@@ -75,6 +75,8 @@ jobs:
       scheduling_contracts: ${{ steps.filter.outputs.scheduling_contracts }}
       messaging_contracts: ${{ steps.filter.outputs.messaging_contracts }}
       messaging_postgres: ${{ steps.filter.outputs.messaging_postgres }}
+      documents_contracts: ${{ steps.filter.outputs.documents_contracts }}
+      documents_postgres: ${{ steps.filter.outputs.documents_postgres }}
       coordinator: ${{ steps.filter.outputs.coordinator }}
       release_tool: ${{ steps.filter.outputs.release_tool }}
       release_source_proof: ${{ steps.filter.outputs.release_source_proof }}
@@ -87,6 +89,7 @@ jobs:
       breg_tutorial: ${{ steps.filter.outputs.breg_tutorial }}
       casework_tutorial: ${{ steps.filter.outputs.casework_tutorial }}
       messaging_tutorial: ${{ steps.filter.outputs.messaging_tutorial }}
+      documents_tutorial: ${{ steps.filter.outputs.documents_tutorial }}
       render_tutorial: ${{ steps.filter.outputs.render_tutorial }}
       scheduling_tutorial: ${{ steps.filter.outputs.scheduling_tutorial }}
       breg_evidence_composition: ${{ steps.filter.outputs.breg_evidence_composition }}
@@ -1133,6 +1136,90 @@ jobs:
           MESSAGINGCTL_BIN: ${{ github.workspace }}/target/debug/messagingctl
         run: products/messaging/scripts/test-dev.sh
 
+  documents-contracts:
+    name: Document Store product contracts
+    needs: [changes, rust-policy]
+    if: ${{ !cancelled() && needs.changes.result == 'success' && needs.changes.outputs.documents_contracts == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          submodules: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          version: "0.11.16"
+
+      - name: Document Store contract consistency
+        run: uv run --no-project --with PyYAML==6.0.2 products/documents/scripts/check-contracts.sh
+
+  documents-postgres:
+    name: Document Store PostgreSQL runtime
+    needs: [changes, rust-policy]
+    if: ${{ !cancelled() && needs.changes.result == 'success' && needs.changes.outputs.documents_postgres == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: docker.io/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675
+        env:
+          POSTGRES_DB: documents
+          POSTGRES_USER: documents
+          POSTGRES_PASSWORD: documents_test
+        options: >-
+          --health-cmd "pg_isready -U documents -d documents"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432/tcp
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          submodules: false
+      - name: Rust cache
+        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        with:
+          shared-key: workspace-registry
+          cache-targets: false
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Install uv
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          version: "0.11.16"
+
+      - name: Build the Document Store operator tool
+        run: cargo build --locked -p registry-documentsctl
+      - name: Verify Document Store product contracts and offline configuration checks
+        env:
+          DOCUMENTSCTL_BIN: ${{ github.workspace }}/target/debug/documentsctl
+        run: uv run --no-project --with PyYAML==6.0.2 products/documents/scripts/check-checkpoint.sh
+      - name: Verify database readiness, activation, the served runtime, and S3 storage
+        env:
+          DOCUMENTS_TEST_DATABASE_URL: postgresql://documents:documents_test@localhost:${{ job.services.postgres.ports['5432'] }}/documents
+        run: cargo test --locked -p registry-documents --features postgres-test --test postgres_startup --test postgres_operator --test postgres_documents --test postgres_s3
+      - name: Verify the documentsctl activation verbs against PostgreSQL
+        env:
+          DOCUMENTS_TEST_DATABASE_URL: postgresql://documents:documents_test@localhost:${{ job.services.postgres.ports['5432'] }}/documents
+        run: cargo test --locked -p registry-documentsctl --features postgres-test --test postgres_cli
+      - name: Build Registry Render for the golden journey
+        run: cargo build --locked -p registry-render
+      - name: Verify the golden journey from a rendered document to an expired share
+        env:
+          DOCUMENTS_TEST_DATABASE_URL: postgresql://documents:documents_test@localhost:${{ job.services.postgres.ports['5432'] }}/documents
+          REGISTRY_RENDER_BIN: ${{ github.workspace }}/target/debug/registry-render
+        run: cargo test --locked -p registry-documents --features postgres-test --test postgres_journey
+      - name: Verify document events are captured on commit and delivered to observers
+        env:
+          DOCUMENTS_TEST_DATABASE_URL: postgresql://documents:documents_test@localhost:${{ job.services.postgres.ports['5432'] }}/documents
+        run: cargo test --locked -p registry-documents --features postgres-test --test postgres_hooks
+
   coordinator-postgres:
     name: Coordinator PostgreSQL runtime
     needs: [changes, rust-policy]
@@ -1679,6 +1766,7 @@ jobs:
           -p registry-bregctl -p registry-caseworkctl -p registry-schedulingctl
           -p registry-coordinator
           -p registry-messagingctl -p registry-discoveryctl -p registry-render
+          -p registry-documentsctl
           -p registry-evidence -p registry-evidencectl -p registry-manifest-cli
           -p registry-breg-mcp -p registry-breg-review -p registry-evidence-oid4vci
 
@@ -1705,6 +1793,8 @@ jobs:
       - messaging-postgres
       - messaging-contracts
       - messaging-smtp
+      - documents-contracts
+      - documents-postgres
       - coordinator-postgres
       - config-conformance
     runs-on: ubuntu-slim
@@ -2361,6 +2451,66 @@ jobs:
           # Docker runner rather than inside a clean read-only container.
           bash docs/site/scripts/check-messaging-tutorial.sh
 
+  documents-tutorial:
+    name: Document Store tutorial from source
+    needs:
+      - changes
+      - rust-policy
+    if: ${{ !cancelled() && needs.changes.result == 'success' && needs.changes.outputs.documents_tutorial == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          submodules: false
+
+      - name: Setup Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: 24.11.0
+          cache: npm
+          cache-dependency-path: docs/site/package-lock.json
+
+      - name: Cache Cargo registry
+        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        with:
+          shared-key: workspace-registry
+          cache-targets: false
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Install docs dependencies
+        working-directory: docs/site
+        # The tutorial runner needs only pure-JS packages; see the Casework
+        # job for why install scripts are skipped.
+        run: npm ci --ignore-scripts
+
+      - name: Test the tutorial runner
+        working-directory: docs/site
+        run: npm run test:tutorial:runner
+
+      - name: Check tutorial command drift
+        working-directory: docs/site
+        run: npm run check:tutorial:documents:dry-run
+
+      - name: Build registry-documentsctl under test
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --locked -p registry-documentsctl
+
+      - name: Execute the Document Store tutorial from a reader directory
+        working-directory: docs/site
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The page's own build step is skipped by the runner; the binary
+          # built above stands in for it. The journey runs documentsctl only,
+          # with no database, container or network.
+          export PATH="$GITHUB_WORKSPACE/target/debug:$PATH"
+          npm run check:tutorial:documents
+
   render-tutorial:
     name: Registry Render tutorial from source
     needs:
@@ -3004,6 +3154,8 @@ jobs:
       - messaging-postgres
       - messaging-contracts
       - messaging-smtp
+      - documents-contracts
+      - documents-postgres
       - coordinator-postgres
       - config-conformance
       - release-tool
@@ -3012,6 +3164,7 @@ jobs:
       - breg-tutorial
       - casework-tutorial
       - messaging-tutorial
+      - documents-tutorial
       - render-tutorial
       - scheduling-tutorial
       - breg-evidence-composition

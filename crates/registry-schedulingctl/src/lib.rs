@@ -9,7 +9,7 @@
 //! verified package on a deployment's database and report its activation
 //! ledger, `records apply` performs the one attributable operator write of a
 //! deployment's live environment records, and `intents` reads the delivery
-//! intents a deployment's sweep has stopped carrying.
+//! intents a deployment's dispatcher has stopped carrying.
 
 pub mod activation;
 pub mod intents;
@@ -72,7 +72,7 @@ enum Command {
     Status(ActivationArgs),
     /// Apply the live environment records of a deployment.
     Records(RecordsArgs),
-    /// List delivery intents a deployment's sweep has stopped carrying.
+    /// List delivery intents a deployment's dispatcher has stopped carrying.
     Intents(IntentsArgs),
 }
 

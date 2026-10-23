@@ -140,8 +140,16 @@ bound to that origin and its `/oauth2/jwks` endpoint, and performs no start,
 stop, reset, or other lifecycle operation.
 The shared runner bounds commands and HTTP responses, reads owner-only secret
 files into the child environment, and discards command output other than owned
-container IDs. Product CLIs retain their own policy, status UI, and cancellation
-flag. Neither operation removes retained files.
+container IDs and completed one-shots' output (the database seed copy,
+`./setup.sh`, and agent-schema bootstrap). That output is kept for diagnosis in
+a new owner-only file under the session state's `logs` directory
+(`local::start_with_logs` takes another private directory), with every injected
+secret value and every line naming a credential the release generated replaced
+by `[redacted]`. A one-shot that exits unsuccessfully names its exit status and
+that file. Seed, setup, and the stateful agent-schema bootstrap are each
+attempted once. Product CLIs retain their
+own policy, status UI, and cancellation flag. Neither operation removes
+retained files.
 
 ## Acquire an approved task
 

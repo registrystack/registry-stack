@@ -36,13 +36,43 @@ pub trait CommandRunner {
     ) -> Result<CommandOutcome, ToolingError> {
         self.run(program, args, secret_environment)
     }
+
+    /// Run a named one-shot (`one_shot` names it, such as `setup`)
+    /// whose output a runner may keep for diagnosis. A runner that keeps it
+    /// writes only redacted output, to an owner-only file it names in the
+    /// outcome. Runners that keep nothing report success alone.
+    fn run_one_shot(
+        &mut self,
+        _one_shot: &'static str,
+        program: &str,
+        args: &[String],
+        secret_environment: &[(String, PathBuf)],
+    ) -> Result<OneShotOutcome, ToolingError> {
+        let outcome = self.run(program, args, secret_environment)?;
+        Ok(OneShotOutcome {
+            success: outcome.success,
+            exit_code: None,
+            log_file: None,
+        })
+    }
+}
+
+/// What a one-shot reports: its result, its numeric exit status
+/// when the process had one, and the owner-only file holding its redacted
+/// output when the runner kept it. Never the output itself.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OneShotOutcome {
+    pub success: bool,
+    pub exit_code: Option<i32>,
+    pub log_file: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandOutcome {
     pub success: bool,
     /// Docker `ps` container IDs only. All other stdout, including setup's
-    /// administrator credential, is discarded by every real runner.
+    /// administrator credential, stays out of this outcome in every real
+    /// runner.
     pub container_ids: String,
 }
 
@@ -63,8 +93,9 @@ impl Bootstrap<'_> {
     /// `ADMIN_PASSWORD` the upstream command demands is satisfied from a
     /// fresh throwaway value in an owner-only file — never the real
     /// administrator credential, never an argv element — and the command's
-    /// stdout is discarded without inspection because the pinned release
-    /// echoes the value it was given on success.
+    /// output may be kept only through the runner's redacted one-shot log
+    /// mechanism because the pinned release echoes the value on success.
+    /// This stateful bootstrap is attempted once; failure preserves state.
     pub fn apply_agent_schema(
         &mut self,
         provisioning_dir: &Path,
@@ -98,7 +129,8 @@ impl Bootstrap<'_> {
         args.push("--defaults".into());
         args.push(SCHEMA_MOUNT_POINT.to_owned());
 
-        let outcome = self.runner.run(
+        let outcome = self.runner.run_one_shot(
+            "agent-schema",
             "docker",
             &args,
             &[(
@@ -107,8 +139,11 @@ impl Bootstrap<'_> {
             )],
         )?;
         if !outcome.success {
-            return Err(ToolingError::CommandFailed {
+            return Err(ToolingError::OneShotFailed {
                 step: "the agent-schema bootstrap one-shot did not succeed; staged state is preserved for diagnosis and nothing was reset",
+                one_shot: "agent-schema",
+                exit_code: outcome.exit_code,
+                log_file: outcome.log_file,
             });
         }
         Ok(())
@@ -284,7 +319,10 @@ mod tests {
         };
         assert!(matches!(
             bootstrap.apply_agent_schema(&schema, &password_file, &[]),
-            Err(ToolingError::CommandFailed { .. })
+            Err(ToolingError::OneShotFailed {
+                one_shot: "agent-schema",
+                ..
+            })
         ));
     }
 }

@@ -1,0 +1,400 @@
+{
+  "$defs": {
+    "AccessProfile": {
+      "additionalProperties": false,
+      "description": "One declared caller profile.",
+      "properties": {
+        "actorKind": {
+          "$ref": "#/$defs/ActorKind",
+          "description": "The actor kind the token must claim."
+        },
+        "institution": {
+          "$ref": "#/$defs/ExternalId",
+          "description": "The institution this profile acts for. The Document Store records it\nas the issuing institution of every document version a caller under\nthis profile reserves; a profile that names none records none."
+        },
+        "principalClaim": {
+          "$ref": "#/$defs/ExternalId",
+          "description": "`sub`, or the name of another string claim identifying the principal.\nEvery profile of one actor kind names the same claim."
+        },
+        "requesterClients": {
+          "description": "The OAuth clients whose tokens resolve to this profile; at least one.",
+          "items": {
+            "$ref": "#/$defs/ExternalId"
+          },
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "requiredScopes": {
+          "description": "The scopes a token must carry; at least one.",
+          "items": {
+            "$ref": "#/$defs/ExternalId"
+          },
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "role": {
+          "$ref": "#/$defs/AccessRole",
+          "description": "What a caller resolved to this profile is to a document."
+        }
+      },
+      "required": [
+        "principalClaim",
+        "requiredScopes",
+        "requesterClients",
+        "actorKind",
+        "role"
+      ],
+      "type": "object"
+    },
+    "AccessRole": {
+      "description": "What a caller resolved to an access profile is to a document.",
+      "oneOf": [
+        {
+          "const": "custodian",
+          "description": "Places documents in custody and issues document grants.",
+          "type": "string"
+        },
+        {
+          "const": "represented-principal",
+          "description": "The person on whose behalf custody is held.",
+          "type": "string"
+        },
+        {
+          "const": "recipient",
+          "description": "Reads exactly the document version a document grant names.",
+          "type": "string"
+        }
+      ]
+    },
+    "ActorKind": {
+      "description": "An actor kind: a service, or a human person.",
+      "enum": [
+        "service",
+        "human"
+      ],
+      "type": "string"
+    },
+    "ContentType": {
+      "description": "A lowercase concrete media type `type/subtype` without parameters or wildcards, matched exactly.",
+      "pattern": "^[a-z0-9][a-z0-9!#$&^_.+-]{0,126}/[a-z0-9][a-z0-9!#$&^_.+-]{0,126}$",
+      "type": "string"
+    },
+    "CustodianRule": {
+      "description": "Who holds a document a service places for a named person.",
+      "oneOf": [
+        {
+          "const": "institution",
+          "description": "Custody stays with the reserving system, acting for its\ninstitution. The named person is recorded as the represented\nprincipal and has no standing on the document; only a document\ngrant releases it to them.",
+          "type": "string"
+        },
+        {
+          "const": "represented-principal",
+          "description": "The named person is the custodian. The reserving system sees the\ndocument's metadata and status but is neither released its content\nnor allowed to grant on it.",
+          "type": "string"
+        }
+      ]
+    },
+    "DisplayText": {
+      "description": "Human-readable display text. Bidirectional embedding, override, and isolate controls, byte-order marks, line and paragraph separators, and Unicode noncharacters are refused; multilingual joiners and direction marks remain valid.",
+      "not": {
+        "pattern": "[  ‪-‮⁦-⁩﻿﷐-﷯￾￿]|🿾|🿿|𯿾|𯿿|𿿾|𿿿|񏿾|񏿿|񟿾|񟿿|񯿾|񯿿|񿿾|񿿿|򏿾|򏿿|򟿾|򟿿|򯿾|򯿿|򿿾|򿿿|󏿾|󏿿|󟿾|󟿿|󯿾|󯿿|󿿾|󿿿|􏿾|􏿿"
+      },
+      "type": "string"
+    },
+    "DocumentPolicy": {
+      "additionalProperties": false,
+      "description": "One document policy: who may hold, grant, and receive a document held\nunder it, and the restrictions every such document carries.",
+      "properties": {
+        "custodian": {
+          "$ref": "#/$defs/CustodianRule",
+          "description": "Who holds a document a service places for a named person: the\nreserving system for its institution, or that person."
+        },
+        "custodyProfiles": {
+          "description": "Profiles that may place a document in custody under this policy.",
+          "items": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "grantingProfiles": {
+          "description": "Profiles that may issue a document grant on a document they hold in\ncustody under this policy. A system that only reserved a document for\nanother custodian never grants on it.",
+          "items": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "label": {
+          "$ref": "#/$defs/DisplayText"
+        },
+        "mandatoryRestrictions": {
+          "$ref": "#/$defs/MandatoryRestrictions"
+        },
+        "recipientProfiles": {
+          "description": "Profiles a document grant may name as its recipient.",
+          "items": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "representedPrincipalGrants": {
+          "$ref": "#/$defs/RepresentedPrincipalGrants",
+          "description": "Whether the represented principal may issue document grants itself."
+        },
+        "representedPrincipalProfile": {
+          "$ref": "#/$defs/LocalId",
+          "description": "The profile a represented principal authenticates under."
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "version",
+        "label",
+        "custodyProfiles",
+        "grantingProfiles",
+        "representedPrincipalProfile",
+        "representedPrincipalGrants",
+        "custodian",
+        "recipientProfiles",
+        "mandatoryRestrictions"
+      ],
+      "type": "object"
+    },
+    "ExternalId": {
+      "description": "An identifier another system issues, written exactly as its issuer gives it.",
+      "maxLength": 512,
+      "minLength": 1,
+      "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$",
+      "type": "string"
+    },
+    "HookHandler": {
+      "description": "Where an observer hook delivers, chosen by its `type` member: a URL\ndestination the runtime configuration binds under `destinations.hooks`.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "destinationId": {
+              "$ref": "#/$defs/LocalId"
+            },
+            "type": {
+              "const": "url",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "destinationId"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "HookPhase": {
+      "description": "When an observer hook runs relative to the triggering transaction.",
+      "enum": [
+        "after"
+      ],
+      "type": "string"
+    },
+    "HookPolicy": {
+      "additionalProperties": false,
+      "description": "One after-commit observer hook.",
+      "properties": {
+        "handler": {
+          "$ref": "#/$defs/HookHandler"
+        },
+        "id": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "phase": {
+          "$ref": "#/$defs/HookPhase"
+        },
+        "policies": {
+          "description": "The document policies whose documents the observer hears about: a\nchange to a document held under any other policy captures nothing\nfor it. Listing them is the operator's declaration of who may\nreceive which documents' events.",
+          "items": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "projection": {
+          "description": "The fields of the trigger's projection the observer receives.",
+          "items": {
+            "$ref": "#/$defs/ExternalId"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "trigger": {
+          "$ref": "#/$defs/HookTrigger"
+        }
+      },
+      "required": [
+        "id",
+        "phase",
+        "trigger",
+        "policies",
+        "projection",
+        "handler"
+      ],
+      "type": "object"
+    },
+    "HookTrigger": {
+      "description": "The committed change an observer hook follows.",
+      "enum": [
+        "document-version.ready",
+        "document-version.rejected",
+        "document-grant.changed"
+      ],
+      "type": "string"
+    },
+    "LocalId": {
+      "description": "A local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`.",
+      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+      "type": "string"
+    },
+    "MandatoryRestrictions": {
+      "additionalProperties": false,
+      "description": "The restrictions every document held under a policy carries.",
+      "properties": {
+        "allowedContentTypes": {
+          "description": "The media types a document may be declared as, matched exactly.",
+          "items": {
+            "$ref": "#/$defs/ContentType"
+          },
+          "maxItems": 16,
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "cleanupGraceHours": {
+          "description": "Time between the custodian's removal request, or a rejection, and\nerasure of the bytes, and the length of a reservation's upload\nwindow. At least one hour, so an operator always has a window to\nrestore from a mistaken request. Grant expiry and revocation erase\nnothing: they only stop a grant releasing.",
+          "format": "uint32",
+          "maximum": 8760,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "grantExpiryHours": {
+          "format": "uint32",
+          "maximum": 8760,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "maximumCustodianBytes": {
+          "description": "The bytes one custodian may hold under this policy, counted over\nevery reserved or stored version not yet erased and checked at\nreservation.",
+          "format": "uint64",
+          "maximum": 1099511627776,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "maximumDocumentBytes": {
+          "description": "The largest document a reservation may declare. It may not exceed\nthe deployment ceiling `storage.maximumDocumentBytes`; the runtime\nrefuses to start otherwise.",
+          "format": "uint64",
+          "maximum": 1073741824,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "maximumGrantExpiryHours": {
+          "format": "uint32",
+          "maximum": 8760,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "maximumDocumentBytes",
+        "maximumCustodianBytes",
+        "allowedContentTypes",
+        "grantExpiryHours",
+        "maximumGrantExpiryHours",
+        "cleanupGraceHours"
+      ],
+      "type": "object"
+    },
+    "ProjectIdentity": {
+      "additionalProperties": false,
+      "description": "The members that name a project (CFG-ENV-6): a project's `project` block\nholds these, and may add project-wide members of the product's own.\nSchema name `ProjectIdentity`.",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "version"
+      ],
+      "type": "object"
+    },
+    "RepresentedPrincipalGrants": {
+      "description": "Whether a represented principal may issue document grants itself.",
+      "enum": [
+        "refused",
+        "permitted"
+      ],
+      "type": "string"
+    }
+  },
+  "$id": "https://id.registrystack.org/schemas/documents/project/project.v1alpha1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "The authored project document, `documents.yaml`.",
+  "properties": {
+    "accessProfiles": {
+      "additionalProperties": {
+        "$ref": "#/$defs/AccessProfile"
+      },
+      "description": "The caller profiles a document policy names, by id.",
+      "propertyNames": {
+        "$ref": "#/$defs/LocalId"
+      },
+      "type": "object"
+    },
+    "apiVersion": {
+      "const": "id.registrystack.org/formats/documents/project/v1alpha1",
+      "type": "string"
+    },
+    "documentPolicies": {
+      "additionalProperties": {
+        "$ref": "#/$defs/DocumentPolicy"
+      },
+      "description": "The policies a document is held under, by id.",
+      "propertyNames": {
+        "$ref": "#/$defs/LocalId"
+      },
+      "type": "object"
+    },
+    "hooks": {
+      "description": "After-commit observer hooks. A project with none omits the member.",
+      "items": {
+        "$ref": "#/$defs/HookPolicy"
+      },
+      "type": "array"
+    },
+    "kind": {
+      "const": "DocumentsProject",
+      "type": "string"
+    },
+    "project": {
+      "$ref": "#/$defs/ProjectIdentity"
+    }
+  },
+  "required": [
+    "apiVersion",
+    "kind",
+    "project",
+    "accessProfiles",
+    "documentPolicies"
+  ],
+  "title": "Registry Stack Document Store project",
+  "type": "object"
+}

@@ -190,6 +190,7 @@ const DELIVERY_STATEMENTS: &[&str] = &[
                          AND attempt > 0
                          AND next_attempt_at IS NULL
                          AND attempt_started_at IS NOT NULL
+                         AND lease_expires_at IS NOT NULL
                          AND lease_expires_at > attempt_started_at
                          AND lease_token IS NOT NULL
                          AND delivered_at IS NULL
@@ -350,6 +351,34 @@ mod tests {
 
     fn rendered(schema: &str) -> Vec<String> {
         statements(schema)
+    }
+
+    #[test]
+    fn every_delivery_state_arm_is_the_dispatch_core_arm() {
+        fn normalized(sql: &str) -> String {
+            sql.split_whitespace().collect::<Vec<_>>().join(" ")
+        }
+        // The arms hold no nested parentheses, so each ends at the first
+        // closing one after its opening.
+        fn arm(shape: &str, state: &str) -> String {
+            let opening = format!("(state = '{state}'");
+            let start = shape
+                .find(&opening)
+                .expect("the shape has an arm for the state");
+            let end = shape[start..].find(')').expect("the arm closes") + start;
+            shape[start..=end].to_owned()
+        }
+        let core = normalized(registry_platform_dispatch::postgres::JobTable::shape_predicate());
+        let delivery = normalized(&rendered(KERNEL_SCHEMA).join("\n"));
+        let delivery = delivery
+            .split_once("CONSTRAINT registry_webhook_delivery_state_shape CHECK (")
+            .and_then(|(_, rest)| rest.split_once("CONSTRAINT"))
+            .map(|(shape, _)| shape)
+            .expect("the delivery state shape check");
+        for state in ["pending", "leased", "delivered", "dead-lettered", "expired"] {
+            assert_eq!(arm(delivery, state), arm(&core, state), "{state}");
+        }
+        assert!(arm(delivery, "leased").contains("AND lease_expires_at IS NOT NULL AND"));
     }
 
     #[test]
@@ -828,6 +857,69 @@ mod tests {
             .await
             .expect("install runs again over current storage");
         assert_eq!(dead_letter_reason_catalog(&client, schema).await, installed);
+        client
+            .batch_execute(&format!("DROP SCHEMA {schema} CASCADE;"))
+            .await
+            .expect("drop the test schema");
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a local PostgreSQL test database named by HOOKS_TEST_DATABASE_URL"]
+    async fn the_delivery_state_shape_refuses_a_lease_without_an_expiry() {
+        let url = std::env::var("HOOKS_TEST_DATABASE_URL")
+            .expect("HOOKS_TEST_DATABASE_URL is required for the real PostgreSQL test");
+        let (client, connection) = tokio_postgres::connect(&url, tokio_postgres::NoTls)
+            .await
+            .expect("connect to the local PostgreSQL test database");
+        tokio::spawn(async move {
+            let _closed = connection.await;
+        });
+        let schema = "hooks_delivery_lease_expiry_test";
+        client
+            .batch_execute(&format!(
+                "DROP SCHEMA IF EXISTS {schema} CASCADE; CREATE SCHEMA {schema};"
+            ))
+            .await
+            .expect("reset the test schema");
+        install(&client, schema)
+            .await
+            .expect("install the delivery schema");
+        // A copy with the state table's checks and without its foreign keys,
+        // so one row exercises the shape check alone.
+        client
+            .batch_execute(&format!(
+                "CREATE TABLE {schema}.shape_probe
+                     (LIKE {schema}.registry_webhook_delivery_state
+                      INCLUDING DEFAULTS INCLUDING CONSTRAINTS);"
+            ))
+            .await
+            .expect("copy the delivery state checks");
+        let leased = |expiry: &str| {
+            format!(
+                "INSERT INTO {schema}.shape_probe
+                     (event_id, compiled_delivery_id, generation, state, attempt,
+                      attempt_started_at, lease_expires_at, lease_token)
+                 VALUES (gen_random_uuid(), 'delivery', 1, 'leased', 1,
+                         transaction_timestamp(), {expiry}, gen_random_uuid())"
+            )
+        };
+        let error = client
+            .batch_execute(&leased("NULL"))
+            .await
+            .expect_err("a leased delivery without a lease expiry is refused");
+        let database = error.as_db_error().expect("a database refusal");
+        assert_eq!(
+            database.code(),
+            &tokio_postgres::error::SqlState::CHECK_VIOLATION
+        );
+        assert_eq!(
+            database.constraint(),
+            Some("registry_webhook_delivery_state_shape")
+        );
+        client
+            .batch_execute(&leased("transaction_timestamp() + interval '1 minute'"))
+            .await
+            .expect("the same lease with an expiry is admitted");
         client
             .batch_execute(&format!("DROP SCHEMA {schema} CASCADE;"))
             .await

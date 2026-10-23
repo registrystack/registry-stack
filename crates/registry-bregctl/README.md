@@ -96,13 +96,13 @@ compiler's deterministic event-delivery inventory. It contains logical
 destination identifiers and governed delivery policy, never deployed URLs,
 secret references, or secret values.
 
-`bregctl webhook sample PROJECT --event ID` compiles the authoring
+`bregctl hook sample PROJECT --event ID` compiles the authoring
 project and renders a deterministic CloudEvents HTTP request with typed
 synthetic projection values. The request target and signature are explicit
 placeholders because this offline command does not load deployment
 configuration or secrets.
 
-`bregctl webhook list --runtime-config ABSOLUTE_FILE [--limit N]`
+`bregctl hook list --runtime-config ABSOLUTE_FILE [--limit N]`
 verifies the current package and database identity before returning bounded
 pending, leased, dead-lettered, and expired metadata, including deliveries
 captured under a superseded binding. The default limit is 50 and the product
@@ -111,14 +111,14 @@ eligibility, expiry, binding activity, discard eligibility, and an optional
 closed dead-letter reason. They never contain projected values, record
 identifiers, destination URLs, secret references, or keys.
 
-`bregctl webhook replay --runtime-config ABSOLUTE_FILE --event-id
+`bregctl hook replay --runtime-config ABSOLUTE_FILE --event-id
 UUID --delivery-id ID --expected-generation N` delegates one optimistic replay
 to Base Registry Engine. Replay is limited to a current, replay-enabled dead letter
 whose retained payload and exact destination binding are still available.
 Configuration, identity, generation, eligibility, and retention refusals share
 one value-free diagnostic.
 
-`bregctl webhook discard --runtime-config ABSOLUTE_FILE --event-id UUID
+`bregctl hook discard --runtime-config ABSOLUTE_FILE --event-id UUID
 --delivery-id ID --expected-generation N` irreversibly closes one retained
 pending delivery, dead letter, or expired lease without sending it under a
 replacement binding. Stop the runtime before discarding pending work. A live
@@ -128,8 +128,8 @@ a receiver effect that may already have committed.
 
 `bregctl doctor --runtime-config ABSOLUTE_FILE` verifies the startup
 dependencies opened by the current preparation path without binding a
-listener. It does not claim listener activation, webhook worker readiness, or
-webhook delivery readiness.
+listener. It does not claim listener activation, hook worker readiness, or
+hook delivery readiness.
 
 JSON failures expose only CLI-owned diagnostics with the stable keys
 `severity`, `code`, `artifact`, `path`, `message`, and `suggestedAction`.

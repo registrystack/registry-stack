@@ -131,7 +131,8 @@ const SUBJECT_ACCESS_LOG_EXPIRY: &str = "registry_internal.expire_subject_access
 const MANAGED_INTERNAL_INDEXES: &[&str] = &[
     "registry_internal.registry_action_evidence_uses_expiry",
     "registry_internal.registry_attachment_live_references",
-    "registry_internal.registry_attachment_verification_pending",
+    "registry_internal.registry_attachment_verification_jobs_due_idx",
+    "registry_internal.registry_attachment_verification_jobs_lease_idx",
     "registry_internal.registry_field_encryption_lifecycle_progress_idx",
     "registry_internal.registry_idempotency_caller_key",
     "registry_internal.registry_import_authorities_one_open",
@@ -442,7 +443,7 @@ impl ExpectedManagedCatalog {
                 Some((false, false)),
             );
         }
-        // Runtime workers scrub retained webhook payload bytes after delivery
+        // Runtime workers scrub retained hook payload bytes after delivery
         // or expiry without widening update access to outbox identity columns.
         catalog.column_privilege(
             "registry_internal.registry_outbox",
@@ -513,6 +514,15 @@ impl ExpectedManagedCatalog {
                 });
             }
         }
+        // The verification job table carries no row-level security: it
+        // holds only dispatch state keyed by a verdict row's identifier.
+        let (table, privileges) = crate::attachment_store::VERIFICATION_JOB_TABLE;
+        catalog.table(
+            &format!("registry_internal.{table}"),
+            privileges.iter().copied(),
+            std::iter::empty::<&str>(),
+            Some((false, false)),
+        );
         for (table, privileges) in crate::attachment_store::ATTACHMENT_TABLES {
             catalog.table(
                 &format!("registry_internal.{table}"),
@@ -952,6 +962,43 @@ pub(crate) async fn registry_state_shape(
     )
 }
 
+/// Whether the database carries the attachment verification shape a pre-1.0
+/// release installed: the verdict table still holds its own `lease_id`
+/// column, or it exists without the verification job table. Installing from
+/// code never revisits an existing table, so this shape is refused by name
+/// rather than reported as catalog drift a backup would carry too.
+pub(crate) async fn pre_1_0_attachment_verification_present(
+    client: &impl GenericClient,
+) -> std::result::Result<bool, tokio_postgres::Error> {
+    let row = client
+        .query_one(
+            "WITH internal AS (
+                 SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = 'registry_internal'
+             )
+             SELECT verdict.oid IS NOT NULL
+                    AND (
+                        EXISTS (
+                            SELECT 1 FROM pg_catalog.pg_attribute attribute
+                             WHERE attribute.attrelid = verdict.oid
+                               AND attribute.attname = 'lease_id'
+                               AND NOT attribute.attisdropped
+                        )
+                        OR NOT EXISTS (
+                            SELECT 1 FROM pg_catalog.pg_class jobs
+                             WHERE jobs.relname = 'registry_attachment_verification_jobs'
+                               AND jobs.relnamespace = (SELECT oid FROM internal)
+                        )
+                    )
+               FROM (SELECT NULL) AS one
+               LEFT JOIN pg_catalog.pg_class verdict
+                 ON verdict.relname = 'registry_attachment_verification'
+                AND verdict.relnamespace = (SELECT oid FROM internal)",
+            &[],
+        )
+        .await?;
+    row.try_get(0)
+}
+
 pub(crate) async fn install_registry_state_schema(
     migration: &impl GenericClient,
     runtime_role: &SqlIdentifier,
@@ -1266,8 +1313,12 @@ pub(crate) async fn verify_managed_catalog(
     .await?;
     verify_row_security(client, expected_catalog).await?;
     verify_policies(client, expected_catalog, runtime_role).await?;
-    if fingerprint_catalog(client, runtime_role).await? != expected.schema_fingerprint {
-        return Err(PostgresKernelError::RegistryUnavailable);
+    let measured = fingerprint_catalog(client, runtime_role).await?;
+    if measured != expected.schema_fingerprint {
+        return Err(PostgresKernelError::SchemaFingerprintMismatch {
+            declared: expected.schema_fingerprint.clone(),
+            measured,
+        });
     }
     Ok(())
 }
@@ -2120,7 +2171,7 @@ mod tests {
             .chain([DELIVERY_SEQUENCE])
             .collect();
         for object in
-            registry_platform_hooks::delivery_schema::object_names(crate::webhook::DELIVERY_SCHEMA)
+            registry_platform_hooks::delivery_schema::object_names(crate::hooks::DELIVERY_SCHEMA)
         {
             assert!(
                 inventoried.contains(&object.as_str()),

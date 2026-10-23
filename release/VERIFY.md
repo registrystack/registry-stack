@@ -278,6 +278,8 @@ in `v0.44.0`, as set by `COORDINATOR_BINARY_FIRST_RELEASE`. Its image and client
 publication remain held; `COORDINATOR_FIRST_RELEASE` and
 `COORDINATOR_CLIENT_FIRST_RELEASE` remain unset until their separate
 publication prerequisites are ready.
+The Registry Document Store is held out of every release while
+`DOCUMENTS_FIRST_RELEASE` is `None`, and no release roster names it.
 `BREG_SERVICES_FIRST_RELEASE`, `MESSAGING_FIRST_RELEASE`,
 `RENDER_FIRST_RELEASE`, `EVIDENCE_OID4VCI_IMAGE_FIRST_RELEASE`, and
 the three Coordinator release constants in `release/scripts/release_roster.py`
@@ -376,6 +378,8 @@ operator tool `coordinatorctl` join that verified binary payload under
 `COORDINATOR_BINARY_FIRST_RELEASE`; its separately governed image remains held.
 The unified client packages carry no Coordinator client; build the
 `registry-coordinator-client` crate and its bindings from source.
+No release payload carries the Document Store runtime `documents` or operator tool
+`documentsctl`; build them from the release source.
 
 ## Verify client registries
 

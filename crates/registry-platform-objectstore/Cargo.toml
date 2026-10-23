@@ -1,0 +1,32 @@
+[package]
+name = "registry-platform-objectstore"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Bounded S3-compatible object storage and external attachment-verifier transports for Registry Stack runtimes."
+repository.workspace = true
+readme = "README.md"
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+chrono.workspace = true
+hex.workspace = true
+hmac.workspace = true
+quick-xml = { version = "0.42" }
+registry-platform-config.workspace = true
+registry-platform-httputil.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+axum.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["macros", "net", "rt", "rt-multi-thread", "time", "io-util"] }

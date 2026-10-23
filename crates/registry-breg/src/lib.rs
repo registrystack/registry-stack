@@ -93,7 +93,7 @@ pub mod history_schema;
 #[cfg(feature = "runtime")]
 pub(crate) mod history_store;
 #[cfg(feature = "runtime")]
-pub mod hook_handler;
+pub mod hooks;
 #[cfg(feature = "runtime")]
 pub mod idempotency;
 #[cfg(all(feature = "runtime", feature = "tooling"))]
@@ -173,8 +173,6 @@ pub mod unique_set;
 pub mod wasm_handler;
 #[cfg(feature = "wasm")]
 pub mod wasm_runtime;
-#[cfg(feature = "runtime")]
-pub mod webhook;
 
 pub use artifacts::{GeneratedArtifact, GeneratedArtifacts};
 #[cfg(feature = "runtime")]

@@ -138,7 +138,10 @@ async fn enabling_bbox_on_existing_point_registry_preserves_data_and_recovers_sa
         ApplyPrecondition::Successor { current: &active },
     )
     .await;
-    assert_value_free(missing_postgis.err(), MigrationError::ApplyFailed);
+    assert_value_free(
+        missing_postgis.err(),
+        MigrationError::PrerequisiteMissing("administrator-installed PostGIS is required"),
+    );
     assert_ready_target(&database, &active).await;
     assert_eq!(site_rows(&database, &base).await, prior_rows);
     assert_eq!(revision_snapshots(&database).await, prior_history);
@@ -150,6 +153,37 @@ async fn enabling_bbox_on_existing_point_registry_preserves_data_and_recovers_sa
     )
     .await
     .expect("administrator provisions PostGIS prerequisites");
+    database
+        .admin
+        .batch_execute(&format!(
+            "REVOKE {} FROM {}",
+            quote(bbox_role.as_str()),
+            quote(database.migration_role.as_str()),
+        ))
+        .await
+        .expect("administrator removes bbox membership to test the next prerequisite");
+    assert_value_free(
+        apply(
+            &database,
+            &spatial_package.verified,
+            ApplyPrecondition::Successor { current: &active },
+        )
+        .await
+        .err(),
+        MigrationError::PrerequisiteMissing(
+            "spatial bbox role membership is incomplete or invalid",
+        ),
+    );
+    assert_ready_target(&database, &active).await;
+    assert_eq!(site_rows(&database, &base).await, prior_rows);
+    assert_eq!(revision_snapshots(&database).await, prior_history);
+    provision_postgis_prerequisites(
+        &database.admin,
+        &database.migration_role,
+        &database.runtime_role,
+    )
+    .await
+    .expect("administrator restores bbox membership");
     let spatial_active = apply(
         &database,
         &spatial_package.verified,

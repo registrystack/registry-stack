@@ -112,6 +112,16 @@ export const PRODUCTS = [
     ],
   },
   {
+    id: 'documents',
+    title: 'Document Store',
+    docsetProduct: 'registry-documents',
+    checkPage: 'reference/documents-configuration',
+    references: [
+      { label: 'Deploy and operate the Document Store', page: 'operate/documents' },
+      { label: 'Document Store configuration reference', page: 'reference/documents-configuration' },
+    ],
+  },
+  {
     id: 'platform',
     title: 'Registry Platform',
     docsetProduct: null,

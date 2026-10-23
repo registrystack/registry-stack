@@ -48,6 +48,7 @@ const SPEC_SOURCES = {
   'registry-scheduling': 'products/scheduling/generated/registry-scheduling.openapi.json',
   'registry-messaging': 'products/messaging/generated/registry-messaging.openapi.json',
   'registry-coordinator': 'products/coordinator/generated/openapi/coordinator.openapi.json',
+  'registry-documents': 'products/documents/generated/registry-documents.openapi.json',
   'registry-evidence': 'products/evidence/generated/registry-evidence.openapi.json',
   // The wallet-facing OID4VCI supporting service beside Evidence publishes its
   // own document, sourced from the same repository entry as Evidence.
@@ -190,10 +191,10 @@ async function main() {
       console.log(`Skipped ${repoId} OpenAPI spec absent from docset ${docset.id}.`);
       continue;
     }
-    // Casework, Scheduling, Messaging, and the Coordinator first enter the
-    // docset line after the archives that predate them, so a docset without
-    // the product pins no spec for it.
-    if ((repoId === 'registry-casework' || repoId === 'registry-scheduling' || repoId === 'registry-messaging' || repoId === 'registry-coordinator') && !docset.products[repoId]) {
+    // Casework, Scheduling, Messaging, the Coordinator, and the Document Store
+    // first enter the docset line after the archives that predate them, so a
+    // docset without the product pins no spec for it.
+    if ((repoId === 'registry-casework' || repoId === 'registry-scheduling' || repoId === 'registry-messaging' || repoId === 'registry-coordinator' || repoId === 'registry-documents') && !docset.products[repoId]) {
       console.log(`Skipped ${repoId} OpenAPI spec absent from docset ${docset.id}.`);
       continue;
     }

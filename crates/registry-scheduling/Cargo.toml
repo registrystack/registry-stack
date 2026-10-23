@@ -44,6 +44,7 @@ registry-platform-calendar.workspace = true
 registry-platform-canonical-json.workspace = true
 registry-platform-config.workspace = true
 registry-platform-crypto.workspace = true
+registry-platform-dispatch = { workspace = true, features = ["postgres"] }
 registry-platform-httpsec = { workspace = true, features = ["server"] }
 registry-platform-httputil.workspace = true
 registry-platform-hooks = { workspace = true, features = ["postgres"] }
@@ -65,6 +66,7 @@ uuid = { workspace = true, features = ["serde"] }
 
 [dev-dependencies]
 jsonschema.workspace = true
+registry-platform-testing = { workspace = true, features = ["migration-pins"] }
 reqwest.workspace = true
 serde_norway.workspace = true
 tempfile.workspace = true

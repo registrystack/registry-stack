@@ -216,6 +216,7 @@ impl From<PostgresKernelError> for ReconcileError {
             | PostgresKernelError::Pool
             | PostgresKernelError::PoolBuild
             | PostgresKernelError::CatalogInvariant(_)
+            | PostgresKernelError::SchemaFingerprintMismatch { .. }
             | PostgresKernelError::RegistryUnavailable
             | PostgresKernelError::HistoryCoverageIncomplete
             | PostgresKernelError::RetainedLocalHooks(_) => Self::Unavailable,
@@ -226,10 +227,15 @@ impl From<PostgresKernelError> for ReconcileError {
 impl From<MigrationError> for ReconcileError {
     fn from(error: MigrationError) -> Self {
         match error {
-            MigrationError::PackageBinding | MigrationError::EmptyPlan => Self::PackageBinding,
+            MigrationError::PackageBinding
+            | MigrationError::EmptyPlan
+            | MigrationError::SchemaFingerprintMismatch { .. }
+            | MigrationError::FieldPatternSyntaxRefused { .. } => Self::PackageBinding,
             MigrationError::MigrationLockHeld => Self::NotExecutable(ReconcileOutcome::InProgress),
             MigrationError::ApplyFailed
+            | MigrationError::SchemaFingerprintMismatchAfterMaintenance { .. }
             | MigrationError::StatementFailed(_)
+            | MigrationError::PackageDdlRefused(_)
             | MigrationError::ActivePackageMismatch
             | MigrationError::AlreadyActive
             | MigrationError::DatabaseMismatch
@@ -246,9 +252,15 @@ impl From<MigrationError> for ReconcileError {
             | MigrationError::ActivationAuditIncomplete
             | MigrationError::ActivationRefusalAuditIncomplete
             | MigrationError::ActivationAuditUnavailable
-            | MigrationError::UnrecognizedDatabase => Self::Unavailable,
-            MigrationError::OperatorReference => Self::InvalidInput,
-            MigrationError::RuntimeWriteAuthority(_)
+            | MigrationError::UnrecognizedDatabase
+            | MigrationError::Pre1_0Schema
+            | MigrationError::PrerequisiteMissing(_)
+            | MigrationError::CatalogRefused(_) => Self::Unavailable,
+            MigrationError::OperatorReference
+            | MigrationError::LockKeyRefused
+            | MigrationError::DatabaseConfigurationRefused(_) => Self::InvalidInput,
+            MigrationError::MigrationRoleRefused(_)
+            | MigrationError::RuntimeWriteAuthority(_)
             | MigrationError::ResumeRolesDiffer { .. }
             | MigrationError::SuccessorRolesDiffer { .. } => Self::MigrationAuthority,
         }

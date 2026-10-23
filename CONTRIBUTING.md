@@ -203,7 +203,13 @@ Every pull request should make the review path clear:
   Operators retain the previous database and audit journal for reconciliation
   and apply the current package to a fresh database; messages still queued and
   holds and appointments recorded in the previous database are not carried
-  forward.
+  forward. v0.44.0 adds three more: Casework's and Scheduling's schemas each
+  start again at a fresh version 200 baseline and refuse by name a ledger
+  below version 200, and BReg refuses by name the v0.43.0 attachment
+  verification tables at startup, in `bregctl doctor`, and in `bregctl plan`
+  and `apply`. The operator path is the same: retain the previous database
+  and audit journal, rebuild the BReg package with the current `bregctl test`
+  and `bregctl package`, and apply the current package to a fresh database.
 - Before 1.0, a release reads only the state its immediate predecessor wrote,
   and an operator upgrades one release at a time, except at the explicit fresh
   baselines. v0.40.0 starts fresh: it
@@ -224,8 +230,8 @@ Every pull request should make the review path clear:
   in [`CONFIG-CONVENTIONS.md`](products/platform/CONFIG-CONVENTIONS.md) keeps
   each refusal until its format's next stable version.
   `FORWARD_PATH_FLOOR` in `release/scripts/rehearse-upgrade.py` names the
-  earliest shared predecessor, v0.42.0, where Evidence's normalized baseline
-  and Messaging's fresh schema baseline start, and
+  earliest shared predecessor, v0.43.0, the release before the v0.44.0
+  Casework, Scheduling, and BReg fresh baselines, and
   [`api-stability.mdx`](docs/site/src/content/docs/reference/api-stability.mdx)
   states the promise for operators.
 
@@ -335,6 +341,28 @@ MESSAGING_TEST_DATABASE_URL=<disposable database> cargo test --locked \
 
 The Messaging PostgreSQL suites fail, rather than skip, without
 `MESSAGING_TEST_DATABASE_URL`; point it at a server whose databases you can
+discard.
+
+Document Store product checks:
+
+```bash
+products/documents/scripts/check-checkpoint.sh
+products/documents/scripts/check-contracts.sh
+DOCUMENTS_TEST_DATABASE_URL=<disposable database> cargo test --locked \
+  -p registry-documents --features postgres-test \
+  --test postgres_startup --test postgres_operator --test postgres_documents \
+  --test postgres_s3 --test postgres_hooks
+DOCUMENTS_TEST_DATABASE_URL=<disposable database> cargo test --locked \
+  -p registry-documentsctl --features postgres-test --test postgres_cli
+cargo build --locked -p registry-render
+DOCUMENTS_TEST_DATABASE_URL=<disposable database> \
+  REGISTRY_RENDER_BIN="$PWD/target/debug/registry-render" cargo test --locked \
+  -p registry-documents --features postgres-test --test postgres_journey
+```
+
+The Document Store PostgreSQL suites fail, rather than skip, without
+`DOCUMENTS_TEST_DATABASE_URL`, and `postgres_journey` also fails without
+`REGISTRY_RENDER_BIN`; point the URL at a server whose databases you can
 discard.
 
 Release source checks:

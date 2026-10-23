@@ -182,9 +182,15 @@ impl Session<'_> {
     /// with persistent mounts but without the runtime resource mounts, since
     /// the resources reference the organization unit setup creates.
     ///
-    /// Setup stdout is discarded unread: the pinned release prints the
+    /// Setup output is never relayed: the pinned release prints the
     /// administrator credential there, and this crate already holds that
-    /// credential in its private file.
+    /// credential in its private file. A runner that keeps a first-run
+    /// one-shot's output for diagnosis keeps it redacted in an owner-only
+    /// file, and a failure names only its exit status and that file.
+    ///
+    /// A failed seed copy or `setup.sh` is not retried; a failed `setup.sh`
+    /// leaves `setup_complete` false, so the next start resumes the same
+    /// one-time phase.
     pub fn prepare(&self, runner: &mut dyn CommandRunner) -> Result<(), ToolingError> {
         ensure_owner_only_dir(&self.state_root.join("secrets"))?;
         ensure_regular_dir(&self.state_root.join("database"))?;
@@ -258,12 +264,13 @@ impl Session<'_> {
                 "-c".to_owned(),
                 "cp -r /opt/thunderid/database/. /seed/".to_owned(),
             ];
-            let outcome = runner.run("docker", &seed, &[])?;
-            if !outcome.success {
-                return Err(ToolingError::CommandFailed {
-                    step: "the shipped database schema could not be seeded into the fresh session state",
-                });
-            }
+            run_first_run_one_shot(
+                runner,
+                "database seed",
+                &seed,
+                &[],
+                "the shipped database schema could not be seeded into the fresh session state",
+            )?;
         }
 
         let mut args: Vec<String> = vec![
@@ -282,20 +289,17 @@ impl Session<'_> {
         }
         args.push(self.image.to_owned());
         args.push("./setup.sh".into());
-        let outcome = runner.run(
-            "docker",
+        // Persist the failure shape rather than retrying destructively:
+        // the state file deliberately still says setup is incomplete, so
+        // the next start of the same session resumes this one-time phase
+        // instead of reusing a half-bootstrapped issuer.
+        run_first_run_one_shot(
+            runner,
+            "setup",
             &args,
             &[("ADMIN_PASSWORD".to_owned(), admin_password_file.clone())],
+            "the local ThunderID issuer's one-time upstream setup (its ./setup.sh bootstrap) did not complete; the partial state is retained for recovery",
         )?;
-        if !outcome.success {
-            // Persist the failure shape rather than retrying destructively:
-            // the state file deliberately still says setup is incomplete, so
-            // the next start of the same session resumes this one-time phase
-            // instead of reusing a half-bootstrapped issuer.
-            return Err(ToolingError::CommandFailed {
-                step: "the local ThunderID issuer's one-time upstream setup (its ./setup.sh bootstrap) did not complete; the partial state is retained for recovery",
-            });
-        }
         let mut state = self.read_state()?.unwrap_or_default();
         state.setup_complete = true;
         self.save_state(&state)
@@ -619,7 +623,42 @@ pub(crate) fn write_owner_only(path: &Path, bytes: &[u8]) -> Result<(), ToolingE
     Ok(())
 }
 
-fn ensure_owner_only_dir(path: &Path) -> Result<(), ToolingError> {
+/// Run one first-run one-shot. A failure becomes `step`, carrying the exit
+/// status and the kept log.
+fn run_first_run_one_shot(
+    runner: &mut dyn CommandRunner,
+    one_shot: &'static str,
+    args: &[String],
+    secret_environment: &[(String, PathBuf)],
+    step: &'static str,
+) -> Result<(), ToolingError> {
+    let outcome = runner.run_one_shot(one_shot, "docker", args, secret_environment)?;
+    if outcome.success {
+        return Ok(());
+    }
+    Err(ToolingError::OneShotFailed {
+        step,
+        one_shot,
+        exit_code: outcome.exit_code,
+        log_file: outcome.log_file,
+    })
+}
+
+/// The one line a first-run one-shot's failure reports: its numeric exit
+/// status and, when its output was kept, the owner-only file holding it.
+/// It is built from the exit status and the path alone.
+pub fn one_shot_report(one_shot: &str, exit_code: Option<i32>, log_file: Option<&Path>) -> String {
+    let ended = match exit_code {
+        Some(code) => format!("ThunderID {one_shot} one-shot exited with status {code}"),
+        None => format!("ThunderID {one_shot} one-shot terminated without a numeric exit status"),
+    };
+    match log_file {
+        Some(path) => format!("{ended}; its output is kept in {}", path.display()),
+        None => ended,
+    }
+}
+
+pub(crate) fn ensure_owner_only_dir(path: &Path) -> Result<(), ToolingError> {
     use std::os::unix::fs::PermissionsExt;
     ensure_regular_dir(path)?;
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).map_err(|_| {
@@ -930,6 +969,136 @@ mod tests {
         // Retention is unchanged: the completion marker still says setup is
         // incomplete, so a retry of the same session resumes this phase.
         assert!(!session.load_state().unwrap().setup_complete);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// Answers every command with success except the first-run one-shots,
+    /// which fail as many times as scripted, each with exit status 1 and a
+    /// distinct kept log path.
+    #[derive(Default)]
+    struct OneShots {
+        attempts: Vec<&'static str>,
+        seed_failures: usize,
+        setup_failures: usize,
+    }
+
+    impl CommandRunner for OneShots {
+        fn run(
+            &mut self,
+            _: &str,
+            _: &[String],
+            _: &[(String, PathBuf)],
+        ) -> Result<CommandOutcome, ToolingError> {
+            Ok(CommandOutcome {
+                success: true,
+                container_ids: String::new(),
+            })
+        }
+
+        fn run_one_shot(
+            &mut self,
+            one_shot: &'static str,
+            _: &str,
+            args: &[String],
+            secret_environment: &[(String, PathBuf)],
+        ) -> Result<crate::bootstrap::OneShotOutcome, ToolingError> {
+            let setup = args.last().is_some_and(|arg| arg == "./setup.sh");
+            assert_eq!(setup, one_shot == "setup", "{one_shot}: {args:?}");
+            assert_eq!(setup, !secret_environment.is_empty());
+            self.attempts.push(one_shot);
+            let remaining = if setup {
+                &mut self.setup_failures
+            } else {
+                &mut self.seed_failures
+            };
+            let failed = *remaining > 0;
+            *remaining = remaining.saturating_sub(1);
+            Ok(crate::bootstrap::OneShotOutcome {
+                success: !failed,
+                exit_code: Some(if failed { 1 } else { 0 }),
+                log_file: Some(PathBuf::from(format!(
+                    "/private/logs/thunderid-{}.{}.log",
+                    one_shot.replace(' ', "-"),
+                    self.attempts.len()
+                ))),
+            })
+        }
+    }
+
+    fn one_shot_session_root(name: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "thunderid-{name}-test-{}-{}",
+            std::process::id(),
+            random_urlsafe(8).unwrap()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        root
+    }
+
+    #[test]
+    fn a_one_shot_report_names_only_the_status_and_the_kept_log() {
+        assert_eq!(
+            one_shot_report("setup", Some(37), None),
+            "ThunderID setup one-shot exited with status 37"
+        );
+        assert_eq!(
+            one_shot_report(
+                "database seed",
+                Some(1),
+                Some(Path::new("/private/logs/thunderid-database-seed.x.log"))
+            ),
+            "ThunderID database seed one-shot exited with status 1; its output is kept in /private/logs/thunderid-database-seed.x.log"
+        );
+        assert_eq!(
+            one_shot_report("setup", None, None),
+            "ThunderID setup one-shot terminated without a numeric exit status"
+        );
+    }
+
+    #[test]
+    fn a_failed_first_run_one_shot_names_its_status_and_kept_log() {
+        let root = one_shot_session_root("one-shot-setup-failed");
+        let session = state_session(&root);
+        let mut runner = OneShots {
+            setup_failures: 1,
+            ..OneShots::default()
+        };
+
+        let reported = session.prepare(&mut runner).unwrap_err().to_string();
+
+        assert_eq!(runner.attempts, ["database seed", "setup"]);
+        for fact in [
+            "ThunderID issuer",
+            "./setup.sh",
+            "retained for recovery",
+            "exited with status 1",
+            "its output is kept in /private/logs/thunderid-setup.2.log",
+        ] {
+            assert!(reported.contains(fact), "{fact}: {reported}");
+        }
+        assert!(!session
+            .read_state()
+            .unwrap()
+            .is_some_and(|state| state.setup_complete));
+        std::fs::remove_dir_all(root).unwrap();
+
+        let root = one_shot_session_root("one-shot-seed-failed");
+        let session = state_session(&root);
+        let mut runner = OneShots {
+            seed_failures: 1,
+            ..OneShots::default()
+        };
+
+        let reported = session.prepare(&mut runner).unwrap_err().to_string();
+
+        assert_eq!(runner.attempts, ["database seed"]);
+        for fact in [
+            "could not be seeded",
+            "ThunderID database seed one-shot exited with status 1",
+            "its output is kept in /private/logs/thunderid-database-seed.1.log",
+        ] {
+            assert!(reported.contains(fact), "{fact}: {reported}");
+        }
         std::fs::remove_dir_all(root).unwrap();
     }
 

@@ -1,0 +1,625 @@
+apiVersion: registry.registrystack.org/product-contract/v1
+product: documents
+purpose: >-
+  Behaviour a reader could reasonably mistake for an oversight, recorded as a
+  deliberate choice with the reasoning that settled it. A later change may
+  overturn any of these, but it overturns the entry in the same commit rather
+  than rediscovering the question.
+decisions:
+  - id: DOCUMENTS-DEC-01
+    subject: Every document route is served, and only behind access-token verification
+    decision: >-
+      The documents binary serves GET /health and GET /ready without a
+      credential and every document route behind bearer-token verification
+      through platform-oidc and access-profile resolution. No route is compiled only into test
+      builds, and the PostgreSQL suites call the served router with tokens a
+      test issuer signs.
+    reasoning: >-
+      A document route served without authorization would answer callers no
+      rule governs, so the routes waited for the token work. Proving the
+      invariants through the router operators run, with real tokens, leaves
+      no synthetic caller whose behaviour could drift from the verifier's.
+    evidence:
+      - {path: crates/registry-documents/tests/postgres_startup.rs, name: a_prepared_runtime_serves_documents_only_to_a_verified_caller}
+  - id: DOCUMENTS-DEC-02
+    subject: Serving never applies the schema
+    decision: >-
+      Startup connects with the runtime credential and refuses a database
+      that does not carry exactly this release's schema. Applying the schema
+      is a separate step, documentsctl apply, over the migration credential.
+    reasoning: >-
+      The runtime credential should not hold the rights to change the schema,
+      and a schema change should be an operator's deliberate step rather than
+      a side effect of a restart.
+    evidence:
+      - {path: crates/registry-documents/tests/postgres_startup.rs, name: a_runtime_whose_database_refuses_the_credential_does_not_start}
+      - {path: crates/registry-documents/tests/postgres_startup.rs, name: a_runtime_over_a_database_without_the_schema_does_not_start}
+      - {path: crates/registry-documents/tests/postgres_operator.rs, name: apply_requires_the_migration_credential}
+  - id: DOCUMENTS-DEC-03
+    subject: One document version is at most 16 MiB by default, and 64 MiB on S3
+    decision: >-
+      storage.maximumDocumentBytes defaults to 16 MiB for both storage types.
+      PostgreSQL storage accepts no more; S3 storage accepts up to 64 MiB. A
+      document policy may only set a lower ceiling.
+    reasoning: >-
+      The upload is hashed and bounded while read, then buffered under one
+      transfer budget shared by uploads, downloads, and verification, so the
+      ceiling stays a small fraction of what the budget may hold. 16 MiB matches the Base Registry
+      Engine's attachment ceiling.
+    evidence:
+      - {path: crates/registry-documents/src/config.rs, name: a_database_ceiling_above_sixteen_mebibytes_is_out_of_range}
+      - {path: crates/registry-documents/src/config.rs, name: an_s3_ceiling_above_sixty_four_mebibytes_is_out_of_range}
+      - {path: crates/registry-documents/src/config.rs, name: s3_storage_reads_the_shared_object_storage_block}
+  - id: DOCUMENTS-DEC-04
+    subject: The project file is bounded and its profile references are cross-checked
+    decision: >-
+      documentsctl check reads documents.yaml against its schema and bounds,
+      refuses unknown members and repeated hook ids, and checks the
+      references a document policy makes to access profiles: a policy that
+      names an undeclared profile is refused with
+      documents.project.unknown-profile, and one that lists a profile in a
+      member its role does not admit with
+      documents.project.profile-role-mismatch. It also refuses a requester
+      client listed in two profiles, two profiles of one actor kind that name
+      different principal claims (documents.project.mixed-principal-claim),
+      and a default grant expiry above the policy's maximum, and reports
+      every such finding in one run.
+    reasoning: >-
+      A policy reference that resolves to no profile, or to one with the
+      wrong role, would leave a document nobody can hold or let the wrong
+      caller grant it. Refusing it when the project is checked keeps the
+      mistake out of a package instead of surfacing it as a refusal at
+      runtime.
+    evidence:
+      - {path: crates/registry-documents-core/src/project.rs, name: an_unknown_member_is_refused}
+      - {path: crates/registry-documents-core/src/project.rs, name: a_repeated_hook_id_is_refused}
+      - {path: crates/registry-documents-core/src/project.rs, name: a_policy_naming_an_undeclared_profile_is_refused_at_the_reference}
+      - {path: crates/registry-documents-core/src/project.rs, name: a_profile_listed_against_its_role_is_refused}
+      - {path: crates/registry-documents-core/src/project.rs, name: a_requester_client_shared_by_two_profiles_is_refused}
+      - {path: crates/registry-documents-core/src/project.rs, name: profiles_of_one_actor_kind_reading_different_principal_claims_are_refused}
+      - {path: crates/registry-documents-core/src/project.rs, name: every_reference_finding_is_reported_in_one_run}
+      - {path: crates/registry-documentsctl/src/lib.rs, name: the_starter_project_and_runtime_check_clean}
+  - id: DOCUMENTS-DEC-05
+    subject: Identical content uploaded twice gives two documents
+    decision: >-
+      Every upload is stored as its own content, in its own S3 object when
+      storage is S3, even when the bytes match another version's.
+    reasoning: >-
+      Sharing content across custodians would let one custodian learn, from
+      timing or storage, that another holds the same bytes, and would tie the
+      erasure of one document to another's.
+    evidence:
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: identical_content_uploaded_twice_gives_two_documents}
+      - {path: crates/registry-documents/tests/postgres_s3.rs, name: identical_s3_uploads_are_two_objects}
+  - id: DOCUMENTS-DEC-06
+    subject: An S3 object a failed upload attempt wrote is left in place
+    decision: >-
+      Each upload attempt commits a staged row naming a fresh object before
+      it writes the object. An attempt that fails, or loses a race to finalize,
+      leaves its object and uncommitted row behind; the upload does not try to
+      delete it.
+    reasoning: >-
+      A delete in the failure path can itself fail and would hide the orphan.
+      The staged row keeps every such object findable for the orphan sweep,
+      which erases it once it is older than the longest transfer deadline
+      (DOCUMENTS-DEC-22).
+    evidence:
+      - {path: crates/registry-documents/tests/postgres_s3.rs, name: a_failed_object_write_keeps_the_staged_row_and_finalizes_nothing}
+  - id: DOCUMENTS-DEC-07
+    subject: A dead-lettered verification leaves the version pending and suspended
+    decision: >-
+      Verification retries an unavailable verifier with backoff from 30
+      seconds, doubling to at most one hour, for about seven days, then
+      dead-letters the job. The version is neither approved nor rejected, and
+      is never erased because of the outage.
+    reasoning: >-
+      An outage says nothing about the content. Rejecting would discard a
+      custodian's document for the verifier's failure; approving would release
+      unverified bytes. An operator replays the job once the verifier answers.
+    evidence:
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: an_unavailable_verifier_never_releases_and_a_dead_letter_neither_approves_nor_rejects}
+  - id: DOCUMENTS-DEC-08
+    subject: A verification job is retried, not ended, when the worker holds another verifier binding
+    decision: >-
+      A verification job runs against the verifier binding its version is
+      currently recorded under. A worker whose own binding differs, as while
+      two instances with different verifiers run side by side during a
+      rollout, retries the job rather than dead-lettering it. Startup cancels
+      every pending job under a binding a version has moved away from, and a
+      job already leased under such a binding ends without a verdict. A
+      verdict that changes no row while the version is still under the same
+      binding and not rejected is not delivered: the attempt is refused and
+      the job retried once its lease lapses.
+    reasoning: >-
+      Ending a job because one worker holds the other binding would strand
+      the version pending until the next restart sweep, though a worker under
+      its own binding could verify it. Retrying costs attempts but never
+      records a verdict under the wrong binding: only the version's own
+      binding may approve, and the database refuses a releasable row whose
+      verdict binding differs from the version's current one. A version an
+      older instance finalizes after a newer instance's sweep stays under the
+      older binding until a worker under that binding verifies it, a later
+      restart sweeps it, or its job dead-letters.
+    evidence:
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_worker_under_another_binding_leaves_the_job_pending_for_its_own}
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_verifier_binding_change_at_restart_suspends_and_verifies_again}
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_verdict_that_records_nothing_under_the_current_binding_is_retried}
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: the_database_refuses_a_releasable_version_under_a_stale_or_mismatched_verdict}
+  - id: DOCUMENTS-DEC-09
+    subject: A document grant is pushed to one named recipient and never evaluated live
+    decision: >-
+      A grant names one exact version, one recipient by issuer and subject, and
+      an expiry fixed at issue from the policy default within its maximum. It
+      cannot be extended, cannot name an organization or a role, and cannot be
+      an invitation; release checks only the stored grant, never a predicate
+      over current claims. A grant's recipient issuer is the granting caller's
+      issuer.
+    reasoning: >-
+      A pushed grant is reviewable as a row: who may read which bytes until
+      when. A live predicate would let a change in an issuer's claims widen
+      release silently, and an organizational recipient would move the choice of
+      reader out of the Store's audit. A new grant is the way to extend access.
+    evidence:
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_grant_releases_one_exact_version_to_its_named_recipient_until_expiry_or_revocation}
+  - id: DOCUMENTS-DEC-10
+    subject: A caller learns a document exists only when it already holds standing on it
+    decision: >-
+      Read, download, and every grant route answer 404 resource.not-found for a
+      document the caller holds no standing on, the same as an unknown
+      identifier. A caller who sees the document but lacks the authority an
+      action needs gets 403 profile.not-authorized. Download releases bytes
+      only to the custodian and an active grant holder. The system that
+      reserved the document for another custodian sees it, so its download
+      answers 403 profile.not-authorized; every caller without standing gets
+      404.
+    reasoning: >-
+      A 403 to a stranger would confirm the identifier names a document. A
+      caller who already sees the document learns nothing from 403 and is better
+      told why. Under citizen delivery the citizen holds and shares the
+      document; the reserving system keeps metadata and status visibility only,
+      with no grant authority and no bytes, so custody, not reservation,
+      decides who reads content and who shares. It already knows the document exists, so a 404 would hide nothing and only
+      misstate why it gets no bytes.
+    evidence:
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: grant_authority_and_unknown_ids_answer_without_disclosing_a_document}
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: an_uploaded_document_is_released_only_after_it_is_verified}
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: the_owning_system_that_is_not_the_custodian_is_refused_the_content_as_unauthorized}
+  - id: DOCUMENTS-DEC-11
+    subject: A transfer admitted before a revocation completes
+    decision: >-
+      Revoking a grant stops every download that has not yet passed its
+      authorization check. A download already authorized and streaming finishes
+      within its transfer deadline.
+    reasoning: >-
+      Cutting an admitted transfer mid-stream would need a revocation check per
+      chunk and still could not recall bytes already sent. The transfer deadline
+      bounds how long an admitted download may run after revocation.
+    evidence:
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_transfer_admitted_before_a_revocation_completes}
+  - id: DOCUMENTS-DEC-12
+    subject: A grant retried after revocation answers the revoked grant
+    decision: >-
+      An Idempotency-Key replay of a grant issue re-runs authorization and
+      answers the grant as it now stands, 201 with state revoked or expired,
+      rather than issuing a new grant or the first answer. Revoking a revoked
+      grant answers 200 with the same view.
+    reasoning: >-
+      Re-issuing on replay would let a client's retry undo a revocation;
+      replaying the first answer would report a grant the Store no longer
+      honours. Answering the current state keeps the retry safe and truthful.
+    evidence:
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: an_idempotent_grant_retry_after_revocation_releases_nothing}
+  - id: DOCUMENTS-DEC-13
+    subject: Lists page in a stable order, and the documents list may return short pages
+    decision: >-
+      Every list orders by creation time and identifier, pages by an opaque
+      cursor, and caps a page at 100 items. The received-grants list selects,
+      before its limit, only grants the caller may redeem: naming the caller's
+      issuer, subject, and actor kind, unrevoked and unexpired, under a policy
+      whose recipient profiles include the caller's, on a version releasable
+      under the current verifier binding; its pages are full while more remain.
+      The documents list selects by the caller's identity and kind in the
+      query and then filters each row by the policy's standing rules, so its
+      page may hold fewer items than the limit while a next cursor remains.
+    reasoning: >-
+      The received-grants conditions are the release conditions themselves and
+      are row facts, so the query states them exactly. The documents list's
+      remaining conditions are per-policy profile rules; repeating them in SQL
+      could let them drift from the ones release enforces. A short page costs a
+      client one more request; a drifted rule could disclose a document.
+    evidence:
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: grant_and_document_lists_page_in_a_stable_order}
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_recipient_s_grant_list_pages_only_grants_it_may_redeem}
+  - id: DOCUMENTS-DEC-14
+    subject: A request that finds the budget spent is refused, not queued
+    decision: >-
+      An upload or download that finds no room in the transfer budget is
+      refused at once with 503 service.unavailable and Retry-After. A
+      verification attempt, which no caller waits on, waits for room only
+      within its attempt timeout and then ends as a transient failure to be
+      retried. A malformed cursor, limit, query key, or Idempotency-Key answers
+      400 request.invalid, and a grant expiry outside the policy bounds answers
+      422 document-grant.expiry-out-of-range, with fixed guidance to choose
+      a positive duration no greater than the policy maximum or omit it
+      for the default. The diagnostic repeats no request value.
+    reasoning: >-
+      A queue would hold connections and memory for callers the Store cannot yet
+      serve, the exhaustion the budget exists to prevent. Retry-After lets a
+      client back off without a second mechanism. Bounding the verifier's wait
+      by its attempt timeout keeps a job from holding its lease past the
+      attempt deadline.
+    evidence:
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: an_exhausted_transfer_budget_refuses_uploads_and_downloads}
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_verification_attempt_waits_for_transfer_budget_only_within_its_attempt_timeout}
+  - id: DOCUMENTS-DEC-15
+    subject: A document policy states who holds custody when a service names a person
+    decision: >-
+      A document policy carries a required custodian rule. Under institution, a
+      service that reserves a document naming a person keeps custody itself
+      and records the person only as the represented principal, who has no
+      standing until granted. Under represented-principal, the named person
+      becomes the custodian. The starter project uses institution for
+      institutional-custody and represented-principal for citizen-delivery and
+      named-share.
+    reasoning: >-
+      Two policies of the same shape, a service reserving a document about a
+      person, can mean opposite things: a certificate delivered to a citizen,
+      or an institution's own file about them. Inferring custody from policy
+      names or profile roles would hide the choice; a required member makes the
+      author state it, and the runtime enforces the stated rule.
+    evidence:
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: under_institutional_custody_the_named_person_has_no_standing_without_a_grant}
+      - {path: crates/registry-documents-core/src/access.rs, name: under_institutional_custody_the_reserving_system_stays_the_custodian}
+  - id: DOCUMENTS-DEC-16
+    subject: A grant names its recipient's actor kind
+    decision: >-
+      A grant request names the recipient as a subject and a required actor
+      kind, service or human, and the grant stores it. Release matches the
+      caller's issuer, subject, and kind against the grant.
+    reasoning: >-
+      An issuer may use one subject namespace for people and services, so a
+      subject alone could release a person's grant to a service that shares the
+      value. The granting caller knows which recipient it means; requiring the
+      kind makes it say so instead of the Store guessing.
+    evidence:
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_grant_releases_only_to_a_caller_of_the_actor_kind_it_names}
+      - {path: crates/registry-documents-core/src/wire.rs, name: a_grant_request_names_one_version_and_one_subject_of_one_kind}
+  - id: DOCUMENTS-DEC-17
+    subject: Activation follows the Messaging ledger, and serve reads the ledger first
+    decision: >-
+      documentsctl plan, apply, and status run over the shared activation
+      ledger the way messagingctl does: one ledger row per applied package,
+      an apply of the already active package records nothing, a changed
+      package records a successor naming its predecessor, the runtime role is
+      split from the migration role when the credentials differ, and the
+      operator reference is kept as a keyed hash. At startup the ledger is
+      read before the schema is checked, so a database nobody activated is
+      refused as not activated rather than as a schema mismatch.
+    reasoning: >-
+      One activation model across products is one model for operators to
+      learn and one implementation to review. Reading the ledger first gives
+      an operator who has not yet applied the remedy they need, apply,
+      instead of a schema finding that suggests the database is damaged.
+    evidence:
+      - {path: crates/registry-documents/tests/postgres_operator.rs, name: apply_is_idempotent_for_one_package_and_records_a_changed_one}
+      - {path: crates/registry-documents/tests/postgres_operator.rs, name: a_fresh_database_is_refused_by_serve_until_the_package_is_applied}
+      - {path: crates/registry-documents/tests/postgres_operator.rs, name: serve_refuses_an_activated_database_with_a_newer_schema_version}
+      - {path: crates/registry-documentsctl/tests/postgres_cli.rs, name: init_package_plan_apply_and_status_activate_a_starter_deployment}
+  - id: DOCUMENTS-DEC-18
+    subject: Dead-letter replay is an operator command over the runtime credential
+    decision: >-
+      documentsctl verification list shows dead-lettered verification jobs
+      and documentsctl verification replay returns one to pending under its
+      next generation; documentsctl erasure list and erasure replay do the
+      same for erasure jobs, the only way back for a dead-lettered erasure,
+      which the sweep never re-arms. All use the runtime credential against
+      an activated database and write the replay to the documentsctl
+      companion audit journal. No HTTP route lists or replays a job.
+    reasoning: >-
+      A replay re-queues work the dispatcher already owns, so it needs no
+      authority beyond the runtime's. Keeping it off HTTP leaves no caller
+      but the operator, and naming the current generation makes a replay
+      issued from a stale listing fail rather than race.
+    evidence:
+      - {path: crates/registry-documents/tests/postgres_operator.rs, name: replay_returns_a_dead_lettered_verification_to_pending}
+      - {path: crates/registry-documents/tests/postgres_operator.rs, name: erasure_replay_returns_a_dead_lettered_erasure_to_pending}
+      - {path: crates/registry-documentsctl/tests/postgres_cli.rs, name: the_dead_letter_verbs_refuse_a_database_that_is_not_activated}
+  - id: DOCUMENTS-DEC-19
+    subject: Grant expiry and revocation erase nothing held in custody
+    decision: >-
+      Two clocks are kept apart. A grant's expiry or revocation only stops that
+      grant releasing; it never starts erasure. Bytes are erased only after the
+      custodian asks for the document's removal and the policy's
+      cleanupGraceHours have passed, or after a rejection and the same grace
+      (DOCUMENTS-DEC-21). Nothing expires by inactivity: there is no
+      sliding expiry, and a citizen-held document stays until its custodian
+      removes it.
+    reasoning: >-
+      Erasing on grant expiry would destroy a document its custodian still
+      holds the moment its last share lapsed. Custody belongs to the custodian,
+      so only the custodian ends it.
+    evidence:
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: grant_expiry_and_revocation_erase_nothing_held_in_custody}
+  - id: DOCUMENTS-DEC-20
+    subject: A removal request stops release at once and freezes its grace
+    decision: >-
+      The removal request moves the version to erasure pending, suspends it,
+      revokes every active grant on the document, and cancels its pending
+      verification, all in one transaction. The due time is the request time
+      plus the policy's cleanupGraceHours at that moment; a later policy change
+      does not move it, and a version a rejection already armed keeps the
+      rejection's due time. A repeated request changes nothing and answers the
+      document as it stands, so the route takes no Idempotency-Key. Only the
+      custodian may ask, by the one predicate the route and the document's
+      offered actions share; a caller that cannot see the document is
+      answered resource.not-found.
+    reasoning: >-
+      The grace exists to give the operator a window to restore from a
+      mistake, not to keep serving: a document its custodian asked to remove
+      must not be released in the meantime. Freezing the due time keeps one
+      request's outcome independent of later package changes. The request is
+      repeat-safe by construction: the document records its first removal
+      request and only that request moves anything, so a removal after a
+      rejection still revokes the document's grants, and a retry after a
+      lost answer finds the first outcome without a stored
+      receipt, and a key would add a refusal (another body under a held key)
+      for a request that has no body.
+    evidence:
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_custodian_erasure_request_stops_release_and_the_sweep_erases_the_bytes}
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: removing_a_rejected_document_revokes_its_grants}
+  - id: DOCUMENTS-DEC-21
+    subject: A rejected version's bytes are erased after the grace; a dead-lettered verification's are kept
+    decision: >-
+      A rejection arms the erasure of the rejected version's bytes in the
+      transaction that records it, due after the document policy's
+      cleanupGraceHours, and the same sweep, erasure job, and evidence a
+      removal uses erase them. The version record stays: it reads rejected
+      until the bytes are erased, and erased after. A policy the deployment no
+      longer declares falls back to the version's upload window, which was
+      cut from the same grace at reservation. A version whose verification
+      dead-lettered is kept, pending and suspended, until an operator replays
+      the job or its custodian asks for removal.
+    reasoning: >-
+      A rejection is a verdict: the bytes can never be released again, since
+      no later verdict moves a rejected version, so keeping them only keeps
+      content the Store refused. The grace leaves an operator the same window
+      to restore from a wrong verdict that a removal leaves. A dead-letter is
+      an outage, not a verdict: the content was never judged, and erasing it
+      would destroy a document a replay would release.
+    evidence:
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_rejected_version_is_erased_after_its_grace}
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: an_unavailable_verifier_never_releases_and_a_dead_letter_neither_approves_nor_rejects}
+  - id: DOCUMENTS-DEC-22
+    subject: Lapsed uploads are expired; orphaned objects are swept after the longest transfer
+    decision: >-
+      Each cleanup pass marks every reserved upload past its upload window
+      expired, the window being the reservation time plus the policy's
+      cleanupGraceHours,
+      in audited batches, whether erasure is active or paused; an expired
+      upload stops counting against the custodian's quota and cannot be
+      finalized. A lapsed upload never stored bytes the Store serves, so
+      nothing is erased for it. An S3 object an upload attempt left
+      uncommitted is erased, and its staged row deleted, once it is older than
+      the deployment's longest transfer deadline plus ten minutes, and only
+      while erasure is active.
+    reasoning: >-
+      Expiring a reservation changes state only, so pausing erasure has no
+      reason to stop it. Sweeping an uncommitted object any sooner could race a
+      write still in flight and leave an object no row names.
+    evidence:
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: an_unfinished_upload_past_its_deadline_is_expired_by_the_sweep}
+      - {path: crates/registry-documents/tests/postgres_s3.rs, name: the_orphan_sweep_erases_only_old_uncommitted_objects}
+  - id: DOCUMENTS-DEC-23
+    subject: An erasure is recorded only once the bytes are confirmed gone
+    decision: >-
+      Each version due for erasure gets one dispatch job. For PostgreSQL bytea
+      the content row is deleted in the transaction that records the version
+      erased. For S3 every committed object is deleted and a read of it must
+      answer 404 before its staged row is deleted and the version recorded
+      erased; an unconfirmed delete leaves the version pending and the job
+      retries. Erased means this Store can no longer serve the bytes:
+      PostgreSQL keeps them on disk until their pages are overwritten or
+      VACUUM FULL rewrites the table, since vacuum only makes the space
+      reusable, and backups, WAL archives, replicas, and a provider's own
+      copies keep them until they age out.
+    reasoning: >-
+      Recording an erasure the store did not confirm would let the Store claim
+      a removal it cannot prove. Recording in the same transaction as the
+      deletion of the rows that named the bytes keeps an interrupted attempt
+      resumable without a second erasure being recorded.
+    evidence:
+      - {path: crates/registry-documents/tests/postgres_s3.rs, name: an_unconfirmed_s3_delete_keeps_the_version_pending}
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: an_interrupted_erasure_batch_resumes_without_double_erasure}
+  - id: DOCUMENTS-DEC-24
+    subject: A dead-lettered erasure waits for a replay
+    decision: >-
+      An erasure job that uses every attempt, about seven days of retries, is
+      dead-lettered and not re-armed by later passes. Its version stays erasure
+      pending and unservable until an operator replays the job.
+    reasoning: >-
+      Re-arming would hide a store that keeps refusing deletes behind an
+      endless retry. A dead-letter is visible, and the version releases nothing
+      while it waits.
+    evidence:
+      - {path: crates/registry-documents/tests/postgres_s3.rs, name: a_dead_lettered_erasure_waits_for_a_replay}
+  - id: DOCUMENTS-DEC-25
+    subject: Erasure deletes bytes and keeps every record
+    decision: >-
+      Erasure deletes the content row or the object and its staged row, and
+      keeps the document, version, grants, idempotency keys, and dispatch jobs
+      as tombstones. Every foreign key is ON DELETE RESTRICT, so no delete
+      cascades through a record the audit trail names. Idempotency keys are not
+      pruned by erasure.
+    reasoning: >-
+      The audit journal names documents, versions, and grants by identifier; a
+      cascade would leave entries naming rows that no longer exist and let one
+      delete silently remove history.
+    evidence:
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: no_delete_cascades_through_custody_records}
+  - id: DOCUMENTS-DEC-26
+    subject: A document under an undeclared policy cannot be removed over HTTP
+    decision: >-
+      A document whose policy the deployed package no longer declares is seen
+      by nobody, so its custodian's removal request answers resource.not-found.
+      Declaring the policy again makes it removable.
+    reasoning: >-
+      Granting removal on a policy the package no longer declares would need a
+      second, policy-free standing rule; the grace a removal freezes comes from
+      that policy. Keeping the bytes is the safe default until the operator
+      restores the declaration.
+    evidence:
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_document_under_an_undeclared_policy_cannot_be_removed}
+  - id: DOCUMENTS-DEC-27
+    subject: An event's type is its hook id, and its family is its data schema
+    decision: >-
+      The envelope type of a document event is the id of the hook that
+      captured it, as the shared hook envelope defines it, and its
+      dataschema names the event family. Two hooks on one trigger deliver
+      two events with different types and the same data schema. The
+      subject's recordRevision is the version's or grant's revision, which
+      every recorded change of that record raises by one, so events about
+      one record carry strictly increasing revisions.
+    reasoning: >-
+      The shared delivery worker re-reads the stored envelope and refuses
+      one whose type disagrees with the outbox row it was captured under,
+      and every product follows the same envelope contract. The data schema
+      already tells a receiver which family it holds, so no second type
+      vocabulary is needed. A receiver that sees deliveries out of order or
+      twice needs a per-record order to keep the latest state, and a fixed
+      revision would give it none.
+    evidence:
+      - {path: crates/registry-documents/tests/postgres_hooks.rs, name: a_verdict_captures_one_delivery_per_matching_observer_with_the_closed_projection}
+      - {path: crates/registry-documents/tests/postgres_hooks.rs, name: a_version_approved_again_after_a_verifier_rebind_reports_ready_again}
+  - id: DOCUMENTS-DEC-28
+    subject: Only a change of state emits, and grant expiry emits nothing
+    decision: >-
+      document-version.ready is emitted when a verdict makes a version
+      ready that was not ready, including a version approved again after a
+      verifier binding change suspended it. document-version.rejected is
+      emitted when a version becomes rejected. document-grant.changed is
+      emitted once on issue and once on revocation, including one revoked
+      event for each grant a removal request revokes; an issue replayed
+      under its idempotency key, a repeated revocation, and a repeated
+      removal emit nothing. A grant reaching its expiry is not a recorded
+      transition and emits nothing: the issued event carries expiresAt, and
+      a receiver reads the lapse from it. This departs from the design
+      handoff, which had expiry recorded as expired; no sweep records it.
+      The version's own erasure steps emit nothing.
+    reasoning: >-
+      An event reports a transition the Store committed. Expiry is not a
+      transition anyone performs: the grant stops releasing at the time the
+      issued event already carried, and recording it would need a sweep
+      outside any caller's transaction for a fact the receiver already
+      holds. A removal does revoke grants, and an observer that tracks them
+      must hear about it as it would about any revocation.
+    evidence:
+      - {path: crates/registry-documents/tests/postgres_hooks.rs, name: grant_issue_and_revoke_each_capture_one_event_and_repeats_capture_none}
+      - {path: crates/registry-documents/tests/postgres_hooks.rs, name: a_removal_captures_one_revoked_event_per_grant_it_revokes_and_a_repeat_none}
+      - {path: crates/registry-documents/tests/postgres_hooks.rs, name: a_rejection_captures_the_rejected_event_once}
+      - {path: crates/registry-documents/tests/postgres_hooks.rs, name: a_version_approved_again_after_a_verifier_rebind_reports_ready_again}
+  - id: DOCUMENTS-DEC-29
+    subject: A capture that cannot be written rolls the transition back
+    decision: >-
+      If the outbox or delivery rows cannot be written, the verdict or grant
+      change fails with them. Once committed, a delivery failure never
+      reaches the transition.
+    reasoning: >-
+      Committing a transition without its event would leave observers
+      permanently out of step with no record to replay. The capture is a
+      local insert in the same database, so failing it is as rare as failing
+      the transition itself, while delivery depends on an outside endpoint
+      and stays after commit.
+    evidence:
+      - {path: crates/registry-documents/tests/postgres_hooks.rs, name: a_rolled_back_transition_captures_nothing}
+      - {path: crates/registry-documents/tests/postgres_hooks.rs, name: a_capture_that_cannot_commit_rolls_its_transition_back}
+      - {path: crates/registry-documents/tests/postgres_hooks.rs, name: a_rolled_back_removal_captures_nothing}
+      - {path: crates/registry-documents/tests/postgres_hooks.rs, name: an_unreachable_destination_never_blocks_a_transition}
+  - id: DOCUMENTS-DEC-30
+    subject: actorKind appears on grant events only, as the kind of the caller whose act they report
+    decision: >-
+      A grant event's actorKind is the kind of the caller that issued or
+      revoked the grant, or that requested the removal which revoked it. It
+      is service or human, never a subject. A version event carries no
+      actorKind.
+    reasoning: >-
+      A receiver needs to tell an institution's own system from a person
+      acting for themselves without learning who either is. A verdict is the
+      verifier's, not a caller's; reporting the reserving caller's kind on
+      it would attribute the verdict to someone who did not make it.
+    evidence:
+      - {path: crates/registry-documents/src/hooks_tests.rs, name: each_family_projects_exactly_its_closed_fields}
+  - id: DOCUMENTS-DEC-31
+    subject: Hooks are part of the package, so changing one is a successor activation
+    decision: >-
+      Hook declarations live in the project file and change the package
+      digest; serve refuses a package that is not the active one, so adding,
+      removing, or changing a hook takes documentsctl apply before restart.
+      A destination's binding in the runtime configuration does not change
+      the package, but every pending or leased delivery pins the binding it
+      was captured under, and startup refuses while one remains whose
+      binding is gone. A hook moves to a new URL or key by binding a new
+      destination id, pointing the hook at it, and applying, while the old
+      entry stays until its deliveries drain or expire. No command abandons
+      pending deliveries. The delivery tables are created by the embedded
+      schema apply installs, and the runtime role is granted them with the
+      rest of what serving needs.
+    reasoning: >-
+      What is observed, and with which fields, is a reviewed governance
+      choice like a policy; where it is sent is an operator binding. Keeping
+      the first in the activated package gives it the same review trail.
+      Sending retained work to a binding it was not captured under would
+      deliver signed events somewhere the capture never approved, so the
+      shared delivery worker refuses that rather than guess.
+    evidence:
+      - {path: crates/registry-documents/tests/postgres_hooks.rs, name: a_split_runtime_role_captures_and_delivers_under_its_own_grants}
+      - {path: crates/registry-documents/tests/postgres_hooks.rs, name: delivery_sends_the_signed_envelope_and_refuses_a_returned_proposal}
+      - {path: crates/registry-documents/tests/postgres_hooks.rs, name: a_destination_changed_under_a_pending_delivery_refuses_startup_until_it_drains}
+  - id: DOCUMENTS-DEC-32
+    subject: Event data schemas are closed and require no member
+    decision: >-
+      Each family's published data schema forbids every property outside
+      the family's inventory and requires none, because each hook projects
+      the subset it chose.
+    reasoning: >-
+      Closing the schema lets a receiver reject a field it never agreed to;
+      requiring a member would make a narrower, privacy-preserving
+      projection invalid.
+    evidence:
+      - {path: crates/registry-documents/src/schema.rs, name: event_schemas_are_deterministic_closed_and_one_per_trigger, features: [schema]}
+  - id: DOCUMENTS-DEC-33
+    subject: A hook hears only about documents under the policies it names
+    decision: >-
+      Every hook carries a required, non-empty policies list naming
+      policies the project declares, each once, and is captured only for a
+      document held under one of them. The list is part of the hook's
+      compiled fingerprint. Eligibility is the operator's per-policy
+      declaration, reviewed with the package; it is a plain list, not a
+      when condition. Routing by custodian is deferred.
+    reasoning: >-
+      A project may hold documents for several owning systems under
+      different policies, and a hook that heard about all of them would tell
+      one system about another's documents. The policy is the unit the
+      project already governs, so scoping by it adds no new vocabulary and
+      no run-time evaluation; per-custodian routing would need a custodian
+      model on the event the Store does not yet carry.
+    evidence:
+      - {path: crates/registry-documents/tests/postgres_hooks.rs, name: a_hook_hears_nothing_about_a_document_under_a_policy_it_does_not_name}
+      - {path: crates/registry-documents-core/src/project.rs, name: a_hook_without_policies_is_refused}
+      - {path: crates/registry-documents/src/hooks_tests.rs, name: the_compiled_fingerprint_covers_the_policy_scope_but_not_its_order}
+  - id: DOCUMENTS-DEC-34
+    subject: A development-only content verifier that approves every version
+    decision: >-
+      contentVerification may be type disabled, which approves every finalized
+      version without asking a verifier, and the runtime accepts it only when
+      the listener declares development-loopback. Any other listener mode
+      refuses the configuration before anything binds. There is no production
+      state in which content is released unverified.
+    reasoning: >-
+      The concept handoff has no not-required state and names a fake verifier
+      endpoint for tests and documentsctl dev. A development database, the
+      checkpoint script and the loopback tests need a verdict without running
+      a verifier process. The guard is the boundary: the same refusal that keeps
+      plaintext hook and verifier URLs out of production keeps this type out,
+      so accepting it adds no path for unverified bytes to reach a recipient.
+    evidence:
+      - {path: crates/registry-documents/src/config.rs, name: disabled_content_verification_requires_development_loopback}

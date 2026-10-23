@@ -36,6 +36,7 @@ SHARDS = {
         "registry-platform-hooks",
         "registry-platform-httpsec",
         "registry-platform-httputil",
+        "registry-platform-objectstore",
         "registry-platform-oidc",
         "registry-platform-ratelimit",
         "registry-platform-script",
@@ -85,6 +86,12 @@ SHARDS = {
         "registry-messaging-client-node",
         "registry-messaging-client-py",
     ),
+    "documents": (
+        "registry-documents-core",
+        "registry-documents",
+        "registry-documentsctl",
+        "registry-documents-client",
+    ),
     "stack-client": ("registry-record", "registry-stack-client"),
     "evidence": (
         "registry-evidence",
@@ -118,6 +125,9 @@ BREG_PACKAGES = frozenset(SHARDS["breg"])
 CASEWORK_PACKAGES = frozenset(SHARDS["casework"])
 SCHEDULING_PACKAGES = frozenset(SHARDS["scheduling"])
 MESSAGING_PACKAGES = frozenset(SHARDS["messaging"])
+DOCUMENTS_PACKAGES = frozenset(SHARDS["documents"])
+# The Document Store PostgreSQL journey drives the real registry-render binary.
+DOCUMENTS_POSTGRES_PACKAGES = DOCUMENTS_PACKAGES | {"registry-render"}
 STACK_CLIENT_PACKAGES = frozenset(SHARDS["stack-client"])
 
 # The runtime configuration conformance gate reads the sources of the runtimes
@@ -137,6 +147,7 @@ CONFIG_CONFORMANCE_PACKAGES = frozenset(
         "registry-render",
         "registry-scheduling",
         "registry-messaging",
+        "registry-documents",
     }
 )
 # The configuration conformance corpus runs the registered `check` command of
@@ -150,6 +161,7 @@ CONFIG_CHECK_PACKAGES = frozenset(
         "registry-bregctl",
         "registry-caseworkctl",
         "registry-discoveryctl",
+        "registry-documentsctl",
         "registry-evidence",
         "registry-evidence-oid4vci",
         "registry-evidencectl",
@@ -170,6 +182,7 @@ CONFIG_CONFORMANCE_INPUTS = (
     "products/casework/generated/runtime/*",
     "products/scheduling/generated/runtime/*",
     "products/messaging/generated/runtime/*",
+    "products/documents/generated/runtime/*",
     "products/evidence/generated/oid4vci-runtime/*",
 )
 
@@ -369,6 +382,19 @@ RENDER_TUTORIAL_INPUTS = (
     "docs/site/src/content/docs/tutorials/first-render-document.mdx",
 )
 
+# Every input the Document Store tutorial gate replays or is built from. The
+# page runs against the registry-documentsctl binary built from the workspace,
+# with no database, container or network; package routing carries the crates.
+DOCUMENTS_TUTORIAL_INPUTS = (
+    "Cargo.lock",
+    "Cargo.toml",
+    "docs/site/package-lock.json",
+    "docs/site/package.json",
+    "docs/site/scripts/run-tutorial.mjs",
+    "docs/site/scripts/tutorial-runner/**",
+    "docs/site/src/content/docs/tutorials/first-documents.mdx",
+)
+
 # Every input the Registry Scheduling tutorial gate replays or is built from.
 # The pages run offline against schedulingctl built from the workspace and
 # start no service or container; package routing carries the crates.
@@ -513,6 +539,10 @@ CASEWORK_TUTORIAL_PACKAGES = frozenset(
 # replayed path.
 MESSAGING_TUTORIAL_PACKAGES = frozenset({"registry-messaging", "registry-messagingctl"})
 
+# The Document Store tutorial replays against the one registry-documentsctl
+# binary.
+DOCUMENTS_TUTORIAL_PACKAGES = frozenset({"registry-documentsctl"})
+
 # The Render tutorial replays against the one registry-render binary.
 RENDER_TUTORIAL_PACKAGES = frozenset({"registry-render"})
 
@@ -616,6 +646,7 @@ DOCS_ARCHIVE_INPUTS = frozenset(
         "docs/site/scripts/generate-casework-configuration.mjs",
         "docs/site/scripts/generate-configuration-formats.mjs",
         "docs/site/scripts/generate-coordinator-configuration.mjs",
+        "docs/site/scripts/generate-documents-configuration.mjs",
         "docs/site/scripts/generate-evidence-configuration.mjs",
         "docs/site/scripts/generate-messaging-configuration.mjs",
         "docs/site/scripts/generate-render-configuration.mjs",
@@ -1140,6 +1171,8 @@ def classify(
                 seeds.update(SCHEDULING_PACKAGES)
             elif path.startswith("products/messaging/"):
                 seeds.update(MESSAGING_PACKAGES)
+            elif path.startswith("products/documents/"):
+                seeds.update(DOCUMENTS_PACKAGES)
             elif path.startswith("products/coordinator/"):
                 seeds.add("registry-coordinator")
             elif path.startswith("products/identifiers/"):
@@ -1300,11 +1333,13 @@ def classify(
             "products/scheduling/generated/records/*",
             "products/scheduling/generated/fixture/*",
             "products/scheduling/generated/runtime/*",
-            # The Messaging, Coordinator, and Render configuration reference
-            # pages are generated from these schemas, and the Coordinator one
-            # from its operation catalogue as well.
+            # The Messaging, Document Store, Coordinator, and Render
+            # configuration reference pages are generated from these schemas,
+            # and the Coordinator one from its operation catalogue as well.
             "products/messaging/generated/authoring/*",
             "products/messaging/generated/runtime/*",
+            "products/documents/generated/project/*",
+            "products/documents/generated/runtime/*",
             "products/coordinator/generated/project/*",
             "products/coordinator/generated/scenarios/*",
             "products/coordinator/generated/runtime/*",
@@ -1324,6 +1359,7 @@ def classify(
             # as the Evidence one is from its own above.
             "products/casework/generated/registry-casework.openapi.json",
             "products/messaging/generated/registry-messaging.openapi.json",
+            "products/documents/generated/registry-documents.openapi.json",
             "products/scheduling/generated/registry-scheduling.openapi.json",
             "products/coordinator/generated/openapi/coordinator.openapi.json",
             # The client capabilities page imports this inventory at build.
@@ -1401,6 +1437,8 @@ def classify(
                 "products/scheduling/generated/fixture/",
                 "products/messaging/generated/authoring/",
                 "products/messaging/generated/runtime/",
+                "products/documents/generated/project/",
+                "products/documents/generated/runtime/",
                 "products/discovery/schemas/",
             )
         )
@@ -1444,6 +1482,12 @@ def classify(
         complete
         or any(matches(path, *MESSAGING_TUTORIAL_INPUTS) for path in paths)
         or bool(affected & MESSAGING_TUTORIAL_PACKAGES)
+    )
+
+    documents_tutorial = (
+        complete
+        or any(matches(path, *DOCUMENTS_TUTORIAL_INPUTS) for path in paths)
+        or bool(affected & DOCUMENTS_TUTORIAL_PACKAGES)
     )
 
     render_tutorial = (
@@ -1529,6 +1573,8 @@ def classify(
         ) and bool(affected & (SCHEDULING_PACKAGES | {"registry-platform-dispatch"})),
         "messaging_contracts": bool(affected & MESSAGING_PACKAGES),
         "messaging_postgres": bool(affected & MESSAGING_PACKAGES),
+        "documents_contracts": bool(affected & DOCUMENTS_PACKAGES),
+        "documents_postgres": bool(affected & DOCUMENTS_POSTGRES_PACKAGES),
         "coordinator": "registry-coordinator" in affected,
         "release_tool": release_tool,
         "release_source_proof": release_source_proof,
@@ -1541,6 +1587,7 @@ def classify(
         "breg_tutorial": breg_tutorial,
         "casework_tutorial": casework_tutorial,
         "messaging_tutorial": messaging_tutorial,
+        "documents_tutorial": documents_tutorial,
         "render_tutorial": render_tutorial,
         "scheduling_tutorial": scheduling_tutorial,
         "breg_evidence_composition": breg_evidence_composition,

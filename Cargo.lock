@@ -4938,7 +4938,6 @@ dependencies = [
  "jsonschema",
  "jsonwebtoken",
  "pg_query",
- "quick-xml 0.42.0",
  "rcgen",
  "registry-breg-client",
  "registry-evidence-client",
@@ -4950,9 +4949,11 @@ dependencies = [
  "registry-platform-canonical-json",
  "registry-platform-config",
  "registry-platform-crypto",
+ "registry-platform-dispatch",
  "registry-platform-hooks",
  "registry-platform-httpsec",
  "registry-platform-httputil",
+ "registry-platform-objectstore",
  "registry-platform-oidc",
  "registry-platform-script",
  "registry-platform-testing",
@@ -5210,6 +5211,7 @@ dependencies = [
  "registry-platform-canonical-json",
  "registry-platform-config",
  "registry-platform-crypto",
+ "registry-platform-dispatch",
  "registry-platform-httpsec",
  "registry-platform-httputil",
  "registry-platform-oidc",
@@ -5394,6 +5396,8 @@ dependencies = [
  "registry-caseworkctl",
  "registry-cli-reference",
  "registry-coordinator",
+ "registry-documents",
+ "registry-documentsctl",
  "registry-evidence",
  "registry-evidence-oid4vci",
  "registry-evidencectl",
@@ -5642,6 +5646,113 @@ dependencies = [
  "thiserror 2.0.21",
  "time",
  "tokio",
+]
+
+[[package]]
+name = "registry-documents"
+version = "0.44.0"
+dependencies = [
+ "async-trait",
+ "aws-lc-rs",
+ "axum",
+ "base64 0.23.1",
+ "bytes",
+ "chrono",
+ "clap",
+ "deadpool-postgres",
+ "futures",
+ "hex",
+ "jsonschema",
+ "jsonwebtoken",
+ "registry-documents-client",
+ "registry-documents-core",
+ "registry-platform-activation",
+ "registry-platform-audit",
+ "registry-platform-authcommon",
+ "registry-platform-buildinfo",
+ "registry-platform-canonical-json",
+ "registry-platform-config",
+ "registry-platform-dispatch",
+ "registry-platform-hooks",
+ "registry-platform-httpsec",
+ "registry-platform-httputil",
+ "registry-platform-objectstore",
+ "registry-platform-oidc",
+ "registry-platform-testing",
+ "registry-platform-yaml",
+ "reqwest 0.12.28",
+ "rustls",
+ "schemars",
+ "serde",
+ "serde_json",
+ "serde_norway",
+ "sha2 0.11.1",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "tokio-postgres",
+ "tokio-postgres-rustls",
+ "tower",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+ "uuid",
+ "wiremock",
+ "zeroize",
+]
+
+[[package]]
+name = "registry-documents-client"
+version = "0.44.0"
+dependencies = [
+ "axum",
+ "bytes",
+ "hex",
+ "http-body",
+ "registry-documents-core",
+ "registry-platform-httpsec",
+ "registry-platform-httputil",
+ "registry-platform-yaml",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "sha2 0.11.1",
+ "thiserror 2.0.21",
+ "tokio",
+ "url",
+]
+
+[[package]]
+name = "registry-documents-core"
+version = "0.44.0"
+dependencies = [
+ "hex",
+ "registry-platform-canonical-json",
+ "registry-platform-config",
+ "registry-platform-hooks",
+ "registry-platform-yaml",
+ "schemars",
+ "serde",
+ "serde_json",
+ "sha2 0.11.1",
+]
+
+[[package]]
+name = "registry-documentsctl"
+version = "0.44.0"
+dependencies = [
+ "clap",
+ "registry-documents",
+ "registry-documents-core",
+ "registry-platform-buildinfo",
+ "registry-platform-config",
+ "registry-platform-yaml",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tokio-postgres",
+ "uuid",
 ]
 
 [[package]]
@@ -6244,6 +6355,7 @@ name = "registry-platform-dispatch"
 version = "0.44.0"
 dependencies = [
  "async-trait",
+ "deadpool-postgres",
  "getrandom 0.4.3",
  "hex",
  "sha2 0.11.1",
@@ -6259,20 +6371,28 @@ version = "0.44.0"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
+ "registry-platform-activation",
+ "registry-platform-audit",
  "registry-platform-canonical-json",
+ "registry-platform-config",
  "registry-platform-crypto",
  "registry-platform-dispatch",
  "registry-platform-httputil",
+ "registry-platform-script",
  "registry-platform-yaml",
+ "rhai",
  "schemars",
  "serde",
  "serde_json",
  "sha2 0.11.1",
+ "tempfile",
  "thiserror 2.0.21",
  "time",
  "tokio",
  "tokio-postgres",
+ "url",
  "uuid",
+ "wat",
 ]
 
 [[package]]
@@ -6324,6 +6444,27 @@ dependencies = [
  "url",
  "uuid",
  "wiremock",
+ "zeroize",
+]
+
+[[package]]
+name = "registry-platform-objectstore"
+version = "0.44.0"
+dependencies = [
+ "axum",
+ "chrono",
+ "hex",
+ "hmac 0.13.0",
+ "quick-xml 0.42.0",
+ "registry-platform-config",
+ "registry-platform-httputil",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "sha2 0.11.1",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
  "zeroize",
 ]
 
@@ -6559,10 +6700,12 @@ dependencies = [
  "registry-platform-canonical-json",
  "registry-platform-config",
  "registry-platform-crypto",
+ "registry-platform-dispatch",
  "registry-platform-hooks",
  "registry-platform-httpsec",
  "registry-platform-httputil",
  "registry-platform-oidc",
+ "registry-platform-testing",
  "registry-platform-yaml",
  "registry-scheduling-core",
  "reqwest 0.12.28",

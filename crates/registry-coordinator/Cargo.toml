@@ -155,7 +155,7 @@ zeroize.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }
-registry-platform-testing = { workspace = true, features = ["test-utils", "test-authorization-server"] }
+registry-platform-testing = { workspace = true, features = ["test-utils", "test-authorization-server", "migration-pins"] }
 tempfile.workspace = true
 tower.workspace = true
 wiremock.workspace = true

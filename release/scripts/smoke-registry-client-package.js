@@ -6,7 +6,7 @@ const client = require('@registrystack/client');
 const { breg, casework, discovery, evidence } = client;
 
 assert.strictEqual(typeof breg.BaseRegistryClient, 'function');
-assert.strictEqual(typeof breg.verifyWebhookDelivery, 'function');
+assert.strictEqual(typeof breg.verifyHookDelivery, 'function');
 assert.strictEqual(typeof discovery.DiscoveryClient, 'function');
 assert.strictEqual(typeof evidence.EvidenceClient, 'function');
 assert.strictEqual(typeof casework.CaseworkClient, 'function');

@@ -49,6 +49,12 @@ its image-specific security evidence join. They remain held until that evidence
 is ready. ``COORDINATOR_BINARY_FIRST_RELEASE`` independently adds the runtime,
 operator CLI, and installer in v0.44.0. Client facades are governed independently.
 
+``DOCUMENTS_FIRST_RELEASE`` is the single place that decides which release
+first ships the Registry Document Store binaries, ``documents`` and
+``documentsctl``, and any image or security evidence of theirs. No release
+script builds, stages, or publishes them yet, so the product stays held until
+it is releasable.
+
 ``PYTHON_311_ABI_FIRST_RELEASE`` is the single place that decides which
 release first builds the Python client wheels against the Python 3.11 stable
 ABI, which names them ``cp311-abi3``. Releases before v0.41.0 were built
@@ -80,6 +86,8 @@ RSTACK_FIRST_RELEASE: tuple[int, int, int] | None = (0, 44, 0)
 COORDINATOR_CLIENT_FIRST_RELEASE: tuple[int, int, int] | None = None
 
 COORDINATOR_FIRST_RELEASE: tuple[int, int, int] | None = None
+
+DOCUMENTS_FIRST_RELEASE: tuple[int, int, int] | None = None
 
 COORDINATOR_BINARY_FIRST_RELEASE: tuple[int, int, int] = (0, 44, 0)
 
@@ -227,6 +235,15 @@ def coordinator_in_release(version: tuple[int, int, int]) -> bool:
     return first_release is not None and tuple(version) >= first_release
 
 
+def documents_in_release(version: tuple[int, int, int]) -> bool:
+    """Return whether the release at ``version`` ships Registry Document Store.
+
+    The constant is read at call time so tests can patch it.
+    """
+    first_release = DOCUMENTS_FIRST_RELEASE
+    return first_release is not None and tuple(version) >= first_release
+
+
 def coordinator_binaries_in_release(version: tuple[int, int, int]) -> bool:
     """Binary distribution does not waive the independent image evidence gate."""
     return tuple(version) >= COORDINATOR_BINARY_FIRST_RELEASE or coordinator_in_release(version)
@@ -335,6 +352,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     coordinator.add_argument("version", type=version_argument, help="release version as X.Y.Z")
     coordinator.set_defaults(in_release=coordinator_in_release)
+    documents = commands.add_parser(
+        "documents-in-release",
+        help="print true when the release version ships Registry Document Store, else false",
+    )
+    documents.add_argument("version", type=version_argument, help="release version as X.Y.Z")
+    documents.set_defaults(in_release=documents_in_release)
     render = commands.add_parser(
         "render-in-release",
         help="print true when the release version ships Registry Render, else false",

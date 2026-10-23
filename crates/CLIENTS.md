@@ -16,6 +16,7 @@ that every checkout or release ships it.
 |---|---|
 | `registry-{breg,casework,coordinator,discovery,evidence,messaging,scheduling}-client` | Canonical Rust product HTTP and response contract |
 | `registry-evidence-verifier` | Evidence response formats, payload contract, and relying-party verification |
+| `registry-documents-client` | Rust Document Store HTTP and response contract; no language binding and not part of the unified packages or the Rust facade |
 | BReg, Casework, Coordinator, Discovery, Evidence, Messaging, and Scheduling `-client-node` / `-client-py` crates | Thin napi-rs / PyO3 bindings and language conversion over the Rust decisions |
 | `registry-stack-client` | Curated Rust facade for BReg, Casework, Discovery, Evidence, Messaging, and Scheduling, with separate product, record, and auth modules |
 | `registry-stack-client-node` | Public `@registrystack/client` facade and platform package definitions |
@@ -38,13 +39,13 @@ or unify distinct authority contracts. Shared HTTP/token primitives live in
   sending, or a 5xx answer other than a typed failure the product returns only
   with the attempt rolled back), and never after a 4xx status line:
   `registry_platform_httputil::client::retry_keyed_mutation` owns its loop and
-  waits, the BReg, Casework, Coordinator, Messaging, and Scheduling clients
-  expose the count as `with_maximum_mutation_retries` (2 by default, at most 2,
-  0 disables), and the resend repeats the caller's exact key, headers, and
-  body. The other
+  waits, the BReg, Casework, Coordinator, Document Store, Messaging, and
+  Scheduling clients expose the count as `with_maximum_mutation_retries` (2
+  by default, at most 2, 0 disables), and the resend repeats the caller's
+  exact key, headers, and body. The other
   clients never resend. Reads and unkeyed operations are never resent, and
   neither are Casework's review request create and cancel, which go through
-  the review client's single exchange. Those five clients treat a connection
+  the review client's single exchange. Those six clients treat a connection
   that was never established, a connect timeout included, as a known failure,
   and the Casework client's `mutation_class` is `Ambiguous` exactly when
   `is_outcome_unknown` holds.

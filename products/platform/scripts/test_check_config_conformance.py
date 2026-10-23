@@ -475,6 +475,193 @@ pub struct SampleRuntime {
             ),
         )
 
+    TAGGED_UNION = """
+#[derive(Deserialize)]
+#[serde(remote = "Self", rename_all = "kebab-case", deny_unknown_fields)]
+pub enum RawSource {
+    Database {},
+    /// The sealed package.
+    Sealed(PackageConfig),
+}
+registry_platform_yaml::tagged_union!(RawSource);
+"""
+
+    def variant_row(self) -> object:
+        return self.block_row(
+            gate.RustBlock(
+                "crates/sample/src/lib.rs",
+                "RawSource",
+                "Sealed",
+                "PackageConfig",
+                variant=True,
+            )
+        )
+
+    def test_a_tagged_variant_holding_the_shared_type_passes(self) -> None:
+        self.with_runtime_struct(self.TAGGED_UNION, imports="PackageConfig")
+        self.assertEqual([], self.problems(self.variant_row()))
+
+    def test_a_tagged_variant_of_another_type_is_refused(self) -> None:
+        self.with_runtime_struct(
+            self.TAGGED_UNION.replace("Sealed(PackageConfig)", "Sealed(LocalStorage)"),
+            imports="PackageConfig",
+        )
+        self.assert_one_problem(
+            "sample: crates/sample/src/lib.rs RawSource::Sealed is not typed "
+            "PackageConfig",
+            self.variant_row(),
+        )
+
+    def test_a_tagged_variant_with_inline_members_is_refused(self) -> None:
+        self.with_runtime_struct(
+            self.TAGGED_UNION.replace(
+                "Sealed(PackageConfig)", "Sealed { url: String, bucket: String }"
+            ),
+            imports="PackageConfig",
+        )
+        self.assert_one_problem(
+            "sample: crates/sample/src/lib.rs RawSource::Sealed is not typed "
+            "PackageConfig",
+            self.variant_row(),
+        )
+
+    def test_a_missing_tagged_union_is_refused(self) -> None:
+        self.with_runtime_struct(self.RUNTIME_STRUCT, imports="PackageConfig")
+        self.assert_one_problem(
+            "sample: crates/sample/src/lib.rs has no enum RawSource",
+            self.variant_row(),
+        )
+
+    def test_a_variant_of_a_union_that_is_not_internally_tagged_is_refused(self) -> None:
+        self.with_runtime_struct(
+            self.TAGGED_UNION.replace(
+                "registry_platform_yaml::tagged_union!(RawSource);\n", ""
+            ),
+            imports="PackageConfig",
+        )
+        self.assert_one_problem(
+            "sample: crates/sample/src/lib.rs enum RawSource is not an internally "
+            "tagged union; read it through tagged_union! or #[serde(tag = ...)]",
+            self.variant_row(),
+        )
+
+    def test_a_variant_of_a_serde_internally_tagged_union_passes(self) -> None:
+        self.with_runtime_struct(
+            self.TAGGED_UNION.replace(
+                "registry_platform_yaml::tagged_union!(RawSource);\n", ""
+            ).replace('remote = "Self"', 'tag = "type"'),
+            imports="PackageConfig",
+        )
+        self.assertEqual([], self.problems(self.variant_row()))
+
+    def test_a_variant_of_an_adjacently_tagged_or_untagged_union_is_refused(
+        self,
+    ) -> None:
+        for attribute in ('tag = "type", content = "spec"', "untagged"):
+            with self.subTest(attribute=attribute):
+                self.with_runtime_struct(
+                    self.TAGGED_UNION.replace(
+                        "registry_platform_yaml::tagged_union!(RawSource);\n", ""
+                    ).replace('remote = "Self"', attribute),
+                    imports="PackageConfig",
+                )
+                self.assert_one_problem(
+                    "sample: crates/sample/src/lib.rs enum RawSource is not an "
+                    "internally tagged union; read it through tagged_union! or "
+                    "#[serde(tag = ...)]",
+                    self.variant_row(),
+                )
+
+    STRUCT_VARIANT_UNION = """
+#[derive(Deserialize)]
+#[serde(remote = "Self", rename_all = "kebab-case", deny_unknown_fields)]
+pub enum RawStore {
+    Database {},
+    /// The sealed package, beside its own bound.
+    Sealed {
+        /// The package, flattened beside the tag.
+        #[serde(rename(deserialize = "registry-platform-yaml/shared-block/package"))]
+        #[cfg_attr(feature = "schema", schemars(flatten))]
+        settings: Box<PackageConfig>,
+        maximum_bytes: u64,
+    },
+}
+registry_platform_yaml::tagged_union!(RawStore);
+"""
+
+    def member_row(self) -> object:
+        return self.block_row(
+            gate.RustBlock(
+                "crates/sample/src/lib.rs",
+                "RawStore",
+                "Sealed",
+                "PackageConfig",
+                variant=True,
+                member="settings",
+            )
+        )
+
+    def test_a_struct_variant_flattening_the_shared_type_passes(self) -> None:
+        for written in ("Box<PackageConfig>", "PackageConfig"):
+            with self.subTest(written=written):
+                self.with_runtime_struct(
+                    self.STRUCT_VARIANT_UNION.replace("Box<PackageConfig>", written),
+                    imports="PackageConfig",
+                )
+                self.assertEqual([], self.problems(self.member_row()))
+
+    def test_a_struct_variant_member_of_another_type_is_refused(self) -> None:
+        self.with_runtime_struct(
+            self.STRUCT_VARIANT_UNION.replace("Box<PackageConfig>", "Box<LocalStorage>"),
+            imports="PackageConfig",
+        )
+        self.assert_one_problem(
+            "sample: crates/sample/src/lib.rs RawStore::Sealed.settings is not typed "
+            "PackageConfig",
+            self.member_row(),
+        )
+
+    def test_a_struct_variant_without_the_member_is_refused(self) -> None:
+        self.with_runtime_struct(
+            self.STRUCT_VARIANT_UNION.replace("settings:", "package:"),
+            imports="PackageConfig",
+        )
+        self.assert_one_problem(
+            "sample: crates/sample/src/lib.rs RawStore::Sealed.settings is not typed "
+            "PackageConfig",
+            self.member_row(),
+        )
+
+    def test_a_struct_variant_member_that_is_not_flattened_is_refused(self) -> None:
+        self.with_runtime_struct(
+            self.STRUCT_VARIANT_UNION.replace(
+                '#[serde(rename(deserialize = "registry-platform-yaml/shared-block/package"))]\n',
+                "",
+            ),
+            imports="PackageConfig",
+        )
+        self.assert_one_problem(
+            "sample: crates/sample/src/lib.rs RawStore::Sealed.settings does not "
+            "place the shared block beside the tag; mark it with the "
+            "registry-platform-yaml/shared-block/ deserialize rename",
+            self.member_row(),
+        )
+
+    def test_a_struct_variant_of_a_union_that_is_not_internally_tagged_is_refused(
+        self,
+    ) -> None:
+        self.with_runtime_struct(
+            self.STRUCT_VARIANT_UNION.replace(
+                "registry_platform_yaml::tagged_union!(RawStore);\n", ""
+            ),
+            imports="PackageConfig",
+        )
+        self.assert_one_problem(
+            "sample: crates/sample/src/lib.rs enum RawStore is not an internally "
+            "tagged union; read it through tagged_union! or #[serde(tag = ...)]",
+            self.member_row(),
+        )
+
     HAND_LISTENER = {
         "type": "object",
         "required": ["bind"],

@@ -14,9 +14,8 @@ use registry_breg::{
     compiler::{compile_project_with_assets, CompileProfile},
     contract::{parse_project_json, ModuleAssetSource},
     event_destination::ActivatedEventDestinationRegistry,
-    hook_handler::HookHandlerRegistry,
+    hooks::{HookDeliveryService, HookWorkOutcome},
     postgres::{PostgresRecordMutationService, RegistryLockKey},
-    webhook::{WebhookDeliveryService, WebhookWorkOutcome},
 };
 use registry_breg_client::{
     BRegActionInvocationRequest, BRegCreateRequest, BRegDirectWrite, BRegIdempotencyKey,
@@ -45,6 +44,21 @@ fn claims() -> VerifiedRequestClaims {
     )
     .unwrap()
 }
+/// The local hook programs `compiled` holds, with a hook WASM runtime on the
+/// default budgets: assembling the delivery path directly bypasses the server
+/// startup path, so this embedder starts the hook runtime itself.
+fn hook_handlers(
+    compiled: &registry_breg::CompiledRegistry,
+    package_revision: &str,
+) -> Arc<registry_platform_hooks::executor::LocalHookHandlers> {
+    let handlers = registry_breg::hooks::local_hook_handlers(compiled, package_revision);
+    #[cfg(feature = "wasm")]
+    let handlers = handlers.with_wasm_runtime(
+        registry_breg::hooks::default_hook_wasm_runtime().expect("the hook wasm runtime starts"),
+    );
+    Arc::new(handlers)
+}
+
 fn compile(source: Value, scripts: &[(&str, &[u8])]) -> registry_breg::CompiledRegistry {
     let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
     let assets = scripts
@@ -75,7 +89,7 @@ fn runtime(
             "databaseInitializationEnvironment: local",
         );
     if let Some(port) = port {
-        config.push_str(&format!("\neventDestinations:\n  observer:\n    origin: http://127.0.0.1:{port}/\n    path: /events\n    networkProfile: loopback-development-http\n    dnsFamily: dual-stack-strict\n    allowedPrivateCidrs: []\n    hmacSha256KeyRef: secret:file/observer-key\n    classificationCeiling: internal\n    deliveryCeilings:\n      attemptTimeoutMilliseconds: 1000\n      maximumAttempts: 2\n"));
+        config.push_str(&format!("\ndestinations:\n  hooks:\n    observer:\n      origin: http://127.0.0.1:{port}/\n      path: /events\n      networkProfile: loopback-development-http\n      dnsFamily: dual-stack-strict\n      allowedPrivateCidrs: []\n      hmacSha256KeyRef: secret:file/observer-key\n      classificationCeiling: internal\n      deliveryCeilings:\n        attemptTimeoutMilliseconds: 1000\n        maximumAttempts: 2\n"));
     }
     let destinations = registry_breg::runtime_config::parse_runtime_config(&config)
         .unwrap()
@@ -92,14 +106,11 @@ fn audit() -> registry_breg::audit::RegistryAudit {
 fn service(
     fixture: &client_http::ClientFixture,
     destinations: Arc<ActivatedEventDestinationRegistry>,
-) -> WebhookDeliveryService {
-    WebhookDeliveryService::new(
+) -> HookDeliveryService {
+    HookDeliveryService::new(
         fixture.pool.clone(),
         destinations,
-        Arc::new(HookHandlerRegistry::new(
-            &fixture.registry,
-            &fixture.identity.activation_id,
-        )),
+        hook_handlers(&fixture.registry, &fixture.identity.activation_id),
         fixture.registry.clone(),
         fixture.identity.clone(),
         "client-capability-test",
@@ -276,12 +287,9 @@ async fn native_observers_capture_filter_fanout_replay_and_private_values_atomic
     assert_eq!(drained.delivered, 3);
     assert_eq!(drained.remaining.retained_deliveries, 2);
     for _ in 0..2 {
-        assert_eq!(
-            service.deliver_once().await,
-            Ok(WebhookWorkOutcome::Delivered)
-        );
+        assert_eq!(service.deliver_once().await, Ok(HookWorkOutcome::Delivered));
     }
-    assert_eq!(service.deliver_once().await, Ok(WebhookWorkOutcome::Idle));
+    assert_eq!(service.deliver_once().await, Ok(HookWorkOutcome::Idle));
     assert_eq!(
         fixture
             .database
@@ -395,12 +403,9 @@ async fn native_url_delivery_keeps_exact_bytes_tightened_budgets_and_expired_lea
     fixture.database.admin.execute("UPDATE registry_internal.registry_webhook_delivery_state SET state='leased',attempt=1,next_attempt_at=NULL,attempt_started_at=transaction_timestamp()-interval '10 seconds',lease_expires_at=transaction_timestamp()-interval '5 seconds',lease_token=gen_random_uuid()",&[]).await.unwrap();
     let service = service(&fixture, destinations);
     // Expired lease recovery is durable before retrying the exact event.
-    assert_eq!(service.deliver_once().await, Ok(WebhookWorkOutcome::Idle));
+    assert_eq!(service.deliver_once().await, Ok(HookWorkOutcome::Idle));
     fixture.database.admin.execute("UPDATE registry_internal.registry_webhook_delivery_state SET next_attempt_at=transaction_timestamp()-interval '1 second' WHERE state='pending'",&[]).await.unwrap();
-    assert_eq!(
-        service.deliver_once().await,
-        Ok(WebhookWorkOutcome::Delivered)
-    );
+    assert_eq!(service.deliver_once().await, Ok(HookWorkOutcome::Delivered));
     let requests = received.lock().await;
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0].1, bytes);
@@ -463,7 +468,7 @@ async fn native_observers_refuse_callback_candidates_before_action_grant_lookup(
     let service = service(&fixture, destinations);
     assert_eq!(
         service.deliver_once().await,
-        Ok(WebhookWorkOutcome::DeadLettered)
+        Ok(HookWorkOutcome::DeadLettered)
     );
     let code: String = fixture
         .database
@@ -498,10 +503,7 @@ async fn native_observer_candidates_have_no_application_authority_even_under_a_f
     fixture.database.admin.execute("DELETE FROM registry_internal.registry_webhook_delivery_state WHERE compiled_delivery_id=$1",&[&native_id]).await.unwrap();
     fixture.database.admin.execute("DELETE FROM registry_internal.registry_webhook_deliveries WHERE compiled_delivery_id=$1",&[&native_id]).await.unwrap();
     let service = service(&fixture, destinations);
-    assert_eq!(
-        service.deliver_once().await,
-        Ok(WebhookWorkOutcome::Delivered)
-    );
+    assert_eq!(service.deliver_once().await, Ok(HookWorkOutcome::Delivered));
     let ordinary=fixture.database.admin.query_one("SELECT s.proposal_disposition,s.proposal_code FROM registry_internal.registry_webhook_delivery_state s JOIN registry_internal.registry_outbox o USING(event_id) WHERE o.event_type='record-candidate'",&[]).await.unwrap();
     assert_eq!(ordinary.get::<_, String>(0), "refused");
     assert_eq!(
@@ -510,7 +512,7 @@ async fn native_observer_candidates_have_no_application_authority_even_under_a_f
     );
     assert_eq!(
         service.deliver_once().await,
-        Ok(WebhookWorkOutcome::DeadLettered)
+        Ok(HookWorkOutcome::DeadLettered)
     );
     let row=fixture.database.admin.query_one("SELECT s.proposal_code FROM registry_internal.registry_webhook_delivery_state s JOIN registry_internal.registry_outbox o USING(event_id) WHERE o.event_type='proposal.started'",&[]).await.unwrap();
     assert_eq!(row.get::<_, String>(0), "hook.proposal.observer_only");

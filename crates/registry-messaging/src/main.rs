@@ -9,6 +9,8 @@ use tracing_subscriber::prelude::*;
 
 #[tokio::main]
 async fn main() {
+    // Help and version answer without requiring valid operational settings.
+    let matches = command().get_matches();
     let level = match operational_log_level(std::env::var("MESSAGING_LOG").ok().as_deref()) {
         Ok(level) => level,
         Err(error) => {
@@ -18,7 +20,6 @@ async fn main() {
     };
     initialize_logging(level);
 
-    let matches = command().get_matches();
     if let Err(error) = run(&matches, Transports::new()).await {
         eprintln!("messaging: {error}");
         std::process::exit(1);

@@ -46,8 +46,9 @@ pub mod version;
 #[doc(hidden)]
 pub mod testing;
 
-/// Every way this crate refuses. Fixed text only: no secret, key, assertion,
-/// token, or upstream error body ever travels in one of these.
+/// Every way this crate refuses. Fixed text, numeric exit statuses and
+/// private file paths only: no secret, key, assertion, token, or upstream
+/// error body ever travels in one of these.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum ToolingError {
@@ -61,6 +62,19 @@ pub enum ToolingError {
     InvalidState { reason: &'static str },
     #[error("a command this session owns did not succeed: {step}")]
     CommandFailed { step: &'static str },
+    /// A one-shot did not succeed. Only its numeric exit status
+    /// and the path of the owner-only file holding its redacted output
+    /// travel here, never the output.
+    #[error(
+        "a command this session owns did not succeed: {step}; {}",
+        container::one_shot_report(.one_shot, *.exit_code, .log_file.as_deref())
+    )]
+    OneShotFailed {
+        step: &'static str,
+        one_shot: &'static str,
+        exit_code: Option<i32>,
+        log_file: Option<std::path::PathBuf>,
+    },
     #[error("the issuer did not become reachable: {step}")]
     Unreachable { step: &'static str },
     #[error("the approved task grant could not be acquired: {reason}")]

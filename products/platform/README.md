@@ -28,6 +28,7 @@ integration-test fixtures.
 | [`registry-platform-hooks`](crates/registry-platform-hooks/README.md) | Shared hook contract: declarations, envelope, handler messages, compile-time rules, and the delivery core behind the `postgres` feature. |
 | [`registry-platform-httpsec`](crates/registry-platform-httpsec/README.md) | Axum/Tower HTTP security middleware, CORS policy validation, body limits, and RFC 9457 Problem Details responses. |
 | [`registry-platform-httputil`](crates/registry-platform-httputil/README.md) | Outbound HTTP clients, bounded response reads, URL construction, and SSRF-resistant fetch validation. |
+| [`registry-platform-objectstore`](../../crates/registry-platform-objectstore/README.md) | S3-compatible object storage and HTTP content verification transports, bound to a caller-supplied namespace, with fixed refusals and no retries. |
 | [`registry-platform-oidc`](crates/registry-platform-oidc/README.md) | OIDC discovery, JWKS caching, and JWT verifier configuration shared by registry services. |
 | [`registry-platform-ratelimit`](crates/registry-platform-ratelimit/README.md) | Bounded in-memory keyed rate limiting: a token bucket and a fixed window counter over opaque caller keys. |
 | [`registry-platform-sdjwt`](crates/registry-platform-sdjwt/README.md) | SD-JWT VC issuance and holder-proof validation helpers. |

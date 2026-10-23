@@ -45,6 +45,17 @@ Scheduling, and Messaging refuse a database a pre-1.0 release wrote at `plan`, `
 startup, naming the fresh-install recovery. BReg names no such refusal, so point it only at a
 fresh database. See [Upgrades and state](../../../reference/api-stability/#upgrades-and-state).
 
+v0.44.0 starts Casework and Scheduling at a fresh baseline again: each installs schema version
+200 and refuses a v0.43.0 database at `plan`, `apply`, and startup as a pre-1.0 schema. BReg in
+v0.44.0 refuses a database holding the v0.43.0 attachment verification tables, at startup, in
+`bregctl doctor` (`startup.database.pre-1-0-schema`), and in `bregctl plan` and `apply`
+(`apply.database.pre-1-0-schema`). For these three, an upgrade from v0.43.0 is a fresh install:
+keep the v0.43.0 database untouched, and apply a v0.44.0 package to a fresh database. For BReg,
+rebuild the package with the v0.44.0 `bregctl test` and `bregctl package`
+([Check, test, package](../../breg/#check-test-package)), then run
+`bregctl apply --package DIR --initial`. Messaging migrates a v0.43.0
+database forward in place when you run `messagingctl apply`.
+
 {/* Evidence: Cargo.toml, [workspace.package] version (every crate uses version.workspace);
     crates/registry-casework-breg/src/lib.rs, BregContextProvider and ReviewContextError::ContractChanged;
     docs/site/src/content/docs/reference/api-stability.mdx, "Upgrades and state";
@@ -62,7 +73,12 @@ fresh database. See [Upgrades and state](../../../reference/api-stability/#upgra
     crates/registry-messaging/src/store.rs, StoreError::Pre1_0Schema;
     products/evidence/CHANGELOG.md, Unreleased (v0.42.0), normalized evidence.yaml project;
     crates/registry-breg/src/migration.rs, MigrationError::UnrecognizedDatabase (refuses only a
-    database from before the activation ledger, which a v0.41.0 database is not). */}
+    database from before the activation ledger, which a v0.41.0 database is not);
+    crates/registry-casework/migrations/0200_reviews.sql and
+    crates/registry-scheduling/migrations/0200_scheduling.sql, baseline version 200;
+    crates/registry-breg/src/startup.rs, StartupError::Pre1_0Schema, and
+    crates/registry-bregctl/src/doctor.rs, startup.database.pre-1-0-schema;
+    crates/registry-messaging/migrations/0101_dispatch_lease_expiry.sql (forward migration). */}
 
 ## Upgrade in this order
 
@@ -289,8 +305,8 @@ so a binary that cannot run leaves the installed toolset selected.
     and nextCursor, turn, rejected, BRegRecoveryHint and BRegApplicationRecoveryHint values,
     Review results name an outcome;
     crates/registry-breg/src/migration.rs, "uninitialized-database" (initial activation check);
-    crates/registry-bregctl/src/lib.rs, ImportAuthorityCommand, WebhookCommand (Replay and List,
-    also in v0.41.0), and DataCommand::Export (needs a serving registry, export-enabled profile);
+    crates/registry-bregctl/src/lib.rs, ImportAuthorityCommand, HookCommand (Replay and List,
+    the `bregctl webhook` command in v0.41.0 and v0.42.0), and DataCommand::Export (needs a serving registry, export-enabled profile);
     crates/registry-breg/src/data.rs, DataImportOperation::Create (only operation and data, so a
     reloaded record gets a new ID);
     crates/registry-bregctl/src/data_lifecycle.rs, DataImportOutcome (counts only, no ID map);
@@ -300,7 +316,7 @@ so a binary that cannot run leaves the installed toolset selected.
     directory command); crates/registry-casework-core/src/model.rs, TeamRecord; /v1/directory/absences and
     /v1/directory/holidays/{id}/revisions/{revision} (no holiday list route);
     crates/registry-bregctl/src/lib.rs, data export --field (required, repeat per field) and
-    WebhookCommand in v0.42.0; configure/evidence-oid4vci.mdx, offers held in process memory;
+    HookCommand (`bregctl webhook` in v0.42.0); configure/evidence-oid4vci.mdx, offers held in process memory;
     products/casework/CHANGELOG.md, WorkItems replaced; crates/registry-casework/src/http.rs,
     /v1/review-policies and /v1/review-tasks/holdings (v0.41.0: /v1/work-items, /v1/review-kinds,
     /v1/holdings);
@@ -558,7 +574,7 @@ in this sequence.
    [Erase retained history](../../breg-retention/#erase-retained-history) and
    [Erase expired Evidence uses](../../breg-retention/#erase-expired-evidence-uses).
 4. Stop `breg`. Pending webhook deliveries stop with it and are not sent; check
-   `bregctl webhook list` first if receivers must see them.
+   `bregctl hook list` first if receivers must see them.
 5. Ship the final audit files and the `bregctl` companion file.
 6. Keep the field-encryption key for as long as you keep any backup that holds sealed values, and
    the audit hash key for as long as you keep the audit archive. Destroy each only when the last
@@ -579,7 +595,7 @@ in this sequence.
     crates/registry-schedulingctl/src/lib.rs, no export command; crates/registry-scheduling/src/runtime.rs,
     outbox workers spawned by the runtime; products/scheduling/README.md, the schedulingctl audit file;
     crates/registry-bregctl/src/lib.rs, DataCommand::Export, ImportAuthorityCommand,
-    WebhookCommand; crates/registry-breg/src/field_encryption.rs, module docs. */}
+    HookCommand; crates/registry-breg/src/field_encryption.rs, module docs. */}
 
 ## Next
 

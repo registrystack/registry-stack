@@ -136,17 +136,28 @@ async fn activation_installs_reference_indexes_and_verification_refuses_their_ab
         .batch_execute(&format!("DROP INDEX registry_data.\"{site_index}\""))
         .await
         .expect("test administrator drops the reference index");
-    assert!(matches!(
-        verify_catalog_identity_for_catalog(
-            &migration,
-            &active,
-            &catalog,
-            &database.migration_role,
-            &database.runtime_role,
-        )
-        .await,
-        Err(PostgresKernelError::RegistryUnavailable)
-    ));
+    let missing_index_fingerprint =
+        managed_schema_fingerprint(&migration, &database.runtime_role, &catalog)
+            .await
+            .expect("the catalog without the reference index fingerprints");
+    assert_ne!(missing_index_fingerprint, active.schema_fingerprint);
+    let refusal = verify_catalog_identity_for_catalog(
+        &migration,
+        &active,
+        &catalog,
+        &database.migration_role,
+        &database.runtime_role,
+    )
+    .await
+    .expect_err("verification refuses the missing reference index");
+    assert!(
+        matches!(
+            &refusal,
+            PostgresKernelError::SchemaFingerprintMismatch { declared, measured }
+                if declared == &active.schema_fingerprint && measured == &missing_index_fingerprint
+        ),
+        "the missing reference index must report both exact fingerprints: {refusal:?}"
+    );
     assert_eq!(
         startup(&database, &package).await.err(),
         Some(StartupError::DatabaseCatalogDrift {

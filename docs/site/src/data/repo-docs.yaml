@@ -45,6 +45,16 @@ repos:
     local: ../..
     openapi: products/coordinator/generated/openapi/coordinator.openapi.json
 
+  # The Document Store runtime is unreleased and held out of releases. Only its
+  # product-owned OpenAPI artifact is pulled; the start, tutorial, operate, and
+  # configuration reference pages are hand-authored.
+  registry-documents:
+    remote: https://github.com/registrystack/registry-stack
+    ref: HEAD
+    version: main source (unreleased)
+    local: ../..
+    openapi: products/documents/generated/registry-documents.openapi.json
+
   # Casework first enters an archived docset at v0.30.0. Its product-owned
   # OpenAPI artifact is rendered directly; adopter prose remains hand-authored
   # in the Casework product lane rather than duplicating the long product README.

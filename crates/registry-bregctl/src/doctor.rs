@@ -18,7 +18,7 @@ pub(crate) const CHECKED_DEPENDENCIES: [&str; 10] = [
     "audit",
     "cursor",
     "authentication.oidc",
-    "eventDestinations",
+    "destinations.hooks",
     "reviewBindings",
     "authentication",
     "fieldEncryption",
@@ -148,7 +148,7 @@ fn startup_diagnostic(error: StartupError) -> Diagnostic {
             "startup.instance-id.pending-deliveries",
             "identity.instanceId",
             &format!(
-                "{pending_deliveries} pending webhook {noun} captured under event source \
+                "{pending_deliveries} pending hook {noun} captured under event source \
                  `{stored_source}`, but identity.instanceId `{configured_instance_id}` derives \
                  another source and the delivery worker would dead-letter them; restore the \
                  previous identity.instanceId until those deliveries drain, then change it and \
@@ -156,7 +156,7 @@ fn startup_diagnostic(error: StartupError) -> Diagnostic {
             ),
         );
     }
-    if let StartupError::RetainedWebhookBindings {
+    if let StartupError::RetainedHookBindings {
         retained_deliveries,
     } = error
     {
@@ -166,10 +166,10 @@ fn startup_diagnostic(error: StartupError) -> Diagnostic {
             "deliveries require"
         };
         return diagnostic(
-            "startup.webhook.retained-bindings",
-            "eventDestinations",
+            "startup.hook.retained-bindings",
+            "destinations.hooks",
             &format!(
-                "{retained_deliveries} retained webhook {noun} a superseded destination or local-handler binding; run `bregctl webhook list` to identify rows where bindingActive is false, then either restore each exact binding until its work drains or explicitly discard each delivery with its current generation; stop the runtime before discarding pending work, and retry an active lease only after it expires"
+                "{retained_deliveries} retained hook {noun} a superseded destination or local-handler binding; run `bregctl hook list` to identify rows where bindingActive is false, then either restore each exact binding until its work drains or explicitly discard each delivery with its current generation; stop the runtime before discarding pending work, and retry an active lease only after it expires"
             ),
         );
     }
@@ -225,6 +225,9 @@ fn startup_diagnostic(error: StartupError) -> Diagnostic {
             "database",
             "the database is not ready for the runtime package",
         ),
+        StartupError::SchemaTestSetupRefused(_) => {
+            unreachable!("only schema-test preparation raises it")
+        }
         StartupError::DatabaseCatalogDrift { .. } => unreachable!("handled above"),
         StartupError::DatabaseUninitialized => (
             "startup.database.uninitialized",
@@ -235,6 +238,11 @@ fn startup_diagnostic(error: StartupError) -> Diagnostic {
             "startup.database.unrecognized",
             "database",
             "the database holds registry state this release does not recognise: a release reads only the state its predecessor wrote, so upgrade the database one release at a time",
+        ),
+        StartupError::Pre1_0Schema => (
+            "startup.database.pre-1-0-schema",
+            "database",
+            crate::PRE_1_0_SCHEMA_RECOVERY,
         ),
         StartupError::DatabaseIdentityMismatch => (
             "startup.database.identity-mismatch",
@@ -294,12 +302,12 @@ fn startup_diagnostic(error: StartupError) -> Diagnostic {
             "the project names clients in requesterClients, trusted actors, or consent recipients that authentication.oidc.allowedClients does not list; list each of them in allowedClients, because the keyword unrestricted lists none",
         ),
         StartupError::EventDestinations => (
-            "startup.event-destinations.refused",
-            "eventDestinations",
+            "startup.hook-destinations.refused",
+            "destinations.hooks",
             "the event destination bindings were refused",
         ),
-        StartupError::RetainedWebhookBindings { .. } => {
-            unreachable!("retained webhook binding diagnostics return before the generic mapping")
+        StartupError::RetainedHookBindings { .. } => {
+            unreachable!("retained hook binding diagnostics return before the generic mapping")
         }
         StartupError::ReviewBindings => (
             "startup.review-bindings.refused",
@@ -309,7 +317,7 @@ fn startup_diagnostic(error: StartupError) -> Diagnostic {
         StartupError::AttachmentStorage => (
             "startup.attachment-storage.refused",
             "attachmentStorage",
-            "the attachment binding was refused: check attachmentStorage and attachmentVerification credentials and endpoints, disabled S3 versioning, and the registry's pinned backend and verification policy",
+            "the attachment binding was refused: check attachmentStorage and attachmentVerification credentials and urls, disabled S3 versioning, and the registry's pinned backend and verification policy",
         ),
         StartupError::FieldEncryption => (
             "startup.field-encryption.refused",
@@ -403,6 +411,7 @@ mod tests {
             },
             StartupError::DatabaseUninitialized,
             StartupError::UnrecognizedDatabase,
+            StartupError::Pre1_0Schema,
             StartupError::InstanceClaimMismatch,
             StartupError::RuntimeWriteAuthority,
             StartupError::RuntimeGrantsMissing,
@@ -504,14 +513,14 @@ mod tests {
 
     #[test]
     fn retained_webhooks_name_the_bounded_recovery_path() {
-        let diagnostic = startup_diagnostic(StartupError::RetainedWebhookBindings {
+        let diagnostic = startup_diagnostic(StartupError::RetainedHookBindings {
             retained_deliveries: 2,
         });
-        assert_eq!(diagnostic.code, "startup.webhook.retained-bindings");
-        assert_eq!(diagnostic.path, "eventDestinations");
+        assert_eq!(diagnostic.code, "startup.hook.retained-bindings");
+        assert_eq!(diagnostic.path, "destinations.hooks");
         for detail in [
-            "2 retained webhook deliveries require",
-            "bregctl webhook list",
+            "2 retained hook deliveries require",
+            "bregctl hook list",
             "bindingActive is false",
             "restore each exact binding",
             "explicitly discard",
@@ -536,7 +545,7 @@ mod tests {
         assert_eq!(diagnostic.code, "startup.instance-id.pending-deliveries");
         assert_eq!(diagnostic.path, "identity.instanceId");
         for detail in [
-            "1 pending webhook delivery was",
+            "1 pending hook delivery was",
             "`urn:registrystack:registry:licences:instance:previous`",
             "identity.instanceId `renamed`",
             "dead-letter",
@@ -621,6 +630,11 @@ mod tests {
                 "database",
             ),
             (
+                StartupError::Pre1_0Schema,
+                "startup.database.pre-1-0-schema",
+                "database",
+            ),
+            (
                 StartupError::InstanceClaimMismatch,
                 "startup.instance-claim.mismatch",
                 "database",
@@ -659,8 +673,8 @@ mod tests {
             ),
             (
                 StartupError::EventDestinations,
-                "startup.event-destinations.refused",
-                "eventDestinations",
+                "startup.hook-destinations.refused",
+                "destinations.hooks",
             ),
             (
                 StartupError::FieldEncryption,
@@ -876,8 +890,8 @@ mod tests {
             ),
             (
                 RuntimeConfigError::InvalidEventDestination,
-                "breg.runtime.invalid-event-destination",
-                "/eventDestinations",
+                "breg.runtime.invalid-hook-destination",
+                "/destinations/hooks",
             ),
             (
                 RuntimeConfigError::InvalidFieldEncryption,

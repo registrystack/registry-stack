@@ -186,7 +186,7 @@ package:\n  root: {missing}\n\
 authentication:\n  oidc:\n    issuer: https://issuer.example.invalid\n    audience: generic-registry\n    allowedAlgorithm: ES256\n    accessTokenType: at+jwt\n    scopeClaim: scope\n    scopeSeparator: \" \"\n    allowedClients: [generic-registry-client]\n    maximumTokenLifetimeSeconds: 300\n    leewayMilliseconds: 30000\n    jwksSource:\n      type: discovery\n  authorityClaims:\n    principal: registry_principal\n    purpose: registry_purpose\n\
 audit:\n  hashKeyRef: secret:file/audit-key\n  path: {audit}\n\
 cursor:\n  secretRef: secret:file/cursor-key\n\
-eventDestinations: {{}}\n",
+destinations:\n  hooks: {{}}\n",
             secrets = secrets_root.display(),
             missing = directory.path.join("does-not-exist").display(),
             audit = directory.path.join("audit").join("audit.jsonl").display(),

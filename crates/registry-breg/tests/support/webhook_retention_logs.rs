@@ -23,9 +23,9 @@ impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Logs {
 }
 
 async fn tick(
-    service: &WebhookDeliveryService,
+    service: &HookDeliveryService,
     batches: usize,
-) -> (Result<(u64, bool), WebhookDeliveryError>, Vec<Value>) {
+) -> (Result<(u64, bool), HookDeliveryError>, Vec<Value>) {
     let logs = Logs::default();
     let subscriber = tracing_subscriber::fmt()
         .json()
@@ -58,7 +58,7 @@ async fn tick(
 
 struct Fixture {
     database: TestDatabase,
-    service: WebhookDeliveryService,
+    service: HookDeliveryService,
     receiver: HttpsReceiver,
     lock: RegistryLockKey,
     identity: ExpectedRegistryIdentity,
@@ -95,7 +95,7 @@ impl Fixture {
             database.audit(profile.clone()),
             Some(destinations.clone()),
         );
-        let service = WebhookDeliveryService::new(
+        let service = HookDeliveryService::new(
             pool.clone(),
             destinations,
             hook_handlers(&compiled, &identity.activation_id),

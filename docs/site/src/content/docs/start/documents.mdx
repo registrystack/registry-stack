@@ -1,0 +1,95 @@
+---
+title: Registry Document Store overview
+description: What the Registry Document Store holds in custody, how content verification and document grants decide what is released, and what stays with the system that owns the document.
+status: draft
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: unreviewed
+doc_type: explanation
+locale: en
+standards_referenced: []
+---
+
+The [Registry Document Store](../../reference/glossary/#registry-documents) holds document bytes
+in custody for the system that owns them, and releases one exact, verified version to each
+recipient a grant names. Use it when an issued certificate, an uploaded supporting document, or a
+scanned record has to be kept and handed to a named person later, without that system serving
+files itself.
+
+{/* Evidence: products/documents/README.md, introduction and Routes. */}
+
+## What you work with
+
+You write a `documents.yaml` project: the access profiles callers resolve to, and one or more
+document policies. A policy says who may place a document in custody, who holds it, which media
+types and sizes it admits, who may be granted it, and for how long. The project may also declare
+[hooks](../../operate/documents/#events) that tell the owning system when a version becomes ready
+or is rejected, or when a grant is issued or revoked.
+
+An owning system reserves a [document](../../reference/glossary/#document) under a policy, then
+sends its bytes once, checked against the digest and length it declared. Its policy fixes the
+[custodian](../../reference/glossary/#document-custody): the person it was placed for, or the
+institution whose system reserved it. Only the custodian may remove it.
+
+Every stored version goes to a [content verifier](../../reference/glossary/#content-verification)
+the operator configured, and only an approval releases it. A
+[document grant](../../reference/glossary/#document-grant) then releases that version to one
+named recipient until a fixed expiry. Only the custodian issues and revokes grants: the
+institution under one of the policy's granting profiles, or the person the document was placed
+for, when the policy permits it. A system that reserved a document it does not hold never grants. The
+[document version](../../reference/glossary/#document-version) entry lists every status a version
+moves through.
+
+A grant names its recipient by subject and actor kind, not by access profile, so issuing it does
+not check which profile the recipient's token will resolve to. That is decided when the recipient
+reads: only a token that resolves to one of the policy's `recipientProfiles` is released anything.
+A grant to someone who signs in under another profile is issued (201) but releases nothing; their
+download answers `404 resource.not-found`, as for a document that does not exist.
+
+A stored document stays until its custodian removes it or the verifier rejects it, and a grant
+that expires or is revoked erases nothing. Only what never became a stored version goes on its
+own: a reservation whose bytes never arrive expires when its upload window lapses, and on S3 the
+bytes of an upload that never completed are deleted.
+[Removal and erasure](../../operate/documents/#removal-and-erasure) says when the bytes go and
+what erasure reaches.
+
+{/* Evidence: crates/registry-documents-core/src/project.rs, DocumentPolicy and CustodianRule;
+    crates/registry-documents-core/src/access.rs, standing (may_grant, may_request_erasure) and
+    is_recipient;
+    crates/registry-documents/src/service.rs, access (released_by_grant) and releasable;
+    crates/registry-documents/src/service/grants.rs, issue_inner;
+    crates/registry-documents/src/service/grants.rs, revoke_inner;
+    crates/registry-documents/src/erasure.rs, cleanup_once, expire_uploads, and erase_orphans. */}
+
+## What stays with the owning system
+
+The Document Store owns custody records, grants, stored bytes, verification state, and its audit
+journal. Why a document exists, who it concerns, which case it belongs to and who is assigned to
+that case, and whether a recipient is entitled to it stay with the system that reserved it.
+
+The Document Store calls no other Registry Stack product, Registry Casework included: its only
+outbound calls go to the issuer's keys, the content verifier, and the event destinations the
+operator configured. An event never grants access; it carries identifiers, and a receiver reads
+current state through the API under its own token. A caller gains no standing for being another
+product. A Base Registry Engine (BReg) or Casework deployment reaches the Document Store over its
+public HTTP API like any other client, and its access profile and the document's policy decide
+what it may do. A BReg [Proposal attachment](../../reference/glossary/#proposal-attachment) is
+held by BReg itself, not by the Document Store.
+
+{/* Evidence: products/documents/AGENTS.md, ownership and dependency rules;
+    products/documents/scripts/check_dependency_direction.py;
+    crates/registry-breg/src/api/attachments.rs. */}
+
+## Status
+
+The Document Store is pre-1.0 and held out of releases: build `documents` and `documentsctl` from
+one source checkout, and use them with the documentation of that same version. It does not render
+documents, which is [Registry Render](../../reference/glossary/#registry-render)'s job, and it
+holds no wallet credential.
+
+## Next
+
+- [Check your first Document Store project](../../tutorials/first-documents/) scaffolds and
+  checks a project on your machine.
+- [Deploy and operate the Document Store](../../operate/documents/) runs it against PostgreSQL.

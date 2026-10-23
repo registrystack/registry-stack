@@ -153,8 +153,8 @@ def write_source(journey, key_root, proxy_url, paths):
     native.private(owner / "registry.yaml", project)
     clients = json.loads((owner / "dev-clients.yaml").read_text())
     clients["secretProviders"] = {"file": {"root": str(key_root)}}
-    clients["eventDestinations"] = {trigger: {"origin": proxy_url, "path": paths[trigger],
-        "hmacSha256KeyRef": "secret:file/event-key"} for trigger in ("created", "patched")}
+    clients["destinations"] = {"hooks": {trigger: {"origin": proxy_url, "path": paths[trigger],
+        "hmacSha256KeyRef": "secret:file/event-key"} for trigger in ("created", "patched")}}
     native.private(owner / "dev-clients.yaml", clients)
     return owner
 
@@ -288,7 +288,7 @@ def run(args):
         native.private(keys / "event-key", key)
         owner = write_source(journey, keys, proxy.url, paths)
         journey.ctl("bregctl", "check", owner)
-        sample = {trigger: journey.ctl("bregctl", "webhook", "sample", owner, "--event", "application-" + trigger + "-v1")["request"]
+        sample = {trigger: journey.ctl("bregctl", "hook", "sample", owner, "--event", "application-" + trigger + "-v1")["request"]
                   for trigger in ("created", "patched")}
         schemas = root / "producer-schemas"
         journey.ctl("bregctl", "generate", "schemas", owner, "--output", schemas)
@@ -367,7 +367,7 @@ def run(args):
         previous_ca = journey.env.get("SSL_CERT_FILE")
         try:
             journey.env["SSL_CERT_FILE"] = str(owner / ".breg/dev/tls/ca.pem")
-            wait_for(lambda: not journey.ctl("bregctl", "webhook", "list", "--runtime-config", report["runtimeConfig"])["deliveries"],
+            wait_for(lambda: not journey.ctl("bregctl", "hook", "list", "--runtime-config", report["runtimeConfig"])["deliveries"],
                      "the producer delivery queue did not drain")
         finally:
             if previous_ca is None:

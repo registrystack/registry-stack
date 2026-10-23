@@ -49,7 +49,7 @@ def _verify_webhook_request(
     # target, content type, idempotency key and exact body, and checks that
     # generation and attempt are positive decimals. The checks below apply this
     # receiver's own contract and clock policy to the authenticated values.
-    verified = breg.verify_webhook_delivery(
+    verified = breg.verify_hook_delivery(
         method="POST", path=path, headers=headers, body=body, key=key
     )
     if (

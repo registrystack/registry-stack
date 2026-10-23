@@ -211,12 +211,14 @@ entries:
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: terminal_retention_is_bounded_and_dependent_failure_rolls_back_the_whole_batch}
       - {path: crates/registry-scheduling-core/src/policy.rs, name: scheduling_observer_hooks_accept_only_the_closed_runtime_contract}
       - {path: crates/registry-scheduling/src/config.rs, name: a_hook_policy_requires_and_accepts_its_deployment_binding}
+      - {path: crates/registry-platform-hooks/src/capability.rs, name: the_url_only_set_refuses_each_other_part_with_the_one_shared_diagnostic}
       - {path: crates/registry-scheduling/src/hooks.rs, name: projections_disclose_only_the_requested_closed_fields}
       - {path: crates/registry-scheduling/src/hooks.rs, name: cancellation_projection_uses_the_public_terminal_state}
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: appointment_hooks_capture_matching_lifecycle_rows_with_bounded_projection}
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_hook_capture_failure_rolls_back_the_whole_appointment_transaction}
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: hook_delivery_sends_the_canonical_event_audits_egress_and_refuses_proposals}
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: hook_delivery_audit_failure_prevents_egress}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: hook_delivery_stops_once_the_activation_record_names_another_package}
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: changed_retained_hook_destination_binding_is_refused}
   - id: SCHEDULING-SEC-25
     tests:

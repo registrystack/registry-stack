@@ -24,8 +24,11 @@ First release of Registry Coordinator.
 - Inspection reports accepted or unknown effects and bounded wait state without protected inputs,
   raw product responses, prepared requests, or correlation values. Encrypted PostgreSQL custody,
   durable audit, retention tombstones, and explicit fenced restore recovery protect work.
-- Protected state schema version 4 directly replaces earlier pilot layouts. Incompatible state is
-  refused; there is no in-place conversion or legacy authoring syntax.
+- Protected state schema version 4 directly replaces earlier pilot layouts. Earlier schema
+  versions are refused; there is no in-place conversion or legacy authoring syntax.
+  Recreate an unreleased development database made before the leased-job CHECK required
+  `lease_expires_at IS NOT NULL` to obtain that constraint. Such a database still reports
+  version 4: startup does not detect or migrate its older CHECK.
 - Maintained examples cover standalone Casework review, product events, and external job
   completion. Native service checks compose BReg, Casework, Scheduling, and Messaging; the
   deferred-appointment journey retains a real 961-second wait and original receipt recovery. Offline scenarios and message acceptance do not establish provider delivery.

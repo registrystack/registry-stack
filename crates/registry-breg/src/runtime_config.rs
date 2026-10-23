@@ -66,8 +66,8 @@ const MAX_JWKS_DOCUMENT_BYTES: u64 = 1024 * 1024;
 const MIN_RSA_MODULUS_BITS: usize = 2048;
 const MAX_RSA_MODULUS_BITS: usize = 8192;
 const MAX_RSA_EXPONENT_BYTES: usize = 8;
-const DEFAULT_WEBHOOK_PAYLOAD_RETENTION_DAYS: u8 = 7;
-const MAX_WEBHOOK_PAYLOAD_RETENTION_DAYS: u8 = 30;
+const DEFAULT_HOOK_PAYLOAD_RETENTION_DAYS: u8 = 7;
+const MAX_HOOK_PAYLOAD_RETENTION_DAYS: u8 = 30;
 const DEFAULT_POOL_WAIT_TIMEOUT_MILLISECONDS: u64 = 30_000;
 const DEFAULT_POOL_CREATE_TIMEOUT_MILLISECONDS: u64 = 30_000;
 const DEFAULT_POOL_RECYCLE_TIMEOUT_MILLISECONDS: u64 = 30_000;
@@ -234,6 +234,14 @@ const REMOVED_KEYS: &[RemovedKey] = &[
         replacement: "rename fieldEncryption.provider.kind to fieldEncryption.provider.type, and write the value localFile as local-file",
     },
     RemovedKey {
+        path: "attachmentStorage[type=s3].endpoint",
+        replacement: "rename attachmentStorage.endpoint to attachmentStorage.url; the value stays as it is",
+    },
+    RemovedKey {
+        path: "attachmentVerification[type=http].endpoint",
+        replacement: "rename attachmentVerification.endpoint to attachmentVerification.url; the value stays as it is",
+    },
+    RemovedKey {
         path: "attachmentStorage.kind",
         replacement: "rename attachmentStorage.kind to attachmentStorage.type; the value stays as it is",
     },
@@ -242,6 +250,10 @@ const REMOVED_KEYS: &[RemovedKey] = &[
         replacement: "rename attachmentVerification.kind to attachmentVerification.type; the value stays as it is",
     },
     REMOVED_OIDC_JWKS_SOURCE_KIND,
+    RemovedKey {
+        path: "eventDestinations",
+        replacement: "move each eventDestinations entry under destinations.hooks; the entries stay as they are",
+    },
     RemovedKey {
         path: "taskGrantStatus.*.caseworkResource",
         replacement: "rename caseworkResource to statusResource in each taskGrantStatus entry; the value stays as it is",
@@ -354,7 +366,7 @@ pub enum RuntimeConfigError {
     #[error("runtime configuration contains an invalid event destination binding")]
     InvalidEventDestination,
     #[error(
-        "runtime configuration eventDestinations contains identifiers that differ only by `-` versus `_`"
+        "runtime configuration destinations.hooks contains identifiers that differ only by `-` versus `_`"
     )]
     EventDestinationIdCollision,
     #[error(
@@ -369,6 +381,11 @@ pub enum RuntimeConfigError {
     InvalidAttachmentStorage,
     #[error("runtime configuration contains an invalid attachment verification binding")]
     InvalidAttachmentVerification,
+    #[error(
+        "attachmentStorage.attemptTimeoutMilliseconds plus attachmentVerification.attemptTimeoutMilliseconds exceeds the {budget} millisecond budget of one verification attempt",
+        budget = crate::attachment_verification_worker::ATTEMPT_BUDGET.as_millis()
+    )]
+    AttachmentAttemptBudgetExceeded,
     #[error("runtime configuration contains an invalid field encryption binding")]
     InvalidFieldEncryption,
     #[error("runtime configuration contains invalid operational bounds")]
@@ -404,12 +421,15 @@ impl RuntimeConfigError {
             Self::InvalidOidcLeeway => "breg.runtime.invalid-oidc-leeway",
             Self::InvalidAudit => "breg.runtime.invalid-audit",
             Self::InvalidCursor => "breg.runtime.invalid-cursor",
-            Self::InvalidEventDestination => "breg.runtime.invalid-event-destination",
-            Self::EventDestinationIdCollision => "breg.runtime.event-destination-id-collision",
+            Self::InvalidEventDestination => "breg.runtime.invalid-hook-destination",
+            Self::EventDestinationIdCollision => "breg.runtime.hook-destination-id-collision",
             Self::EvidenceProviderIdCollision => "breg.runtime.evidence-provider-id-collision",
             Self::ReviewAuthorityIdCollision => "breg.runtime.review-authority-id-collision",
             Self::InvalidAttachmentStorage => "breg.runtime.invalid-attachment-storage",
             Self::InvalidAttachmentVerification => "breg.runtime.invalid-attachment-verification",
+            Self::AttachmentAttemptBudgetExceeded => {
+                "breg.runtime.attachment-attempt-budget-exceeded"
+            }
             Self::InvalidFieldEncryption => "breg.runtime.invalid-field-encryption",
             Self::InvalidBounds => "breg.runtime.invalid-bounds",
             Self::InvalidWasmExecution => "breg.runtime.invalid-wasm-execution",
@@ -440,12 +460,15 @@ impl RuntimeConfigError {
             Self::InvalidOidcLeeway => "/authentication/oidc/leewayMilliseconds",
             Self::InvalidAudit => "/audit",
             Self::InvalidCursor => "/cursor",
-            Self::InvalidEventDestination => "/eventDestinations",
-            Self::EventDestinationIdCollision => "/eventDestinations",
+            Self::InvalidEventDestination => "/destinations/hooks",
+            Self::EventDestinationIdCollision => "/destinations/hooks",
             Self::EvidenceProviderIdCollision => "/evidenceProviders",
             Self::ReviewAuthorityIdCollision => "/reviewAuthorities",
             Self::InvalidAttachmentStorage => "/attachmentStorage",
             Self::InvalidAttachmentVerification => "/attachmentVerification",
+            Self::AttachmentAttemptBudgetExceeded => {
+                "/attachmentVerification/attemptTimeoutMilliseconds"
+            }
             Self::InvalidFieldEncryption => "/fieldEncryption",
             Self::InvalidBounds => "/operationalTimeouts",
             Self::InvalidWasmExecution => "/wasmExecution",
@@ -517,10 +540,15 @@ impl RuntimeConfigError {
                 "Rename one identifier so the two definitions remain distinct after separator normalization."
             }
             Self::InvalidAttachmentStorage => {
-                "Correct attachmentStorage: name every credential by secret reference and give the S3 endpoint as an https URL."
+                "Correct attachmentStorage: name every credential by secret reference and give the S3 service url as an https URL."
             }
             Self::InvalidAttachmentVerification => {
                 "Correct attachmentVerification: give the verifier as an https URL and name its authorization by secret reference."
+            }
+            // The figure is `attachment_verification_worker::ATTEMPT_BUDGET`;
+            // the runtime configuration tests hold the two together.
+            Self::AttachmentAttemptBudgetExceeded => {
+                "Lower attachmentStorage.attemptTimeoutMilliseconds or attachmentVerification.attemptTimeoutMilliseconds so the two add up to at most 55000."
             }
             Self::InvalidFieldEncryption => {
                 "Correct fieldEncryption: name the data key by secret reference and give the transit endpoint as an https URL."
@@ -748,9 +776,10 @@ fn runtime_definition_id_diagnostics(
     let mut diagnostics = Vec::new();
     for (namespace, code, ids) in [
         (
-            "eventDestinations",
-            "breg.runtime.event-destination-id-collision",
-            raw.event_destinations
+            "destinations/hooks",
+            "breg.runtime.hook-destination-id-collision",
+            raw.destinations
+                .hooks
                 .keys()
                 .map(String::as_str)
                 .collect::<Vec<_>>(),
@@ -834,10 +863,10 @@ fn runtime_stand_in(pointer: &str) -> &'static str {
         }
         ["audit", "path"]
         | ["fieldEncryption", "provider", "unixSocketPath"]
-        | ["eventDestinations", _, "path"] => "/deferred",
+        | ["destinations", "hooks", _, "path"] => "/deferred",
         ["taskGrantStatus", _, "statusPath"] => "/{grantId}",
-        ["attachmentStorage" | "attachmentVerification", "endpoint"]
-        | ["eventDestinations", _, "origin"]
+        ["attachmentStorage" | "attachmentVerification", "url"]
+        | ["destinations", "hooks", _, "origin"]
         | ["evidenceProviders", _, "baseUrl"]
         | ["taskGrantStatus", _, "baseUrl"
         | "sourceIssuer"
@@ -892,6 +921,29 @@ pub struct RuntimeConfig {
     metrics_listener: Option<MetricsListenerConfig>,
 }
 
+/// Refuses a storage read and a verifier call that could not both finish
+/// inside one verification attempt. A database read makes no network call
+/// and takes none of the budget; without a verifier no attempt runs.
+fn validate_attachment_attempt_budget(
+    storage: &crate::attachment_storage::RawAttachmentStorageConfig,
+    verification: &crate::attachment_verification::RawAttachmentVerificationConfig,
+) -> Result<()> {
+    use crate::attachment_storage::RawAttachmentStorageConfig;
+    use crate::attachment_verification::RawAttachmentVerificationConfig;
+    let RawAttachmentVerificationConfig::Http(verifier) = verification else {
+        return Ok(());
+    };
+    let storage_ms = match storage {
+        RawAttachmentStorageConfig::Database {} => 0,
+        RawAttachmentStorageConfig::S3(config) => config.attempt_timeout_milliseconds.get(),
+    };
+    let total_ms = u128::from(storage_ms) + u128::from(verifier.attempt_timeout_milliseconds.get());
+    if total_ms > crate::attachment_verification_worker::ATTEMPT_BUDGET.as_millis() {
+        return Err(RuntimeConfigError::AttachmentAttemptBudgetExceeded);
+    }
+    Ok(())
+}
+
 impl RuntimeConfig {
     fn from_raw(raw: RawRuntimeConfig) -> Result<Self> {
         validate_runtime_definition_ids(&raw)?;
@@ -899,6 +951,7 @@ impl RuntimeConfig {
         let identity = DeploymentIdentity::from_raw(raw.identity)?;
         let secret_providers = SecretProvidersConfig::from_raw(raw.secret_providers)?;
         let database = DatabaseConfig::from_raw(raw.database)?;
+        validate_attachment_attempt_budget(&raw.attachment_storage, &raw.attachment_verification)?;
         let attachment_storage =
             crate::attachment_storage::AttachmentStorageConfig::from_raw(raw.attachment_storage)
                 .map_err(|_| RuntimeConfigError::InvalidAttachmentStorage)?;
@@ -919,7 +972,7 @@ impl RuntimeConfig {
         .map_err(|_| RuntimeConfigError::InvalidTaskGrantStatus)?;
         let audit = AuditConfig::from_raw(raw.audit)?;
         let cursor = CursorConfig::from_raw(raw.cursor)?;
-        let event_destinations = EventDestinationConfigs::from_raw(raw.event_destinations)
+        let event_destinations = EventDestinationConfigs::from_raw(raw.destinations.hooks)
             .map_err(|_| RuntimeConfigError::InvalidEventDestination)?;
         let retention = RetentionConfig::from_raw(raw.retention);
         let review_authorities = raw
@@ -1357,7 +1410,8 @@ impl RuntimeConfig {
 fn validate_runtime_definition_ids(raw: &RawRuntimeConfig) -> Result<()> {
     for (ids, error) in [
         (
-            raw.event_destinations
+            raw.destinations
+                .hooks
                 .keys()
                 .map(String::as_str)
                 .collect::<Vec<_>>(),
@@ -2861,14 +2915,10 @@ struct RawRuntimeConfig {
     task_grant_status: Vec<TaskGrantStatusConfig>,
     audit: RawAuditConfig,
     cursor: RawCursorConfig,
-    #[serde(default, deserialize_with = "local_id_map")]
-    #[cfg_attr(
-        feature = "schema",
-        schemars(
-            schema_with = "local_id_map_schema::<crate::event_destination::RawEventDestinationConfig>"
-        )
-    )]
-    event_destinations: RawEventDestinationConfigs,
+    /// Outbound destination bindings. Absent by default, which binds no
+    /// destination.
+    #[serde(default)]
+    destinations: RawDestinationsConfig,
     #[serde(default, deserialize_with = "local_id_map")]
     #[cfg_attr(
         feature = "schema",
@@ -3305,6 +3355,22 @@ struct RawCursorConfig {
 }
 
 #[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
+#[derive(Default, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// Outbound destination bindings, grouped by what sends to them.
+struct RawDestinationsConfig {
+    /// URL hook destinations, keyed by the identifier a reviewed hook names.
+    #[serde(default, deserialize_with = "local_id_map")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(
+            schema_with = "local_id_map_schema::<crate::event_destination::RawEventDestinationConfig>"
+        )
+    )]
+    hooks: RawEventDestinationConfigs,
+}
+
+#[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RawRetentionConfig {
@@ -3321,14 +3387,14 @@ struct RawRetentionConfig {
         )
     )]
     receipt_retention_days: u16,
-    /// Defaults to the bounded retained payload lifetime for pending or dead-letter webhook work.
-    #[serde(default = "default_webhook_payload_retention_days")]
+    /// Defaults to the bounded retained payload lifetime for pending or dead-letter hook work.
+    #[serde(default = "default_hook_payload_retention_days")]
     #[serde(
-        deserialize_with = "crate::contract::bounded_u8::<_, 1, { MAX_WEBHOOK_PAYLOAD_RETENTION_DAYS as u32 }>"
+        deserialize_with = "crate::contract::bounded_u8::<_, 1, { MAX_HOOK_PAYLOAD_RETENTION_DAYS as u32 }>"
     )]
     #[cfg_attr(
         feature = "schema",
-        schemars(with = "BoundedU32<1, { MAX_WEBHOOK_PAYLOAD_RETENTION_DAYS as u32 }>")
+        schemars(with = "BoundedU32<1, { MAX_HOOK_PAYLOAD_RETENTION_DAYS as u32 }>")
     )]
     hook_payload_retention_days: u8,
 }
@@ -3337,13 +3403,13 @@ impl Default for RawRetentionConfig {
     fn default() -> Self {
         Self {
             receipt_retention_days: default_receipt_retention_days(),
-            hook_payload_retention_days: default_webhook_payload_retention_days(),
+            hook_payload_retention_days: default_hook_payload_retention_days(),
         }
     }
 }
 
-const fn default_webhook_payload_retention_days() -> u8 {
-    DEFAULT_WEBHOOK_PAYLOAD_RETENTION_DAYS
+const fn default_hook_payload_retention_days() -> u8 {
+    DEFAULT_HOOK_PAYLOAD_RETENTION_DAYS
 }
 
 const fn default_receipt_retention_days() -> u16 {
@@ -3550,7 +3616,8 @@ pub fn runtime_config_schema() -> std::result::Result<Value, serde_json::Error> 
         );
     }
     for pointer in [
-        "/properties/eventDestinations",
+        "/properties/destinations",
+        "/$defs/RawDestinationsConfig/properties/hooks",
         "/$defs/RawAuthorityClaimsConfig/properties/purpose",
         "/$defs/RawEventDestinationConfig/properties/tls",
         "/$defs/RawOidcVerifierConfig/properties/deniedKids",
@@ -3758,7 +3825,7 @@ fn install_schema_constraints(schema: &mut Value) {
         true,
     );
     if let Some(member) = schema
-        .pointer_mut("/properties/eventDestinations")
+        .pointer_mut("/$defs/RawDestinationsConfig/properties/hooks")
         .and_then(Value::as_object_mut)
     {
         member.insert("maxProperties".to_owned(), Value::from(128_u64));
@@ -4017,6 +4084,28 @@ fn oidc_leeway(milliseconds: u64) -> Result<Duration> {
     Ok(Duration::from_millis(milliseconds))
 }
 
+#[cfg(test)]
+mod tests {
+    use super::RuntimeConfigError;
+    use crate::attachment_verification_worker::ATTEMPT_BUDGET;
+
+    #[test]
+    fn the_attempt_budget_action_states_the_worker_budget() {
+        let budget = ATTEMPT_BUDGET.as_millis();
+        assert_eq!(budget, 55_000);
+        let action = RuntimeConfigError::AttachmentAttemptBudgetExceeded.suggested_action();
+        assert!(
+            action.ends_with(&format!("add up to at most {budget}.")),
+            "{action}"
+        );
+        let message = RuntimeConfigError::AttachmentAttemptBudgetExceeded.to_string();
+        assert!(
+            message.contains(&format!("the {budget} millisecond budget")),
+            "{message}"
+        );
+    }
+}
+
 #[cfg(all(test, feature = "schema"))]
 mod schema_tests {
     use serde_json::json;
@@ -4055,7 +4144,7 @@ mod schema_tests {
     fn schema_types_the_keys_of_a_map_as_the_identifier_the_reader_reads() {
         let schema = super::runtime_config_schema().unwrap();
         for (map, identifier) in [
-            ("/properties/eventDestinations", "LocalId"),
+            ("/$defs/RawDestinationsConfig/properties/hooks", "LocalId"),
             (
                 "/$defs/RawAuthorityClaimsConfig/properties/trustedActors",
                 "ExternalId",
