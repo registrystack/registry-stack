@@ -25,6 +25,11 @@
 - Allow distinct local clients to share an access profile, so development
   sessions can exercise independent reviewers without changing the policy.
 - Correct the peer version-mismatch remedy to name `--bregctl-bin`.
+- Make `caseworkctl check --production` validate the exact package input
+  closure offline, with an authored `provider pair` recovery for unpaired
+  context providers. Complete runtime-schema secret-provider parity for every
+  secret reference, and describe the bodyless pending, concealed-or-unknown,
+  and expired review-result responses in OpenAPI.
 
 ## 0.43.0 - 2026-10-21
 
