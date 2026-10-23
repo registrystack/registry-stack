@@ -295,6 +295,42 @@ fn random_generation_takes_no_alphabet_or_scope() {
 }
 
 #[test]
+fn length_diagnostics_state_the_field_bounds_each_strategy_needs() {
+    // "REG-" plus max(6, 19) digits needs 23 characters; "T-" plus 8 is 10.
+    let mut sequence = project_value();
+    sequence["recordTypes"][0]["fields"][1]["maximumLength"] = json!(12);
+    let mut random = project_value();
+    random["recordTypes"][0]["fields"][2]["minimumLength"] = json!(9);
+    random["recordTypes"][0]["fields"][2]["maximumLength"] = json!(9);
+    for (case, project, expected) in [
+        (
+            "sequence",
+            sequence,
+            ["max(minimumDigits, 19)", "maximumLength at least 23"],
+        ),
+        (
+            "random",
+            random,
+            ["exactly 10 characters", "maximumLength at least 10"],
+        ),
+    ] {
+        let failure = compile(&project).expect_err(case);
+        let diagnostic = failure
+            .diagnostics()
+            .iter()
+            .find(|diagnostic| diagnostic.code == "breg.field.generate-length-outside-field")
+            .unwrap_or_else(|| panic!("{case}: {:?}", failure.diagnostics()));
+        for fragment in expected {
+            assert!(
+                diagnostic.message.contains(fragment),
+                "{case}: {}",
+                diagnostic.message
+            );
+        }
+    }
+}
+
+#[test]
 fn sequence_scope_fields_cannot_hold_restricted_values_or_references() {
     // The reservation ledger keeps scope values after record erasure.
     let mut restricted = project_value();
