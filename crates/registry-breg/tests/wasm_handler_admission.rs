@@ -223,7 +223,7 @@ fn generated_only_create_accepts_an_empty_wasm_write_slot() {
         "minimumLength": 1,
         "maximumLength": 32,
         "required": true,
-        "classification": "restricted",
+        "classification": "internal",
         "generate": {"type": "sequence", "minimumDigits": 1}
     }]);
     project["actions"][0]["plan"]["writes"][0]["fields"] = json!([]);
