@@ -28,6 +28,7 @@ NAMESPACES = {
     "evidence": ("EvidenceClient", "EvidenceClientError"),
     "messaging": ("MessagingClient", "MessagingClientError"),
     "scheduling": ("SchedulingClient", "SchedulingClientError"),
+    "coordinator": ("CoordinatorClient", "CoordinatorClientError"),
 }
 
 

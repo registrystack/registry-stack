@@ -69,7 +69,10 @@ docker pull --platform linux/amd64 "$MESSAGING_IMAGE"
 The session's `--released-clients` option reads BReg and admits the run through
 the installed unified Python client. It uses the active workflow revision and
 repeats one identical start key to confirm the same run identity. No Rust input
-helper or Rust toolchain is needed. Keep this terminal open.
+helper or Rust toolchain is needed. A maintainer rehearsal sets
+`REGISTRY_STACK_CLIENT` to the absolute candidate wheel path so the same command
+uses those exact bytes. Ordinary release users leave it unset. Keep this
+terminal open.
 
 ## Read the workflow
 
@@ -107,7 +110,7 @@ its schema as the database superuser and serves as a separate runtime role: a lo
 ```sh
 mkdir -p tutorial-work
 uv run --project products/coordinator/examples/reviewed-notice --locked \
-  --with "registry-stack-client==$REGISTRY_STACK_VERSION" \
+  --with "${REGISTRY_STACK_CLIENT:-registry-stack-client==$REGISTRY_STACK_VERSION}" \
   products/coordinator/examples/reviewed-notice/session.py start \
   --released-clients --messaging-image "$MESSAGING_IMAGE" \
   --bin-dir "$COORDINATOR_TUTORIAL_BIN_DIR" \

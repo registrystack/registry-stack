@@ -13,7 +13,7 @@ class AuthFacadeTests(unittest.TestCase):
         # suite; this isolated test checks the public package's import wiring.
         canonical = type("PrivateKeyJwt", (), {})
         modules = {}
-        for product in ("breg", "casework", "discovery", "evidence", "messaging", "scheduling"):
+        for product in ("breg", "casework", "discovery", "evidence", "messaging", "scheduling", "coordinator"):
             modules[f"registry_client.{product}"] = types.ModuleType(f"registry_client.{product}")
         modules["registry_client.breg"].PrivateKeyJwt = canonical
         source = Path(__file__).resolve().parents[1] / "python"

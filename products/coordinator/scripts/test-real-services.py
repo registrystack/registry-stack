@@ -685,6 +685,10 @@ class Journey:
             result = subprocess.run(["docker", "rm", "--force", "--volumes", container],
                                     env=self.env, capture_output=True, timeout=60)
             if result.returncode != 0:
+                listing = subprocess.run(["docker", "container", "ls", "--all", "--format", "{{.Names}}"],
+                                         env=self.env, capture_output=True, timeout=30)
+                if listing.returncode == 0 and container.encode() not in listing.stdout.splitlines():
+                    continue
                 failures.append("docker container " + container)
         assert not failures, f"owned cleanup failed for {', '.join(failures)}; inspect private logs in {self.root}"
 

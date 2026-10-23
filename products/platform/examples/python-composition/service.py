@@ -122,6 +122,9 @@ class Inbox:
                 "CREATE TABLE IF NOT EXISTS wake_subjects (wake_id TEXT PRIMARY KEY, proposal_id TEXT NOT NULL, version INTEGER NOT NULL, effect_digest TEXT, consumed INTEGER NOT NULL DEFAULT 0)"
             )
             db.execute(
+                "CREATE TABLE IF NOT EXISTS poll_order (proposal_id TEXT PRIMARY KEY, sequence INTEGER NOT NULL)"
+            )
+            db.execute(
                 "CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, body TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'prepared', attempts INTEGER NOT NULL DEFAULT 0)"
             )
 
@@ -219,11 +222,22 @@ class Inbox:
 
     def jobs(self):
         with self.connect() as db:
-            return db.execute(
-                "SELECT j.id,j.body,j.state,j.attempts FROM jobs j WHERE state!='notified' "
-                "ORDER BY EXISTS(SELECT 1 FROM wake_subjects w WHERE w.consumed=0 AND w.proposal_id=j.id "
+            db.execute("BEGIN IMMEDIATE")
+            sequence = db.execute(
+                "SELECT COALESCE(MAX(sequence),0)+1 FROM poll_order"
+            ).fetchone()[0]
+            rows = db.execute(
+                "SELECT j.id,j.body,j.state,j.attempts FROM jobs j LEFT JOIN poll_order p ON p.proposal_id=j.id WHERE state!='notified' "
+                "ORDER BY COALESCE(p.sequence,0),EXISTS(SELECT 1 FROM wake_subjects w WHERE w.consumed=0 AND w.proposal_id=j.id "
                 "AND w.version=json_extract(j.body,'$.version') AND w.effect_digest=json_extract(j.body,'$.effectDigest')) DESC,j.id LIMIT 100"
             ).fetchall()
+            # Rotate durable bounded batches even when earlier work is awaiting
+            # review or needs operator recovery. Hints prioritize equally due work.
+            db.executemany(
+                "INSERT INTO poll_order VALUES (?,?) ON CONFLICT(proposal_id) DO UPDATE SET sequence=excluded.sequence",
+                ((row[0], sequence) for row in rows),
+            )
+            return rows
 
     def consume(self, proposal_id, version, effect_digest):
         with self.connect() as db:

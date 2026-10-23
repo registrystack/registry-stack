@@ -555,3 +555,43 @@ class OwningSchemaTests(unittest.TestCase):
                 ).read_text()
             ),
         )
+
+
+class FairPollingTests(unittest.TestCase):
+    def test_later_approved_work_is_polled_past_a_full_batch_awaiting_review(self):
+        with tempfile.TemporaryDirectory() as root:
+            app = ReceiptRecoveryTests().app(root)
+            notice = json.loads(app.inbox.jobs()[0][1])["notice"]
+            with app.inbox.connect() as db:
+                db.execute("DELETE FROM jobs")
+            for index in range(101):
+                app.inbox.register(
+                    f"proposal-{index:03}", 1, "sha256:" + "a" * 64, notice
+                )
+            reads = []
+
+            def current(_binding, identifier):
+                reads.append(identifier)
+                return SimpleNamespace(
+                    document={
+                        "state": "applied"
+                        if identifier == "proposal-100"
+                        else "submitted",
+                        "submissionVersion": 1,
+                        "effectDigest": "sha256:" + "a" * 64,
+                    }
+                )
+
+            def awaiting(*_):
+                error = RuntimeError("source does not promote Apply")
+                error.kind = "invalid-request"
+                raise error
+
+            app.registry.get_proposal = current
+            app.registry.prepare_proposal = awaiting
+            submits = []
+            app.messages = SimpleNamespace(submit=lambda *args: submits.append(args))
+            self.assertEqual(app.reconcile(), 0)
+            self.assertEqual(app.reconcile(), 1)
+            self.assertIn("proposal-100", reads)
+            self.assertEqual(len(submits), 1)

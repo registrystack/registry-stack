@@ -8,7 +8,7 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
-import { TOOLSETS, cargoBuild, clientEnvironment, npmEnvironment, serveBinaries, serveNpmPackages, workspaceReleaseTag } from './toolsets.mjs';
+import { TOOLSETS, cargoBuild, clientEnvironment, npmEnvironment, serveBinaries, serveNpmPackages, workspaceReleaseTag, coordinatorTutorialEnvironment } from './toolsets.mjs';
 
 const execFileAsync = promisify(execFile);
 
@@ -280,4 +280,22 @@ test('a journey that installs no client needs no packages and serves nothing', a
 test('a directory without an npm package is refused', async () => {
   const empty = await mkdtemp(join(tmpdir(), 'toolset-npm-'));
   await assert.rejects(serveNpmPackages(empty), /no npm package in \/\S+/u);
+});
+
+
+test('Coordinator rehearsal selects the exact candidate wheel and digest-pinned Messaging image', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'coordinator-client-env-'));
+  await writeFile(join(root, 'Cargo.toml'), '[workspace.package]\nversion = "0.44.0"\n');
+  const packages = join(root, 'packages');
+  await mkdir(packages);
+  const wheel = join(packages, 'registry_stack_client-0.44.0-cp311-abi3-macosx_11_0_arm64.whl');
+  await writeFile(wheel, 'candidate wheel');
+  const image = 'ghcr.io/registrystack/messaging@sha256:' + 'a'.repeat(64);
+  const env = coordinatorTutorialEnvironment(root, packages, image);
+  assert.equal(env.REGISTRY_STACK_VERSION, '0.44.0');
+  assert.equal(env.REGISTRY_STACK_CLIENT, wheel);
+  assert.equal(env.MESSAGING_IMAGE, image);
+  assert.throws(() => coordinatorTutorialEnvironment(root, packages, 'ghcr.io/registrystack/messaging:latest'), /digest/u);
+  await writeFile(join(packages, 'registry_stack_client-0.44.0-cp311-abi3-manylinux_2_17_x86_64.whl'), 'ambiguous candidate');
+  assert.throws(() => coordinatorTutorialEnvironment(root, packages, image), /exactly one/u);
 });

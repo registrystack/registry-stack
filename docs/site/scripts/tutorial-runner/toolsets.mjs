@@ -200,13 +200,13 @@ function productToolset({
 //
 // REGISTRY_CLIENT_PACKAGES_DIR names a directory a previous
 // release/scripts/assemble-registry-client-packages.py run filled. Without
-// it, assembleClientPackages builds the six Node bindings and the Python
+// it, assembleClientPackages builds the selected Node bindings and the Python
 // wheel the way that script's prerequisites describe, once per run of the
 // runner. On macOS the assembly bundles the AWS-LC FIPS dylib the bindings
 // load into each package, so an installed package needs no library path, as
 // a released one needs none.
 const ASSEMBLE = 'release/scripts/assemble-registry-client-packages.py';
-const CLIENT_PRODUCTS = ['discovery', 'evidence', 'breg', 'casework', 'messaging', 'scheduling'];
+const CLIENT_PRODUCTS = ['discovery', 'evidence', 'breg', 'casework', 'messaging', 'scheduling', 'coordinator'];
 
 // Serve every npm package packed in dir, as an npm registry on a loopback
 // port: each package document lists the versions found, and a tarball is
@@ -443,6 +443,24 @@ const casework = productToolset({
 // runtimes it actually calls. Its example-owned session helper owns teardown;
 // the ordinary product-session sweep remains as an idempotent fallback when a
 // reader interrupts startup before the helper records readiness.
+// The source gate uses the immutable v0.43.0 Messaging image. A release
+// rehearsal may supply its own exact image; this is not a publication check.
+const COORDINATOR_MESSAGING_IMAGE = 'ghcr.io/registrystack/messaging@sha256:695b6a6dc2f72ab2f2341510f171d683cc87a19c7d37c253b545198557bd8a2c';
+
+export function coordinatorTutorialEnvironment(repoRoot, packages, image = process.env.COORDINATOR_TUTORIAL_MESSAGING_IMAGE ?? COORDINATOR_MESSAGING_IMAGE) {
+  if (!/^ghcr\.io\/registrystack\/messaging@sha256:[0-9a-f]{64}$/u.test(image)) {
+    throw new ToolsetError('Coordinator tutorial Messaging image requires an exact published digest');
+  }
+  const version = workspaceReleaseTag(repoRoot).slice(1);
+  const wheels = readdirSync(packages).filter((name) => name.startsWith(`registry_stack_client-${version}-`) && name.endsWith('.whl'));
+  if (wheels.length !== 1) throw new ToolsetError(`provide exactly one host wheel for registry-stack-client ${version} in ${packages}`);
+  return {
+    REGISTRY_STACK_VERSION: version,
+    REGISTRY_STACK_CLIENT: join(packages, wheels[0]),
+    MESSAGING_IMAGE: image,
+  };
+}
+
 const coordinatorProduct = productToolset({
   label: 'coordinator, BReg, Casework, and Messaging',
   commands: /(^|[^\w./=-])(coordinatorctl|coordinator|reviewed-notice-input)([^\w./-]|$)|products\/coordinator\/examples\/reviewed-notice\/session\.py/mu,
@@ -454,15 +472,11 @@ const coordinatorProduct = productToolset({
     ['bregctl', 'BREGCTL_BIN'],
     ['casework', 'CASEWORK_BIN'],
     ['caseworkctl', 'CASEWORKCTL_BIN'],
-    ['messaging', 'MESSAGING_BIN'],
-    ['messagingctl', 'MESSAGINGCTL_BIN'],
-    ['reviewed-notice-input', 'REVIEWED_NOTICE_INPUT_BIN', 'examples/reviewed-notice-input'],
   ],
   cargoArgs: [
-    '-p', 'registry-coordinator', '--example', 'reviewed-notice-input',
+    '-p', 'registry-coordinator',
     '-p', 'registry-breg', '--features', 'registry-breg/runtime', '-p', 'registry-bregctl',
     '-p', 'registry-casework', '-p', 'registry-caseworkctl',
-    '-p', 'registry-messaging', '-p', 'registry-messagingctl',
   ],
   profileVariable: 'COORDINATOR_TUTORIAL_CARGO_PROFILE',
   targetName: 'coordinator-tutorial-source',
@@ -477,7 +491,11 @@ const coordinator = {
 
   async prepare(context) {
     await coordinatorProduct.prepare(context);
-    return { COORDINATOR_TUTORIAL_BIN_DIR: context.binDir };
+    const packages = clientPackages(context.repoRoot);
+    return {
+      COORDINATOR_TUTORIAL_BIN_DIR: context.binDir,
+      ...coordinatorTutorialEnvironment(context.repoRoot, packages),
+    };
   },
 
   async teardown(context) {
