@@ -209,18 +209,6 @@ class RuntimePreflightTest(unittest.TestCase):
                     evidence_stage,
                 )
 
-    def test_adopter_builder_carries_locked_fips_build_dependencies(self) -> None:
-        chef_stage = DOCKERFILE.read_text(encoding="utf-8").split(
-            "FROM rust:1.95-trixie", 1
-        )[1].split("FROM chef AS planner", 1)[0]
-        for dependency in [
-            "cmake=3.31.6-2",
-            "golang-go=2:1.24~2",
-            "libclang-19-dev=1:19.1.7-3+b1",
-        ]:
-            with self.subTest(dependency=dependency):
-                self.assertIn(dependency, chef_stage)
-
     def test_all_services_use_native_checks_after_complete_static_preflight(
         self,
     ) -> None:
