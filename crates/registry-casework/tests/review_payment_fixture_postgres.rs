@@ -346,12 +346,14 @@ fn project(issuer: &str) -> CaseworkProject {
         context_providers: Vec::new(),
         review_policies: vec![ReviewPolicy {
             id: "payment-batch".to_owned(),
+            label: None,
             version: "1".to_owned(),
             purpose: ReviewPurpose::Approval,
             context: ReviewContextPolicy::Submitted,
             routing: Vec::new(),
             stages: vec![ReviewStagePolicy {
                 id: "verification".to_owned(),
+                label: None,
                 queue: "payment-review".to_owned(),
                 deciding_profiles: vec!["reviewer".to_owned()],
                 required_approvals: 1,

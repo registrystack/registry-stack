@@ -7,3 +7,13 @@ extendRecordTypes:
   - recordType: contact
     fields:
       - {id: internal-note, type: string, maximumLength: 500, classification: internal}
+    accessProfiles:
+      - id: note-editor
+        principalClaim: registry_principal
+        requiredScopes: ["registry:directory:write"]
+        requiredPurposes: [directory-administration]
+        operations: [patch]
+        readableFields: [internal-note]
+        writableFields: [internal-note]
+        rowBoundaries:
+          - {field: jurisdiction, claim: jurisdiction, operator: equals}

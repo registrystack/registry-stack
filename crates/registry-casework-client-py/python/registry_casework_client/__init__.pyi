@@ -239,6 +239,7 @@ class RoutingCondition(TypedDict, total=False):
 
 class RoutingRule(TypedDict):
     id: str
+    label: NotRequired[str]
     because: str
     when: RoutingCondition
     queue: str
@@ -738,6 +739,7 @@ class ReviewContextProviderPolicy(TypedDict):
     serviceProfiles: NotRequired[dict[ReviewContextCapability, str]]
 class ReviewStagePolicy(TypedDict):
     id: str
+    label: NotRequired[str]
     queue: str
     decidingProfiles: list[str]
     requiredApprovals: SafeInteger
@@ -755,6 +757,7 @@ class ReviewOutcomePolicy(TypedDict):
     publicReason: Literal["required", "optional", "none"]
     resultRequired: NotRequired[bool]
 class _ReviewPolicyOptional(TypedDict, total=False):
+    label: str
     routing: list[RoutingRule]
     clocks: list[str]
     resultSchema: JsonValue

@@ -1,11 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 //! `init --template <ID>`: one of the shipped starter registry projects.
 //!
-//! Each starter under `products/breg/examples/` is an ordinary
-//! authored BReg project checked in to the repository. This module embeds
-//! those files verbatim at compile time, so `init --template` writes an
-//! unmodified copy of the checked-in project without reading the source tree
-//! at runtime.
+//! Each starter under `products/breg/examples/` is an ordinary authored BReg
+//! project checked in to the repository. This module embeds those files at
+//! compile time. A starter may remove an explicitly optional advanced grant
+//! while retaining the owning example as its documented source.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -23,6 +22,13 @@ use crate::{
 struct Starter {
     id: &'static str,
     files: &'static [(&'static str, &'static [u8])],
+    replacements: &'static [Replacement],
+}
+
+struct Replacement {
+    path: &'static str,
+    from: &'static [u8],
+    to: &'static [u8],
 }
 
 pub(crate) const DEFAULT_TEMPLATE: &str = "minimal-directory";
@@ -30,6 +36,7 @@ pub(crate) const DEFAULT_TEMPLATE: &str = "minimal-directory";
 const STARTERS: &[Starter] = &[
     Starter {
         id: DEFAULT_TEMPLATE,
+        replacements: &[],
         files: &[
             (
                 "README.md",
@@ -77,6 +84,18 @@ const STARTERS: &[Starter] = &[
     },
     Starter {
         id: "facility-registry",
+        replacements: &[
+            Replacement {
+                path: "registry.yaml",
+                from: b"          readPaths:\n            - {path: operators, readableFields: [operator-code, status, jurisdiction]}\n",
+                to: b"",
+            },
+            Replacement {
+                path: "README.md",
+                from: b"`bregctl check` reports an intentional related-disclosure advisory. The\n`operators` related read uses the selected facility root profile, so review that\ngrant alongside direct operator access. This project gives both reads the same\njurisdiction claim and readable field set. Sharing a claim name does not prove\nthat linked operator rows meet the direct grant's boundary. The related read\napplies the facility boundary; the direct operator grant does not restrict it.\n",
+                to: b"The starter keeps operator access on its direct jurisdiction-bound routes. The\nadvanced source example also demonstrates an optional `operators` related read;\nreview that grant before adding it because a related read uses the facility root\nprofile instead of the operator profile's row boundaries.\n",
+            },
+        ],
         files: &[
             (
                 "README.md",
@@ -175,7 +194,7 @@ pub(crate) fn run(destination: &Path, id: &str) -> Result<SuccessReport, Failure
     let files: BTreeMap<String, Vec<u8>> = starter
         .files
         .iter()
-        .map(|(path, bytes)| ((*path).to_owned(), bytes.to_vec()))
+        .map(|(path, bytes)| ((*path).to_owned(), materialize(starter, path, bytes)))
         .collect();
     crate::write_source_files(destination, &files).map_err(|diagnostic| FailureReport {
         ok: false,
@@ -202,6 +221,32 @@ pub(crate) fn run(destination: &Path, id: &str) -> Result<SuccessReport, Failure
         explanation: None,
         next_steps: next_steps(destination, starter.id),
     })
+}
+
+fn materialize(starter: &Starter, path: &str, bytes: &[u8]) -> Vec<u8> {
+    let mut result = bytes.to_vec();
+    for replacement in starter
+        .replacements
+        .iter()
+        .filter(|replacement| replacement.path == path)
+    {
+        let matches = result
+            .windows(replacement.from.len())
+            .enumerate()
+            .filter_map(|(offset, window)| (window == replacement.from).then_some(offset))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            matches.len(),
+            1,
+            "starter source replacement must match exactly once: {path}"
+        );
+        let offset = matches[0];
+        result.splice(
+            offset..offset + replacement.from.len(),
+            replacement.to.iter().copied(),
+        );
+    }
+    result
 }
 
 /// What a reader does after writing the `id` starter, named against the
@@ -254,7 +299,7 @@ mod tests {
     }
 
     #[test]
-    fn every_shipped_starter_writes_its_exact_checked_in_files_and_passes_check() {
+    fn every_shipped_starter_writes_its_expected_files_and_passes_check() {
         for id in ids() {
             let directory = tempfile::tempdir().expect("a temporary directory");
             let destination = directory
@@ -277,7 +322,7 @@ mod tests {
             for (path, contents) in &expected {
                 assert_eq!(
                     &written[path], contents,
-                    "{id}: {path} must be written byte for byte"
+                    "{id}: {path} must match its embedded source and declared replacements"
                 );
             }
 
@@ -285,7 +330,7 @@ mod tests {
                 project: Some(&destination),
                 package: None,
                 production: false,
-                deny_warnings: false,
+                deny_warnings: true,
                 runtime_config: None,
                 environment: false,
             };
@@ -315,9 +360,14 @@ mod tests {
                 _ => panic!("unregistered template"),
             });
         // The optional console is a separate application, not project input.
+        let starter = lookup(id).expect("registered template");
         walk_files(&root)
             .into_iter()
             .filter(|(path, _)| !path.starts_with("console/"))
+            .map(|(path, bytes)| {
+                let contents = materialize(starter, &path, &bytes);
+                (path, contents)
+            })
             .collect()
     }
 

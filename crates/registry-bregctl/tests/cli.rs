@@ -86,6 +86,7 @@ fn duplicate_profile_display_warns_once_and_deny_warnings_refuses_it() {
     let warning = &diagnostics[0];
     assert_eq!(warning["code"], "breg.access-profile.duplicate-label");
     assert_eq!(warning["severity"], "warning");
+    assert_eq!(warning["rank"], "hygiene");
     assert_eq!(warning["path"], "/accessProfiles/1/display/label");
     assert_eq!(
         warning["related"][0]["path"],
@@ -361,11 +362,11 @@ fn check_places_nested_compiler_diagnostics_at_the_exact_authored_members() {
         ),
         (
             "breg.access-profile.read-path-processing-wider-than-read",
-            "/accessProfiles/1/permissions/records/1/readPaths/0/filterableFields",
+            "/accessProfiles/1/permissions/records/1/readPaths/0/filterableFields/0",
         ),
         (
             "breg.access-profile.processing-wider-than-read",
-            "/accessProfiles/1/permissions/records/2/filterableFields",
+            "/accessProfiles/1/permissions/records/2/filterableFields/1",
         ),
     ] {
         let diagnostic = diagnostics
@@ -374,6 +375,16 @@ fn check_places_nested_compiler_diagnostics_at_the_exact_authored_members() {
             .unwrap_or_else(|| panic!("{code} is reported: {report:#?}"));
         assert_check_diagnostic(diagnostic, Some("BRegProject"));
         assert_eq!(diagnostic["path"], pointer, "{diagnostic:#?}");
+        let field = match code {
+            "breg.access-profile.read-path-processing-wider-than-read" => Some("status"),
+            "breg.access-profile.processing-wider-than-read" => Some("operator"),
+            _ => None,
+        };
+        if let Some(field) = field {
+            let message = diagnostic["message"].as_str().unwrap();
+            assert!(message.contains("facility-reader"), "{diagnostic}");
+            assert!(message.contains(field), "{diagnostic}");
+        }
         assert_eq!(
             diagnostic["source"]["file"],
             project.path().join("registry.yaml").display().to_string()
@@ -386,6 +397,207 @@ fn check_places_nested_compiler_diagnostics_at_the_exact_authored_members() {
                 .expect("message is text")
                 .contains("(in "),
             "a complete source pointer does not carry an unresolved compiler path: {diagnostic:#?}"
+        );
+    }
+    for subject in [
+        "model",
+        "access",
+        "routes",
+        "queries",
+        "actions",
+        "proposals",
+        "events",
+    ] {
+        let refused = bregctl(&["--format", "json", "explain", subject, path(project.path())]);
+        assert_eq!(refused.status.code(), Some(1), "{refused:?}");
+        assert!(refused.stderr.is_empty(), "{refused:?}");
+        assert_eq!(
+            json_stdout(&refused)["diagnostics"],
+            report["diagnostics"],
+            "refused explain {subject} retains the same diagnostics and warning ranks as check"
+        );
+    }
+}
+
+#[test]
+fn check_places_temporal_and_duplicate_api_name_errors_at_the_owning_record_and_profile() {
+    let baseline = registry_platform_yaml::Reader::new("registry.yaml")
+        .scan(include_bytes!(
+            "../../../products/breg/examples/minimal/registry.yaml"
+        ))
+        .unwrap()
+        .unwrap()
+        .to_json_value();
+    let mut temporal = baseline.clone();
+    temporal["actions"] = json!([]);
+    temporal["accessProfiles"][0]["permissions"]
+        .as_object_mut()
+        .unwrap()
+        .remove("actions");
+    temporal["accessProfiles"][0]["permissions"]
+        .as_object_mut()
+        .unwrap()
+        .remove("proposals");
+    temporal["recordTypes"][0]["temporal"] =
+        json!({"startField":"start-date","endField":"end-date"});
+    temporal["recordTypes"][0]["fields"]
+        .as_array_mut()
+        .unwrap()
+        .extend([
+            json!({"id":"start-date","type":"date","required":true,"classification":"internal"}),
+            json!({"id":"end-date","type":"date","required":false,"classification":"internal"}),
+        ]);
+    for member in ["readableFields", "writableFields"] {
+        temporal["accessProfiles"][0]["permissions"]["records"][0][member]
+            .as_array_mut()
+            .unwrap()
+            .extend([json!("start-date"), json!("end-date")]);
+    }
+    let mut optional_start = temporal.clone();
+    optional_start["recordTypes"][0]["fields"][3]["required"] = json!(false);
+    let mut hidden_start = temporal;
+    hidden_start["accessProfiles"][0]["permissions"]["records"][0]["readableFields"]
+        .as_array_mut()
+        .unwrap()
+        .retain(|field| field != "start-date");
+    let mut duplicate_name = baseline;
+    let mut second = duplicate_name["recordTypes"][0].clone();
+    second["id"] = json!("contact-details");
+    second["route"] = json!("contact-details");
+    second["apiName"] = json!("Contact");
+    duplicate_name["recordTypes"]
+        .as_array_mut()
+        .unwrap()
+        .push(second);
+
+    for (source, code, pointer, setting) in [
+        (
+            optional_start,
+            "breg.field.valid-time-start-required",
+            "/recordTypes/0/fields/3/required",
+            "required: true",
+        ),
+        (
+            hidden_start,
+            "breg.query.temporal-field-not-readable",
+            "/accessProfiles/0/permissions/records/0/readableFields",
+            "readableFields",
+        ),
+        (
+            duplicate_name,
+            "breg.record-type.api-name-invalid",
+            "/recordTypes/1/apiName",
+            "apiName",
+        ),
+    ] {
+        let project =
+            TestProject::from_registry_source(&serde_json::to_vec_pretty(&source).unwrap());
+        let output = bregctl(&["--format", "json", "check", path(project.path())]);
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        assert!(output.stderr.is_empty(), "{output:?}");
+        let report = json_stdout(&output);
+        let diagnostic = report["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|diagnostic| diagnostic["code"] == code)
+            .unwrap_or_else(|| panic!("{code}: {report}"));
+        assert_eq!(diagnostic["path"], pointer, "{diagnostic}");
+        assert_eq!(
+            diagnostic["source"]["file"],
+            project.path().join("registry.yaml").display().to_string()
+        );
+        assert!(
+            !diagnostic["message"].as_str().unwrap().contains("(in "),
+            "{diagnostic}"
+        );
+        assert!(
+            diagnostic["suggestedAction"]
+                .as_str()
+                .unwrap()
+                .contains(setting),
+            "{diagnostic}"
+        );
+    }
+}
+
+#[test]
+fn hook_projection_errors_point_to_the_second_hook_in_each_owning_file() {
+    let mut source = registry_platform_yaml::Reader::new("registry.yaml")
+        .scan(include_bytes!(
+            "../../../products/breg/examples/minimal/registry.yaml"
+        ))
+        .unwrap()
+        .unwrap()
+        .to_json_value();
+    let hook = |id: &str, field: &str| {
+        json!({
+            "id":id,"phase":"after","trigger":"created","projection":[field],
+            "handler":{"type":"url","destinationId":"events"}
+        })
+    };
+    source["recordTypes"][0]["hooks"] = json!([
+        hook("root-first", "name"),
+        hook("root-second", "no-such-field")
+    ]);
+    let module = json!({
+        "apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1",
+        "kind":"BRegModule","id":"events","version":"1",
+        "extendRecordTypes":[{"recordType":"contact","hooks":[
+            hook("module-first", "name"),hook("module-second", "no-such-field")
+        ]}]
+    });
+    let module_bytes = serde_json::to_vec_pretty(&module).unwrap();
+    source["modules"] = json!([{"id":"events","version":"1","digest":module_digest(&parse_module_json(&module_bytes).unwrap())}]);
+    let root_bytes = serde_json::to_vec_pretty(&source).unwrap();
+    let project = TestProject::from_registry_source(&root_bytes);
+    let module_directory = project.path().join("modules/events");
+    fs::create_dir_all(&module_directory).unwrap();
+    fs::write(module_directory.join("module.yaml"), &module_bytes).unwrap();
+
+    let output = bregctl(&["--format", "json", "check", path(project.path())]);
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert!(output.stderr.is_empty(), "{output:?}");
+    let report = json_stdout(&output);
+    let diagnostics = report["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|diagnostic| diagnostic["code"] == "breg.event.projection-field-unknown")
+        .collect::<Vec<_>>();
+    assert_eq!(diagnostics.len(), 2, "{report}");
+    for (file, bytes, pointer) in [
+        (
+            project.path().join("registry.yaml"),
+            root_bytes,
+            "/recordTypes/0/hooks/1/projection/0",
+        ),
+        (
+            module_directory.join("module.yaml"),
+            module_bytes,
+            "/extendRecordTypes/0/hooks/1/projection/0",
+        ),
+    ] {
+        let diagnostic = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic["source"]["file"] == file.display().to_string())
+            .unwrap();
+        assert_eq!(diagnostic["path"], pointer, "{diagnostic}");
+        let authored = std::str::from_utf8(&bytes).unwrap();
+        let (line, text) = authored
+            .lines()
+            .enumerate()
+            .find(|(_, text)| text.contains("no-such-field"))
+            .unwrap();
+        assert_eq!(diagnostic["source"]["line"], line + 1, "{diagnostic}");
+        assert_eq!(
+            diagnostic["source"]["column"],
+            text.find('"').unwrap() + 1,
+            "{diagnostic}"
+        );
+        assert!(
+            !diagnostic["message"].as_str().unwrap().contains("(in "),
+            "{diagnostic}"
         );
     }
 }
@@ -480,6 +692,107 @@ extendRecordTypes:
                 .contains("(in "),
             "an exact extension pointer does not carry an unresolved compiler path: {diagnostic:#?}"
         );
+    }
+}
+
+#[test]
+fn hook_program_errors_point_to_the_declaring_module_and_explain_names_the_stopped_stage() {
+    let project = TestProject::from_registry_source(
+        br#"apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project:
+  id: hook-diagnostic-fixture
+  version: "1"
+  defaultLanguage: en
+  canonicalBaseIri: https://hook-diagnostic-fixture.example.test
+datasets:
+  - id: test-dataset
+modules:
+  - id: hooks
+    version: "1"
+"#,
+    );
+    let module_directory = project.path().join("modules/hooks");
+    fs::create_dir_all(module_directory.join("hooks")).expect("module asset directory is created");
+    fs::write(
+        module_directory.join("module.yaml"),
+        br#"apiVersion: id.registrystack.org/formats/breg/module/v1alpha1
+kind: BRegModule
+id: hooks
+version: "1"
+recordTypes:
+  - id: first
+    primaryDataset: test-dataset
+    route: first
+    mutationMode: create-only
+    fields:
+      - {id: code, type: string, maximumLength: 64, classification: public}
+    hooks:
+      - id: first-created
+        phase: after
+        trigger: created
+        projection: [code]
+        handler: {type: url, destinationId: audit}
+  - id: second
+    primaryDataset: test-dataset
+    route: second
+    mutationMode: create-only
+    fields:
+      - {id: code, type: string, maximumLength: 64, classification: public}
+    hooks:
+      - id: second-created
+        phase: after
+        trigger: created
+        projection: [code]
+        handler:
+          type: rhai
+          script: hooks/second.rhai
+          abi: registry.hook-handler/v1
+"#,
+    )
+    .expect("module source is written");
+    fs::write(
+        module_directory.join("hooks/second.rhai"),
+        b"fn handle(ctx) { #{answer: \"none\"",
+    )
+    .expect("broken hook source is written");
+
+    let checked = bregctl(&["--format", "json", "check", path(project.path())]);
+    assert_eq!(checked.status.code(), Some(1), "{checked:?}");
+    let report = json_stdout(&checked);
+    let diagnostic = report["diagnostics"]
+        .as_array()
+        .expect("diagnostics is a list")
+        .iter()
+        .find(|diagnostic| diagnostic["code"] == "breg.hook.handler-parse")
+        .unwrap_or_else(|| panic!("hook parse diagnostic is reported: {report:#?}"));
+    assert_eq!(diagnostic["path"], "/recordTypes/1/hooks/0/handler/script");
+    assert_eq!(
+        diagnostic["source"]["file"],
+        module_directory.join("module.yaml").display().to_string()
+    );
+
+    let explained = bregctl(&["--format", "json", "explain", "model", path(project.path())]);
+    assert_eq!(explained.status.code(), Some(1), "{explained:?}");
+    let refusal = json_stdout(&explained);
+    let stopped = refusal["diagnostics"]
+        .as_array()
+        .expect("diagnostics is a list")
+        .iter()
+        .find(|diagnostic| diagnostic["code"] == "breg.compile.later-checks-skipped")
+        .unwrap_or_else(|| panic!("stopped stage is reported: {refusal:#?}"));
+    let message = stopped["message"].as_str().expect("message is text");
+    assert!(message.contains("source validation"), "{stopped:#?}");
+    for subject in [
+        "model",
+        "access",
+        "routes",
+        "queries",
+        "actions",
+        "proposals",
+        "events",
+    ] {
+        assert!(message.contains(subject), "{subject:?} in {stopped:#?}");
     }
 }
 
@@ -627,6 +940,20 @@ fn missing_action_script_identifies_action_and_safe_relative_path() {
         .unwrap()
         .contains("scripts/register-person.rhai"));
     assert_check_diagnostic(diagnostic, Some("BRegProject"));
+    let skipped = report["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|diagnostic| diagnostic["code"] == "breg.compile.later-checks-skipped")
+        .unwrap_or_else(|| panic!("the stopped compiler stage is reported: {report}"));
+    assert!(skipped["message"]
+        .as_str()
+        .unwrap()
+        .contains("Action compilation"));
+    assert!(skipped["message"]
+        .as_str()
+        .unwrap()
+        .contains("proposals, and events"));
     assert!(!String::from_utf8_lossy(&output.stdout).contains("fn handle"));
 }
 
@@ -677,21 +1004,33 @@ fn capture_failure_shares_the_registry_warning_budget() {
         .expect("the capture failure remains inside the file budget");
     assert!(capture < 100, "{report}");
     assert_eq!(diagnostics[capture]["path"], "/functions/0/source");
-    assert_eq!(
+    let stopped = report["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|diagnostic| diagnostic["code"] == "breg.compile.later-checks-skipped")
+        .unwrap_or_else(|| {
+            panic!("the stopped compiler stage survives the warning budget: {report}")
+        });
+    assert!(stopped["message"]
+        .as_str()
+        .unwrap()
+        .contains("Action compilation"));
+    assert!(
         diagnostics[..100]
             .iter()
             .filter(|diagnostic| diagnostic["code"] == "breg.recipient.duplicate-name")
-            .count(),
-        99,
-        "{report}"
+            .count()
+            > 90,
+        "reader warnings still share the bounded report: {report}"
     );
     let overflow = diagnostics[100];
     assert_eq!(overflow["code"], "config.too-many-problems");
     assert_eq!(overflow["severity"], "warning");
-    assert_eq!(
-        overflow["message"],
-        "2 more problems in this file are not shown"
-    );
+    assert!(overflow["message"]
+        .as_str()
+        .unwrap()
+        .contains("more problems in this file are not shown"));
 
     let human = bregctl(&["check", path(project.path())]);
     assert_eq!(human.status.code(), Some(1), "{human:?}");
@@ -926,7 +1265,7 @@ fn access_review_example_explains_simulates_and_refuses_footguns_without_live_da
     )
     .unwrap();
     assert!(bregctl(&["check", path]).status.success());
-    assert!(!bregctl(&["check", path, "--deny-warnings"])
+    assert!(bregctl(&["check", path, "--deny-warnings"])
         .status
         .success());
 }
@@ -1495,6 +1834,7 @@ fn assert_check_diagnostic(diagnostic: &Value, artifact: Option<&str>) {
                 "suggestedAction",
                 "source",
                 "related",
+                "rank",
             ]
             .contains(&key.as_str()),
             "{key} in {diagnostic}"
@@ -1504,6 +1844,17 @@ fn assert_check_diagnostic(diagnostic: &Value, artifact: Option<&str>) {
         matches!(diagnostic["severity"].as_str(), Some("error" | "warning")),
         "{diagnostic}"
     );
+    if diagnostic["severity"] == "warning" {
+        assert!(
+            matches!(
+                diagnostic["rank"].as_str(),
+                Some("widens-access" | "performance" | "hygiene")
+            ),
+            "{diagnostic}"
+        );
+    } else {
+        assert!(diagnostic.get("rank").is_none(), "{diagnostic}");
+    }
     let pointer = diagnostic["path"].as_str().expect("path is a string");
     assert!(
         pointer.is_empty() || pointer.starts_with('/'),
@@ -1721,6 +2072,60 @@ fn init_creates_the_complete_canonical_minimal_project_that_checks_immediately()
         registry,
         "an immediate project lock leaves the initialized project byte-identical"
     );
+}
+
+#[test]
+fn facility_starter_checks_clean_with_warnings_denied() {
+    let project = TestProject::asset_fixture();
+    let destination = project.path().join("facility");
+    let initialized = bregctl(&[
+        "init",
+        "--template",
+        "facility-registry",
+        path(&destination),
+    ]);
+    assert!(initialized.status.success(), "{initialized:?}");
+
+    let registry = registry_platform_yaml::Reader::new("registry.yaml")
+        .scan(&fs::read(destination.join("registry.yaml")).unwrap())
+        .unwrap()
+        .unwrap()
+        .to_json_value();
+    let reader = registry["accessProfiles"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|profile| profile["id"] == "facility-reader")
+        .unwrap();
+    let records = reader["permissions"]["records"].as_array().unwrap();
+    let facility = records
+        .iter()
+        .find(|permission| permission["recordType"] == "facility")
+        .unwrap();
+    assert!(facility.get("readPaths").is_none());
+    let operator = records
+        .iter()
+        .find(|permission| permission["recordType"] == "operator")
+        .unwrap();
+    assert!(operator["operations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|operation| operation == "get"));
+    assert_eq!(operator["rowBoundaries"].as_array().unwrap().len(), 1);
+
+    let checked = bregctl(&[
+        "--format",
+        "json",
+        "check",
+        path(&destination),
+        "--deny-warnings",
+    ]);
+    assert!(checked.status.success(), "{checked:?}");
+    assert!(json_stdout(&checked)["diagnostics"]
+        .as_array()
+        .unwrap()
+        .is_empty());
 }
 
 #[test]
@@ -2980,19 +3385,35 @@ fn init_from_publicschema_starter_writes_a_derived_project_that_checks_immediate
         !destination.join("modules").exists(),
         "a derived project locks no module"
     );
-    let codes: Vec<&str> = report["findings"]
+    let findings = report["findings"]
         .as_array()
         .expect("findings")
         .iter()
-        .map(|finding| finding["code"].as_str().expect("code"))
-        .collect();
-    assert!(
-        codes.contains(&"breg.access.profile-unrestricted-collection"),
-        "{codes:?}"
-    );
-    assert!(
-        codes.contains(&"breg.access.profile-higher-classification"),
-        "{codes:?}"
+        .map(|finding| {
+            (
+                finding["code"].as_str().expect("code"),
+                finding["path"].as_str().expect("path"),
+                finding["suggestedAction"]
+                    .as_str()
+                    .expect("suggested action"),
+            )
+        })
+        .collect::<Vec<_>>();
+    let classification_action = "Remove the field from readableFields, or confirm that the profile scopes and purposes admit only callers cleared for this classification.";
+    assert_eq!(
+        findings,
+        [
+            (
+                "breg.access.profile-higher-classification",
+                "recordTypes[id=group-membership].accessProfiles[id=operator].readableFields[field=person]",
+                classification_action,
+            ),
+            (
+                "breg.access.profile-higher-classification",
+                "recordTypes[id=person].accessProfiles[id=operator].readableFields[field=marital-status]",
+                classification_action,
+            ),
+        ]
     );
     let next_steps = report["nextSteps"].as_array().expect("next steps");
     assert!(next_steps.iter().any(|step| step
@@ -3259,13 +3680,26 @@ fn init_from_publicschema_reports_the_derived_project_in_the_report_shape() {
     );
     assert_eq!(
         stdout
-            .matches("warning[breg.access.profile-unrestricted-collection]")
+            .matches("warning[breg.access.profile-higher-classification]")
             .count(),
-        6,
-        "each unrestricted permission keeps its diagnostic location: {stdout}"
+        2,
+        "each sensitive field keeps its diagnostic location: {stdout}"
+    );
+    for path in [
+        "recordTypes[id=group-membership].accessProfiles[id=operator].readableFields[field=person]",
+        "recordTypes[id=person].accessProfiles[id=operator].readableFields[field=marital-status]",
+    ] {
+        assert!(stdout.contains(path), "{stdout}");
+    }
+    assert_eq!(
+        stdout
+            .matches("next: Remove the field from readableFields, or confirm that the profile scopes and purposes admit only callers cleared for this classification.")
+            .count(),
+        2,
+        "each sensitive field gives its classification recovery: {stdout}"
     );
     assert!(
-        stdout.contains("\n0 errors, 8 warnings\n"),
+        stdout.contains("\n0 errors, 2 warnings\n"),
         "the report closes with the count to act on: {stdout}"
     );
     assert!(
@@ -5178,7 +5612,7 @@ recordTypes:
     );
     assert_eq!(
         overflow["message"],
-        "101 more problems in this file are not shown"
+        "202 more problems in this file are not shown"
     );
 
     let human = bregctl(&["check", path(project.path())]);

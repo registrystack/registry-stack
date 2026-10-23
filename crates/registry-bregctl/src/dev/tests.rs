@@ -698,7 +698,11 @@ fn dev_capture_runs_the_placeholder_iri_and_names_a_compile_refusal_by_code() {
             .expect("an empty canonical IRI does not compile")
     );
     assert!(
-        refusal.contains("(breg.registry.canonical-base-iri-required)"),
+        refusal.contains("breg.registry.canonical-base-iri-required"),
+        "{refusal}"
+    );
+    assert!(
+        refusal.contains("breg.compile.later-checks-skipped"),
         "{refusal}"
     );
 }

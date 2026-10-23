@@ -174,6 +174,7 @@
             }
           }
         ],
+        "migrationReviewRevision": "sha256:0a8b66458099c77f339e79b5ae3b13792abde68b014bd226de89af94fa4546f5",
         "permissions": [
           {
             "default": true,
@@ -263,7 +264,7 @@
       }
     ]
   },
-  "apiVersion": "id.registrystack.org/formats/breg/access-explanation/v1alpha6",
+  "apiVersion": "id.registrystack.org/formats/breg/access-explanation/v1alpha7",
   "claimContract": {
     "directClaims": {},
     "principalClaims": [

@@ -90,9 +90,6 @@ fn validate_retained_closure(registry_id: &str, row: &Retained) -> Result<(), Mu
     policy
         .check()
         .map_err(|_| MutationError::PreconditionFailed)?;
-    let expected =
-        registry_review_client::submission_digest(&row.producer, registry_id, &row.request)
-            .map_err(|_| MutationError::PreconditionFailed)?;
     let reference = format!(
         "breg:{registry_id}:{}:{}:{}",
         row.action_id, row.id, row.version
@@ -105,7 +102,6 @@ fn validate_retained_closure(registry_id: &str, row: &Retained) -> Result<(), Mu
         || row.request.subject.id != row.id.to_string()
         || row.request.subject.version != row.version.to_string()
         || row.request.subject.digest.as_str() != row.digest
-        || row.submission_digest != expected
         || !matches!(&row.request.context,registry_review_client::ReviewContext::CurrentSource{binding} if binding.reference==reference)
     {
         return Err(MutationError::PreconditionFailed);
@@ -122,7 +118,6 @@ fn validate_retained_closure(registry_id: &str, row: &Retained) -> Result<(), Mu
         if accepted.request_id.is_nil()
             || accepted.subject != row.request.subject
             || !policy.matches(&accepted.policy)
-            || accepted.submission_digest != expected
         {
             return Err(MutationError::PreconditionFailed);
         }
@@ -154,6 +149,13 @@ fn validate_retained_closure(registry_id: &str, row: &Retained) -> Result<(), Mu
         }
         _ => return Err(MutationError::PreconditionFailed),
     }
+    crate::review_store::stored_submission_digest_compatibility(
+        &row.producer,
+        registry_id,
+        &row.request,
+        &row.submission_digest,
+        row.accepted.as_ref(),
+    )?;
     Ok(())
 }
 

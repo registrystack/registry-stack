@@ -19,6 +19,10 @@ INSTALLERS = {
     "evidencectl": ROOT / "crates/registry-evidencectl/install.sh",
     "casework": ROOT / "crates/registry-casework/install.sh",
     "scheduling": ROOT / "crates/registry-scheduling/install.sh",
+    "discovery": ROOT / "crates/registry-discovery/install.sh",
+}
+LATEST_NUMBERED_INSTALLERS = {
+    name: path for name, path in INSTALLERS.items() if name != "discovery"
 }
 SOURCE_SHA = "0123456789abcdef0123456789abcdef01234567"
 TAG = f"v0.99.0-nightly.20261002.{SOURCE_SHA}"
@@ -36,7 +40,7 @@ class InstallerBootstrapTests(unittest.TestCase):
         self.assertEqual(0, result.returncode, result.stderr)
 
     def test_latest_numbered_release_executes_the_stable_pinned_installer(self) -> None:
-        for product, installer in INSTALLERS.items():
+        for product, installer in LATEST_NUMBERED_INSTALLERS.items():
             with self.subTest(product=product), BootstrapFixture(product, installer) as fixture:
                 result = fixture.run()
                 self.assertEqual(0, result.returncode, result.stderr)
@@ -103,15 +107,18 @@ class InstallerBootstrapTests(unittest.TestCase):
                 self.assertEqual(f"{TAG}\n", fixture.marker.read_text())
 
     def test_unsupported_schema_refuses_before_downloading_an_installer(self) -> None:
-        with BootstrapFixture("breg", INSTALLERS["breg"]) as fixture:
-            manifest = json.loads(fixture.manifest.read_text())
-            manifest["schema_version"] = "registry-stack.nightly.v3"
-            fixture.manifest.write_text(json.dumps(manifest, indent=2) + "\n")
-            result = fixture.run("--channel", "nightly")
-            self.assertNotEqual(0, result.returncode)
-            self.assertIn("unsupported schema_version", result.stderr)
-            self.assertFalse(fixture.marker.exists())
-            self.assertEqual(1, len(fixture.requests()), fixture.requests())
+        for product in ("breg", "discovery"):
+            with self.subTest(product=product), BootstrapFixture(
+                product, INSTALLERS[product]
+            ) as fixture:
+                manifest = json.loads(fixture.manifest.read_text())
+                manifest["schema_version"] = "registry-stack.nightly.v3"
+                fixture.manifest.write_text(json.dumps(manifest, indent=2) + "\n")
+                result = fixture.run("--channel", "nightly")
+                self.assertNotEqual(0, result.returncode)
+                self.assertIn("unsupported schema_version", result.stderr)
+                self.assertFalse(fixture.marker.exists())
+                self.assertEqual(1, len(fixture.requests()), fixture.requests())
 
     def test_missing_manifest_refuses_before_executing_an_installer(self) -> None:
         with BootstrapFixture("breg", INSTALLERS["breg"]) as fixture:
@@ -132,27 +139,33 @@ class InstallerBootstrapTests(unittest.TestCase):
             self.assertEqual(1, len(fixture.requests()), fixture.requests())
 
     def test_checksum_mismatch_refuses_before_executing_an_installer(self) -> None:
-        with BootstrapFixture("breg", INSTALLERS["breg"]) as fixture:
-            manifest = json.loads(fixture.manifest.read_text())
-            manifest["assets"][0]["sha256"] = "0" * 64
-            fixture.manifest.write_text(json.dumps(manifest, indent=2) + "\n")
-            result = fixture.run("--channel", "nightly")
-            self.assertNotEqual(0, result.returncode)
-            self.assertIn("Checksum verification failed", result.stderr)
-            self.assertFalse(fixture.marker.exists())
+        for product in ("breg", "discovery"):
+            with self.subTest(product=product), BootstrapFixture(
+                product, INSTALLERS[product]
+            ) as fixture:
+                manifest = json.loads(fixture.manifest.read_text())
+                manifest["assets"][0]["sha256"] = "0" * 64
+                fixture.manifest.write_text(json.dumps(manifest, indent=2) + "\n")
+                result = fixture.run("--channel", "nightly")
+                self.assertNotEqual(0, result.returncode)
+                self.assertIn("Checksum verification failed", result.stderr)
+                self.assertFalse(fixture.marker.exists())
 
     def test_published_installer_refuses_a_conflicting_selector(self) -> None:
-        with BootstrapFixture("breg", INSTALLERS["breg"]) as fixture:
-            published = fixture.root / "breg-v0.98.0-install.sh"
-            source = INSTALLERS["breg"].read_text().replace(
-                'default_version=""', 'default_version="v0.98.0"', 1
-            )
-            published.write_text(source)
-            result = fixture.run_path(published, "--channel", "nightly")
-            self.assertEqual(2, result.returncode)
-            self.assertIn("already pinned to v0.98.0", result.stderr)
-            self.assertFalse(fixture.marker.exists())
-            self.assertEqual([], fixture.requests())
+        for product in ("breg", "discovery"):
+            with self.subTest(product=product), BootstrapFixture(
+                product, INSTALLERS[product]
+            ) as fixture:
+                published = fixture.root / f"{product}-v0.98.0-install.sh"
+                source = INSTALLERS[product].read_text().replace(
+                    'default_version=""', 'default_version="v0.98.0"', 1
+                )
+                published.write_text(source)
+                result = fixture.run_path(published, "--channel", "nightly")
+                self.assertEqual(2, result.returncode)
+                self.assertIn("already pinned to v0.98.0", result.stderr)
+                self.assertFalse(fixture.marker.exists())
+                self.assertEqual([], fixture.requests())
 
 
 class BootstrapFixture:

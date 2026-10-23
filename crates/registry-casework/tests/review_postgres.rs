@@ -286,6 +286,7 @@ fn project(version: &str) -> CaseworkProject {
         }],
         review_policies: vec![ReviewPolicy {
             id: "registry-correction".to_owned(),
+            label: None,
             version: version.to_owned(),
             purpose: ReviewPurpose::Approval,
             context: ReviewContextPolicy::Submitted,
@@ -293,6 +294,7 @@ fn project(version: &str) -> CaseworkProject {
             stages: vec![
                 ReviewStagePolicy {
                     id: "primary".to_owned(),
+                    label: None,
                     queue: "review".to_owned(),
                     deciding_profiles: vec!["staff".to_owned()],
                     required_approvals: 1,
@@ -302,6 +304,7 @@ fn project(version: &str) -> CaseworkProject {
                 },
                 ReviewStagePolicy {
                     id: "secondary".to_owned(),
+                    label: None,
                     queue: "review".to_owned(),
                     deciding_profiles: vec!["staff".to_owned()],
                     required_approvals: 1,
@@ -4844,6 +4847,7 @@ async fn advisory_history_uses_the_active_tasks_routed_queue() {
     policy.stages[1].exclude_previous_stage_reviewers = false;
     policy.routing.push(RoutingRule {
         id: "specialist-stage".to_owned(),
+        label: None,
         because: "Route the authorization stage to its specialist team".to_owned(),
         when: RoutingCondition {
             stage: Some("secondary".to_owned()),

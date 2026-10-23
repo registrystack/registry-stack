@@ -2553,6 +2553,42 @@ class RegistryReleaseTest(TestCase):
                     step["run"],
                 )
 
+    def test_v0_44_binaries_and_installers_are_required_in_manifest(self) -> None:
+        module = load_registry_release()
+        with tempfile.TemporaryDirectory() as temporary:
+            manifest_path = write_manifest(
+                Path(temporary), version="0.44.0", source_ref="HEAD"
+            )
+            artifacts = yaml.safe_load(manifest_path.read_text())["artifacts"]
+        additions = {
+            "coordinator",
+            "coordinatorctl",
+            "rstack",
+            "rstack-installer",
+            *(f"{name}-installer" for name in
+              module.release_roster.additional_installers((0, 44, 0))),
+        }
+        self.assertLessEqual(additions, set(artifacts))
+        self.assertFalse(module.release_roster.coordinator_in_release((0, 44, 0)))
+        self.assertEqual([], module.artifact_inventory_errors("0.44.0", artifacts))
+        for name in additions:
+            with self.subTest(missing=name):
+                incomplete = {
+                    key: value for key, value in artifacts.items() if key != name
+                }
+                self.assertNotEqual(
+                    [], module.artifact_inventory_errors("0.44.0", incomplete)
+                )
+
+        with tempfile.TemporaryDirectory() as temporary:
+            historical_path = write_manifest(
+                Path(temporary), version="0.43.0", source_ref="HEAD"
+            )
+            historical = yaml.safe_load(historical_path.read_text())["artifacts"]
+        self.assertNotIn("rstack", historical)
+        self.assertNotIn("rstack-installer", historical)
+        self.assertEqual([], module.artifact_inventory_errors("0.43.0", historical))
+
     @mock.patch.object(load_release_roster(), "COORDINATOR_FIRST_RELEASE", (0, 42, 0))
     def test_required_rust_context_aggregates_path_gated_shards(self) -> None:
         workflow = yaml.safe_load(
@@ -3898,12 +3934,15 @@ class RegistryReleaseTest(TestCase):
                 inventory.update({"breg-mcp": version, "breg-review": version})
             if module.release_roster.discoveryctl_in_release(version_tuple):
                 inventory["discoveryctl"] = version
-            if module.release_roster.coordinator_in_release(version_tuple):
+            if module.release_roster.coordinator_binaries_in_release(version_tuple):
                 inventory.update({"coordinator": version, "coordinatorctl": version})
+            if module.release_roster.rstack_in_release(version_tuple):
+                inventory.update({"rstack": version, "rstack-installer": version})
             if module.release_roster.scheduling_installer_in_release(version_tuple):
                 inventory["scheduling-installer"] = version
             if version_tuple >= (0, 39, 0):
                 inventory = {name: value for name, value in inventory.items() if not name.startswith("relay")}
+            inventory.update({f"{name}-installer": version for name in module.release_roster.additional_installers(version_tuple)})
             return inventory
 
         # No version ships Messaging while the roster names no first release.
@@ -4002,10 +4041,13 @@ class RegistryReleaseTest(TestCase):
                 inventory["discoveryctl"] = version
             if roster.messaging_in_release(version_tuple):
                 inventory.update({"messaging": version, "messagingctl": version})
-            if roster.coordinator_in_release(version_tuple):
+            if roster.coordinator_binaries_in_release(version_tuple):
                 inventory.update({"coordinator": version, "coordinatorctl": version})
+            if roster.rstack_in_release(version_tuple):
+                inventory.update({"rstack": version, "rstack-installer": version})
             if roster.scheduling_installer_in_release(version_tuple):
                 inventory["scheduling-installer"] = version
+            inventory.update({f"{name}-installer": version for name in module.release_roster.additional_installers(version_tuple)})
             return inventory
 
         historical = released("0.40.0")
@@ -4032,11 +4074,11 @@ class RegistryReleaseTest(TestCase):
                     [], module.artifact_inventory_errors("0.42.0", incomplete)
                 )
 
-        # No version ships Coordinator while the roster names no first release.
+        # Holding the image does not hold the independently released binaries.
         with mock.patch.object(
             module.release_roster, "COORDINATOR_FIRST_RELEASE", None
         ):
-            for version in ("0.42.0", "1.0.0"):
+            for version in ("0.42.0", "0.43.0"):
                 with self.subTest(version=version, roster=None):
                     held = released(version)
                     self.assertNotIn("coordinator", held)
@@ -4138,10 +4180,13 @@ class RegistryReleaseTest(TestCase):
                         current["discoveryctl"] = version
                     if module.release_roster.messaging_in_release(version_tuple):
                         current.update({"messaging": version, "messagingctl": version})
-                    if module.release_roster.coordinator_in_release(version_tuple):
+                    if module.release_roster.coordinator_binaries_in_release(version_tuple):
                         current.update({"coordinator": version, "coordinatorctl": version})
+                    if module.release_roster.rstack_in_release(version_tuple):
+                        current.update({"rstack": version, "rstack-installer": version})
                     if module.release_roster.scheduling_installer_in_release(version_tuple):
                         current["scheduling-installer"] = version
+                    current.update({f"{name}-installer": version for name in module.release_roster.additional_installers(version_tuple)})
                     if version_tuple >= (0, 39, 0):
                         current = {name: value for name, value in current.items() if not name.startswith("relay")}
                     self.assertEqual(
@@ -5906,13 +5951,17 @@ def write_manifest(
     if load_release_roster().messaging_in_release(version_tuple):
         artifacts["messaging"] = version
         artifacts["messagingctl"] = version
-    if load_release_roster().coordinator_in_release(version_tuple):
+    if load_release_roster().coordinator_binaries_in_release(version_tuple):
         artifacts["coordinator"] = version
         artifacts["coordinatorctl"] = version
+    if load_release_roster().rstack_in_release(version_tuple):
+        artifacts["rstack"] = version
+        artifacts["rstack-installer"] = version
     if load_release_roster().scheduling_installer_in_release(version_tuple):
         artifacts["scheduling-installer"] = version
     if version_tuple >= (0, 39, 0):
         artifacts = {name: value for name, value in artifacts.items() if not name.startswith("relay")}
+    artifacts.update({f"{name}-installer": version for name in load_release_roster().additional_installers(version_tuple)})
     manifest = {
         "stack": {
             "release": "beta-6",

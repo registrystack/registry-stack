@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! Frozen native Action revisions always require review when their accepted
-//! vocabulary or target-field contract changes. Record field widening remains
-//! independently additive; it does not authorize automatic Action migration.
+//! Frozen native Action revisions require review when their accepted
+//! vocabulary, inputs, conditions, or effects change. Record field widening
+//! remains independently additive, and an unrelated optional target field does
+//! not turn every Action over that Record type into a reviewed change.
 
 #![cfg(feature = "runtime")]
 
@@ -31,6 +32,7 @@ const ASSET_MODULE: &str = include_str!(
 
 const WITHDRAW_DECISION: &str = "{id: decision, type: vocabulary-code, vocabulary: consent-decision, values: [withdrawn], required: true, classification: internal}";
 const INSPECTION_RESULT_INPUT: &str = "{id: inspection-result, apiName: initialResult, type: vocabulary-code, vocabulary: inspection-result, required: true, classification: internal}";
+const IMPORT_SOURCE_REFERENCE: &str = "{id: source-reference, type: string, maximumLength: 255, required: true, classification: internal}";
 
 /// Compile an edited fixture, relocking its modules as `bregctl project lock`
 /// would after the edit.
@@ -248,10 +250,8 @@ fn an_unrelated_vocabulary_leaves_every_action_semantically_unchanged() {
     );
 }
 
-/// Widening and narrowing a retained target field both change the frozen
-/// Action revision, while the Record field widening keeps its additive code.
 #[test]
-fn a_raised_target_text_limit_is_additive_for_the_record_and_reviewed_for_actions() {
+fn an_unrelated_target_text_limit_is_additive_while_a_related_action_input_needs_review() {
     const SOURCE_REFERENCE: &str =
         "{id: source-reference, type: string, maximumLength: 255, classification: internal}";
     let with_limit = |max_length: u32| {
@@ -282,45 +282,47 @@ fn a_raised_target_text_limit_is_additive_for_the_record_and_reviewed_for_action
             Some("review-note")
         )
     );
-    for action in [
-        "give-person-consent",
-        "import-person-consent",
-        "invalidate-person-consent",
-        "record-person-consent-assisted",
-        "refuse-person-consent",
-        "withdraw-person-consent",
-    ] {
-        assert_eq!(
-            action_change(&widened, action),
-            (
-                CompiledRegistryChangeCode::ActionChanged,
-                CompiledRegistryChangeClass::AccessOrDisclosureChange
-            )
-        );
-    }
     assert!(widened.changes.iter().any(|change| change.code
         == CompiledRegistryChangeCode::FieldLengthWidened
         && change.class == CompiledRegistryChangeClass::CompatibleAdditive));
-    assert_eq!(changes.len(), 7, "{changes:?}");
-    assert!(change_set_to_applicable_migration_plan(&widened).is_err());
+    assert_eq!(changes.len(), 1, "{changes:?}");
+    assert!(changes.iter().all(|(code, _)| !matches!(
+        code,
+        CompiledRegistryChangeCode::ActionAdded
+            | CompiledRegistryChangeCode::ActionChanged
+            | CompiledRegistryChangeCode::ActionRemoved
+    )));
+    change_set_to_applicable_migration_plan(&widened)
+        .expect("an unrelated optional target field remains additive");
 
-    let narrowed = compiled_registry_change_set(
-        &before,
-        &consent(CONSENT_PROJECT, &with_limit(100)),
+    let related = replace_once(
+        CONSENT_MODULE,
+        SOURCE_REFERENCE,
+        &SOURCE_REFERENCE.replace("maximumLength: 255", "maximumLength: 1000"),
+    );
+    let related = replace_once(
+        &related,
+        IMPORT_SOURCE_REFERENCE,
+        &IMPORT_SOURCE_REFERENCE.replace("maximumLength: 255", "maximumLength: 1000"),
+    );
+    let related = compiled_registry_change_set(
+        &consent(CONSENT_PROJECT, CONSENT_MODULE),
+        &consent(CONSENT_PROJECT, &related),
         "prior-package",
     );
-    assert!(
-        narrowed
-            .changes
-            .iter()
-            .any(|change| change.code == CompiledRegistryChangeCode::ActionChanged),
-        "a lowered limit changes the requests an action accepts: {:#?}",
-        narrowed.changes
+    assert_eq!(
+        action_change(&related, "import-person-consent"),
+        (
+            CompiledRegistryChangeCode::ActionChanged,
+            CompiledRegistryChangeClass::AccessOrDisclosureChange
+        )
     );
+    assert_eq!(related.changes.len(), 2, "{:#?}", related.changes);
+    assert!(change_set_to_applicable_migration_plan(&related).is_err());
 }
 
 #[test]
-fn a_lowered_target_string_minimum_is_additive_for_the_record_and_reviewed_for_actions() {
+fn an_unrelated_target_string_minimum_is_additive_while_a_related_input_needs_review() {
     const SOURCE_REFERENCE: &str =
         "{id: source-reference, type: string, maximumLength: 255, classification: internal}";
     let with_minimum = |min_length: u32| {
@@ -351,39 +353,49 @@ fn a_lowered_target_string_minimum_is_additive_for_the_record_and_reviewed_for_a
             Some("review-code")
         )
     );
-    for action in [
-        "give-person-consent",
-        "import-person-consent",
-        "invalidate-person-consent",
-        "record-person-consent-assisted",
-        "refuse-person-consent",
-        "withdraw-person-consent",
-    ] {
-        assert_eq!(
-            action_change(&lowered, action),
-            (
-                CompiledRegistryChangeCode::ActionChanged,
-                CompiledRegistryChangeClass::AccessOrDisclosureChange
-            )
-        );
-    }
     assert!(lowered.changes.iter().any(|change| change.code
         == CompiledRegistryChangeCode::FieldLengthWidened
         && change.class == CompiledRegistryChangeClass::CompatibleAdditive));
-    assert_eq!(changes.len(), 7, "{changes:?}");
-    assert!(change_set_to_applicable_migration_plan(&lowered).is_err());
+    assert_eq!(changes.len(), 1, "{changes:?}");
+    assert!(changes.iter().all(|(code, _)| !matches!(
+        code,
+        CompiledRegistryChangeCode::ActionAdded
+            | CompiledRegistryChangeCode::ActionChanged
+            | CompiledRegistryChangeCode::ActionRemoved
+    )));
+    change_set_to_applicable_migration_plan(&lowered)
+        .expect("an unrelated optional target field remains additive");
 
-    let raised = compiled_registry_change_set(
-        &before,
-        &consent(CONSENT_PROJECT, &with_minimum(16)),
+    let related_before = replace_once(
+        CONSENT_MODULE,
+        SOURCE_REFERENCE,
+        &SOURCE_REFERENCE.replace("maximumLength: 255", "minimumLength: 8, maximumLength: 255"),
+    );
+    let related_before = replace_once(
+        &related_before,
+        IMPORT_SOURCE_REFERENCE,
+        &IMPORT_SOURCE_REFERENCE
+            .replace("maximumLength: 255", "minimumLength: 8, maximumLength: 255"),
+    );
+    let related_after = related_before.replace("minimumLength: 8", "minimumLength: 2");
+    assert_eq!(
+        related_before.matches("minimumLength: 8").count(),
+        2,
+        "both the Record field and Action input carry the reviewed constraint"
+    );
+    assert_eq!(related_after.matches("minimumLength: 2").count(), 2);
+    let related = compiled_registry_change_set(
+        &consent(CONSENT_PROJECT, &related_before),
+        &consent(CONSENT_PROJECT, &related_after),
         "prior-package",
     );
-    assert!(
-        raised
-            .changes
-            .iter()
-            .any(|change| change.code == CompiledRegistryChangeCode::ActionChanged),
-        "a raised minimum changes the requests an action accepts: {:#?}",
-        raised.changes
+    assert_eq!(
+        action_change(&related, "import-person-consent"),
+        (
+            CompiledRegistryChangeCode::ActionChanged,
+            CompiledRegistryChangeClass::AccessOrDisclosureChange
+        )
     );
+    assert_eq!(related.changes.len(), 2, "{:#?}", related.changes);
+    assert!(change_set_to_applicable_migration_plan(&related).is_err());
 }

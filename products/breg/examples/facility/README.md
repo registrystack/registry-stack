@@ -37,7 +37,9 @@ including their conditions and idempotency keys. Changed input requires an expli
 `bregctl check` reports an intentional related-disclosure advisory. The
 `operators` related read uses the selected facility root profile, so review that
 grant alongside direct operator access. This project gives both reads the same
-jurisdiction boundary and readable field set.
+jurisdiction claim and readable field set. Sharing a claim name does not prove
+that linked operator rows meet the direct grant's boundary. The related read
+applies the facility boundary; the direct operator grant does not restrict it.
 
 `tests/journeys.yaml` exercises registration, reads both resulting records,
 checks jurisdiction concealment, edits a no-review Proposal, refuses stale

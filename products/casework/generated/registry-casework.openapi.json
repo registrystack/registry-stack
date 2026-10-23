@@ -3355,6 +3355,17 @@
           "id": {
             "$ref": "#/components/schemas/LocalId"
           },
+          "label": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DisplayText"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional presentation label. Stable references use `id`."
+          },
           "outcomes": {
             "description": "Written in configuration as a mapping from each outcome id; served\nas a list by id.",
             "items": {
@@ -3416,6 +3427,12 @@
           "displaySchema": true,
           "identity": {
             "$ref": "#/components/schemas/ReviewPolicyIdentity"
+          },
+          "label": {
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "outcomes": {
             "items": {
@@ -3998,6 +4015,17 @@
           "id": {
             "$ref": "#/components/schemas/LocalId"
           },
+          "label": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DisplayText"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional presentation label. Stable references use `id`."
+          },
           "negativeDecisions": {
             "$ref": "#/components/schemas/ReviewNegativeDecisionMode",
             "default": "settle",
@@ -4401,6 +4429,17 @@
           },
           "id": {
             "$ref": "#/components/schemas/LocalId"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DisplayText"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional presentation label. Stable references use `id`."
           },
           "queue": {
             "type": "string"

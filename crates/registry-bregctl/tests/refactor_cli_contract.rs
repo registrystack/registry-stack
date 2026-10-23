@@ -22,8 +22,7 @@ fn run(args: &[&str]) -> std::process::Output {
         .output()
         .unwrap()
 }
-fn explain(subject: &str) -> Value {
-    let project = fixture();
+fn explain_project(subject: &str, project: &Path) -> Value {
     let mut arguments = vec!["--format", "json", "explain", subject];
     if subject != "lifecycle" {
         arguments.push(project.to_str().unwrap());
@@ -38,6 +37,52 @@ fn explain(subject: &str) -> Value {
     assert_eq!(document["ok"], true);
     assert_eq!(document["kind"], "BRegCtlReport");
     document
+}
+fn explain(subject: &str) -> Value {
+    explain_project(subject, &fixture())
+}
+fn warning_fixture() -> tempfile::TempDir {
+    let temporary = tempfile::tempdir().unwrap();
+    std::fs::write(
+        temporary.path().join("registry.yaml"),
+        r#"apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project:
+  id: warning-contract
+  canonicalBaseIri: https://warning.example.test
+  version: "1"
+  defaultLanguage: en
+package:
+  sourceRevision: warning-contract-1
+datasets:
+  - id: directory
+recordTypes:
+  - id: entry
+    route: entries
+    primaryDataset: directory
+    mutationMode: mutable
+    classification: internal
+    fields:
+      - {id: code, type: string, required: true, maximumLength: 32, classification: internal}
+      - {id: owner, type: string, required: true, maximumLength: 64, classification: internal}
+accessProfiles:
+  - id: reader
+    default: true
+    principalClaim: sub
+    requiredScopes: ["entry:read"]
+    permissions:
+      records:
+        - recordType: entry
+          operations: [create, get, list]
+          readableFields: [code, owner]
+          writableFields: [code, owner]
+          rowBoundaries:
+            - {field: owner, claim: sub, operator: equals}
+          allowDataExport: true
+"#,
+    )
+    .unwrap();
+    temporary
 }
 fn compiled() -> registry_breg::CompiledRegistry {
     let source = parse_project_yaml(include_bytes!(
@@ -263,15 +308,18 @@ fn record_schema_and_openapi_use_breg_terms_without_respelling_registry_record_v
 
 #[test]
 fn explain_findings_share_checks_source_locations_and_json_pointers() {
-    let project = fixture();
+    let fixture = warning_fixture();
+    let project = fixture.path();
     let output = run(&["--format", "json", "check", project.to_str().unwrap()]);
     assert!(output.status.success(), "{output:?}");
     let checked: Value = serde_json::from_slice(&output.stdout).unwrap();
     let expected = checked["diagnostics"].as_array().unwrap();
-    assert!(
-        !expected.is_empty(),
-        "facility must exercise a real compiler finding"
+    assert_eq!(
+        expected.len(),
+        1,
+        "the warning fixture has one review finding: {expected:?}"
     );
+    assert_eq!(expected[0]["code"], "breg.access.profile-data-export");
     for subject in [
         "model",
         "access",
@@ -281,7 +329,7 @@ fn explain_findings_share_checks_source_locations_and_json_pointers() {
         "proposals",
         "events",
     ] {
-        let report = explain(subject);
+        let report = explain_project(subject, project);
         assert_eq!(report["findings"], checked["diagnostics"], "{subject}");
         for finding in report["findings"].as_array().unwrap() {
             assert!(finding["path"].as_str().unwrap().starts_with('/'));

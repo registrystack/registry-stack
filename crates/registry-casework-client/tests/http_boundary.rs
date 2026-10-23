@@ -32,12 +32,14 @@ type HistoryObservations = Arc<Mutex<Vec<(String, HeaderMap)>>>;
 async fn review_policy_refuses_a_valid_snapshot_for_another_identifier() {
     let snapshot = fixture_closure(ReviewPolicy {
         id: "returned-kind".to_owned(),
+        label: None,
         version: "1".to_owned(),
         purpose: ReviewPurpose::Approval,
         context: ReviewContextPolicy::Submitted,
         routing: Vec::new(),
         stages: vec![ReviewStagePolicy {
             id: "review".to_owned(),
+            label: None,
             queue: "reviews".to_owned(),
             deciding_profiles: vec!["staff".to_owned()],
             required_approvals: 1,
@@ -1798,12 +1800,14 @@ async fn review_task_context_preserves_the_frozen_source_neutral_shape() {
 fn context_body(strategy: ReviewContextPolicy, display_schema: Value, context: Value) -> Value {
     let snapshot = fixture_closure(ReviewPolicy {
         id: "standalone-answer".to_owned(),
+        label: None,
         version: "1".to_owned(),
         purpose: ReviewPurpose::Approval,
         context: strategy,
         routing: Vec::new(),
         stages: vec![ReviewStagePolicy {
             id: "answer".to_owned(),
+            label: None,
             queue: "answers".to_owned(),
             deciding_profiles: vec!["staff".to_owned()],
             required_approvals: 1,
@@ -2974,12 +2978,14 @@ async fn empty_not_found_response() -> axum::http::Response<axum::body::Body> {
 async fn task_context_response() -> impl IntoResponse {
     let snapshot = fixture_closure(ReviewPolicy {
         id: "standalone-answer".to_owned(),
+        label: None,
         version: "1".to_owned(),
         purpose: ReviewPurpose::Approval,
         context: ReviewContextPolicy::Submitted,
         routing: Vec::new(),
         stages: vec![ReviewStagePolicy {
             id: "answer".to_owned(),
+            label: None,
             queue: "answers".to_owned(),
             deciding_profiles: vec!["staff".to_owned()],
             required_approvals: 1,

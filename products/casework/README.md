@@ -46,6 +46,23 @@ The dev database pulls `docker.io/library/postgres:17.11` at pinned digest
 Retained owned containers using the previous exact ECR Public reference at
 that digest remain valid.
 
+Policy, stage, routing-rule, queue, team, and outcome labels are presentation
+text for people. They are single-line values: tabs, line feeds, carriage
+returns, and other control characters are refused. Stable references continue
+to use ids, and labels do not change a policy's behavioral binding digest.
+`explain` reports the queues a policy uses, including clock reassignment
+queues, the union of its deciding profiles, and every staff or supervisor
+profile eligible to be selected.
+
+A policy binding deliberately closes over every access profile, queue, team,
+and the project inbox, even when one policy does not currently name them. It
+also closes over that policy's referenced clocks and calendars, context
+provider, task templates, and trusted producers. This whole-project staffing
+closure means adding an otherwise unused queue or team changes every policy
+binding. `explain` keeps that closure in `dependencies` and reports narrower
+usage separately; it also lists all project clocks, calendars, and trusted
+producers at project level.
+
 Each protected API call authenticates with `Authorization: Bearer ...` and selects
 one declared profile. Shared producer Review routes use `Registry-Review-Profile`;
 Casework policy inspection, human and administrative routes use

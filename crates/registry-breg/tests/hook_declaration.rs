@@ -103,6 +103,15 @@ fn assert_diagnostic(failure: &CompileFailure, code: &str, needle: &str) {
     );
 }
 
+fn assert_diagnostic_path(failure: &CompileFailure, code: &str, expected_path: &str) {
+    let matched = failure
+        .diagnostics()
+        .iter()
+        .find(|diagnostic| diagnostic.code == code)
+        .unwrap_or_else(|| panic!("missing diagnostic {code:?}: {:?}", failure.diagnostics()));
+    assert_eq!(expected_path, matched.path, "diagnostic {code:?}");
+}
+
 #[test]
 fn an_entity_declares_hooks_in_the_shared_declaration_shape() {
     let project = parse_project_json(
@@ -224,6 +233,50 @@ fn an_after_phase_rhai_hook_requires_a_handle_entry_point() {
     )
     .expect_err("a script without handle is refused");
     assert_diagnostic(&failure, "breg.hook.handler-entrypoint", "handle");
+}
+
+#[test]
+fn a_rhai_hook_program_error_names_its_record_type_and_hook() {
+    for (code, source) in [
+        (
+            "breg.hook.handler-parse",
+            "fn handle(ctx) { #{answer: \"none\"",
+        ),
+        (
+            "breg.hook.handler-entrypoint",
+            "fn other(ctx) { #{answer: \"none\"} }",
+        ),
+    ] {
+        let mut project = project_with_hooks(json!([url_hook()]));
+        let mut second = project["recordTypes"][0].clone();
+        second["id"] = json!("application");
+        second["route"] = json!("applications");
+        second["hooks"] = json!([{
+            "id": "application-created",
+            "phase": "after",
+            "trigger": "created",
+            "projection": ["label", "region"],
+            "handler": {
+                "type": "rhai",
+                "script": "hooks/application.rhai",
+                "abi": "registry.hook-handler/v1"
+            }
+        }]);
+        project["recordTypes"]
+            .as_array_mut()
+            .expect("recordTypes is a list")
+            .push(second);
+
+        let failure =
+            compile_with_assets(&project, &[rhai_asset("hooks/application.rhai", source)])
+                .expect_err("the second Record type's hook program is refused");
+
+        assert_diagnostic_path(
+            &failure,
+            code,
+            "recordTypes[id=application].hooks[id=application-created].handler.script",
+        );
+    }
 }
 
 #[test]
@@ -358,7 +411,10 @@ fn a_wasm_hook_is_refused_by_a_build_without_wasm_support() {
         .iter()
         .find(|diagnostic| diagnostic.code == "breg.hook.handler-wasm-build-unsupported")
         .expect("the build refusal is reported");
-    assert_eq!("recordTypes[].hooks[].handler.type", refusal.path);
+    assert_eq!(
+        "recordTypes[id=case].hooks[id=case-created].handler.type",
+        refusal.path
+    );
     assert!(
         !failure
             .diagnostics()
