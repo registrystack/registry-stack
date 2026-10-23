@@ -47,3 +47,11 @@ export function expandReferenceTables(body, sources) {
     });
   }).join('');
 }
+
+/** Keep Astro's digest consistent with the body machine-readable routes consume. */
+export function expandReferenceEntry(entry, generateDigest) {
+  if (!entry?.body) return entry;
+  const body = expandReferenceTables(entry.body);
+  if (body === entry.body) return entry;
+  return { ...entry, body, digest: generateDigest({ sourceDigest: entry.digest, body }) };
+}

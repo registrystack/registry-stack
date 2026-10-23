@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
-import { expandReferenceTables } from '../src/lib/reference-tables.mjs';
+import { expandReferenceEntry, expandReferenceTables } from '../src/lib/reference-tables.mjs';
 
 const sources = {
   'breg-api': [{id: 'routes', columns: ['Method', 'Path'], rows: [['GET', '`/v1/records`']]}],
@@ -28,9 +27,15 @@ test('keeps fenced examples and unrelated MDX unchanged', () => {
   assert.equal(expandReferenceTables(body, sources), body);
 });
 
-test('collection body expansion feeds Markdown twins and the LLM collection', () => {
-  const loader = readFileSync(new URL('../src/content.config.ts', import.meta.url), 'utf8');
-  assert.match(loader, /body: expandReferenceTables\(entry.body/);
-  const route = readFileSync(new URL('../src/pages/[...slug].md.ts', import.meta.url), 'utf8');
-  assert.match(route, /entry.body/);
+test('stored body expansion changes its digest while retaining normal MDX render metadata', () => {
+  const entry = { id: 'reference/breg-api', digest: 'source', body: '<ApiReferenceTable id="routes" />', deferredRender: true, filePath: 'reference/breg-api.mdx' };
+  let digested;
+  const expanded = expandReferenceEntry(entry, (value) => { digested = value; return 'expanded'; });
+  assert.equal(expanded.digest, 'expanded');
+  assert.match(expanded.body, /\| Route \| Operation \|/);
+  assert.equal(digested.sourceDigest, 'source');
+  assert.equal(digested.body, expanded.body);
+  assert.equal(expanded.filePath, entry.filePath);
+  assert.equal(expanded.deferredRender, true);
+  assert.equal(expandReferenceEntry(expanded, () => { throw new Error('unchanged body'); }), expanded);
 });
