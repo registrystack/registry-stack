@@ -435,7 +435,10 @@ supported release history. Starting with v0.26.1, a release promotes only the
 unified user-facing clients: `@registrystack/client` on npm and
 `registry-stack-client` on PyPI. Their product namespaces carry the
 version-selected APIs: `discovery`, `evidence`, and `breg` from v0.26.1,
-`casework` from v0.30.0, and `messaging` from v0.38.0. Releases through
+`casework` from v0.30.0, `messaging` from v0.38.0, and `scheduling` from
+v0.40.0. The client roster selects `coordinator` from v0.44.0; this is
+independent of the Coordinator runtime image hold and is not proof of
+publication. Check that version's actual release manifest and package assets. Releases through
 v0.38.0 also carry a `relay` namespace; v0.39.0 removes it. The
 product-specific native bindings are build inputs, not additional public
 projects.

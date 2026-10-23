@@ -1,7 +1,12 @@
 # @registrystack/client
 
 One versioned Node.js package for the Discovery, Evidence, Base Registry
-Engine, Casework, Messaging, and Scheduling client APIs in Registry Stack.
+Engine, Casework, Messaging, Scheduling, and Coordinator client APIs in Registry Stack.
+
+Coordinator joins the client roster at v0.44.0. Its imports below require a
+Coordinator-enabled v0.44.0 candidate or published package; published v0.43.0
+contains the earlier six products. Check the version-specific release assets
+before installing. Source integration does not establish publication.
 
 ## Install
 
@@ -11,13 +16,13 @@ npm install "@registrystack/client@<version>"
 
 Requires Node.js 24.11 or newer. Supported targets are macOS arm64, Linux
 arm64 with glibc, and Linux x64 with glibc; installing the package pulls in
-one platform-specific optional dependency containing all six native
+one platform-specific optional dependency containing all seven native
 bindings.
 
 ## Usage
 
 ```js
-const { discovery, evidence, breg, casework, messaging, scheduling } = require('@registrystack/client');
+const { discovery, evidence, breg, casework, messaging, scheduling, coordinator } = require('@registrystack/client');
 
 const registry = new breg.BaseRegistryClient({
   baseUrl: 'https://registry.example.invalid/',
@@ -30,6 +35,9 @@ const messages = new messaging.MessagingClient({
 });
 const appointments = new scheduling.SchedulingClient({
   baseUrl: 'https://scheduling.example.invalid/',
+});
+const workflows = new coordinator.CoordinatorClient({
+  baseUrl: 'https://coordinator.example.invalid/',
 });
 ```
 
@@ -47,6 +55,9 @@ const appointments = new scheduling.SchedulingClient({
   institution-owned messages.
 - `scheduling`: Registry Scheduling, published offerings, availability,
   holds, and appointments over operator-anchored supply.
+
+- `coordinator`: Registry Coordinator, workflow contracts, admission, run status,
+  inspection, and operator recovery. It is optional for direct product composition.
 
 Each product remains in its own namespace because its routing,
 authentication, errors, and verification rules are different.

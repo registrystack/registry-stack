@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-10-17"
+last_reviewed: "2026-10-23"
 doc_type: reference
 locale: en
 standards_referenced:
@@ -17,7 +17,7 @@ One package carries every maintained Registry Stack client API: `@registrystack/
 Discovery, `evidence` for Registry Evidence, `breg` for Base Registry
 Engine (BReg), `casework` for Registry
 Casework<DocsetProduct product="registry-messaging">, `messaging` for Registry Messaging</DocsetProduct>, and `scheduling` for
-Registry Scheduling. Each namespace keeps its own routes,
+Registry Scheduling<DocsetProduct product="registry-coordinator">, with `coordinator` for Registry Coordinator from the v0.44.0 client roster</DocsetProduct>. Each namespace keeps its own routes,
 authentication, errors, and verification rules, because those contracts differ.
 
 Rust is the canonical implementation. The Python and Node packages are thin bindings over it: they
@@ -35,7 +35,10 @@ carry no Base Registry Engine client package and no unified package; they distri
 package per product instead. The `casework` namespace is present in those same unified packages
 beginning with Registry Stack v0.30.0<DocsetProduct product="registry-messaging">; the `messaging` namespace is present
 beginning with Registry Stack v0.38.0</DocsetProduct>; the `scheduling` namespace is present
-beginning with Registry Stack v0.40.0.
+beginning with Registry Stack v0.40.0. The `coordinator` namespace is selected
+from v0.44.0. Published v0.43.0 packages have no Coordinator namespace; use a
+Coordinator-enabled candidate until its matching package is published. Runtime
+binary and image availability are separate release prerequisites.
 Python requires version 3.11 or later and the wheels use the
 Python 3.11 stable ABI (`abi3-py311`), so a later Python imports the same file. Node requires version 24.11
 or later. Both packages select a native build for Linux amd64 with glibc, Linux arm64 with glibc, or
@@ -82,7 +85,7 @@ The package does not declare that dependency itself, because a JavaScript consum
 
 A Rust application takes the source crate from the matching release tag. `registry-stack-client` is
 the facade that re-exports the product clients under `breg`, `casework`, `discovery`,
-`evidence`<DocsetProduct product="registry-messaging">, `messaging`</DocsetProduct>, and `scheduling` modules; a single-product application can depend on that product's crate
+`evidence`<DocsetProduct product="registry-messaging">, `messaging`</DocsetProduct>, `scheduling`, and `coordinator` modules in the v0.44.0 source; a single-product application can depend on that product's crate
 directly instead.
 
 ```toml
@@ -96,18 +99,21 @@ registry-stack-client = { git = "https://github.com/registrystack/registry-stack
 
 ## One import, one namespace per product
 
+The seven-product imports below target Coordinator-enabled v0.44.0 packages.
+For published v0.43.0, omit `coordinator`; do not infer availability from source.
+
 <DocsetProduct product="registry-messaging">
 
 ```python
-from registry_client import breg, casework, discovery, evidence, messaging, scheduling
+from registry_client import breg, casework, coordinator, discovery, evidence, messaging, scheduling
 ```
 
 ```js
-const { breg, casework, discovery, evidence, messaging, scheduling } = require('@registrystack/client');
+const { breg, casework, coordinator, discovery, evidence, messaging, scheduling } = require('@registrystack/client');
 ```
 
 ```rust
-use registry_stack_client::{breg, casework, discovery, evidence, messaging, scheduling};
+use registry_stack_client::{breg, casework, coordinator, discovery, evidence, messaging, scheduling};
 ```
 
 </DocsetProduct>
@@ -130,10 +136,17 @@ use registry_stack_client::{breg, casework, discovery, evidence, scheduling};
 
 <DocsetProduct product="registry-coordinator">
 
-The unified packages carry no Registry Coordinator namespace. Its client is the
-`registry-coordinator-client` Rust crate, with Node.js and Python bindings built from source in the
-same repository. The [Registry Coordinator API](../apis/registry-coordinator/) reference describes
-the routes it reaches.
+The v0.44.0 source exports `registry_stack_client::coordinator`,
+`registry_client.coordinator`, and `@registrystack/client/coordinator` (also
+available as the Node root's `coordinator` export). Construct
+`coordinator.CoordinatorClient(base_url)` in Python or
+`new coordinator.CoordinatorClient({ baseUrl })` in Node. Each operation takes
+its own authorized bearer token. `workflow` reads the active workflow revision;
+`start` admits an exact revision and input under a stable caller key; `status`
+and `inspect` read persisted progress. See the
+[Coordinator HTTP reference](../apis/registry-coordinator/) and
+[candidate evaluation tutorial](../../tutorials/review-an-application-and-send-a-notice/).
+Coordinator remains optional for direct BReg and Casework applications.
 
 </DocsetProduct>
 

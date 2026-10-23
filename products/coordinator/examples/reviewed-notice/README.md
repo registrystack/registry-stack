@@ -19,9 +19,16 @@ The session helper accepts `--bin-dir` with verified native binaries and
 Rust input helper. `--messaging-image` accepts an exact published
 `ghcr.io/registrystack/messaging@sha256:...` digest and runs its runtime and tool
 with Docker host networking and only the owned fixture directory mounted.
-This supports hosts without a native Messaging distribution. Keep the image,
-native tools, support archive, and client version aligned. v0.43.0 does not yet
-publish Coordinator; a candidate rehearsal does not establish publication.
+This supports hosts without a native Messaging distribution. The verified local
+combination is v0.44.0 candidate native tools and unified wheel, the reviewed C1
+source Git archive, and published Messaging v0.43.0 at digest
+`sha256:695b6a6dc2f72ab2f2341510f171d683cc87a19c7d37c253b545198557bd8a2c`.
+It was executed on macOS arm64 with the Linux amd64 image under OrbStack.
+This does not establish an actual Linux amd64 host run or a fully published
+Coordinator distribution. Future release users must select the exact tested
+combination documented for their release; arbitrary version mixing is not
+covered. v0.43.0 does not publish Coordinator. The binary platform roster and
+publication work remain required.
 
 See the [tutorial](https://docs.registrystack.org/dev/tutorials/review-an-application-and-send-a-notice/)
 for the complete sequence, restart, and cleanup. The Python projection uses

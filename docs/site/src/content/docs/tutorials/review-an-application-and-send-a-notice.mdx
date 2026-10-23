@@ -26,13 +26,19 @@ approval email from Registry Messaging. Coordinator does the rest, even across a
   outcome="One approved, unchanged application produces one finished run and one email in local Mailpit."
   time="About 20 minutes"
   level="Local evaluation only"
-  prerequisites={['Docker 24 or later with host networking', 'OpenSSL', 'Python 3.11 or later and uv', 'curl', 'jq', 'Linux amd64 or macOS arm64', 'Verified native release tools, matching support files, and the unified Python client']}
+  prerequisites={['Docker 24 or later with host networking', 'OpenSSL', 'Python 3.11 or later and uv', 'curl', 'jq', 'Linux amd64 or macOS arm64', 'Verified native tools, a matching source archive, and the unified Python client']}
 />
 
-## Get the matching release tools
+## Prepare verified candidate or release assets
 
 :::note[Coordinator distribution is pending]
-The published v0.43.0 release does not include Coordinator. Use this path only
+The published v0.43.0 release does not include Coordinator. The verified local
+evaluation uses v0.44.0 candidate native tools and the candidate unified wheel
+with published Messaging v0.43.0 at
+`sha256:695b6a6dc2f72ab2f2341510f171d683cc87a19c7d37c253b545198557bd8a2c`.
+It ran on macOS arm64 with the Linux amd64 image under OrbStack. An actual
+Linux amd64 host run, the macOS binary platform release work, and a fully
+published Coordinator distribution are still pending. Use this path only
 with a release or a reviewed candidate that supplies the Coordinator pair and
 unified client. A candidate rehearsal is not proof that those assets have been
 published. The [deployment runbook](https://github.com/registrystack/registry-stack/blob/main/products/coordinator/DEPLOYMENT.md)
@@ -41,24 +47,92 @@ retains the contributor build procedure.
 
 Verify the selected release's manifest and checksums using the
 [release operations procedure](https://github.com/registrystack/registry-stack/blob/main/release/OPERATIONS.md).
-Use the same version's tagged source archive for these support files, with no
-Rust build. Extract the six native tools into one private directory: `breg`,
-`bregctl`, `casework`, `caseworkctl`, `coordinator`, and `coordinatorctl`.
-On macOS, retain each archive's adjacent FIPS libraries in that directory.
-Refuse different bytes for a repeated library filename.
+For a local candidate, use the maintainer's reviewed source and checksum-bound
+artifact handoff. The asset directory must contain its verified `SHA256SUMS`,
+the host's unified wheel, and all six native assets named below. Do not use
+v0.43.0 downloads as substitutes for missing Coordinator assets.
 
-Set `REGISTRY_STACK_VERSION` to the verified version and
-`COORDINATOR_TUTORIAL_BIN_DIR` to that directory's absolute path. Set
-`MESSAGING_IMAGE` to the exact `ghcr.io/registrystack/messaging@sha256:...`
-reference from that release's manifest. The image supplies Messaging and
-`messagingctl` on both hosts; its Linux amd64 platform runs through Docker.
+Get GitHub's source-code archive for that verified source tag or commit, or the
+maintainer's checksum-bound `git archive` export of the same reviewed commit.
+These are ordinary Git source archives, not a separate published support asset.
+Extract it and run from its root. Rust is not required. Use a fresh working
+directory; the maintained macOS extractor refuses an existing destination.
 
-From the extracted support archive:
+Set `REGISTRY_STACK_VERSION` to the candidate or release version and
+`REGISTRY_STACK_ASSETS` to the absolute directory containing its verified local
+artifacts. The preparation checks the selected file checksums, renames raw
+Linux assets to executable tool names, and uses the existing strict macOS
+archive extractor while retaining its adjacent FIPS libraries.
+
+```sh test-skip="asset preparation is verified separately against the candidate handoff"
+: "${REGISTRY_STACK_VERSION:?set the verified candidate or release version}"
+: "${REGISTRY_STACK_ASSETS:?set the absolute verified artifact directory}"
+mkdir -p tutorial-work
+python3 - "$REGISTRY_STACK_VERSION" "$REGISTRY_STACK_ASSETS" >tutorial-work/prepared-tools.json <<'PY'
+import hashlib, json, platform, shutil, sys
+from pathlib import Path
+sys.path.insert(0, "release/scripts")
+from macos_fips_packaging import extract_macos_binary_archive
+
+version, assets = sys.argv[1], Path(sys.argv[2])
+if not assets.is_absolute():
+    raise SystemExit("Use an absolute artifact directory.")
+host = (platform.system(), platform.machine())
+if host == ("Darwin", "arm64"):
+    target, suffix = "macos-arm64", "_arm64.whl"
+elif host in (("Linux", "x86_64"), ("Linux", "amd64")):
+    target, suffix = "linux-amd64", "_x86_64.manylinux2014_x86_64.whl"
+else:
+    raise SystemExit("This tutorial supports macOS arm64 and Linux amd64.")
+tools = ("breg", "bregctl", "casework", "caseworkctl", "coordinator", "coordinatorctl")
+checksums = {}
+for line in (assets / "SHA256SUMS").read_text().splitlines():
+    if not line.strip():
+        continue
+    digest, name = line.split(maxsplit=1)
+    checksums[name.removeprefix("*")] = digest
+wheels = [path for path in assets.glob(f"registry_stack_client-{version}-*.whl") if path.name.endswith(suffix)]
+if len(wheels) != 1:
+    raise SystemExit("Supply exactly one verified host wheel.")
+files = [assets / (f"{tool}-v{version}-{target}" + (".tar.gz" if target == "macos-arm64" else "")) for tool in tools]
+for path in [*files, wheels[0]]:
+    if checksums.get(path.name) != hashlib.sha256(path.read_bytes()).hexdigest():
+        raise SystemExit(f"Checksum mismatch: {path.name}")
+output = Path("tutorial-work/native-tools").resolve()
+output.mkdir(mode=0o700)
+for tool, path in zip(tools, files):
+    stem = f"{tool}-v{version}-{target}"
+    if target == "macos-arm64":
+        extracted = Path("tutorial-work/unpacked") / tool
+        extract_macos_binary_archive(path, extracted, stem)
+        source = extracted / stem
+        for library in extracted.glob("libaws_lc_fips_*.dylib"):
+            destination = output / library.name
+            if destination.exists() and destination.read_bytes() != library.read_bytes():
+                raise SystemExit("Conflicting FIPS library bytes; stop and inspect the candidate.")
+            if not destination.exists():
+                shutil.copy2(library, destination)
+    else:
+        source = path
+    shutil.copy2(source, output / tool)
+    (output / tool).chmod(0o755)
+print(json.dumps({"tools": str(output), "clientWheel": str(wheels[0])}))
+PY
+```
+
+For the tested candidate evaluation, set `MESSAGING_IMAGE` to the exact public
+Messaging v0.43.0 digest above, prefixed by
+`ghcr.io/registrystack/messaging@`. Future published journeys must use the
+combination recorded for their release, including the supported binary
+platform roster. The helper accepts the public Messaging repository only; it
+does not accept a private candidate-image reference.
 
 ```sh
 : "${REGISTRY_STACK_VERSION:?set the verified release or candidate version}"
-: "${COORDINATOR_TUTORIAL_BIN_DIR:?set the absolute native tools directory}"
+: "${COORDINATOR_TUTORIAL_BIN_DIR:=$(jq -r .tools tutorial-work/prepared-tools.json)}"
+: "${REGISTRY_STACK_CLIENT:=$(jq -r .clientWheel tutorial-work/prepared-tools.json)}"
 : "${MESSAGING_IMAGE:?set the published Messaging image digest}"
+export COORDINATOR_TUTORIAL_BIN_DIR REGISTRY_STACK_CLIENT
 for tool in breg bregctl casework caseworkctl coordinator coordinatorctl; do
   test -x "$COORDINATOR_TUTORIAL_BIN_DIR/$tool"
 done
@@ -69,10 +143,9 @@ docker pull --platform linux/amd64 "$MESSAGING_IMAGE"
 The session's `--released-clients` option reads BReg and admits the run through
 the installed unified Python client. It uses the active workflow revision and
 repeats one identical start key to confirm the same run identity. No Rust input
-helper or Rust toolchain is needed. A maintainer rehearsal sets
-`REGISTRY_STACK_CLIENT` to the absolute candidate wheel path so the same command
-uses those exact bytes. Ordinary release users leave it unset. Keep this
-terminal open.
+helper or Rust toolchain is needed. The preparation selects the exact local
+wheel through `REGISTRY_STACK_CLIENT`. When that variable is unset, the start
+command instead selects the named published version. Keep this terminal open.
 
 ## Read the workflow
 
