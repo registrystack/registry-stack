@@ -280,7 +280,7 @@ patch, tombstone, or batch. Proposal starts and transitions, attachment changes,
 and statistics publications require it.
 
 - Keys are scoped to the verified issuer and principal; two callers never share one.
-- A spent key answers `409 idempotency.conflict` on any different request: the binding names the
+- A spent key answers `409 idempotency.key-reused` on any different request: the binding names the
   route, method, target, body, package activation, profile, and verified claims.
 - Only successes spend a key. Correct a refused request and retry with the same key.
 - An exact repeat returns the held response without writing, for

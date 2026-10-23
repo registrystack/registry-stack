@@ -225,13 +225,12 @@ The receipt horizon is how long a service holds a key's first answer: BReg's
 `retention.receiptRetentionDays`, 7 days by default<DocsetProduct product="registry-messaging">,
 Messaging's `retention.receiptRetentionDays`,</DocsetProduct> and Scheduling's
 `retention.receiptRetentionDays`. Every service answers a spent key by one rule: a different request
-under it is an idempotency conflict, `409 idempotency.conflict` in BReg and
-`409 idempotency.key-reused` in the others, whatever the key's age. Past the horizon the same
-request is refused with `410 idempotency.expired` and the key stays spent. In BReg that `410` means
-the first attempt committed: read the record or its history rather than sending the write again
-under a new key. In Casework it means an earlier attempt under the key committed and retention
-erased only its stored response: reconcile by reading the review request, task, or Directory before
-choosing a new key.<DocsetProduct product="registry-messaging"> In Messaging, once retention deletes
+under it is an idempotency conflict, `409 idempotency.key-reused`, whatever the key's age. Past the
+horizon the same request is refused with `410 idempotency.expired` and the key stays spent. In BReg
+that `410` means the first attempt committed: read the record or its history rather than sending
+the write again under a new key. In Casework it means an earlier attempt under the key committed and
+retention erased only its stored response: reconcile by reading the review request, task, or
+Directory before choosing a new key.<DocsetProduct product="registry-messaging"> In Messaging, once retention deletes
 the message record after `retention.recordRetentionDays`, the request hash goes with it and any request under
 the key is refused with `410`.</DocsetProduct>
 
