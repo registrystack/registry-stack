@@ -3,9 +3,11 @@
 ## Unreleased
 
 - Serialize import-run admission so one authority has at most one open or
-  blocked run. Successor plan and apply refuse legacy duplicates before
-  maintenance while the existing runtime remains available for creator-scoped
-  recovery through `bregctl data runs list` and `data runs cancel`.
+  blocked run. Successor plan and apply refuse legacy duplicates under a live
+  current authority before maintenance while the existing runtime remains
+  available for creator-scoped recovery through `bregctl data runs list` and
+  `data runs cancel`; historical runs under retired authorities do not block an
+  upgrade.
 - BREAKING: rename the `409 idempotency.conflict` wire code to
   `idempotency.key-reused`. Update code-based error handling when upgrading;
   older clients treat the renamed code as an unrecognized problem. BReg keeps

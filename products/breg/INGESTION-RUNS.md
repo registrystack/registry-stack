@@ -178,12 +178,17 @@ Both commands use the ordinary authenticated run routes. Listing remains
 creator- and bound-context-scoped; cancellation applies the same creator,
 profile, claim-context, and task-grant checks as the runtime API.
 
-An upgrade from a release that allowed several non-terminal runs on one import
-authority refuses both plan and apply before maintenance begins. Plan writes no
-activation audit. Apply keeps its normal request and refused-response audit,
+An upgrade from a release that allowed several non-terminal runs on one live
+import authority refuses both plan and apply before maintenance begins. A live
+authority is open, unexpired, and belongs to the current activation. Plan writes
+no activation audit. Apply keeps its normal request and refused-response audit,
 while the active runtime remains available for each creator to list and cancel
-their duplicate work. After every authority has at most one `open` or `blocked`
-run, plan and apply can proceed without deleting or rewriting retained work.
+their duplicate work. After every live authority has at most one `open` or
+`blocked` run, plan and apply can proceed without deleting or rewriting retained
+work. Runs under terminal, expired, or superseded authorities remain retained
+as history and do not block an upgrade because those authorities
+cannot admit more work. If maintenance already started, apply may resume only
+the validated exact target recorded for that migration.
 
 A successor run created under the new binding carries the work forward. A
 committed chunk replays its receipt in any run status, including blocked: the
@@ -243,7 +248,7 @@ refusals.
 | Package or schema binding changed | Block the run; continue in a successor run. |
 | Import authority closed, expired, exhausted, or superseded | Block the run; open a new authority and continue the uncommitted remainder in a successor run. |
 | Another non-terminal run occupies the import authority | List runs with `bregctl data runs list`; the creator cancels the duplicate, then retries the announcement. |
-| Upgrade finds legacy duplicate non-terminal runs | Keep the active runtime serving; each creator lists and cancels its duplicate, then the operator retries plan and apply. |
+| Upgrade finds legacy duplicate non-terminal runs under a live authority | Keep the active runtime serving; each creator lists and cancels its duplicate, then the operator retries plan and apply. Historical runs under terminal, expired, or superseded authorities require no upgrade recovery. |
 | Operator stop | Explicit cancel, preserving counts and audit. |
 
 ## Retention

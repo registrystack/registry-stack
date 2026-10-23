@@ -84,7 +84,7 @@ pub enum MigrationError {
     /// which still occupies an import authority. Each creator can recover it
     /// through the authenticated run routes of the still-serving runtime.
     #[error(
-        "multiple non-terminal import runs share one import authority; use `bregctl data runs list --record-route <API_ROUTE>` and `bregctl data runs cancel --record-route <API_ROUTE>` as each run creator, then retry plan or apply"
+        "multiple non-terminal import runs share one live import authority; use `bregctl data runs list --record-route <API_ROUTE>` and `bregctl data runs cancel --record-route <API_ROUTE>` as each run creator, then retry plan or apply"
     )]
     ConflictingImportRuns,
     /// Refused before maintenance began: the migration database could not be

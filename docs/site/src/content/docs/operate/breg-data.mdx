@@ -251,9 +251,12 @@ bregctl data runs cancel \
 ```
 
 During an upgrade, `bregctl plan` and `apply` refuse before maintenance if an older database has
-several non-terminal runs under one import authority. Keep the existing runtime serving, have
-each creator list and cancel its duplicate work, then run plan and apply again. No run or committed
-prefix is deleted automatically.
+several non-terminal runs under one live import authority. A live authority is open, unexpired,
+and belongs to the current activation. Keep the existing runtime serving, have each creator list
+and cancel its duplicate work, then run plan and apply again. Historical runs under terminal,
+expired, or superseded authorities remain retained but do not block the upgrade. If maintenance
+already started, apply may resume only the validated exact target recorded for that migration.
+No run or committed prefix is deleted automatically.
 
 A run is blocked with `activePackageChanged` when another package is activated, and with
 `importAuthorityClosed` when its window ends. To continue a run from another machine without its

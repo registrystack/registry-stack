@@ -2449,7 +2449,31 @@ async fn begin_successor_in(
         event_destination_compatibility_inventory,
     )
     .await?;
-    verify_import_run_admission_state(transaction).await?;
+    let fresh = transaction
+        .query_opt(
+            "SELECT 1
+             FROM registry_internal.registry_state
+             WHERE singleton
+               AND maintenance_status = 'ready'
+               AND package_id = $1
+               AND database_id = $2
+               AND active_package_digest = $3
+               AND active_activation_id = $4
+               AND schema_fingerprint = $5
+             FOR UPDATE",
+            &[
+                &current.package_id,
+                &current.database_id,
+                &current.package_digest,
+                &current.activation_uuid()?,
+                &current.schema_fingerprint,
+            ],
+        )
+        .await?
+        .is_some();
+    if fresh {
+        verify_import_run_admission_state(transaction, current.activation_uuid()?).await?;
+    }
     let changed = transaction
         .execute(
             "UPDATE registry_internal.registry_state
@@ -2481,10 +2505,15 @@ async fn begin_successor_in(
     Ok(())
 }
 
-/// Refuse a successor before maintenance when legacy data predates the
-/// one-run-per-authority admission rule. The existing runtime remains able to
-/// list and cancel each creator's runs while the registry stays ready.
-async fn verify_import_run_admission_state(transaction: &impl GenericClient) -> Result<()> {
+/// Refuse a fresh successor before maintenance when legacy data predates the
+/// one-run-per-authority admission rule. Only a still-live authority can admit
+/// more work; historical run rows remain retained without blocking upgrade.
+/// The existing runtime remains able to list and cancel each creator's live
+/// conflicts while the registry stays ready.
+async fn verify_import_run_admission_state(
+    transaction: &impl GenericClient,
+    active_activation_id: Uuid,
+) -> Result<()> {
     let table_exists = transaction
         .query_one(
             "SELECT to_regclass('registry_internal.registry_ingestion_runs') IS NOT NULL",
@@ -2498,14 +2527,18 @@ async fn verify_import_run_admission_state(transaction: &impl GenericClient) -> 
     let conflict = transaction
         .query_one(
             "SELECT EXISTS (
-                 SELECT import_authority_id
-                   FROM registry_internal.registry_ingestion_runs
-                  WHERE import_authority_id IS NOT NULL
-                    AND status IN ('open', 'blocked')
-                  GROUP BY import_authority_id
+                 SELECT run.import_authority_id
+                   FROM registry_internal.registry_ingestion_runs AS run
+                   JOIN registry_internal.registry_import_authorities AS authority
+                     ON authority.authority_id = run.import_authority_id
+                  WHERE run.status IN ('open', 'blocked')
+                    AND authority.status = 'open'
+                    AND authority.activation_id = $1
+                    AND authority.expires_at > transaction_timestamp()
+                  GROUP BY run.import_authority_id
                  HAVING count(*) > 1
              )",
-            &[],
+            &[&active_activation_id],
         )
         .await?
         .try_get::<_, bool>(0)?;

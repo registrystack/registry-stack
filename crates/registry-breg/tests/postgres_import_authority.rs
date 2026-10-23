@@ -1845,6 +1845,200 @@ async fn plan_and_apply_refuse_legacy_run_conflicts_before_maintenance_until_own
     harness.database.cleanup().await;
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn exact_target_recovery_ignores_conflicts_discovered_after_maintenance_started() {
+    let (initial, successor) = activation_packages().await;
+    let database = TestDatabase::create(8).await;
+    let active = apply_verified_package(activation_request(
+        &database,
+        &initial,
+        ApplyPrecondition::InitialActivation,
+        false,
+    ))
+    .await
+    .expect("initial package activates");
+    let registry = Arc::new(initial.registry().clone());
+    let lock_key = RegistryLockKey::derive(PACKAGE_ID).expect("lock key derives");
+    let audit_profile = AuditProfile::production_from_secret_bytes(vec![0x7c; 32].into())
+        .expect("test owns a keyed audit profile");
+    let app = build_router(
+        &database,
+        registry.clone(),
+        active.clone(),
+        lock_key,
+        audit_profile.clone(),
+    );
+    let harness = Harness {
+        database,
+        registry,
+        identity: active.clone(),
+        lock_key,
+        audit_profile,
+        app,
+    };
+    harness.open("widget", "loader", 9, &[]).await;
+    let load = plan("resume-conflict", 6);
+    let retained = harness
+        .created_run_for_active_package("widgets", "loader", &load)
+        .await;
+
+    let first_statement = &successor.manifest().migration_plan.statements[0].sql;
+    harness
+        .database
+        .admin
+        .batch_execute(first_statement)
+        .await
+        .expect("administrator injects the target column before apply");
+    apply_verified_package(activation_request(
+        &harness.database,
+        &successor,
+        ApplyPrecondition::Successor { current: &active },
+        false,
+    ))
+    .await
+    .expect_err("the injected target column interrupts the successor apply");
+    assert_eq!(
+        activation_state(&harness.database).await.0,
+        "failed",
+        "the exact target remains durably resumable"
+    );
+
+    harness.duplicate_nonterminal_run(&retained).await;
+    let widget = &successor.registry().entities()["widget"];
+    harness
+        .database
+        .admin
+        .batch_execute(&format!(
+            "ALTER TABLE registry_data.\"{}\" DROP COLUMN \"{}\"",
+            widget.physical_table, widget.fields["note"].physical_name
+        ))
+        .await
+        .expect("administrator repairs the injected DDL conflict");
+
+    let recovered = apply_verified_package(activation_request(
+        &harness.database,
+        &successor,
+        ApplyPrecondition::Successor { current: &active },
+        false,
+    ))
+    .await
+    .expect("the already-recorded exact target resumes despite the legacy run conflict");
+    assert_eq!(recovered.package_digest, successor.package_digest());
+    assert_eq!(
+        activation_state(&harness.database).await,
+        ("ready".to_owned(), None, 2)
+    );
+    harness.database.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn non_live_authority_run_conflicts_do_not_block_a_successor() {
+    for authority_state in ["expired", "stale", "terminal"] {
+        let (initial, successor) = activation_packages().await;
+        let database = TestDatabase::create(8).await;
+        let active = apply_verified_package(activation_request(
+            &database,
+            &initial,
+            ApplyPrecondition::InitialActivation,
+            false,
+        ))
+        .await
+        .expect("initial package activates");
+        let registry = Arc::new(initial.registry().clone());
+        let lock_key = RegistryLockKey::derive(PACKAGE_ID).expect("lock key derives");
+        let audit_profile = AuditProfile::production_from_secret_bytes(vec![0x7c; 32].into())
+            .expect("test owns a keyed audit profile");
+        let app = build_router(
+            &database,
+            registry.clone(),
+            active.clone(),
+            lock_key,
+            audit_profile.clone(),
+        );
+        let harness = Harness {
+            database,
+            registry,
+            identity: active.clone(),
+            lock_key,
+            audit_profile,
+            app,
+        };
+        let authority = harness.open("widget", "loader", 9, &[]).await;
+        let load = plan(&format!("{authority_state}-conflict"), 6);
+        let retained = harness
+            .created_run_for_active_package("widgets", "loader", &load)
+            .await;
+        harness.duplicate_nonterminal_run(&retained).await;
+        match authority_state {
+            "expired" => {
+                harness
+                    .database
+                    .admin
+                    .execute(
+                        "UPDATE registry_internal.registry_import_authorities
+                            SET opened_at = transaction_timestamp() - interval '2 hours',
+                                expires_at = transaction_timestamp() - interval '1 hour'
+                          WHERE authority_id = $1",
+                        &[&authority.authority_id],
+                    )
+                    .await
+                    .expect("legacy authority is expired but not yet settled");
+            }
+            "stale" => {
+                harness
+                    .database
+                    .admin
+                    .execute(
+                        "UPDATE registry_internal.registry_import_authorities
+                            SET activation_id = $2
+                          WHERE authority_id = $1",
+                        &[&authority.authority_id, &Uuid::new_v4()],
+                    )
+                    .await
+                    .expect("legacy authority belongs to a retired activation");
+            }
+            "terminal" => {
+                harness
+                    .database
+                    .admin
+                    .execute(
+                        "UPDATE registry_internal.registry_import_authorities
+                            SET status = 'superseded', closed_at = transaction_timestamp()
+                          WHERE authority_id = $1",
+                        &[&authority.authority_id],
+                    )
+                    .await
+                    .expect("legacy authority is already terminal");
+            }
+            _ => unreachable!("the test owns every authority state"),
+        }
+
+        plan_verified_package(activation_request(
+            &harness.database,
+            &successor,
+            ApplyPrecondition::Successor { current: &active },
+            true,
+        ))
+        .await
+        .unwrap_or_else(|error| {
+            panic!("{authority_state} authority history does not block planning: {error:?}")
+        });
+        let activated = apply_verified_package(activation_request(
+            &harness.database,
+            &successor,
+            ApplyPrecondition::Successor { current: &active },
+            false,
+        ))
+        .await
+        .unwrap_or_else(|error| {
+            panic!("{authority_state} authority history does not block apply: {error:?}")
+        });
+        assert_eq!(activated.package_digest, successor.package_digest());
+        assert_eq!(harness.run_count().await, 2, "activation deletes no run");
+        harness.database.cleanup().await;
+    }
+}
+
 async fn activation_state(database: &TestDatabase) -> (String, Option<String>, i64) {
     let row = database
         .admin
