@@ -437,7 +437,7 @@ def validate_release_manifest(
             asset_tag=identity.asset_tag,
             label="public candidate",
         )
-    for component in validated_manifest.get("components", []):
+    for component in validated_manifest.get("distribution_components", []):
         component_asset_tag = release_units.asset_tag(component["version"])
         for image in component["images"]:
             append_image(

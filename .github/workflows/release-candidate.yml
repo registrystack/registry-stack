@@ -2396,7 +2396,7 @@ jobs:
             | if $unit == "stack" then
               if ($distribution_components | length) > 0 then
                 .schema_version = "registry-stack.release-candidate.v3" |
-                .components = $distribution_components
+                .distribution_components = $distribution_components
               else . end
             else
               .schema_version = "registry-stack.release-candidate.v3" |
