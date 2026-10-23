@@ -188,6 +188,18 @@ fn install_runtime_constraints(schema: &mut Value) {
             ]),
         );
     }
+    // Absence is described by the optional members, not by null or an empty
+    // object that the referenced schemas reject as an explicit value.
+    for pointer in [
+        "/$defs/AuthRuntime/properties/apiKeyRef",
+        "/properties/secretProviders",
+    ] {
+        schema
+            .pointer_mut(pointer)
+            .and_then(Value::as_object_mut)
+            .expect("derived optional runtime member exists")
+            .remove("default");
+    }
     set_audit_destination_constraints(schema);
     if let Some(definitions) = schema.get_mut("$defs").and_then(Value::as_object_mut) {
         definitions.extend(socket_definitions());
@@ -300,6 +312,21 @@ mod tests {
             .with_draft(Draft::Draft202012)
             .compile(&schema)
             .unwrap_or_else(|error| panic!("{file} compiles as Draft 2020-12: {error}"))
+    }
+
+    #[test]
+    fn optional_auth_metadata_does_not_advertise_invalid_defaults() {
+        let documents = schema_documents().unwrap();
+        let runtime: Value = serde_json::from_str(&documents[RUNTIME_SCHEMA_FILE]).unwrap();
+        for pointer in [
+            "/$defs/AuthRuntime/properties/apiKeyRef",
+            "/properties/secretProviders",
+        ] {
+            let member = runtime.pointer(pointer).unwrap().as_object().unwrap();
+            assert!(!member.contains_key("default"), "{pointer}: {member:?}");
+            let description = member.get("description").and_then(Value::as_str).unwrap();
+            assert!(description.contains("Omit"), "{pointer}: {description}");
+        }
     }
 
     fn as_json(file: &str, bytes: &[u8]) -> Value {

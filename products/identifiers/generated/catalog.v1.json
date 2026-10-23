@@ -4713,7 +4713,7 @@
       "description": "Registry Render bundle manifest, label table, and runtime configuration JSON Schema.",
       "source": {
         "path": "crates/registry-render/src/schema.rs",
-        "sha256": "08d9f759ca03759403de2895a2d282a66fdcec6a51eb91e4b24b3bb1f47b3972"
+        "sha256": "187b3c8a7cb457962a2cadc80432af5c81124641ca356f539f634a5c2403a309"
       },
       "artifact": {
         "path": "products/render/schemas/bundle.schema.json",
@@ -4731,7 +4731,7 @@
       "description": "Registry Render bundle manifest, label table, and runtime configuration JSON Schema.",
       "source": {
         "path": "crates/registry-render/src/schema.rs",
-        "sha256": "08d9f759ca03759403de2895a2d282a66fdcec6a51eb91e4b24b3bb1f47b3972"
+        "sha256": "187b3c8a7cb457962a2cadc80432af5c81124641ca356f539f634a5c2403a309"
       },
       "artifact": {
         "path": "products/render/schemas/labels.schema.json",
@@ -4749,11 +4749,11 @@
       "description": "Registry Render bundle manifest, label table, and runtime configuration JSON Schema.",
       "source": {
         "path": "crates/registry-render/src/schema.rs",
-        "sha256": "08d9f759ca03759403de2895a2d282a66fdcec6a51eb91e4b24b3bb1f47b3972"
+        "sha256": "187b3c8a7cb457962a2cadc80432af5c81124641ca356f539f634a5c2403a309"
       },
       "artifact": {
         "path": "products/render/schemas/runtime.schema.json",
-        "sha256": "554f5ce5de7ab011a929158e0797ce63e6748d404fba38d415d6740472428c18",
+        "sha256": "e853c774b697a8debb56537eb3a14c4e8c32f9fa8771eba1cd05eb397505b3c6",
         "mediaType": "application/schema+json"
       }
     },

@@ -98,6 +98,8 @@ pub struct RenderRuntime {
     pub listener: ListenerRuntime,
     /// The verified bundle package Render serves.
     pub package: PackageConfig,
+    /// Providers for secret references. Omit when the authentication mode uses
+    /// no secret references.
     #[serde(default)]
     pub secret_providers: SecretProvidersConfig,
     pub auth: AuthRuntime,
@@ -193,6 +195,7 @@ fn default_shutdown_grace(
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct AuthRuntime {
     /// Secret reference to the caller API key, under a declared provider.
+    /// Omit when OIDC authentication is configured.
     #[cfg_attr(
         feature = "schema",
         schemars(with = "registry_platform_config::SecretReference")

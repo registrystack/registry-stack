@@ -109,8 +109,7 @@
       "properties": {
         "apiKeyRef": {
           "$ref": "#/$defs/SecretReference",
-          "default": null,
-          "description": "Secret reference to the caller API key, under a declared provider."
+          "description": "Secret reference to the caller API key, under a declared provider.\nOmit when OIDC authentication is configured."
         },
         "oidc": {
           "$ref": "#/$defs/OidcRuntime"
@@ -503,7 +502,7 @@
     },
     "secretProviders": {
       "$ref": "#/$defs/SecretProvidersConfig",
-      "default": {}
+      "description": "Providers for secret references. Omit when the authentication mode uses\nno secret references."
     }
   },
   "required": [
