@@ -7,6 +7,7 @@
 //! transaction that first exposes them.
 
 use serde_json::{Map, Value};
+use tokio_postgres::error::SqlState;
 use tokio_postgres::types::ToSql;
 use tokio_postgres::{GenericClient, Transaction};
 
@@ -37,10 +38,27 @@ pub(crate) enum GeneratedIdentifierError {
     Exhausted,
     #[error("generated identifier state is unavailable")]
     Unavailable,
+    #[error("generated identifier allocation conflicted with a concurrent transaction")]
+    RetryableConflict,
+}
+
+/// Serialization failures and deadlocks are transient: callers retry them,
+/// matching how ordinary mutation database errors are classified.
+fn classify_database_error(code: Option<&SqlState>) -> GeneratedIdentifierError {
+    match code {
+        Some(code)
+            if code == &SqlState::T_R_SERIALIZATION_FAILURE
+                || code == &SqlState::T_R_DEADLOCK_DETECTED =>
+        {
+            GeneratedIdentifierError::RetryableConflict
+        }
+        _ => GeneratedIdentifierError::Unavailable,
+    }
 }
 
 /// Log the value-free part of a database error, then report allocation state
-/// as unavailable. The SQLSTATE and schema object names carry no record values.
+/// as unavailable, or as a retryable conflict for transient transaction
+/// failures. The SQLSTATE and schema object names carry no record values.
 fn unavailable(operation: &'static str, error: &tokio_postgres::Error) -> GeneratedIdentifierError {
     tracing::warn!(
         target: "registry_breg::generated_identifiers",
@@ -48,7 +66,7 @@ fn unavailable(operation: &'static str, error: &tokio_postgres::Error) -> Genera
         failure = %PostgresFailure::from_error(error),
         "generated identifier state is unavailable"
     );
-    GeneratedIdentifierError::Unavailable
+    classify_database_error(error.code())
 }
 
 impl From<GeneratedIdentifierError> for MutationError {
@@ -57,6 +75,7 @@ impl From<GeneratedIdentifierError> for MutationError {
             GeneratedIdentifierError::InvalidInput => Self::InvalidRequest,
             GeneratedIdentifierError::Exhausted => Self::Conflict,
             GeneratedIdentifierError::Unavailable => Self::Unavailable,
+            GeneratedIdentifierError::RetryableConflict => Self::RetryableConflict,
         }
     }
 }
@@ -292,9 +311,7 @@ async fn reserve_sequence(
             )
             .await
             .map_err(|error| {
-                if error.code()
-                    == Some(&tokio_postgres::error::SqlState::NUMERIC_VALUE_OUT_OF_RANGE)
-                {
+                if error.code() == Some(&SqlState::NUMERIC_VALUE_OUT_OF_RANGE) {
                     GeneratedIdentifierError::Exhausted
                 } else {
                     unavailable("allocate-sequence", &error)
@@ -379,5 +396,23 @@ mod tests {
         let suffix = random_suffix(512, b"ABC").expect("the test host supplies entropy");
         assert_eq!(suffix.len(), 512);
         assert!(suffix.bytes().all(|byte| b"ABC".contains(&byte)));
+    }
+
+    #[test]
+    fn serialization_failures_and_deadlocks_are_retryable() {
+        for state in [
+            SqlState::T_R_SERIALIZATION_FAILURE,
+            SqlState::T_R_DEADLOCK_DETECTED,
+        ] {
+            let error = classify_database_error(Some(&state));
+            assert_eq!(error, GeneratedIdentifierError::RetryableConflict);
+            assert_eq!(MutationError::from(error), MutationError::RetryableConflict);
+        }
+        for state in [None, Some(SqlState::CONNECTION_FAILURE)] {
+            assert_eq!(
+                classify_database_error(state.as_ref()),
+                GeneratedIdentifierError::Unavailable
+            );
+        }
     }
 }
