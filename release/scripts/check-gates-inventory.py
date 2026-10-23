@@ -383,6 +383,14 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
         "registry-messaging-client-node registry-scheduling-client-node",
     ),
     (
+        "Render Python client binding coverage",
+        "registry-coordinator-client-py registry-render-client-py",
+    ),
+    (
+        "Render Node client binding coverage",
+        "registry-coordinator-client-node registry-render-client-node",
+    ),
+    (
         "Coordinator Python client binding coverage",
         "registry-scheduling-client-py registry-coordinator-client-py",
     ),

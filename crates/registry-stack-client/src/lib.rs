@@ -143,5 +143,5 @@ pub mod auth {
     };
 }
 
-pub use registry_render_client as render;
 pub use registry_coordinator_client as coordinator;
+pub use registry_render_client as render;

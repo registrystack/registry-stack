@@ -1069,6 +1069,16 @@ class GateInventoryTest(unittest.TestCase):
                 "Scheduling Node client binding coverage",
             ),
             (
+                "registry-coordinator-client-py registry-render-client-py",
+                "registry-coordinator-client-py",
+                "Render Python client binding coverage",
+            ),
+            (
+                "registry-coordinator-client-node registry-render-client-node",
+                "registry-coordinator-client-node",
+                "Render Node client binding coverage",
+            ),
+            (
                 "registry-scheduling-client-py registry-coordinator-client-py",
                 "registry-scheduling-client-py",
                 "Coordinator Python client binding coverage",
@@ -1276,7 +1286,7 @@ class GateInventoryTest(unittest.TestCase):
         # Both the build loop and the copy loop must include every binding.
         self.assertEqual(
             proof.count(
-                "for client in discovery evidence breg casework messaging scheduling coordinator; do"
+                "for client in discovery evidence breg casework messaging scheduling coordinator render; do"
             ),
             2,
         )

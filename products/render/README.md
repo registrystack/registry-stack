@@ -134,6 +134,32 @@ release-client hold remains in place. A lost response does not establish that a
 render failed. Clients expose transport uncertainty and perform no automatic retry;
 retaining identical inputs preserves byte determinism when the caller repeats it.
 
+## Linux worker execution on Apple Silicon
+
+A v0.43.0 adopter probe recorded a worker failure (`early eof`) while running
+its released Linux amd64 binary through Docker's `linux/amd64` emulation on
+Apple Silicon, in a mutable `debian:bookworm-slim` base. That response used
+`data: {}`. The probe's full scaffold request also returned HTTP 500, but its
+response body was not retained. The [reported failure](https://github.com/registrystack/registry-stack/issues/2366)
+therefore needs those two observations kept distinct.
+
+A separate [native Linux amd64 release check](https://github.com/registrystack/registry-stack/actions/runs/39652049834/job/119446529176)
+used the exact same v0.43.0 binary (SHA-256
+`5ee7a42a4e3429b69a97ab23ec38c504f8652bdd1cd8328345633211e094c2e4`)
+and wrote a 13,049-byte PDF through the supervised compile worker. Its freshly
+generated package, request, issuance timestamp and native Ubuntu environment
+differed from the emulator probe. The original full request, package and
+container were not reproduced on native Linux. The cause remains unresolved;
+these observations establish neither a general Render defect nor a universal
+emulation limitation.
+
+The maintained native platform checks are the
+[release candidate's packaged scaffold render](../../.github/workflows/release-candidate.yml)
+and [Render's golden and serving tests](../../crates/registry-render/tests/),
+selected by the [main CI workflow](../../.github/workflows/ci.yml). An image
+version check or a CLI argument refusal before worker execution does not prove
+that a worker can render.
+
 ## Guarantees, mechanistically
 
 - **Byte-stable**: for fixed (package hash, type, locale, canonical data,
