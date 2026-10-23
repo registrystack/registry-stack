@@ -8,13 +8,13 @@ set -eu
 #
 # It also loads the exact unified Rust, Node and Python Casework facades against the
 # candidate product-native bindings and real HTTP service. The unified release
-# artifacts normally bundle six native products. Building all six here would
-# duplicate the release assembly gate, so the test supplies inert sibling
-# namespaces and only the candidate Casework native artifact. This proves the
+# artifacts normally bundle seven native products. This journey builds the
+# Casework bindings and the real BReg Python authentication provider, with
+# inert sibling namespaces. It avoids duplicating the full release assembly gate. This proves the
 # Casework facade/native/HTTP boundary, but does not claim installed tarball or
 # wheel proof; release package assembly remains separately gated.
 
-repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
+repo_root=$(CDPATH='' cd -- "$(dirname -- "$0")/../../.." && pwd)
 . "$repo_root/scripts/cargo-runtime-library-path.sh"
 
 case "$(uname -s):$(uname -m)" in
@@ -78,18 +78,21 @@ done
   npm run build:debug
 )
 
-cargo build --locked -p registry-casework-client-py --lib \
-  --features registry-casework-client-py/extension-module
+cargo build --locked -p registry-casework-client-py -p registry-breg-client-py --lib \
+  --features registry-casework-client-py/extension-module,registry-breg-client-py/extension-module
 
 CASEWORK_NODE_FACADE_ROOT="$repo_root/crates/registry-stack-client-node"
 CASEWORK_NODE_NATIVE="$repo_root/crates/registry-casework-client-node/casework-client.$node_platform.node"
 CASEWORK_PYTHON_FACADE_ROOT="$repo_root/crates/registry-stack-client-py/python/registry_client"
 CASEWORK_PYTHON_PRODUCT_ROOT="$repo_root/crates/registry-casework-client-py/python/registry_casework_client"
 CASEWORK_PYTHON_NATIVE="$target_directory/debug/libregistry_casework_client.$python_library_extension"
+CASEWORK_PYTHON_BREG_PRODUCT_ROOT="$repo_root/crates/registry-breg-client-py/python/registry_breg_client"
+CASEWORK_PYTHON_BREG_NATIVE="$target_directory/debug/libregistry_breg_client.$python_library_extension"
 export CASEWORK_NODE_FACADE_ROOT CASEWORK_NODE_NATIVE
 export CASEWORK_PYTHON_FACADE_ROOT CASEWORK_PYTHON_PRODUCT_ROOT CASEWORK_PYTHON_NATIVE
+export CASEWORK_PYTHON_BREG_PRODUCT_ROOT CASEWORK_PYTHON_BREG_NATIVE
 
-for artifact in "$CASEWORK_NODE_NATIVE" "$CASEWORK_PYTHON_NATIVE"; do
+for artifact in "$CASEWORK_NODE_NATIVE" "$CASEWORK_PYTHON_NATIVE" "$CASEWORK_PYTHON_BREG_NATIVE"; do
   if [ ! -f "$artifact" ]; then
     echo "candidate native binding was not built: $artifact" >&2
     exit 1
