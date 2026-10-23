@@ -92,7 +92,9 @@ test('the Compose tutorial runs the candidate the adapter mounts, under an activ
   // The approved bundle is mounted read-only where the runtime reads it. A page
   // that names another path sends the adopter to edit package.root or the mount
   // until the service starts, and away from the bundle that was approved.
-  const mount = compose.match(/\$\{EVIDENCE_CANDIDATE_DIR[^}]*\}:([^:\s]+):ro/u);
+  const mount = compose.match(
+    /\$\{EVIDENCE_CANDIDATE_DIR[^}]*\}\/bundle:(\/etc\/registry-evidence\/bundle):ro/u,
+  );
   assert.ok(mount, 'docker-compose.yaml mounts EVIDENCE_CANDIDATE_DIR read-only');
   const bundlePath = mount[1];
   assert.ok(runtime.includes(`\n  root: ${bundlePath}\n`), `runtime.docker.yaml reads ${bundlePath}`);
