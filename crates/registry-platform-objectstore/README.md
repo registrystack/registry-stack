@@ -80,7 +80,9 @@ or policy changes it. The calling product records and compares the digest.
 - Integrity: every read and write is checked against the expected SHA-256 and
   length; a versioned object (`x-amz-version-id` other than `null`, or
   `x-amz-delete-marker`) is refused, so a deletion cannot leave a recoverable
-  older version behind.
+  older version behind. A body lost or stalled in transit is `Unavailable`,
+  not `Integrity`: only a body that arrives and fails its size or digest
+  check says something about the stored bytes.
 - Fail closed: a verifier timeout, non-`200` status, malformed, duplicate,
   unknown, or oversized verdict is `Unavailable`, never an approval. Invalid
   digests and content types are refused before any request is sent.

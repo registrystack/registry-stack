@@ -146,9 +146,10 @@ invariants:
       rejected version, and 503 service.unavailable, with a storage-integrity
       audit entry and no byte released, when stored content no longer matches
       or is gone from a version not under removal. A content read that fails
-      because the database or object storage is unavailable answers the same
-      503 with a storage-unavailable audit entry; content removed while it is
-      read is answered as a version under removal.
+      because the database or object storage is unavailable, an object body
+      lost or stalled in transit included, answers the same 503 with a
+      storage-unavailable audit entry; content removed while it is read is
+      answered as a version under removal.
     negativeTest:
       path: crates/registry-documents/tests/postgres_documents.rs
       name: an_uploaded_document_is_released_only_after_it_is_verified

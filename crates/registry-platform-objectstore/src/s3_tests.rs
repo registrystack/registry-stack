@@ -789,8 +789,10 @@ async fn writes_verify_remote_bytes_and_deletion_can_be_retried() {
     server.abort();
 }
 
+/// A body the connection loses partway is a backend failure, not stored
+/// bytes that fail their check, so it is unavailable and never integrity.
 #[tokio::test]
-async fn download_refuses_interrupted_response() {
+async fn an_interrupted_download_body_is_unavailable_not_an_integrity_failure() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
@@ -806,9 +808,35 @@ async fn download_refuses_interrupted_response() {
     let digest = hex::encode(Sha256::digest(b"content"));
     assert_eq!(
         store(&url, "registry").get(&digest, 7).await,
-        Err(ObjectStoreError::Integrity)
+        Err(ObjectStoreError::Unavailable)
     );
     server.await.unwrap();
+}
+
+#[tokio::test]
+async fn a_download_body_stalled_past_the_attempt_timeout_is_unavailable() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let mut request = [0_u8; 4096];
+        let _ = stream.read(&mut request).await.unwrap();
+        stream
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 7\r\n\r\npart")
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_secs(2)).await;
+    });
+    let mut input = raw(&url);
+    input["attemptTimeoutMilliseconds"] = json!(100);
+    let store = store_from(input, "registry", &SecretFiles::new());
+    let digest = hex::encode(Sha256::digest(b"content"));
+    assert_eq!(
+        store.get(&digest, 7).await,
+        Err(ObjectStoreError::Unavailable)
+    );
+    server.abort();
 }
 
 /// Run against a disposable S3-compatible service with the synthetic
