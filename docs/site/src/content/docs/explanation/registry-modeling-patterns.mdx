@@ -85,13 +85,15 @@ still identifies it in routes and references.
 
 A scope field must be a `public` or `internal` value that is not a reference, because BReg keeps
 issued values with their scopes after erasure. It must be supplied on create and cannot change
-after issuance. BReg reserves values
-transactionally and never reuses an issued value, so sequences can have gaps. Proposal Submit
-freezes the value for review; Apply and Retry use that frozen value. If you enable generation on a
-field that already exists, a reviewed migration must backfill any missing values before BReg seeds
-its allocation state and checks retained values for uniqueness. The repository's
-`products/breg/acceptance/generated-identifiers/registry.yaml` shows both strategies and a
-Proposal Action.
+after issuance. BReg reserves values transactionally and never reuses an issued value. Proposal
+Submit allocates and freezes the value for review, and Apply and Retry use that frozen value, so a
+rejected or cancelled Proposal still consumes its number. A register that needs gapless numbers
+cannot issue them with a sequence through a Proposal Action. A sequence value is also guessable and
+shows issuance volume, so use a random code for anything people outside the registry see. If you
+enable generation on a field that already exists, a reviewed migration must backfill any missing
+values before BReg seeds its allocation state and checks retained values for uniqueness. The
+repository's `products/breg/acceptance/generated-identifiers/registry.yaml` shows both strategies
+and a Proposal Action.
 
 Use a separate identifier Record type when one holder can have several identifiers, or assignments
 have their own issuer, validity, or replacement history. Derive uniqueness from the scheme's rules: two authorities may both issue `0017`, while a
