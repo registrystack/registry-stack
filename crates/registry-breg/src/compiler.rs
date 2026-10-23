@@ -4123,6 +4123,18 @@ fn validate_generated_identifier(
                 "a generated identifier scope field cannot itself be generated or encrypted",
             ));
         }
+        // The append-only reservation ledger keeps scope values after record
+        // erasure, so a scope must not carry restricted data or point at a
+        // person.
+        if scope_field.classification > Classification::Internal
+            || matches!(scope_field.field_type, FieldTypeSource::Reference { .. })
+        {
+            errors.push(Diagnostic::error(
+                "breg.field.generate-scope-field-sensitive",
+                &scope_path,
+                "a generated identifier scope field must be classified public or internal and cannot be a reference, because the reservation ledger keeps scope values after record erasure; scope by a non-personal field such as a jurisdiction or category code",
+            ));
+        }
         match generated_identifier_scope_max_bytes(&scope_field.field_type) {
             Some(bytes) => maximum_indexed_bytes = maximum_indexed_bytes.saturating_add(bytes),
             None => errors.push(Diagnostic::error(

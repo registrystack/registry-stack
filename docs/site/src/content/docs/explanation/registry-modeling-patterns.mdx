@@ -83,7 +83,9 @@ type. A random code uses a fixed alphabet without easily misread characters. BRe
 uniqueness constraint, and the caller omits the generated field from writes. The Record's UUID
 still identifies it in routes and references.
 
-A scope field must be supplied on create and cannot change after issuance. BReg reserves values
+A scope field must be a `public` or `internal` value that is not a reference, because BReg keeps
+issued values with their scopes after erasure. It must be supplied on create and cannot change
+after issuance. BReg reserves values
 transactionally and never reuses an issued value, so sequences can have gaps. Proposal Submit
 freezes the value for review; Apply and Retry use that frozen value. If you enable generation on a
 field that already exists, a reviewed migration must backfill any missing values before BReg seeds
