@@ -5,6 +5,7 @@ use crate::query::QueryError;
 use axum::body::Body;
 use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE};
 use axum::http::{HeaderValue, Response, StatusCode};
+use registry_platform_httpsec::{ProblemBody, TraceContext};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProblemCode {
@@ -25,10 +26,10 @@ impl ProblemCode {
     #[must_use]
     pub const fn code(self) -> &'static str {
         match self {
-            Self::InvalidRequest => "invalid-request",
-            Self::NotFound => "not-found",
-            Self::ResultBoundExceeded => "result-bound-exceeded",
-            Self::Unavailable => "unavailable",
+            Self::InvalidRequest => "request.invalid",
+            Self::NotFound => "request.not-found",
+            Self::ResultBoundExceeded => "request.result-bound-exceeded",
+            Self::Unavailable => "service.unavailable",
         }
     }
 
@@ -72,7 +73,19 @@ impl ProblemCode {
 
     #[must_use]
     pub fn response(self) -> Response<Body> {
-        let mut response = Response::new(Body::from(self.body()));
+        let trace = TraceContext::server_created();
+        let body = ProblemBody {
+            type_uri: self.type_uri().to_owned(),
+            title: self.title(),
+            status: self.status().as_u16(),
+            detail: self.description(),
+            code: self.code(),
+            trace_id: trace.trace_id.clone(),
+        };
+        let mut response = Response::new(Body::from(
+            serde_json::to_vec(&body).expect("fixed problem serializes"),
+        ));
+        trace.apply(response.headers_mut());
         *response.status_mut() = self.status();
         response.headers_mut().insert(
             CONTENT_TYPE,
@@ -82,15 +95,6 @@ impl ProblemCode {
             .headers_mut()
             .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
         response
-    }
-
-    const fn body(self) -> &'static [u8] {
-        match self {
-            Self::InvalidRequest => br#"{"type":"https://id.registrystack.org/problems/registry-discovery/invalid-request","title":"Invalid request","status":400}"#.as_slice(),
-            Self::NotFound => br#"{"type":"https://id.registrystack.org/problems/registry-discovery/not-found","title":"Not found","status":404}"#.as_slice(),
-            Self::ResultBoundExceeded => br#"{"type":"https://id.registrystack.org/problems/registry-discovery/result-bound-exceeded","title":"Result bound exceeded","status":422}"#.as_slice(),
-            Self::Unavailable => br#"{"type":"https://id.registrystack.org/problems/registry-discovery/unavailable","title":"Unavailable","status":503}"#.as_slice(),
-        }
     }
 
     pub const fn status(self) -> StatusCode {
@@ -119,13 +123,6 @@ mod tests {
     #[test]
     fn problems_are_static_and_value_free() {
         for problem in ProblemCode::ALL {
-            let expected = format!(
-                r#"{{"type":"{}","title":"{}","status":{}}}"#,
-                problem.type_uri(),
-                problem.title(),
-                problem.status().as_u16()
-            );
-            assert_eq!(problem.body(), expected.as_bytes());
             let response = problem.response();
             assert_eq!(response.headers()[CONTENT_TYPE], "application/problem+json");
             assert_eq!(response.headers()[CACHE_CONTROL], "no-store");

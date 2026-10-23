@@ -6,6 +6,8 @@
 //! authorization endpoints, PKCE, token minting, or refresh flows.
 
 mod authorization_claims;
+mod diagnostics;
+pub use diagnostics::{AuthenticationDiagnostics, AuthenticationStage};
 pub mod task_grant;
 
 pub use authorization_claims::{
@@ -1273,6 +1275,7 @@ impl VerifiedToken {
 
 #[derive(Debug)]
 pub struct TokenVerifier {
+    diagnostics: AuthenticationDiagnostics,
     config: TokenVerifierConfig,
     fetcher: Arc<JwksFetcher>,
     allowed_clients: HashSet<String>,
@@ -1296,6 +1299,7 @@ impl TokenVerifier {
         let allowed_id_typ = normalize_typ_set(&config.allowed_id_typ);
         let allowed_userinfo_typ = normalize_typ_set(&config.allowed_userinfo_typ);
         Self {
+            diagnostics: AuthenticationDiagnostics::default(),
             config,
             fetcher,
             allowed_clients,
@@ -1318,6 +1322,12 @@ impl TokenVerifier {
 
     pub async fn verify(&self, token: &str) -> Result<VerifiedToken, OidcError> {
         self.verify_access_token(token, true).await
+    }
+
+    /// One fixed category, at most once per stage per minute. No values from
+    /// the error, token, claims, or operator configuration are returned.
+    pub fn authentication_diagnostic(&self, stage: AuthenticationStage) -> Option<&'static str> {
+        self.diagnostics.admit(stage).then_some(stage.label())
     }
 
     pub async fn verify_related_token(&self, token: &str) -> Result<VerifiedToken, OidcError> {

@@ -45,6 +45,66 @@ use tower::ServiceExt as _;
 use zeroize::Zeroizing;
 
 const AUDIENCE: &str = "urn:example:breg";
+
+#[tokio::test]
+async fn separate_resource_rs256_and_es256_profiles_refuse_cross_resource_reuse() {
+    use registry_platform_testing::{access_token_test_key, sign_compact_jwt_with_key};
+    let registry = compile_project(
+        &parse_project_yaml(PROJECT.as_bytes()).unwrap(),
+        &[],
+        CompileProfile::Authoring,
+    )
+    .unwrap();
+    for algorithm in [Algorithm::RS256, Algorithm::ES256] {
+        let key = access_token_test_key(algorithm);
+        let source = Arc::new(JwksFetcher::new_static(
+            serde_json::from_value(json!({"keys":[key.public()]})).unwrap(),
+            JwksFetcherConfig::defaults(),
+        ));
+        let config = TokenVerifierConfig::access_token_profile(
+            "https://canary-issuer.test",
+            vec![AUDIENCE.into()],
+            vec![algorithm],
+            vec!["at+jwt".into()],
+        );
+        let auth =
+            RegistryAuthenticator::new(&registry, config, source, authority_claims()).unwrap();
+        let mut claims = valid_claims();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        claims["iss"] = json!("https://canary-issuer.test");
+        claims["iat"] = json!(now);
+        claims["exp"] = json!(now + 300);
+        let sign = |claims: Value, typ: &str| {
+            sign_compact_jwt_with_key(&key, typ, "canary-resource-key", claims)
+        };
+        assert!(auth
+            .authenticate(&sign(claims.clone(), "at+jwt"))
+            .await
+            .is_ok());
+        let mut multiple = claims.clone();
+        multiple["aud"] = json!([AUDIENCE, "urn:canary:additional-resource"]);
+        assert!(auth.authenticate(&sign(multiple, "at+jwt")).await.is_ok());
+        for resource in [
+            "urn:canary:casework",
+            "urn:canary:scheduling",
+            "urn:canary:messaging",
+        ] {
+            let mut other = claims.clone();
+            other["aud"] = json!(resource);
+            assert!(matches!(
+                auth.authenticate(&sign(other, "at+jwt")).await,
+                Err(AuthenticationError::VerificationRefused)
+            ));
+        }
+        assert!(matches!(
+            auth.authenticate(&sign(claims, "JWT")).await,
+            Err(AuthenticationError::VerificationRefused)
+        ));
+    }
+}
 const PRINCIPAL: &str = "principal-value-never-rendered";
 const PURPOSE: &str = "case-management-never-rendered";
 const JURISDICTION: &str = "area-a-never-rendered";

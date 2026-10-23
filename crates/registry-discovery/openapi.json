@@ -101,12 +101,25 @@
           {
             "additionalProperties": false,
             "properties": {
+              "code": {
+                "maxLength": 128,
+                "pattern": "^[a-z][a-z0-9-]*[.][a-z][a-z0-9-]*$",
+                "type": "string"
+              },
+              "detail": {
+                "maxLength": 1024,
+                "type": "string"
+              },
               "status": {
                 "const": 400,
                 "type": "integer"
               },
               "title": {
                 "const": "Invalid request",
+                "type": "string"
+              },
+              "traceId": {
+                "pattern": "^[0-9a-f]{32}$",
                 "type": "string"
               },
               "type": {
@@ -118,19 +131,35 @@
             "required": [
               "type",
               "title",
-              "status"
+              "status",
+              "detail",
+              "code",
+              "traceId"
             ],
             "type": "object"
           },
           {
             "additionalProperties": false,
             "properties": {
+              "code": {
+                "maxLength": 128,
+                "pattern": "^[a-z][a-z0-9-]*[.][a-z][a-z0-9-]*$",
+                "type": "string"
+              },
+              "detail": {
+                "maxLength": 1024,
+                "type": "string"
+              },
               "status": {
                 "const": 404,
                 "type": "integer"
               },
               "title": {
                 "const": "Not found",
+                "type": "string"
+              },
+              "traceId": {
+                "pattern": "^[0-9a-f]{32}$",
                 "type": "string"
               },
               "type": {
@@ -142,19 +171,35 @@
             "required": [
               "type",
               "title",
-              "status"
+              "status",
+              "detail",
+              "code",
+              "traceId"
             ],
             "type": "object"
           },
           {
             "additionalProperties": false,
             "properties": {
+              "code": {
+                "maxLength": 128,
+                "pattern": "^[a-z][a-z0-9-]*[.][a-z][a-z0-9-]*$",
+                "type": "string"
+              },
+              "detail": {
+                "maxLength": 1024,
+                "type": "string"
+              },
               "status": {
                 "const": 422,
                 "type": "integer"
               },
               "title": {
                 "const": "Result bound exceeded",
+                "type": "string"
+              },
+              "traceId": {
+                "pattern": "^[0-9a-f]{32}$",
                 "type": "string"
               },
               "type": {
@@ -166,19 +211,35 @@
             "required": [
               "type",
               "title",
-              "status"
+              "status",
+              "detail",
+              "code",
+              "traceId"
             ],
             "type": "object"
           },
           {
             "additionalProperties": false,
             "properties": {
+              "code": {
+                "maxLength": 128,
+                "pattern": "^[a-z][a-z0-9-]*[.][a-z][a-z0-9-]*$",
+                "type": "string"
+              },
+              "detail": {
+                "maxLength": 1024,
+                "type": "string"
+              },
               "status": {
                 "const": 503,
                 "type": "integer"
               },
               "title": {
                 "const": "Unavailable",
+                "type": "string"
+              },
+              "traceId": {
+                "pattern": "^[0-9a-f]{32}$",
                 "type": "string"
               },
               "type": {
@@ -190,7 +251,10 @@
             "required": [
               "type",
               "title",
-              "status"
+              "status",
+              "detail",
+              "code",
+              "traceId"
             ],
             "type": "object"
           }

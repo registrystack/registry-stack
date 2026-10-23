@@ -189,7 +189,7 @@ export class CaseworkClientError extends Error {
   readonly traceId?: string
   readonly validation?: {
     readonly path: string
-    readonly reason: 'policy-not-allowed' | 'reference-invalid' | 'object-required' | 'maximum-bytes-exceeded' | 'maximum-depth-exceeded' | 'schema-mismatch' | 'outcome-not-declared' | 'reason-required' | 'text-invalid' | 'result-not-declared' | 'result-required' | 'field-not-declared' | 'constraint-invalid' | 'constraint-violated' | 'public-reason-required' | 'public-reason-not-declared' | 'approval-outcome-differs'
+    readonly reason: 'binding-invalid' | 'field-required' | 'policy-not-allowed' | 'reference-invalid' | 'object-required' | 'maximum-bytes-exceeded' | 'maximum-depth-exceeded' | 'schema-mismatch' | 'outcome-not-declared' | 'reason-required' | 'text-invalid' | 'result-not-declared' | 'result-required' | 'field-not-declared' | 'constraint-invalid' | 'constraint-violated' | 'public-reason-required' | 'public-reason-not-declared' | 'approval-outcome-differs'
     /** Outcome identifiers the review policy declares for the requested settlement when an outcome is refused; empty otherwise. */
     readonly allowed: ReadonlyArray<string>
   }

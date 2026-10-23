@@ -40,7 +40,6 @@ pub struct SchedulingAuthenticator {
     verifier: TokenVerifier,
     claim_names: ClaimNames,
     audience: String,
-    scope_claim: String,
     reads_scope: String,
     explain_scope: String,
     /// Whether the deployment declared any assertion authority at all.
@@ -60,7 +59,6 @@ impl SchedulingAuthenticator {
             verifier: TokenVerifier::new(verifier, keys),
             claim_names,
             audience: oidc.provider.audience.clone(),
-            scope_claim: oidc.scope_claim.clone(),
             reads_scope: oidc.reads_scope.clone(),
             explain_scope: oidc.explain_scope.clone(),
             binds_assertion_issuers: !oidc.clients.assertion_issuers.is_empty(),
@@ -82,28 +80,27 @@ impl SchedulingAuthenticator {
     }
 
     /// Admit a verified caller holding `required`, or refuse it as a profile
-    /// miss. The refusal tells the operator which claim was read and which
-    /// scope was expected, and which keys select them, because a deployment
-    /// whose issuer emits a different claim or scope spelling sees nothing
-    /// but this refusal. The caller's own scopes are never logged.
+    /// miss. Diagnostics name only the fixed stage, never scope or claim values.
     fn require_scope(
         &self,
         caller: Caller,
         scopes: &[String],
         required: &str,
-        key: &str,
+        _key: &str,
     ) -> Result<Caller, AuthenticationError> {
         if scopes.iter().any(|scope| scope == required) {
             return Ok(caller);
         }
-        tracing::info!(
-            "{}",
-            MissingScope {
-                claim: &self.scope_claim,
-                scope: required,
-                key,
-            }
-        );
+        if let Some(stage) = self
+            .verifier
+            .authentication_diagnostic(registry_platform_oidc::AuthenticationStage::Scope)
+        {
+            tracing::info!(
+                stage,
+                remedy = "check authentication.oidc.scopeClaim and readsScope or explainScope",
+                "Scheduling authentication profile refused"
+            );
+        }
         Err(AuthenticationError::Profile)
     }
 
@@ -123,7 +120,12 @@ impl SchedulingAuthenticator {
     ) -> Result<(Caller, Vec<String>), AuthenticationError> {
         validate_compact_access_token(token).map_err(|_| AuthenticationError::Refused)?;
         let verified = self.verifier.verify(token).await.map_err(|error| {
-            tracing::debug!(error = %error, "the Scheduling bearer credential did not verify");
+            if let Some(stage) = self
+                .verifier
+                .authentication_diagnostic(error.authentication_stage())
+            {
+                tracing::info!(stage, "Scheduling authentication refused");
+            }
             verifier_failure(&error)
         })?;
         // An exchanged token names the authority whose assertion produced it.
@@ -192,24 +194,6 @@ impl SchedulingAuthenticator {
             },
             verified.scopes,
         ))
-    }
-}
-
-/// The operator sentence a scope refusal logs: the claim read, the scope
-/// expected, and the two keys that select them.
-struct MissingScope<'a> {
-    claim: &'a str,
-    scope: &'a str,
-    key: &'a str,
-}
-
-impl std::fmt::Display for MissingScope<'_> {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            formatter,
-            "a Scheduling request was refused because the token's `{}` claim does not carry the `{}` scope the route requires; issue that scope to the client, or set authentication.oidc.scopeClaim and authentication.oidc.{} to what the issuer emits",
-            self.claim, self.scope, self.key
-        )
     }
 }
 
@@ -465,30 +449,6 @@ mod tests {
             .authenticate_mutate(&credential)
             .await
             .expect("a caller without the reads scope still reaches a mutation");
-    }
-
-    #[test]
-    fn a_scope_refusal_names_the_expected_claim_scope_and_keys() {
-        let read = MissingScope {
-            claim: "registry_scopes",
-            scope: "scheduling-read",
-            key: "readsScope",
-        }
-        .to_string();
-        assert!(read.contains("`registry_scopes` claim"), "{read}");
-        assert!(read.contains("`scheduling-read` scope"), "{read}");
-        assert!(read.contains("authentication.oidc.scopeClaim"), "{read}");
-        assert!(read.contains("authentication.oidc.readsScope"), "{read}");
-        let explain = MissingScope {
-            claim: "scope",
-            scope: "scheduling-explain",
-            key: "explainScope",
-        }
-        .to_string();
-        assert!(
-            explain.contains("authentication.oidc.explainScope"),
-            "{explain}"
-        );
     }
 
     #[tokio::test]
@@ -781,5 +741,92 @@ mod tests {
             authenticator().authenticate_read(&forged).await,
             Err(AuthenticationError::Refused)
         ));
+    }
+    #[tokio::test]
+    async fn separate_resource_rs256_and_es256_profiles_refuse_cross_resource_reuse() {
+        for algorithm in [Algorithm::RS256, Algorithm::ES256] {
+            let mut key =
+                registry_platform_crypto::generate_private_jwk(if algorithm == Algorithm::ES256 {
+                    registry_platform_crypto::GeneratedKeyAlgorithm::Es256
+                } else {
+                    registry_platform_crypto::GeneratedKeyAlgorithm::Rs384
+                })
+                .unwrap();
+            key.alg = Some(format!("{algorithm:?}"));
+            key.kid = Some("canary-resource-key".into());
+            let jwks = serde_json::from_value(json!({"keys":[key.public()]})).unwrap();
+            let source = Arc::new(JwksFetcher::new_static(jwks, JwksFetcherConfig::defaults()));
+            let verifier = TokenVerifierConfig::access_token_profile(
+                ISSUER,
+                vec![AUDIENCE.to_owned()],
+                vec![algorithm],
+                vec!["at+jwt".to_owned()],
+            )
+            .with_scope_claim("registry_scopes")
+            .with_allowed_clients(vec![CLIENT.to_owned()]);
+            let auth = SchedulingAuthenticator::new(&oidc(), verifier, source);
+            let now = Utc::now().timestamp();
+            let claims = json!({"iss":ISSUER,"aud":AUDIENCE,"azp":CLIENT,"sub":"canary-person","registry_scopes":"scheduling-read","registry_actor_kind":"human","iat":now,"exp":now+300});
+            let sign = |claims: serde_json::Value, typ: &str| {
+                let header = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&json!({"alg":format!("{algorithm:?}"),"typ":typ,"kid":"canary-resource-key"})).unwrap());
+                let payload = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&claims).unwrap());
+                let input = format!("{header}.{payload}");
+                format!(
+                    "{input}.{}",
+                    URL_SAFE_NO_PAD
+                        .encode(registry_platform_crypto::sign(input.as_bytes(), &key).unwrap())
+                )
+            };
+            let good = sign(claims.clone(), "at+jwt");
+            assert!(auth.authenticate_read(&good).await.is_ok());
+            let mut multiple = claims.clone();
+            multiple["aud"] = json!([AUDIENCE, "urn:canary:additional-resource"]);
+            let multi = sign(multiple, "at+jwt");
+            assert!(
+                auth.authenticate_read(&multi).await.is_ok(),
+                "audience membership remains sufficient on this ordinary resource profile"
+            );
+            for resource in [
+                "urn:canary:breg",
+                "urn:canary:casework",
+                "urn:canary:scheduling",
+                "urn:canary:messaging",
+            ] {
+                let mut other = claims.clone();
+                other["aud"] = json!(resource);
+                let token = sign(other, "at+jwt");
+                assert!(matches!(
+                    auth.authenticate_read(&token).await,
+                    Err(AuthenticationError::Refused)
+                ));
+            }
+            let token = sign(claims.clone(), "JWT");
+            assert!(matches!(
+                auth.authenticate_read(&token).await,
+                Err(AuthenticationError::Refused)
+            ));
+            // A valid symmetric JWT is outside the asymmetric production baseline.
+            let token = self::token(
+                json!({"azp":CLIENT,"registry_scopes":"scheduling-read","registry_actor_kind":"human"}),
+            );
+            assert!(matches!(
+                auth.authenticate_read(&token).await,
+                Err(AuthenticationError::Refused)
+            ));
+            let mut wrong_actor = claims.clone();
+            wrong_actor["registry_actor_kind"] = json!("canary-invalid-actor");
+            let token = sign(wrong_actor, "at+jwt");
+            assert!(matches!(
+                auth.authenticate_read(&token).await,
+                Err(AuthenticationError::Claims)
+            ));
+            let mut missing = claims.clone();
+            missing["registry_scopes"] = json!("");
+            let token = sign(missing, "at+jwt");
+            assert!(matches!(
+                auth.authenticate_read(&token).await,
+                Err(AuthenticationError::Profile)
+            ));
+        }
     }
 }

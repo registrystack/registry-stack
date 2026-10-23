@@ -212,6 +212,35 @@ fn optional_input<T: DeserializeOwned + Default>(
         .map(Option::unwrap_or_default)
 }
 
+fn accepted_input(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<ReviewRequestAccepted> {
+    let value = python_to_json(value).map_err(|_| {
+        to_py_err(
+            py,
+            MappedError {
+                kind: "invalid-request",
+                message: "the accepted review binding is invalid".to_owned(),
+                validation: Some(
+                    serde_json::json!({"path":"$", "reason":"binding-invalid", "allowed":[]}),
+                ),
+                ..MappedError::default()
+            },
+        )
+    })?;
+    casework_client_sdk::accepted_binding(value).map_err(|error| {
+        to_py_err(
+            py,
+            MappedError {
+                kind: "invalid-request",
+                message: "the accepted review binding is invalid".to_owned(),
+                validation: Some(
+                    serde_json::json!({"path":error.path,"reason":error.reason,"allowed":[]}),
+                ),
+                ..MappedError::default()
+            },
+        )
+    })
+}
+
 fn bearer(py: Python<'_>, value: &str) -> PyResult<BearerToken> {
     BearerToken::new(value.to_owned())
         .map_err(|_| binding_error(py, "invalid-request", "the bearer token is invalid"))
@@ -550,8 +579,8 @@ impl CaseworkClient {
         profile: &str,
         accepted: &Bound<'_, PyAny>,
     ) -> PyResult<Bound<'py, PyAny>> {
+        let accepted = accepted_input(py, accepted)?;
         let token = bearer(py, token)?;
-        let accepted = input(py, accepted)?;
         review_result_complete(
             py,
             py.detach(|| {

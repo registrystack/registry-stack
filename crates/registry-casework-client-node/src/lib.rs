@@ -160,8 +160,11 @@ impl CaseworkClient {
         profile: String,
         accepted: Value,
     ) -> Result<CaseworkOutcome> {
+        let accepted = casework_client_sdk::accepted_binding(accepted).map_err(|error| NapiError::from_reason(json!({
+            "kind":"invalid-request", "message":"the accepted review binding is invalid", "outcomeUnknown":false,
+            "validation":{"path":error.path,"reason":error.reason,"allowed":[]}
+        }).to_string()))?;
         let token = bearer(token)?;
-        let accepted = input(accepted)?;
         review_result_outcome(
             self.inner
                 .review_result(CaseworkAuth::new(&token, &profile), &accepted)

@@ -487,7 +487,7 @@ fn problem_schema() -> Value {
         .into_iter()
         .map(|(type_uri, title, status)| {
             object_schema(
-                &["type", "title", "status"],
+                &["type", "title", "status", "detail", "code", "traceId"],
                 &[
                     (
                         "type",
@@ -495,6 +495,9 @@ fn problem_schema() -> Value {
                     ),
                     ("title", json!({"type": "string", "const": title})),
                     ("status", json!({"type": "integer", "const": status})),
+                    ("detail", json!({"type":"string", "maxLength":1024})),
+                    ("code", json!({"type":"string", "maxLength":128, "pattern":"^[a-z][a-z0-9-]*[.][a-z][a-z0-9-]*$"})),
+                    ("traceId", json!({"type":"string", "pattern":"^[0-9a-f]{32}$"})),
                 ],
             )
         })

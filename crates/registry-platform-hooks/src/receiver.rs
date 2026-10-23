@@ -17,9 +17,8 @@ use std::time::{Duration, SystemTime};
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use registry_platform_crypto::delivery_signature::{
-    verify_v1, SignatureFields, VerificationError, MAX_BODY_BYTES,
+    verify_v1, verify_v1_authenticity, SignatureFields, VerificationError, MAX_BODY_BYTES,
 };
-use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 
 const SIGNATURE_PREFIX: &str = "v1=";
 const SIGNATURE_BYTES: usize = 32;
@@ -48,7 +47,7 @@ pub enum DeliveryFreshness {
     /// Refuse a delivery time further than `skew` from `now`, in either
     /// direction.
     Within { now: SystemTime, skew: Duration },
-    /// Check only that the delivery time is a canonical RFC 3339 instant. The
+    /// Check only that the delivery time is a valid RFC 3339 instant. The
     /// caller enforces its own clock window on
     /// [`VerifiedDelivery::delivery_time`] before acting on the body.
     CallerEnforced,
@@ -123,7 +122,7 @@ pub enum ReceiverError {
 /// Reads the transport headers, requires CloudEvents spec version `1.0`, a
 /// `v1=` signature of the exact Version 1 shape and canonical positive decimal
 /// generation and attempt counters, then delegates the signing input,
-/// canonical delivery-time validation, and constant-time HMAC comparison to
+/// RFC 3339 delivery-time validation, and constant-time HMAC comparison to
 /// `registry_platform_crypto::delivery_signature::verify_v1`. A body above
 /// [`MAX_BODY_BYTES`] is refused before the signature is computed; a receiver
 /// that buffers the body applies the same bound before reading it.
@@ -164,36 +163,29 @@ where
     if delivery.body.len() > MAX_BODY_BYTES {
         return Err(ReceiverError::BodyTooLarge);
     }
-    let (now, skew) = match freshness {
-        DeliveryFreshness::Within { now, skew } => (now, skew),
-        DeliveryFreshness::CallerEnforced => (
-            OffsetDateTime::parse(delivery_time, &Rfc3339)
-                .map(SystemTime::from)
-                .map_err(|_| ReceiverError::InvalidDeliveryTime)?,
-            Duration::ZERO,
-        ),
+    let fields = SignatureFields {
+        id,
+        source,
+        event_type,
+        time,
+        data_schema,
+        generation,
+        attempt,
+        delivery_time,
+        method: delivery.method,
+        request_target: delivery.request_target,
+        content_type,
+        idempotency_key,
+        body: delivery.body,
     };
-    verify_v1(
-        delivery.key,
-        SignatureFields {
-            id,
-            source,
-            event_type,
-            time,
-            data_schema,
-            generation,
-            attempt,
-            delivery_time,
-            method: delivery.method,
-            request_target: delivery.request_target,
-            content_type,
-            idempotency_key,
-            body: delivery.body,
-        },
-        signature,
-        now,
-        skew,
-    )
+    match freshness {
+        DeliveryFreshness::Within { now, skew } => {
+            verify_v1(delivery.key, fields, signature, now, skew)
+        }
+        DeliveryFreshness::CallerEnforced => {
+            verify_v1_authenticity(delivery.key, fields, signature)
+        }
+    }
     .map_err(|error| match error {
         VerificationError::InvalidKey => ReceiverError::InvalidKey,
         VerificationError::InputTooLarge => ReceiverError::MalformedHeader,
@@ -500,7 +492,25 @@ mod tests {
                 );
             }
         }
-        let invalid_headers = with("x-registry-delivery-time", "yesterday");
+        let vectors: serde_json::Value = serde_json::from_str(include_str!(
+            "../../registry-platform-crypto/tests/fixtures/delivery-signatures.json"
+        ))
+        .unwrap();
+        let vector = vectors
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|value| value["valid"] == false)
+            .unwrap();
+        let mut invalid_headers = with(
+            "x-registry-delivery-time",
+            vector["deliveryTime"].as_str().unwrap(),
+        );
+        for (name, value) in &mut invalid_headers {
+            if *name == "x-registry-signature" {
+                *value = vector["signature"].as_str().unwrap().to_owned();
+            }
+        }
         let invalid_delivery_time =
             verify(&invalid_headers, BODY, DeliveryFreshness::CallerEnforced);
         assert_eq!(

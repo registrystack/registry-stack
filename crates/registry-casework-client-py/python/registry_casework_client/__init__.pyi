@@ -394,9 +394,11 @@ ReviewValidationReason: TypeAlias = Literal[
     "approval-outcome-differs",
 ]
 
+AcceptedBindingValidationReason: TypeAlias = Literal["binding-invalid", "field-required", "object-required", "field-not-declared"]
+
 class ValidationDetail(TypedDict):
     path: str
-    reason: ReviewValidationReason
+    reason: ReviewValidationReason | AcceptedBindingValidationReason
     # The outcome identifiers the review policy declares for the requested
     # settlement when an outcome is refused; empty otherwise.
     allowed: list[str]

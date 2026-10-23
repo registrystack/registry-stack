@@ -1052,6 +1052,11 @@ categories emit series. No selector, subject, request ID, raw error, URL,
 credential, or signing key becomes a label. Source observations cover transport,
 projection, and response verification; assertion derivation remains visible at
 the request boundary. Upstream reachability does not decide `/ready`.
+A source-data outage returns `503 source.unavailable` without `Retry-After`
+when no useful recovery interval is known; meaningful rate-limit hints remain.
+The instance stays ready while its own required dependencies are healthy,
+without probing source-data endpoints. See the shared
+[HTTP recovery contract](../platform/HTTP-PROBLEMS.md).
 
 One unlabeled gauge is published on the same listener. It carries none of the
 four request-boundary labels, since it reports a process-wide fact rather than

@@ -134,3 +134,9 @@ Report security-sensitive issues privately before opening a public issue.
 ## License
 
 Apache-2.0. See [`LICENSE`](LICENSE).
+
+## Shared HTTP contracts
+
+- [HTTP problems and recovery](HTTP-PROBLEMS.md)
+- [Per-resource access tokens](ACCESS-TOKENS.md)
+- [Signed hook deliveries](DELIVERY-SIGNING.md)

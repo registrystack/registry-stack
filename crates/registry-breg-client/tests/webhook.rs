@@ -128,7 +128,24 @@ fn refusal_codes_are_closed_and_value_free() {
 #[test]
 fn invalid_delivery_time_names_the_delivery_time_fix() {
     let mut invalid = headers();
-    invalid.insert("x-registry-delivery-time".into(), "not-a-time".into());
+    let vectors: serde_json::Value = serde_json::from_str(include_str!(
+        "../../registry-platform-crypto/tests/fixtures/delivery-signatures.json"
+    ))
+    .unwrap();
+    let vector = vectors
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|value| value["valid"] == false)
+        .unwrap();
+    invalid.insert(
+        "x-registry-delivery-time".into(),
+        vector["deliveryTime"].as_str().unwrap().into(),
+    );
+    invalid.insert(
+        "x-registry-signature".into(),
+        vector["signature"].as_str().unwrap().into(),
+    );
     let error = verify_webhook_delivery(delivery(&invalid, BODY, KEY)).unwrap_err();
     assert_eq!(error, BRegWebhookVerificationError::InvalidDeliveryTime);
     assert_eq!(error.code(), "invalid-delivery-time");

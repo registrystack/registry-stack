@@ -8,6 +8,8 @@ Node binding's `webhook-verification.test.js` use, which in turn belongs to
 from __future__ import annotations
 
 import unittest
+import json
+from pathlib import Path
 
 from bootstrap import ensure_built
 
@@ -54,6 +56,17 @@ def verify(**overrides):
 
 
 class WebhookVerificationTests(unittest.TestCase):
+    def test_shared_language_vectors_preserve_exact_rfc3339_fractions(self):
+        fixture = Path(__file__).resolve().parents[3] / "registry-platform-crypto/tests/fixtures/delivery-signatures.json"
+        for vector in json.loads(fixture.read_text()):
+            exact = {**headers(), "x-registry-delivery-time": vector["deliveryTime"], "x-registry-signature": vector["signature"]}
+            with self.subTest(timestamp=vector["deliveryTime"]):
+                if vector["valid"]:
+                    self.assertEqual(verify(headers=exact)["delivery_time"], vector["deliveryTime"])
+                    self.assert_refused("signature-mismatch", headers={**exact, "x-registry-delivery-time": "2026-08-30T00:00:01.0000Z"})
+                else:
+                    self.assert_refused("invalid-delivery-time", headers=exact)
+
     def assert_refused(self, code: str, message: str | None = None, **overrides) -> None:
         with self.assertRaises(BaseRegistryClientError) as raised:
             verify(**overrides)
@@ -118,10 +131,12 @@ class WebhookVerificationTests(unittest.TestCase):
         )
 
     def test_reports_an_invalid_delivery_time_with_its_fix(self) -> None:
+        fixture = Path(__file__).resolve().parents[3] / "registry-platform-crypto/tests/fixtures/delivery-signatures.json"
+        vector = next(value for value in json.loads(fixture.read_text()) if not value["valid"])
         self.assert_refused(
             "invalid-delivery-time",
             "the Base Registry Engine webhook delivery time is invalid; check the signed delivery time and sender clock",
-            headers={**headers(), "x-registry-delivery-time": "not-a-time"},
+            headers={**headers(), "x-registry-delivery-time": vector["deliveryTime"], "x-registry-signature": vector["signature"]},
         )
 
     def test_reports_an_oversized_body_with_its_fix(self) -> None:

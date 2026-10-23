@@ -197,6 +197,12 @@ impl RegistryAuthenticator {
         validate_compact_access_token(token)
             .map_err(|_| AuthenticationError::MalformedCredential)?;
         let verified = self.verifier.verify(token).await.map_err(|error| {
+            if let Some(stage) = self
+                .verifier
+                .authentication_diagnostic(error.authentication_stage())
+            {
+                tracing::info!(stage, "BReg authentication refused");
+            }
             // UnknownKid precedes signature verification and also covers denied
             // keys. It cannot establish rotation, regardless of the key source.
             if matches!(error, OidcError::UnknownKid)

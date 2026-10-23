@@ -222,6 +222,22 @@ pub fn sign_compact_jwt_with_key(
     sign_compact_jwt_header(private, header, claims)
 }
 
+/// Ephemeral asymmetric key for resource-server interoperability tests. No
+/// private fixture bytes are retained or printed.
+#[must_use]
+pub fn access_token_test_key(algorithm: jsonwebtoken::Algorithm) -> PrivateJwk {
+    use registry_platform_crypto::{generate_private_jwk, GeneratedKeyAlgorithm};
+    let mut key = generate_private_jwk(match algorithm {
+        jsonwebtoken::Algorithm::ES256 => GeneratedKeyAlgorithm::Es256,
+        jsonwebtoken::Algorithm::RS256 => GeneratedKeyAlgorithm::Rs384,
+        _ => panic!("the baseline fixture admits only RS256 and ES256"),
+    })
+    .expect("ephemeral test key generates");
+    key.alg = Some(format!("{algorithm:?}"));
+    key.kid = Some("canary-resource-key".to_owned());
+    key
+}
+
 fn sign_compact_jwt_header(private: &PrivateJwk, header: Value, claims: Value) -> String {
     let signing_input = format!("{}.{}", encode_json(&header), encode_json(&claims));
     let signature = sign(signing_input.as_bytes(), private).expect("fixture key signs JWT");

@@ -41,6 +41,19 @@ function input(overrides = {}) {
   };
 }
 
+test('shared language vectors authenticate exact RFC3339 fractions', () => {
+  const vectors = require('../../registry-platform-crypto/tests/fixtures/delivery-signatures.json');
+  for (const vector of vectors) {
+    const exact = { ...headers(), 'x-registry-delivery-time': vector.deliveryTime, 'x-registry-signature': vector.signature };
+    if (vector.valid) {
+      assert.equal(verifyWebhookDelivery(input({ headers: exact })).deliveryTime, vector.deliveryTime);
+      assert.throws(() => verifyWebhookDelivery(input({ headers: { ...exact, 'x-registry-delivery-time': '2026-08-30T00:00:01.0000Z' } })), assertRefusal('signature-mismatch'));
+    } else {
+      assert.throws(() => verifyWebhookDelivery(input({ headers: exact })), assertRefusal('invalid-delivery-time'));
+    }
+  }
+});
+
 function assertRefusal(code) {
   return (error) => error instanceof BaseRegistryClientError
     && error.kind === 'webhook-verification'
@@ -98,8 +111,9 @@ test('refuses a truncated signature', () => {
 });
 
 test('reports an invalid delivery time with its fix', () => {
+  const vector = require('../../registry-platform-crypto/tests/fixtures/delivery-signatures.json').find(value => !value.valid);
   assert.throws(() => verifyWebhookDelivery(input({
-    headers: { ...headers(), 'x-registry-delivery-time': 'not-a-time' },
+    headers: { ...headers(), 'x-registry-delivery-time': vector.deliveryTime, 'x-registry-signature': vector.signature },
   })), assertExactRefusal(
     'invalid-delivery-time',
     'the Base Registry Engine webhook delivery time is invalid; check the signed delivery time and sender clock',

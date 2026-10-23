@@ -144,6 +144,25 @@ selection is inert metadata that grants no access.
     crates/registry-stack-client-py/python/registry_client/__init__.py,
     crates/registry-stack-client/src/lib.rs */}
 
+## Shared protocol and authentication
+
+The [HTTP problem and recovery contract](https://github.com/registrystack/registry-stack/blob/main/products/platform/HTTP-PROBLEMS.md)
+defines the common fields, bodyless Casework result states, Scheduling concealment,
+meaningful Retry-After intervals and portable idempotency guidance. BReg keeps
+`$top`/`$skiptoken`; Casework, Scheduling and Coordinator use `limit`/`cursor`.
+
+Use Python `from registry_client.auth import PrivateKeyJwt` for a product-neutral
+provider. The compatibility `breg.PrivateKeyJwt` is the same native class. Construct
+one provider per resource/audience and scope set; one OAuth registration may request
+separate tokens, and no bearer token grants universal product access. The
+[per-resource profile](https://github.com/registrystack/registry-stack/blob/main/products/platform/ACCESS-TOKENS.md)
+records token type, algorithms, actor rules, lifetime and network policy.
+
+{/* Evidence: products/platform/HTTP-PROBLEMS.md; products/platform/ACCESS-TOKENS.md;
+    crates/registry-stack-client-py/python/registry_client/auth.py;
+    crates/registry-casework-client/src/accepted.rs;
+    crates/registry-casework-client-py/tests/python/test_construction.py */}
+
 ## What every client shares
 
 The naming convention is fixed across the bindings:
@@ -680,6 +699,11 @@ shape is refused at construction with kind `configuration`.
     crates/registry-breg-client-node/client.d.ts, attemptTimeoutMilliseconds,
     crates/registry-breg-client-py/python/registry_breg_client/__init__.pyi, attempt_timeout_seconds */}
 
+Python's `top` list argument produces BReg's `$top` query parameter. Continue with the
+returned `$skiptoken` contract. Treat `metadata.operations` identifiers as opaque
+metadata selected from the compiled registry contract; do not construct or parse
+identifiers using an undocumented spelling.
+
 ### Verify a webhook delivery
 
 `verifyWebhookDelivery` in Node and `verify_webhook_delivery` in Python authenticate one exact BReg
@@ -1037,6 +1061,14 @@ Persist the accepted concrete request binding. Recover a lost response with the 
 subject, request body, key, and digest, even after a policy update. Do not rewrite an ID-only
 selector into the accepted exact binding during recovery: that changes the submission identity.
 Read `review_result` with the accepted binding or resume the authenticated `review_results` feed.
+The accepted binding has exactly `requestId`, `policy`, `subject`, and `submissionDigest`.
+Invalid bindings return fixed, bounded `validation.path` and `validation.reason` before
+credential validation or HTTP, without input values. Result reads keep bodyless
+202 pending, 404 concealed-or-unknown and 410 expired responses.
+`bootstrap_directory(staff=...)` accepts staff declarations and returns the resulting
+`members`; the argument and response deliberately use different names.
+See the [completion receiver contract](https://github.com/registrystack/registry-stack/blob/main/products/casework/COMPLETION-RECEIVERS.md)
+for authenticated, at-least-once wakes and Python/Node durable deduplication examples.
 Producer create and cancel calls are never automatically resent.
 
 {/* Evidence: crates/registry-review-protocol/src/lib.rs, submission_digest, ReviewCreateRequest;

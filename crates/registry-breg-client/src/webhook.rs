@@ -93,7 +93,7 @@ impl BRegWebhookVerificationError {
 
 /// Verify one exact BReg Version 1 webhook delivery without applying receiver policy.
 ///
-/// This delegates header extraction, the signature input, canonical
+/// This delegates header extraction, the signature input, RFC 3339
 /// delivery-time validation, and constant-time HMAC comparison to the shared
 /// `registry_platform_hooks::receiver::verify_delivery`. Verifying against the
 /// claimed delivery instant disables only receiver clock policy; the caller

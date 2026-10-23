@@ -200,3 +200,13 @@ For changed wire surfaces, use owning product contract gates, including
 client, verifier, binding, authoring, and language-server source also stays
 under Evidence's neutrality checks. Package checks alone do not prove a
 changed runtime authorization or disclosure boundary.
+
+## Shared protocol references
+
+[HTTP problems and recovery](../products/platform/HTTP-PROBLEMS.md) owns the
+common envelope, deliberate bodyless/concealed states, meaningful Retry-After,
+idempotency guidance and the two pagination families.
+[Access tokens](../products/platform/ACCESS-TOKENS.md) owns the per-resource
+verification table. Python `registry_client.auth.PrivateKeyJwt` is the same
+canonical provider as the compatibility BReg entry point; configure one
+instance per resource. A facade grants no shared bearer authority.

@@ -726,6 +726,27 @@ async fn result_lookup_accepts_only_the_four_defined_statuses_and_shapes() {
 }
 
 #[tokio::test]
+async fn nil_accepted_request_is_refused_before_authenticated_http() {
+    let client = ReviewClient::new(ReviewClientConfig::new(
+        Url::parse("http://127.0.0.1:1/").unwrap(),
+    ))
+    .unwrap();
+    let token = BearerToken::new("canary-not-sent").unwrap();
+    let error = client
+        .result(
+            ReviewAuth::new(&token, "producer"),
+            &expected_binding(Uuid::nil()),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(error, ReviewClientError::InvalidRequest { .. }));
+    assert_eq!(
+        error.mutation_class(),
+        registry_review_client::ReviewMutationErrorClass::Deterministic
+    );
+}
+
+#[tokio::test]
 async fn result_lookup_refuses_every_mismatched_correlation_field() {
     let app = Router::new().route("/v1/review-requests/{id}/result", get(result_by_id));
     let (client, server) = serve(app).await;

@@ -523,3 +523,7 @@ Declare bounded count datasets for live analysis under ordinary read profiles
 and immutable, disclosure-controlled releases for separate dashboard readers.
 See [Statistical datasets](STATISTICS.md) for the model, HTTP contract,
 publication lifecycle, and accepted disclosure risks.
+
+See the shared [per-resource access-token profile](../platform/ACCESS-TOKENS.md)
+for OIDC interoperability. `registry_actor_kind` is profile-specific, including
+when one OAuth client registration requests separate product tokens.

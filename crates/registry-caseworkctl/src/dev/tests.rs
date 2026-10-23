@@ -739,6 +739,28 @@ fn binding_refuses_a_client_missing_one_required_profile_scope() {
 }
 
 #[test]
+fn fixture_profile_guidance_names_fields_without_claim_or_scope_values() {
+    let root = crate::canonical_tempdir();
+    let project = standalone(root.path());
+    let policy = crate::project::load_and_check_policy(&project).unwrap();
+    let text = STANDALONE_DEV_CLIENTS
+        .replace("scopes: [casework:staff]", "scopes: [canary-private-scope]")
+        .replace(
+            "registry_actor_kind: human",
+            "registry_actor_kind: canary-private-kind",
+        );
+    let clients = accepted(text.as_bytes());
+    let findings = config::bind(&clients, &policy).unwrap_err();
+    let rendered = format!("{findings:?}");
+    assert!(rendered.contains("/scopes"));
+    assert!(rendered.contains("registry_actor_kind"));
+    assert!(rendered.contains("requiredScopes"));
+    assert!(rendered.contains("human"));
+    assert!(!rendered.contains("canary-private-scope"));
+    assert!(!rendered.contains("canary-private-kind"));
+}
+
+#[test]
 fn binding_accepts_directory_members_with_matching_roles() {
     let root = crate::canonical_tempdir();
     let project = standalone(root.path());
