@@ -295,6 +295,33 @@ fn random_generation_takes_no_alphabet_or_scope() {
 }
 
 #[test]
+fn sequence_scope_fields_cannot_hold_restricted_values_or_references() {
+    // The reservation ledger keeps scope values after record erasure.
+    let mut restricted = project_value();
+    restricted["recordTypes"][0]["fields"][0]["classification"] = json!("restricted");
+    let mut reference = project_value();
+    reference["recordTypes"][0]["fields"][0] = json!({
+        "id": "jurisdiction", "type": "reference", "target": "record",
+        "required": true, "classification": "internal"
+    });
+    for (case, project) in [("restricted", restricted), ("reference", reference)] {
+        let failure = compile(&project).expect_err(case);
+        assert!(
+            failure
+                .diagnostics()
+                .iter()
+                .any(|diagnostic| diagnostic.code == "breg.field.generate-scope-field-sensitive"),
+            "{case}: {:?}",
+            failure.diagnostics()
+        );
+    }
+
+    let mut public = project_value();
+    public["recordTypes"][0]["fields"][0]["classification"] = json!("public");
+    compile(&public).expect("a public scope field compiles");
+}
+
+#[test]
 fn generated_identifiers_cannot_be_caller_writable() {
     let mut project = project_value();
     project["accessProfiles"][0]["permissions"]["records"][0]["writableFields"] =

@@ -35,9 +35,12 @@ to misread. Choose enough length for the expected number of
 records. BReg retries a collision within a bounded attempt count and refuses
 the create if the code space cannot supply a free value.
 
-`scope`, accepted on `sequence` only, lists required stored scalar fields.
-BReg includes their values in both the allocation namespace and a database
-uniqueness constraint. Omit it for one namespace across that Record type; a
+`scope`, accepted on `sequence` only, lists required stored scalar fields
+classified `public` or `internal`, and never a `reference`. BReg keeps every
+issued value with its scope values after the record is erased, so a scope must
+not hold restricted data or point at a person; use a jurisdiction or category
+code. BReg includes the scope values in both the allocation namespace and a
+database uniqueness constraint. Omit it for one namespace across that Record type; a
 `random` code always has one namespace across its Record type. Include the scope fields when
 looking up a scoped identifier, since the same code can exist in another scope.
 The compiler limits the combined maximum size of the identifier field and its

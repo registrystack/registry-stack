@@ -14,8 +14,9 @@ The public code is an immutable stored field, while the record UUID remains
 the engine identity. The threat is a caller choosing or reusing a code, moving
 it to a different uniqueness scope, or causing a Proposal retry or migration
 to issue a code twice. Compiler validation in `compiler.rs` requires a bounded
-string field and required stored scalar scope fields, excludes generated fields
-from caller-writable contracts, and rejects incompatible successor rules.
+string field and required stored scalar scope fields classified public or
+internal and not references, excludes generated fields from caller-writable
+contracts, and rejects incompatible successor rules.
 Mutation admission in `mutation.rs`, `immediate_actions.rs`, and
 `proposal_prepare.rs` refuses caller or Action values for generated fields and
 later changes to either a generated field or its scope. Proposal Submit reserves
@@ -36,6 +37,16 @@ role grants, rollback, scoped reuse, retained rows, replay, and recovery.
 Generated codes are institution-facing labels, not proof of authority. A
 holder still needs the ordinary Record or Action grant. A code space can fill;
 the bounded allocator returns a conflict instead of silently recycling values.
+
+Residual: the reservation ledger is append-only and no erasure path touches
+it, so each issued value and its sequence scope values stay in
+`registry_generated_identifier_reservations` after the Record is tombstoned or
+erased. That is the price of never reissuing a code. It is acceptable because
+the compiler limits scope fields to public or internal values that are not
+references, so the ledger holds a jurisdiction or category code beside an
+institution-issued number, never restricted data or a link to a person. Hashing
+the scope values would remove even that, and stays open if a register needs to
+scope by more sensitive data.
 
 ## Attachment storage and verification through the shared object store
 
