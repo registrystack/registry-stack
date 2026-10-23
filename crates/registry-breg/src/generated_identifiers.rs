@@ -16,7 +16,7 @@ use crate::model::{
     CompiledRegistry,
 };
 use crate::mutation::MutationError;
-use crate::postgres::SqlIdentifier;
+use crate::postgres::{PostgresFailure, SqlIdentifier};
 
 const MAX_ALLOCATION_ATTEMPTS: usize = 64;
 
@@ -37,6 +37,18 @@ pub(crate) enum GeneratedIdentifierError {
     Exhausted,
     #[error("generated identifier state is unavailable")]
     Unavailable,
+}
+
+/// Log the value-free part of a database error, then report allocation state
+/// as unavailable. The SQLSTATE and schema object names carry no record values.
+fn unavailable(operation: &'static str, error: &tokio_postgres::Error) -> GeneratedIdentifierError {
+    tracing::warn!(
+        target: "registry_breg::generated_identifiers",
+        operation,
+        failure = %PostgresFailure::from_error(error),
+        "generated identifier state is unavailable"
+    );
+    GeneratedIdentifierError::Unavailable
 }
 
 impl From<GeneratedIdentifierError> for MutationError {
@@ -120,11 +132,11 @@ pub(crate) async fn install(
              ) FROM PUBLIC;",
         )
         .await
-        .map_err(|_| GeneratedIdentifierError::Unavailable)?;
+        .map_err(|error| unavailable("install", &error))?;
 
     let runtime_revoke = crate::postgres::RuntimeRevoke::detect(migration, runtime_role)
         .await
-        .map_err(|_| GeneratedIdentifierError::Unavailable)?;
+        .map_err(|error| unavailable("install", &error))?;
     let role = runtime_role.as_str();
     let grants = GENERATED_IDENTIFIER_TABLES
         .iter()
@@ -160,7 +172,7 @@ pub(crate) async fn install(
             ),
         ))
         .await
-        .map_err(|_| GeneratedIdentifierError::Unavailable)?;
+        .map_err(|error| unavailable("install", &error))?;
     Ok(())
 }
 
@@ -256,7 +268,7 @@ async fn canonical_scope_values(
         .query_one(&sql, &parameters)
         .await
         .map(|row| row.get(0))
-        .map_err(|_| GeneratedIdentifierError::Unavailable)
+        .map_err(|error| unavailable("canonical-scope", &error))
 }
 
 async fn reserve_sequence(
@@ -285,7 +297,7 @@ async fn reserve_sequence(
                 {
                     GeneratedIdentifierError::Exhausted
                 } else {
-                    GeneratedIdentifierError::Unavailable
+                    unavailable("allocate-sequence", &error)
                 }
             })?;
         let number: i64 = row
@@ -355,7 +367,7 @@ async fn reserve(
         )
         .await
         .map(|row| row.get(0))
-        .map_err(|_| GeneratedIdentifierError::Unavailable)
+        .map_err(|error| unavailable("reserve", &error))
 }
 
 #[cfg(test)]
