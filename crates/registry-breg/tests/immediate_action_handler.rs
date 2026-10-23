@@ -540,8 +540,7 @@ fn directly_returned_literal_outcomes_are_checked_against_the_action_catalogues(
         ),
     ] {
         let failure = compile(project(), script)
-            .err()
-            .expect("a definite returned literal typo is refused before execution");
+            .expect_err("a definite returned literal typo is refused before execution");
         let diagnostic = failure
             .diagnostics()
             .iter()

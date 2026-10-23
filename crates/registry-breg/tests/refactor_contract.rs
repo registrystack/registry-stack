@@ -1165,15 +1165,18 @@ fn authored_action_input_display_survives_source_and_compilation() {
 fn input_and_refusal_labels_are_presentation_not_frozen_meaning() {
     use serde_json::json;
     let mut value: serde_json::Value = project_source();
-    value["actions"][1]["plan"]["refusals"] =
-        json!([{ "code":"invalid-address", "label":"Old label" }]);
+    // Keep the planner's returned code declared while independently changing
+    // presentation and the operational identity of another declared refusal.
+    value["actions"][1]["plan"]["refusals"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({ "code":"invalid-address", "label":"Old label" }));
     let source =
         registry_breg::contract::parse_project_json(&serde_json::to_vec(&value).unwrap()).unwrap();
     let before = compile(&source).unwrap();
     value["actions"][0]["inputs"][0]["display"] =
         json!({"label":"A clearer label", "description":"Presentation only"});
-    value["actions"][1]["plan"]["refusals"] =
-        json!([{ "code":"invalid-address", "label":"Use a distinct address" }]);
+    value["actions"][1]["plan"]["refusals"][1]["label"] = json!("Use a distinct address");
     let project =
         registry_breg::contract::parse_project_json(&serde_json::to_vec(&value).unwrap()).unwrap();
     let after = compile(&project).unwrap();
@@ -1196,7 +1199,7 @@ fn input_and_refusal_labels_are_presentation_not_frozen_meaning() {
     );
 
     let mut changed_refusal_source = value.clone();
-    changed_refusal_source["actions"][1]["plan"]["refusals"][0]["code"] = json!("invalid-location");
+    changed_refusal_source["actions"][1]["plan"]["refusals"][1]["code"] = json!("invalid-location");
     let changed_refusal = registry_breg::contract::parse_project_json(
         &serde_json::to_vec(&changed_refusal_source).unwrap(),
     )

@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+- BREAKING: rename the `409 idempotency.conflict` wire code to
+  `idempotency.key-reused`. Update code-based error handling when upgrading;
+  older clients treat the renamed code as an unrecognized problem. BReg keeps
+  its 256-byte key limit; 128 bytes remains the portable cross-product guidance.
+- Allow required Proposal inputs to be completed at Submit. Start, Edit,
+  Revise, and Rebase accept incomplete drafts while checking every supplied
+  value and its write grant. Immediate Actions still require complete inputs.
+- Add `pendingManualApplication=true` to Proposal List. The local current
+  submission and unexpired, non-withdrawn approval determine eligibility before
+  pagination; listing does not call the Review provider for each Proposal.
+- Add optional field-guard `reason` copy keys. Availability and
+  `412 action.guard_failed` disclose `guardReason` only when every guard and
+  row-boundary fact for the target is readable; commit-time enforcement remains
+  authoritative.
+- Add value-free Invoke and Submit planner diagnostics and doctor advisories
+  for unbound logical Review authorities. An omitted optional authority permits
+  startup and unrelated work while its dependent Submit remains unavailable.
+- Select free owned development ports when preferred defaults are occupied,
+  retain the assignment across restarts, and preserve borrowed issuer endpoints.
+  Keep the raw pre-apply doctor report as initial-apply evidence.
+- Diagnose incompatible field options, fixture refusal pairs, and directly
+  returned Rhai literal refusal codes and write-slot IDs before execution.
+  Computed and helper-returned plans retain runtime validation. Executable
+  examples cover success, refusal, and exact expected handler failure, including
+  complete synthetic Evidence transcripts.
 - Add the closed `logLevel` runtime setting to BReg, `breg-mcp`, and
   `breg-review`. Each existing product environment variable takes precedence,
   then the runtime file, then `info`; an unknown environment or configuration

@@ -1054,10 +1054,13 @@ async fn absent_optional_copy_has_the_same_safe_failure_at_invoke_and_submit() {
     use registry_breg_client::{BRegActionInvocationRequest, BRegIdempotencyKey, BRegProblemCode};
     let _guard = HANDLER_TEST_LOCK.lock().await;
     let logs = captured_handler_logs();
-    let mut source: Value = serde_norway::from_str(include_str!(
-        "../../../products/breg/fixtures/action-plan-branches/registry.yaml"
-    ))
-    .unwrap();
+    let mut source = registry_platform_yaml::Reader::new("registry.yaml")
+        .scan(include_bytes!(
+            "../../../products/breg/fixtures/action-plan-branches/registry.yaml"
+        ))
+        .expect("the Action fixture uses the supported YAML subset")
+        .expect("the Action fixture is nonempty")
+        .to_json_value();
     source["actions"][1]["inputs"].as_array_mut().unwrap().push(
         json!({"id":"private-data","type":"string","maximumLength":64,"classification":"internal"}),
     );

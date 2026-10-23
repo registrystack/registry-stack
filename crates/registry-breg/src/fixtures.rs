@@ -4633,10 +4633,10 @@ fn assert_response_with_observations(
                 )
             } else if code == "action.guard_failed" && document.get("guardReason").is_some() {
                 keys.push("guardReason");
-                if !document
+                if document
                     .get("guardReason")
                     .and_then(Value::as_str)
-                    .is_some_and(|reason| registry_platform_yaml::LocalId::new(reason).is_ok())
+                    .is_none_or(|reason| registry_platform_yaml::LocalId::new(reason).is_err())
                 {
                     return Err(FixtureError::ResponseShapeRefused);
                 }
@@ -6736,7 +6736,11 @@ mod tests {
             );
             assert_eq!(
                 validate_claims(&supplied, &profile, ExpectedOutcome::Success),
-                Err(FixtureError::AuthorityWideningRefused)
+                Err(FixtureError::AuthoringRule {
+                    code: "fixture.claims.direct-claims-invalid",
+                    key: "claims.directClaims",
+                    message: "successful steps require exactly the selected access profile's non-reserved row-boundary claims, with bounded string or string-set values",
+                })
             );
         }
         let mapped = VerifiedRequestClaims::authenticated(

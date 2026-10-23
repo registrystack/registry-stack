@@ -431,7 +431,7 @@ async fn pending_manual_application_filter_precedes_pagination_and_keeps_authori
     for (index, draft) in drafts.iter().enumerate().skip(12) {
         let submit = client
             .prepare_proposal(
-                &draft,
+                draft,
                 "submit",
                 json!({}),
                 &key(&format!("queue-submit-{index}")),
@@ -6943,6 +6943,7 @@ async fn writable_inputs_treat_explicit_null_as_a_write() {
         .value
         .select_action("correct-name", "clerk")
         .unwrap();
+    let clerk_get = metadata.value.select_proposal_get("clerk").unwrap();
 
     let before = fixture.audit_capture.entries().len();
     let refused = client
@@ -6959,7 +6960,7 @@ async fn writable_inputs_treat_explicit_null_as_a_write() {
         .await;
     assert_input_write_refused(&fixture, refused, before, "start").await;
 
-    let draft = client
+    let draft_receipt = client
         .start_proposal(
             &action,
             &BRegActionInvocationRequest::new(
@@ -6970,6 +6971,11 @@ async fn writable_inputs_treat_explicit_null_as_a_write() {
             .unwrap(),
             &key("nullable-start"),
         )
+        .await
+        .unwrap()
+        .value;
+    let draft = client
+        .get_proposal(&clerk_get, draft_receipt.id())
         .await
         .unwrap()
         .value;
@@ -7013,10 +7019,14 @@ async fn writable_inputs_treat_explicit_null_as_a_write() {
             &key("nullable-officer-add-null"),
         )
         .unwrap();
-    let with_null = client.execute_proposal(&officer_edit).await.unwrap().value;
+    let with_null_receipt = client.execute_proposal(&officer_edit).await.unwrap().value;
+    let with_null = client
+        .get_proposal(&officer_get, with_null_receipt.id())
+        .await
+        .unwrap()
+        .value;
     assert_eq!(with_null.input().unwrap().get("note"), Some(&Value::Null));
 
-    let clerk_get = metadata.value.select_proposal_get("clerk").unwrap();
     let clerk_view = client
         .get_proposal(&clerk_get, draft.id())
         .await
@@ -7067,7 +7077,12 @@ async fn writable_inputs_treat_explicit_null_as_a_write() {
     let submit = client
         .prepare_proposal(&draft, "submit", json!({}), &key("nullable-submit"))
         .unwrap();
-    let submitted = client.execute_proposal(&submit).await.unwrap().value;
+    let submitted_receipt = client.execute_proposal(&submit).await.unwrap().value;
+    let submitted = client
+        .get_proposal(&clerk_get, submitted_receipt.id())
+        .await
+        .unwrap()
+        .value;
     let mut revised_input = submitted.input().unwrap().clone();
     revised_input.insert("note".into(), Value::Null);
     let before = fixture.audit_capture.entries().len();
@@ -7095,7 +7110,12 @@ async fn writable_inputs_treat_explicit_null_as_a_write() {
             &key("nullable-revise"),
         )
         .unwrap();
-    let revised = client.execute_proposal(&revise).await.unwrap().value;
+    let revised_receipt = client.execute_proposal(&revise).await.unwrap().value;
+    let revised = client
+        .get_proposal(&clerk_get, revised_receipt.id())
+        .await
+        .unwrap()
+        .value;
     let mut rebased_input = revised.input().unwrap().clone();
     rebased_input.insert("note".into(), Value::Null);
     let before = fixture.audit_capture.entries().len();
