@@ -31,6 +31,10 @@ resource token and reacquires it before expiry. Token exchange is uncached.
 Use one provider instance per resource and scope set. Python exposes it as
 `registry_client.auth.PrivateKeyJwt`; `registry_client.breg.PrivateKeyJwt`
 remains the same class for compatibility. Rust exposes `registry_stack_client::auth`.
+The provider's `resource` is the RFC 8707 resource indicator for the issued
+access token. Its optional `audience` instead names the private_key_jwt client
+assertion's audience (default: token endpoint); it does not select an access-token
+audience. Keep that distinction when configuring one shared OAuth registration.
 A provider does not choose scopes, derive an audience or grant downstream authority.
 
 ## Issuer networking

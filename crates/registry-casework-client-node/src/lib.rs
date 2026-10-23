@@ -160,7 +160,7 @@ impl CaseworkClient {
         profile: String,
         accepted: Value,
     ) -> Result<CaseworkOutcome> {
-        let accepted = casework_client_sdk::accepted_binding(accepted).map_err(|error| NapiError::from_reason(json!({
+        let accepted = registry_casework_client::accepted_binding(accepted).map_err(|error| NapiError::from_reason(json!({
             "kind":"invalid-request", "message":"the accepted review binding is invalid", "outcomeUnknown":false,
             "validation":{"path":error.path,"reason":error.reason,"allowed":[]}
         }).to_string()))?;

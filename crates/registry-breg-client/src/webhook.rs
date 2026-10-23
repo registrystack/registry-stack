@@ -95,9 +95,9 @@ impl BRegWebhookVerificationError {
 ///
 /// This delegates header extraction, the signature input, RFC 3339
 /// delivery-time validation, and constant-time HMAC comparison to the shared
-/// `registry_platform_hooks::receiver::verify_delivery`. Verifying against the
-/// claimed delivery instant disables only receiver clock policy; the caller
-/// receives that authenticated value to enforce its own skew bound.
+/// `registry_platform_hooks::receiver::verify_delivery`. Caller-enforced
+/// freshness leaves the receiver's clock policy separate; the caller receives
+/// the authenticated raw delivery time to enforce its own skew bound.
 pub fn verify_webhook_delivery(
     delivery: BRegWebhookDelivery<'_>,
 ) -> Result<BRegVerifiedWebhookDelivery, BRegWebhookVerificationError> {

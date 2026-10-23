@@ -96,7 +96,7 @@ impl MessagingAuthenticator {
                     let (stage, remedy) = if self.profiles.missing_scope(&facts).is_some() {
                         (registry_platform_oidc::AuthenticationStage::Scope, "check authentication.oidc.scopeClaim and accessProfiles requiredScopes")
                     } else {
-                        (registry_platform_oidc::AuthenticationStage::Profile, "check accessProfiles actorKinds and client binding")
+                        (registry_platform_oidc::AuthenticationStage::Profile, "check accessProfiles actorKind and requesterClients")
                     };
                     if let Some(stage) = self.verifier.authentication_diagnostic(stage) {
                         tracing::info!(stage, remedy, "Messaging authentication profile refused");
