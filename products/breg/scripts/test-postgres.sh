@@ -15,8 +15,11 @@ if [[ $# -ne 0 ]]; then
   lane=$2
 fi
 case "$lane" in
-  all|postgres|immediate-actions) ;;
-  *) usage; exit 2 ;;
+  all | postgres | immediate-actions) ;;
+  *)
+    usage
+    exit 2
+    ;;
 esac
 
 if [[ -z "${BREG_TEST_DATABASE_URL:-}" ]]; then
@@ -84,6 +87,8 @@ if [[ "$lane" == all || "$lane" == postgres ]]; then
     --test postgres_import_authority \
     --test postgres_refactor \
     --test postgres_proposal \
+    --test postgres_proposal_task_authority \
+    --test postgres_proposal_recovery_permissions \
     --test postgres_proposal_shape_activation \
     --test postgres_native_retention \
     --test postgres_proposal_human_recovery \
@@ -129,7 +134,10 @@ if len(binaries) != 1:
     raise SystemExit("expected exactly one built Evidence executable")
 print(binaries[0])
 ')
-  [[ -x "$evidence_binary" ]] || { printf '%s\n' 'Built Evidence executable is unavailable.' >&2; exit 2; }
+  [[ -x "$evidence_binary" ]] || {
+    printf '%s\n' 'Built Evidence executable is unavailable.' >&2
+    exit 2
+  }
   export BREG_TEST_EVIDENCE_BINARY="$evidence_binary"
   uv run --no-project --with PyYAML==6.0.2 cargo test --locked -p registry-breg --features postgres-test,tooling,schema \
     --test postgres_action_evidence \

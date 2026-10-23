@@ -326,14 +326,15 @@ pub(crate) fn compiled_access_findings(
         }
     }
     for reach in row_reach(entities, actions) {
-        // Ordinary permissions retain their existing finding codes above.
-        if reach.surface == "record" {
+        // Ordinary permissions and read-path grants retain their existing
+        // finding codes above. A read path reaches related rows under the
+        // root profile's authority; it is not an Action or Proposal target.
+        if reach.surface == "record" || reach.surface == "read_path" {
             continue;
         }
         // A `self` consent issuer's subject and record targets are bound
         // through the caller's principal link, not by a row boundary.
         if reach.rows == "all"
-            && !reach.owner_only
             && !link_bound.contains(&reach.source_path)
             && entities
                 .get(&reach.entity)

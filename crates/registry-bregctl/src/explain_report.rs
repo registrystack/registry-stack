@@ -174,7 +174,7 @@ pub(crate) fn actions(value: &Value, lines: &mut Lines) {
                 ),
             );
         }
-        permissions(&action["permissions"], 2, lines);
+        action_permissions(&action["permissions"], 2, lines);
         if action["execution"]["mode"] == "proposal" {
             let proposal = &action["execution"]["proposal"];
             let review = &proposal["review"];
@@ -207,18 +207,94 @@ pub(crate) fn actions(value: &Value, lines: &mut Lines) {
                     2,
                     "Restricted built-in executor holds the compiled system apply grant.",
                 );
+                system_apply_grant(&proposal["systemApplyGrant"], 2, lines);
             }
-            permissions(&proposal["permissions"], 2, lines);
+            proposal_permissions(&proposal["permissions"], &action["inputs"], 2, lines);
         }
     }
 }
 
-fn permissions(value: &Value, depth: usize, lines: &mut Lines) {
+pub(crate) fn json_list_or(value: &Value, empty: &str) -> String {
+    if value.as_array().is_some_and(|values| !values.is_empty()) {
+        value.to_string()
+    } else {
+        empty.to_owned()
+    }
+}
+
+fn row_restrictions(value: &Value) -> String {
+    if value.is_null()
+        || value.as_array().is_some_and(Vec::is_empty)
+        || value.as_str() == Some("unrestricted")
+    {
+        "unrestricted".to_owned()
+    } else {
+        value.to_string()
+    }
+}
+
+fn permission_gates(permission: &Value) -> Vec<(&'static str, String)> {
+    let mut gates = vec![
+        (
+            "actor kind",
+            permission["actorKind"]
+                .as_str()
+                .unwrap_or("not declared")
+                .to_owned(),
+        ),
+        (
+            "requester clients",
+            json_list_or(&permission["requesterClients"], "any"),
+        ),
+        (
+            "principal claim",
+            permission["principalClaim"]
+                .as_str()
+                .unwrap_or("none")
+                .to_owned(),
+        ),
+        (
+            "required scopes (all)",
+            json_list_or(&permission["requiredScopes"], "unrestricted"),
+        ),
+        (
+            "allowed purposes (any)",
+            json_list_or(&permission["requiredPurposes"], "unrestricted"),
+        ),
+    ];
+    if permission["taskGrant"].is_object() {
+        gates.push((
+            "task grant source issuer",
+            text(&permission["taskGrant"]["sourceIssuer"]).to_owned(),
+        ));
+        if permission["taskGrant"]["permissions"]
+            .as_array()
+            .is_some_and(|permissions| !permissions.is_empty())
+        {
+            let permissions = items(&permission["taskGrant"]["permissions"])
+                .map(|grant| {
+                    format!(
+                        "{}: {}",
+                        text(&grant["collection"]),
+                        names(&grant["operations"], "id")
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("; ");
+            gates.push(("task grant permissions", permissions));
+        }
+    } else {
+        gates.push(("task grant", "none".to_owned()));
+    }
+    gates
+}
+
+fn action_permissions(value: &Value, depth: usize, lines: &mut Lines) {
     for permission in items(value) {
         lines.listed(
             depth,
             &format!(
-                "profile {}: {}{}",
+                "Action profile {}: {}{}",
                 text(&permission["profileId"]),
                 names(&permission["operations"], "id"),
                 if permission["default"] == true {
@@ -227,6 +303,126 @@ fn permissions(value: &Value, depth: usize, lines: &mut Lines) {
                     ""
                 }
             ),
+        );
+        lines.pairs_at(depth + 1, &permission_gates(permission));
+        lines.pairs_at(
+            depth + 1,
+            &[("results", names(&permission["results"], "id"))],
+        );
+        for target in items(&permission["targets"]) {
+            lines.listed(
+                depth + 1,
+                &format!(
+                    "target {}: {} from {}",
+                    text(&target["recordType"]),
+                    text(&target["operation"]),
+                    target["source"]
+                ),
+            );
+            lines.pairs_at(
+                depth + 2,
+                &[(
+                    "row restrictions (all)",
+                    row_restrictions(&target["rowBoundaries"]),
+                )],
+            );
+        }
+    }
+}
+
+fn proposal_permissions(value: &Value, action_inputs: &Value, depth: usize, lines: &mut Lines) {
+    for permission in items(value) {
+        lines.listed(
+            depth,
+            &format!(
+                "Proposal profile {}: {}{}",
+                text(&permission["profileId"]),
+                names(&permission["operations"], "id"),
+                if permission["default"] == true {
+                    " (default)"
+                } else {
+                    ""
+                }
+            ),
+        );
+        let mut fields = permission_gates(permission);
+        fields.extend([
+            (
+                "ownership",
+                permission["ownership"]
+                    .as_str()
+                    .unwrap_or("unrestricted")
+                    .to_owned(),
+            ),
+            (
+                "readable context fields",
+                names(&permission["readableContextFields"], "id"),
+            ),
+            (
+                "readable inputs",
+                names(&permission["readableInputs"], "id"),
+            ),
+            (
+                "writable inputs",
+                if permission.get("writableInputs").is_none()
+                    || permission["writableInputs"].is_null()
+                {
+                    format!("all Action inputs ({})", names(action_inputs, "id"))
+                } else {
+                    names(&permission["writableInputs"], "id")
+                },
+            ),
+            (
+                "readable attachments",
+                names(&permission["readableAttachments"], "id"),
+            ),
+            (
+                "writable attachments",
+                names(&permission["writableAttachments"], "id"),
+            ),
+        ]);
+        lines.pairs_at(depth + 1, &fields);
+        for target in items(&permission["targets"]) {
+            lines.listed(
+                depth + 1,
+                &format!("target {}", text(&target["recordType"])),
+            );
+            lines.pairs_at(
+                depth + 2,
+                &[(
+                    "row restrictions (all)",
+                    row_restrictions(&target["rowBoundaries"]),
+                )],
+            );
+        }
+    }
+}
+
+fn system_apply_grant(grant: &Value, depth: usize, lines: &mut Lines) {
+    lines.item_at(depth, "system apply grant");
+    lines.pairs_at(
+        depth + 1,
+        &[
+            ("action", text(&grant["actionId"]).to_owned()),
+            ("action revision", text(&grant["actionRevision"]).to_owned()),
+            ("grant revision", text(&grant["revision"]).to_owned()),
+        ],
+    );
+    for target in items(&grant["targets"]) {
+        lines.listed(
+            depth + 1,
+            &format!(
+                "{} {}",
+                text(&target["operation"]),
+                text(&target["recordType"])
+            ),
+        );
+        lines.pairs_at(
+            depth + 2,
+            &[
+                ("writable fields", names(&target["fields"], "id")),
+                ("readable fields", names(&target["readFields"], "id")),
+            ],
         );
     }
 }
@@ -404,6 +600,57 @@ fn lifecycle(value: &Value, lines: &mut Lines) {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn permission_gates_quote_literal_identifiers_and_label_empty_lists() {
+        for identifiers in [
+            json!(["none"]),
+            json!(["any"]),
+            json!(["unrestricted"]),
+            json!(["none", "any", "unrestricted"]),
+        ] {
+            let expected = identifiers.to_string();
+            let literal = permission_gates(&json!({
+                "requesterClients": identifiers.clone(),
+                "requiredScopes": identifiers.clone(),
+                "requiredPurposes": identifiers
+            }));
+            for label in [
+                "requester clients",
+                "required scopes (all)",
+                "allowed purposes (any)",
+            ] {
+                assert_eq!(
+                    literal.iter().find_map(
+                        |(candidate, value)| (*candidate == label).then_some(value.as_str())
+                    ),
+                    Some(expected.as_str())
+                );
+            }
+        }
+
+        for empty in [
+            permission_gates(&json!({
+                "requesterClients": [],
+                "requiredScopes": [],
+                "requiredPurposes": []
+            })),
+            permission_gates(&json!({})),
+        ] {
+            for (label, expected) in [
+                ("requester clients", "any"),
+                ("required scopes (all)", "unrestricted"),
+                ("allowed purposes (any)", "unrestricted"),
+            ] {
+                assert_eq!(
+                    empty.iter().find_map(
+                        |(candidate, value)| (*candidate == label).then_some(value.as_str())
+                    ),
+                    Some(expected)
+                );
+            }
+        }
+    }
 
     #[test]
     fn lifecycle_summary_renders_every_possible_turn_and_its_condition() {

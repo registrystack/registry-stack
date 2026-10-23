@@ -7,7 +7,9 @@ mod action;
 pub(crate) use action::erase_expired_action_evidence;
 pub(crate) use action::{HookChangeApplication, HookChangeOutcome};
 mod proposal;
-pub(crate) use proposal::{proposal_operation_name, ProposalApplyPreflight};
+pub(crate) use proposal::{
+    proposal_operation_name, CheckedProposalTaskAuthority, ProposalApplyPreflight,
+};
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;

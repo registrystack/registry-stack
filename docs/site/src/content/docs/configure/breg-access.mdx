@@ -273,14 +273,21 @@ bregctl explain access facility
       allowed purposes (any)  ["facility-administration"]
 ```
 
-The report lists every profile under each Record type with its fields and row restrictions. Each
+The human report shows the actor kind, requester clients and task-grant requirements beside
+each profile's fields and row restrictions. Action and Proposal permissions include their target
+rows, inputs, attachments and ownership. Omitted ownership and writable-input defaults are
+explicit. Caller ownership limits which Proposal documents can be managed; it does not bound
+the target Records. The report also shows the built-in executor's system application ceiling. Each
 read-path grant names its target Record type, through Record type, and route. `rowReach` also lists
 the target under a `read_path` surface with the root profile's row boundaries, so a review that
 starts from the disclosed Record type does not miss incoming paths. Add `--scenario` with a file of
 synthetic claims to preview a decision without a token or a database. To prove the refusals against a running registry, write
 [journeys](../breg-journeys/) that read as both readers.
 
-{/* Evidence: crates/registry-bregctl/src/lib.rs, explain access; crates/registry-breg/src/access_preview.rs. */}
+{/* Evidence: crates/registry-bregctl/src/lib.rs, explain access;
+    crates/registry-bregctl/src/explain_report.rs, actions();
+    crates/registry-bregctl/tests/cli.rs, explain_access_human_reports_profile_gates_permissions_and_target_row_reach();
+    crates/registry-breg/src/access_preview.rs. */}
 
 ## Next
 

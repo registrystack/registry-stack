@@ -10924,6 +10924,9 @@ fn push_access_explanation(explanation: &Value, lines: &mut report::Lines) {
         "purposeMatching",
         "rowMatching",
         "profileSelection",
+        "relationshipMatching",
+        "missingClaims",
+        "evaluation",
     ] {
         let sentence = explanation[key].as_str().unwrap_or("");
         if !sentence.is_empty() {
@@ -10957,10 +10960,106 @@ fn push_access_explanation(explanation: &Value, lines: &mut report::Lines) {
         }
     }
     explain_report::actions(&explanation["actions"]["actions"], lines);
+    push_row_reach(&explanation["rowReach"], lines);
     explain_report::datasets(&explanation["statisticalDatasets"], lines);
     if explanation["consent"].is_object() {
         lines.blank();
         push_consent_explanation(&explanation["consent"], lines);
+    }
+}
+
+fn push_row_reach(row_reach: &Value, lines: &mut report::Lines) {
+    let Some(entries) = row_reach.as_array().filter(|entries| !entries.is_empty()) else {
+        return;
+    };
+    lines.heading("Target row reach:");
+    for reach in entries {
+        lines.item_at(
+            1,
+            &format!(
+                "{} as {}",
+                reach["recordType"].as_str().unwrap_or(""),
+                reach["profile"].as_str().unwrap_or("")
+            ),
+        );
+        let mut fields = vec![
+            (
+                "surface",
+                reach["surface"].as_str().unwrap_or("").to_owned(),
+            ),
+            ("rows", reach["rows"].as_str().unwrap_or("").to_owned()),
+            (
+                "configuration path",
+                reach["sourcePath"].as_str().unwrap_or("").to_owned(),
+            ),
+        ];
+        if reach["surface"] == "proposal_target" {
+            fields.push((
+                "Proposal ownership",
+                if reach["ownerOnly"] == true {
+                    "caller only".to_owned()
+                } else {
+                    "unrestricted".to_owned()
+                },
+            ));
+        }
+        if reach["rowBoundaries"]
+            .as_array()
+            .is_some_and(|boundaries| !boundaries.is_empty())
+        {
+            fields.push(("row restrictions (all)", reach["rowBoundaries"].to_string()));
+        }
+        if reach["membershipBoundaries"]
+            .as_array()
+            .is_some_and(|boundaries| !boundaries.is_empty())
+        {
+            fields.push((
+                "membership restrictions (all)",
+                reach["membershipBoundaries"].to_string(),
+            ));
+        }
+        let fields = fields
+            .iter()
+            .map(|(label, value)| (*label, value.clone()))
+            .collect::<Vec<_>>();
+        lines.pairs_at(2, &fields);
+        if reach["actionTargetAuthority"].is_object() {
+            let authority = &reach["actionTargetAuthority"];
+            lines.pairs_at(
+                2,
+                &[
+                    (
+                        "Action target enforcement",
+                        authority["enforcement"].as_str().unwrap_or("").to_owned(),
+                    ),
+                    (
+                        "direct Record grant relationship",
+                        authority["recordGrantRelationship"]
+                            .as_str()
+                            .unwrap_or("")
+                            .to_owned(),
+                    ),
+                    (
+                        "same-profile direct Record grant",
+                        authority["hasDirectRecordGrant"]
+                            .as_bool()
+                            .unwrap_or(false)
+                            .to_string(),
+                    ),
+                ],
+            );
+            for use_ in authority["uses"].as_array().into_iter().flatten() {
+                lines.listed(
+                    2,
+                    &format!(
+                        "target use {}: {} from {}",
+                        use_["role"].as_str().unwrap_or(""),
+                        use_["operation"].as_str().unwrap_or(""),
+                        use_["source"]
+                    ),
+                );
+            }
+        }
     }
 }
 
@@ -11204,13 +11303,52 @@ fn push_access_profile(profile: &Value, depth: usize, lines: &mut report::Lines)
         depth,
         &format!("profile {}", profile["id"].as_str().unwrap_or("")),
     );
-    let mut fields = vec![(
-        "principal claim",
-        profile["principalClaim"]
-            .as_str()
-            .unwrap_or("none")
-            .to_owned(),
-    )];
+    let mut fields = vec![
+        (
+            "actor kind",
+            profile["actorKind"]
+                .as_str()
+                .unwrap_or("not declared")
+                .to_owned(),
+        ),
+        (
+            "requester clients",
+            explain_report::json_list_or(&profile["requesterClients"], "any"),
+        ),
+        (
+            "principal claim",
+            profile["principalClaim"]
+                .as_str()
+                .unwrap_or("none")
+                .to_owned(),
+        ),
+    ];
+    if profile["taskGrant"].is_object() {
+        fields.push((
+            "task grant source issuer",
+            profile["taskGrant"]["sourceIssuer"]
+                .as_str()
+                .unwrap_or("")
+                .to_owned(),
+        ));
+        let permissions = profile["taskGrant"]["permissions"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|permission| {
+                format!(
+                    "{}: {}",
+                    permission["collection"].as_str().unwrap_or(""),
+                    joined_or(&permission["operations"], "none")
+                )
+            })
+            .collect::<Vec<_>>();
+        if !permissions.is_empty() {
+            fields.push(("task grant permissions", permissions.join("; ")));
+        }
+    } else {
+        fields.push(("task grant", "none".to_owned()));
+    }
     let membership_restricted = profile["membershipBoundaries"]
         .as_array()
         .is_some_and(|boundaries| !boundaries.is_empty());

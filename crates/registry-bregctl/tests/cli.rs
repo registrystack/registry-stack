@@ -4868,6 +4868,209 @@ fn explain_access_includes_action_only_grants_and_target_reach() {
 }
 
 #[test]
+fn explain_access_human_reports_profile_gates_permissions_and_target_row_reach() {
+    let mut source = registry_platform_yaml::Reader::new("registry.yaml")
+        .scan(include_bytes!(
+            "../../../products/breg/examples/minimal/registry.yaml"
+        ))
+        .unwrap()
+        .unwrap()
+        .to_json_value();
+    source["accessProfiles"][0]["actorKind"] = json!("agent");
+    source["accessProfiles"][0]["requesterClients"] = json!(["task-worker"]);
+    source["accessProfiles"][0]["taskGrant"] = json!({"sourceIssuer":"https://casework.example"});
+    source["accessProfiles"][0]["permissions"]["records"][0]["operations"] = json!(["get", "list"]);
+    source["accessProfiles"][0]["permissions"]["records"][0]["writableFields"] = json!([]);
+    let project =
+        TestProject::from_registry_source(serde_norway::to_string(&source).unwrap().as_bytes());
+
+    let output = bregctl(&["explain", "access", path(project.path())]);
+
+    assert!(output.status.success(), "{output:?}");
+    let human = String::from_utf8(output.stdout).expect("access report is UTF-8");
+    let aligned = human.split_whitespace().collect::<Vec<_>>().join(" ");
+    let record_profiles = human
+        .split("Actions:")
+        .next()
+        .expect("Record profiles precede Actions");
+    let aligned_record_profiles = record_profiles
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    assert!(
+        aligned_record_profiles.contains(
+            "profile directory-editor actor kind agent requester clients [\"task-worker\"]"
+        ),
+        "{human}"
+    );
+    for expected in [
+        "profile directory-editor",
+        "actor kind agent",
+        "requester clients [\"task-worker\"]",
+        "task grant source issuer https://casework.example",
+        "Action profile directory-editor",
+        "required scopes (all) [\"registry:directory:write\"]",
+        "target contact: patch",
+        "results contact-email",
+        "Proposal profile directory-editor",
+        "ownership caller",
+        "readable inputs email, jurisdiction, name",
+        "writable inputs all Action inputs",
+        "Target row reach:",
+        "surface record",
+        "surface action_target",
+        "surface proposal_target",
+        "rows claim_bound",
+    ] {
+        assert!(aligned.contains(expected), "{expected:?} in {human}");
+    }
+
+    let row_reach = human
+        .split("Target row reach:")
+        .nth(1)
+        .expect("the human report has a row-reach section");
+    let mut blocks = Vec::<Vec<&str>>::new();
+    for line in row_reach.lines() {
+        if line.starts_with("  ") && !line.starts_with("    ") {
+            blocks.push(vec![line]);
+        } else if line.starts_with("    ") {
+            if let Some(block) = blocks.last_mut() {
+                block.push(line);
+            }
+        }
+    }
+    let blocks = blocks
+        .iter()
+        .map(|block| {
+            block
+                .join(" ")
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
+        .collect::<Vec<_>>();
+    for surface in ["record", "action_target"] {
+        let block = blocks
+            .iter()
+            .find(|block| block.contains(&format!("surface {surface}")))
+            .unwrap_or_else(|| panic!("missing {surface} block in {human}"));
+        assert!(!block.contains("Proposal ownership"), "{block}");
+    }
+    let proposal = blocks
+        .iter()
+        .find(|block| block.contains("surface proposal_target"))
+        .unwrap_or_else(|| panic!("missing Proposal target block in {human}"));
+    assert!(
+        proposal.contains("Proposal ownership caller only"),
+        "{proposal}"
+    );
+}
+
+#[test]
+fn explain_access_human_distinguishes_proposal_ownership_and_writable_inputs() {
+    let source = registry_platform_yaml::Reader::new("registry.yaml")
+        .scan(include_bytes!(
+            "../../../products/breg/examples/minimal/registry.yaml"
+        ))
+        .unwrap()
+        .unwrap()
+        .to_json_value();
+    let baseline =
+        TestProject::from_registry_source(serde_norway::to_string(&source).unwrap().as_bytes());
+    let baseline = bregctl(&["explain", "access", path(baseline.path())]);
+    assert!(baseline.status.success(), "{baseline:?}");
+    let baseline = String::from_utf8(baseline.stdout)
+        .unwrap()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    assert!(baseline.contains("ownership caller"), "{baseline}");
+    assert!(
+        baseline.contains("writable inputs all Action inputs"),
+        "{baseline}"
+    );
+
+    let mut narrowed = source;
+    let permission = &mut narrowed["accessProfiles"][0]["permissions"]["proposals"][0];
+    permission.as_object_mut().unwrap().remove("ownership");
+    permission["writableInputs"] = json!(["email"]);
+    let narrowed =
+        TestProject::from_registry_source(serde_norway::to_string(&narrowed).unwrap().as_bytes());
+    let narrowed = bregctl(&["explain", "access", path(narrowed.path())]);
+    assert!(narrowed.status.success(), "{narrowed:?}");
+    let narrowed = String::from_utf8(narrowed.stdout)
+        .unwrap()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    assert!(narrowed.contains("ownership unrestricted"), "{narrowed}");
+    assert!(narrowed.contains("writable inputs email"), "{narrowed}");
+    assert_ne!(baseline, narrowed);
+}
+
+#[test]
+fn explain_access_human_reports_attachment_and_system_apply_authority() {
+    let project = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../products/breg/examples/facility")
+        .canonicalize()
+        .unwrap();
+
+    let output = bregctl(&["explain", "access", path(&project)]);
+
+    assert!(output.status.success(), "{output:?}");
+    let human = String::from_utf8(output.stdout).expect("access report is UTF-8");
+    let aligned = human.split_whitespace().collect::<Vec<_>>().join(" ");
+    for expected in [
+        "Proposal profile facility-correction-author",
+        "readable attachments supporting-document",
+        "writable attachments supporting-document",
+        "system apply grant",
+        "action correct-address",
+        "patch facility",
+        "writable fields address-line, city, postal-code",
+        "readable fields address-line, city, postal-code",
+    ] {
+        assert!(aligned.contains(expected), "{expected:?} in {human}");
+    }
+}
+
+#[test]
+fn proposal_ownership_does_not_suppress_an_unrestricted_target_warning() {
+    let mut source = registry_platform_yaml::Reader::new("registry.yaml")
+        .scan(include_bytes!(
+            "../../../products/breg/examples/minimal/registry.yaml"
+        ))
+        .unwrap()
+        .unwrap()
+        .to_json_value();
+    source["accessProfiles"][0]["permissions"]["proposals"][0]["targets"][0]["rowBoundaries"] =
+        json!("unrestricted");
+    let project =
+        TestProject::from_registry_source(serde_norway::to_string(&source).unwrap().as_bytes());
+
+    let output = bregctl(&["--format", "json", "check", path(project.path())]);
+
+    assert!(output.status.success(), "{output:?}");
+    let report = json_stdout(&output);
+    let finding = report["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|finding| finding["code"] == "breg.access.target-unrestricted-rows")
+        .unwrap_or_else(|| panic!("missing unrestricted target diagnostic in {report:#}"));
+    assert_eq!(
+        finding["path"],
+        "/accessProfiles/0/permissions/proposals/0/targets/0/rowBoundaries"
+    );
+    assert!(
+        finding["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("Review this registry-wide target authority")),
+        "{finding:#}"
+    );
+}
+
+#[test]
 fn explain_actions_reports_the_normalized_ordered_plan() {
     let project = TestProject::from_registry_source(action_fixture());
     let output = bregctl(&[

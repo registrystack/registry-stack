@@ -380,11 +380,9 @@ fn a_self_issued_actions_link_bound_targets_are_not_registry_wide_findings() {
             .collect::<BTreeSet<_>>()
     };
     let expected = [
-        // Direct read paths have their own disclosure finding. They remain
-        // visible even when the compiler proves the Action targets are bound
-        // through the caller's principal link.
-        "recordTypes[id=enrolment].accessProfiles[id=food-targeting].readPaths[path=households]",
-        "recordTypes[id=person].accessProfiles[id=food-targeting].readPaths[path=households]",
+        // Direct read paths have their own related-disclosure finding. They
+        // are not Action or Proposal target permissions and must not receive
+        // this target-authority warning as well.
         "actions[id=record-consent].permissions[profile=steward].targets[recordType=consent-decision].rowBoundaries",
         "actions[id=record-consent].permissions[profile=steward].targets[recordType=person].rowBoundaries",
     ];
