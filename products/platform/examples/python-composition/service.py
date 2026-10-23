@@ -1,16 +1,15 @@
 #!/usr/bin/env python3
 """Direct BReg, Casework, and Messaging composition over released clients.
 
-The completion receiver records hints only. Source state, exact Proposal
+The BReg hook receiver records hints only. Source state, exact Proposal
 version/effects, and BReg's lifecycle guards decide whether Apply is possible.
 """
 
 from __future__ import annotations
 import argparse
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 import hashlib
-import hmac
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import logging
@@ -68,50 +67,53 @@ class Inbox:
         finally:
             db.close()
 
-    def accept(self, authorization, recipient, key, body, *, token, binding):
-        if (
-            not isinstance(authorization, str)
-            or not hmac.compare_digest(
-                authorization.encode(), ("Bearer " + token).encode()
-            )
-            or recipient != binding
-            or not body
-            or len(body) > MAXIMUM_BODY
-        ):
-            raise WakeRefused("completion credential, binding, or body was refused")
+    def accept(
+        self, method, path, headers, body, *, key, source, event_type, schema, now=None
+    ):
+        from registry_client.breg import (
+            BaseRegistryClientError,
+            verify_webhook_delivery,
+        )
+
+        if not body or len(body) > MAXIMUM_BODY:
+            raise WakeRefused("hook body was refused")
         try:
-            event = strict_json(body)
-            if (
-                set(event)
-                != {"type", "eventId", "requestId", "resultId", "completedAt"}
-                or event["type"] != "review.completed"
-                or event["eventId"] != key
-            ):
-                raise ValueError("completion shape")
-            for field in ("eventId", "requestId", "resultId"):
-                if str(uuid.UUID(event[field])) != event[field]:
-                    raise ValueError("completion identifier")
-            instant = datetime.fromisoformat(
-                event["completedAt"].replace("Z", "+00:00")
+            verified = verify_webhook_delivery(
+                method=method, path=path, headers=headers, body=body, key=key
             )
-            if instant.tzinfo is None:
-                raise ValueError("completion time")
-        except (ValueError, TypeError, KeyError, AttributeError):
-            raise WakeRefused("completion envelope was refused") from None
-        digest = hashlib.sha256(body).hexdigest()
+            delivered = datetime.fromisoformat(
+                verified["delivery_time"].replace("Z", "+00:00")
+            )
+            instant = datetime.now(timezone.utc) if now is None else now
+            if abs((instant - delivered).total_seconds()) > 300:
+                raise WakeRefused("hook delivery time is outside the accepted window")
+            if (verified["source"], verified["type"], verified["dataschema"]) != (
+                source,
+                event_type,
+                schema,
+            ):
+                raise WakeRefused("hook source, type, or schema was refused")
+        except (BaseRegistryClientError, ValueError, TypeError, KeyError):
+            raise WakeRefused(
+                "hook signature or expected envelope was refused"
+            ) from None
+        # Replay generations change the transport idempotency key. The event
+        # identity and captured bytes remain stable across every generation.
+        identity = json.dumps(
+            [verified["source"], verified["id"]], separators=(",", ":")
+        )
+        digest = hashlib.sha256(verified["body"]).hexdigest()
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
             previous = db.execute(
-                "SELECT digest FROM wakes WHERE id=?", (key,)
+                "SELECT digest FROM wakes WHERE id=?", (identity,)
             ).fetchone()
             if previous:
                 if previous[0] != digest:
-                    raise WakeRefused(
-                        "completion identity conflicts with its accepted bytes"
-                    )
+                    raise WakeRefused("hook identity conflicts with its accepted bytes")
                 return False
             db.execute(
-                "INSERT INTO wakes VALUES (?,?,?)", (key, digest, event["completedAt"])
+                "INSERT INTO wakes VALUES (?,?,?)", (identity, digest, verified["time"])
             )
         return True
 
@@ -151,11 +153,40 @@ class TokenSource:
     """One independent provider per product resource, with no token logging."""
 
     def __init__(self, config):
+        if not isinstance(config, dict):
+            raise CompositionError("product token configuration must be an object")
+        if set(config) == {"headerFile", "resource", "scopes"}:
+            resource, scopes = config["resource"], config["scopes"]
+            if not isinstance(config["headerFile"], str) or not config["headerFile"]:
+                raise CompositionError("product credential file is required")
+        elif set(config) == {"privateKeyJwt"} and isinstance(
+            config["privateKeyJwt"], dict
+        ):
+            resource = config["privateKeyJwt"].get("resource")
+            scopes = config["privateKeyJwt"].get("scopes")
+        else:
+            raise CompositionError(
+                "choose exactly one headerFile or privateKeyJwt product credential"
+            )
+        if (
+            not isinstance(resource, str)
+            or not resource
+            or any(c.isspace() for c in resource)
+            or not isinstance(scopes, list)
+            or not scopes
+            or any(
+                not isinstance(value, str)
+                or not value
+                or any(c.isspace() for c in value)
+                for value in scopes
+            )
+        ):
+            raise CompositionError(
+                "configure the product resource and its non-empty scope list"
+            )
         self.config = config
         self.provider = None
         if "privateKeyJwt" in config:
-            # Present in released clients; registry_client.auth exposes the
-            # identical class once the neutral alias is published.
             from registry_client.breg import PrivateKeyJwt
 
             self.provider = PrivateKeyJwt(config["privateKeyJwt"])
@@ -193,23 +224,33 @@ class Composition:
         from registry_client import breg, casework, messaging
 
         self.config, self.inbox = config, inbox
+        if (
+            set(config["tokens"]) - {"breg", "casework", "messaging"}
+            or "breg" not in config["tokens"]
+        ):
+            raise CompositionError(
+                "configure only the selected product token providers"
+            )
+        selected = {"breg"} | {
+            name for name in ("casework", "messaging") if name + "Url" in config
+        }
+        if set(config["tokens"]) != selected:
+            raise CompositionError("each selected product needs its own token provider")
         self.tokens = {
             name: TokenSource(value) for name, value in config["tokens"].items()
         }
         self.registry = breg.BaseRegistryClient(
             config["bregUrl"],
             authorization=self.tokens["breg"].breg_authorization(),
-            maximum_mutation_retries=0,
+            max_mutation_retries=0,
         )
         self.reviews = (
-            casework.CaseworkClient(config["caseworkUrl"], maximum_mutation_retries=0)
+            casework.CaseworkClient(config["caseworkUrl"], max_mutation_retries=0)
             if "caseworkUrl" in config
             else None
         )
         self.messages = (
-            messaging.MessagingClient(
-                config["messagingUrl"], maximum_mutation_retries=0
-            )
+            messaging.MessagingClient(config["messagingUrl"], max_mutation_retries=0)
             if "messagingUrl" in config
             else None
         )
@@ -233,6 +274,16 @@ class Composition:
             )
         return self.reviews.review_tasks(
             self.tokens["casework"].bearer_token(), self.config["caseworkProfile"]
+        )
+
+    def review_context(self, task_id):
+        if self.reviews is None:
+            raise CompositionError("configure Casework before reading review context")
+        return self.reviews.review_task_context(
+            self.tokens["casework"].bearer_token(),
+            self.config["caseworkProfile"],
+            task_id,
+            source_profile=self.config.get("caseworkSourceProfile"),
         )
 
     def decide(self, task_id, revision, key, decision):
@@ -302,16 +353,26 @@ class Composition:
                 current = self.registry.get_proposal(binding, proposal_id)
                 if current.document["state"] != "applied":
                     raise CompositionError("source Apply was not confirmed")
-            with self.inbox.connect() as db:
-                db.execute(
-                    "UPDATE jobs SET state='issued',attempts=attempts+1 WHERE id=?",
-                    (proposal_id,),
+            notice_key = f"{proposal_id}:{job['version']}:notice"
+            if state == "notice-uncertain":
+                receipt = self.messages.message_receipt(
+                    self.tokens["messaging"].bearer_token(), notice_key, job["notice"]
                 )
-            self.messages.submit(
-                self.tokens["messaging"].bearer_token(),
-                f"{proposal_id}:{job['version']}:notice",
-                job["notice"],
-            )
+                if receipt.get("kind") != "complete":
+                    raise CompositionError(
+                        "the original notice receipt remains unresolved"
+                    )
+            else:
+                with self.inbox.connect() as db:
+                    db.execute(
+                        "UPDATE jobs SET state='notice-uncertain',attempts=attempts+1 WHERE id=?",
+                        (proposal_id,),
+                    )
+                # A lost response leaves notice-uncertain on disk. The next
+                # pass reads the receipt; it never blindly repeats submission.
+                self.messages.submit(
+                    self.tokens["messaging"].bearer_token(), notice_key, job["notice"]
+                )
             with self.inbox.connect() as db:
                 db.execute(
                     "UPDATE jobs SET state='notified' WHERE id=?", (proposal_id,)
@@ -320,81 +381,79 @@ class Composition:
         return count
 
 
-def receiver(inbox, *, token, binding):
+def receiver(inbox, *, key, source, event_type, schema):
     class Handler(BaseHTTPRequestHandler):
         def setup(self):
             super().setup()
             self.connection.settimeout(5)
 
         def refuse(self, status, code, detail):
+            trace = uuid.uuid4().hex
             body = json.dumps(
                 {
                     "type": "https://example.org/problems/" + code,
-                    "title": "Completion refused",
+                    "title": "Hook refused",
                     "status": status,
                     "detail": detail,
                     "code": code,
-                    "traceId": uuid.uuid4().hex,
+                    "traceId": trace,
                 }
             ).encode()
             self.send_response(status)
             self.send_header("Content-Type", "application/problem+json")
             self.send_header("Content-Length", str(len(body)))
+            self.send_header("traceparent", f"00-{trace}-{uuid.uuid4().hex[:16]}-01")
             self.end_headers()
             self.wfile.write(body)
 
         def do_POST(self):
-            if (
-                self.path != "/casework/completion"
-                or len(self.headers.get_all("Authorization", [])) != 1
-                or len(self.headers.get_all("Registry-Recipient-Binding", [])) != 1
-                or len(self.headers.get_all("Idempotency-Key", [])) != 1
-                or len(self.headers.get_all("Content-Length", [])) != 1
-            ):
-                self.refuse(
-                    403,
-                    "receiver.wake-refused",
-                    "The completion credential, binding, or envelope was refused.",
-                )
-                return
             try:
-                length = int(self.headers.get("Content-Length", "0"))
                 if (
-                    not 0 < length <= MAXIMUM_BODY
+                    self.path != "/hooks/breg"
+                    or len(self.headers.get_all("Content-Length", [])) != 1
                     or self.headers.get("Transfer-Encoding")
-                    or self.headers.get_content_type() != "application/json"
                 ):
-                    raise WakeRefused("body framing refused")
+                    raise WakeRefused("hook target or body framing refused")
+                length = int(self.headers["Content-Length"])
+                if not 0 < length <= MAXIMUM_BODY:
+                    raise WakeRefused("hook body exceeds its bound")
+                headers = {}
+                seen = set()
+                for name, value in self.headers.items():
+                    if name.lower() in seen:
+                        raise WakeRefused("a hook header is repeated")
+                    headers[name] = value
+                    seen.add(name.lower())
                 inbox.accept(
-                    self.headers["Authorization"],
-                    self.headers["Registry-Recipient-Binding"],
-                    self.headers["Idempotency-Key"],
+                    "POST",
+                    self.path,
+                    headers,
                     self.rfile.read(length),
-                    token=token,
-                    binding=binding,
+                    key=key,
+                    source=source,
+                    event_type=event_type,
+                    schema=schema,
                 )
             except (ValueError, WakeRefused):
                 self.refuse(
                     403,
-                    "receiver.wake-refused",
-                    "The completion credential, binding, or envelope was refused.",
+                    "receiver.hook-refused",
+                    "The hook signature, target, or envelope was refused.",
                 )
                 return
             except sqlite3.Error:
-                LOG.error("completion persistence unavailable")
+                LOG.error("hook persistence unavailable")
                 self.refuse(
                     503,
                     "receiver.persistence-unavailable",
-                    "The completion could not be persisted; retry with the same event identity.",
+                    "The hook could not be persisted; retry the same event.",
                 )
                 return
-            # Commit succeeded, including an identical replay. No downstream
-            # call occurs before this acknowledgement.
             self.send_response(204)
             self.end_headers()
 
         def log_message(self, message, *args):
-            LOG.info("completion HTTP request handled")
+            LOG.info("hook HTTP request handled")
 
     return Handler
 
@@ -405,6 +464,8 @@ def main():
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("serve-wakes")
     sub.add_parser("review-tasks")
+    context = sub.add_parser("review-context")
+    context.add_argument("task_id")
     sub.add_parser("reconcile")
     prepare = sub.add_parser("prepare")
     prepare.add_argument("action")
@@ -425,17 +486,19 @@ def main():
     config = strict_json(args.config.read_bytes())
     inbox = Inbox(Path(config["inbox"]))
     if args.command == "serve-wakes":
-        token = Path(config["wakeTokenFile"]).read_text().strip()
-        if len(token) < 32:
-            raise CompositionError(
-                "completion credential must contain at least 32 characters"
-            )
+        key = Path(config["hookKeyFile"]).read_bytes()
         host, port = config.get("listen", "127.0.0.1:9300").rsplit(":", 1)
         if host != "127.0.0.1":
             raise CompositionError("put the example receiver behind a local TLS proxy")
         ThreadingHTTPServer(
             (host, int(port)),
-            receiver(inbox, token=token, binding=config["wakeRecipientBinding"]),
+            receiver(
+                inbox,
+                key=key,
+                source=config["hookSource"],
+                event_type=config["hookType"],
+                schema=config["hookSchema"],
+            ),
         ).serve_forever()
         return
     if args.command == "register":
@@ -464,6 +527,8 @@ def main():
     elif args.command == "review-tasks":
         result = app.review_tasks()
         print(json.dumps(result))
+    elif args.command == "review-context":
+        print(json.dumps(app.review_context(args.task_id)))
     elif args.command == "decide":
         app.decide(
             args.task_id,

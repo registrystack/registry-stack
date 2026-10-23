@@ -21,14 +21,23 @@ file and replace its service origins, profiles, and credential file paths.
 Each product gets a separate resource-bound provider. A `privateKeyJwt` object
 uses the released canonical helper's `token_endpoint`, `client_id`,
 `client_key`, `resource`, and `scopes` settings instead of a `headerFile`.
+Its optional `audience` identifies the OAuth token endpoint as the client
+assertion's recipient. It is distinct from `resource`, which requests the
+product access token. Each product validates that access token's audience,
+scopes, and permissions; this application does not impose a singleton audience.
 Keep the key and token configuration out of source control.
 
 Give `inbox` a durable application-owned directory. The example creates its
 SQLite file owner-only. The wake receiver listens on loopback behind your
-TLS edge; the edge owns network access limits. Configure the same bearer token
-and recipient binding in Casework's completion destination. The
-[completion receiver contract](../../../casework/COMPLETION-RECEIVERS.md)
-owns its protocol. An empty `204` works with released and candidate senders.
+TLS edge; the edge owns network access limits. BReg owns the Casework completion
+for its Proposals. Configure a BReg signed event destination for this
+application's `/hooks/breg` route, with the same key bytes as `hookKeyFile`.
+Set `hookSource`, `hookType`, and `hookSchema` to the producer's exact envelope.
+The native `verify_webhook_delivery` helper verifies the method, path, headers,
+and raw bytes under the maintained BReg delivery contract. The receiver also
+checks the delivery time within five minutes and persists the event identity
+and body digest before returning an empty `204`. Run reconciliation on a timer
+as well: a missing hook must not prevent an authoritative source reread.
 
 ## Walk the application
 
@@ -40,6 +49,7 @@ inputs object itself, including its original application and attachment refs.
 ```sh
 uv run --locked service.py --config officer.json prepare issue-licence inputs.json issue-example
 uv run --locked service.py --config staff.json review-tasks
+uv run --locked service.py --config staff.json review-context <task-id>
 ```
 
 The first command returns the Proposal id, exact submission version, and
@@ -52,7 +62,9 @@ uv run --locked service.py --config receiver.json serve-wakes
 ```
 
 A reviewer reads the task and source context through their application's UI
-before deciding. The explicit `decide` command accepts the displayed task
+before deciding. `review-context` uses that reviewer's Casework authority and
+`caseworkSourceProfile` for the source projection; a producer token does not
+grant reviewer access. The explicit `decide` command accepts the displayed task
 revision, a stable decision key, and the product's decision document. It is
 never invoked automatically by a wake.
 
@@ -65,20 +77,26 @@ The wake only records a durable hint, keyed to the authenticated event identity
 and exact bytes, before acknowledging it. It carries no decision or apply
 permission. Reconciliation reads the Proposal from BReg, keeps the registered
 version and effect digest, and uses the source-issued Apply capability.
-After source application is confirmed, it submits the unchanged notice under
-one stable Messaging key. A submission receipt proves admission, not delivery;
-read Messaging's message state when delivery matters.
+After source application is confirmed, it records `notice-uncertain` before
+submitting the unchanged notice under one stable Messaging key. If the response
+is lost, later passes read the original command receipt with the same caller,
+key, and body. They do not resubmit it. An unresolved or expired receipt leaves
+the job uncertain and requires investigation; it does not establish no effect.
+A submission receipt proves admission, not delivery; read Messaging's message
+state when delivery matters.
 
 Run a single reconciliation process for this small example. Each job has a
 bounded attempt budget. On an uncertain Apply or notice send, retain the same
 keys and bodies and read authoritative state; never register a fresh key to
 escape an unknown outcome. Exhausted budgets require operator recovery.
-The owning product's idempotency horizon and data retention still apply.
+Keep the same configured caller across recovery and restarts. The owning
+product's idempotency horizon and data retention still apply.
 
 ## Verify
 
 `uv run --locked python -m unittest discover -s tests -v` covers durable wake
-acceptance, restart persistence, replay conflicts, and credential/binding
-refusals. Live composition proof requires configured BReg, Casework, and
+acceptance, restart persistence, replay conflicts, the pinned native constructors,
+review context authority, HTTP acknowledgment ordering, and uncertain notice
+receipt recovery. Live composition proof requires configured BReg, Casework, and
 Messaging instances, separate least-privilege callers, and a real reviewed
 issuance Action. Unit tests and an import smoke do not establish that journey.
