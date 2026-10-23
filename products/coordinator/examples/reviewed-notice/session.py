@@ -219,7 +219,7 @@ def messaging_image_tools(journey, image):
         raise ValueError("Messaging image must use its exact published GHCR digest")
     for tool in ("messaging", "messagingctl"):
         name = "coordinator-tutorial-" + tool + "-" + uuid.uuid4().hex[:12]
-        command = ["docker", "run", "--rm", "--name", name,
+        command = ["docker", "run", "--rm", "--platform", "linux/amd64", "--name", name,
                    "--label", "org.registrystack.journey=coordinator-real-services",
                    "--network", "host", "--user", f"{os.getuid()}:{os.getgid()}",
                    "--mount", f"type=bind,source={journey.root},target={journey.root}",

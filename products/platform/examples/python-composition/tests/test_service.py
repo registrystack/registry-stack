@@ -60,32 +60,95 @@ def accept(inbox, body=BODY, **overrides):
     return inbox.accept(**options)
 
 
+PROPOSAL_ID = "00000000-0000-4000-8000-000000000002"
+PROPOSAL_SCHEMA = "https://id.registrystack.org/contracts/breg/proposal-event/v1"
+
+
+def proposal_envelope():
+    return {
+        "id": headers()["ce-id"],
+        "type": "proposal.applied",
+        "source": SOURCE,
+        "time": "2026-08-30T00:00:00Z",
+        "dataschema": PROPOSAL_SCHEMA,
+        "subject": {
+            "recordReference": "/v1/proposals/" + PROPOSAL_ID,
+            "recordRevision": 2,
+        },
+        "causation": {"root": headers()["ce-id"], "hop": 0},
+        "data": {
+            "proposalId": PROPOSAL_ID,
+            "submissionVersion": 1,
+            "revision": 2,
+            "actionId": "issue-licence",
+            "actionRevision": "sha256:" + "b" * 64,
+            "fromState": "submitted",
+            "state": "applied",
+            "transition": "applied",
+            "effectDigest": "sha256:" + "a" * 64,
+            "authorityKind": "caller",
+            "systemApplyGrantRevision": None,
+            "turn": "nobody",
+        },
+    }
+
+
+def verified_proposal(envelope=None):
+    envelope = proposal_envelope() if envelope is None else envelope
+    verified = breg.verify_webhook_delivery(
+        method="POST",
+        path="/hooks/registry",
+        headers=headers(),
+        body=BODY,
+        key=CANARY_KEY,
+    )
+    verified.update(
+        {
+            name: envelope[name]
+            for name in ("id", "type", "source", "time", "dataschema")
+        }
+    )
+    verified["body"] = json.dumps(envelope).encode()
+    return verified
+
+
+def accept_proposal(inbox, envelope=None):
+    verified = verified_proposal(envelope)
+    with patch.object(breg, "verify_webhook_delivery", return_value=verified):
+        return inbox.accept(
+            "POST",
+            "/hooks/breg",
+            {},
+            verified["body"],
+            key=CANARY_KEY,
+            source=SOURCE,
+            event_type="proposal.applied",
+            schema=PROPOSAL_SCHEMA,
+            now=NOW,
+        )
+
+
 class WakeReceiverTests(unittest.TestCase):
+    def test_authenticated_record_payload_is_not_an_accepted_proposal_hint(self):
+        with tempfile.TemporaryDirectory() as root:
+            inbox = Inbox(Path(root) / "inbox.sqlite")
+            with self.assertRaises(WakeRefused):
+                accept(inbox)
+            self.assertEqual(inbox.pending(), 0)
+
     def test_native_signature_acceptance_is_durable_and_event_replay_is_deduplicated(
         self,
     ):
         with tempfile.TemporaryDirectory() as root:
             path = Path(root) / "inbox.sqlite"
             inbox = Inbox(path)
-            self.assertTrue(accept(inbox))
-            self.assertFalse(accept(inbox))
+            self.assertTrue(accept_proposal(inbox))
+            self.assertFalse(accept_proposal(inbox))
             self.assertEqual(Inbox(path).pending(), 1)
-            verified = breg.verify_webhook_delivery(
-                method="POST",
-                path="/hooks/registry",
-                headers=headers(),
-                body=BODY,
-                key=CANARY_KEY,
-            )
-            # A trusted verification result isolates the persisted event/body
-            # conflict check without implementing a second signing function.
-            with patch.object(
-                breg,
-                "verify_webhook_delivery",
-                return_value={**verified, "body": b"different"},
-            ):
-                with self.assertRaises(WakeRefused):
-                    accept(inbox)
+            conflict = proposal_envelope()
+            conflict["data"]["actionId"] = "another-action"
+            with self.assertRaises(WakeRefused):
+                accept_proposal(inbox, conflict)
 
     def test_signature_target_identity_schema_and_freshness_refusals_precede_acceptance(
         self,
@@ -155,20 +218,26 @@ class PublishedClientTests(unittest.TestCase):
             "casework": SimpleNamespace(bearer_token=lambda: "canary-casework-token")
         }
         calls = []
+
         def record(*args, **kwargs):
             calls.append((args, kwargs))
+
         app.reviews = SimpleNamespace(
-            review_task_context=record, review_tasks=record, decide_review_task=record
+            review_task_context=record,
+            review_tasks=record,
+            claim_review_task=record,
+            decide_review_task=record,
         )
         app.review_context("task-id")
         app.review_tasks()
+        app.claim("task-id", 1, "claim-key")
         app.decide(
             "task-id",
             1,
             "key",
             {"decision": {"type": "approve", "outcome": "approved"}},
         )
-        self.assertEqual(len(calls), 3)
+        self.assertEqual(len(calls), 4)
         self.assertTrue(
             all(
                 kwargs == {"source_profile": "proposal-reviewer"} for _, kwargs in calls
@@ -268,13 +337,7 @@ class ReceiverHttpTests(unittest.TestCase):
     def test_acknowledgment_follows_persistence_and_replay_is_safe(self):
         with tempfile.TemporaryDirectory() as root:
             inbox = Inbox(Path(root) / "inbox.sqlite")
-            verified = breg.verify_webhook_delivery(
-                method="POST",
-                path="/hooks/registry",
-                headers=headers(),
-                body=BODY,
-                key=CANARY_KEY,
-            )
+            verified = verified_proposal()
             verified["delivery_time"] = datetime.now(timezone.utc).isoformat()
             server = ThreadingHTTPServer(
                 ("127.0.0.1", 0),
@@ -282,8 +345,8 @@ class ReceiverHttpTests(unittest.TestCase):
                     inbox,
                     key=CANARY_KEY,
                     source=SOURCE,
-                    event_type="case-created-v1",
-                    schema=SCHEMA,
+                    event_type="proposal.applied",
+                    schema=PROPOSAL_SCHEMA,
                 ),
             )
             thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -433,3 +496,62 @@ class IntakeCopyTests(unittest.TestCase):
                 intake_proposal_id="intake",
             )
         self.assertEqual(calls, [])
+
+
+class ProposalHintTests(unittest.TestCase):
+    def test_exact_native_subject_is_prioritized_then_consumed_after_source_reread(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as root:
+            app = ReceiptRecoveryTests().app(root)
+            notice = json.loads(app.inbox.jobs()[0][1])["notice"]
+            app.inbox.register(PROPOSAL_ID, 1, "sha256:" + "a" * 64, notice)
+            self.assertTrue(accept_proposal(app.inbox))
+            self.assertEqual(app.inbox.jobs()[0][0], PROPOSAL_ID)
+            reads = []
+            get = app.registry.get_proposal
+            app.registry.get_proposal = lambda *args: (
+                reads.append(args[-1]) or get(*args)
+            )
+            app.messages = SimpleNamespace(submit=lambda *_: {"kind": "complete"})
+            self.assertEqual(app.reconcile(), 2)
+            self.assertEqual(reads[0], PROPOSAL_ID)
+            self.assertEqual(app.inbox.pending(), 0)
+            self.assertEqual(app.inbox.jobs(), [])
+
+    def test_subject_version_and_payload_schema_are_checked_before_durable_acceptance(
+        self,
+    ):
+        for change in ("subject", "version", "unknown-field", "header"):
+            with self.subTest(change=change), tempfile.TemporaryDirectory() as root:
+                inbox = Inbox(Path(root) / "inbox.sqlite")
+                envelope = proposal_envelope()
+                if change == "subject":
+                    envelope["subject"]["recordReference"] = "/v1/proposals/another"
+                elif change == "version":
+                    envelope["data"]["submissionVersion"] = True
+                elif change == "unknown-field":
+                    envelope["data"]["privateValue"] = "must-not-persist"
+                else:
+                    envelope["type"] = "proposal.submitted"
+                with self.assertRaises(WakeRefused):
+                    accept_proposal(inbox, envelope)
+                self.assertEqual(inbox.pending(), 0)
+
+
+class OwningSchemaTests(unittest.TestCase):
+    def test_bundled_proposal_schema_matches_the_owning_generated_contract(self):
+        root = Path(__file__).resolve().parents[5]
+        self.assertEqual(
+            json.loads(
+                (
+                    Path(__file__).resolve().parents[1] / "proposal-event.schema.json"
+                ).read_text()
+            ),
+            json.loads(
+                (
+                    root
+                    / "products/breg/generated/event-schemas/proposal-lifecycle.schema.json"
+                ).read_text()
+            ),
+        )

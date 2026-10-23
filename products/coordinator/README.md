@@ -13,8 +13,10 @@ from earlier pilot layouts.
 
 Build the Coordinator service, operator CLI, client, and client bindings from source using
 the deployment runbook and the client crate instructions. The release binaries and container
-image are not yet distributed, and the Coordinator client is not part of the unified Rust,
-Node.js, or Python packages.
+image are not yet distributed in v0.43.0. The source unified Rust, Node.js, and Python
+facades now include Coordinator for the upcoming client release. Publication and the
+[archive-based tutorial](https://docs.registrystack.org/dev/tutorials/review-an-application-and-send-a-notice/)
+remain subject to the matching runtime assets and release checks.
 
 Coordinator is optional. A direct application can prepare a BReg Proposal, obtain Casework review
 of its exact version and effects, and ask BReg to apply it without running Coordinator. Every

@@ -36,7 +36,11 @@ Set `hookSource`, `hookType`, and `hookSchema` to the producer's exact envelope.
 The native `verify_webhook_delivery` helper verifies the method, path, headers,
 and raw bytes under the maintained BReg delivery contract. The receiver also
 checks the delivery time within five minutes and persists the event identity
-and body digest before returning an empty `204`. Run reconciliation on a timer
+and body digest before returning an empty `204`. It validates the native Proposal
+payload against the bundled copy of BReg's generated lifecycle schema, checks the
+envelope against signed metadata and its Proposal subject, and stores only the
+Proposal id, submission version, effect digest, event identity, and body digest.
+The unit suite checks that bundled schema against its owning generated source. Run reconciliation on a timer
 as well: a missing hook must not prevent an authoritative source reread.
 
 ## Walk the application
@@ -69,22 +73,26 @@ uv run --locked service.py --config applier.json register <proposal-id> <version
 uv run --locked service.py --config receiver.json serve-wakes
 ```
 
-A reviewer reads the task and source context through their application's UI
-before deciding. `review-context` uses that reviewer's Casework authority and
+A reviewer reads the task and source context through their application's UI,
+then explicitly claims the displayed revision when the policy requires a held
+task. Use the revision returned by `claim` for the subsequent decision. `review-context` uses that reviewer's Casework authority and
 `caseworkSourceProfile` for the source projection; a producer token does not
 grant reviewer access. The explicit `decide` command accepts the displayed task
 revision, a stable decision key, and the product's decision document. It is
 never invoked automatically by a wake.
 
 ```sh
-uv run --locked service.py --config staff.json decide <task-id> <revision> <decision-key> decision.json
+uv run --locked service.py --config staff.json claim <task-id> <displayed-revision> <claim-key>
+uv run --locked service.py --config staff.json decide <task-id> <claimed-revision> <decision-key> decision.json
 uv run --locked service.py --config applier.json reconcile
 ```
 
 The wake only records a durable hint, keyed to the authenticated event identity
 and exact bytes, before acknowledging it. It carries no decision or apply
-permission. Reconciliation reads the Proposal from BReg, keeps the registered
-version and effect digest, and uses the source-issued Apply capability.
+permission. Reconciliation prioritizes exact matching pending hints, reads the Proposal
+from BReg, keeps the registered version and effect digest, and consumes matching
+hints only after that authoritative binding check. It uses the source-issued
+Apply capability. Timer passes scan registered jobs even without a hook.
 After source application is confirmed, it records `notice-uncertain` before
 submitting the unchanged notice under one stable Messaging key. If the response
 is lost, later passes read the original command receipt with the same caller,

@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-10-13"
+last_reviewed: "2026-10-23"
 doc_type: tutorial
 persona:
   - operator
@@ -26,25 +26,50 @@ approval email from Registry Messaging. Coordinator does the rest, even across a
   outcome="One approved, unchanged application produces one finished run and one email in local Mailpit."
   time="About 20 minutes"
   level="Local evaluation only"
-  prerequisites={['Docker 24 or later', 'The repository Rust toolchain through rustup', 'OpenSSL', 'Python 3.11 or later', 'curl', 'jq', 'Linux or macOS', 'A current Registry Stack source checkout']}
+  prerequisites={['Docker 24 or later with host networking', 'OpenSSL', 'Python 3.11 or later and uv', 'curl', 'jq', 'Linux amd64 or macOS arm64', 'Verified native release tools, matching support files, and the unified Python client']}
 />
 
-## Build the local tools
+## Get the matching release tools
 
-From the source checkout, build the four products, their tools, and the example's input helper.
-On macOS, the sourced function also tells your shell where the binaries' FIPS library lives:
+:::note[Coordinator distribution is pending]
+The published v0.43.0 release does not include Coordinator. Use this path only
+with a release or a reviewed candidate that supplies the Coordinator pair and
+unified client. A candidate rehearsal is not proof that those assets have been
+published. The [deployment runbook](https://github.com/registrystack/registry-stack/blob/main/products/coordinator/DEPLOYMENT.md)
+retains the contributor build procedure.
+:::
+
+Verify the selected release's manifest and checksums using the
+[release operations procedure](https://github.com/registrystack/registry-stack/blob/main/release/OPERATIONS.md).
+Use the same version's tagged source archive for these support files, with no
+Rust build. Extract the six native tools into one private directory: `breg`,
+`bregctl`, `casework`, `caseworkctl`, `coordinator`, and `coordinatorctl`.
+On macOS, retain each archive's adjacent FIPS libraries in that directory.
+Refuse different bytes for a repeated library filename.
+
+Set `REGISTRY_STACK_VERSION` to the verified version and
+`COORDINATOR_TUTORIAL_BIN_DIR` to that directory's absolute path. Set
+`MESSAGING_IMAGE` to the exact `ghcr.io/registrystack/messaging@sha256:...`
+reference from that release's manifest. The image supplies Messaging and
+`messagingctl` on both hosts; its Linux amd64 platform runs through Docker.
+
+From the extracted support archive:
 
 ```sh
-. scripts/cargo-runtime-library-path.sh
-registry_cargo_build "$PWD" --locked \
-  -p registry-coordinator --example reviewed-notice-input \
-  -p registry-breg --features registry-breg/runtime \
-  -p registry-bregctl -p registry-casework -p registry-caseworkctl \
-  -p registry-messaging -p registry-messagingctl --bins
-export PATH="$PWD/target/debug:$PATH"
+: "${REGISTRY_STACK_VERSION:?set the verified release or candidate version}"
+: "${COORDINATOR_TUTORIAL_BIN_DIR:?set the absolute native tools directory}"
+: "${MESSAGING_IMAGE:?set the published Messaging image digest}"
+for tool in breg bregctl casework caseworkctl coordinator coordinatorctl; do
+  test -x "$COORDINATOR_TUTORIAL_BIN_DIR/$tool"
+done
+export PATH="$COORDINATOR_TUTORIAL_BIN_DIR:$PATH"
+docker pull --platform linux/amd64 "$MESSAGING_IMAGE"
 ```
 
-Keep this terminal open.
+The session's `--released-clients` option reads BReg and admits the run through
+the installed unified Python client. It uses the active workflow revision and
+repeats one identical start key to confirm the same run identity. No Rust input
+helper or Rust toolchain is needed. Keep this terminal open.
 
 ## Read the workflow
 
@@ -70,17 +95,22 @@ the application again before calling Messaging.
 
 ## Start the products and the run
 
-The session script starts the four products from `target/debug`, with their databases and the
-Mailpit mail sink in Docker. It seeds one application for Amina Example and starts one
+The session script starts BReg, Casework, and Coordinator from the selected native directory,
+with Messaging, databases, and the Mailpit mail sink in Docker. It seeds one application for Amina Example and starts one
 **[run](../../reference/glossary/#run)** of the workflow for it with `POST /v1/runs`: one admitted
 execution that Coordinator keeps in its database. The registry project, review policy, and
-notice template it uses are in `products/coordinator/scripts/real_service_fixtures.py`. Every
-service listens on loopback HTTP (`tlsTermination: development-loopback`), and Coordinator applies
+notice template it uses are in `products/coordinator/scripts/real_service_fixtures.py`. Docker host networking lets Messaging reach the owned loopback services. This is
+local evaluation configuration. Every service listens on loopback HTTP
+(`tlsTermination: development-loopback`), and Coordinator applies
 its schema as the database superuser and serves as a separate runtime role: a local setup only.
 
 ```sh
 mkdir -p tutorial-work
-python3 products/coordinator/examples/reviewed-notice/session.py start \
+uv run --project products/coordinator/examples/reviewed-notice --locked \
+  --with "registry-stack-client==$REGISTRY_STACK_VERSION" \
+  products/coordinator/examples/reviewed-notice/session.py start \
+  --released-clients --messaging-image "$MESSAGING_IMAGE" \
+  --bin-dir "$COORDINATOR_TUTORIAL_BIN_DIR" \
   --session-dir tutorial-work/reviewed-notice > tutorial-work/session.json
 jq '{status, workflow}' tutorial-work/session.json
 ```

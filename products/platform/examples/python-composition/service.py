@@ -18,6 +18,14 @@ from pathlib import Path
 import sqlite3
 import uuid
 
+from jsonschema import Draft202012Validator, FormatChecker, ValidationError
+
+PROPOSAL_SCHEMA = "https://id.registrystack.org/contracts/breg/proposal-event/v1"
+PROPOSAL_PAYLOAD = Draft202012Validator(
+    json.loads(Path(__file__).with_name("proposal-event.schema.json").read_text()),
+    format_checker=FormatChecker(),
+)
+
 LOG = logging.getLogger("python-composition")
 MAXIMUM_BODY = 8192
 MAXIMUM_ATTEMPTS = 12
@@ -43,6 +51,63 @@ def strict_json(body):
     return json.loads(body, object_pairs_hook=members)
 
 
+def proposal_subject(verified):
+    """Read the native Proposal envelope, never an adopter approval document."""
+    try:
+        envelope = strict_json(verified["body"])
+        if set(envelope) != {
+            "id",
+            "type",
+            "source",
+            "time",
+            "dataschema",
+            "subject",
+            "data",
+            "causation",
+        }:
+            raise ValueError("envelope shape")
+        if verified["dataschema"] != PROPOSAL_SCHEMA or any(
+            envelope[name] != verified[name]
+            for name in ("id", "type", "source", "time", "dataschema")
+        ):
+            raise ValueError("signed metadata differs")
+        data = envelope["data"]
+        PROPOSAL_PAYLOAD.validate(data)
+        if (
+            not isinstance(envelope["subject"], dict)
+            or type(envelope["subject"].get("recordRevision")) is not int
+            or envelope["type"] != "proposal." + data["transition"]
+            or envelope["subject"]
+            != {
+                "recordReference": "/v1/proposals/" + data["proposalId"],
+                "recordRevision": data["revision"],
+            }
+        ):
+            raise ValueError("subject differs")
+        causation = envelope["causation"]
+        if (
+            not isinstance(causation, dict)
+            or set(causation) - {"root", "hop", "parent"}
+            or type(causation.get("hop")) is not int
+            or causation["hop"] < 0
+            or str(uuid.UUID(causation["root"])) != causation["root"]
+            or (
+                causation["hop"] == 0
+                and (causation["root"] != envelope["id"] or "parent" in causation)
+            )
+            or (
+                causation["hop"] > 0
+                and str(uuid.UUID(causation["parent"])) != causation["parent"]
+            )
+        ):
+            raise ValueError("causation differs")
+        return data["proposalId"], data["submissionVersion"], data["effectDigest"]
+    except (ValueError, TypeError, KeyError, ValidationError):
+        raise WakeRefused(
+            "the authenticated native Proposal envelope was refused"
+        ) from None
+
+
 class Inbox:
     def __init__(self, path: Path):
         self.path = path
@@ -52,6 +117,9 @@ class Inbox:
         with self.connect() as db:
             db.execute(
                 "CREATE TABLE IF NOT EXISTS wakes (id TEXT PRIMARY KEY, digest TEXT NOT NULL, accepted_at TEXT NOT NULL)"
+            )
+            db.execute(
+                "CREATE TABLE IF NOT EXISTS wake_subjects (wake_id TEXT PRIMARY KEY, proposal_id TEXT NOT NULL, version INTEGER NOT NULL, effect_digest TEXT, consumed INTEGER NOT NULL DEFAULT 0)"
             )
             db.execute(
                 "CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, body TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'prepared', attempts INTEGER NOT NULL DEFAULT 0)"
@@ -97,6 +165,7 @@ class Inbox:
             raise WakeRefused(
                 "hook signature or expected envelope was refused"
             ) from None
+        proposal_id, version, effect_digest = proposal_subject(verified)
         # Replay generations change the transport idempotency key. The event
         # identity and captured bytes remain stable across every generation.
         identity = json.dumps(
@@ -115,11 +184,17 @@ class Inbox:
             db.execute(
                 "INSERT INTO wakes VALUES (?,?,?)", (identity, digest, verified["time"])
             )
+            db.execute(
+                "INSERT INTO wake_subjects(wake_id,proposal_id,version,effect_digest) VALUES (?,?,?,?)",
+                (identity, proposal_id, version, effect_digest),
+            )
         return True
 
     def pending(self):
         with self.connect() as db:
-            return db.execute("SELECT COUNT(*) FROM wakes").fetchone()[0]
+            return db.execute(
+                "SELECT COUNT(*) FROM wake_subjects WHERE consumed=0"
+            ).fetchone()[0]
 
     def register(self, proposal_id, version, effect_digest, notice):
         body = json.dumps(
@@ -145,8 +220,17 @@ class Inbox:
     def jobs(self):
         with self.connect() as db:
             return db.execute(
-                "SELECT id,body,state,attempts FROM jobs WHERE state!='notified' ORDER BY id LIMIT 100"
+                "SELECT j.id,j.body,j.state,j.attempts FROM jobs j WHERE state!='notified' "
+                "ORDER BY EXISTS(SELECT 1 FROM wake_subjects w WHERE w.consumed=0 AND w.proposal_id=j.id "
+                "AND w.version=json_extract(j.body,'$.version') AND w.effect_digest=json_extract(j.body,'$.effectDigest')) DESC,j.id LIMIT 100"
             ).fetchall()
+
+    def consume(self, proposal_id, version, effect_digest):
+        with self.connect() as db:
+            db.execute(
+                "UPDATE wake_subjects SET consumed=1 WHERE proposal_id=? AND version=? AND effect_digest=?",
+                (proposal_id, version, effect_digest),
+            )
 
 
 class TokenSource:
@@ -326,6 +410,18 @@ class Composition:
             source_profile=self.config.get("caseworkSourceProfile"),
         )
 
+    def claim(self, task_id, revision, key):
+        if self.reviews is None:
+            raise CompositionError("configure Casework before claiming a task")
+        return self.reviews.claim_review_task(
+            self.tokens["casework"].bearer_token(),
+            self.config["caseworkProfile"],
+            task_id,
+            revision,
+            key,
+            source_profile=self.config.get("caseworkSourceProfile"),
+        )
+
     def decide(self, task_id, revision, key, decision):
         # An explicit human action, never called by a wake or background pass.
         if self.reviews is None:
@@ -368,6 +464,7 @@ class Composition:
                 raise CompositionError(
                     "the Proposal version or effects no longer match the registered job"
                 )
+            self.inbox.consume(proposal_id, job["version"], job["effectDigest"])
             if document["state"] != "applied":
                 # The native SDK selects the source-issued lifecycle link and
                 # opaque ETag. An unavailable Apply is refused before mutation.
@@ -540,6 +637,10 @@ def main():
     register.add_argument("version", type=int)
     register.add_argument("effect_digest")
     register.add_argument("notice", type=Path)
+    claim = sub.add_parser("claim")
+    claim.add_argument("task_id")
+    claim.add_argument("revision", type=int)
+    claim.add_argument("key")
     decide = sub.add_parser("decide")
     decide.add_argument("task_id")
     decide.add_argument("revision", type=int)
@@ -596,6 +697,8 @@ def main():
         print(json.dumps(result))
     elif args.command == "review-context":
         print(json.dumps(app.review_context(args.task_id)))
+    elif args.command == "claim":
+        print(json.dumps(app.claim(args.task_id, args.revision, args.key)))
     elif args.command == "decide":
         app.decide(
             args.task_id,

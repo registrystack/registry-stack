@@ -12,7 +12,23 @@ coordinatorctl check --project products/coordinator/examples/reviewed-notice --e
 coordinatorctl test --project products/coordinator/examples/reviewed-notice
 ~~~
 
-## Prepare trusted input
+## Use packaged tools and clients
+
+The session helper accepts `--bin-dir` with verified native binaries and
+`--released-clients` to use an installed unified Python client instead of the
+Rust input helper. `--messaging-image` accepts an exact published
+`ghcr.io/registrystack/messaging@sha256:...` digest and runs its runtime and tool
+with Docker host networking and only the owned fixture directory mounted.
+This supports hosts without a native Messaging distribution. Keep the image,
+native tools, support archive, and client version aligned. v0.43.0 does not yet
+publish Coordinator; a candidate rehearsal does not establish publication.
+
+See the [tutorial](https://docs.registrystack.org/dev/tutorials/review-an-application-and-send-a-notice/)
+for the complete sequence, restart, and cleanup. The Python projection uses
+pinned RFC 8785 canonicalization over the same three reviewed fields; refusal
+messages contain no field values.
+
+## Prepare trusted input from a contributor build
 
 The reviewed-notice-input Rust example reads the application through the
 maintained BReg client. It writes a new owner-only input file containing the
