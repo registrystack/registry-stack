@@ -969,6 +969,30 @@ pub struct CompiledEntity {
     pub definition_revision: String,
 }
 
+impl CompiledEntity {
+    /// The fields whose values the server generates on create.
+    pub fn generated_fields(&self) -> impl Iterator<Item = &CompiledField> {
+        self.fields
+            .values()
+            .filter(|field| field.generate.is_some())
+    }
+
+    /// Generated values and every field that partitions their namespace are
+    /// immutable after create. Action compilation, Proposal preparation, and
+    /// direct mutation admission share this predicate so work cannot freeze
+    /// only to fail later at apply.
+    pub fn is_generated_identifier_immutable(&self, field_id: &str) -> bool {
+        self.fields
+            .get(field_id)
+            .is_some_and(|field| field.generate.is_some())
+            || self.generated_fields().any(|field| {
+                field.generate.as_ref().is_some_and(|generation| {
+                    generation.scope.iter().any(|scope| scope == field_id)
+                })
+            })
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct CompiledRelationship {

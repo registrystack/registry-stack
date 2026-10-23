@@ -4359,7 +4359,7 @@
       "description": "Base Registry Engine project authoring JSON Schema.",
       "source": {
         "path": "crates/registry-breg/src/schema.rs",
-        "sha256": "7d4486220280407c9dfd630afb1aa4ce1ad432f52ffacf4536f7a43094e4d582"
+        "sha256": "a4f271e6bce5bb3f80aea875d47589081660c95384be57782aed60216f753005"
       },
       "artifact": {
         "path": "products/breg/generated/authoring/registry-module.schema.json",
@@ -4377,7 +4377,7 @@
       "description": "Base Registry Engine project authoring JSON Schema.",
       "source": {
         "path": "crates/registry-breg/src/schema.rs",
-        "sha256": "7d4486220280407c9dfd630afb1aa4ce1ad432f52ffacf4536f7a43094e4d582"
+        "sha256": "a4f271e6bce5bb3f80aea875d47589081660c95384be57782aed60216f753005"
       },
       "artifact": {
         "path": "products/breg/generated/authoring/registry-project.schema.json",
@@ -4467,7 +4467,7 @@
       "description": "Base Registry Engine runtime configuration JSON Schema.",
       "source": {
         "path": "crates/registry-breg/src/schema.rs",
-        "sha256": "7d4486220280407c9dfd630afb1aa4ce1ad432f52ffacf4536f7a43094e4d582"
+        "sha256": "a4f271e6bce5bb3f80aea875d47589081660c95384be57782aed60216f753005"
       },
       "artifact": {
         "path": "products/breg/generated/runtime/runtime.schema.json",

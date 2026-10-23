@@ -276,11 +276,7 @@ pub(crate) fn generate_ddl_with_actions(
     // tables are empty. A successor migration selects the same stable
     // statement after its reviewed field backfill and before serving writes.
     for entity in entities.values() {
-        for field in entity
-            .fields
-            .values()
-            .filter(|field| field.generate.is_some())
-        {
+        for field in entity.generated_fields() {
             statements.push(generated_identifier_seed_statement(entity, field));
         }
     }
