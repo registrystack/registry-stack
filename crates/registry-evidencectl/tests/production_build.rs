@@ -422,6 +422,40 @@ fn target_check_and_package_refuse_runtime_mismatches_at_the_authored_location()
 }
 
 #[test]
+fn runtime_refusal_at_the_authored_location_precedes_secret_reference_syntax() {
+    for command in ["check", "package"] {
+        let fixture = Fixture::new();
+        edit_json(&fixture.target, |target| {
+            target["listener"]["trustProxyIdentityHeaders"] = json!(true);
+            target["signer"]["keyName"] = json!("secret:file/Bad");
+        });
+
+        let output = if command == "check" {
+            fixture.check_production("json")
+        } else {
+            fixture.package("json")
+        };
+
+        assert_failed(
+            &output,
+            "invalid listener with a malformed secret reference",
+        );
+        let report: Value = serde_json::from_slice(&output.stdout).unwrap_or_else(|_| {
+            panic!(
+                "{command}: expected a JSON refusal report: {}",
+                stderr(&output)
+            )
+        });
+        assert!(
+            report["diagnostics"].as_array().is_some_and(|items| items
+                .iter()
+                .any(|item| item["code"] == "evidence.runtime.invalid-listener")),
+            "{command}: the authored runtime diagnostic must win: {report}"
+        );
+    }
+}
+
+#[test]
 fn local_target_bootstrap_generates_matching_keys_and_repairs_only_the_public_half() {
     let fixture = Fixture::new();
     fixture.use_default_local_signer();

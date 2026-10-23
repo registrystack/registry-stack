@@ -427,8 +427,6 @@ fn prepare_candidate(
     interruption.check()?;
     reject_review_markers(&compiled.bundle_path)?;
     reject_review_markers_in_bytes(&target.runtime, "runtime.yaml")?;
-    let runtime = runtime_value(&target.runtime).map_err(anyhow::Error::new)?;
-    let secret_references = secret_references(&json!([compiled.bundle, runtime]))?;
     let package_digest = run_bundle_check(
         evidence_bin,
         &compiled.bundle_path,
@@ -448,6 +446,11 @@ fn prepare_candidate(
             interruption,
         )?;
     }
+    // Secret references are collected only after the delegated bundle check
+    // passes, so a malformed reference in the runtime section is reported by
+    // that check at its authored location first.
+    let runtime = runtime_value(&target.runtime).map_err(anyhow::Error::new)?;
+    let secret_references = secret_references(&json!([compiled.bundle, runtime]))?;
     Ok((package_digest, secret_references))
 }
 
