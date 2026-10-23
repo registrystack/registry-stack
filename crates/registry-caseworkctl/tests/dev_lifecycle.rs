@@ -15,10 +15,10 @@
 //! products/casework/scripts/check-review-journeys.sh
 //! ```
 //!
-//! The script supplies only the candidate Casework native artifact to each
-//! exact unified Casework facade. Inert sibling namespace stubs stand in for
-//! the other five product bindings, whose package assembly has a separate
-//! release gate. This is real HTTP/native-facade proof, not installed tarball
+//! The script supplies the candidate Casework native artifacts and the real
+//! BReg Python provider behind the shared authentication facade. Other product
+//! namespaces use inert stubs; their package assembly has a separate release
+//! gate. This is real HTTP/native-facade proof, not installed tarball
 //! or wheel proof.
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
@@ -216,6 +216,8 @@ impl NativeClients {
         let python_facade_root = required_path("CASEWORK_PYTHON_FACADE_ROOT");
         let python_product_root = required_path("CASEWORK_PYTHON_PRODUCT_ROOT");
         let python_native = required_path("CASEWORK_PYTHON_NATIVE");
+        let python_breg_root = required_path("CASEWORK_PYTHON_BREG_PRODUCT_ROOT");
+        let python_breg_native = required_path("CASEWORK_PYTHON_BREG_NATIVE");
         let python_path = native_root.join("python");
         let unified_package = python_path.join("registry_client");
         fs::create_dir_all(&unified_package).expect("the Python facade directory is writable");
@@ -224,8 +226,23 @@ impl NativeClients {
             unified_package.join("__init__.py"),
         )
         .expect("the exact unified Python facade is copied");
+        for name in ["auth.py", "auth.pyi"] {
+            fs::copy(python_facade_root.join(name), unified_package.join(name))
+                .expect("the exact shared authentication facade is copied");
+        }
+        let breg_package = unified_package.join("breg");
+        fs::create_dir_all(&breg_package).expect("the BReg provider package is writable");
+        fs::copy(
+            python_breg_root.join("__init__.py"),
+            breg_package.join("__init__.py"),
+        )
+        .expect("the exact BReg provider facade is copied");
+        fs::copy(
+            python_breg_native,
+            breg_package.join("registry_breg_client.so"),
+        )
+        .expect("the canonical Python authentication provider is copied");
         for sibling in [
-            "breg",
             "coordinator",
             "discovery",
             "evidence",
