@@ -46,7 +46,7 @@ class ReleaseDistributionTest(TestCase):
                 {
                     "unit": "discovery",
                     "version": "1.2.3",
-                    "policy": "compatible-patch",
+                    "policy": "exact",
                 }
             ],
         }
@@ -59,21 +59,16 @@ class ReleaseDistributionTest(TestCase):
         with self.assertRaisesRegex(self.module.DistributionError, "exactly"):
             self.module.load_components(self.repo, "0.45.0")
 
-    def test_selection_policy_allows_later_patch_or_an_exact_version(self) -> None:
-        compatible = {
-            "unit": "discovery",
-            "version": "1.2.3",
-            "policy": "compatible-patch",
-        }
-        self.module.validate_selected_version(compatible, "1.2.9")
-        for selected in ("1.3.0", "2.2.3", "1.2.2"):
-            with self.subTest(selected=selected):
-                with self.assertRaisesRegex(self.module.DistributionError, "compatible patch"):
-                    self.module.validate_selected_version(compatible, selected)
+    def test_selection_policy_admits_only_the_exact_committed_version(self) -> None:
         exact = {"unit": "discovery", "version": "2.0.0", "policy": "exact"}
         self.module.validate_selected_version(exact, "2.0.0")
-        with self.assertRaisesRegex(self.module.DistributionError, "exact version"):
-            self.module.validate_selected_version(exact, "2.0.1")
+        for selected in ("2.0.1", "1.9.9", "2.1.0"):
+            with self.subTest(selected=selected):
+                with self.assertRaisesRegex(self.module.DistributionError, "exact version"):
+                    self.module.validate_selected_version(exact, selected)
+        compatible = {"unit": "discovery", "version": "2.0.0", "policy": "compatible-patch"}
+        with self.assertRaisesRegex(self.module.DistributionError, "policy must be exact"):
+            self.module.validate_selected_version(compatible, "2.0.0")
 
     def test_authenticated_manifest_becomes_an_exact_component_lock(self) -> None:
         payload = {
@@ -106,7 +101,7 @@ class ReleaseDistributionTest(TestCase):
         body = (json.dumps(manifest, sort_keys=True) + "\n").encode()
         manifest_name = "registry-discovery-v1.2.4-release-manifest.json"
         checksums = {payload["name"]: payload["sha256"], manifest_name: hashlib.sha256(body).hexdigest()}
-        selection = {"unit": "discovery", "version": "1.2.3", "policy": "compatible-patch"}
+        selection = {"unit": "discovery", "version": "1.2.4", "policy": "exact"}
         with (
             mock.patch.object(
                 self.module.release_candidate,
@@ -183,15 +178,6 @@ class ReleaseDistributionTest(TestCase):
         self.assertEqual([component], json.loads(body)["components"])
 
     def test_resolver_uses_only_the_committed_version(self) -> None:
-        selection = {
-            "unit": "discovery",
-            "version": "1.2.3",
-            "policy": "compatible-patch",
-        }
-        self.assertEqual(
-            "discovery/v1.2.3",
-            self.module.select_release_tag(selection),
-        )
         exact = {"unit": "discovery", "version": "2.0.0", "policy": "exact"}
         self.assertEqual("discovery/v2.0.0", self.module.select_release_tag(exact))
 
@@ -199,7 +185,7 @@ class ReleaseDistributionTest(TestCase):
         selection = {
             "unit": "discovery",
             "version": "1.2.3",
-            "policy": "compatible-patch",
+            "policy": "exact",
         }
         closure = {
             "manifest_bytes": b"{}\n",

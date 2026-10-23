@@ -64,8 +64,8 @@ and seals an exact distribution lock retaining the original source, tag, asset
 checksums, and image digest. It installs those original bytes and exercises them
 over HTTP with the current packaged unified SDK. Docs retain the original
 Discovery source tag. A diverged product version requires this selection.
-`compatible-patch` permits a separately selected later patch in the same minor
-line; resolution still uses the committed version, never a floating latest tag.
+`exact` is the only accepted `policy`: resolution uses the committed version,
+never a floating latest tag. To ship a later Discovery patch, commit its version.
 
 Measure merge-to-publication time, including queues, retries, and operator wait,
 alongside build time. Scoped builds are a mechanism, not evidence that the

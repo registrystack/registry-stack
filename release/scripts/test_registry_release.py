@@ -773,6 +773,76 @@ class RegistryReleaseTest(TestCase):
             local.assert_not_called()
             remote.assert_not_called()
 
+    def write_sdk_compatibility(self, root: Path, baseline: str, line: str) -> None:
+        path = root / "crates/registry-stack-client/compatibility.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"namespaces": {"discovery": {
+            "testedServerBaseline": baseline,
+            "compatibleServerPatchLine": line,
+        }}}))
+
+    def test_sdk_compatibility_refuses_selected_discovery_outside_declared_line(self) -> None:
+        tool = load_registry_release()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.write_sdk_compatibility(root, "0.44.0", "0.44.x")
+            selections = root / "release/distributions"
+            selections.mkdir(parents=True)
+            (selections / "v0.44.0.json").write_text(json.dumps({
+                "schema_version": "registry-stack.distribution-selection.v1",
+                "stack_version": "0.44.0",
+                "components": [{"unit": "discovery", "version": "0.43.9", "policy": "exact"}],
+            }))
+            with self.assertRaisesRegex(
+                tool.ReleasePlanError, r"0\.43\.9.*compatibility\.json.*compatibility_metadata\.rs"
+            ):
+                tool.validate_discovery_sdk_compatibility(root, "0.44.0")
+            (selections / "v0.44.0.json").write_text(json.dumps({
+                "schema_version": "registry-stack.distribution-selection.v1",
+                "stack_version": "0.44.0",
+                "components": [{"unit": "discovery", "version": "0.45.0", "policy": "exact"}],
+            }))
+            with self.assertRaisesRegex(tool.ReleasePlanError, "0.45.0.*0.44.x"):
+                tool.validate_discovery_sdk_compatibility(root, "0.44.0")
+
+    def test_sdk_compatibility_refuses_stack_discovery_outside_declared_line(self) -> None:
+        tool = load_registry_release()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.write_sdk_compatibility(root, "0.44.0", "0.44.x")
+            with self.assertRaisesRegex(
+                tool.ReleasePlanError, r"0\.45\.0.*compatibility\.json.*compatibility_metadata\.rs"
+            ):
+                tool.validate_discovery_sdk_compatibility(root, "0.45.0")
+
+    def test_sdk_compatibility_refuses_a_malformed_declaration(self) -> None:
+        tool = load_registry_release()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for baseline, line in (("0.44.0", "0.44"), ("0.44", "0.44.x"), ("0.44.0", 44)):
+                with self.subTest(baseline=baseline, line=line):
+                    self.write_sdk_compatibility(root, baseline, line)
+                    with self.assertRaisesRegex(
+                        tool.ReleasePlanError, r"MAJOR\.MINOR\.x.*compatibility_metadata\.rs"
+                    ):
+                        tool.validate_discovery_sdk_compatibility(root, "0.44.0")
+
+    def test_sdk_compatibility_allows_versions_inside_declared_line(self) -> None:
+        tool = load_registry_release()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.write_sdk_compatibility(root, "0.44.0", "0.44.x")
+            tool.validate_discovery_sdk_compatibility(root, "0.44.0")
+            tool.validate_discovery_sdk_compatibility(root, "0.44.7")
+            selections = root / "release/distributions"
+            selections.mkdir(parents=True)
+            (selections / "v0.45.0.json").write_text(json.dumps({
+                "schema_version": "registry-stack.distribution-selection.v1",
+                "stack_version": "0.45.0",
+                "components": [{"unit": "discovery", "version": "0.44.2", "policy": "exact"}],
+            }))
+            tool.validate_discovery_sdk_compatibility(root, "0.45.0")
+
     def test_legacy_train_release_does_not_require_discovery_selection(self) -> None:
         tool = load_registry_release()
         with tempfile.TemporaryDirectory() as directory:

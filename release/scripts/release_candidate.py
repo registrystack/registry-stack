@@ -1282,9 +1282,6 @@ def validate_candidate_manifest(
 ) -> dict[str, Any]:
     """Validate a closed Stack v2 or independent-unit v3 candidate."""
 
-    if expected_unit == "stack":
-        expected_unit = None
-
     if allow_current_run_in_progress and promotion:
         raise CandidateError(
             "current in-progress run metadata cannot authorize promotion"
@@ -1379,7 +1376,7 @@ def validate_candidate_manifest(
             raise CandidateError(str(exc)) from exc
     else:
         expected_tag = f"v{version}"
-        if expected_unit is not None:
+        if expected_unit not in {None, "stack"}:
             raise CandidateError("Stack candidates do not have a release unit")
     if release["tag"] != expected_tag:
         raise CandidateError(
@@ -1724,7 +1721,7 @@ def validate_candidate_manifest(
         )
 
     expectations = (
-        ("unit", expected_unit, unit),
+        ("unit", expected_unit, unit or "stack"),
         ("source SHA", expected_source_sha, source_sha),
         ("workflow revision", expected_workflow_revision, workflow_revision),
         ("version", expected_version, version),

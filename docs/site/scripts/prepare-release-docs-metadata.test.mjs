@@ -136,7 +136,7 @@ test('pins selected Discovery docs to the original independent release tag and v
   const distribution = {
     schema_version: 'registry-stack.distribution-selection.v1',
     stack_version: '0.29.0',
-    components: [{ unit: 'discovery', version: '1.4.2', policy: 'compatible-patch' }],
+    components: [{ unit: 'discovery', version: '1.4.2', policy: 'exact' }],
   };
   const { prepare, read, write } = await fixture(t, {
     artifacts: { 'registry-docs': '0.29.0', evidence: '0.29.0', discovery: '1.4.2', discoveryctl: '1.4.2' },
@@ -170,6 +170,16 @@ test('refuses a distribution selection for a different Stack version', async (t)
   };
   const { prepare } = await fixture(t, { distribution: selection });
   await assert.rejects(prepare(), /distribution selection stack_version must match/);
+});
+
+test('refuses a distribution selection policy other than exact', async (t) => {
+  const selection = {
+    schema_version: 'registry-stack.distribution-selection.v1',
+    stack_version: '0.29.0',
+    components: [{ unit: 'discovery', version: '1.4.2', policy: 'compatible-patch' }],
+  };
+  const { prepare } = await fixture(t, { distribution: selection });
+  await assert.rejects(prepare(), /distribution selection Discovery policy must be exact/);
 });
 
 test('refuses symlinked and non-regular distribution selections', async (t) => {

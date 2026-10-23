@@ -100,8 +100,8 @@ async function selectedDiscoveryVersion(repoRoot, stackVersion) {
   if (!stableVersionPattern.test(component.version ?? '')) {
     throw new Error('distribution selection Discovery version must be a stable semantic version');
   }
-  if (!['exact', 'compatible-patch'].includes(component.policy)) {
-    throw new Error('distribution selection Discovery policy must be exact or compatible-patch');
+  if (component.policy !== 'exact') {
+    throw new Error('distribution selection Discovery policy must be exact');
   }
   return component.version;
 }

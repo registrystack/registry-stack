@@ -2348,6 +2348,44 @@ def validate_stack_component_selection(repo: Path, version: str) -> None:
         )
 
 
+# The Node.js package copy is generated from this file and held to it by
+# sync-registry-client-node.py --check.
+SDK_COMPATIBILITY = Path("crates/registry-stack-client/compatibility.json")
+
+
+def validate_discovery_sdk_compatibility(repo: Path, version: str) -> None:
+    """Refuse a Stack release whose SDK declares its distributed Discovery incompatible."""
+
+    fix = (
+        f"update {SDK_COMPATIBILITY}, regenerate the Node.js copy with "
+        "release/scripts/sync-registry-client-node.py, and update the expectation in "
+        "crates/registry-discovery-client/tests/compatibility_metadata.rs"
+    )
+    document = required_json(repo / SDK_COMPATIBILITY)
+    try:
+        declared = document["namespaces"]["discovery"]
+        baseline = strict_semver(declared["testedServerBaseline"])
+        line = declared["compatibleServerPatchLine"]
+        line_match = re.fullmatch(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.x", line)
+    except (KeyError, TypeError, ReleasePlanError) as exc:
+        raise ReleasePlanError(
+            f"{SDK_COMPATIBILITY} must declare a Discovery testedServerBaseline "
+            f"and a MAJOR.MINOR.x compatibleServerPatchLine; {fix}"
+        ) from exc
+    if line_match is None:
+        raise ReleasePlanError(
+            f"{SDK_COMPATIBILITY} compatibleServerPatchLine {line!r} must be MAJOR.MINOR.x; {fix}"
+        )
+    distributed = component_artifact_versions(repo, version).get("discovery", version)
+    actual = strict_semver(distributed)
+    if actual < baseline or actual[:2] != tuple(int(part) for part in line_match.groups()):
+        raise ReleasePlanError(
+            f"distributed Discovery {distributed} is outside the SDK compatibility declaration "
+            f"(testedServerBaseline {declared['testedServerBaseline']}, "
+            f"compatibleServerPatchLine {line}); {fix}"
+        )
+
+
 def prepare_release_context(repo: Path, version: str, release_id: str) -> dict[str, Any]:
     repo = repo.resolve()
     if not repo.is_dir():
@@ -2360,6 +2398,7 @@ def prepare_release_context(repo: Path, version: str, release_id: str) -> dict[s
     selected, previous, advisory = select_release_history(repo, version, release_id)
     validate_selected_manifest(repo, selected)
     validate_stack_component_selection(repo, version)
+    validate_discovery_sdk_compatibility(repo, version)
     checks = [
         passed_check(
             "release-history",
