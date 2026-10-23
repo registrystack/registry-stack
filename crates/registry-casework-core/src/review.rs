@@ -203,10 +203,7 @@ pub enum ReviewPublicReasonRule {
 
 impl ReviewOutcomePolicy {
     fn label_is_valid(&self) -> bool {
-        !self.label.trim().is_empty()
-            && self.label.len() <= 120
-            && self.label.chars().all(|character| !character.is_control())
-            && registry_platform_yaml::DisplayText::new(self.label.as_str()).is_ok()
+        crate::typed::valid_display_label(&self.label, 120)
     }
 }
 
@@ -217,6 +214,17 @@ pub struct ReviewStagePolicy {
     #[serde(deserialize_with = "crate::typed::local_id")]
     #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub id: String,
+    /// Optional presentation label. Stable references use `id`.
+    #[serde(
+        default,
+        deserialize_with = "registry_platform_yaml::optional_display_text",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Option<registry_platform_yaml::DisplayText>")
+    )]
+    pub label: Option<String>,
     pub queue: String,
     pub deciding_profiles: Vec<String>,
     #[serde(
@@ -270,6 +278,18 @@ impl ReviewStagePolicy {
                 format!("{at}/id"),
                 IDENTIFIER_MESSAGE,
                 IDENTIFIER_ACTION,
+            );
+        }
+        if self
+            .label
+            .as_deref()
+            .is_some_and(|label| !crate::typed::valid_display_label(label, 160))
+        {
+            identity.push(
+                "casework.review-policy.invalid-stage-label",
+                format!("{at}/label"),
+                "expected single-line display text of 1 to 160 bytes that is not only spaces",
+                "Write a short single-line display label without control or unsafe display characters.",
             );
         }
         if !valid_identifier(&self.queue) {
@@ -343,6 +363,17 @@ pub struct ReviewPolicy {
     #[serde(deserialize_with = "crate::typed::local_id")]
     #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub id: String,
+    /// Optional presentation label. Stable references use `id`.
+    #[serde(
+        default,
+        deserialize_with = "registry_platform_yaml::optional_display_text",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Option<registry_platform_yaml::DisplayText>")
+    )]
+    pub label: Option<String>,
     pub version: String,
     pub purpose: ReviewPurpose,
     pub context: crate::ReviewContextPolicy,
@@ -446,6 +477,18 @@ impl ReviewPolicy {
                 "/id",
                 IDENTIFIER_MESSAGE,
                 IDENTIFIER_ACTION,
+            );
+        }
+        if self
+            .label
+            .as_deref()
+            .is_some_and(|label| !crate::typed::valid_display_label(label, 160))
+        {
+            identity.push(
+                "casework.review-policy.invalid-label",
+                "/label",
+                "expected single-line display text of 1 to 160 bytes that is not only spaces",
+                "Write a short single-line display label without control or unsafe display characters.",
             );
         }
         if !valid_version(&self.version) {
@@ -703,10 +746,15 @@ impl ReviewPolicy {
         let mut policy = self.clone();
         // Authored presentation stays in the immutable closure and package, but
         // does not change the behavioral identity used for request admission.
+        policy.label = None;
+        for stage in &mut policy.stages {
+            stage.label = None;
+        }
         for outcome in &mut policy.outcomes {
             outcome.label.clear();
         }
         for rule in &mut policy.routing {
+            rule.label = None;
             rule.because.clear();
         }
         let mut dependencies = dependencies.clone();
@@ -774,6 +822,7 @@ impl ReviewPolicy {
                 digest: self.digest_with(&dependencies)?,
             },
             dependencies,
+            label: self.label.clone(),
             purpose: self.purpose,
             context: self.context.clone(),
             routing: self.routing.clone(),
@@ -805,6 +854,8 @@ pub struct ReviewPolicyIdentity {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReviewPolicyClosure {
     pub dependencies: crate::ReviewPolicyDependencies,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
     pub identity: ReviewPolicyIdentity,
     pub purpose: ReviewPurpose,
     pub context: crate::ReviewContextPolicy,
@@ -962,6 +1013,7 @@ impl ReviewPolicyClosure {
     fn as_policy(&self) -> ReviewPolicy {
         ReviewPolicy {
             id: self.identity.id.clone(),
+            label: self.label.clone(),
             version: self.identity.version.clone(),
             purpose: self.purpose,
             context: self.context.clone(),
@@ -2828,6 +2880,7 @@ mod tests {
     fn stage(id: &str, required_approvals: u16) -> ReviewStagePolicy {
         ReviewStagePolicy {
             id: id.to_owned(),
+            label: None,
             queue: "review".to_owned(),
             deciding_profiles: vec!["reviewer".to_owned()],
             required_approvals,
@@ -2840,6 +2893,7 @@ mod tests {
     fn approval_policy(stages: Vec<ReviewStagePolicy>) -> ReviewPolicy {
         ReviewPolicy {
             id: "registry-correction".to_owned(),
+            label: None,
             version: "1".to_owned(),
             purpose: ReviewPurpose::Approval,
             context: crate::ReviewContextPolicy::Submitted,
@@ -2889,6 +2943,7 @@ mod tests {
     fn answer_policy() -> ReviewPolicy {
         ReviewPolicy {
             id: "standalone-question".to_owned(),
+            label: None,
             version: "1".to_owned(),
             purpose: ReviewPurpose::Answer,
             context: crate::ReviewContextPolicy::Submitted,
@@ -3185,6 +3240,7 @@ mod tests {
             (0..MAXIMUM_REVIEW_STAGES)
                 .map(|stage_index| ReviewStagePolicy {
                     id: identifier('s', stage_index),
+                    label: None,
                     queue: identifier('q', stage_index),
                     deciding_profiles: (0..MAXIMUM_REVIEW_PROFILES_PER_STAGE)
                         .map(|profile_index| identifier('p', profile_index))

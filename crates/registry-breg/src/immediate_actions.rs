@@ -2828,6 +2828,40 @@ fn compile_execution(
     }
 }
 
+/// Identity used by migration classification, independent of presentation and
+/// the target-row snapshot revision. Record schema changes are classified by
+/// their own migration rules; frozen Proposals keep the stricter snapshot fence.
+#[must_use]
+pub fn migration_review_revision(action: &CompiledAction) -> String {
+    let mut action = action.clone();
+    action.definition_revision.clear();
+    action.display = Default::default();
+    for input in &mut action.inputs {
+        input.display = Default::default();
+    }
+    if let Some(handler) = &mut action.handler {
+        for label in handler.refusals.values_mut() {
+            label.clear();
+        }
+    }
+    if let crate::model::CompiledActionExecution::Proposal { proposal } = &mut action.execution {
+        for hook in &mut proposal.hooks {
+            hook.display = Default::default();
+        }
+        if let Some(grant) = &mut proposal.system_apply_grant {
+            grant.revision.clear();
+            grant.action_revision.clear();
+        }
+    }
+    let value = serde_json::to_value(action).expect("compiled Action serializes");
+    format!(
+        "sha256:{}",
+        hex_lower(&Sha256::digest(
+            canonicalize_json(&value).expect("compiled Action canonicalizes")
+        ))
+    )
+}
+
 pub(crate) fn finalize_action_revisions(
     inventory: &mut CompiledActionInventory,
     entities: &BTreeMap<String, CompiledEntity>,

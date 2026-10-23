@@ -1066,6 +1066,10 @@ fn handler_source_diagnostics_distinguish_assets_parse_positions_and_entrypoints
             .collect::<Vec<_>>();
         let failure = compile_project_with_assets(&source, &[], &assets, CompileProfile::Authoring)
             .unwrap_err();
+        assert!(failure.diagnostics().iter().any(|diagnostic| {
+            diagnostic.code == "breg.compile.later-checks-skipped"
+                && diagnostic.message.contains("Action compilation")
+        }));
         let diagnostics = failure
             .diagnostics()
             .iter()

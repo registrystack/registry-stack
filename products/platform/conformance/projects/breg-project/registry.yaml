@@ -45,6 +45,6 @@ accessProfiles:
         - recordType: contact
           operations: [create, get, list, patch]
           readableFields: [name, email, jurisdiction]
-          writableFields: [name, email, jurisdiction]
+          writableFields: [name, email, jurisdiction, is-active]
           rowBoundaries:
             - {field: jurisdiction, claim: jurisdiction, operator: equals}

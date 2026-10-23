@@ -252,6 +252,119 @@ path.write_text(body.replace(old, new))
         self.assertEqual(extracted / asset, executable)
         self.assertIn(f"@loader_path/{CRYPTO}", executable.read_text())
 
+    def test_plain_archive_is_deterministic_and_strictly_extractable(self) -> None:
+        binary = self.root / "discovery"
+        self._macho(
+            binary,
+            "/usr/lib/libSystem.B.dylib",
+            "/System/Library/Frameworks/Security.framework/Versions/A/Security",
+        )
+        notice = self.root / "NOTICE"
+        notice.write_text("Registry Stack notices\n")
+        asset = "discovery-v0.44.0-macos-arm64"
+        archives = [self.root / "plain-first.tar.gz", self.root / "plain-second.tar.gz"]
+        for archive in archives:
+            MODULE.archive_plain_macos_binary(
+                binary=binary,
+                asset_name=asset,
+                notice=notice,
+                output=archive,
+            )
+        self.assertEqual(archives[0].read_bytes(), archives[1].read_bytes())
+
+        with tarfile.open(archives[0], "r:gz") as package:
+            self.assertEqual([asset, "THIRD_PARTY_NOTICES"], package.getnames())
+            modes = {member.name: stat.S_IMODE(member.mode) for member in package}
+        self.assertEqual(
+            {asset: 0o755, "THIRD_PARTY_NOTICES": 0o644},
+            modes,
+        )
+        extracted = self.root / "plain-extracted"
+        executable = MODULE.extract_plain_macos_binary_archive(
+            archives[0], extracted, asset
+        )
+        self.assertEqual(extracted / asset, executable)
+
+        notice_first = self.root / "notice-first.tar.gz"
+        with tarfile.open(
+            notice_first, "w:gz", format=tarfile.GNU_FORMAT
+        ) as package:
+            for member_name, payload, mode in (
+                ("THIRD_PARTY_NOTICES", b"notices", 0o644),
+                (asset, b"executable", 0o755),
+            ):
+                info = tarfile.TarInfo(member_name)
+                info.size = len(payload)
+                info.mode = mode
+                info.uid = info.gid = 0
+                info.uname = info.gname = ""
+                info.mtime = 0
+                package.addfile(info, io.BytesIO(payload))
+        notice_first_destination = self.root / "notice-first-extracted"
+        self.assertEqual(
+            notice_first_destination / asset,
+            MODULE.extract_plain_macos_binary_archive(
+                notice_first, notice_first_destination, asset
+            ),
+        )
+
+    def test_plain_archive_refuses_non_system_or_fips_loads(self) -> None:
+        notice = self.root / "NOTICE"
+        notice.write_text("Registry Stack notices\n")
+        asset = "discovery-v0.44.0-macos-arm64"
+        for name, load in (
+            ("fips", f"@rpath/{CRYPTO}"),
+            ("rpath", "@rpath/libthird_party.dylib"),
+            ("absolute", "/opt/local/lib/libthird_party.dylib"),
+        ):
+            with self.subTest(name=name):
+                binary = self.root / name / "discovery"
+                self._macho(binary, load)
+                with self.assertRaisesRegex(
+                    MODULE.PackagingError, "non-system macOS load command"
+                ):
+                    MODULE.archive_plain_macos_binary(
+                        binary=binary,
+                        asset_name=asset,
+                        notice=notice,
+                        output=self.root / f"{name}.tar.gz",
+                    )
+
+    def test_plain_extractor_refuses_fips_or_unsafe_members(self) -> None:
+        asset = "discovery-v0.44.0-macos-arm64"
+        cases = {
+            "fips": [
+                (asset, 0o755),
+                (CRYPTO, 0o755),
+                ("THIRD_PARTY_NOTICES", 0o644),
+            ],
+            "path": [(f"bin/{asset}", 0o755), ("THIRD_PARTY_NOTICES", 0o644)],
+            "mode": [(asset, 0o644), ("THIRD_PARTY_NOTICES", 0o644)],
+            "duplicate": [
+                (asset, 0o755),
+                (asset, 0o755),
+                ("THIRD_PARTY_NOTICES", 0o644),
+            ],
+        }
+        for name, members in cases.items():
+            with self.subTest(name=name):
+                archive = self.root / f"plain-{name}.tar.gz"
+                with tarfile.open(
+                    archive, "w:gz", format=tarfile.GNU_FORMAT
+                ) as package:
+                    for member_name, mode in members:
+                        info = tarfile.TarInfo(member_name)
+                        info.size = 1
+                        info.mode = mode
+                        info.uid = info.gid = 0
+                        info.uname = info.gname = ""
+                        info.mtime = 0
+                        package.addfile(info, io.BytesIO(b"x"))
+                with self.assertRaises(MODULE.PackagingError):
+                    MODULE.extract_plain_macos_binary_archive(
+                        archive, self.root / f"plain-extract-{name}", asset
+                    )
+
     def test_extractor_refuses_noncanonical_or_unsafe_members(self) -> None:
         asset = "evidence-v0.33.0-macos-arm64"
         cases = {

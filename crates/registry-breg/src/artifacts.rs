@@ -535,6 +535,7 @@ pub fn inspect_action(action: &CompiledAction) -> Value {
     json!({
         "id": action.id, "apiName": action.api_name,
         "revision": action.definition_revision, "display": action.display,
+        "migrationReviewRevision": crate::immediate_actions::migration_review_revision(action),
         "execution": action.execution,
         "inputs": action.inputs.iter().map(|input| action_input_metadata(input, action.handler.is_some())).collect::<Vec<_>>(),
         "plan": plan,

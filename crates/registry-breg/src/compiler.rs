@@ -313,7 +313,13 @@ pub fn compile_project_with_assets(
     let module_profiles = crate::access::module_profile_keys(&sources);
     expand_project_access(project, &mut sources, &mut diagnostics);
     resolve_vocabularies(project, &mut sources, &mut action_sources, &mut diagnostics);
-    validate_entities(&project.project.id, &sources, profile, &mut diagnostics);
+    validate_entities(
+        &project.project.id,
+        &sources,
+        &origins.hook_paths,
+        profile,
+        &mut diagnostics,
+    );
     crate::access::validate_access_requirements(&sources, &mut diagnostics);
     crate::membership::validate(&sources, &mut diagnostics);
     crate::consent::validate(project, &sources, &mut diagnostics);
@@ -327,15 +333,31 @@ pub fn compile_project_with_assets(
     validate_derived_assets(&sources, &origins.derived, assets, &mut diagnostics);
     validate_hook_assets(&sources, &origins.hooks, assets, &mut diagnostics);
     if !diagnostics.is_empty() {
+        findings.push(stopped_stage_finding(
+            "source validation",
+            "compiled model and Manifest projection checks did not run",
+        ));
         return Err(CompileFailure::from_errors(diagnostics).with_findings(&findings));
     }
 
-    let (mut entities, physical_names) = compile_entities(&sources, &origins, assets)
-        .map_err(|failure| failure.with_findings(&findings))?;
-    compile_relationships(&mut entities)
-        .map_err(|errors| CompileFailure::from_errors(errors).with_findings(&findings))?;
-    let statistical_datasets = statistics::compile(project, &entities)
-        .map_err(|errors| CompileFailure::from_errors(errors).with_findings(&findings))?;
+    let (mut entities, physical_names) =
+        compile_entities(&sources, &origins, assets).map_err(|failure| {
+            stopped_compile_failure(failure, &findings, "compiled model construction")
+        })?;
+    compile_relationships(&mut entities).map_err(|errors| {
+        stopped_compile_failure(
+            CompileFailure::from_errors(errors),
+            &findings,
+            "relationship compilation",
+        )
+    })?;
+    let statistical_datasets = statistics::compile(project, &entities).map_err(|errors| {
+        stopped_compile_failure(
+            CompileFailure::from_errors(errors),
+            &findings,
+            "statistical release compilation",
+        )
+    })?;
     crate::membership::compile(&mut entities);
     let recipients = crate::consent::compile(project, &sources, &mut entities);
     let mut action_inventory = compile_immediate_actions(
@@ -347,18 +369,43 @@ pub fn compile_project_with_assets(
         &project.review_authorities,
         project,
     )
-    .map_err(|errors| CompileFailure::from_errors(errors).with_findings(&findings))?;
+    .map_err(|errors| {
+        stopped_compile_failure(
+            CompileFailure::from_errors(errors),
+            &findings,
+            "Action compilation",
+        )
+    })?;
     crate::action_evidence_contracts::compile_evidence(project, assets, &mut action_inventory)
-        .map_err(|errors| CompileFailure::from_errors(errors).with_findings(&findings))?;
-    crate::proposal_hooks::compile_hooks(&action_sources, &mut action_inventory, assets)
-        .map_err(|errors| CompileFailure::from_errors(errors).with_findings(&findings))?;
+        .map_err(|errors| {
+            stopped_compile_failure(
+                CompileFailure::from_errors(errors),
+                &findings,
+                "Action Evidence compilation",
+            )
+        })?;
+    crate::proposal_hooks::compile_hooks(&action_sources, &mut action_inventory, assets).map_err(
+        |errors| {
+            stopped_compile_failure(
+                CompileFailure::from_errors(errors),
+                &findings,
+                "Proposal hook compilation",
+            )
+        },
+    )?;
     crate::immediate_actions::finalize_action_revisions(&mut action_inventory, &entities);
+    findings.extend(stored_field_fillability_findings(
+        &entities,
+        &action_inventory,
+    ));
     findings.extend(crate::access::compiled_access_findings(
         &entities,
         &action_inventory,
     ));
     let (route_inventory, access_inventory) =
-        compile_routes_and_access(&entities).map_err(|failure| failure.with_findings(&findings))?;
+        compile_routes_and_access(&entities).map_err(|failure| {
+            stopped_compile_failure(failure, &findings, "route and access compilation")
+        })?;
     let metadata_inventory = compile_metadata_inventory(
         &project.project.id,
         &project.project.version,
@@ -366,7 +413,13 @@ pub fn compile_project_with_assets(
         &route_inventory,
         &access_inventory,
     )
-    .map_err(|error| CompileFailure::from_one(error).with_findings(&findings))?;
+    .map_err(|error| {
+        stopped_compile_failure(
+            CompileFailure::from_one(error),
+            &findings,
+            "metadata compilation",
+        )
+    })?;
     let query_inventory = compile_query_inventory(&entities, &mut diagnostics);
     if profile == CompileProfile::Authoring {
         findings.extend(unindexed_list_findings(&entities));
@@ -389,6 +442,10 @@ pub fn compile_project_with_assets(
         .sort_by(|left, right| left.id.cmp(&right.id));
     validate_manifest_projection(project, &entities, &mut diagnostics);
     if !diagnostics.is_empty() {
+        findings.push(stopped_stage_finding(
+            "Manifest projection validation",
+            "explain output could not be produced",
+        ));
         return Err(CompileFailure::from_errors(diagnostics).with_findings(&findings));
     }
     let ddl = generate_ddl_with_actions(&entities, &physical_names, &action_inventory);
@@ -2031,7 +2088,7 @@ fn validate_manifest_projection(
             ));
             continue;
         }
-        let Some((_entity, visible_fields)) = visible.get(metadata.id.as_str()) else {
+        let Some((entity, visible_fields)) = visible.get(metadata.id.as_str()) else {
             errors.push(Diagnostic::error(
                 "breg.manifest-projection.entity-not-visible",
                 path,
@@ -2039,6 +2096,21 @@ fn validate_manifest_projection(
             ));
             continue;
         };
+        let dataset = datasets
+            .get(
+                entity
+                    .primary_dataset
+                    .as_deref()
+                    .expect("projected entity has a dataset"),
+            )
+            .expect("projected entity dataset was validated");
+        let access_profile = dataset
+            .access_profile
+            .as_deref()
+            .unwrap_or(&projection.access_profile);
+        let classification_ceiling = dataset
+            .classification_ceiling
+            .unwrap_or(projection.classification_ceiling);
         if let Some(title) = metadata.title.as_ref() {
             validate_projection_text(title, &format!("{path}.title"), errors);
         }
@@ -2047,23 +2119,45 @@ fn validate_manifest_projection(
         }
         let mut identifier_fields = BTreeSet::new();
         for identifier in &metadata.identifiers {
+            let identifier_path = format!("{path}.identifiers[field={}]", identifier.field);
             let field_is_projected = visible_fields
                 .get(identifier.field.as_str())
                 .is_some_and(|field| manifest_projects_field(field));
-            if !identifier_fields.insert(identifier.field.as_str())
-                || !field_is_projected
-                || identifier.kind.trim().is_empty()
-            {
+            if !identifier_fields.insert(identifier.field.as_str()) {
                 errors.push(Diagnostic::error(
-                    "breg.manifest-projection.identifier-invalid",
-                    format!("{path}.identifiers[{}]", identifier.field),
-                    "Registry Manifest identifiers must uniquely reference visible fields and declare a kind",
+                    "breg.manifest-projection.identifier-duplicate",
+                    identifier_path.clone(),
+                    &format!(
+                        "manifestProjection entity `{}` repeats the identifier for field `{}`",
+                        metadata.id, identifier.field
+                    ),
+                ));
+            }
+            if !field_is_projected {
+                errors.push(Diagnostic::error(
+                    "breg.manifest-projection.identifier-field-not-visible",
+                    identifier_path.clone(),
+                    &format!(
+                        "identifier field `{}` is not a portable field readable by access profile `{access_profile}` at classification ceiling `{}`",
+                        identifier.field,
+                        classification_name(classification_ceiling)
+                    ),
+                ));
+            }
+            if identifier.kind.trim().is_empty() {
+                errors.push(Diagnostic::error(
+                    "breg.manifest-projection.identifier-kind-missing",
+                    identifier_path,
+                    &format!(
+                        "identifier field `{}` has no kind; every Registry Manifest identifier must declare one",
+                        identifier.field
+                    ),
                 ));
             }
         }
         let mut field_ids = BTreeSet::new();
         for field_metadata in &metadata.fields {
-            let field_path = format!("{path}.fields[{}]", field_metadata.id);
+            let field_path = format!("{path}.fields[id={}]", field_metadata.id);
             if !field_ids.insert(field_metadata.id.as_str()) {
                 errors.push(Diagnostic::error(
                     "breg.manifest-projection.field-duplicate",
@@ -2073,10 +2167,29 @@ fn validate_manifest_projection(
                 continue;
             }
             let Some(field) = visible_fields.get(field_metadata.id.as_str()) else {
+                let rule = match entity.fields.get(field_metadata.id.as_str()) {
+                    None => "does not exist on the Record type".to_owned(),
+                    Some(field)
+                        if !entity.access_profiles[access_profile]
+                            .readable_fields
+                            .contains(&field.id) =>
+                    {
+                        format!("is not readable by access profile `{access_profile}`")
+                    }
+                    Some(field) if field.classification > classification_ceiling => format!(
+                        "is classified `{}`, above classification ceiling `{}`",
+                        classification_name(field.classification),
+                        classification_name(classification_ceiling)
+                    ),
+                    Some(_) => format!("is not visible through access profile `{access_profile}`"),
+                };
                 errors.push(Diagnostic::error(
                     "breg.manifest-projection.field-not-visible",
                     field_path,
-                    "Registry Manifest metadata may describe only a field visible through the selected access profile",
+                    &format!(
+                        "manifestProjection field `{}` {rule}; selected access profile `{access_profile}` may project only readable fields at or below its classification ceiling",
+                        field_metadata.id
+                    ),
                 ));
                 continue;
             };
@@ -2120,6 +2233,18 @@ fn validate_manifest_projection(
                 .extend(values);
         }
     }
+    let projection_profiles = datasets
+        .values()
+        .map(|dataset| {
+            dataset
+                .access_profile
+                .as_deref()
+                .unwrap_or(&projection.access_profile)
+        })
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>()
+        .join(", ");
     let mut vocabulary_ids = BTreeSet::new();
     for metadata in &projection.vocabularies {
         let path = format!("project.manifestProjection.vocabularies[{}]", metadata.id);
@@ -2135,7 +2260,10 @@ fn validate_manifest_projection(
             errors.push(Diagnostic::error(
                 "breg.manifest-projection.vocabulary-not-visible",
                 path,
-                "Registry Manifest metadata may describe only a vocabulary used by a visible field",
+                &format!(
+                    "vocabulary `{}` is not used by a field visible through selected access profile `{projection_profiles}`; project only vocabularies used by a readable field at or below its classification ceiling",
+                    metadata.id
+                ),
             ));
             continue;
         };
@@ -2152,6 +2280,14 @@ fn validate_manifest_projection(
                 validate_projection_text(label, &format!("{path}.concepts[].label"), errors);
             }
         }
+    }
+}
+
+fn classification_name(classification: Classification) -> &'static str {
+    match classification {
+        Classification::Public => "public",
+        Classification::Internal => "internal",
+        Classification::Restricted => "restricted",
     }
 }
 
@@ -2534,6 +2670,8 @@ type DerivedOriginMap = BTreeMap<(String, String), Option<String>>;
 /// the delivery inventory resolves its bytes against the same asset namespace
 /// an action handler resolves against.
 type HookOriginMap = BTreeMap<(String, String), Option<String>>;
+/// Exact authored path of each collected hook, including module extensions.
+type HookPathMap = BTreeMap<(String, String), String>;
 /// Which module contributed one id-keyed member of an entity, by
 /// `(entity id, member id)`.
 type EntityMemberOriginMap = BTreeMap<(String, String), Option<String>>;
@@ -2560,6 +2698,7 @@ struct CollectedOrigins {
     selector_profiles: EntityMemberOriginMap,
     read_paths: EntityMemberOriginMap,
     hooks: HookOriginMap,
+    hook_paths: HookPathMap,
 }
 
 fn collect_entities(
@@ -2667,6 +2806,16 @@ fn insert_entity(
         origins
             .hooks
             .insert((entity.id.clone(), hook.id.clone()), module.clone());
+        let path = match module.as_deref() {
+            Some(module) => format!(
+                "modules[id={module}].recordTypes[id={}].hooks[id={}]",
+                entity.id, hook.id
+            ),
+            None => format!("recordTypes[id={}].hooks[id={}]", entity.id, hook.id),
+        };
+        origins
+            .hook_paths
+            .insert((entity.id.clone(), hook.id.clone()), path);
     }
 }
 
@@ -2745,15 +2894,26 @@ fn apply_extensions(
         let mut extensions = module.extend_entities.clone();
         extensions.sort_by(|left, right| left.entity.cmp(&right.entity));
         for extension in &extensions {
+            let extension_path = format!(
+                "modules[id={}].extendRecordTypes[recordType={}]",
+                module.id, extension.entity
+            );
             let Some(entity) = entities.get_mut(&extension.entity) else {
                 errors.push(Diagnostic::error(
                     "breg.extension.record-type-unknown",
-                    "modules[].extendRecordTypes[].recordType",
+                    format!("{extension_path}.recordType"),
                     "an extension targets an unknown record type",
                 ));
                 continue;
             };
+            let diagnostics_start = errors.len();
             merge_extension(entity, extension, Some(module.id.clone()), origins, errors);
+            for diagnostic in &mut errors[diagnostics_start..] {
+                diagnostic.path =
+                    diagnostic
+                        .path
+                        .replacen("modules[].extendRecordTypes[]", &extension_path, 1);
+            }
         }
     }
 }
@@ -2863,6 +3023,16 @@ fn merge_extension(
         origins
             .hooks
             .insert((entity.id.clone(), hook.id.clone()), module.clone());
+        let path = match module.as_deref() {
+            Some(module) => format!(
+                "modules[id={module}].extendRecordTypes[recordType={}].hooks[id={}]",
+                entity.id, hook.id
+            ),
+            None => format!("recordTypes[id={}].hooks[id={}]", entity.id, hook.id),
+        };
+        origins
+            .hook_paths
+            .insert((entity.id.clone(), hook.id.clone()), path);
     }
     let existing_selector_profiles = entity.selector_profiles.len();
     merge_by_id(
@@ -3242,6 +3412,7 @@ fn resolve_vocabularies(
     let unused_consent = crate::consent::unused_record_message(entities);
     for entity in entities.values_mut() {
         for field in &mut entity.fields {
+            let diagnostics_start = errors.len();
             if let FieldTypeSource::VocabularyCode { vocabulary, values } = &mut field.field_type {
                 if !values.is_empty() && crate::consent::is_reserved_vocabulary(vocabulary) {
                     errors.push(Diagnostic::error(
@@ -3268,10 +3439,21 @@ fn resolve_vocabularies(
                     }
                 }
             }
+            for diagnostic in &mut errors[diagnostics_start..] {
+                diagnostic.path = diagnostic
+                    .path
+                    .replacen(
+                        "recordTypes[]",
+                        &format!("recordTypes[id={}]", entity.id),
+                        1,
+                    )
+                    .replacen("fields[]", &format!("fields[id={}]", field.id), 1);
+            }
         }
     }
     for action in actions.values_mut() {
         for input in &mut action.source.inputs {
+            let diagnostics_start = errors.len();
             if let FieldTypeSource::VocabularyCode { vocabulary, values } = &mut input.field_type {
                 if values.is_empty() {
                     if let Some(resolved) = vocabularies.get(vocabulary) {
@@ -3291,6 +3473,12 @@ fn resolve_vocabularies(
                     }
                 }
             }
+            for diagnostic in &mut errors[diagnostics_start..] {
+                diagnostic.path = diagnostic
+                    .path
+                    .replacen("actions[]", &format!("actions[id={}]", action.source.id), 1)
+                    .replacen("inputs[]", &format!("inputs[id={}]", input.id), 1);
+            }
         }
     }
     vocabularies
@@ -3299,6 +3487,7 @@ fn resolve_vocabularies(
 fn validate_entities(
     registry_id: &str,
     entities: &BTreeMap<String, EntitySource>,
+    hook_paths: &HookPathMap,
     profile: CompileProfile,
     errors: &mut Vec<Diagnostic>,
 ) {
@@ -3306,6 +3495,7 @@ fn validate_entities(
     let mut sql_names = BTreeSet::new();
     let mut event_ids = BTreeSet::new();
     for entity in entities.values() {
+        let diagnostics_start = errors.len();
         validate_id(&entity.id, "recordTypes[].id", errors);
         if !sql_names.insert(canonical_sql_name(&entity.id)) {
             errors.push(Diagnostic::error(
@@ -3369,7 +3559,21 @@ fn validate_entities(
         validate_selector_profiles(entity, errors);
         validate_read_paths(entity, entities, errors);
         validate_profiles(entity, entities, errors);
-        validate_hooks(registry_id, entity, profile, &mut event_ids, errors);
+        validate_hooks(
+            registry_id,
+            entity,
+            hook_paths,
+            profile,
+            &mut event_ids,
+            errors,
+        );
+        for diagnostic in &mut errors[diagnostics_start..] {
+            diagnostic.path = diagnostic.path.replacen(
+                "recordTypes[]",
+                &format!("recordTypes[id={}]", entity.id),
+                1,
+            );
+        }
     }
     validate_read_path_cycles(entities, errors);
 }
@@ -3774,7 +3978,7 @@ fn validate_entity_fields(
             if role == ValidTimeRole::ValidFrom && !field.required {
                 errors.push(Diagnostic::error(
                     "breg.field.valid-time-start-required",
-                    "recordTypes[].fields[].required",
+                    format!("recordTypes[].fields[id={}].required", field.id),
                     "a valid-time start field must be required",
                 ));
             }
@@ -4768,19 +4972,20 @@ fn validate_profiles(
                 ));
             }
         }
-        if !access.filterable_fields.is_subset(&access.readable_fields)
-            || !access.sortable_fields.is_subset(&access.readable_fields)
-        {
-            let member = if !access.filterable_fields.is_subset(&access.readable_fields) {
-                "filterableFields"
-            } else {
-                "sortableFields"
-            };
-            errors.push(Diagnostic::error(
-                "breg.access-profile.processing-wider-than-read",
-                format!("{profile_path}.{member}"),
-                "filterable and sortable fields must be readable",
-            ));
+        for (member, processed) in [
+            ("filterableFields", &access.filterable_fields),
+            ("sortableFields", &access.sortable_fields),
+        ] {
+            for field in processed.difference(&access.readable_fields) {
+                errors.push(Diagnostic::error(
+                    "breg.access-profile.processing-wider-than-read",
+                    format!("{profile_path}.{member}[field={field}]"),
+                    &format!(
+                        "access profile `{}` processes field `{field}` for filtering or sorting, so `{field}` must also be readable",
+                        access.id
+                    ),
+                ));
+            }
         }
         // Query processing over ciphertext cannot filter or order: an
         // encrypted field leaves the filterable and sortable sets.
@@ -4926,6 +5131,92 @@ fn create_required_field_findings(entities: &BTreeMap<String, EntitySource>) -> 
         }
     }
     findings
+}
+
+fn stored_field_fillability_findings(
+    entities: &BTreeMap<String, CompiledEntity>,
+    actions: &crate::model::CompiledActionInventory,
+) -> Vec<Diagnostic> {
+    let mut fillable = BTreeSet::<(String, String)>::new();
+    for entity in entities.values() {
+        for profile in entity.access_profiles.values().filter(|profile| {
+            [Operation::Create, Operation::Patch, Operation::Import]
+                .iter()
+                .any(|operation| profile.operations.contains(operation))
+        }) {
+            fillable.extend(
+                profile
+                    .writable_fields
+                    .iter()
+                    .map(|field| (entity.id.clone(), field.clone())),
+            );
+        }
+    }
+    for action in &actions.actions {
+        for effect in &action.effects {
+            fillable.extend(
+                effect
+                    .mutations
+                    .iter()
+                    .filter_map(|mutation| match mutation {
+                        crate::model::CompiledPlanMutation::Set { field, .. } => {
+                            Some((effect.target.entity_id.clone(), field.clone()))
+                        }
+                        crate::model::CompiledPlanMutation::Clear { .. } => None,
+                    }),
+            );
+        }
+        if let Some(handler) = &action.handler {
+            for write in &handler.writes {
+                fillable.extend(
+                    write
+                        .ceiling
+                        .fields
+                        .iter()
+                        .map(|field| (write.ceiling.target_entity_id.clone(), field.clone())),
+                );
+            }
+        }
+    }
+    let mut findings = Vec::new();
+    for entity in entities.values() {
+        for field in entity.stored_fields.iter().filter(|field| {
+            !field.required && !fillable.contains(&(entity.id.clone(), field.logical.id.clone()))
+        }) {
+            findings.push(Diagnostic::finding(
+                "breg.record-type.stored-field-unfillable",
+                format!(
+                    "recordTypes[id={}].fields[id={}]",
+                    entity.id, field.logical.id
+                ),
+                "this optional stored field has no writable access grant, fixed Action set, function-plan write, or import that can supply a value; add the field to one of those writers, or remove the field",
+            ));
+        }
+    }
+    findings
+}
+
+fn stopped_stage_finding(stage: &str, skipped_checks: &str) -> Diagnostic {
+    Diagnostic::finding(
+        "breg.compile.later-checks-skipped",
+        "project",
+        &format!(
+            "compilation stopped during {stage}; {skipped_checks}. Correct the errors above and check again. Explain subjects model, access, routes, queries, actions, proposals, and events require a successful compiled model and did not run"
+        ),
+    )
+}
+
+fn stopped_compile_failure(
+    failure: CompileFailure,
+    findings: &[Diagnostic],
+    stage: &str,
+) -> CompileFailure {
+    let mut findings = findings.to_vec();
+    findings.push(stopped_stage_finding(
+        stage,
+        "remaining compiler checks did not run",
+    ));
+    failure.with_findings(&findings)
 }
 
 /// Refuse multiple defaults. With no default, an ambiguous route requires
@@ -5162,19 +5453,20 @@ fn validate_read_path_permission_fields(
             "a read-path permission must declare readable fields",
         ));
     }
-    if !grant.filterable_fields.is_subset(&grant.readable_fields)
-        || !grant.sortable_fields.is_subset(&grant.readable_fields)
-    {
-        let member = if !grant.filterable_fields.is_subset(&grant.readable_fields) {
-            "filterableFields"
-        } else {
-            "sortableFields"
-        };
-        errors.push(Diagnostic::error(
-            "breg.access-profile.read-path-processing-wider-than-read",
-            format!("{grant_path}.{member}"),
-            "read-path filterable and sortable fields must be readable",
-        ));
+    for (member, processed) in [
+        ("filterableFields", &grant.filterable_fields),
+        ("sortableFields", &grant.sortable_fields),
+    ] {
+        for field in processed.difference(&grant.readable_fields) {
+            errors.push(Diagnostic::error(
+                "breg.access-profile.read-path-processing-wider-than-read",
+                format!("{grant_path}.{member}[field={field}]"),
+                &format!(
+                    "access profile `{}` read path `{}` processes field `{field}` for filtering or sorting, so `{field}` must also be readable",
+                    access.id, grant.path
+                ),
+            ));
+        }
     }
     for (member, referenced) in [
         ("readableFields", &grant.readable_fields),
@@ -5219,6 +5511,7 @@ fn validate_read_path_permission_fields(
 fn validate_hooks(
     registry_id: &str,
     entity: &EntitySource,
+    hook_paths: &HookPathMap,
     profile: CompileProfile,
     registry_event_ids: &mut BTreeSet<String>,
     errors: &mut Vec<Diagnostic>,
@@ -5228,8 +5521,20 @@ fn validate_hooks(
         .iter()
         .map(|field| (field.id.as_str(), field))
         .collect();
+    let mut hook_id_counts = BTreeMap::new();
+    for hook in &entity.hooks {
+        *hook_id_counts.entry(hook.id.as_str()).or_insert(0_usize) += 1;
+    }
     let mut ids = BTreeSet::new();
     for hook in &entity.hooks {
+        let hook_path = if hook_id_counts.get(hook.id.as_str()) == Some(&1) {
+            hook_paths
+                .get(&(entity.id.clone(), hook.id.clone()))
+                .cloned()
+                .unwrap_or_else(|| format!("recordTypes[id={}].hooks[id={}]", entity.id, hook.id))
+        } else {
+            format!("recordTypes[id={}].hooks[]", entity.id)
+        };
         validate_id(&hook.id, "recordTypes[].hooks[].id", errors);
         if !ids.insert(hook.id.as_str()) {
             errors.push(Diagnostic::error(
@@ -5247,36 +5552,36 @@ fn validate_hooks(
         if hook.phase != HookPhase::After {
             errors.push(Diagnostic::error(
                 "breg.hook.phase-unsupported",
-                "recordTypes[].hooks[].phase",
+                format!("{hook_path}.phase"),
                 "an entity hook runs after the triggering transaction commits; declare phase: after",
             ));
         }
         if hook.projection.is_empty() {
             errors.push(Diagnostic::error(
                 "breg.event.projection-empty",
-                "recordTypes[].hooks[].projection",
+                format!("{hook_path}.projection"),
                 "an event projection must contain at least one field",
             ));
         }
-        if hook
+        for field in hook
             .projection
             .iter()
-            .any(|field| !fields.contains_key(field.as_str()))
+            .filter(|field| !fields.contains_key(field.as_str()))
         {
             errors.push(Diagnostic::error(
                 "breg.event.projection-field-unknown",
-                "recordTypes[].hooks[].projection",
+                format!("{hook_path}.projection[field={field}]"),
                 "an event projection refers to an unknown field",
             ));
         }
-        if hook.projection.iter().any(|field| {
+        for field in hook.projection.iter().filter(|field| {
             fields
                 .get(field.as_str())
                 .is_some_and(|field| field.encrypted)
         }) {
             errors.push(Diagnostic::error(
                 "breg.event.projection-encrypted",
-                "recordTypes[].hooks[].projection",
+                format!("{hook_path}.projection[field={field}]"),
                 "an encrypted field cannot be projected into an event",
             ));
         }
@@ -5293,18 +5598,18 @@ fn validate_hooks(
         {
             errors.push(Diagnostic::error(
                 "breg.event.trigger-unavailable",
-                "recordTypes[].hooks[].trigger",
+                format!("{hook_path}.trigger"),
                 "an event trigger is unavailable for a create-only entity",
             ));
         }
         if hook.trigger == EventTrigger::Tombstoned && !entity.tombstone {
             errors.push(Diagnostic::error(
                 "breg.event.trigger-unavailable",
-                "recordTypes[].hooks[].trigger",
+                format!("{hook_path}.trigger"),
                 "a tombstone event requires tombstone behavior",
             ));
         }
-        validate_event_condition(hook, &fields, errors);
+        validate_event_condition(hook, &fields, &hook_path, errors);
         let destination_id = match hook.handler.as_ref() {
             // A remote call inside the triggering transaction would hold row
             // locks for the length of a network round trip, so the one
@@ -5312,7 +5617,7 @@ fn validate_hooks(
             Some(HookHandlerSource::Url { .. }) if hook.phase != HookPhase::After => {
                 errors.push(Diagnostic::error(
                     "breg.hook.handler-kind-unsupported",
-                    "recordTypes[].hooks[].handler.type",
+                    format!("{hook_path}.handler.type"),
                     "handler type url cannot run in phase before; declare phase: after",
                 ));
                 continue;
@@ -5322,14 +5627,14 @@ fn validate_hooks(
             // Its script or module asset is resolved and checked against the
             // supplied assets by `validate_hook_assets`.
             Some(handler) => {
-                validate_hook_handler_abi(handler, errors);
+                validate_hook_handler_abi(handler, &hook_path, errors);
                 None
             }
             None => {
                 if profile == CompileProfile::Production {
                     errors.push(Diagnostic::error(
                         "breg.event.delivery-required",
-                        "recordTypes[].hooks[].handler",
+                        format!("{hook_path}.handler"),
                         "a production event requires a supported delivery",
                     ));
                 }
@@ -5341,14 +5646,14 @@ fn validate_hooks(
         {
             errors.push(Diagnostic::error(
                 "breg.event.webhook-projection-too-large",
-                "recordTypes[].hooks[].projection",
+                format!("{hook_path}.projection"),
                 "the webhook projection can exceed the governed transport body bound",
             ));
         }
         if destination_id.is_some_and(|value| !valid_logical_destination_id(value)) {
             errors.push(Diagnostic::error(
                 "breg.event.webhook-destination-invalid",
-                "recordTypes[].hooks[].handler.destinationId",
+                format!("{hook_path}.handler.destinationId"),
                 "a webhook destination must use the closed logical identifier grammar",
             ));
         }
@@ -5358,7 +5663,11 @@ fn validate_hooks(
 /// A local handler runs the one handler ABI version one defines, so a hook
 /// declaring any other spelling is refused rather than compiled into a
 /// program the worker would call with a contract it does not implement.
-fn validate_hook_handler_abi(handler: &HookHandlerSource, errors: &mut Vec<Diagnostic>) {
+fn validate_hook_handler_abi(
+    handler: &HookHandlerSource,
+    hook_path: &str,
+    errors: &mut Vec<Diagnostic>,
+) {
     let abi = match handler {
         HookHandlerSource::Rhai { abi, .. } | HookHandlerSource::Wasm { abi, .. } => abi.as_deref(),
         HookHandlerSource::Url { .. } => return,
@@ -5366,7 +5675,7 @@ fn validate_hook_handler_abi(handler: &HookHandlerSource, errors: &mut Vec<Diagn
     if abi != Some(HOOK_HANDLER_ABI_V1) {
         errors.push(Diagnostic::error(
             "breg.hook.handler-abi-unsupported",
-            "recordTypes[].hooks[].handler.abi",
+            format!("{hook_path}.handler.abi"),
             &format!("a local hook handler requires abi {HOOK_HANDLER_ABI_V1}"),
         ));
     }
@@ -5385,6 +5694,7 @@ fn validate_hook_assets(
 ) {
     for entity in sources.values() {
         for hook in &entity.hooks {
+            let hook_path = format!("recordTypes[id={}].hooks[id={}]", entity.id, hook.id);
             let Some(handler) = hook.handler.as_ref() else {
                 continue;
             };
@@ -5400,7 +5710,7 @@ fn validate_hook_assets(
                 // compiled could only fail when it fires.
                 errors.push(Diagnostic::error(
                     "breg.hook.handler-wasm-build-unsupported",
-                    "recordTypes[].hooks[].handler.type",
+                    format!("{hook_path}.handler.type"),
                     "this build of the compiler does not admit WASM hook handlers",
                 ));
                 continue;
@@ -5420,15 +5730,21 @@ fn validate_hook_assets(
                 };
                 errors.push(Diagnostic::error(
                     code,
-                    format!("recordTypes[].hooks[].handler.{member}"),
+                    format!("{hook_path}.handler.{member}"),
                     &format!("supply the hook's owned handler asset at {source_path}"),
                 ));
                 continue;
             };
+            let diagnostic_start = errors.len();
             if is_wasm {
                 validate_hook_module_asset(&asset.bytes, errors);
             } else {
                 validate_hook_script_asset(&asset.bytes, errors);
+            }
+            for diagnostic in &mut errors[diagnostic_start..] {
+                if let Some(rest) = diagnostic.path.strip_prefix("recordTypes[].hooks[]") {
+                    diagnostic.path = format!("{hook_path}{rest}");
+                }
             }
         }
     }
@@ -5527,6 +5843,7 @@ pub(crate) fn validate_hook_script_asset(bytes: &[u8], errors: &mut Vec<Diagnost
 fn validate_event_condition(
     event: &crate::contract::HookSource,
     fields: &BTreeMap<&str, &FieldSource>,
+    hook_path: &str,
     errors: &mut Vec<Diagnostic>,
 ) {
     match event.when.as_ref() {
@@ -5545,7 +5862,7 @@ fn validate_event_condition(
             {
                 errors.push(Diagnostic::error(
                     "breg.event.when-empty",
-                    "recordTypes[].hooks[].when",
+                    format!("{hook_path}.when"),
                     "a field event condition requires at least one predicate",
                 ));
             }
@@ -5561,15 +5878,16 @@ fn validate_event_condition(
             if !compatible {
                 errors.push(Diagnostic::error(
                     "breg.event.when-trigger-incompatible",
-                    "recordTypes[].hooks[].when",
+                    format!("{hook_path}.when"),
                     "field predicates are unavailable for this event trigger",
                 ));
             }
             for field in changed {
+                let path = format!("{hook_path}.when.changed[field={field}]");
                 if !fields.contains_key(field.as_str()) {
                     errors.push(Diagnostic::error(
                         "breg.event.when-field-unknown",
-                        "recordTypes[].hooks[].when.changed",
+                        &path,
                         "an event condition refers to an unknown field",
                     ));
                 }
@@ -5579,20 +5897,21 @@ fn validate_event_condition(
                 {
                     errors.push(Diagnostic::error(
                         "breg.event.when-encrypted",
-                        "recordTypes[].events[].when.changed",
+                        &path,
                         "an event condition cannot name an encrypted field",
                     ));
                 }
             }
-            for (path, unset) in [
-                ("recordTypes[].hooks[].when.beforeIsNull", before_is_null),
-                ("recordTypes[].hooks[].when.afterIsNull", after_is_null),
+            for (member, unset) in [
+                ("beforeIsNull", before_is_null),
+                ("afterIsNull", after_is_null),
             ] {
                 for field in unset {
+                    let path = format!("{hook_path}.when.{member}[field={field}]");
                     let Some(source) = fields.get(field.as_str()) else {
                         errors.push(Diagnostic::error(
                             "breg.event.when-field-unknown",
-                            path,
+                            &path,
                             "an event condition refers to an unknown field",
                         ));
                         continue;
@@ -5600,21 +5919,22 @@ fn validate_event_condition(
                     if source.encrypted {
                         errors.push(Diagnostic::error(
                             "breg.event.when-encrypted",
-                            path,
+                            &path,
                             "an event condition cannot name an encrypted field",
                         ));
                     }
                 }
             }
-            for (path, predicates) in [
-                ("recordTypes[].hooks[].when.beforeEquals", before_equals),
-                ("recordTypes[].hooks[].when.afterEquals", after_equals),
+            for (member, predicates) in [
+                ("beforeEquals", before_equals),
+                ("afterEquals", after_equals),
             ] {
                 for (field, value) in predicates {
+                    let path = format!("{hook_path}.when.{member}[field={field}]");
                     let Some(source) = fields.get(field.as_str()) else {
                         errors.push(Diagnostic::error(
                             "breg.event.when-field-unknown",
-                            path,
+                            &path,
                             "an event condition refers to an unknown field",
                         ));
                         continue;
@@ -5622,7 +5942,7 @@ fn validate_event_condition(
                     if source.encrypted {
                         errors.push(Diagnostic::error(
                             "breg.event.when-encrypted",
-                            path,
+                            &path,
                             "an event condition cannot name an encrypted field",
                         ));
                     }
@@ -5630,7 +5950,7 @@ fn validate_event_condition(
                     if canonical_field_literal(&value, &source.field_type).is_none() {
                         errors.push(Diagnostic::error(
                             "breg.event.when-value-invalid",
-                            path,
+                            &path,
                             "an event comparison value must be canonical for its declared field type",
                         ));
                     }
@@ -7221,15 +7541,25 @@ fn query_operation(
     } = input;
     if let Some(binding) = &temporal {
         let temporal_fields = [&binding.start_field, &binding.end_field];
-        if temporal_fields
-            .iter()
-            .any(|field| !profile.readable_fields.contains(*field))
+        let mut missing = false;
+        for field in temporal_fields
+            .into_iter()
+            .filter(|field| !profile.readable_fields.contains(field.as_str()))
         {
             errors.push(Diagnostic::error(
                 "breg.query.temporal-field-not-readable",
-                "recordTypes[].accessProfiles[].readableFields",
-                "temporal query boundary fields must be readable by the selected profile",
+                format!(
+                    "recordTypes[id={}].accessProfiles[id={}].readableFields",
+                    entity.id, profile.id
+                ),
+                &format!(
+                    "access profile `{}` must include temporal boundary field `{field}` in readableFields",
+                    profile.id
+                ),
             ));
+            missing = true;
+        }
+        if missing {
             return None;
         }
     }
@@ -8144,7 +8474,7 @@ fn validate_native_definitions(project: &RegistryProject, errors: &mut Vec<Diagn
         {
             errors.push(Diagnostic::error(
                 "breg.record-type.api-name-invalid",
-                "recordTypes[].apiName",
+                format!("recordTypes[id={}].apiName", record.id),
                 "Record type API names must be unique upper camel case names",
             ));
         }

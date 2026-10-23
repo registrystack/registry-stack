@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://id.registrystack.org/schemas/breg/lifecycle-explanation/lifecycle-explanation.v1alpha7.schema.json",
+  "$id": "https://id.registrystack.org/schemas/breg/lifecycle-explanation/lifecycle-explanation.v1alpha8.schema.json",
   "title": "LifecycleExplanation",
   "description": "The native engine-owned Proposal lifecycle, pinned independently of project source.",
   "type": "object",
@@ -12,7 +12,7 @@
   ],
   "properties": {
     "apiVersion": {
-      "const": "id.registrystack.org/formats/breg/lifecycle-explanation/v1alpha7"
+      "const": "id.registrystack.org/formats/breg/lifecycle-explanation/v1alpha8"
     },
     "kind": {
       "const": "BRegLifecycleExplanation"
@@ -183,61 +183,74 @@
               "event": "edit",
               "from": "draft",
               "guard": "The Proposal is draft; replace validated Action input and advance its lifecycle revision.",
-              "to": "draft"
+              "to": "draft",
+              "recoveryReasons": []
             },
             {
               "event": "submit",
               "from": "draft",
               "guard": "The Proposal is draft and this submission version has not been frozen; accept the prepared plan and freeze its digest.",
-              "to": "submitted"
+              "to": "submitted",
+              "recoveryReasons": []
             },
             {
               "event": "rebase",
               "from": "draft",
               "guard": "The Proposal is draft; explicitly bind the active Action definition and preserve the current submission version.",
-              "to": "draft"
+              "to": "draft",
+              "recoveryReasons": []
             },
             {
               "event": "cancel",
               "from": "draft",
               "guard": "The Proposal is draft or submitted; cancel without applying its effects.",
-              "to": "cancelled"
+              "to": "cancelled",
+              "recoveryReasons": []
             },
             {
               "event": "revise",
               "from": "submitted",
               "guard": "The Proposal is submitted; open a new draft submission version without modifying the frozen prior submission.",
-              "to": "draft"
+              "to": "draft",
+              "recoveryReasons": []
             },
             {
               "event": "rebase",
               "from": "submitted",
               "guard": "The Proposal is submitted; open a new draft version explicitly bound to the active Action definition.",
-              "to": "draft"
+              "to": "draft",
+              "recoveryReasons": []
             },
             {
               "event": "retry",
               "from": "submitted",
               "guard": "The Proposal remains submitted; schedule another eligible review or application attempt without changing the frozen plan.",
-              "to": "submitted"
+              "to": "submitted",
+              "recoveryReasons": [
+                "dependency-outage",
+                "lease-expired"
+              ]
             },
             {
               "event": "cancel",
               "from": "submitted",
               "guard": "The Proposal is draft or submitted; cancel without applying its effects.",
-              "to": "cancelled"
+              "to": "cancelled",
+              "recoveryReasons": []
             },
             {
               "event": "apply",
               "from": "submitted",
               "guard": "The submission version, displayed digest, frozen Action contract, authorized targets, commit guards, and required approval match the application attempt.",
-              "to": "applied"
+              "to": "applied",
+              "recoveryReasons": []
             },
             {
               "event": "reject",
               "from": "submitted",
               "guard": "The configured review authority returned a rejected result for the exact current submission. A rejection is terminal; a changes-requested result leaves the Proposal submitted and revisable.",
-              "to": "rejected"
+              "to": "rejected",
+              "recoveryReasons": []
             }
           ]
         }

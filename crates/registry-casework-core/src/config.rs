@@ -1016,9 +1016,7 @@ impl CaseworkProject {
                     "Write a bounded id.",
                 );
             }
-            if !bounded_config_text(&team.label, 160)
-                || registry_platform_yaml::DisplayText::new(team.label.as_str()).is_err()
-            {
+            if !crate::typed::valid_display_label(&team.label, 160) {
                 findings.push(
                     "casework.team.identity",
                     format!("{at}/label"),
@@ -1112,15 +1110,12 @@ impl CaseworkProject {
                     IDENTIFIER_ACTION,
                 );
             }
-            if queue.label.trim().is_empty()
-                || queue.label.len() > 160
-                || registry_platform_yaml::DisplayText::new(queue.label.as_str()).is_err()
-            {
+            if !crate::typed::valid_display_label(&queue.label, 160) {
                 findings.push(
                     "casework.queue.invalid-label",
                     format!("{}/label", keyed("queues", &queue.id)),
-                    "expected display text of 1 to 160 bytes that is not only spaces",
-                    "Write a short display label without hidden reordering controls, line separators, byte-order marks, or Unicode noncharacters.",
+                    "expected single-line display text of 1 to 160 bytes that is not only spaces",
+                    "Write a short single-line display label without control or unsafe display characters.",
                 );
             }
         }
@@ -1674,12 +1669,73 @@ fn project_integrity_diagnostics(decoded: &mut Decoded<CaseworkProject>) -> Vec<
                 })
                 .collect(),
         ),
+        (
+            "casework.project.duplicate-review-policy-label",
+            "review policies",
+            project
+                .review_policies
+                .iter()
+                .filter_map(|item| {
+                    item.label.as_ref().map(|label| {
+                        let pointer = format!(
+                            "/reviewPolicies/{}/label",
+                            registry_platform_yaml::escape_pointer_segment(&item.id)
+                        );
+                        (item.id.clone(), label.clone(), pointer)
+                    })
+                })
+                .collect(),
+        ),
     ];
     let mut warnings = Vec::new();
     for (code, kind, values) in &warning_groups {
         warnings.extend(duplicate_labels(document, code, kind, values));
     }
     for policy in &project.review_policies {
+        let policy_base = format!(
+            "/reviewPolicies/{}",
+            registry_platform_yaml::escape_pointer_segment(&policy.id)
+        );
+        let stage_labels = policy
+            .stages
+            .iter()
+            .enumerate()
+            .filter_map(|(index, stage)| {
+                stage.label.as_ref().map(|label| {
+                    (
+                        stage.id.clone(),
+                        label.clone(),
+                        format!("{policy_base}/stages/{index}/label"),
+                    )
+                })
+            })
+            .collect::<Vec<_>>();
+        warnings.extend(duplicate_labels(
+            document,
+            "casework.review-policy.duplicate-stage-label",
+            "review stages",
+            &stage_labels,
+        ));
+        let routing_labels = policy
+            .routing
+            .iter()
+            .enumerate()
+            .filter_map(|(index, rule)| {
+                rule.label.as_ref().map(|label| {
+                    (
+                        rule.id.clone(),
+                        label.clone(),
+                        format!("{policy_base}/routing/{index}/label"),
+                    )
+                })
+            })
+            .collect::<Vec<_>>();
+        warnings.extend(duplicate_labels(
+            document,
+            "casework.review-policy.duplicate-routing-label",
+            "routing rules",
+            &routing_labels,
+        ));
         let base = format!(
             "/reviewPolicies/{}/outcomes",
             registry_platform_yaml::escape_pointer_segment(&policy.id)

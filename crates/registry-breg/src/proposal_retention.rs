@@ -945,20 +945,33 @@ pub(crate) async fn mark_incompatible_proposals(
         if !action.execution.is_proposal() {
             continue;
         }
-        client.execute("UPDATE registry_internal.registry_proposal_state
-            SET blocked_reason=CASE WHEN action_revision=$2 OR (state='submitted' AND EXISTS (
-                SELECT 1 FROM registry_internal.registry_proposal_activation_compatibility c
-                JOIN registry_internal.registry_proposal_submissions p USING(action_id,proposal_id,submission_version)
-                WHERE c.action_id=registry_proposal_state.action_id AND c.proposal_id=registry_proposal_state.proposal_id
-                  AND c.submission_version=registry_proposal_state.submission_version
-                  AND c.frozen_action_revision=registry_proposal_state.action_revision
-                  AND c.current_action_revision=$2 AND c.candidate_package_digest=$3 AND c.activation_id=$4
-                  AND c.effect_digest=p.snapshot->>'effectDigest' AND p.erased_at IS NULL))
-                THEN NULL ELSE 'package-changed' END,
+        let rows = client.query("WITH compatibility AS (
+            SELECT s.action_id,s.proposal_id,
+                (s.action_revision=$2 OR (s.state='submitted' AND EXISTS (
+                    SELECT 1 FROM registry_internal.registry_proposal_activation_compatibility c
+                    JOIN registry_internal.registry_proposal_submissions p USING(action_id,proposal_id,submission_version)
+                    WHERE c.action_id=s.action_id AND c.proposal_id=s.proposal_id
+                      AND c.submission_version=s.submission_version
+                      AND c.frozen_action_revision=s.action_revision
+                      AND c.current_action_revision=$2 AND c.candidate_package_digest=$3 AND c.activation_id=$4
+                      AND c.effect_digest=p.snapshot->>'effectDigest' AND p.erased_at IS NULL))) AS compatible
+            FROM registry_internal.registry_proposal_state s
+            WHERE s.action_id=$1 AND s.state IN ('draft','submitted')
+            FOR UPDATE OF s)
+            UPDATE registry_internal.registry_proposal_state s
+            SET blocked_reason=CASE WHEN s.blocked_reason='application-refused'
+                THEN 'application-refused' WHEN c.compatible THEN NULL ELSE 'package-changed' END,
                 updated_at=transaction_timestamp()
-            WHERE action_id=$1 AND state IN ('draft','submitted')",
+            FROM compatibility c
+            WHERE s.action_id=c.action_id AND s.proposal_id=c.proposal_id
+            RETURNING s.proposal_id,c.compatible",
             &[&action.id,&action.definition_revision,&candidate_digest,&activation]).await.map_err(map_retention_error)?;
-        crate::review_store::withdraw_blocked_proposals(client, &action.id)
+        let incompatible = rows
+            .iter()
+            .filter(|row| !row.get::<_, bool>(1))
+            .map(|row| row.get::<_, Uuid>(0))
+            .collect::<Vec<_>>();
+        crate::review_store::withdraw_incompatible_proposals(client, &action.id, &incompatible)
             .await
             .map_err(|_| ProposalRetentionError::Unavailable)?;
     }

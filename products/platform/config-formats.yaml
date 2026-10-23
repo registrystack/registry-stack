@@ -869,17 +869,17 @@ formats:
     audience: generated
     stability: promised
     current:
-      apiVersion: id.registrystack.org/formats/breg/access-explanation/v1alpha6
+      apiVersion: id.registrystack.org/formats/breg/access-explanation/v1alpha7
       kind: BRegAccessExplanation
       checkedBy:
         file: crates/registry-bregctl/src/lib.rs
         symbol: ACCESS_EXPLANATION
     target:
-      apiVersion: id.registrystack.org/formats/breg/access-explanation/v1alpha6
+      apiVersion: id.registrystack.org/formats/breg/access-explanation/v1alpha7
       kind: BRegAccessExplanation
     schema:
       path: products/breg/contracts/explain/AccessExplanation.schema.json
-      id: https://id.registrystack.org/schemas/breg/access-explanation/access-explanation.v1alpha6.schema.json
+      id: https://id.registrystack.org/schemas/breg/access-explanation/access-explanation.v1alpha7.schema.json
       origin: hand-written
       differentialTest: crates/registry-bregctl/tests/explain_contract.rs
     reader: none
@@ -929,17 +929,17 @@ formats:
     audience: generated
     stability: promised
     current:
-      apiVersion: id.registrystack.org/formats/breg/actions-explanation/v1alpha6
+      apiVersion: id.registrystack.org/formats/breg/actions-explanation/v1alpha7
       kind: BRegActionsExplanation
       checkedBy:
         file: crates/registry-bregctl/src/lib.rs
         symbol: ACTIONS_EXPLANATION
     target:
-      apiVersion: id.registrystack.org/formats/breg/actions-explanation/v1alpha6
+      apiVersion: id.registrystack.org/formats/breg/actions-explanation/v1alpha7
       kind: BRegActionsExplanation
     schema:
       path: products/breg/contracts/explain/ActionsExplanation.schema.json
-      id: https://id.registrystack.org/schemas/breg/actions-explanation/actions-explanation.v1alpha6.schema.json
+      id: https://id.registrystack.org/schemas/breg/actions-explanation/actions-explanation.v1alpha7.schema.json
       origin: hand-written
       differentialTest: crates/registry-bregctl/tests/explain_contract.rs
     reader: none
@@ -959,17 +959,17 @@ formats:
     audience: generated
     stability: promised
     current:
-      apiVersion: id.registrystack.org/formats/breg/proposals-explanation/v1alpha2
+      apiVersion: id.registrystack.org/formats/breg/proposals-explanation/v1alpha3
       kind: BRegProposalsExplanation
       checkedBy:
         file: crates/registry-bregctl/src/lib.rs
         symbol: PROPOSALS_EXPLANATION
     target:
-      apiVersion: id.registrystack.org/formats/breg/proposals-explanation/v1alpha2
+      apiVersion: id.registrystack.org/formats/breg/proposals-explanation/v1alpha3
       kind: BRegProposalsExplanation
     schema:
       path: products/breg/contracts/explain/ProposalsExplanation.schema.json
-      id: https://id.registrystack.org/schemas/breg/proposals-explanation/proposals-explanation.v1alpha2.schema.json
+      id: https://id.registrystack.org/schemas/breg/proposals-explanation/proposals-explanation.v1alpha3.schema.json
       origin: hand-written
       differentialTest: crates/registry-bregctl/tests/explain_contract.rs
     reader: none
@@ -1019,17 +1019,17 @@ formats:
     audience: generated
     stability: promised
     current:
-      apiVersion: id.registrystack.org/formats/breg/lifecycle-explanation/v1alpha7
+      apiVersion: id.registrystack.org/formats/breg/lifecycle-explanation/v1alpha8
       kind: BRegLifecycleExplanation
       checkedBy:
         file: crates/registry-bregctl/src/lib.rs
         symbol: LIFECYCLE_EXPLANATION
     target:
-      apiVersion: id.registrystack.org/formats/breg/lifecycle-explanation/v1alpha7
+      apiVersion: id.registrystack.org/formats/breg/lifecycle-explanation/v1alpha8
       kind: BRegLifecycleExplanation
     schema:
       path: products/breg/contracts/explain/LifecycleExplanation.schema.json
-      id: https://id.registrystack.org/schemas/breg/lifecycle-explanation/lifecycle-explanation.v1alpha7.schema.json
+      id: https://id.registrystack.org/schemas/breg/lifecycle-explanation/lifecycle-explanation.v1alpha8.schema.json
       origin: hand-written
       differentialTest: crates/registry-bregctl/tests/explain_contract.rs
     reader: none
@@ -1398,17 +1398,17 @@ formats:
     audience: generated
     stability: promised
     current:
-      apiVersion: id.registrystack.org/formats/casework/report/v1alpha1
+      apiVersion: id.registrystack.org/formats/casework/report/v1alpha2
       kind: CaseworkReport
       checkedBy:
         file: crates/registry-caseworkctl/src/report.rs
         symbol: REPORT_API_VERSION
     target:
-      apiVersion: id.registrystack.org/formats/casework/report/v1alpha1
+      apiVersion: id.registrystack.org/formats/casework/report/v1alpha2
       kind: CaseworkReport
     schema:
       path: products/casework/contracts/cli/report.schema.json
-      id: https://id.registrystack.org/schemas/casework/report/report.v1alpha1.schema.json
+      id: https://id.registrystack.org/schemas/casework/report/report.v1alpha2.schema.json
       origin: generated
       generator: cargo run -p registry-caseworkctl --features schema --example report-schemas -- --output products/casework/contracts/cli
       driftCheck: crates/registry-caseworkctl/src/schema.rs

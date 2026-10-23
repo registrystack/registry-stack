@@ -84,8 +84,10 @@ A case file (`cases/<id>.yaml`) has these members:
               severity (default error), at ({line, column} relative to an
               anchor of the mutation, or `file`), optional from (the anchor:
               start, value, key, root, apiVersion, kind, item, itemId, first,
-              firstId), optional suggestedAction, message, and related
-              ({path, at, from} each)
+              firstId), optional suggestedAction, message, related, and
+              formats (only the named format ids expect this diagnostic)
+              ({path, at, from} each). `at: file` means the target file with
+              no line; `at: project` means the staged project directory.
   human       optional: also run without `--format json` and find each
               diagnostic in the human output
 
@@ -363,7 +365,9 @@ RUN_MODES = ("init",)
 APPLIES_KEYS = {"audiences", "envelope", "formats"}
 ENCODING_KEYS = {"byteOrderMark", "lineEndings", "appendBytes", "size"}
 EXPECT_KEYS = {"exit", "report", "diagnostics"}
-DIAGNOSTIC_KEYS = {"severity", "code", "path", "at", "from", "suggestedAction", "message", "related"}
+DIAGNOSTIC_KEYS = {
+    "severity", "code", "path", "at", "from", "suggestedAction", "message", "related", "formats"
+}
 RELATED_KEYS = {"path", "at", "from"}
 
 
@@ -463,18 +467,27 @@ def check_expected_diagnostic(item: Any, fail) -> None:
         raise fail("an expected diagnostic has an unknown member")
     if not isinstance(item.get("code"), str) or not isinstance(item.get("path"), str):
         raise fail("an expected diagnostic needs `code` and `path`")
-    check_at(item.get("at"), fail)
+    formats = item.get("formats")
+    if formats is not None and (
+        not isinstance(formats, list)
+        or not formats
+        or not all(isinstance(format_id, str) and format_id for format_id in formats)
+        or len(formats) != len(set(formats))
+    ):
+        raise fail("an expected diagnostic's `formats` is not a non-empty list of unique format ids")
+    check_at(item.get("at"), fail, allow_project=True)
     for related in item.get("related") or []:
         if not isinstance(related, dict) or set(related) - RELATED_KEYS or not isinstance(related.get("path"), str):
             raise fail("a related location needs `path` and `at` only")
         check_at(related.get("at"), fail)
 
 
-def check_at(at: Any, fail) -> None:
-    if at == "file":
+def check_at(at: Any, fail, allow_project: bool = False) -> None:
+    if at == "file" or (allow_project and at == "project"):
         return
     if not isinstance(at, dict) or set(at) != {"line", "column"}:
-        raise fail("`at` is not `file` or {line, column}")
+        choices = "`file`, `project`, or {line, column}" if allow_project else "`file` or {line, column}"
+        raise fail(f"`at` is not {choices}")
 
 
 # --------------------------------------------------------------------------
@@ -1111,7 +1124,7 @@ def relative(anchor: tuple[int, int], at: dict[str, int]) -> tuple[int, int]:
 
 def resolve_position(spec: dict[str, Any], operation: str | None, site: Site) -> tuple[int | None, int | None]:
     at = spec["at"]
-    if at == "file":
+    if at in ("file", "project"):
         return None, None
     name = spec.get("from")
     if name is None:
@@ -1124,18 +1137,25 @@ def resolve_position(spec: dict[str, Any], operation: str | None, site: Site) ->
 
 
 def resolve_expected(
-    expect: dict[str, Any], operation: str | None, variant: Variant, target_file: str
+    expect: dict[str, Any],
+    operation: str | None,
+    variant: Variant,
+    target_file: str,
+    format_id: str | None = None,
+    project_file: str | None = None,
 ) -> list[dict[str, Any]]:
     """The diagnostics a conforming check reports, one per site per entry."""
     resolved = []
     for site in variant.sites:
         for spec in expect.get("diagnostics") or []:
+            if "formats" in spec and format_id not in spec["formats"]:
+                continue
             line, column = resolve_position(spec, operation, site)
             entry: dict[str, Any] = {
                 "severity": spec.get("severity", "error"),
                 "code": spec["code"],
                 "path": expand(spec["path"], site.values),
-                "file": target_file,
+                "file": project_file if spec["at"] == "project" else target_file,
                 "line": line,
                 "column": column,
             }
@@ -1178,8 +1198,9 @@ def parse_report(stdout: str) -> tuple[list[Any] | None, list[str]]:
 
 
 REQUIRED_MEMBERS = ("severity", "code", "path", "message", "suggestedAction")
-ALLOWED_MEMBERS = REQUIRED_MEMBERS + ("artifact", "source", "related")
+ALLOWED_MEMBERS = REQUIRED_MEMBERS + ("artifact", "source", "related", "rank")
 RELATED_MEMBERS = ("file", "line", "column", "path", "message")
+FINDING_RANKS = ("widens-access", "performance", "hygiene")
 
 
 def positive(value: Any) -> bool:
@@ -1196,6 +1217,11 @@ def shape_problems(diag: Any, kind: str | None) -> list[str]:
         problems.append("severity is not error or warning")
     if "code" in diag and not (isinstance(diag["code"], str) and CODE.match(diag["code"])):
         problems.append("code is not dotted lowercase kebab-case")
+    if "rank" in diag:
+        if diag.get("severity") != "warning":
+            problems.append("rank is present on an error")
+        if diag["rank"] not in FINDING_RANKS:
+            problems.append(f"rank is not {', '.join(FINDING_RANKS[:-1])}, or {FINDING_RANKS[-1]}")
     if "path" in diag:
         path = diag["path"]
         if not isinstance(path, str) or (path and not path.startswith("/")):
@@ -1971,7 +1997,9 @@ def run_cell(root: Path, fmt: Format, case: Case, bin_dir: Path) -> list[str]:
             staged.target.write_bytes(encode(written, case.encoding))
             if fmt.harness.get("digests"):
                 refresh_digests(staged, fmt.harness["digests"])
-            expected = resolve_expected(case.expect, case.operation, variant, str(staged.target))
+            expected = resolve_expected(
+                case.expect, case.operation, variant, str(staged.target), fmt.id, str(staged.project)
+            )
             problems += check_variant(fmt, case, argv, staged, env, expected)
         return list(dict.fromkeys(sanitize(problem, str(staged.work)) for problem in problems))
     finally:
@@ -2109,6 +2137,13 @@ def validate_ids(
     for case_id in expected.inapplicable:
         if case_id not in case_ids:
             raise HarnessError(f"expected-failures.yaml names case {case_id}, which the corpus does not")
+    for case in cases:
+        for diagnostic in case.expect.get("diagnostics") or []:
+            for format_id in diagnostic.get("formats") or []:
+                if only_formats is not None and format_id not in only_formats:
+                    continue
+                if format_id not in format_ids:
+                    raise HarnessError(f"case {case.id} names format {format_id}, which the registry does not")
 
 
 def validate_selectors(args: argparse.Namespace, formats: list[Format], cases: list[Case]) -> None:

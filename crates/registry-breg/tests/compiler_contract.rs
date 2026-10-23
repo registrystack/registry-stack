@@ -888,7 +888,7 @@ fn missing_resource_identity_members_have_actionable_authoring_diagnostics() {
     )));
     assert!(project_codes.contains(&(
         "breg.manifest-projection.entity-primary-dataset-required",
-        "recordTypes[].primaryDataset"
+        "recordTypes[id=record].primaryDataset"
     )));
 
     let module = parse_module_json(
@@ -908,7 +908,7 @@ fn missing_resource_identity_members_have_actionable_authoring_diagnostics() {
         .expect_err("module entity membership is required for compilation");
     assert!(module.diagnostics().iter().any(|diagnostic| {
         diagnostic.code == "breg.manifest-projection.entity-primary-dataset-required"
-            && diagnostic.path == "recordTypes[].primaryDataset"
+            && diagnostic.path == "recordTypes[id=record].primaryDataset"
     }));
 }
 
@@ -1173,6 +1173,49 @@ fn derived_fields_selectors_and_read_paths_compile_to_route_specific_inventories
     assert!(path.allow_count);
     assert!(path.processing_fields.contains(&"household".to_owned()));
     assert!(path.processing_fields.contains(&"person".to_owned()));
+}
+
+#[test]
+fn read_path_processing_diagnostic_names_the_profile_path_and_field() {
+    let failure = compile_json(
+        br#"{"datasets":[{"id":"records"}],
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"read-path-disclosure","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://read-paths.example.test"},
+          "recordTypes":[
+            {"id":"household","primaryDataset":"records","route":"households","mutationMode":"mutable",
+             "fields":[{"id":"code","type":"string","maximumLength":32,"classification":"internal"}],
+             "readPaths":[{"id":"people","through":"membership","to":"person","route":"people"}]},
+            {"id":"person","primaryDataset":"records","route":"people","mutationMode":"mutable",
+             "fields":[
+               {"id":"legal-name","type":"string","maximumLength":80,"classification":"internal"},
+               {"id":"date-of-birth","type":"date","classification":"internal"}
+             ]},
+            {"id":"membership","primaryDataset":"records","route":"memberships","mutationMode":"mutable","fields":[]}
+          ],
+          "accessProfiles":[{
+            "id":"reader","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
+              "recordType":"household","operations":["get"],"readableFields":["code"],"rowBoundaries":"unrestricted",
+              "readPaths":[{"path":"people","readableFields":["legal-name"],"filterableFields":["date-of-birth"]}]
+            }]}
+          }]
+        }"#,
+    )
+    .expect_err("read-path processing cannot exceed its disclosure projection");
+    let diagnostic = failure
+        .diagnostics()
+        .iter()
+        .find(|diagnostic| {
+            diagnostic.code == "breg.access-profile.read-path-processing-wider-than-read"
+        })
+        .expect("read-path processing wider than disclosure is diagnosed");
+    assert_eq!(
+        diagnostic.path,
+        "recordTypes[id=household].accessProfiles[id=reader].readPaths[path=people].filterableFields[field=date-of-birth]"
+    );
+    for identifier in ["reader", "people", "date-of-birth"] {
+        assert!(diagnostic.message.contains(identifier), "{diagnostic:?}");
+    }
 }
 
 #[test]
@@ -1855,7 +1898,7 @@ fn production_allows_missing_manifest_projection_and_emits_no_manifest_artifacts
               "package":{"sourceRevision":"source"},
               "recordTypes":[{
                 "id":"record","primaryDataset":"test-dataset","route":"records","mutationMode":"create-only",
-                "fields":[{"id":"code","type":"string","maximumLength":32,"classification":"internal"}]
+                "fields":[{"id":"code","type":"string","maximumLength":32,"classification":"internal","required":true}]
               }],
               "accessProfiles":[{
                 "id":"reader",
@@ -2043,6 +2086,173 @@ fn module_entity_access_profiles_remain_supported_for_module_composition() {
     assert!(compiled.entities()["case-file"]
         .access_profiles
         .contains_key("extension-reader"));
+}
+
+#[test]
+fn hook_projection_diagnostics_name_the_record_hook_field_and_module_extension() {
+    let project = parse_project_json(
+        br#"{"datasets":[{"id":"records"}],
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"hook-paths","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://hook-paths.example.test"},
+          "modules":[{"id":"events","version":"1"}],
+          "recordTypes":[{
+            "id":"entry","primaryDataset":"records","route":"entries","mutationMode":"mutable",
+            "fields":[{"id":"code","type":"string","maximumLength":32,"classification":"internal"}],
+            "hooks":[
+              {"id":"root-first","phase":"after","trigger":"created","projection":["code"],"handler":{"type":"url","destinationId":"events"}},
+              {"id":"root-second","phase":"after","trigger":"created","projection":["no-such-field"],"handler":{"type":"url","destinationId":"events"}}
+            ]
+          }]
+        }"#,
+    )
+    .expect("project parses");
+    let module = parse_module_json(
+        br#"{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"events","version":"1",
+          "extendRecordTypes":[{
+            "recordType":"entry",
+            "hooks":[
+              {"id":"module-first","phase":"after","trigger":"created","projection":["code"],"handler":{"type":"url","destinationId":"events"}},
+              {"id":"module-second","phase":"after","trigger":"created","projection":["no-such-field"],"handler":{"type":"url","destinationId":"events"}}
+            ]
+          }]
+        }"#,
+    )
+    .expect("module parses");
+
+    let failure = compile_project(&project, &[module], CompileProfile::Authoring)
+        .expect_err("unknown projection fields are refused");
+    let paths = failure
+        .diagnostics()
+        .iter()
+        .filter(|diagnostic| diagnostic.code == "breg.event.projection-field-unknown")
+        .map(|diagnostic| diagnostic.path.as_str())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        paths,
+        BTreeSet::from([
+            "modules[id=events].extendRecordTypes[recordType=entry].hooks[id=module-second].projection[field=no-such-field]",
+            "recordTypes[id=entry].hooks[id=root-second].projection[field=no-such-field]",
+        ])
+    );
+}
+
+#[test]
+fn module_extension_hook_diagnostics_keep_the_second_hook_and_member_paths() {
+    let project = parse_project_json(
+        br#"{"datasets":[{"id":"records"}],
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"hook-member-paths","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://hook-member-paths.example.test"},
+          "modules":[{"id":"events","version":"1"}],
+          "recordTypes":[{
+            "id":"entry","primaryDataset":"records","route":"entries","mutationMode":"create-only",
+            "fields":[
+              {"id":"code","type":"string","maximumLength":32,"classification":"internal"},
+              {"id":"secret","type":"string","maximumLength":32,"classification":"restricted","encrypted":true}
+            ]
+          }]
+        }"#,
+    )
+    .expect("project parses");
+    let module = parse_module_json(
+        br#"{"apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1","kind":"BRegModule","id":"events","version":"1",
+          "extendRecordTypes":[{
+            "recordType":"entry",
+            "hooks":[
+              {"id":"module-first","phase":"after","trigger":"created","projection":["code"],"handler":{"type":"url","destinationId":"events"}},
+              {"id":"module-second","phase":"before","trigger":"patched","projection":[],
+               "when":{"type":"fields","changed":["no-such-field"]},
+               "handler":{"type":"rhai","script":"hooks/second.rhai","abi":"registry.hook-handler/v2"}},
+              {"id":"module-third","phase":"after","trigger":"created","projection":["secret"],
+               "handler":{"type":"url","destinationId":"Invalid Destination"}}
+            ]
+          }]
+        }"#,
+    )
+    .expect("module parses");
+
+    let failure = compile_project(&project, &[module], CompileProfile::Authoring)
+        .expect_err("invalid module extension hooks are refused");
+    let path = |code: &str| {
+        failure
+            .diagnostics()
+            .iter()
+            .find(|diagnostic| diagnostic.code == code)
+            .unwrap_or_else(|| panic!("missing {code}: {failure:?}"))
+            .path
+            .as_str()
+    };
+    let second = "modules[id=events].extendRecordTypes[recordType=entry].hooks[id=module-second]";
+    let third = "modules[id=events].extendRecordTypes[recordType=entry].hooks[id=module-third]";
+    assert_eq!(
+        path("breg.hook.phase-unsupported"),
+        format!("{second}.phase")
+    );
+    assert_eq!(
+        path("breg.event.projection-empty"),
+        format!("{second}.projection")
+    );
+    assert_eq!(
+        path("breg.event.trigger-unavailable"),
+        format!("{second}.trigger")
+    );
+    assert_eq!(
+        path("breg.event.when-field-unknown"),
+        format!("{second}.when.changed[field=no-such-field]")
+    );
+    assert_eq!(
+        path("breg.hook.handler-abi-unsupported"),
+        format!("{second}.handler.abi")
+    );
+    assert_eq!(
+        path("breg.event.projection-encrypted"),
+        format!("{third}.projection[field=secret]")
+    );
+    assert_eq!(
+        path("breg.event.webhook-destination-invalid"),
+        format!("{third}.handler.destinationId")
+    );
+}
+
+#[test]
+fn duplicate_hook_ids_do_not_claim_an_ambiguous_hook_selector() {
+    let project = parse_project_json(
+        br#"{"datasets":[{"id":"records"}],
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"duplicate-hook-paths","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://duplicate-hook-paths.example.test"},
+          "recordTypes":[{
+            "id":"entry","primaryDataset":"records","route":"entries","mutationMode":"mutable",
+            "fields":[{"id":"code","type":"string","maximumLength":32,"classification":"internal"}],
+            "hooks":[
+              {"id":"duplicate","phase":"after","trigger":"created","projection":["code"],"handler":{"type":"url","destinationId":"events"}},
+              {"id":"duplicate","phase":"before","trigger":"created","projection":["code"],"handler":{"type":"rhai","script":"hooks/duplicate.rhai"}}
+            ]
+          }]
+        }"#,
+    )
+    .expect("project parses");
+
+    let failure = compile_project(&project, &[], CompileProfile::Authoring)
+        .expect_err("duplicate hook identifiers are refused");
+    let path = |code: &str| {
+        failure
+            .diagnostics()
+            .iter()
+            .find(|diagnostic| diagnostic.code == code)
+            .unwrap_or_else(|| panic!("missing {code}: {failure:?}"))
+            .path
+            .as_str()
+    };
+    assert_eq!(
+        path("breg.event.id-duplicate"),
+        "recordTypes[id=entry].hooks[].id"
+    );
+    assert_eq!(
+        path("breg.hook.phase-unsupported"),
+        "recordTypes[id=entry].hooks[].phase"
+    );
 }
 
 #[test]
@@ -2606,6 +2816,116 @@ fn manifest_projection_metadata_cannot_describe_hidden_entities_or_fields() {
     assert!(codes.contains("breg.manifest-projection.field-not-visible"));
     assert!(codes.contains("breg.manifest-projection.field-not-representable"));
     assert!(codes.contains("breg.manifest-projection.entity-not-visible"));
+}
+
+#[test]
+fn manifest_projection_diagnostics_name_the_profile_and_identifier_rule() {
+    let mut source: Value = serde_json::from_slice(MULTI_DATASET_PROJECT).unwrap();
+    source["accessProfiles"][0]["permissions"]["records"][0]["readableFields"] = json!([]);
+    source["manifestProjection"]["entities"] = json!([
+        {
+            "id": "person",
+            "fields": [{"id": "name"}],
+            "identifiers": [
+                {"field": "missing", "kind": ""},
+                {"field": "missing", "kind": "other"}
+            ]
+        }
+    ]);
+    source["manifestProjection"]["vocabularies"] = json!([{
+        "id": "missing-vocabulary",
+        "schemeIri": "https://registry.example.test/vocab/missing",
+        "concepts": []
+    }]);
+    let failure = compile_json(&serde_json::to_vec(&source).unwrap())
+        .expect_err("hidden projection members are refused");
+
+    for (code, identifiers) in [
+        (
+            "breg.manifest-projection.field-not-visible",
+            &["reader", "name", "not readable"][..],
+        ),
+        (
+            "breg.manifest-projection.identifier-duplicate",
+            &["person", "missing", "repeats"][..],
+        ),
+        (
+            "breg.manifest-projection.identifier-field-not-visible",
+            &["reader", "missing", "not a portable field"][..],
+        ),
+        (
+            "breg.manifest-projection.identifier-kind-missing",
+            &["missing", "no kind"][..],
+        ),
+        (
+            "breg.manifest-projection.vocabulary-not-visible",
+            &["reader", "missing-vocabulary", "not used"][..],
+        ),
+    ] {
+        let diagnostic = failure
+            .diagnostics()
+            .iter()
+            .find(|diagnostic| diagnostic.code == code)
+            .unwrap_or_else(|| panic!("missing {code}: {failure:?}"));
+        for identifier in identifiers {
+            assert!(
+                diagnostic.message.contains(identifier),
+                "{code} does not name {identifier}: {}",
+                diagnostic.message
+            );
+        }
+    }
+}
+
+#[test]
+fn an_early_compile_error_says_which_later_checks_did_not_run() {
+    let project = parse_project_json(
+        br#"{"datasets":[{"id":"records"}],
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"staged-check","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://staged-check.example.test"},
+          "manifestProjection":{
+            "accessProfile":"reader",
+            "classificationCeiling":"restricted",
+            "catalog":{"baseUrl":"https://staged-check.example.test","title":"Staged check","publisher":{"id":"publisher","name":"Publisher"}},
+            "publicService":{"id":"staged-check-service","title":"Staged check"},
+            "datasets":[{"id":"records","title":"Records"}],
+            "dataServices":[{"id":"registry-api","title":"Registry API","endpointUrl":"https://staged-check.example.test/v1","servesDatasets":["records"]}],
+            "entities":[{"id":"record","fields":[{"id":"secret-note","concepts":["https://example.test/secret-note"]}]}]
+          },
+          "recordTypes":[{"id":"record","primaryDataset":"records","route":"records","mutationMode":"create-only","classification":"public",
+            "fields":[
+              {"id":"name","type":"string","maximumLength":64,"classification":"public"},
+              {"id":"secret-note","type":"string","maximumLength":64,"classification":"restricted"}
+            ]}],
+          "accessProfiles":[{"id":"reader","principalClaim":"principal","requiredScopes":"unrestricted","permissions":{"records":[{
+            "recordType":"record","operations":["get","list"],"readableFields":["name"],"filterableFields":["secret-note"],"rowBoundaries":"unrestricted"
+          }]}}]
+        }"#,
+    )
+    .expect("project parses");
+
+    let failure = compile_project(&project, &[], CompileProfile::Authoring)
+        .expect_err("the access profile stops compilation before the Manifest projection stage");
+    let processing = failure
+        .diagnostics()
+        .iter()
+        .find(|diagnostic| diagnostic.code == "breg.access-profile.processing-wider-than-read")
+        .expect("processing wider than disclosure is diagnosed");
+    assert_eq!(
+        processing.path,
+        "recordTypes[id=record].accessProfiles[id=reader].filterableFields[field=secret-note]"
+    );
+    assert!(processing.message.contains("reader"), "{processing:?}");
+    assert!(processing.message.contains("secret-note"), "{processing:?}");
+    let skipped = failure
+        .diagnostics()
+        .iter()
+        .find(|diagnostic| diagnostic.code == "breg.compile.later-checks-skipped")
+        .expect("the failed stage says which later checks did not run");
+    assert_eq!(DiagnosticSeverity::Finding, skipped.severity);
+    assert!(skipped.message.contains("source validation"));
+    assert!(skipped.message.contains("Manifest projection"));
 }
 
 /// A project whose `authorization-status` vocabulary is used by
@@ -4434,49 +4754,49 @@ fn bbox_authoring_requires_declared_readable_primary_point_and_bounded_spans() {
             r#""geojson":{"geometryField":"missing"}"#,
             r#""operations":["list"],"readableFields":["code","location"],"spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":2,"maximumLatitudeSpanDegrees":2}}"#,
             "breg.geojson.geometry-field-unknown",
-            "recordTypes[].geojson.geometryField",
+            "recordTypes[id=site].geojson.geometryField",
         ),
         (
             r#""geojson":{"geometryField":"code"}"#,
             r#""operations":["list"],"readableFields":["code","location"],"spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":2,"maximumLatitudeSpanDegrees":2}}"#,
             "breg.geojson.geometry-field-type-unsupported",
-            "recordTypes[].geojson.geometryField",
+            "recordTypes[id=site].geojson.geometryField",
         ),
         (
             r#""geojson":{"geometryField":"location"}"#,
             r#""operations":["list"],"readableFields":["code","location"],"spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":0,"maximumLatitudeSpanDegrees":2}}"#,
             "breg.access-profile.spatial-queries-bbox-maximum-longitude-span-degrees-invalid",
-            "recordTypes[].accessProfiles[].spatialQueries.bbox.maximumLongitudeSpanDegrees",
+            "recordTypes[id=site].accessProfiles[].spatialQueries.bbox.maximumLongitudeSpanDegrees",
         ),
         (
             r#""geojson":{"geometryField":"location"}"#,
             r#""operations":["list"],"readableFields":["code","location"],"spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":361,"maximumLatitudeSpanDegrees":2}}"#,
             "breg.access-profile.spatial-queries-bbox-maximum-longitude-span-degrees-invalid",
-            "recordTypes[].accessProfiles[].spatialQueries.bbox.maximumLongitudeSpanDegrees",
+            "recordTypes[id=site].accessProfiles[].spatialQueries.bbox.maximumLongitudeSpanDegrees",
         ),
         (
             r#""geojson":{"geometryField":"location"}"#,
             r#""operations":["list"],"readableFields":["code","location"],"spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":2,"maximumLatitudeSpanDegrees":181}}"#,
             "breg.access-profile.spatial-queries-bbox-maximum-latitude-span-degrees-invalid",
-            "recordTypes[].accessProfiles[].spatialQueries.bbox.maximumLatitudeSpanDegrees",
+            "recordTypes[id=site].accessProfiles[].spatialQueries.bbox.maximumLatitudeSpanDegrees",
         ),
         (
             r#""geojson":{"geometryField":"location"}"#,
             r#""operations":["list"],"readableFields":["code","location"],"spatialQueries":{}"#,
             "breg.access-profile.spatial-queries-empty",
-            "recordTypes[].accessProfiles[].spatialQueries",
+            "recordTypes[id=site].accessProfiles[].spatialQueries",
         ),
         (
             r#""geojson":{"geometryField":"location"}"#,
             r#""operations":["list"],"readableFields":["code"],"spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":2,"maximumLatitudeSpanDegrees":2}}"#,
             "breg.access-profile.spatial-queries-bbox-geometry-not-readable",
-            "recordTypes[].accessProfiles[].readableFields",
+            "recordTypes[id=site].accessProfiles[].readableFields",
         ),
         (
             r#""geojson":{"geometryField":"location"}"#,
             r#""operations":["get"],"readableFields":["code","location"],"spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":2,"maximumLatitudeSpanDegrees":2}}"#,
             "breg.access-profile.spatial-queries-bbox-list-required",
-            "recordTypes[].accessProfiles[].spatialQueries.bbox",
+            "recordTypes[id=site].accessProfiles[].spatialQueries.bbox",
         ),
     ];
 
@@ -6079,10 +6399,11 @@ fn temporal_non_overlap_refuses_a_nullable_scope_field() {
         .iter()
         .find(|diagnostic| diagnostic.code == "breg.constraint.temporal-scope-nullable")
         .expect("nullable temporal scope has a stable diagnostic");
-    assert_eq!(diagnostic.path, "recordTypes[].constraints[].scopeFields");
-    assert!(!serde_json::to_string(diagnostic)
-        .expect("diagnostic serializes")
-        .contains("asset-placement"));
+    assert_eq!(
+        diagnostic.path,
+        "recordTypes[id=asset-placement].constraints[].scopeFields"
+    );
+    assert!(!diagnostic.message.contains("asset-placement"));
 }
 
 #[test]
@@ -6125,14 +6446,16 @@ fn temporal_non_overlap_refuses_structured_and_crs84_point_scope_fields() {
             .collect::<Vec<_>>();
         assert_eq!(diagnostics.len(), 1);
         let diagnostic = diagnostics[0];
-        assert_eq!(diagnostic.path, "recordTypes[].constraints[].scopeFields");
+        assert_eq!(
+            diagnostic.path,
+            "recordTypes[id=asset-placement].constraints[].scopeFields"
+        );
         assert_eq!(
             diagnostic.message,
             "a temporal non-overlap scope field must use a supported scalar type"
         );
-        let serialized = serde_json::to_string(diagnostic).expect("diagnostic serializes");
         for value in ["asset-placement", "asset-item", "scope-canary"] {
-            assert!(!serialized.contains(value));
+            assert!(!diagnostic.message.contains(value));
         }
     }
 }
@@ -6903,8 +7226,60 @@ fn temporal_queries_require_profile_readable_boundary_fields() {
         .expect_err("temporal query cannot process hidden boundary fields");
     assert!(failure.diagnostics().iter().any(|diagnostic| {
         diagnostic.code == "breg.query.temporal-field-not-readable"
-            && diagnostic.path == "recordTypes[].accessProfiles[].readableFields"
+            && diagnostic.path
+                == "recordTypes[id=asset-placement].accessProfiles[id=asset-operator].readableFields"
+            && diagnostic.message.contains("asset-operator")
+            && diagnostic.message.contains("valid-to")
     }));
+}
+
+#[test]
+fn temporal_start_required_diagnostic_names_the_record_and_field() {
+    let mut project = asset_project();
+    let field = project
+        .entities
+        .iter_mut()
+        .find(|entity| entity.id == "asset-placement")
+        .expect("fixture has temporal placements")
+        .fields
+        .iter_mut()
+        .find(|field| field.id == "valid-from")
+        .expect("fixture has a valid-time start");
+    field.required = false;
+
+    let failure = compile_project(&project, &[], CompileProfile::Authoring)
+        .expect_err("a temporal start cannot be optional");
+    let diagnostic = failure
+        .diagnostics()
+        .iter()
+        .find(|diagnostic| diagnostic.code == "breg.field.valid-time-start-required")
+        .expect("the optional start is diagnosed");
+    assert_eq!(
+        diagnostic.path,
+        "recordTypes[id=asset-placement].fields[id=valid-from].required"
+    );
+}
+
+#[test]
+fn duplicate_record_api_name_diagnostic_names_the_conflicting_record() {
+    let failure = compile_json(
+        br#"{"datasets":[{"id":"records"}],
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"api-names","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://api-names.example.test"},
+          "recordTypes":[
+            {"id":"operator","apiName":"Operator","primaryDataset":"records","route":"operators","mutationMode":"create-only","fields":[{"id":"code","type":"string","maximumLength":32,"classification":"internal"}]},
+            {"id":"directory-entry","apiName":"Operator","primaryDataset":"records","route":"directory-entries","mutationMode":"create-only","fields":[{"id":"code","type":"string","maximumLength":32,"classification":"internal"}]}
+          ]
+        }"#,
+    )
+    .expect_err("duplicate Record API names are refused");
+    let diagnostic = failure
+        .diagnostics()
+        .iter()
+        .find(|diagnostic| diagnostic.code == "breg.record-type.api-name-invalid")
+        .expect("the duplicate name is diagnosed");
+    assert_eq!(diagnostic.path, "recordTypes[id=directory-entry].apiName");
 }
 
 #[test]
@@ -6995,12 +7370,11 @@ fn duplicate_routes_fail_before_artifact_generation() {
         .iter()
         .find(|diagnostic| diagnostic.code == "breg.record-type.route-duplicate")
         .expect("duplicate route has a stable diagnostic");
-    assert_eq!(diagnostic.path, "recordTypes[].route");
+    assert_eq!(diagnostic.path, "recordTypes[id=second-record].route");
     let rendered = serde_json::to_string(&failure).expect("failure serializes");
     assert!(!rendered.contains("hidden-route-value"));
-    let rendered = serde_json::to_string(diagnostic).expect("route diagnostic serializes");
     for authored_value in ["hidden-route-value", "first-record", "second-record"] {
-        assert!(!rendered.contains(authored_value));
+        assert!(!diagnostic.message.contains(authored_value));
     }
     for record_type in ["first-record", "second-record"] {
         assert!(failure.diagnostics().iter().any(|diagnostic| {
@@ -7133,7 +7507,10 @@ fn selector_profile_field_refusals_separate_unknown_names_from_cardinality() {
         .iter()
         .find(|item| item.code == "breg.selector-profile.fields-unknown")
         .unwrap_or_else(|| panic!("the unknown selector field is named: {failure:?}"));
-    assert_eq!(diagnostic.path, "recordTypes[].selectorProfiles[].fields");
+    assert_eq!(
+        diagnostic.path,
+        "recordTypes[id=record].selectorProfiles[].fields"
+    );
     assert!(
         diagnostic.message.contains("`missing-field`"),
         "{diagnostic:?}"

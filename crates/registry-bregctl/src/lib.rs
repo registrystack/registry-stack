@@ -1564,6 +1564,7 @@ struct SuccessReport {
     /// Named only by `check --package`: the digest of the package it verified.
     #[serde(skip_serializing_if = "Option::is_none")]
     package_digest: Option<String>,
+    #[serde(serialize_with = "serialize_ranked_project_findings")]
     findings: Vec<registry_platform_yaml::Diagnostic>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     artifacts: Vec<ArtifactReport>,
@@ -1637,8 +1638,8 @@ struct FailureReport {
 }
 
 /// A command refusal. A document the shared reader refused keeps the
-/// reader's diagnostics unchanged (CFG-DIAG-1, CFG-DIAG-2); every other
-/// refusal is the command's own report.
+/// reader's diagnostics (CFG-DIAG-1, CFG-DIAG-2), with warning ranks added by
+/// explain's CLI envelope; every other refusal is the command's own report.
 enum Refusal {
     Tool(FailureReport),
     Document(DocumentRefusal),
@@ -1658,13 +1659,13 @@ impl From<FailureReport> for Refusal {
     }
 }
 
-/// The ctl report envelope around reader diagnostics, carried unchanged.
+/// The ctl report envelope around a command's document diagnostics.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct DocumentFailureReport<'a> {
+struct DocumentFailureReport<D> {
     ok: bool,
     command: &'static str,
-    diagnostics: &'a [registry_platform_yaml::Diagnostic],
+    diagnostics: D,
 }
 
 /// Name a file the command found inside a project by the project path the
@@ -1766,6 +1767,30 @@ where
             suggested_action: finding.suggested_action,
             source: finding.source.as_ref(),
             related: (!finding.related.is_empty()).then_some(finding.related.as_slice()),
+        })
+        .collect::<Vec<_>>()
+        .serialize(serializer)
+}
+
+#[derive(Serialize)]
+struct RankedProjectFinding<'a> {
+    #[serde(flatten)]
+    diagnostic: &'a registry_platform_yaml::Diagnostic,
+    rank: check::FindingRank,
+}
+
+fn serialize_ranked_project_findings<S>(
+    findings: &[registry_platform_yaml::Diagnostic],
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    findings
+        .iter()
+        .map(|diagnostic| RankedProjectFinding {
+            diagnostic,
+            rank: check::finding_rank_for_code(&diagnostic.code),
         })
         .collect::<Vec<_>>()
         .serialize(serializer)
@@ -2298,6 +2323,7 @@ struct CapturedProjectSource {
     project_bytes: Vec<u8>,
     project_assets: Vec<CapturedModuleAssetSource>,
     modules: Vec<CapturedModuleSource>,
+    diagnostics: Vec<Diagnostic>,
 }
 
 #[derive(Debug)]
@@ -2306,12 +2332,19 @@ struct CapturedModuleSource {
     module: RegistryModule,
     bytes: Vec<u8>,
     assets: Vec<CapturedModuleAssetSource>,
+    diagnostics: Vec<Diagnostic>,
 }
 
 #[derive(Debug)]
 struct CapturedModuleAssetSource {
     path: String,
     bytes: Vec<u8>,
+}
+
+#[derive(Debug, Default)]
+struct CapturedAssets {
+    assets: Vec<CapturedModuleAssetSource>,
+    diagnostics: Vec<Diagnostic>,
 }
 
 #[derive(Clone, Debug)]
@@ -7332,7 +7365,8 @@ fn rendered_changes(
             ) {
                 (Some(entity), Some(member)) => format!("{entity}.{member}"),
                 (Some(entity), None) => entity.to_owned(),
-                (None, _) => "registry".to_owned(),
+                (None, Some(member)) => member.to_owned(),
+                (None, None) => "registry".to_owned(),
             };
             let mut line = format!("{} at {target}", change_code_name(change.code));
             if let Some(explanation) = change.code.explanation() {
@@ -7362,7 +7396,8 @@ fn diff_change_path(change: &registry_breg::package::CompiledRegistryChange) -> 
     ) {
         (Some(entity), Some(member)) => format!("changes.{entity}.{member}"),
         (Some(entity), None) => format!("changes.{entity}"),
-        (None, _) => "changes.registry".to_owned(),
+        (None, Some(member)) => format!("changes.{member}"),
+        (None, None) => "changes.registry".to_owned(),
     }
 }
 
@@ -7665,7 +7700,7 @@ fn project_lock(project_path: &Path, check_only: bool) -> Result<SuccessReport, 
             )],
         });
     }
-    let artifacts = if changed {
+    let original_project_bytes = if changed {
         let authored_locks = std::mem::replace(&mut source.project.modules, next_locks);
         let updated = render_project_module_locks(
             &source.project_bytes,
@@ -7680,7 +7715,13 @@ fn project_lock(project_path: &Path, check_only: bool) -> Result<SuccessReport, 
                 SuggestedAction::UpdateModuleLocks,
             )
         })?;
-        write_project_registry(project_path, &source.project_bytes, &updated).map_err(
+        Some(std::mem::replace(&mut source.project_bytes, updated))
+    } else {
+        None
+    };
+    let compiled = compile_captured_project(&source, ProfileArg::Authoring, "project lock")?;
+    let artifacts = if let Some(original) = original_project_bytes {
+        write_project_registry(project_path, &original, &source.project_bytes).map_err(
             |diagnostic| {
                 source_failure(
                     "project lock",
@@ -7690,22 +7731,14 @@ fn project_lock(project_path: &Path, check_only: bool) -> Result<SuccessReport, 
                 )
             },
         )?;
-        vec![artifact_report("registry.yaml", "text/yaml", &updated)]
+        vec![artifact_report(
+            "registry.yaml",
+            "text/yaml",
+            &source.project_bytes,
+        )]
     } else {
         Vec::new()
     };
-    let compiled = compile_captured_project(
-        &capture_resolved_project_source(project_path).map_err(|diagnostic| {
-            source_failure(
-                "project lock",
-                diagnostic,
-                DiagnosticArtifact::RegistryProject,
-                SuggestedAction::CorrectAuthoringSource,
-            )
-        })?,
-        ProfileArg::Authoring,
-        "project lock",
-    )?;
     Ok(SuccessReport {
         ok: true,
         command: "project lock",
@@ -7901,7 +7934,7 @@ const MODEL_EXPLANATION: ExplainFormat = ExplainFormat {
     kind: "BRegModelExplanation",
 };
 const ACCESS_EXPLANATION: ExplainFormat = ExplainFormat {
-    api_version: "id.registrystack.org/formats/breg/access-explanation/v1alpha6",
+    api_version: "id.registrystack.org/formats/breg/access-explanation/v1alpha7",
     kind: "BRegAccessExplanation",
 };
 const ACCESS_PREVIEW: ExplainFormat = ExplainFormat {
@@ -7917,11 +7950,11 @@ const QUERIES_EXPLANATION: ExplainFormat = ExplainFormat {
     kind: "BRegQueriesExplanation",
 };
 const ACTIONS_EXPLANATION: ExplainFormat = ExplainFormat {
-    api_version: "id.registrystack.org/formats/breg/actions-explanation/v1alpha6",
+    api_version: "id.registrystack.org/formats/breg/actions-explanation/v1alpha7",
     kind: "BRegActionsExplanation",
 };
 const PROPOSALS_EXPLANATION: ExplainFormat = ExplainFormat {
-    api_version: "id.registrystack.org/formats/breg/proposals-explanation/v1alpha2",
+    api_version: "id.registrystack.org/formats/breg/proposals-explanation/v1alpha3",
     kind: "BRegProposalsExplanation",
 };
 const EVENTS_EXPLANATION: ExplainFormat = ExplainFormat {
@@ -7929,7 +7962,7 @@ const EVENTS_EXPLANATION: ExplainFormat = ExplainFormat {
     kind: "BRegEventsExplanation",
 };
 const LIFECYCLE_EXPLANATION: ExplainFormat = ExplainFormat {
-    api_version: "id.registrystack.org/formats/breg/lifecycle-explanation/v1alpha7",
+    api_version: "id.registrystack.org/formats/breg/lifecycle-explanation/v1alpha8",
     kind: "BRegLifecycleExplanation",
 };
 
@@ -8323,7 +8356,9 @@ fn capture_resolved_project_source(
         AUTHORED_SOURCE_REDERIVATION_MAX_BYTES,
     )?;
     let project = parse_project_yaml(&project_bytes).map_err(first_diagnostic)?;
-    let project_assets = load_project_planner_asset_files(&project_directory, &project)?;
+    let project_capture = load_project_planner_asset_files(&project_directory, &project)?;
+    let mut diagnostics = project_capture.diagnostics;
+    let project_assets = project_capture.assets;
     let modules = load_module_files(project_path, &project)?
         .into_iter()
         .map(|source| {
@@ -8334,15 +8369,21 @@ fn capture_resolved_project_source(
             } = source;
             let module = parse_module_yaml(&bytes).map_err(first_diagnostic)?;
             ensure_module_id_matches_directory(&module.id, &id)?;
-            let assets = load_module_asset_files(&directory, &id, &module)?;
+            let capture = load_module_asset_files(&directory, &id, &module)?;
             Ok(CapturedModuleSource {
                 id,
                 module,
                 bytes,
-                assets,
+                assets: capture.assets,
+                diagnostics: capture.diagnostics,
             })
         })
         .collect::<Result<Vec<_>, Diagnostic>>()?;
+    diagnostics.extend(
+        modules
+            .iter()
+            .flat_map(|module| module.diagnostics.iter().cloned()),
+    );
     ensure_every_lock_has_a_source(&project, &modules)?;
     Ok(CapturedProjectSource {
         project_path: project_path.to_path_buf(),
@@ -8350,6 +8391,7 @@ fn capture_resolved_project_source(
         project_bytes,
         project_assets,
         modules,
+        diagnostics,
     })
 }
 
@@ -8404,7 +8446,9 @@ fn capture_project_source_for_lock(
         AUTHORED_SOURCE_REDERIVATION_MAX_BYTES,
     )?;
     let project = parse_project_yaml(&project_bytes).map_err(first_diagnostic)?;
-    let project_assets = load_project_planner_asset_files(&project_directory, &project)?;
+    let project_capture = load_project_planner_asset_files(&project_directory, &project)?;
+    let mut diagnostics = project_capture.diagnostics;
+    let project_assets = project_capture.assets;
     let mut locked = BTreeSet::new();
     for lock in &project.modules {
         if !locked.insert(lock.id.as_str()) {
@@ -8425,15 +8469,21 @@ fn capture_project_source_for_lock(
             } = source;
             let module = parse_module_yaml(&bytes).map_err(first_diagnostic)?;
             ensure_module_id_matches_directory(&module.id, &directory_id)?;
-            let assets = load_module_asset_files(&directory, &directory_id, &module)?;
+            let capture = load_module_asset_files(&directory, &directory_id, &module)?;
             Ok(CapturedModuleSource {
                 id: directory_id,
                 module,
                 bytes,
-                assets,
+                assets: capture.assets,
+                diagnostics: capture.diagnostics,
             })
         })
         .collect::<Result<Vec<_>, Diagnostic>>()?;
+    diagnostics.extend(
+        modules
+            .iter()
+            .flat_map(|module| module.diagnostics.iter().cloned()),
+    );
     ensure_every_lock_has_a_source(&project, &modules)?;
     Ok(CapturedProjectSource {
         project_path: project_path.to_path_buf(),
@@ -8441,6 +8491,7 @@ fn capture_project_source_for_lock(
         project_bytes,
         project_assets,
         modules,
+        diagnostics,
     })
 }
 
@@ -8592,7 +8643,7 @@ fn discover_module_files(project_path: &Path) -> Result<Vec<ModuleSource>, Diagn
 fn load_project_planner_asset_files(
     project_directory: &SafeDir,
     project: &RegistryProject,
-) -> Result<Vec<CapturedModuleAssetSource>, Diagnostic> {
+) -> Result<CapturedAssets, Diagnostic> {
     let mut paths = BTreeMap::new();
     let mut wasm_module_paths = BTreeMap::new();
     for (action, hook) in registry_breg::proposal_hooks::source_hooks(&project.actions) {
@@ -8624,7 +8675,8 @@ fn load_project_planner_asset_files(
             );
         }
     }
-    let mut assets = load_planner_asset_files(project_directory, paths)?;
+    let mut capture = load_planner_asset_files(project_directory, paths)?;
+    let assets = &mut capture.assets;
     assets.extend(load_wasm_module_asset_files(
         project_directory,
         wasm_module_paths,
@@ -8672,7 +8724,7 @@ fn load_project_planner_asset_files(
         }
     }
     assets.sort_by(|left, right| left.path.cmp(&right.path));
-    Ok(assets)
+    Ok(capture)
 }
 
 /// Read a module's declared assets through the module directory descriptor the
@@ -8683,7 +8735,7 @@ fn load_module_asset_files(
     module_directory: &SafeDir,
     module_id: &str,
     module: &RegistryModule,
-) -> Result<Vec<CapturedModuleAssetSource>, Diagnostic> {
+) -> Result<CapturedAssets, Diagnostic> {
     let mut paths = BTreeSet::new();
     for entity in &module.entities {
         for derived in &entity.derived {
@@ -8793,13 +8845,17 @@ fn load_module_asset_files(
             );
         }
     }
-    assets.extend(load_planner_asset_files(module_directory, planner_paths)?);
+    let planner_capture = load_planner_asset_files(module_directory, planner_paths)?;
+    assets.extend(planner_capture.assets);
     assets.extend(load_wasm_module_asset_files(
         module_directory,
         wasm_module_paths,
     )?);
     assets.sort_by(|left, right| left.path.cmp(&right.path));
-    Ok(assets)
+    Ok(CapturedAssets {
+        assets,
+        diagnostics: planner_capture.diagnostics,
+    })
 }
 
 /// Split one handler's declared source reference into its asset family:
@@ -8836,57 +8892,75 @@ fn partition_handler_source(
 fn load_planner_asset_files(
     origin: &SafeDir,
     paths: BTreeMap<String, String>,
-) -> Result<Vec<CapturedModuleAssetSource>, Diagnostic> {
-    paths
-        .into_iter()
-        .map(|(path, declaring_path)| {
-            validate_rhai_planner_asset_path(&declaring_path, &path)?;
-            let entry = open_asset_entry(
-                origin,
-                &path,
-                || planner_asset_path_diagnostic(&declaring_path),
-                |error| {
-                    let mut diagnostic = path_diagnostic(
-                        error,
-                        "breg.source.planner-asset-missing",
-                        &declaring_path,
-                        "the required authoring source is not available",
-                        "authoring sources must be regular files and must not be symbolic links",
-                    );
-                    diagnostic.message.push_str(&format!(
+) -> Result<CapturedAssets, Diagnostic> {
+    let mut capture = CapturedAssets::default();
+    for (path, declaring_path) in paths {
+        validate_rhai_planner_asset_path(&declaring_path, &path)?;
+        let entry = match open_asset_entry(
+            origin,
+            &path,
+            || planner_asset_path_diagnostic(&declaring_path),
+            |error| {
+                let mut diagnostic = path_diagnostic(
+                    error,
+                    "breg.source.planner-asset-missing",
+                    &declaring_path,
+                    "the required authoring source is not available",
+                    "authoring sources must be regular files and must not be symbolic links",
+                );
+                diagnostic.message.push_str(&format!(
                         "; referenced Rhai script: {path:?}, relative to its declaring project or module"
                     ));
-                    diagnostic
-                },
-            )
-            .map_err(|mut error| {
-                error.message.push_str(&format!(
-                    "; referenced Rhai script: {path:?}, relative to its declaring project or module"
-                ));
-                error
-            })?;
-            let bytes = read_bounded_source_entry(
-                &entry,
-                "breg.source.planner-asset-missing",
-                &declaring_path,
-                MAX_RHAI_PLANNER_SOURCE_BYTES,
-            )
-            .map_err(|mut error| {
-                error.message.push_str(&format!(
-                    "; referenced Rhai script: {path:?}, relative to its declaring project or module"
-                ));
-                error
-            })?;
-            if bytes.is_empty() {
-                return Err(diagnostic(
-                    "breg.source.planner-asset-bounds",
-                    &declaring_path,
-                    &format!("referenced Rhai script {path:?} must be a non-empty bounded regular file"),
-                ));
+                diagnostic
+            },
+        ) {
+            Ok(entry) => entry,
+            Err(error) if error.code == "breg.source.planner-asset-missing" => {
+                capture.diagnostics.push(error);
+                continue;
             }
-            Ok(CapturedModuleAssetSource { path, bytes })
-        })
-        .collect()
+            Err(mut error) => {
+                error.message.push_str(&format!(
+                    "; referenced Rhai script: {path:?}, relative to its declaring project or module"
+                ));
+                return Err(error);
+            }
+        };
+        let bytes = match read_bounded_source_entry(
+            &entry,
+            "breg.source.planner-asset-missing",
+            &declaring_path,
+            MAX_RHAI_PLANNER_SOURCE_BYTES,
+        ) {
+            Ok(bytes) => bytes,
+            Err(mut error) if error.code == "breg.source.planner-asset-missing" => {
+                error.message.push_str(&format!(
+                    "; referenced Rhai script: {path:?}, relative to its declaring project or module"
+                ));
+                capture.diagnostics.push(error);
+                continue;
+            }
+            Err(mut error) => {
+                error.message.push_str(&format!(
+                    "; referenced Rhai script: {path:?}, relative to its declaring project or module"
+                ));
+                return Err(error);
+            }
+        };
+        if bytes.is_empty() {
+            return Err(diagnostic(
+                "breg.source.planner-asset-bounds",
+                &declaring_path,
+                &format!(
+                    "referenced Rhai script {path:?} must be a non-empty bounded regular file"
+                ),
+            ));
+        }
+        capture
+            .assets
+            .push(CapturedModuleAssetSource { path, bytes });
+    }
+    Ok(capture)
 }
 
 /// Read the WASM handler modules declared by one authoring source through the
@@ -13071,16 +13145,28 @@ fn write_document_failure(
     stderr: &mut dyn Write,
 ) -> ExitCode {
     let result = if format == OutputFormat::Json {
-        write_ctl_report(
-            &mut *stdout,
-            &DocumentFailureReport {
-                ok: false,
-                command: refusal.command,
-                diagnostics: refusal.report.diagnostics(),
-            },
-        )
-        .map_err(io::Error::other)
-        .and_then(|()| writeln!(stdout))
+        let written = if refusal.command == "explain" {
+            write_ctl_report(
+                &mut *stdout,
+                &DocumentFailureReport {
+                    ok: false,
+                    command: refusal.command,
+                    diagnostics: check::ranked_diagnostics(refusal.report.diagnostics()),
+                },
+            )
+        } else {
+            write_ctl_report(
+                &mut *stdout,
+                &DocumentFailureReport {
+                    ok: false,
+                    command: refusal.command,
+                    diagnostics: refusal.report.diagnostics(),
+                },
+            )
+        };
+        written
+            .map_err(io::Error::other)
+            .and_then(|()| writeln!(stdout))
     } else {
         // One sentence of the command's own, then the reader's diagnostics
         // and summary line unchanged.
@@ -14062,7 +14148,8 @@ mod tests {
             )]),
         )
         .expect("safe project-relative planner is captured");
-        assert_eq!(captured[0].path, "planners/request.rhai");
+        assert_eq!(captured.assets[0].path, "planners/request.rhai");
+        assert!(captured.diagnostics.is_empty());
 
         for path in [
             "../request.rhai",
@@ -14181,6 +14268,34 @@ mod tests {
             fs::read(directory.path.join("modules/outside.sql")).unwrap(),
             b"outside\n"
         );
+    }
+
+    #[test]
+    fn migration_review_names_distinct_action_targets() {
+        use registry_breg::package::{
+            CompiledRegistryChange, CompiledRegistryChangeClass, CompiledRegistryChangeCode,
+            CompiledRegistryChangeTarget, CompiledRegistryChangeTargetKind,
+        };
+        let changes = ["create-entry", "correct-entry"].map(|id| CompiledRegistryChange {
+            class: CompiledRegistryChangeClass::AccessOrDisclosureChange,
+            code: CompiledRegistryChangeCode::ActionChanged,
+            target: CompiledRegistryChangeTarget {
+                kind: CompiledRegistryChangeTargetKind::Action,
+                entity_id: None,
+                member_id: Some(id.to_owned()),
+            },
+        });
+        let rendered = rendered_changes(&changes, |_| true);
+        assert!(
+            rendered.contains("action-changed at create-entry"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("action-changed at correct-entry"),
+            "{rendered}"
+        );
+        assert!(!rendered.contains("at registry"), "{rendered}");
+        assert_eq!(diff_change_path(&changes[0]), "changes.create-entry");
     }
 
     #[test]
@@ -15501,6 +15616,7 @@ functions:
                 .expect("the module assets read");
 
             let captured = assets
+                .assets
                 .iter()
                 .map(|asset| (asset.path.as_str(), asset.bytes.as_slice()))
                 .collect::<Vec<_>>();

@@ -502,6 +502,68 @@ fn presentation_changes_preserve_behavior_binding_and_closure_keeps_them() {
 }
 
 #[test]
+fn policy_stage_and_routing_labels_are_presentation_only() {
+    let mut value = project_value();
+    value["reviewPolicies"]["notice-review"]["routing"] = json!([{
+        "id":"north","because":"Route notices locally",
+        "when":{"fields":{"region":{"equals":"north"}}},"queue":"north"
+    }]);
+    let before = decode(value.clone())
+        .compile_policy("notice-review")
+        .unwrap();
+
+    value["reviewPolicies"]["notice-review"]["label"] = json!("Notice review");
+    value["reviewPolicies"]["notice-review"]["stages"][0]["label"] = json!("Technical review");
+    value["reviewPolicies"]["notice-review"]["routing"][0]["label"] = json!("Northern notices");
+    let after = decode(value).compile_policy("notice-review").unwrap();
+
+    assert_eq!(before.binding(), after.binding());
+    assert_eq!(after.label.as_deref(), Some("Notice review"));
+    assert_eq!(after.stages[0].label.as_deref(), Some("Technical review"));
+    assert_eq!(after.routing[0].label.as_deref(), Some("Northern notices"));
+    after.verify().unwrap();
+}
+
+#[test]
+fn new_peer_labels_warn_when_they_are_visually_indistinguishable() {
+    let mut value = project_value();
+    let policy = &mut value["reviewPolicies"]["notice-review"];
+    policy["label"] = json!("Notice review");
+    policy["stages"][0]["label"] = json!("Technical review");
+    let mut second_stage = policy["stages"][0].clone();
+    second_stage["id"] = json!("authorization");
+    second_stage["label"] = json!("technical review");
+    policy["stages"].as_array_mut().unwrap().push(second_stage);
+    policy["routing"] = json!([
+        {"id":"north","label":"Regional route","because":"Route north","when":{"fields":{"region":{"equals":"north"}}},"queue":"north"},
+        {"id":"elsewhere","label":"regional route","because":"Route elsewhere","when":{"fields":{"region":{"equals":"south"}}},"queue":"reviews"}
+    ]);
+    let mut copy = policy.clone();
+    copy["label"] = json!("notice review");
+    value["reviewPolicies"]["notice-review-copy"] = copy;
+    value["trustedProducers"]["notice-service"]["reviewPolicies"] =
+        json!(["notice-review", "notice-review-copy"]);
+
+    let bytes = serde_json::to_vec(&value).unwrap();
+    let decoded = CaseworkProject::read("casework.json", &bytes)
+        .unwrap_or_else(|report| panic!("{}", report.render_human()));
+    let warnings = decoded.document.warnings();
+    for code in [
+        "casework.project.duplicate-review-policy-label",
+        "casework.review-policy.duplicate-stage-label",
+        "casework.review-policy.duplicate-routing-label",
+    ] {
+        assert!(
+            warnings
+                .diagnostics()
+                .iter()
+                .any(|diagnostic| diagnostic.code == code),
+            "missing {code}: {warnings:#?}"
+        );
+    }
+}
+
+#[test]
 fn provider_description_keeps_path_text_semantics() {
     let mut value = source_value();
     let description = "context-providers/\u{202e}provider.json";

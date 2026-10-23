@@ -1865,6 +1865,7 @@ impl PostgresRecordMutationService {
                     | MutationError::FieldGuardFailed { .. }
                     | MutationError::ProposalReviewResultMismatch
                     | MutationError::Conflict
+                    | MutationError::ProposalUniqueConflict
                     | MutationError::ProposalRejected
                     | MutationError::AuthorizationRefused
                     | MutationError::FieldPatternViolation { .. }

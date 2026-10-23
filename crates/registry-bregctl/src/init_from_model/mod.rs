@@ -268,43 +268,6 @@ fn usage_failure(diagnostic: Diagnostic) -> FailureReport {
 /// just written and the profiles it declares.
 fn next_steps(destination: &Path, plan: &resolve::Plan) -> Vec<String> {
     let readme = destination.join("README.md");
-    let profiles = if render::reader_entities(plan).is_empty() {
-        format!(
-            "the `{}` profile lists whole collections",
-            render::OPERATOR_PROFILE
-        )
-    } else {
-        format!(
-            "the `{}` and `{}` profiles list whole collections",
-            render::OPERATOR_PROFILE,
-            render::READER_PROFILE
-        )
-    };
-    let elevated = render::elevated_fields(plan);
-    let counted = |count: usize| {
-        if count == 1 {
-            "a field".to_owned()
-        } else {
-            format!("{count} fields")
-        }
-    };
-    let mut findings = format!("{profiles} on purpose");
-    let sensitive = render::sensitive_elevated_fields(&elevated);
-    if !sensitive.is_empty() {
-        findings.push_str(&format!(
-            ", and the `{}` profile reads {} the model marks sensitive",
-            render::OPERATOR_PROFILE,
-            counted(sensitive.len())
-        ));
-    }
-    let mismatched = render::public_mismatch_fields(&elevated);
-    if !mismatched.is_empty() {
-        findings.push_str(&format!(
-            ", and the `{}` profile reads {} the selection placed inside a public entity",
-            render::OPERATOR_PROFILE,
-            counted(mismatched.len())
-        ));
-    }
     let mut steps = vec![
         format!(
             "read {}, then run 'bregctl check {}'",
@@ -312,7 +275,7 @@ fn next_steps(destination: &Path, plan: &resolve::Plan) -> Vec<String> {
             destination.display()
         ),
         format!(
-            "leave the findings above as they are; {findings}, and {} says where to narrow them",
+            "review the generated access profiles; their required scopes and purposes bound whole-collection access, and {} says where to add row boundaries when callers need row-level separation",
             readme.display()
         ),
     ];
@@ -475,7 +438,7 @@ mod tests {
     }
 
     #[test]
-    fn next_steps_tell_a_public_entitys_fields_apart_from_ones_the_model_marks_sensitive() {
+    fn next_steps_explain_the_generated_profile_boundaries() {
         let directory = tempfile::tempdir().expect("a temporary directory");
         let root = directory.path().canonicalize().expect("a canonical path");
         let selection = root.join("selection.yaml");
@@ -504,11 +467,7 @@ mod tests {
         .unwrap_or_else(|failure| panic!("{}", serde_json::to_string_pretty(&failure).unwrap()));
         let step = &report.next_steps[1];
         assert!(
-            !step.contains("the model marks sensitive"),
-            "no field of a public entity is model-sensitive: {step}"
-        );
-        assert!(
-            step.contains("reads 3 fields the selection placed inside a public entity"),
+            step.contains("required scopes and purposes bound whole-collection access"),
             "{step}"
         );
     }
@@ -531,11 +490,26 @@ mod tests {
         assert_eq!(report.command, "init");
         assert!(destination.join(render::SELECTION_PATH).is_file());
         assert!(destination.join("registry.yaml").is_file());
-        assert!(report.findings.iter().all(|finding| {
-            finding.code == "breg.access.profile-unrestricted-collection"
-                || finding.code == "breg.access.profile-higher-classification"
-        }));
-        assert!(report.next_steps[1].contains("reads 2 fields the model marks sensitive"));
+        let findings = report
+            .findings
+            .iter()
+            .map(|finding| (finding.code.as_str(), finding.path.as_str()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            findings,
+            [
+                (
+                    "breg.access.profile-higher-classification",
+                    "recordTypes[id=group-membership].accessProfiles[id=operator].readableFields[field=person]",
+                ),
+                (
+                    "breg.access.profile-higher-classification",
+                    "recordTypes[id=person].accessProfiles[id=operator].readableFields[field=marital-status]",
+                ),
+            ]
+        );
+        assert!(report.next_steps[1]
+            .contains("required scopes and purposes bound whole-collection access"));
         assert_eq!(report.next_steps.len(), 5);
         match run(
             &destination,

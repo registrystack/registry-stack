@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://id.registrystack.org/schemas/breg/proposals-explanation/proposals-explanation.v1alpha2.schema.json",
+  "$id": "https://id.registrystack.org/schemas/breg/proposals-explanation/proposals-explanation.v1alpha3.schema.json",
   "title": "ProposalsExplanation",
   "type": "object",
   "additionalProperties": false,
@@ -45,7 +45,7 @@
   ],
   "properties": {
     "apiVersion": {
-      "const": "id.registrystack.org/formats/breg/proposals-explanation/v1alpha2"
+      "const": "id.registrystack.org/formats/breg/proposals-explanation/v1alpha3"
     },
     "kind": {
       "const": "BRegProposalsExplanation"
@@ -59,6 +59,7 @@
           "id",
           "apiName",
           "revision",
+          "migrationReviewRevision",
           "display",
           "execution",
           "inputs",
@@ -78,6 +79,11 @@
           "revision": {
             "type": "string",
             "pattern": "^sha256:[0-9a-f]{64}$"
+          },
+          "migrationReviewRevision": {
+            "type": "string",
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "description": "Digest of the Action behavior contract used to decide whether an activation change requires migration review."
           },
           "display": {
             "type": "object",

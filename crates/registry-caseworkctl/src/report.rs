@@ -231,7 +231,7 @@ mod tests {
     }
 }
 
-pub(crate) const REPORT_API_VERSION: &str = "id.registrystack.org/formats/casework/report/v1alpha1";
+pub(crate) const REPORT_API_VERSION: &str = "id.registrystack.org/formats/casework/report/v1alpha2";
 pub(crate) const REPORT_KIND: &str = "CaseworkReport";
 
 use registry_casework_core::*;
@@ -296,6 +296,8 @@ payload!(ProducerAgreement {
 payload!(ExplainStage {
     #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    label: Option<String>,
     queue: String,
     deciding_profiles: Vec<String>,
     #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::BoundedU32<1, { registry_casework_core::MAXIMUM_REVIEW_APPROVALS_PER_STAGE as u32 }>"))]
@@ -309,6 +311,7 @@ impl From<&ReviewStagePolicy> for ExplainStage {
     fn from(stage: &ReviewStagePolicy) -> Self {
         Self {
             id: stage.id.clone(),
+            label: stage.label.clone(),
             queue: stage.queue.clone(),
             deciding_profiles: stage.deciding_profiles.clone(),
             required_approvals: stage.required_approvals,
@@ -321,6 +324,8 @@ impl From<&ReviewStagePolicy> for ExplainStage {
 
 payload!(ExplainPolicy {
     binding: ReviewPolicyIdentity,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    label: Option<String>,
     purpose: ReviewPurpose,
     #[cfg_attr(
         feature = "schema",
@@ -339,6 +344,10 @@ payload!(ExplainPolicy {
     outcomes: Vec<ReviewOutcomePolicy>,
     routing: Vec<RoutingRule>,
     routing_fields: Vec<String>,
+    used_queues: Vec<String>,
+    deciding_profiles: Vec<String>,
+    eligible_deciding_profiles: Vec<String>,
+    dependency_scope: String,
     dependencies: ReviewPolicyDependencies,
     retention: ReviewRetentionPolicy,
     recovery: Vec<String>,
@@ -351,7 +360,16 @@ payload!(ExplainStaffing {
     routing: String,
     clock_recompute: String
 });
-payload!(ExplainData {project:ProjectIdentity,review_policies:Vec<ExplainPolicy>,context_providers:Vec<ReviewContextProviderPolicy>,staffing:ExplainStaffing,authority:String});
+payload!(ExplainData {
+    project: ProjectIdentity,
+    review_policies: Vec<ExplainPolicy>,
+    context_providers: Vec<ReviewContextProviderPolicy>,
+    clocks: Vec<ClockPolicy>,
+    calendars: Vec<CalendarPolicy>,
+    trusted_producers: Vec<ReviewProducerPolicy>,
+    staffing: ExplainStaffing,
+    authority: String
+});
 payload!(TestData {fixtures:Vec<PathBuf>,proof_boundary:String,production_closure:bool,network_access:bool,database_access:bool});
 payload!(TypesData {output:PathBuf,files:Vec<String>});
 payload!(ReaderAuthority {profile:Option<String>,operation:String,source_writes:bool});

@@ -411,6 +411,7 @@
             }
           }
         ],
+        "migrationReviewRevision": "sha256:0c2bfdcc4d48d0b8e7143ee4679c54c7e7a7265ade70c7c50b7c6b5fc4ccb495",
         "permissions": [
           {
             "default": false,
@@ -674,6 +675,7 @@
             }
           }
         ],
+        "migrationReviewRevision": "sha256:f47a8179064b71687f210b7455d382fe6629c6e4a9a962bebfd201d761ae3cf0",
         "permissions": [
           {
             "default": false,
@@ -916,6 +918,7 @@
             }
           }
         ],
+        "migrationReviewRevision": "sha256:646b395e5631cece510ec4618e7835c21cc1e822c2842f1d69822ada99505d8c",
         "permissions": [
           {
             "default": false,
@@ -1155,7 +1158,7 @@
       }
     ]
   },
-  "apiVersion": "id.registrystack.org/formats/breg/access-explanation/v1alpha6",
+  "apiVersion": "id.registrystack.org/formats/breg/access-explanation/v1alpha7",
   "claimContract": {
     "directClaims": {
       "jurisdiction": {
@@ -1352,7 +1355,10 @@
                 "operator-code",
                 "status"
               ],
-              "sortableFields": []
+              "route": "operators",
+              "sortableFields": [],
+              "targetRecordType": "operator",
+              "throughRecordType": "facility-assignment"
             }
           ],
           "readableFields": [
@@ -1698,6 +1704,21 @@
       "rows": "claim_bound",
       "sourcePath": "recordTypes[id=facility].accessProfiles[id=facility-reader].rowBoundaries",
       "surface": "record"
+    },
+    {
+      "ownerOnly": false,
+      "profile": "facility-reader",
+      "recordType": "operator",
+      "rowBoundaries": [
+        {
+          "claim": "jurisdiction",
+          "field": "jurisdiction",
+          "operator": "equals"
+        }
+      ],
+      "rows": "claim_bound",
+      "sourcePath": "recordTypes[id=facility].accessProfiles[id=facility-reader].readPaths[path=operators]",
+      "surface": "read_path"
     },
     {
       "ownerOnly": false,

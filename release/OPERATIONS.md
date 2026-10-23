@@ -646,10 +646,13 @@ again with a new `rehearsal_request_id`. Do not rerun only the failed jobs: a
 fresh correlated dispatch keeps both shard artifacts and their consumer on one
 source and workflow attempt.
 
-Starting with v0.33.0, every macOS arm64 native executable is candidate input
-as an archive whose name is the previous executable asset stem plus `.tar.gz`.
-The flat archive contains the same-stem executable, its complete
-AWS-LC-FIPS shared-library closure, and `THIRD_PARTY_NOTICES`. The native shard
+Starting with v0.33.0, macOS arm64 native executables use archives whose names
+are the previous executable asset stems plus `.tar.gz`. Registry Manifest
+retains its historical flat executable format. Each flat archive contains the
+same-stem executable and `THIRD_PARTY_NOTICES`. Commands that link AWS-LC-FIPS
+also include their complete shared-library closure. Starting with v0.44.0,
+`rstack` and `discovery` use plain two-file archives because they do not link
+the FIPS dylib; `discoveryctl` still requires its FIPS libraries. The native shard
 builder must relocate each FIPS load to its adjacent packaged library, sign the
 changed Mach-O files, and verify the resulting loader closure before producing
 the deterministic archive. Keep each executable in its own archive because

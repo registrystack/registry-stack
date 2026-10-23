@@ -1585,6 +1585,7 @@ impl MutationTransaction {
             fields,
             before.map(|row| &row.data),
             self.field_encryption.as_deref(),
+            PlanWriteOrigin::ImmediateAction,
         )
         .await?;
         target_context

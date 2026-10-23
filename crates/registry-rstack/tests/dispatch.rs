@@ -19,6 +19,15 @@ fn platform() -> &'static str {
     }
 }
 
+fn write_release_launcher(path: &Path) {
+    let executable = env!("CARGO_BIN_EXE_rstack").replace('\'', "'\"'\"'");
+    let script = format!(
+        "#!/usr/bin/env bash\nset -euo pipefail\nif [[ \"${{1:-}}\" == --version ]]; then printf 'rstack 0.44.0\\n'; exit 0; fi\nexec '{executable}' \"$@\"\n"
+    );
+    fs::write(path, script).unwrap();
+    fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+}
+
 fn fixture(directory: &Path) -> (PathBuf, PathBuf, PathBuf) {
     let platform = platform();
     let archived = platform == "macos-arm64";
@@ -44,22 +53,26 @@ fn fixture(directory: &Path) -> (PathBuf, PathBuf, PathBuf) {
                 fs::write(&target, bytes).unwrap();
                 fs::set_permissions(&target, fs::Permissions::from_mode(0o755)).unwrap();
             } else {
-                fs::copy(env!("CARGO_BIN_EXE_rstack"), &target).unwrap();
+                write_release_launcher(&target);
             }
             fs::write(contents.join("THIRD_PARTY_NOTICES"), "fixture\n").unwrap();
-            fs::write(contents.join("libaws_lc_fips_test.dylib"), "fixture\n").unwrap();
+            let mut entries = vec![binary, "THIRD_PARTY_NOTICES"];
+            if executable.is_some() {
+                fs::write(contents.join("libaws_lc_fips_test.dylib"), "fixture\n").unwrap();
+                entries.push("libaws_lc_fips_test.dylib");
+            }
             let output = Command::new("tar")
                 .arg("-czf")
                 .arg(asset)
                 .arg("-C")
                 .arg(&contents)
-                .args([binary, "THIRD_PARTY_NOTICES", "libaws_lc_fips_test.dylib"])
+                .args(entries)
                 .output()
                 .unwrap();
             assert!(output.status.success(), "{output:?}");
         }
     } else {
-        fs::copy(env!("CARGO_BIN_EXE_rstack"), &launcher).unwrap();
+        write_release_launcher(&launcher);
         fs::write(&evidence, script).unwrap();
         fs::set_permissions(&evidence, fs::Permissions::from_mode(0o755)).unwrap();
     }

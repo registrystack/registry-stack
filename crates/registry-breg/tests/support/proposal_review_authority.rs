@@ -121,6 +121,26 @@ impl LocalAuthority {
             self.state.results.load(Ordering::SeqCst),
         )
     }
+
+    pub fn replace_submission_digest_for_test(
+        &self,
+        digest: registry_review_client::SubmissionDigest,
+    ) {
+        self.state
+            .accepted
+            .lock()
+            .unwrap()
+            .as_mut()
+            .expect("the authority retained an accepted request")
+            .submission_digest = digest.clone();
+        self.state
+            .result
+            .lock()
+            .unwrap()
+            .as_mut()
+            .expect("the authority retained an approved result")
+            .submission_digest = digest;
+    }
 }
 fn authenticated(headers: &HeaderMap) -> bool {
     headers

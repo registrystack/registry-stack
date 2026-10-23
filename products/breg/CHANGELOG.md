@@ -27,6 +27,36 @@
   Computed and helper-returned plans retain runtime validation. Executable
   examples cover success, refusal, and exact expected handler failure, including
   complete synthetic Evidence transcripts.
+- A manual Proposal Apply that hits a unique constraint rolls back its Record
+  effects and durably blocks that application. It returns the same value-free
+  `409 mutation.conflict`, disables Apply, and leaves Rebase available to correct
+  the input. Stale Record revisions remain `412 precondition.failed` and do not
+  create that block.
+- Bind Proposal review delivery digests to the configured `review.source`,
+  including source namespaces distinct from the registry id. Pending legacy
+  submissions recover their acceptance under the same request and idempotency
+  key. Handoff logs identify initial delivery, retries and acceptance with a
+  hashed Proposal reference, authority and attempt count, without input values.
+- Migration review compares Action behavior independently of display text and
+  unrelated optional target fields. `migrationReviewRevision` in Action
+  inspection exposes this comparison; runtime snapshot revisions remain strict.
+  Review-required findings name each affected Action.
+- BREAKING: the actions explanation format advances to `v1alpha7`, proposals
+  to `v1alpha3`, access to `v1alpha7`, and lifecycle to `v1alpha8`. Actions and
+  Proposals expose `migrationReviewRevision`; read-path grants name their target,
+  through Record type and route, `rowReach` includes related-record reach, and
+  lifecycle transitions name retry recovery reasons. Select the matching schema.
+- `bregctl check` retains earlier findings when a Rhai authoring source is
+  missing and reports the stopped compiler stage and affected explain subjects.
+  Hook, access-profile, extension, vocabulary and manifest-projection findings
+  point to the exact authored member and give cause-specific remedies. Journey
+  failures name the step, profile and unreadable field, or the Action and missing
+  required input.
+- Warning findings now include a stable `rank` of `widens-access`, `performance`
+  or `hygiene`. Clean generated starters suppress broad-access warnings when
+  scope and purpose requirements already bound their callers. Optional stored
+  fields that no supported Record grant or Action can fill report
+  `breg.record-type.stored-field-unfillable`.
 - Add the closed `logLevel` runtime setting to BReg, `breg-mcp`, and
   `breg-review`. Each existing product environment variable takes precedence,
   then the runtime file, then `info`; an unknown environment or configuration

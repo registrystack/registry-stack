@@ -484,6 +484,11 @@ path = "tests/package_change_plan.rs"
 required-features = ["runtime"]
 
 [[test]]
+name = "proposal_hooks"
+path = "tests/proposal_hooks.rs"
+required-features = ["runtime"]
+
+[[test]]
 name = "postgres_access_log"
 path = "tests/postgres_access_log.rs"
 required-features = ["postgres-test"]

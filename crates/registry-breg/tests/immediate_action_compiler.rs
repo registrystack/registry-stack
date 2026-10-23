@@ -725,7 +725,7 @@ fn action_inputs_reject_unknown_project_vocabulary_references() {
     .expect_err("unknown action input vocabularies are refused");
     assert!(failure.diagnostics().iter().any(|diagnostic| {
         diagnostic.code == "breg.action.input-vocabulary-unknown"
-            && diagnostic.path == "actions[].inputs[].vocabulary"
+            && diagnostic.path == "actions[id=create-asset].inputs[id=kind].vocabulary"
     }));
 }
 
