@@ -35,6 +35,11 @@ const DEFAULT_MAXIMUM_RESPONSE_BYTES: u64 = 4 * 1024 * 1024;
 const MAXIMUM_RESPONSE_BYTES: u64 = 16 * 1024 * 1024;
 const DEFAULT_MAXIMUM_DOWNLOAD_BYTES: u64 = 16 * 1024 * 1024;
 const MAXIMUM_DOWNLOAD_BYTES: u64 = 64 * 1024 * 1024;
+const MEBIBYTE: u64 = 1024 * 1024;
+/// The runtime's default `transfers.minimumDeadlineSeconds`.
+const DEFAULT_TRANSFER_MINIMUM: Duration = Duration::from_secs(60);
+/// The runtime's default `transfers.mebibyteAllowanceSeconds`.
+const DEFAULT_TRANSFER_PER_MEBIBYTE: Duration = Duration::from_secs(8);
 
 /// The body of a content upload: in memory, or streamed from any
 /// `http_body::Body` through `UploadBody::wrap`. A streamed body is sent as
@@ -53,6 +58,8 @@ pub struct DocumentsClientConfig {
     trusted_root_certificates: Option<Vec<u8>>,
     maximum_response_bytes: u64,
     maximum_download_bytes: u64,
+    transfer_minimum: Duration,
+    transfer_per_mebibyte: Duration,
 }
 
 impl DocumentsClientConfig {
@@ -66,9 +73,13 @@ impl DocumentsClientConfig {
             trusted_root_certificates: None,
             maximum_response_bytes: DEFAULT_MAXIMUM_RESPONSE_BYTES,
             maximum_download_bytes: DEFAULT_MAXIMUM_DOWNLOAD_BYTES,
+            transfer_minimum: DEFAULT_TRANSFER_MINIMUM,
+            transfer_per_mebibyte: DEFAULT_TRANSFER_PER_MEBIBYTE,
         }
     }
 
+    /// How long one exchange may take. An upload or a download is allowed
+    /// this plus its transfer deadline; see `with_transfer_deadline`.
     #[must_use]
     pub fn with_attempt_timeout(mut self, value: Duration) -> Self {
         self.attempt_timeout = value;
@@ -110,11 +121,29 @@ impl DocumentsClientConfig {
         self
     }
 
+    /// The transfer deadline the service holds content to: `minimum`, plus
+    /// `per_mebibyte` for every started mebibyte. An upload is allowed the
+    /// attempt timeout plus the deadline for its reserved length, and a
+    /// download the attempt timeout plus the deadline for the download byte
+    /// bound. The default, 60 seconds and 8 seconds, is the runtime's
+    /// default; set the deployment's `transfers.minimumDeadlineSeconds` and
+    /// `transfers.mebibyteAllowanceSeconds` when it changed them.
+    #[must_use]
+    pub fn with_transfer_deadline(mut self, minimum: Duration, per_mebibyte: Duration) -> Self {
+        self.transfer_minimum = minimum;
+        self.transfer_per_mebibyte = per_mebibyte;
+        self
+    }
+
     fn validate(&self) -> Result<ServiceBaseUrl, DocumentsClientError> {
         let base_url = ServiceBaseUrl::new(self.base_url.clone()).map_err(|_| {
             DocumentsClientError::configuration("the service base URL is not usable")
         })?;
-        if self.attempt_timeout.is_zero() || self.connect_timeout.is_zero() {
+        if self.attempt_timeout.is_zero()
+            || self.connect_timeout.is_zero()
+            || self.transfer_minimum.is_zero()
+            || self.transfer_per_mebibyte.is_zero()
+        {
             return Err(DocumentsClientError::configuration(
                 "client timeouts must be greater than zero",
             ));
@@ -158,6 +187,8 @@ impl fmt::Debug for DocumentsClientConfig {
             )
             .field("maximum_response_bytes", &self.maximum_response_bytes)
             .field("maximum_download_bytes", &self.maximum_download_bytes)
+            .field("transfer_minimum", &self.transfer_minimum)
+            .field("transfer_per_mebibyte", &self.transfer_per_mebibyte)
             .finish()
     }
 }
@@ -205,6 +236,9 @@ pub struct DocumentsClient {
     base_url: ServiceBaseUrl,
     maximum_response_bytes: u64,
     maximum_download_bytes: u64,
+    attempt_timeout: Duration,
+    transfer_minimum: Duration,
+    transfer_per_mebibyte: Duration,
 }
 
 impl fmt::Debug for DocumentsClient {
@@ -231,6 +265,9 @@ impl DocumentsClient {
             base_url,
             maximum_response_bytes: config.maximum_response_bytes,
             maximum_download_bytes: config.maximum_download_bytes,
+            attempt_timeout: config.attempt_timeout,
+            transfer_minimum: config.transfer_minimum,
+            transfer_per_mebibyte: config.transfer_per_mebibyte,
         })
     }
 
@@ -375,6 +412,7 @@ impl DocumentsClient {
         let url = self.url(UPLOAD_CONTENT_PATH, &[upload_id])?;
         let request = self
             .authorized(self.http.put(url), token)
+            .timeout(self.transfer_timeout(version.length))
             .header(CONTENT_TYPE, version.media_type.as_str())
             .header(CONTENT_LENGTH, version.length)
             .body(body);
@@ -412,6 +450,7 @@ impl DocumentsClient {
         let request = self
             .http
             .get(url)
+            .timeout(self.download_timeout())
             .header(AUTHORIZATION, token.authorization_header_value());
         let response = self.send(request).await?;
         let status = response.status();
@@ -560,6 +599,21 @@ impl DocumentsClient {
         let url = self.url(POLICIES_PATH, &[])?;
         self.json_answer(self.authorized(self.http.get(url), token), StatusCode::OK)
             .await
+    }
+
+    /// How long a transfer of `length` bytes may take: the attempt timeout
+    /// plus the transfer deadline for that length.
+    fn transfer_timeout(&self, length: u64) -> Duration {
+        let mebibytes = u32::try_from(length.div_ceil(MEBIBYTE)).unwrap_or(u32::MAX);
+        self.attempt_timeout
+            .saturating_add(self.transfer_minimum)
+            .saturating_add(self.transfer_per_mebibyte.saturating_mul(mebibytes))
+    }
+
+    /// How long a download may take: a transfer of the most bytes it may
+    /// carry.
+    fn download_timeout(&self) -> Duration {
+        self.transfer_timeout(self.maximum_download_bytes)
     }
 
     /// The URL of one route under the deployment prefix, with each `{name}`
@@ -935,6 +989,10 @@ mod tests {
             DocumentsClientConfig::new(url.clone()).with_maximum_download_bytes(0),
             DocumentsClientConfig::new(url.clone())
                 .with_maximum_download_bytes(MAXIMUM_DOWNLOAD_BYTES + 1),
+            DocumentsClientConfig::new(url.clone())
+                .with_transfer_deadline(Duration::ZERO, Duration::from_secs(8)),
+            DocumentsClientConfig::new(url.clone())
+                .with_transfer_deadline(Duration::from_secs(60), Duration::ZERO),
         ] {
             assert!(
                 matches!(
@@ -950,5 +1008,42 @@ mod tests {
             .validate()
             .is_ok());
         assert!(DocumentsClientConfig::new(url).validate().is_ok());
+    }
+
+    /// By default a transfer is allowed the attempt timeout plus the
+    /// runtime's default transfer deadline: 60 seconds and 8 more for every
+    /// started mebibyte. A download is allowed it for the most bytes it may
+    /// carry.
+    #[test]
+    fn a_transfer_is_allowed_the_runtime_default_deadline_for_its_length() {
+        const MEBIBYTE: u64 = 1024 * 1024;
+        let url = Url::parse("https://documents.example.invalid/").expect("fixture URL");
+        let client = DocumentsClient::new(DocumentsClientConfig::new(url.clone()))
+            .expect("a default client");
+        let attempt = DEFAULT_REQUEST_TIMEOUT;
+        assert_eq!(
+            client.transfer_timeout(0),
+            attempt + Duration::from_secs(60)
+        );
+        assert_eq!(
+            client.transfer_timeout(1),
+            attempt + Duration::from_secs(68)
+        );
+        assert_eq!(
+            client.transfer_timeout(16 * MEBIBYTE),
+            attempt + Duration::from_secs(188)
+        );
+        assert_eq!(
+            client.download_timeout(),
+            attempt + Duration::from_secs(188)
+        );
+        let larger = DocumentsClient::new(
+            DocumentsClientConfig::new(url).with_maximum_download_bytes(64 * MEBIBYTE),
+        )
+        .expect("a client with a larger download bound");
+        assert_eq!(
+            larger.download_timeout(),
+            attempt + Duration::from_secs(60 + 8 * 64)
+        );
     }
 }

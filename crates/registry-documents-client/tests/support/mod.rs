@@ -46,6 +46,8 @@ pub enum Answer {
     /// Holds the request past the client's timeout, so the client cannot
     /// know whether it took effect.
     Stall,
+    /// The inner answer, sent once the delay has passed.
+    Slow(Duration, Box<Answer>),
     /// An exact product problem, with an optional `Retry-After` field.
     Problem(ProblemCode, Option<&'static str>),
     /// A traced answer with the given status, content type, and body.
@@ -96,7 +98,11 @@ async fn answer(
             headers,
             body,
         });
-    let next = script.answers.lock().expect("answers").pop_front();
+    let mut next = script.answers.lock().expect("answers").pop_front();
+    while let Some(Answer::Slow(delay, inner)) = next {
+        tokio::time::sleep(delay).await;
+        next = Some(*inner);
+    }
     match next {
         Some(Answer::Stall) => {
             tokio::time::sleep(Duration::from_secs(30)).await;
@@ -135,6 +141,7 @@ async fn answer(
             }
             (status, headers).into_response()
         }
+        Some(Answer::Slow(..)) => unreachable!("a slow answer is unwrapped before it is sent"),
         None => StatusCode::IM_A_TEAPOT.into_response(),
     }
 }
