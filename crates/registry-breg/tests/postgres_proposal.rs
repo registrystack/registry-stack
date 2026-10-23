@@ -791,6 +791,311 @@ async fn proposal_list_pages_valid_large_inputs_without_losing_later_proposals()
 }
 
 #[tokio::test]
+async fn manual_apply_unique_conflict_blocks_apply_while_stale_revision_stays_rebasable() {
+    let mut source = registry_source(false);
+    source["recordTypes"][0]["constraints"] =
+        json!([{"id":"unique-name","type":"unique","fields":["name"]}]);
+    let fixture =
+        client_http::ClientFixture::start(compile(source.clone()), claims("author", "zone-a"))
+            .await;
+    let client = &fixture.http.client;
+    let metadata = client.registry_contract(Some("clerk")).await.unwrap();
+    let BRegDirectWrite::Create(create) = metadata
+        .value
+        .select_direct_write("records.target.create", "clerk")
+        .unwrap()
+    else {
+        panic!("create");
+    };
+    let action = metadata
+        .value
+        .select_action("correct-name", "clerk")
+        .unwrap();
+
+    let original = client
+        .create_record(
+            &create,
+            &BRegCreateRequest::new(map(json!({"name":"Original","jurisdiction":"zone-a"})))
+                .unwrap(),
+            &key("unique-apply-original"),
+            BRegRecordFormat::Json,
+        )
+        .await
+        .unwrap()
+        .value;
+    let input = BRegActionInvocationRequest::new(
+        &action,
+        map(json!({"target":original.data.record_identifier,"value":"Reserved"})),
+        None,
+    )
+    .unwrap();
+    let draft = client
+        .start_proposal(&action, &input, &key("unique-apply-start"))
+        .await
+        .unwrap()
+        .value;
+    let submit = client
+        .prepare_proposal(&draft, "submit", json!({}), &key("unique-apply-submit"))
+        .unwrap();
+    let submitted = client.execute_proposal(&submit).await.unwrap().value;
+    client
+        .create_record(
+            &create,
+            &BRegCreateRequest::new(map(json!({"name":"Reserved","jurisdiction":"zone-a"})))
+                .unwrap(),
+            &key("unique-apply-race"),
+            BRegRecordFormat::Json,
+        )
+        .await
+        .unwrap();
+    let apply = client
+        .prepare_proposal(
+            &submitted,
+            "apply",
+            json!({"submissionVersion":submitted.submission_version(),
+                "effectDigest":submitted.effect_digest().unwrap()}),
+            &key("unique-apply-conflict"),
+        )
+        .unwrap();
+    let audit_before = fixture.audit_capture.entries().len();
+    let refusal = client.execute_proposal(&apply).await.unwrap_err();
+    assert_eq!(
+        refusal.problem_code(),
+        Some(BRegProblemCode::MutationConflict)
+    );
+    assert!(
+        refusal.constraint().is_none(),
+        "unique conflict stays value-free"
+    );
+    let audit = fixture.audit_capture.entries();
+    let terminal = audit[audit_before..]
+        .iter()
+        .find(|entry| {
+            entry["record"]["phase"] == "terminal"
+                && entry["record"]["operationId"] == "proposals.correct-name.apply"
+        })
+        .expect("the refused Apply records its terminal outcome");
+    assert_eq!(terminal["record"]["outcome"], "refused");
+    assert!(
+        terminal["record"].get("applicationReference").is_none(),
+        "a refused Apply did not retain an application"
+    );
+
+    let blocked = client.read_proposal(&submitted).await.unwrap().value;
+    let blocked_json = serde_json::to_value(&blocked).unwrap();
+    assert_eq!(blocked.state(), BRegProposalState::Submitted);
+    assert_eq!(blocked.blocked_reason(), None);
+    assert_eq!(blocked_json["applicationStatus"]["state"], "blocked");
+    assert_eq!(
+        blocked_json["applicationStatus"]["reason"],
+        "application-refused"
+    );
+    assert_eq!(
+        blocked_json["links"]["apply"]["availability"],
+        json!({"available":false,"observedRevision":blocked.revision(),
+            "reason":"invalid-input","recovery":"correct-input"})
+    );
+    assert!(
+        blocked
+            .link("rebase")
+            .unwrap()
+            .availability()
+            .unwrap()
+            .available
+    );
+    assert_eq!(
+        client
+            .execute_proposal(&apply)
+            .await
+            .unwrap_err()
+            .problem_code(),
+        Some(BRegProblemCode::PreconditionFailed),
+        "the original Apply attempt is no longer executable"
+    );
+    let row = fixture
+        .database
+        .admin
+        .query_one(
+            "SELECT count(*)::bigint FROM registry_internal.registry_proposal_applications",
+            &[],
+        )
+        .await
+        .unwrap();
+    assert_eq!(row.get::<_, i64>(0), 0, "conflicting effects roll back");
+    #[cfg(feature = "tooling")]
+    let (compatible, blocked, create, action) = {
+        let mut next = source;
+        next["actions"][0]["display"] = json!({"label":"Correct the name"});
+        let mut incompatible = next.clone();
+        incompatible["actions"][0]["inputs"]
+            .as_array_mut()
+            .unwrap()
+            .push(
+                json!({"id":"activation-note","type":"string","maximumLength":32,
+                "required":false,"classification":"internal"}),
+            );
+        let mut registry = (*fixture.registry).clone();
+        let mut identity = fixture.identity.clone();
+        let mut activated = None;
+        for candidate in [&next, &incompatible, &next] {
+            let (package, current_identity) = proposal_activation::activate_with_compatibility(
+                &fixture, &registry, &identity, candidate, None,
+            )
+            .await;
+            registry = package.registry().clone();
+            identity = current_identity;
+            let current = successor_client(&fixture, registry.clone(), identity.clone()).await;
+            let metadata = current
+                .client
+                .registry_contract(Some("clerk"))
+                .await
+                .unwrap();
+            let BRegDirectWrite::Create(create) = metadata
+                .value
+                .select_direct_write("records.target.create", "clerk")
+                .unwrap()
+            else {
+                panic!("create");
+            };
+            let action = metadata
+                .value
+                .select_action("correct-name", "clerk")
+                .unwrap();
+            let collection = metadata.value.select_proposals("clerk").unwrap();
+            let proposal = current
+                .client
+                .list_proposals(&collection, &BRegProposalQuery::default())
+                .await
+                .unwrap()
+                .value
+                .items
+                .into_iter()
+                .find(|proposal| proposal.id() == blocked.id())
+                .expect("the refused Proposal remains listed after activation");
+            let current_json = serde_json::to_value(&proposal).unwrap();
+            assert_eq!(
+                current_json["applicationStatus"]["reason"], "application-refused",
+                "package activation retains the durable Apply refusal"
+            );
+            assert_eq!(proposal.effect_digest(), blocked.effect_digest());
+            assert!(
+                !proposal
+                    .link("apply")
+                    .unwrap()
+                    .availability()
+                    .unwrap()
+                    .available
+            );
+            assert!(
+                proposal
+                    .link("rebase")
+                    .unwrap()
+                    .availability()
+                    .unwrap()
+                    .available
+            );
+            activated = Some((current, proposal, create, action));
+        }
+        activated.expect("the original Action is restored after the incompatible successor")
+    };
+    #[cfg(feature = "tooling")]
+    let client = &compatible.client;
+    let rebase = client
+        .prepare_proposal(
+            &blocked,
+            "rebase",
+            json!({"input":{"target":original.data.record_identifier,"value":"Reserved"}}),
+            &key("unique-apply-rebase"),
+        )
+        .unwrap();
+    let rebased = client.execute_proposal(&rebase).await.unwrap().value;
+    assert_eq!(rebased.state(), BRegProposalState::Draft);
+    assert!(rebased.application_status().is_none());
+    assert!(rebased.blocked_reason().is_none());
+
+    let stale_record = client
+        .create_record(
+            &create,
+            &BRegCreateRequest::new(map(json!({"name":"Stale","jurisdiction":"zone-a"}))).unwrap(),
+            &key("stale-apply-record"),
+            BRegRecordFormat::Json,
+        )
+        .await
+        .unwrap()
+        .value;
+    let stale_input = BRegActionInvocationRequest::new(
+        &action,
+        map(json!({"target":stale_record.data.record_identifier,"value":"Fresh"})),
+        None,
+    )
+    .unwrap();
+    let stale_draft = client
+        .start_proposal(&action, &stale_input, &key("stale-apply-start"))
+        .await
+        .unwrap()
+        .value;
+    let stale_submit = client
+        .prepare_proposal(
+            &stale_draft,
+            "submit",
+            json!({}),
+            &key("stale-apply-submit"),
+        )
+        .unwrap();
+    let stale_submitted = client.execute_proposal(&stale_submit).await.unwrap().value;
+    let entity = &fixture.registry.entities()["target"];
+    let stale_id = uuid::Uuid::parse_str(&stale_record.data.record_identifier).unwrap();
+    fixture
+        .database
+        .admin
+        .execute(
+            &format!(
+                "UPDATE registry_data.\"{}\" SET record_revision=record_revision+1 WHERE record_id=$1",
+                entity.physical_table
+            ),
+            &[&stale_id],
+        )
+        .await
+        .unwrap();
+    let stale_apply = client
+        .prepare_proposal(
+            &stale_submitted,
+            "apply",
+            json!({"submissionVersion":stale_submitted.submission_version(),
+                "effectDigest":stale_submitted.effect_digest().unwrap()}),
+            &key("stale-apply-conflict"),
+        )
+        .unwrap();
+    assert_eq!(
+        client
+            .execute_proposal(&stale_apply)
+            .await
+            .unwrap_err()
+            .problem_code(),
+        Some(BRegProblemCode::PreconditionFailed)
+    );
+    let stale_current = client.read_proposal(&stale_submitted).await.unwrap().value;
+    assert!(stale_current.blocked_reason().is_none());
+    assert!(
+        stale_current
+            .link("apply")
+            .unwrap()
+            .availability()
+            .unwrap()
+            .available
+    );
+    assert!(
+        stale_current
+            .link("rebase")
+            .unwrap()
+            .availability()
+            .unwrap()
+            .available
+    );
+    fixture.finish().await;
+}
+
+#[tokio::test]
 async fn proposal_list_pages_by_limit_and_refuses_top_naming_limit() {
     let fixture =
         client_http::ClientFixture::start(registry(false), claims("author", "zone-a")).await;
@@ -5305,7 +5610,7 @@ async fn apply_receipt_replay_refuses_a_task_grant_expiring_at_the_idempotency_l
 
 #[cfg(feature = "tooling")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn compatible_old_review_closure_survives_successors_and_same_package_role_reactivation() {
+async fn compatible_legacy_review_closure_survives_status_apply_successors_and_role_reactivation() {
     use registry_breg::migration::{
         apply_verified_package, ActivationDeployment, ApplyPrecondition, ApplyRoles, ApplyTimeouts,
         ApplyVerifiedPackageRequest,
@@ -5315,9 +5620,15 @@ async fn compatible_old_review_closure_survives_successors_and_same_package_role
         json!([{"id":"local-review","protocol":"id.registrystack.org/protocols/review/v1"}]);
     let old_policy =
         json!({"id":"name-correction","version":"1","digest":format!("sha256:{}","b".repeat(64))});
-    source["actions"][0]["execution"]["proposal"]["review"] = json!({"type":"required","authority":"local-review","source":"proposal-test","policy":old_policy});
-    let authority = proposal_review_authority::LocalAuthority::start(
+    let review_source = "shared.facility.registry:v1";
+    source["actions"][0]["execution"]["proposal"]["review"] = json!({"type":"required","authority":"local-review","source":review_source,"policy":old_policy});
+    source["accessProfiles"][0]["permissions"]["proposals"][0]["operations"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!("get-review-status"));
+    let authority = proposal_review_authority::LocalAuthority::start_for_registry(
         serde_json::from_value(old_policy.clone()).unwrap(),
+        review_source,
     )
     .await;
     let configured = authority.registry.clone();
@@ -5384,6 +5695,87 @@ async fn compatible_old_review_closure_survives_successors_and_same_package_role
         .await
         .unwrap()
     );
+    let retained = fixture
+        .database
+        .admin
+        .query_one(
+            "SELECT q.create_request,q.producer_id,q.idempotency_key,q.expected_submission_digest,
+                q.accepted_binding,r.result
+           FROM registry_internal.registry_proposal_review_submissions q
+           JOIN registry_internal.registry_proposal_review_results r
+             USING(action_id,proposal_id,submission_version)",
+            &[],
+        )
+        .await
+        .unwrap();
+    let create: registry_review_client::ReviewCreateRequest =
+        serde_json::from_value(retained.get(0)).unwrap();
+    let producer: String = retained.get(1);
+    let legacy_digest = registry_review_client::submission_digest(
+        &producer,
+        fixture.registry.registry_id(),
+        &create,
+    )
+    .unwrap();
+    assert_ne!(
+        legacy_digest.as_str(),
+        retained.get::<_, String>(3),
+        "the regression needs the historical registry-id digest to differ"
+    );
+    let mut accepted: registry_review_client::ReviewRequestAccepted =
+        serde_json::from_value(retained.get(4)).unwrap();
+    accepted.submission_digest = legacy_digest.clone();
+    let mut result: registry_review_client::ReviewResult =
+        serde_json::from_value(retained.get(5)).unwrap();
+    result.submission_digest = legacy_digest.clone();
+    fixture
+        .database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_proposal_review_submissions
+            SET expected_submission_digest=$1,accepted_binding=$2",
+            &[&legacy_digest.as_str(), &json!(accepted)],
+        )
+        .await
+        .unwrap();
+    fixture
+        .database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_proposal_review_results SET result=$1",
+            &[&json!(result)],
+        )
+        .await
+        .unwrap();
+    authority.replace_submission_digest_for_test(legacy_digest.clone());
+    let immutable_review: Value = fixture
+        .database
+        .admin
+        .query_one(
+            "SELECT jsonb_build_object(
+                    'request',create_request,
+                    'key',idempotency_key,
+                    'digest',expected_submission_digest,
+                    'binding',accepted_binding)
+           FROM registry_internal.registry_proposal_review_submissions",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    let status = reqwest::Client::new()
+        .get(format!(
+            "{}/v1/proposals/{}/review-status?accessProfile=clerk",
+            fixture.http.base_url,
+            submitted.id(),
+        ))
+        .send()
+        .await
+        .unwrap();
+    let status_code = status.status();
+    let status_body: Value = status.json().await.unwrap();
+    assert_eq!(status_code, reqwest::StatusCode::OK, "{status_body}");
+    assert_eq!(status_body["result"]["state"], "approved");
     let row = fixture
         .database
         .admin
@@ -5567,6 +5959,25 @@ async fn compatible_old_review_closure_survives_successors_and_same_package_role
     assert_eq!(row.get::<_, Value>(2), old_policy);
     assert_eq!(row.get::<_, i64>(3), 1);
     assert_eq!(submitted.submission_version(), 1);
+    let after: Value = fixture
+        .database
+        .admin
+        .query_one(
+            "SELECT jsonb_build_object(
+                    'request',create_request,
+                    'key',idempotency_key,
+                    'digest',expected_submission_digest,
+                    'binding',accepted_binding)
+           FROM registry_internal.registry_proposal_review_submissions",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        after, immutable_review,
+        "status, activation, and Apply preserve the historical accepted closure"
+    );
     fixture.finish().await;
 }
 

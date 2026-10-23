@@ -1,5 +1,5 @@
 {
-  "apiVersion": "id.registrystack.org/formats/breg/lifecycle-explanation/v1alpha7",
+  "apiVersion": "id.registrystack.org/formats/breg/lifecycle-explanation/v1alpha8",
   "kind": "BRegLifecycleExplanation",
   "lifecycles": [
     {
@@ -166,60 +166,73 @@
           "event": "edit",
           "from": "draft",
           "guard": "The Proposal is draft; replace validated Action input and advance its lifecycle revision.",
+          "recoveryReasons": [],
           "to": "draft"
         },
         {
           "event": "submit",
           "from": "draft",
           "guard": "The Proposal is draft and this submission version has not been frozen; accept the prepared plan and freeze its digest.",
+          "recoveryReasons": [],
           "to": "submitted"
         },
         {
           "event": "rebase",
           "from": "draft",
           "guard": "The Proposal is draft; explicitly bind the active Action definition and preserve the current submission version.",
+          "recoveryReasons": [],
           "to": "draft"
         },
         {
           "event": "cancel",
           "from": "draft",
           "guard": "The Proposal is draft or submitted; cancel without applying its effects.",
+          "recoveryReasons": [],
           "to": "cancelled"
         },
         {
           "event": "revise",
           "from": "submitted",
           "guard": "The Proposal is submitted; open a new draft submission version without modifying the frozen prior submission.",
+          "recoveryReasons": [],
           "to": "draft"
         },
         {
           "event": "rebase",
           "from": "submitted",
           "guard": "The Proposal is submitted; open a new draft version explicitly bound to the active Action definition.",
+          "recoveryReasons": [],
           "to": "draft"
         },
         {
           "event": "retry",
           "from": "submitted",
           "guard": "The Proposal remains submitted; schedule another eligible review or application attempt without changing the frozen plan.",
+          "recoveryReasons": [
+            "dependency-outage",
+            "lease-expired"
+          ],
           "to": "submitted"
         },
         {
           "event": "cancel",
           "from": "submitted",
           "guard": "The Proposal is draft or submitted; cancel without applying its effects.",
+          "recoveryReasons": [],
           "to": "cancelled"
         },
         {
           "event": "apply",
           "from": "submitted",
           "guard": "The submission version, displayed digest, frozen Action contract, authorized targets, commit guards, and required approval match the application attempt.",
+          "recoveryReasons": [],
           "to": "applied"
         },
         {
           "event": "reject",
           "from": "submitted",
           "guard": "The configured review authority returned a rejected result for the exact current submission. A rejection is terminal; a changes-requested result leaves the Proposal submitted and revisable.",
+          "recoveryReasons": [],
           "to": "rejected"
         }
       ]

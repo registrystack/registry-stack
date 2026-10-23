@@ -36,8 +36,8 @@ asset_dir="${SCHEDULING_ASSET_DIR:-}"
 usage() {
 	cat <<EOF
 Install the Registry Scheduling runtime and the schedulingctl adopter tooling.
-The runtime is published for Linux amd64 only; Linux arm64 and macOS arm64
-install schedulingctl alone.
+From v0.44.0 both commands are published for every supported platform.
+Earlier releases install schedulingctl alone on Linux arm64 and macOS arm64.
 
 Quick install:
   curl -fsSL https://github.com/${repo}/releases/latest/download/scheduling-install.sh | bash
@@ -312,8 +312,8 @@ fi
 os="$(uname -s)"
 arch="$(uname -m)"
 
-# The Scheduling runtime is published for Linux amd64 only. The other
-# platforms publish schedulingctl alone, so their toolset is that one binary.
+# Before v0.44.0 the Scheduling runtime was published for Linux amd64 only.
+IFS=. read -r release_major release_minor _ <<<"${version#v}"
 case "$os/$arch" in
 Linux/x86_64 | Linux/amd64)
 	os_label="linux"
@@ -322,12 +322,16 @@ Linux/x86_64 | Linux/amd64)
 Linux/arm64 | Linux/aarch64)
 	os_label="linux"
 	arch_label="arm64"
-	binaries=(schedulingctl)
+	if ((release_major == 0 && release_minor < 44)); then
+		binaries=(schedulingctl)
+	fi
 	;;
 Darwin/arm64 | Darwin/aarch64)
 	os_label="macos"
 	arch_label="arm64"
-	binaries=(schedulingctl)
+	if ((release_major == 0 && release_minor < 44)); then
+		binaries=(schedulingctl)
+	fi
 	;;
 *)
 	printf 'No prebuilt Registry Scheduling asset is published for %s/%s.\n' "$os" "$arch" >&2

@@ -11,6 +11,7 @@ source_sha=""
 version=""
 output=""
 nightly_tag=""
+exclude_discovery=0
 while [[ "$#" -gt 0 ]]; do
   case "$1" in
     --group) group="${2:-}"; shift 2 ;;
@@ -20,12 +21,20 @@ while [[ "$#" -gt 0 ]]; do
     --version) version="${2:-}"; shift 2 ;;
     --output) output="${2:-}"; shift 2 ;;
     --nightly-tag) nightly_tag="${2:-}"; shift 2 ;;
+    --exclude-unit)
+      if [[ "${2:-}" != discovery ]]; then
+        printf 'only --exclude-unit discovery is supported\n' >&2
+        exit 2
+      fi
+      exclude_discovery=1
+      shift 2
+      ;;
     *) printf 'unknown argument: %s\n' "$1" >&2; exit 2 ;;
   esac
 done
 
 usage() {
-  printf 'usage: %s [--include-casework] [--nightly-tag TAG] --group core|breg|bregctl|casework|scheduling|all --purpose candidate_input|review_only --source-sha SHA --version VERSION --output DIRECTORY\n' "$0" >&2
+  printf 'usage: %s [--include-casework] [--nightly-tag TAG] [--exclude-unit discovery] --group core|breg|bregctl|casework|scheduling|all --purpose candidate_input|review_only --source-sha SHA --version VERSION --output DIRECTORY\n' "$0" >&2
   exit 2
 }
 
@@ -90,7 +99,7 @@ bundle_fips=0
 if ((version_major > 0 || version_minor >= 33)); then
   bundle_fips=1
   # AWS-LC FIPS supports a shared module on macOS. It refuses static macOS
-  # builds, so package that module with every executable from v0.33 onward.
+  # builds, so package that module with crypto-using executables from v0.33 onward.
   # CMake otherwise inherits the host SDK minimum for the shared dylib, which
   # can be newer than the macOS 11 release contract carried by the binaries.
   export AWS_LC_FIPS_SYS_STATIC=0
@@ -118,8 +127,7 @@ if ((version_major > 0 || version_minor >= 30)) ||
    [[ "${include_casework_override}" -eq 1 ]]; then
   include_casework=1
 fi
-# Scheduling has no macOS runtime asset; its operator tool is a native
-# release binary from 0.36.0.
+# Scheduling's operator tool is native from 0.36.0; its runtime joins at 0.44.0.
 include_schedulingctl=0
 if ((version_major > 0 || version_minor >= 36)); then
   include_schedulingctl=1
@@ -156,19 +164,34 @@ stage() {
   local destination="$2"
   local dependencies
   local source="${target_root}/${target}/release/${binary}"
-  if [[ "${bundle_fips}" -eq 1 ]]; then
+  if [[ "${bundle_fips}" -eq 1 && "${binary}" != registry-manifest ]]; then
     local archive="${temporary}/platform/${destination}.tar.gz"
     local extracted="${temporary}/smoke/${destination}"
-    python3 "${packager}" archive \
-      --binary "${source}" \
-      --asset-name "${destination}" \
-      --library-root "${fips_library_root}" \
-      --notice "${repo_root}/THIRD_PARTY_NOTICES" \
-      --output "${archive}"
-    python3 "${packager}" extract \
-      --archive "${archive}" \
-      --destination "${extracted}" \
-      --expected-executable "${destination}"
+    # These programs do not link the release's AWS-LC FIPS dylib. Keep the list
+    # explicit so a missing FIPS load on any required consumer still fails in
+    # the strict FIPS packager instead of silently becoming plain.
+    if [[ "${binary}" == rstack || "${binary}" == discovery ]]; then
+      python3 "${packager}" archive-plain \
+        --binary "${source}" \
+        --asset-name "${destination}" \
+        --notice "${repo_root}/THIRD_PARTY_NOTICES" \
+        --output "${archive}"
+      python3 "${packager}" extract-plain \
+        --archive "${archive}" \
+        --destination "${extracted}" \
+        --expected-executable "${destination}"
+    else
+      python3 "${packager}" archive \
+        --binary "${source}" \
+        --asset-name "${destination}" \
+        --library-root "${fips_library_root}" \
+        --notice "${repo_root}/THIRD_PARTY_NOTICES" \
+        --output "${archive}"
+      python3 "${packager}" extract \
+        --archive "${archive}" \
+        --destination "${extracted}" \
+        --expected-executable "${destination}"
+    fi
     staged_executable="${extracted}/${destination}"
     return
   fi
@@ -276,6 +299,12 @@ build_scheduling() {
   if [[ "${include_schedulingctl}" -ne 1 ]]; then
     return
   fi
+  if [[ "${additional_platform_builds}" == *"registry-scheduling scheduling"* ]]; then
+    "${cargo_bin}" build --release --locked \
+      -p registry-scheduling --bin scheduling --target "${target}"
+    stage scheduling "scheduling-${tag}-${asset}"
+    test "$("${staged_executable}" --version)" = "scheduling ${display_version}"
+  fi
   "${cargo_bin}" build --release --locked \
     -p registry-schedulingctl --bin schedulingctl \
     --target "${target}"
@@ -285,9 +314,38 @@ build_scheduling() {
     "schedulingctl ${display_version}"
 }
 
+additional_platform_builds="$(python3 "${repo_root}/release/scripts/release_roster.py" additional-platform-builds "${version}")"
+if [[ "${exclude_discovery}" -eq 1 ]]; then
+  filtered_platform_builds=""
+  while read -r package binary; do
+    if [[ "${package}" == registry-discovery* ]]; then
+      continue
+    fi
+    filtered_platform_builds+="${package} ${binary}"$'\n'
+  done <<<"${additional_platform_builds}"
+  additional_platform_builds="${filtered_platform_builds%$'\n'}"
+fi
+build_additional_platforms() {
+  local package binary expected typst_pin
+  [[ -n "${additional_platform_builds}" ]] || return 0
+  while read -r package binary; do
+    [[ "${binary}" != scheduling ]] || continue
+    "${cargo_bin}" build --release --locked -p "${package}" --bin "${binary}" --target "${target}"
+    stage "${binary}" "${binary}-${tag}-${asset}"
+    expected="${binary} ${display_version}"
+    if [[ "${binary}" == registry-render ]]; then
+      typst_pin="$(sed -n 's/^pub const TYPST_PIN: &str = "\([^"]*\)";$/\1/p' "${repo_root}/crates/registry-render/src/lib.rs")"
+      test -n "${typst_pin}"
+      expected+=" (typst ${typst_pin})"
+    fi
+    test "$("${staged_executable}" --version)" = "${expected}"
+  done <<<"${additional_platform_builds}"
+}
+
 cd -- "${repo_root}"
 if [[ "${group}" == core || "${group}" == all ]]; then
   build_core
+  build_additional_platforms
 fi
 if [[ "${group}" == breg || "${group}" == all ]]; then
   build_breg
@@ -304,6 +362,12 @@ fi
 rm -rf -- "${temporary}/smoke"
 
 assets=()
+if [[ ("${group}" == core || "${group}" == all) && -n "${additional_platform_builds}" ]]; then
+  while read -r package binary; do
+    [[ "${binary}" != scheduling ]] || continue
+    assets+=("${binary}-${tag}-${asset}")
+  done <<<"${additional_platform_builds}"
+fi
 if [[ "${group}" == core || "${group}" == all ]]; then
   if [[ "${include_rstack}" -eq 1 ]]; then
     assets+=("rstack-${tag}-${asset}")
@@ -327,11 +391,16 @@ if [[ ("${group}" == casework || "${group}" == all) && "${include_casework}" -eq
   assets+=("casework-${tag}-${asset}" "caseworkctl-${tag}-${asset}")
 fi
 if [[ ("${group}" == scheduling || "${group}" == all) && "${include_schedulingctl}" -eq 1 ]]; then
+  if [[ "${additional_platform_builds}" == *"registry-scheduling scheduling"* ]]; then
+    assets+=("scheduling-${tag}-${asset}")
+  fi
   assets+=("schedulingctl-${tag}-${asset}")
 fi
 if [[ "${bundle_fips}" -eq 1 ]]; then
   for index in "${!assets[@]}"; do
-    assets[${index}]="${assets[${index}]}.tar.gz"
+    if [[ "${assets[${index}]}" != registry-manifest-* ]]; then
+      assets[index]="${assets[${index}]}.tar.gz"
+    fi
   done
 fi
 

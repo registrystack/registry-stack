@@ -6527,6 +6527,7 @@ dependencies = [
  "clap",
  "fs2",
  "hex",
+ "registry-platform-buildinfo",
  "registry-platform-canonical-json",
  "rustix 1.1.5",
  "serde",

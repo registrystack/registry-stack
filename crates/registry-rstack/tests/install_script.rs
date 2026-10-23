@@ -3,7 +3,7 @@
 #![cfg(unix)]
 
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{symlink, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -29,7 +29,7 @@ fn help_does_not_require_home() {
 }
 
 #[test]
-fn explicit_install_paths_do_not_require_home() {
+fn plain_macos_launcher_archive_bootstraps_without_home() {
     let fixture = InstallerFixture::new();
     let output = fixture.command().output().unwrap();
 
@@ -91,6 +91,46 @@ fn ordinary_component_selection_is_forwarded_without_a_delimiter() {
     assert!(!arguments.ends_with("--\nbreg\n"));
 }
 
+#[test]
+fn unsafe_macos_launcher_archives_are_refused_before_execution() {
+    for variant in [
+        ArchiveVariant::FipsLibrary,
+        ArchiveVariant::ExtraEntry,
+        ArchiveVariant::NestedLauncher,
+        ArchiveVariant::DuplicateLauncher,
+        ArchiveVariant::SymlinkNotices,
+        ArchiveVariant::MissingNotices,
+        ArchiveVariant::WrongLauncherMode,
+        ArchiveVariant::WrongNoticesMode,
+    ] {
+        let fixture = InstallerFixture::with_archive(variant);
+
+        let output = fixture.command().output().unwrap();
+
+        assert!(
+            !output.status.success(),
+            "unsafe archive {variant:?} was accepted"
+        );
+        assert!(
+            !fixture.arguments.exists(),
+            "unsafe archive {variant:?} executed the launcher"
+        );
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum ArchiveVariant {
+    Valid,
+    FipsLibrary,
+    ExtraEntry,
+    NestedLauncher,
+    DuplicateLauncher,
+    SymlinkNotices,
+    MissingNotices,
+    WrongLauncherMode,
+    WrongNoticesMode,
+}
+
 struct InstallerFixture {
     _temp: TempDir,
     assets: PathBuf,
@@ -102,6 +142,10 @@ struct InstallerFixture {
 
 impl InstallerFixture {
     fn new() -> Self {
+        Self::with_archive(ArchiveVariant::Valid)
+    }
+
+    fn with_archive(variant: ArchiveVariant) -> Self {
         let temp = tempfile::tempdir().unwrap();
         let assets = temp.path().join("assets");
         let tools = temp.path().join("tools");
@@ -129,23 +173,55 @@ impl InstallerFixture {
             &launcher,
             "#!/bin/sh\nif [ \"${1:-}\" = --version ]; then printf 'rstack 9.8.7\\n'; exit 0; fi\nprintf '%s\\n' \"$@\" > \"${RSTACK_TEST_ARGUMENTS:?}\"\n",
         );
-        fs::write(archive_root.join("THIRD_PARTY_NOTICES"), "test notices\n").unwrap();
-        fs::write(
-            archive_root.join("libaws_lc_fips_test.dylib"),
-            "test module\n",
-        )
-        .unwrap();
+        let notices = archive_root.join("THIRD_PARTY_NOTICES");
+        fs::write(&notices, "test notices\n").unwrap();
+        fs::set_permissions(&notices, fs::Permissions::from_mode(0o644)).unwrap();
+
+        let mut archive_entries = vec![launcher_name.clone(), "THIRD_PARTY_NOTICES".into()];
+        match variant {
+            ArchiveVariant::Valid => {}
+            ArchiveVariant::FipsLibrary => {
+                let entry = "libaws_lc_fips_test.dylib";
+                fs::write(archive_root.join(entry), "test module\n").unwrap();
+                archive_entries.push(entry.into());
+            }
+            ArchiveVariant::ExtraEntry => {
+                let entry = "extra";
+                fs::write(archive_root.join(entry), "unexpected\n").unwrap();
+                archive_entries.push(entry.into());
+            }
+            ArchiveVariant::NestedLauncher => {
+                let nested = archive_root.join("nested");
+                fs::create_dir(&nested).unwrap();
+                fs::rename(&launcher, nested.join(&launcher_name)).unwrap();
+                archive_entries[0] = format!("nested/{launcher_name}");
+            }
+            ArchiveVariant::DuplicateLauncher => {
+                archive_entries.insert(1, launcher_name.clone());
+            }
+            ArchiveVariant::SymlinkNotices => {
+                let target = temp.path().join("notices-target");
+                fs::rename(&notices, &target).unwrap();
+                symlink(target, &notices).unwrap();
+            }
+            ArchiveVariant::MissingNotices => {
+                fs::remove_file(notices).unwrap();
+                archive_entries.pop();
+            }
+            ArchiveVariant::WrongLauncherMode => {
+                fs::set_permissions(&launcher, fs::Permissions::from_mode(0o700)).unwrap();
+            }
+            ArchiveVariant::WrongNoticesMode => {
+                fs::set_permissions(notices, fs::Permissions::from_mode(0o600)).unwrap();
+            }
+        }
         let archive = assets.join(format!("{launcher_name}.tar.gz"));
         let status = Command::new("tar")
             .args(["-czf"])
             .arg(&archive)
             .arg("-C")
             .arg(&archive_root)
-            .args([
-                &launcher_name,
-                "THIRD_PARTY_NOTICES",
-                "libaws_lc_fips_test.dylib",
-            ])
+            .args(&archive_entries)
             .status()
             .unwrap();
         assert!(status.success());
@@ -198,6 +274,9 @@ impl InstallerFixture {
 }
 
 fn installer_path() -> PathBuf {
+    if let Some(path) = std::env::var_os("RSTACK_TEST_INSTALLER") {
+        return path.into();
+    }
     Path::new(env!("CARGO_MANIFEST_DIR")).join("install.sh")
 }
 

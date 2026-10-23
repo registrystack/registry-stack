@@ -124,10 +124,36 @@ V2_1_PAYLOAD_TEMPLATES = tuple(
         )
     )
 )
+V2_2_ROSTER_PROFILE = "registry-stack.nightly-roster.v2.2"
+V2_2_INSTALLERS = (
+    "breg", "breg-mcp", "breg-review", "casework", "coordinator", "discovery",
+    "evidencectl", "messaging", "registry-manifest", "registry-render", "scheduling",
+)
+# Keep published inventories frozen, including the standalone Manifest CLI and
+# the rstack launcher on every supported platform. The rstack installer remains
+# numbered-release-only because it requires that channel's component manifest.
+# Coordinator binaries do not imply approval of its separately held image.
+V2_2_PAYLOAD_TEMPLATES = tuple(sorted((
+    *V2_PAYLOAD_TEMPLATES,
+    "scheduling-{tag}-linux-arm64", "scheduling-{tag}-macos-arm64.tar.gz",
+    "messaging-{tag}-linux-arm64", "messaging-{tag}-macos-arm64.tar.gz",
+    "messagingctl-{tag}-linux-arm64", "messagingctl-{tag}-macos-arm64.tar.gz",
+    "discovery-{tag}-linux-arm64", "discovery-{tag}-macos-arm64.tar.gz",
+    "discoveryctl-{tag}-linux-arm64", "discoveryctl-{tag}-macos-arm64.tar.gz",
+    "registry-render-{tag}-linux-arm64", "registry-render-{tag}-macos-arm64.tar.gz",
+    "registry-manifest-{tag}-linux-arm64", "registry-manifest-{tag}-macos-arm64",
+    "rstack-{tag}-linux-amd64", "rstack-{tag}-linux-arm64", "rstack-{tag}-macos-arm64.tar.gz",
+    "coordinator-{tag}-linux-amd64", "coordinator-{tag}-linux-arm64", "coordinator-{tag}-macos-arm64.tar.gz",
+    "coordinatorctl-{tag}-linux-amd64", "coordinatorctl-{tag}-linux-arm64", "coordinatorctl-{tag}-macos-arm64.tar.gz",
+)))
+V2_3_ROSTER_PROFILE = "registry-stack.nightly-roster.v2.3"
 V2_ROSTER_PROFILES = {
     V2_ROSTER_PROFILE: (V2_IMAGES, V2_INSTALLERS, V2_PAYLOAD_TEMPLATES),
     V2_1_ROSTER_PROFILE: (V2_1_IMAGES, V2_INSTALLERS, V2_1_PAYLOAD_TEMPLATES),
+    V2_2_ROSTER_PROFILE: (V2_IMAGES, V2_2_INSTALLERS, V2_2_PAYLOAD_TEMPLATES),
+    V2_3_ROSTER_PROFILE: (V2_1_IMAGES, V2_2_INSTALLERS, V2_2_PAYLOAD_TEMPLATES),
 }
+INSTALLERS.update(release_roster.ADDITIONAL_INSTALLERS)
 
 
 class NightlyError(ValueError):
@@ -308,6 +334,9 @@ def current_roster(version: str, tag: str) -> dict:
     if base != version:
         raise NightlyError("nightly roster version does not match its tag")
     parsed = tuple(int(part) for part in version.split("."))
+    if parsed >= release_roster.ALL_PLATFORMS_FIRST_RELEASE:
+        profile = V2_3_ROSTER_PROFILE if release_roster.coordinator_in_release(parsed) else V2_2_ROSTER_PROFILE
+        return frozen_roster(profile, tag)
     if release_roster.coordinator_in_release(parsed):
         return frozen_roster(V2_1_ROSTER_PROFILE, tag)
     return frozen_roster(V2_ROSTER_PROFILE, tag)
@@ -670,10 +699,22 @@ def smoke(directory: Path) -> None:
             for binary in binaries + (
                 ("scheduling",) if product == "scheduling" else ()
             ):
-                if (
-                    run(str(destination / binary), "--version")
-                    != f"{binary} {expected_binary_version(binary, manifest['version'])}"
-                ):
+                expected = (
+                    f"{binary} "
+                    f"{expected_binary_version(binary, manifest['version'])}"
+                )
+                if binary == "registry-render":
+                    pin = re.search(
+                        r'^pub const TYPST_PIN: &str = "([^" ]+)";$',
+                        (ROOT / "crates/registry-render/src/lib.rs").read_text(),
+                        re.MULTILINE,
+                    )
+                    if pin is None:
+                        raise NightlyError(
+                            "Registry Render's Typst version pin is missing"
+                        )
+                    expected += f" (typst {pin[1]})"
+                if run(str(destination / binary), "--version") != expected:
                     raise NightlyError(f"installed {binary} reports another version")
 
 

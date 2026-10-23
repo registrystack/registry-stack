@@ -19,11 +19,13 @@ teams:
     supervisorProfiles: [supervisor]
 reviewPolicies:
   regional-review:
+    label: Regional review
     version: "1"
     purpose: approval
     context: {mode: submitted}
     routing:
       - id: northern-requests
+        label: Northern requests
         because: The submitted region is north.
         when:
           stage: technical
@@ -31,10 +33,12 @@ reviewPolicies:
         queue: northern-review
     stages:
       - id: technical
+        label: Technical review
         queue: triage
         decidingProfiles: [staff]
         requiredApprovals: 1
       - id: signoff
+        label: Final signoff
         queue: signoff
         decidingProfiles: [supervisor]
         requiredApprovals: 1

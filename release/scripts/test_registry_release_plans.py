@@ -206,12 +206,18 @@ def manifest(version: str, release_id: str, source_ref: str, status: str) -> dic
         inventory += ("messaging", "messagingctl")
     if REGISTRY_RELEASE.release_roster.render_in_release(version_tuple):
         inventory += ("registry-render",)
-    if REGISTRY_RELEASE.release_roster.coordinator_in_release(version_tuple):
+    if REGISTRY_RELEASE.release_roster.coordinator_binaries_in_release(version_tuple):
         inventory += ("coordinator", "coordinatorctl")
+    if REGISTRY_RELEASE.release_roster.rstack_in_release(version_tuple):
+        inventory += ("rstack", "rstack-installer")
     if REGISTRY_RELEASE.release_roster.scheduling_installer_in_release(version_tuple):
         inventory += ("scheduling-installer",)
     if version_tuple >= (0, 39, 0):
         inventory = tuple(name for name in inventory if not name.startswith("relay"))
+    inventory += tuple(
+        f"{name}-installer"
+        for name in REGISTRY_RELEASE.release_roster.additional_installers(version_tuple)
+    )
     data = {
         "stack": {
             "release": release_id,
@@ -737,6 +743,23 @@ class RegistryReleasePlanTest(unittest.TestCase):
         self.assertEqual(
             [],
             owner.artifact_inventory_errors("0.38.0", current["artifacts"]),
+        )
+
+    def test_rstack_artifacts_join_only_the_v0_44_manifest_inventory(self) -> None:
+        owner = _load_registry_release()
+        historical = manifest("0.43.0", "beta-fixture", "v0.43.0", "candidate")
+        current = manifest("0.44.0", "beta-fixture", "v0.44.0", "candidate")
+        for name in ("rstack", "rstack-installer"):
+            with self.subTest(name=name):
+                self.assertNotIn(name, historical["artifacts"])
+                self.assertIn(name, current["artifacts"])
+        self.assertEqual(
+            [],
+            owner.artifact_inventory_errors("0.43.0", historical["artifacts"]),
+        )
+        self.assertEqual(
+            [],
+            owner.artifact_inventory_errors("0.44.0", current["artifacts"]),
         )
 
     @roster_patch("release_roster.COORDINATOR_FIRST_RELEASE", (0, 42, 0))
@@ -1278,6 +1301,10 @@ version = "1.0.0"
 
     def test_prepare_binds_unshipped_docset_labels_and_refs(self) -> None:
         data_dir = self.repo.root / "docs/site/src/data"
+        artifacts_path = data_dir / "docset-release-artifacts.yaml"
+        artifacts = yaml.safe_load(artifacts_path.read_text(encoding="utf-8"))
+        artifacts["products"]["unshipped-example"] = "unshipped-service"
+        write_yaml(artifacts_path, artifacts)
         docsets_path = data_dir / "docsets.yaml"
         docsets = yaml.safe_load(docsets_path.read_text(encoding="utf-8"))
         selected = next(item for item in docsets["docsets"] if item["id"] == "v1.1.0")
@@ -1287,13 +1314,13 @@ version = "1.0.0"
             ("main source (unreleased)", "HEAD", False),
         ):
             with self.subTest(label=label, ref=ref):
-                selected["products"]["registry-coordinator"] = {"version": label, "ref": ref}
+                selected["products"]["unshipped-example"] = {"version": label, "ref": ref}
                 write_yaml(docsets_path, docsets)
                 write_json(data_dir / "generated/docsets.json", docsets)
                 result = self.prepare()
                 self.assertEqual(0 if succeeds else 1, result.returncode, result.stderr)
                 if not succeeds:
-                    self.assertIn("docset v1.1.0 product registry-coordinator", result.stderr)
+                    self.assertIn("docset v1.1.0 product unshipped-example", result.stderr)
 
     def test_prepare_rejects_unreleased_label_for_shipped_product(self) -> None:
         docsets_path = self.repo.root / "docs/site/src/data/docsets.yaml"

@@ -149,13 +149,16 @@ evidence_oid4vci_image_in_release="$(python3 "${script_dir}/release_roster.py" \
 if [[ "${evidence_oid4vci_image_in_release}" == true ]]; then
   include_evidence_oid4vci_image=1
 fi
-# release_roster.py names the first release that ships Registry Coordinator;
-# until it does, no version builds or stages coordinator or coordinatorctl.
+# Coordinator binaries have an independent boundary from image publication.
 include_coordinator=0
 coordinator_in_release="$(python3 "${script_dir}/release_roster.py" \
-  coordinator-in-release "${version}")"
+  coordinator-binaries-in-release "${version}")"
 if [[ "${coordinator_in_release}" == true ]]; then
   include_coordinator=1
+fi
+include_coordinator_image=0
+if [[ "$(python3 "${script_dir}/release_roster.py" coordinator-in-release "${version}")" == true ]]; then
+  include_coordinator_image=1
 fi
 
 if [[ "${group}" == discovery ]]; then
@@ -310,8 +313,10 @@ build_payload() {
         "dist/bin/coordinator-${RELEASE_TAG}-linux-amd64"
       cp target/release/coordinatorctl \
         "dist/bin/coordinatorctl-${RELEASE_TAG}-linux-amd64"
-      cp target/release/coordinator dist/image-bin/coordinator
-      cp target/release/coordinatorctl dist/image-bin/coordinatorctl
+      if [[ "${include_coordinator_image}" -eq 1 ]]; then
+        cp target/release/coordinator dist/image-bin/coordinator
+        cp target/release/coordinatorctl dist/image-bin/coordinatorctl
+      fi
     fi
 
   fi
@@ -546,6 +551,7 @@ docker run --rm \
   --env RELEASE_INCLUDE_MESSAGING="${include_messaging}" \
   --env RELEASE_INCLUDE_RENDER="${include_render}" \
   --env RELEASE_INCLUDE_COORDINATOR="${include_coordinator}" \
+  --env RELEASE_INCLUDE_COORDINATOR_IMAGE="${include_coordinator_image}" \
   --env RELEASE_INCLUDE_EVIDENCE_OID4VCI_IMAGE="${include_evidence_oid4vci_image}" \
   --env RELEASE_TAG="${tag}" \
   "${identity_env_args[@]}" \
@@ -660,7 +666,9 @@ if [[ "${group}" == all || "${group}" == core ]]; then
       "coordinator-${tag}-linux-amd64"
       "coordinatorctl-${tag}-linux-amd64"
     )
-    image_bin_binaries+=(coordinator coordinatorctl)
+    if [[ "${include_coordinator_image}" -eq 1 ]]; then
+      image_bin_binaries+=(coordinator coordinatorctl)
+    fi
   fi
 fi
 

@@ -33,17 +33,17 @@ fn routing_findings_name_each_authored_rule_member_once() {
             (
                 "casework.routing.unknown-stage",
                 "/reviewPolicies/regional-review/routing/0/when/stage",
-                Some(29),
+                Some(31),
             ),
             (
                 "casework.routing.unknown-field",
                 "/reviewPolicies/regional-review/routing/0/when/fields/zone",
-                Some(30),
+                Some(32),
             ),
             (
                 "casework.routing.unknown-queue",
                 "/reviewPolicies/regional-review/routing/0/queue",
-                Some(31),
+                Some(33),
             ),
         ],
     );
@@ -65,7 +65,7 @@ fn assert_unknown_field_and_predicate_error(predicate: &str, predicate_code: &st
             finding.path,
             "/reviewPolicies/regional-review/routing/0/when/fields/zone"
         );
-        assert_eq!(finding.source.as_ref().unwrap().line, Some(30));
+        assert_eq!(finding.source.as_ref().unwrap().line, Some(32));
     }
 }
 

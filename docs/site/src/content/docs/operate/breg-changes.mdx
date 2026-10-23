@@ -88,11 +88,27 @@ bregctl test refused.
 
   error    migration.review.required  reviewedMigrations
            the successor cannot be applied automatically; the changes to review are:
-           action-changed at registry. Run diff, review the migration and its rehearsal
+           action-changed at register-facility. Run diff, review the migration and its rehearsal
            evidence, then provide --reviewed-migrations to both test and package
 
 1 error, 0 findings.
 ```
+
+Action labels, descriptions, input labels, and refusal wording do not require
+migration review. Adding an unrelated optional field to a target Record type
+also does not make the Action itself a reviewed change. Changes to inputs,
+plans, conditions, effects, or permissions still do.
+
+For an authoring tool, compare each Action's `migrationReviewRevision` from
+`bregctl explain actions` before and after an edit. This is the identity used
+to classify Action changes; the complete `diff` still covers Record types,
+queries, and other registry changes. The separate `revision` protects frozen
+Proposals and includes their target row schema. An optional field can therefore
+require a frozen Proposal to be rebased even when the migration needs no review.
+
+{/* Evidence: crates/registry-breg/src/immediate_actions.rs, migration_review_revision();
+    crates/registry-breg/src/package.rs, compare_actions();
+    crates/registry-breg/tests/refactor_contract.rs. */}
 
 A reviewed migration is a directory you write and keep beside the project. Each migration lives at
 `modules/<module>/migrations/<id>/` and holds a `descriptor.json`, a `rehearsal.json`, and any SQL

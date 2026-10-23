@@ -1,7 +1,8 @@
 import { CaseworkClient, CaseworkClientError, submissionDigest, type ContentDigest, type SubjectBinding,
   type PolicyBinding, type ReviewCreateRequest, type ReviewRequestAccepted,
   type ReviewTask, type SupervisoryReviewTask, type StaffingDiagnostic, type ReviewTaskDecisionRequest, type ReviewStaffingQuery,
-  type ReviewCaseloadMoveRequest, type ReviewClockRecomputeRequest } from '../client'
+  type ReviewCaseloadMoveRequest, type ReviewClockRecomputeRequest, type ReviewPolicyClosure,
+  type ReviewStagePolicy, type RoutingRule } from '../client'
 const client = new CaseworkClient({ baseUrl: 'https://casework.example.test/', attemptTimeoutMilliseconds: 1500, maximumResponseBytes: 1500, maximumMutationRetries: 0 })
 // @ts-expect-error the public response-bound name is maximumResponseBytes
 new CaseworkClient({ baseUrl: 'https://casework.example.test/', maxResponseBytes: 1500 })
@@ -17,6 +18,13 @@ const token = 'one-call-secret', profile = 'staff', id = '00000000-0000-4000-800
 const digest: ContentDigest = `sha256:${'a'.repeat(64)}`
 const subject: SubjectBinding = { source: 'registry', type: 'proposal', id: 'proposal-1', version: '1', digest }
 const policy: PolicyBinding = { id: 'review', version: '1', digest }
+declare const explainedPolicy: ReviewPolicyClosure
+declare const explainedStage: ReviewStagePolicy
+declare const explainedRule: RoutingRule
+const policyLabel: string | undefined = explainedPolicy.label
+const stageLabel: string | undefined = explainedStage.label
+const ruleLabel: string | undefined = explainedRule.label
+void policyLabel; void stageLabel; void ruleLabel
 const submitted: ReviewCreateRequest = { policy, subject, requesterReference: 'proposal-1', context: { mode: 'submitted', snapshot: { reference: 'proposal-1' } } }
 const current: ReviewCreateRequest = { ...submitted, context: { mode: 'current-source', binding: { reference: 'proposal-1' } } }
 void client.createOrRecoverReviewRequest(token, 'requester', 'submit-1', current, digest)

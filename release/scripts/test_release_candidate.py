@@ -135,6 +135,30 @@ def security_evidence_tar(
 
 
 class ReleaseCandidateTest(TestCase):
+    def test_v0_44_publishes_every_runtime_and_ctl_on_all_supported_platforms(self):
+        actual_boundary = mock.patch.object(self.module.release_roster, "COORDINATOR_FIRST_RELEASE", None)
+        actual_boundary.start()
+        self.addCleanup(actual_boundary.stop)
+        inventory = self.module._release_payload_inventory("0.44.0")
+        binaries = (
+            "breg", "bregctl", "breg-mcp", "breg-review", "casework", "caseworkctl",
+            "evidence", "evidencectl", "evidence-oid4vci", "scheduling", "schedulingctl",
+            "messaging", "messagingctl", "discovery", "discoveryctl", "registry-render",
+            "registry-manifest", "coordinator", "coordinatorctl",
+        )
+        for binary in binaries:
+            for platform in ("linux-amd64", "linux-arm64", "macos-arm64"):
+                suffix = ".tar.gz" if platform == "macos-arm64" and binary != "registry-manifest" else ""
+                with self.subTest(binary=binary, platform=platform):
+                    self.assertEqual("binary", inventory.get(f"{binary}-v0.44.0-{platform}{suffix}"))
+        for installer in ("breg", "casework", "evidencectl", "scheduling", "breg-mcp", "breg-review", "messaging", "discovery", "registry-render", "registry-manifest", "coordinator"):
+            self.assertEqual("installer", inventory.get(f"{installer}-v0.44.0-install.sh"))
+            self.assertEqual("installer", inventory.get(f"{installer}-install.sh"))
+        historical = self.module._release_payload_inventory("0.43.0")
+        self.assertNotIn("registry-render-v0.43.0-macos-arm64.tar.gz", historical)
+        self.assertFalse(any(name.startswith("coordinator") for name in historical))
+        self.assertNotIn("coordinator", self.module._candidate_image_names("0.44.0"))
+
     def setUp(self) -> None:
         self.module = load_module()
         enabled = mock.patch.object(
@@ -1268,7 +1292,7 @@ class ReleaseCandidateTest(TestCase):
             }.issubset(self.module.SECURITY_EVIDENCE_REQUIRED_FILES)
         )
 
-    def test_no_version_ships_coordinator_until_the_roster_names_a_first_release(
+    def test_coordinator_image_hold_is_independent_of_binary_distribution(
         self,
     ) -> None:
         with mock.patch.object(
@@ -1279,7 +1303,8 @@ class ReleaseCandidateTest(TestCase):
                     self.assertNotIn(
                         "coordinator", self.module._candidate_image_names(version)
                     )
-                    self.assertFalse(
+                    self.assertEqual(
+                        self.module.release_roster.coordinator_binaries_in_release(self.module.release_roster.parse_version(version)),
                         any(
                             name.startswith("coordinator")
                             for name in self.module._release_payload_inventory(

@@ -244,6 +244,8 @@ pub struct LifecycleTransition {
     /// What the workflow method itself checks before it moves the state. Nothing the
     /// runtime checks around the call appears here; that is `enforcement`.
     pub guard: &'static str,
+    /// Availability reasons for which this event is the documented recovery.
+    pub recovery_reasons: &'static [&'static str],
 }
 
 /// One place the runtime can refuse an event, in execution order within
@@ -364,60 +366,70 @@ pub fn proposal_lifecycle() -> LifecycleDescription {
                 event: "edit",
                 to: "draft",
                 guard: "The Proposal is draft; replace validated Action input and advance its lifecycle revision.",
+                recovery_reasons: &[],
             },
             LifecycleTransition {
                 from: "draft",
                 event: "submit",
                 to: "submitted",
                 guard: "The Proposal is draft and this submission version has not been frozen; accept the prepared plan and freeze its digest.",
+                recovery_reasons: &[],
             },
             LifecycleTransition {
                 from: "draft",
                 event: "rebase",
                 to: "draft",
                 guard: "The Proposal is draft; explicitly bind the active Action definition and preserve the current submission version.",
+                recovery_reasons: &[],
             },
             LifecycleTransition {
                 from: "draft",
                 event: "cancel",
                 to: "cancelled",
                 guard: "The Proposal is draft or submitted; cancel without applying its effects.",
+                recovery_reasons: &[],
             },
             LifecycleTransition {
                 from: "submitted",
                 event: "revise",
                 to: "draft",
                 guard: "The Proposal is submitted; open a new draft submission version without modifying the frozen prior submission.",
+                recovery_reasons: &[],
             },
             LifecycleTransition {
                 from: "submitted",
                 event: "rebase",
                 to: "draft",
                 guard: "The Proposal is submitted; open a new draft version explicitly bound to the active Action definition.",
+                recovery_reasons: &[],
             },
             LifecycleTransition {
                 from: "submitted",
                 event: "retry",
                 to: "submitted",
                 guard: "The Proposal remains submitted; schedule another eligible review or application attempt without changing the frozen plan.",
+                recovery_reasons: &["dependency-outage", "lease-expired"],
             },
             LifecycleTransition {
                 from: "submitted",
                 event: "cancel",
                 to: "cancelled",
                 guard: "The Proposal is draft or submitted; cancel without applying its effects.",
+                recovery_reasons: &[],
             },
             LifecycleTransition {
                 from: "submitted",
                 event: "apply",
                 to: "applied",
                 guard: "The submission version, displayed digest, frozen Action contract, authorized targets, commit guards, and required approval match the application attempt.",
+                recovery_reasons: &[],
             },
             LifecycleTransition {
                 from: "submitted",
                 event: "reject",
                 to: "rejected",
                 guard: "The configured review authority returned a rejected result for the exact current submission. A rejection is terminal; a changes-requested result leaves the Proposal submitted and revisable.",
+                recovery_reasons: &[],
             },
         ],
         proposal_enforcement(),
@@ -431,6 +443,25 @@ mod tests {
         EntityId, ProposalKey, ProposalState, ProposalWorkflow, RecordId, StateRevision,
         TrustedActorRef, TrustedTimestamp, TrustedTransitionContext,
     };
+
+    #[test]
+    fn retry_names_the_runtime_recovery_reasons() {
+        let lifecycle = proposal_lifecycle();
+        let retry = lifecycle
+            .transitions
+            .iter()
+            .find(|transition| transition.event == "retry")
+            .expect("retry transition exists");
+        assert_eq!(
+            retry.recovery_reasons,
+            ["dependency-outage", "lease-expired"]
+        );
+        assert!(lifecycle
+            .transitions
+            .iter()
+            .filter(|transition| transition.event != "retry")
+            .all(|transition| transition.recovery_reasons.is_empty()));
+    }
 
     fn context() -> TrustedTransitionContext {
         TrustedTransitionContext::from_verified_context(

@@ -396,6 +396,16 @@ class MergeReleaseBinaryShardsTest(unittest.TestCase):
         )
         self.assertNotIn("relay", dict(images_039))
 
+    def test_rstack_joins_the_core_shard_only_from_v0_44(self) -> None:
+        historical_rosters, _ = MODULE.rosters("0.43.0")
+        self.assertFalse(
+            any(name.startswith("rstack-") for name in historical_rosters["core"])
+        )
+
+        current_rosters, current_images = MODULE.rosters("0.44.0")
+        self.assertIn("rstack-v0.44.0-linux-amd64", current_rosters["core"])
+        self.assertNotIn("rstack", dict(current_images))
+
     @mock.patch.object(MODULE.release_roster, "COORDINATOR_FIRST_RELEASE", (0, 42, 0))
     def test_coordinator_joins_the_core_shard_only_from_v0_42(self) -> None:
         rosters_040, images_040 = MODULE.rosters("0.40.0")

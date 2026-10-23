@@ -120,6 +120,14 @@ class ProductContractTests(unittest.TestCase):
         schemas = sorted(path.name for path in (PRODUCT / "contracts/cli").glob("*.schema.json"))
         self.assertEqual(schemas, ["report.schema.json"])
         schema = json.loads((PRODUCT / "contracts/cli/report.schema.json").read_text())
+        self.assertEqual(
+            schema["$id"],
+            "https://id.registrystack.org/schemas/casework/report/report.v1alpha2.schema.json",
+        )
+        self.assertEqual(
+            schema["properties"]["apiVersion"]["const"],
+            "id.registrystack.org/formats/casework/report/v1alpha2",
+        )
         self.assertEqual(schema["properties"]["kind"]["const"], "CaseworkReport")
         self.assertTrue(schema["oneOf"])
         self.assertIn("ExplainPolicy", schema["$defs"])

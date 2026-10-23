@@ -1,6 +1,7 @@
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -16,7 +17,16 @@ fn digest(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
 }
 
-fn release_fixture(directory: &Path) -> (PathBuf, PathBuf, PathBuf) {
+fn write_release_launcher(path: &Path) {
+    fs::write(
+        path,
+        b"#!/usr/bin/env bash\nset -euo pipefail\n[[ \"${1:-}\" == --version ]]\nprintf 'rstack 0.44.0\\n'\n",
+    )
+    .unwrap();
+    fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+fn release_fixture(directory: &Path, schema_version: &str) -> (PathBuf, PathBuf, PathBuf) {
     let platform = match (std::env::consts::OS, std::env::consts::ARCH) {
         ("linux", "x86_64") => "linux-amd64",
         ("linux", "aarch64") => "linux-arm64",
@@ -32,34 +42,25 @@ fn release_fixture(directory: &Path) -> (PathBuf, PathBuf, PathBuf) {
     if archive {
         let contents = directory.join("archive");
         fs::create_dir(&contents).unwrap();
-        fs::copy(
-            env!("CARGO_BIN_EXE_rstack"),
-            contents.join("rstack-v0.44.0-macos-arm64"),
-        )
-        .unwrap();
+        write_release_launcher(&contents.join("rstack-v0.44.0-macos-arm64"));
         fs::write(contents.join("THIRD_PARTY_NOTICES"), "test fixture\n").unwrap();
-        fs::write(contents.join("libaws_lc_fips_test.dylib"), "test fixture\n").unwrap();
         let result = Command::new("tar")
             .args(["-czf"])
             .arg(&launcher)
             .arg("-C")
             .arg(&contents)
-            .args([
-                "rstack-v0.44.0-macos-arm64",
-                "THIRD_PARTY_NOTICES",
-                "libaws_lc_fips_test.dylib",
-            ])
+            .args(["rstack-v0.44.0-macos-arm64", "THIRD_PARTY_NOTICES"])
             .output()
             .unwrap();
         assert!(result.status.success(), "{result:?}");
     } else {
-        fs::copy(env!("CARGO_BIN_EXE_rstack"), &launcher).unwrap();
+        write_release_launcher(&launcher);
     }
     let binary = fs::read(&launcher).unwrap();
     let manifest_name = "registry-stack-v0.44.0-release-manifest.json";
     let manifest_path = directory.join(manifest_name);
-    let manifest = json!({
-        "schema_version": "registry-stack.release-candidate.v2",
+    let mut manifest = json!({
+        "schema_version": schema_version,
         "repository": "registrystack/registry-stack",
         "release": {
             "tag": "v0.44.0",
@@ -84,6 +85,57 @@ fn release_fixture(directory: &Path) -> (PathBuf, PathBuf, PathBuf) {
             "components": {}
         }
     });
+    if schema_version == "registry-stack.release-candidate.v3" {
+        manifest["payloads"].as_array_mut().unwrap().extend([
+            json!({"name": "docs.tar.gz", "kind": "docs", "size": 1, "sha256": "b".repeat(64)}),
+            json!({"name": "sbom.json", "kind": "sbom", "size": 1, "sha256": "c".repeat(64)}),
+            json!({"name": "security-evidence.tar.gz", "kind": "security-evidence", "size": 1, "sha256": "d".repeat(64)}),
+            json!({"name": "distribution.json", "kind": "distribution", "size": 1, "sha256": "e".repeat(64)}),
+        ]);
+        manifest["workflow"] = json!({
+            "path": ".github/workflows/release-candidate.yml",
+            "revision": "a".repeat(40),
+            "run_id": 123,
+            "run_attempt": 1
+        });
+        manifest["validity"] = json!({
+            "created_at": "2026-10-23T00:00:00Z",
+            "expires_at": "2026-10-24T00:00:00Z"
+        });
+        manifest["images"] = json!([{
+            "name": "breg",
+            "candidate_ref": format!("ghcr.io/registrystack/breg-candidate@sha256:{}", "f".repeat(64)),
+            "digest": format!("sha256:{}", "f".repeat(64)),
+            "final_ref": "ghcr.io/registrystack/breg:v0.44.0"
+        }]);
+        manifest["docs"] = json!({"name": "docs.tar.gz", "sha256": "b".repeat(64)});
+        manifest["sbom"] = json!({"name": "sbom.json", "sha256": "c".repeat(64)});
+        manifest["scans"] = json!([{
+            "image": "breg",
+            "name": "breg.grype.json",
+            "sha256": "1".repeat(64),
+            "status": "passed"
+        }]);
+        manifest["advisory"] = json!({
+            "name": "advisory.json",
+            "sha256": "2".repeat(64),
+            "verdict": "passed"
+        });
+        manifest["bundle"] = json!({
+            "name": "candidate.tar.gz",
+            "size": 1,
+            "sha256": "3".repeat(64)
+        });
+        manifest["distribution_components"] = json!([{
+            "unit": "discovery",
+            "version": "1.2.3",
+            "release_tag": "discovery/v1.2.3",
+            "source_sha": "4".repeat(40),
+            "manifest": {"name": "discovery-manifest.json", "sha256": "5".repeat(64)},
+            "payloads": [],
+            "images": []
+        }]);
+    }
     let manifest_bytes = serde_json::to_vec(&manifest).unwrap();
     fs::write(&manifest_path, &manifest_bytes).unwrap();
     let checksums = directory.join("SHA256SUMS");
@@ -104,7 +156,8 @@ fn launcher_only_bootstrap_activates_one_owned_generation() {
     let workspace = scratch();
     let assets = workspace.path().join("assets");
     fs::create_dir(&assets).unwrap();
-    let (manifest, checksums, launcher) = release_fixture(&assets);
+    let (manifest, checksums, launcher) =
+        release_fixture(&assets, "registry-stack.release-candidate.v2");
     let install_root = workspace.path().join("lib");
     let bin_dir = workspace.path().join("bin");
     let result = Command::new(env!("CARGO_BIN_EXE_rstack"))
@@ -140,11 +193,44 @@ fn launcher_only_bootstrap_activates_one_owned_generation() {
 }
 
 #[test]
+fn stack_v3_launcher_only_bootstrap_activates() {
+    let workspace = scratch();
+    let assets = workspace.path().join("assets");
+    fs::create_dir(&assets).unwrap();
+    let (manifest, checksums, launcher) =
+        release_fixture(&assets, "registry-stack.release-candidate.v3");
+    let install_root = workspace.path().join("lib");
+    let bin_dir = workspace.path().join("bin");
+
+    let result = Command::new(env!("CARGO_BIN_EXE_rstack"))
+        .arg("bootstrap")
+        .arg("--release-manifest")
+        .arg(&manifest)
+        .arg("--checksum-file")
+        .arg(&checksums)
+        .arg("--launcher-asset")
+        .arg(&launcher)
+        .arg("--asset-dir")
+        .arg(&assets)
+        .arg("--install-root")
+        .arg(&install_root)
+        .arg("--bin-dir")
+        .arg(&bin_dir)
+        .output()
+        .unwrap();
+
+    assert!(result.status.success(), "{result:?}");
+    assert!(install_root.join("current").exists());
+    assert!(bin_dir.join("rstack").exists());
+}
+
+#[test]
 fn relative_installation_paths_create_a_working_public_launcher() {
     let workspace = scratch();
     let assets = workspace.path().join("assets");
     fs::create_dir(&assets).unwrap();
-    let (manifest, checksums, launcher) = release_fixture(&assets);
+    let (manifest, checksums, launcher) =
+        release_fixture(&assets, "registry-stack.release-candidate.v2");
     let working_directory = workspace.path().join("working");
     fs::create_dir(&working_directory).unwrap();
     let result = Command::new(env!("CARGO_BIN_EXE_rstack"))
@@ -184,7 +270,8 @@ fn corrupted_public_manifest_refuses_before_activation() {
     let workspace = scratch();
     let assets = workspace.path().join("assets");
     fs::create_dir(&assets).unwrap();
-    let (manifest, checksums, launcher) = release_fixture(&assets);
+    let (manifest, checksums, launcher) =
+        release_fixture(&assets, "registry-stack.release-candidate.v2");
     let mut bytes = fs::read(&manifest).unwrap();
     bytes.push(b' ');
     fs::write(&manifest, bytes).unwrap();

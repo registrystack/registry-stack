@@ -442,10 +442,9 @@ fn registry(plan: &Plan) -> String {
         0,
         "A token selects one profile per request, and that profile decides everything the \
          request may touch. `operator` may create, read, list, and patch every entity; it is \
-         the profile `bregctl dev` and the journeys use first. `check` reports \
-         `breg.access.profile-unrestricted-collection` for it: it can list every record, and a \
-         caller-supplied filter is not authorization. That is intended for a single \
-         operations team; close it with a `rowBoundaries` entry or by removing `list`. \
+         the profile `bregctl dev` and the journeys use first. Its required scope and purpose \
+         restrict collection access to the registry operations team. Add `rowBoundaries` when \
+         different callers on that team must see different rows. \
          `breg.access.profile-writable-row-boundary` reports a patch that can move a record \
          between values allowed by an `in` boundary. Keep boundary fields writable for \
          create; use a separate patch permission if those fields must not change.",
@@ -487,9 +486,9 @@ fn registry(plan: &Plan) -> String {
         yaml.comment(
             1,
             "A read-only profile over the entities that are not classified `restricted`, \
-             reading only their fields that are not either. It lists whole collections too, so \
-             `check` reports the same finding for it; bind a `rowBoundaries` entry to whatever \
-             field carries your registry's tenancy to close it.",
+             reading only their fields that are not either. Its reporting scope and purpose \
+             admit whole-collection reads; add `rowBoundaries` if reporting callers must be \
+             separated by tenant or jurisdiction.",
         );
         yaml.entry(1, "- id", READER_PROFILE);
         yaml.line(2, "principalClaim: registry_principal");
@@ -1259,11 +1258,9 @@ fn readme(plan: &Plan) -> String {
     }
     let _ = writeln!(
         out,
-        "\n`bregctl check .` reports `breg.access.profile-unrestricted-collection` for each \
-         profile: it can list a whole collection, and a caller-supplied filter is not \
-         authorization. Leave the findings while you explore; before a production package, \
-         bind a `rowBoundaries` entry to whatever field carries your registry's tenancy, or \
-         remove `list`."
+        "\nThe generated profiles bind whole-collection access to explicit scopes and purposes. If \
+         separate callers within either profile must see different rows, add `rowBoundaries` \
+         for the field that carries the registry's tenant or jurisdiction before packaging."
     );
     let _ = writeln!(
         out,
@@ -1647,27 +1644,25 @@ mod tests {
         compile(&path, ProfileArg::Production, "init").unwrap_or_else(|failure| {
             panic!("{}", serde_json::to_string_pretty(&failure).unwrap())
         });
-        let findings: Vec<String> = authoring
+        let findings = authoring
             .findings()
             .iter()
-            .map(|finding| finding.code.clone())
-            .collect();
-        assert!(
-            findings.iter().all(|code| {
-                code == "breg.access.profile-unrestricted-collection"
-                    || code == "breg.access.profile-higher-classification"
-            }),
-            "{findings:?}"
+            .map(|finding| (finding.code.as_str(), finding.path.as_str()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            findings,
+            [
+                (
+                    "breg.access.profile-higher-classification",
+                    "recordTypes[id=group-membership].accessProfiles[id=operator].readableFields[field=person]",
+                ),
+                (
+                    "breg.access.profile-higher-classification",
+                    "recordTypes[id=person].accessProfiles[id=operator].readableFields[field=marital-status]",
+                ),
+            ]
         );
         let elevated = elevated_fields(&plan);
-        assert_eq!(
-            findings
-                .iter()
-                .filter(|code| *code == "breg.access.profile-higher-classification")
-                .count(),
-            elevated.len(),
-            "{findings:?}"
-        );
         assert!(elevated
             .iter()
             .any(|(entity, field)| entity.id == "person" && field.id == "marital-status"));
