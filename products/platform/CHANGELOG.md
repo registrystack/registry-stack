@@ -6,9 +6,6 @@
   `type`, `title`, `status`), plus a matching `traceparent` header (previously
   absent). Codes are `request.invalid`, `request.not-found`,
   `request.result-bound-exceeded`, `service.unavailable`; existing type URIs stay.
-- BReg's coordinated pre-1.0 409 rename is `idempotency.conflict` to
-  `idempotency.key-reused`, with no dual emission. The BReg owning change and
-  generated contracts ship with this delivery group; the 256-byte key bound stays.
 - Casework completion acknowledges any 2xx status (previously only an empty 204).
   No response body is buffered. This changes no Retry-After header; no
   synthetic header is introduced for indeterminate failures.

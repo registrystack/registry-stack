@@ -59,9 +59,10 @@ not become public error details.
 ## Idempotency and retries
 
 Use a caller-owned key and keep the original body, headers and accepted binding
-when reconciling an uncertain mutation. Reusing a live key with another request
-is 409 `idempotency.key-reused`. BReg previously emitted `idempotency.conflict`;
-the pre-1.0 rename has no dual-emission period.
+when reconciling an uncertain mutation. Reusing a key with another request
+is 409 `idempotency.key-reused` from Casework, Coordinator, Messaging and
+Scheduling, and 409 `idempotency.conflict` from BReg. Classify a 409 by the
+product that returned it.
 
 128 bytes is portable key guidance, not a replacement for route limits.
 BReg and Coordinator preserve their existing 256-byte bounds; Casework,
