@@ -299,3 +299,22 @@ test('Coordinator rehearsal selects the exact candidate wheel and digest-pinned 
   await writeFile(join(packages, 'registry_stack_client-0.44.0-cp311-abi3-manylinux_2_17_x86_64.whl'), 'ambiguous candidate');
   assert.throws(() => coordinatorTutorialEnvironment(root, packages, image), /exactly one/u);
 });
+
+
+test('given release binaries retain their adjacent FIPS library when served for a frozen session', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'toolset-release-fips-'));
+  const source = join(root, 'released');
+  await mkdir(source);
+  const binary = join(source, 'coordinator');
+  await writeFile(binary, 'native binary');
+  const library = 'libaws_lc_fips_0_14_2_crypto.dylib';
+  await writeFile(join(source, library), 'release FIPS bytes');
+  const bin = join(root, 'bin');
+  await serveBinaries(bin, [['coordinator', binary]]);
+  assert.equal(readFileSync(join(bin, library), 'utf8'), 'release FIPS bytes');
+  const other = join(root, 'another-release');
+  await mkdir(other);
+  await writeFile(join(other, 'breg'), 'another native binary');
+  await writeFile(join(other, library), 'conflicting FIPS bytes');
+  await assert.rejects(serveBinaries(bin, [['breg', join(other, 'breg')]]), /conflicting FIPS/u);
+});

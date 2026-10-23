@@ -7,8 +7,8 @@
 
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { accessSync, closeSync, constants, existsSync, mkdtempSync, openSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { chmod, mkdir, readdir, stat, symlink, writeFile } from 'node:fs/promises';
+import { accessSync, closeSync, constants, existsSync, mkdtempSync, openSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chmod, copyFile, mkdir, readdir, stat, symlink, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
@@ -85,6 +85,20 @@ export async function serveBinaries(binDir, entries, libraryDir) {
   for (const [name, path] of entries) {
     const served = join(binDir, name);
     if (!libraryDir) {
+      // A frozen session copies these executables out of this directory, so
+      // retain the release archive's loader-relative FIPS library alongside them.
+      const parent = dirname(realpathSync(path));
+      for (const file of readdirSync(parent).filter((file) => /^libaws_lc_fips_[A-Za-z0-9_]+\.dylib$/u.test(file))) {
+        const source = join(parent, file);
+        const destination = join(binDir, file);
+        if (existsSync(destination)) {
+          if (!readFileSync(destination).equals(readFileSync(source))) {
+            throw new ToolsetError(`release binaries carry conflicting FIPS library bytes: ${file}`);
+          }
+        } else {
+          await copyFile(source, destination);
+        }
+      }
       await symlink(path, served);
       continue;
     }

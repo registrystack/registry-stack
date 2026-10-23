@@ -143,9 +143,9 @@ Complete new-image onboarding outside the release clock, in this order:
    token on the command line:
 
 ```sh
-package="${PACKAGE:?set PACKAGE to evidence, discovery, breg, breg-mcp, breg-review, casework, scheduling, messaging, registry-render, or evidence-oid4vci}"
+package="${PACKAGE:?set PACKAGE to evidence, discovery, breg, breg-mcp, breg-review, casework, scheduling, messaging, registry-render, evidence-oid4vci, or coordinator}"
 case "${package}" in
-  evidence|discovery|breg|breg-mcp|breg-review|casework|scheduling|messaging|registry-render|evidence-oid4vci) ;;
+  evidence|discovery|breg|breg-mcp|breg-review|casework|scheduling|messaging|registry-render|evidence-oid4vci|coordinator) ;;
   *) echo "unsupported release image package: ${package}" >&2; exit 1 ;;
 esac
 
