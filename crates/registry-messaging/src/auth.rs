@@ -35,12 +35,11 @@ pub struct MessagingAuthenticator {
 
 impl MessagingAuthenticator {
     pub(crate) fn record_header_refusal(&self) {
-        if let Some(stage) = self
-            .verifier
-            .authentication_diagnostic(registry_platform_oidc::AuthenticationStage::Header)
-        {
-            tracing::info!(stage, "Messaging authentication refused");
-        }
+        registry_platform_oidc::log_authentication_refusal!(
+            self.verifier,
+            registry_platform_oidc::AuthenticationStage::Header,
+            "Messaging authentication refused"
+        );
     }
 
     #[must_use]
@@ -69,12 +68,11 @@ impl MessagingAuthenticator {
             AuthenticationError::Refused
         })?;
         let verified = self.verifier.verify(token).await.map_err(|error| {
-            if let Some(stage) = self
-                .verifier
-                .authentication_diagnostic(error.authentication_stage())
-            {
-                tracing::info!(stage, "Messaging authentication refused");
-            }
+            registry_platform_oidc::log_authentication_refusal!(
+                self.verifier,
+                error.authentication_stage(),
+                "Messaging authentication refused"
+            );
             verifier_failure(&error)
         })?;
         // An exchanged token names the authority whose assertion produced it.
@@ -110,9 +108,12 @@ impl MessagingAuthenticator {
                     } else {
                         (registry_platform_oidc::AuthenticationStage::Profile, "check accessProfiles actorKind and requesterClients")
                     };
-                    if let Some(stage) = self.verifier.authentication_diagnostic(stage) {
-                        tracing::info!(stage, remedy, "Messaging authentication profile refused");
-                    }
+                    registry_platform_oidc::log_authentication_refusal!(
+                        self.verifier,
+                        stage,
+                        "Messaging authentication profile refused",
+                        remedy = remedy
+                    );
                     AuthenticationError::Profile
                 }
                 AccessRefusal::Claims => AuthenticationError::Claims,

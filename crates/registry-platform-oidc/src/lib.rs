@@ -8,6 +8,8 @@
 mod authorization_claims;
 mod diagnostics;
 pub use diagnostics::{AuthenticationDiagnostics, AuthenticationStage};
+#[doc(hidden)]
+pub use tracing as __tracing;
 pub mod task_grant;
 
 pub use authorization_claims::{

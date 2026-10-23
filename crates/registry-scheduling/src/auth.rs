@@ -48,12 +48,11 @@ pub struct SchedulingAuthenticator {
 
 impl SchedulingAuthenticator {
     pub(crate) fn record_header_refusal(&self) {
-        if let Some(stage) = self
-            .verifier
-            .authentication_diagnostic(registry_platform_oidc::AuthenticationStage::Header)
-        {
-            tracing::info!(stage, "Scheduling authentication refused");
-        }
+        registry_platform_oidc::log_authentication_refusal!(
+            self.verifier,
+            registry_platform_oidc::AuthenticationStage::Header,
+            "Scheduling authentication refused"
+        );
     }
 
     #[must_use]
@@ -100,16 +99,12 @@ impl SchedulingAuthenticator {
         if scopes.iter().any(|scope| scope == required) {
             return Ok(caller);
         }
-        if let Some(stage) = self
-            .verifier
-            .authentication_diagnostic(registry_platform_oidc::AuthenticationStage::Scope)
-        {
-            tracing::info!(
-                stage,
-                remedy = "check authentication.oidc.scopeClaim and readsScope or explainScope",
-                "Scheduling authentication profile refused"
-            );
-        }
+        registry_platform_oidc::log_authentication_refusal!(
+            self.verifier,
+            registry_platform_oidc::AuthenticationStage::Scope,
+            "Scheduling authentication profile refused",
+            remedy = "check authentication.oidc.scopeClaim and readsScope or explainScope"
+        );
         Err(AuthenticationError::Profile)
     }
 
@@ -132,12 +127,11 @@ impl SchedulingAuthenticator {
             AuthenticationError::Refused
         })?;
         let verified = self.verifier.verify(token).await.map_err(|error| {
-            if let Some(stage) = self
-                .verifier
-                .authentication_diagnostic(error.authentication_stage())
-            {
-                tracing::info!(stage, "Scheduling authentication refused");
-            }
+            registry_platform_oidc::log_authentication_refusal!(
+                self.verifier,
+                error.authentication_stage(),
+                "Scheduling authentication refused"
+            );
             verifier_failure(&error)
         })?;
         // An exchanged token names the authority whose assertion produced it.

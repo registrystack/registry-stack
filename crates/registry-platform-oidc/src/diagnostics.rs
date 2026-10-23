@@ -72,6 +72,18 @@ impl OidcError {
     }
 }
 
+/// Log one value-free refusal at the call site's own tracing target, at most
+/// once per stage per minute per verifier. `$message` is a literal naming the
+/// product; the optional `remedy` is a fixed operator hint.
+#[macro_export]
+macro_rules! log_authentication_refusal {
+    ($verifier:expr, $stage:expr, $message:literal $(, remedy = $remedy:expr)?) => {
+        if let Some(stage) = $verifier.authentication_diagnostic($stage) {
+            $crate::__tracing::info!(stage, $(remedy = $remedy,)? $message);
+        }
+    };
+}
+
 /// At most one diagnostic per fixed stage per minute, per verifier.
 /// The fixed array cannot grow with attacker-controlled inputs.
 #[derive(Debug, Default)]
