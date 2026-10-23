@@ -1,6 +1,6 @@
 //! Bounded diagnostic categories, independent of credential and configuration values.
 
-use std::sync::Mutex;
+use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use crate::OidcError;
@@ -85,9 +85,8 @@ impl AuthenticationDiagnostics {
     }
 
     fn admit_at(&self, stage: AuthenticationStage, now: Instant) -> bool {
-        let Ok(mut last) = self.last.lock() else {
-            return false;
-        };
+        // The guarded state is plain timestamps, so a poisoned lock is safe to reuse.
+        let mut last = self.last.lock().unwrap_or_else(PoisonError::into_inner);
         let slot = &mut last[stage as usize];
         if slot.is_some_and(|previous| {
             now.saturating_duration_since(previous) < Duration::from_secs(60)
@@ -132,5 +131,16 @@ mod tests {
         }
         assert!(diagnostics.admit_at(AuthenticationStage::Audience, now));
         assert!(diagnostics.admit_at(stage, now + Duration::from_secs(60)));
+    }
+
+    #[test]
+    fn a_poisoned_lock_keeps_admitting_diagnostics() {
+        let diagnostics = AuthenticationDiagnostics::default();
+        let poisoned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = diagnostics.last.lock().unwrap();
+            panic!("poison the lock");
+        }));
+        assert!(poisoned.is_err());
+        assert!(diagnostics.admit(AuthenticationStage::Header));
     }
 }
