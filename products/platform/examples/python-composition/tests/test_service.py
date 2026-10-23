@@ -1,4 +1,5 @@
 import json
+import sqlite3
 import tempfile
 import threading
 import unittest
@@ -12,6 +13,7 @@ from unittest.mock import patch
 from registry_client import breg, messaging
 
 from service import (
+    MAXIMUM_ATTEMPTS,
     PROPOSAL_PAYLOAD,
     PROPOSAL_SCHEMA_PATH,
     Composition,
@@ -309,8 +311,8 @@ class ReceiptRecoveryTests(unittest.TestCase):
                     or {"kind": "complete", "value": {"id": "message-one"}}
                 ),
             )
-            with self.assertRaises(RuntimeError):
-                app.reconcile()
+            with self.assertLogs("python-composition", level="ERROR"):
+                self.assertEqual(app.reconcile(), 0)
             self.assertEqual(app.inbox.jobs()[0][2], "notice-uncertain")
             self.assertEqual(app.reconcile(), 1)
             self.assertEqual(len(submits), 1)
@@ -334,8 +336,8 @@ class ReceiptRecoveryTests(unittest.TestCase):
                     submit=lambda *_: self.fail("must not resubmit"),
                     message_receipt=refused,
                 )
-                with self.assertRaises(RuntimeError):
-                    app.reconcile()
+                with self.assertLogs("python-composition", level="ERROR"):
+                    self.assertEqual(app.reconcile(), 0)
                 self.assertEqual(app.inbox.jobs()[0][2], "notice-uncertain")
 
 
@@ -397,12 +399,23 @@ class NativeFailureRecoveryTests(unittest.TestCase):
             app = self.app(root)
             # This fixture notice is deliberately outside the native wire schema.
             # The actual released SDK rejects it before opening a connection.
-            app.messages = messaging.MessagingClient(
+            native = messaging.MessagingClient(
                 "http://127.0.0.1:1", max_mutation_retries=0
             )
-            with self.assertRaises(messaging.MessagingClientError) as raised:
-                app.reconcile()
-            self.assertIs(raised.exception.outcome_unknown, False)
+            failures = []
+
+            def submit(*args):
+                try:
+                    return native.submit(*args)
+                except messaging.MessagingClientError as error:
+                    failures.append(error)
+                    raise
+
+            app.messages = SimpleNamespace(submit=submit)
+            with self.assertLogs("python-composition", level="ERROR"):
+                self.assertEqual(app.reconcile(), 0)
+            self.assertEqual(len(failures), 1)
+            self.assertIs(failures[0].outcome_unknown, False)
             self.assertEqual(app.inbox.jobs()[0][2], "prepared")
 
     def test_receipt_recovery_still_runs_at_the_attempt_budget(self):
@@ -598,3 +611,387 @@ class FairPollingTests(unittest.TestCase):
             self.assertEqual(app.reconcile(), 1)
             self.assertIn("proposal-100", reads)
             self.assertEqual(len(submits), 1)
+            with app.inbox.connect() as db:
+                self.assertEqual(
+                    db.execute(
+                        "SELECT COUNT(*) FROM jobs WHERE state='prepared' AND attempts!=0"
+                    ).fetchone()[0],
+                    0,
+                )
+
+
+class ReconcileIsolationTests(unittest.TestCase):
+    def test_stale_first_job_does_not_starve_a_healthy_job_in_the_same_batch(self):
+        with tempfile.TemporaryDirectory() as root:
+            app = ReceiptRecoveryTests().app(root)
+            with app.inbox.connect() as db:
+                original = db.execute(
+                    "SELECT body FROM jobs WHERE id='proposal-one'"
+                ).fetchone()[0]
+            app.inbox.register(
+                "proposal-two", 1, "sha256:" + "a" * 64, json.loads(original)["notice"]
+            )
+            reads, submits = [], []
+
+            def current(_binding, identifier):
+                reads.append(identifier)
+                return SimpleNamespace(
+                    document={
+                        "state": "applied",
+                        "submissionVersion": 2 if identifier == "proposal-one" else 1,
+                        "effectDigest": "sha256:" + "a" * 64,
+                    }
+                )
+
+            app.registry.get_proposal = current
+            app.messages = SimpleNamespace(submit=lambda *args: submits.append(args))
+            with self.assertLogs("python-composition", level="ERROR") as diagnostic:
+                completed = [app.reconcile() for _ in range(2)]
+            self.assertEqual(completed, [1, 0])
+            self.assertEqual(reads, ["proposal-one", "proposal-two", "proposal-one"])
+            self.assertEqual(len(submits), 1)
+            self.assertEqual(submits[0][1], "proposal-two:1:notice")
+            with app.inbox.connect() as db:
+                self.assertEqual(
+                    db.execute(
+                        "SELECT body,state,attempts FROM jobs WHERE id='proposal-one'"
+                    ).fetchone(),
+                    (original, "prepared", 2),
+                )
+                self.assertEqual(
+                    db.execute(
+                        "SELECT state FROM jobs WHERE id='proposal-two'"
+                    ).fetchone(),
+                    ("notified",),
+                )
+            self.assertEqual(len(diagnostic.output), 2)
+            self.assertEqual(diagnostic.output[0], diagnostic.output[1])
+            self.assertRegex(diagnostic.output[0], r"job=[0-9a-f]{16};")
+            self.assertTrue(all("stage=binding" in line for line in diagnostic.output))
+            self.assertTrue(all(len(line) < 256 for line in diagnostic.output))
+            self.assertNotIn("proposal-one", "\n".join(diagnostic.output))
+            self.assertNotIn("canary-messaging-token", "\n".join(diagnostic.output))
+            self.assertNotIn("person@example.org", "\n".join(diagnostic.output))
+
+    def test_related_job_failures_do_not_abort_the_remaining_batch(self):
+        cases = (
+            ("read", "read"),
+            ("effect", "binding"),
+            ("prepare", "prepare"),
+            ("execute", "apply"),
+            ("readback-error", "confirm"),
+            ("readback-pending", "confirm"),
+            ("receipt-error", "receipt"),
+            ("receipt-unresolved", "receipt"),
+            ("submit", "submit"),
+        )
+        for fault, stage in cases:
+            with self.subTest(fault=fault), tempfile.TemporaryDirectory() as root:
+                app = ReceiptRecoveryTests().app(root)
+                with app.inbox.connect() as db:
+                    original = db.execute(
+                        "SELECT body FROM jobs WHERE id='proposal-one'"
+                    ).fetchone()[0]
+                    if fault.startswith("receipt-"):
+                        db.execute(
+                            "UPDATE jobs SET state='notice-uncertain',attempts=?",
+                            (MAXIMUM_ATTEMPTS,),
+                        )
+                notice = json.loads(original)["notice"]
+                app.inbox.register("proposal-two", 1, "sha256:" + "a" * 64, notice)
+                reads, preparations, executions, submits, receipts = [], [], [], [], []
+                applies = fault in {
+                    "prepare",
+                    "execute",
+                    "readback-error",
+                    "readback-pending",
+                }
+
+                def current(_binding, identifier):
+                    reads.append(identifier)
+                    if identifier == "proposal-one" and (
+                        fault == "read"
+                        or fault == "readback-error"
+                        and reads.count(identifier) == 2
+                    ):
+                        raise RuntimeError("canary private remote failure")
+                    return SimpleNamespace(
+                        identifier=identifier,
+                        document={
+                            "state": "submitted"
+                            if applies and identifier == "proposal-one"
+                            else "applied",
+                            "submissionVersion": 1,
+                            "effectDigest": "sha256:"
+                            + (
+                                "b"
+                                if fault == "effect" and identifier == "proposal-one"
+                                else "a"
+                            )
+                            * 64,
+                        },
+                    )
+
+                def prepare(current, transition, authority, key):
+                    preparations.append((transition, authority, key))
+                    if fault == "prepare":
+                        raise RuntimeError("canary private remote failure")
+                    return current.identifier
+
+                def execute(prepared):
+                    executions.append(prepared)
+                    if fault == "execute":
+                        raise RuntimeError("canary private remote failure")
+
+                def submit(*args):
+                    submits.append(args)
+                    if fault == "submit" and args[1] == "proposal-one:1:notice":
+                        raise RuntimeError("canary private remote failure")
+                    return {"kind": "complete"}
+
+                def receipt(*args):
+                    receipts.append(args)
+                    if fault == "receipt-error":
+                        raise RuntimeError("canary private remote failure")
+                    return {"kind": "pending"}
+
+                app.registry.get_proposal = current
+                app.registry.prepare_proposal = prepare
+                app.registry.execute_proposal = execute
+                app.messages = SimpleNamespace(submit=submit, message_receipt=receipt)
+                with self.assertLogs("python-composition", level="ERROR") as diagnostic:
+                    self.assertEqual(app.reconcile(), 1)
+                self.assertEqual(len(diagnostic.output), 1)
+                self.assertIn("stage=" + stage, diagnostic.output[0])
+                self.assertLess(len(diagnostic.output[0]), 256)
+                for hidden in (
+                    "canary private remote failure",
+                    "canary-messaging-token",
+                    "person@example.org",
+                    "Approved",
+                    "proposal-one",
+                ):
+                    self.assertNotIn(hidden, diagnostic.output[0])
+                with app.inbox.connect() as db:
+                    self.assertEqual(
+                        db.execute(
+                            "SELECT body,state,attempts FROM jobs WHERE id='proposal-one'"
+                        ).fetchone(),
+                        (
+                            original,
+                            "notice-uncertain"
+                            if fault.startswith("receipt-") or fault == "submit"
+                            else "prepared",
+                            MAXIMUM_ATTEMPTS if fault.startswith("receipt-") else 1,
+                        ),
+                    )
+                    self.assertEqual(
+                        db.execute(
+                            "SELECT state FROM jobs WHERE id='proposal-two'"
+                        ).fetchone(),
+                        ("notified",),
+                    )
+                self.assertIn("proposal-two", reads)
+                self.assertEqual(submits[-1][1], "proposal-two:1:notice")
+                if applies:
+                    self.assertEqual(
+                        preparations,
+                        [
+                            (
+                                "apply",
+                                {
+                                    "submissionVersion": 1,
+                                    "effectDigest": "sha256:" + "a" * 64,
+                                },
+                                "proposal-one:1:apply",
+                            )
+                        ],
+                    )
+                    self.assertEqual(
+                        executions, [] if fault == "prepare" else ["proposal-one"]
+                    )
+                if fault.startswith("receipt-"):
+                    self.assertEqual(
+                        receipts,
+                        [("canary-messaging-token", "proposal-one:1:notice", notice)],
+                    )
+                    self.assertEqual(len(submits), 1)
+
+    def test_failed_checks_exhaust_only_the_original_job_budget(self):
+        with tempfile.TemporaryDirectory() as root:
+            app = ReceiptRecoveryTests().app(root)
+            with app.inbox.connect() as db:
+                original = db.execute("SELECT body FROM jobs").fetchone()[0]
+                db.execute("UPDATE jobs SET attempts=?", (MAXIMUM_ATTEMPTS - 1,))
+            app.inbox.register(
+                "proposal-two", 1, "sha256:" + "a" * 64, json.loads(original)["notice"]
+            )
+            reads = []
+
+            def stale(_binding, identifier):
+                reads.append(identifier)
+                return SimpleNamespace(
+                    document={
+                        "state": "applied",
+                        "submissionVersion": 2 if identifier == "proposal-one" else 1,
+                        "effectDigest": "sha256:" + "a" * 64,
+                    }
+                )
+
+            app.registry.get_proposal = stale
+            app.messages = SimpleNamespace(submit=lambda *_: {"kind": "complete"})
+            with self.assertLogs("python-composition", level="ERROR") as diagnostic:
+                self.assertEqual([app.reconcile(), app.reconcile()], [1, 0])
+            self.assertEqual(reads, ["proposal-one", "proposal-two"])
+            self.assertIn("stage=binding", diagnostic.output[0])
+            self.assertIn("stage=budget", diagnostic.output[1])
+            with app.inbox.connect() as db:
+                self.assertEqual(
+                    db.execute(
+                        "SELECT body,state,attempts FROM jobs WHERE id='proposal-one'"
+                    ).fetchone(),
+                    (original, "prepared", MAXIMUM_ATTEMPTS),
+                )
+
+    def test_global_contract_configuration_and_persistence_failures_still_escape(self):
+        for fault in ("contract", "credential", "persistence", "stored-body"):
+            with self.subTest(fault=fault), tempfile.TemporaryDirectory() as root:
+                app = ReceiptRecoveryTests().app(root)
+                app.messages = SimpleNamespace(submit=lambda *_: {"kind": "complete"})
+                if fault == "contract":
+                    target, member, error = (
+                        app.registry,
+                        "registry_contract",
+                        RuntimeError("canary startup refusal"),
+                    )
+                elif fault == "credential":
+                    target, member, error = (
+                        app.tokens["messaging"],
+                        "bearer_token",
+                        CompositionError("credential could not be read"),
+                    )
+                elif fault == "persistence":
+                    target, member, error = (
+                        app.inbox,
+                        "consume",
+                        sqlite3.OperationalError("canary persistence refusal"),
+                    )
+                else:
+                    with app.inbox.connect() as db:
+                        db.execute("UPDATE jobs SET body='{'")
+                    with (
+                        patch("service.LOG.error") as diagnostic,
+                        self.assertRaises(json.JSONDecodeError),
+                    ):
+                        app.reconcile()
+                    diagnostic.assert_not_called()
+                    continue
+                with (
+                    patch.object(target, member, side_effect=error),
+                    patch("service.LOG.error") as diagnostic,
+                    self.assertRaises(type(error)),
+                ):
+                    app.reconcile()
+                diagnostic.assert_not_called()
+
+    def test_confirmed_apply_uses_the_last_attempt_without_submitting_a_notice(self):
+        with tempfile.TemporaryDirectory() as root:
+            app = ReceiptRecoveryTests().app(root)
+            with app.inbox.connect() as db:
+                db.execute("UPDATE jobs SET attempts=?", (MAXIMUM_ATTEMPTS - 1,))
+            reads, executions, submits = [], [], []
+
+            def current(*_):
+                reads.append(True)
+                return SimpleNamespace(
+                    document={
+                        "state": "submitted" if len(reads) == 1 else "applied",
+                        "submissionVersion": 1,
+                        "effectDigest": "sha256:" + "a" * 64,
+                    }
+                )
+
+            app.registry.get_proposal = current
+            app.registry.prepare_proposal = lambda *_: "prepared-apply"
+            app.registry.execute_proposal = lambda prepared: executions.append(prepared)
+            app.messages = SimpleNamespace(submit=lambda *args: submits.append(args))
+            with patch("service.LOG.error") as diagnostic:
+                completed = app.reconcile()
+            with app.inbox.connect() as db:
+                self.assertEqual(
+                    db.execute("SELECT state,attempts FROM jobs").fetchone(),
+                    ("prepared", MAXIMUM_ATTEMPTS),
+                )
+            self.assertEqual(completed, 0)
+            self.assertEqual(executions, ["prepared-apply"])
+            self.assertEqual(submits, [])
+            diagnostic.assert_called_once()
+            self.assertIn(
+                "stage=budget",
+                diagnostic.call_args.args[0] % diagnostic.call_args.args[1:],
+            )
+
+    def test_native_uncertain_or_conflicting_notices_keep_original_receipt_recovery(
+        self,
+    ):
+        cases = (
+            (False, "idempotency.expired"),
+            (False, "idempotency.key-reused"),
+            (True, "transport.failed"),
+        )
+        for unknown, code in cases:
+            with self.subTest(code=code), tempfile.TemporaryDirectory() as root:
+                app = ReceiptRecoveryTests().app(root)
+                error = messaging.MessagingClientError("canary private notice failure")
+                error.outcome_unknown, error.code = unknown, code
+                submits, receipts = [], []
+
+                def submit(*args):
+                    submits.append(args)
+                    raise error
+
+                def receipt(*args):
+                    receipts.append(args)
+                    return {"kind": "complete", "value": {"id": "message-one"}}
+
+                app.messages = SimpleNamespace(submit=submit, message_receipt=receipt)
+                with self.assertLogs("python-composition", level="ERROR") as diagnostic:
+                    self.assertEqual(app.reconcile(), 0)
+                self.assertIn("stage=submit", diagnostic.output[0])
+                self.assertNotIn("canary private notice failure", diagnostic.output[0])
+                with app.inbox.connect() as db:
+                    self.assertEqual(
+                        db.execute("SELECT state,attempts FROM jobs").fetchone(),
+                        ("notice-uncertain", 1),
+                    )
+                    db.execute("UPDATE jobs SET attempts=?", (MAXIMUM_ATTEMPTS,))
+                self.assertEqual(app.reconcile(), 1)
+                self.assertEqual(len(submits), 1)
+                self.assertEqual(receipts, submits)
+                self.assertEqual(app.inbox.jobs(), [])
+
+    def test_failed_attempt_persistence_is_not_downgraded_to_a_job_refusal(self):
+        with tempfile.TemporaryDirectory() as root:
+            app = ReceiptRecoveryTests().app(root)
+            app.messages = SimpleNamespace(submit=lambda *_: {"kind": "complete"})
+            with app.inbox.connect() as db:
+                db.execute(
+                    "CREATE TRIGGER refuse_attempt BEFORE UPDATE OF attempts ON jobs "
+                    "BEGIN SELECT RAISE(ABORT, 'canary durable write failure'); END"
+                )
+            with (
+                patch.object(
+                    app.registry,
+                    "get_proposal",
+                    side_effect=RuntimeError("canary private remote failure"),
+                ),
+                patch("service.LOG.error") as diagnostic,
+                self.assertRaises(sqlite3.IntegrityError),
+            ):
+                app.reconcile()
+            diagnostic.assert_not_called()
+            with app.inbox.connect() as db:
+                self.assertEqual(
+                    db.execute("SELECT state,attempts FROM jobs").fetchone(),
+                    ("prepared", 0),
+                )

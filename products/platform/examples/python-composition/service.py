@@ -455,6 +455,20 @@ class Composition:
             source_profile=self.config.get("caseworkSourceProfile"),
         )
 
+    def _job_failed(self, proposal_id, stage, *, charge=False):
+        if charge:
+            with self.inbox.connect() as db:
+                db.execute(
+                    "UPDATE jobs SET attempts=attempts+1 WHERE id=?", (proposal_id,)
+                )
+        reference = hashlib.sha256(proposal_id.encode()).hexdigest()[:16]
+        LOG.error(
+            "job reconciliation refused; stage=%s job=%s; inspect the stored job "
+            "and authoritative source or original notice receipt before retrying",
+            stage,
+            reference,
+        )
+
     def reconcile(self):
         if self.messages is None:
             raise CompositionError(
@@ -467,21 +481,31 @@ class Composition:
         count = 0
         for proposal_id, body, state, attempts in self.inbox.jobs():
             if state != "notice-uncertain" and attempts >= MAXIMUM_ATTEMPTS:
-                LOG.error(
-                    "job needs operator recovery after its bounded attempt budget"
-                )
+                self._job_failed(proposal_id, "budget")
                 continue
             job = json.loads(body)
-            current = self.registry.get_proposal(binding, proposal_id)
+            version, effect_digest, notice = (
+                job["version"],
+                job["effectDigest"],
+                job["notice"],
+            )
+            try:
+                current = self.registry.get_proposal(binding, proposal_id)
+            except Exception:
+                self._job_failed(
+                    proposal_id, "read", charge=state != "notice-uncertain"
+                )
+                continue
             document = current.document
             if (
-                document["submissionVersion"] != job["version"]
-                or document.get("effectDigest") != job["effectDigest"]
+                document["submissionVersion"] != version
+                or document.get("effectDigest") != effect_digest
             ):
-                raise CompositionError(
-                    "the Proposal version or effects no longer match the registered job"
+                self._job_failed(
+                    proposal_id, "binding", charge=state != "notice-uncertain"
                 )
-            self.inbox.consume(proposal_id, job["version"], job["effectDigest"])
+                continue
+            self.inbox.consume(proposal_id, version, effect_digest)
             if document["state"] != "applied":
                 # The native SDK selects the source-issued lifecycle link and
                 # opaque ETag. An unavailable Apply is refused before mutation.
@@ -490,10 +514,10 @@ class Composition:
                         current,
                         "apply",
                         {
-                            "submissionVersion": job["version"],
-                            "effectDigest": job["effectDigest"],
+                            "submissionVersion": version,
+                            "effectDigest": effect_digest,
                         },
-                        f"{proposal_id}:{job['version']}:apply",
+                        f"{proposal_id}:{version}:apply",
                     )
                 except Exception as error:
                     if getattr(error, "kind", None) == "invalid-request":
@@ -501,25 +525,46 @@ class Composition:
                             "Proposal is not currently applicable; awaiting authoritative source state"
                         )
                         continue
-                    raise
+                    self._job_failed(
+                        proposal_id, "prepare", charge=state != "notice-uncertain"
+                    )
+                    continue
+                if attempts >= MAXIMUM_ATTEMPTS:
+                    self._job_failed(proposal_id, "budget")
+                    continue
                 with self.inbox.connect() as db:
                     db.execute(
                         "UPDATE jobs SET attempts=attempts+1 WHERE id=?", (proposal_id,)
                     )
-                self.registry.execute_proposal(prepared)
-                current = self.registry.get_proposal(binding, proposal_id)
+                attempts += 1
+                try:
+                    self.registry.execute_proposal(prepared)
+                except Exception:
+                    self._job_failed(proposal_id, "apply")
+                    continue
+                try:
+                    current = self.registry.get_proposal(binding, proposal_id)
+                except Exception:
+                    self._job_failed(proposal_id, "confirm")
+                    continue
                 if current.document["state"] != "applied":
-                    raise CompositionError("source Apply was not confirmed")
-            notice_key = f"{proposal_id}:{job['version']}:notice"
+                    self._job_failed(proposal_id, "confirm")
+                    continue
+            notice_key = f"{proposal_id}:{version}:notice"
             if state == "notice-uncertain":
-                receipt = self.messages.message_receipt(
-                    self.tokens["messaging"].bearer_token(), notice_key, job["notice"]
-                )
+                token = self.tokens["messaging"].bearer_token()
+                try:
+                    receipt = self.messages.message_receipt(token, notice_key, notice)
+                except Exception:
+                    self._job_failed(proposal_id, "receipt")
+                    continue
                 if receipt.get("kind") != "complete":
-                    raise CompositionError(
-                        "the original notice receipt remains unresolved"
-                    )
+                    self._job_failed(proposal_id, "receipt")
+                    continue
             else:
+                if attempts >= MAXIMUM_ATTEMPTS:
+                    self._job_failed(proposal_id, "budget")
+                    continue
                 with self.inbox.connect() as db:
                     db.execute(
                         "UPDATE jobs SET state='notice-uncertain',attempts=attempts+1 WHERE id=?",
@@ -527,12 +572,9 @@ class Composition:
                     )
                 # A lost response leaves notice-uncertain on disk. The next
                 # pass reads the receipt; it never blindly repeats submission.
+                token = self.tokens["messaging"].bearer_token()
                 try:
-                    self.messages.submit(
-                        self.tokens["messaging"].bearer_token(),
-                        notice_key,
-                        job["notice"],
-                    )
+                    self.messages.submit(token, notice_key, notice)
                 except MessagingClientError as error:
                     # A native known refusal permits another bounded attempt.
                     # Expired or conflicting keys can describe earlier accepted
@@ -546,7 +588,11 @@ class Composition:
                                 "UPDATE jobs SET state='prepared' WHERE id=?",
                                 (proposal_id,),
                             )
-                    raise
+                    self._job_failed(proposal_id, "submit")
+                    continue
+                except Exception:
+                    self._job_failed(proposal_id, "submit")
+                    continue
             with self.inbox.connect() as db:
                 db.execute(
                     "UPDATE jobs SET state='notified' WHERE id=?", (proposal_id,)

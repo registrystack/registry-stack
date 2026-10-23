@@ -107,12 +107,32 @@ the job uncertain and requires investigation; it does not establish no effect.
 A submission receipt proves admission, not delivery; read Messaging's message
 state when delivery matters.
 
-Run a single reconciliation process for this small example. Each job has a
-bounded attempt budget. On an uncertain Apply or notice send, retain the same
-keys and bodies and read authoritative state; never register a fresh key to
-escape an unknown outcome. Exhausted budgets require operator recovery.
-Keep the same configured caller across recovery and restarts. The owning
-product's idempotency horizon and data retention still apply.
+Run a single reconciliation process for this small example. A per-job refusal
+does not stop later jobs in the selected batch. Its diagnostic names a fixed
+`stage` and a `job` reference: the first 16 hexadecimal characters of the
+SHA-256 of the stored Proposal id. Correlate that reference locally with the
+inbox. Exception text, Proposal ids, notice payloads, and credentials are not
+included in these diagnostics. Startup, credential configuration, corrupt
+stored JSON, and SQLite failures still fail the command visibly.
+
+Each job has a bounded attempt budget. Failed source reads, mismatched registered
+bindings, and failed preparation consume one attempt; waiting for a source-issued
+Apply capability does not. Each new Apply or notice submission is charged before
+dispatch and requires remaining budget, including when Apply and notification
+would otherwise happen in the same pass. An uncertain notice continues reading
+its original receipt at the budget without consuming another attempt or
+resubmitting. A completed-job count describes only the jobs completed in that
+pass; consult the diagnostics for jobs that remain unresolved.
+
+On an uncertain Apply or notice send, retain the same keys and bodies and read
+authoritative state; never register a fresh key to escape an unknown outcome.
+For a binding refusal, inspect the registered version and effect digest alongside
+the native Proposal; this service does not replace the accepted binding. For an
+Apply or notice refusal, inspect the authoritative source or original notice
+receipt before deciding whether recovery is safe. Exhausted budgets require
+operator recovery; this example does not reset them automatically. Keep the same
+configured caller across recovery and restarts. The owning product's idempotency
+horizon and data retention still apply.
 
 ## Verify
 
