@@ -278,21 +278,7 @@ pub fn check_runtime_file(path: &Path, environment: bool) -> OfflineCheck {
     };
     let layout = Layout::scan(&check.file, &bytes);
 
-    let mut package_refused = false;
-    for finding in &config.findings() {
-        if !environment && layout.substituted(&finding.pointer) {
-            continue;
-        }
-        package_refused |= finding.pointer.starts_with("/package");
-        check.push_runtime(
-            &layout,
-            finding.code,
-            &finding.pointer,
-            finding.at_key,
-            finding.message(),
-            finding.action.as_str(),
-        );
-    }
+    let package_refused = push_config_findings(&mut check, &layout, &config, !environment);
 
     check_ca_bundles(&mut check, &config, &layout, environment);
 
@@ -346,23 +332,7 @@ pub fn check_runtime_file(path: &Path, environment: bool) -> OfflineCheck {
             .flatten()
     });
 
-    for finding in runtime_binding_findings(&bundle.config, &config) {
-        if !environment && layout.substituted(&finding.pointer) {
-            continue;
-        }
-        let message = match finding.error.artifact_fault() {
-            Some(fault) => fault.fault().cause().to_owned(),
-            None => finding.error.to_string(),
-        };
-        check.push_runtime(
-            &layout,
-            finding.code,
-            &finding.pointer,
-            false,
-            message,
-            finding.action,
-        );
-    }
+    push_binding_findings(&mut check, &layout, &bundle, &config, !environment);
     check.bundle = Some(bundle);
     check
 }
@@ -407,12 +377,28 @@ pub fn check_runtime_bindings_file(path: &Path, bundle: &Bundle) -> OfflineCheck
         }
     };
     let layout = Layout::scan(&check.file, &bytes);
+    push_config_findings(&mut check, &layout, &config, true);
+    push_binding_findings(&mut check, &layout, bundle, &config, true);
+    check
+}
+
+/// Report the runtime's own findings about one decoded document. Findings at a
+/// pointer a substitution fills are skipped when `skip_substituted` is set.
+/// Returns whether any finding refused the `/package` section.
+fn push_config_findings(
+    check: &mut OfflineCheck,
+    layout: &Layout,
+    config: &RuntimeConfig,
+    skip_substituted: bool,
+) -> bool {
+    let mut package_refused = false;
     for finding in &config.findings() {
-        if layout.substituted(&finding.pointer) {
+        if skip_substituted && layout.substituted(&finding.pointer) {
             continue;
         }
+        package_refused |= finding.pointer.starts_with("/package");
         check.push_runtime(
-            &layout,
+            layout,
             finding.code,
             &finding.pointer,
             finding.at_key,
@@ -420,8 +406,20 @@ pub fn check_runtime_bindings_file(path: &Path, bundle: &Bundle) -> OfflineCheck
             finding.action.as_str(),
         );
     }
-    for finding in runtime_binding_findings(&bundle.config, &config) {
-        if layout.substituted(&finding.pointer) {
+    package_refused
+}
+
+/// Report the target binding findings between a loaded bundle and one decoded
+/// runtime document, with the same substitution rule as `push_config_findings`.
+fn push_binding_findings(
+    check: &mut OfflineCheck,
+    layout: &Layout,
+    bundle: &Bundle,
+    config: &RuntimeConfig,
+    skip_substituted: bool,
+) {
+    for finding in runtime_binding_findings(&bundle.config, config) {
+        if skip_substituted && layout.substituted(&finding.pointer) {
             continue;
         }
         let message = match finding.error.artifact_fault() {
@@ -429,7 +427,7 @@ pub fn check_runtime_bindings_file(path: &Path, bundle: &Bundle) -> OfflineCheck
             None => finding.error.to_string(),
         };
         check.push_runtime(
-            &layout,
+            layout,
             finding.code,
             &finding.pointer,
             false,
@@ -437,7 +435,6 @@ pub fn check_runtime_bindings_file(path: &Path, bundle: &Bundle) -> OfflineCheck
             finding.action,
         );
     }
-    check
 }
 
 /// Report a runtime file the reader refused while expressions stood for
