@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-10-17"
+last_reviewed: "2026-10-23"
 doc_type: tutorial
 persona:
   - data publisher
@@ -74,29 +74,29 @@ Initialized a registry project. 6 artifacts written.
   tests/journeys.yaml
 ```
 
-It then reports eight warnings, of two kinds. One kind says a profile reads a field that is more
-sensitive than its Record type:
+It then reports two warnings. Each says a profile reads a field that is more sensitive than its
+Record type:
+
+```text test-excerpt
+warning[breg.access.profile-higher-classification] recordTypes[id=group-membership].accessProfiles[id=operator].readableFields[field=person]
+  this field is more sensitive than its record type's classification; verify the profile's scope and purpose before disclosing it
+  next: Remove the field from readableFields, or confirm that the profile scopes and purposes admit only callers cleared for this classification.
+```
+
+The other warning is for a person's marital status. It is followed by the count and the next
+steps:
 
 ```text test-excerpt
 warning[breg.access.profile-higher-classification] recordTypes[id=person].accessProfiles[id=operator].readableFields[field=marital-status]
   this field is more sensitive than its record type's classification; verify the profile's scope and purpose before disclosing it
-  next: Review the finding, and change the source if the behavior it describes is not intended.
-```
-
-The other says a profile lists whole collections. The last of those warnings is followed by the
-count and the next steps:
-
-```text test-excerpt
-warning[breg.access.profile-unrestricted-collection] recordTypes[id=person].accessProfiles[id=reader].rowBoundaries
-  this profile lists rows without claim-bound or membership restrictions; configured consent and other disclosure checks still apply. Caller filters are not authorization. Review this broad access and restrict the profile to intended callers. Statistical release publishers require unrestricted reads of their dataset dependencies
-  next: Review the finding, and change the source if the behavior it describes is not intended.
-0 errors, 8 warnings
+  next: Remove the field from readableFields, or confirm that the profile scopes and purposes admit only callers cleared for this classification.
+0 errors, 2 warnings
 
 Next:
   1. read household-registry/README.md, then run 'bregctl check household-registry'
-  2. leave the findings above as they are; the `operator` and `reader` profiles list
-     whole collections on purpose, and the `operator` profile reads 2 fields the model
-     marks sensitive, and household-registry/README.md says where to narrow them
+  2. review the generated access profiles; their required scopes and purposes bound
+     whole-collection access, and household-registry/README.md says where to add row
+     boundaries when callers need row-level separation
   3. run 'bregctl dev household-registry' to start the registry locally and replay
      household-registry/tests/journeys.yaml
   4. replace canonicalBaseIri in household-registry/registry.yaml before you build a
@@ -112,10 +112,10 @@ files that define your registry. It declares three
 `group-membership`, and two [access profiles](../../reference/glossary/#access-profile),
 `operator` and `reader`, each naming what its callers may read and change.
 
-The eight warnings are about those profiles. Both may list whole collections, because the starter
-has no field such as a district to limit them by, and `operator` reads two fields PublicSchema marks
-sensitive. Leave them while you explore; the project's README says how to narrow each one before
-production.
+The two warnings are about the `operator` profile reading fields PublicSchema marks sensitive.
+The generated README explains why they exist and how to align the Record type classifications.
+Before production, remove fields the operator must not read or confirm that admitted callers are
+cleared for them.
 
 {/* Evidence: crates/registry-bregctl/src/lib.rs, init_from_model::run() and init_from_model::Source::Starter;
     crates/registry-bregctl/src/init_from_model/{mod,selection}.rs;
@@ -157,7 +157,7 @@ bregctl check household-registry
 Authoring check passed; registry revision sha256:<digest>.
 ```
 
-The same eight warnings follow, each pointing at the line of `registry.yaml` it is about.
+The same two warnings follow, each pointing at the line of `registry.yaml` it is about.
 
 {/* Evidence: crates/registry-bregctl/src/init_from_model/render.rs, readme();
     crates/registry-linkml/src/publicschema.rs, LICENSE_NOTICE. */}
@@ -300,13 +300,12 @@ Derive a second project from the edited file, into a new directory:
 bregctl init household-registry-2 --from publicschema --selection household-registry/model/selection.yaml
 ```
 
-The report has a new revision and seven warnings. One sensitive-field warning is left, for the
-membership's link to a person:
+The report has a new revision and one warning, for the membership's link to a person:
 
 ```text test-excerpt
 warning[breg.access.profile-higher-classification] recordTypes[id=group-membership].accessProfiles[id=operator].readableFields[field=person]
   this field is more sensitive than its record type's classification; verify the profile's scope and purpose before disclosing it
-  next: Review the finding, and change the source if the behavior it describes is not intended.
+  next: Remove the field from readableFields, or confirm that the profile scopes and purposes admit only callers cleared for this classification.
 ```
 
 Every change to what you derive follows the same cycle: edit `model/selection.yaml`, derive into a

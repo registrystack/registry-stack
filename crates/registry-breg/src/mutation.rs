@@ -2191,6 +2191,11 @@ pub enum MutationError {
     ProposalReviewResultMismatch,
     #[error("mutation conflicts with current state")]
     Conflict,
+    /// A Proposal application reached a PostgreSQL unique constraint. The
+    /// public problem stays the generic value-free mutation conflict, while
+    /// the Proposal controller may durably close this exact Apply attempt.
+    #[error("mutation conflicts with current state")]
+    ProposalUniqueConflict,
     /// The review authority rejected the Proposal, and a rejection is terminal.
     #[error("the review rejected this Proposal")]
     ProposalRejected,
@@ -2461,7 +2466,7 @@ async fn apply_create_row(
         record_id,
         data,
         field_encryption,
-        Some(ConstraintDisclosure {
+        Some(ConstraintDisclosure::DeclaredFields {
             physical_names: &request.plan.constraint_names,
             readable_fields: &profile.readable_fields,
         }),
@@ -2485,7 +2490,7 @@ async fn apply_patch_row(
         expected_revision,
         data,
         field_encryption,
-        Some(ConstraintDisclosure {
+        Some(ConstraintDisclosure::DeclaredFields {
             physical_names: &request.plan.constraint_names,
             readable_fields: &profile.readable_fields,
         }),
@@ -2505,6 +2510,7 @@ pub(super) async fn write_plan_row(
     fields: Map<String, Value>,
     before: Option<&Map<String, Value>>,
     field_encryption: Option<&FieldEncryptionService>,
+    origin: PlanWriteOrigin,
 ) -> Result<CurrentRow, MutationError> {
     if fields.is_empty()
         || fields
@@ -2530,7 +2536,7 @@ pub(super) async fn write_plan_row(
                 &record_id,
                 &fields,
                 field_encryption,
-                None,
+                origin.constraint_disclosure(),
             )
             .await?
         }
@@ -2545,7 +2551,7 @@ pub(super) async fn write_plan_row(
                 revision,
                 fields,
                 field_encryption,
-                None,
+                origin.constraint_disclosure(),
             )
             .await?
         }
@@ -2553,6 +2559,21 @@ pub(super) async fn write_plan_row(
     current.predecessor_revision = expected_revision;
     current.before_data = before.cloned();
     Ok(current)
+}
+
+#[derive(Clone, Copy)]
+pub(super) enum PlanWriteOrigin {
+    ImmediateAction,
+    ProposalApplication,
+}
+
+impl PlanWriteOrigin {
+    fn constraint_disclosure(self) -> Option<ConstraintDisclosure<'static>> {
+        match self {
+            Self::ImmediateAction => None,
+            Self::ProposalApplication => Some(ConstraintDisclosure::ProposalApplication),
+        }
+    }
 }
 
 async fn insert_current_row(
@@ -3889,9 +3910,12 @@ fn method_name(method: HttpMethod) -> &'static str {
 }
 
 #[derive(Clone, Copy)]
-struct ConstraintDisclosure<'a> {
-    physical_names: &'a BTreeMap<String, String>,
-    readable_fields: &'a BTreeSet<String>,
+enum ConstraintDisclosure<'a> {
+    DeclaredFields {
+        physical_names: &'a BTreeMap<String, String>,
+        readable_fields: &'a BTreeSet<String>,
+    },
+    ProposalApplication,
 }
 
 fn map_field_database_error(
@@ -3899,6 +3923,11 @@ fn map_field_database_error(
     entity: &CompiledEntity,
     disclosure: Option<ConstraintDisclosure<'_>>,
 ) -> MutationError {
+    if error.code() == Some(&SqlState::UNIQUE_VIOLATION)
+        && matches!(disclosure, Some(ConstraintDisclosure::ProposalApplication))
+    {
+        return MutationError::ProposalUniqueConflict;
+    }
     if error.code() == Some(&SqlState::CHECK_VIOLATION) {
         if let Some(constraint) = error.as_db_error().and_then(|error| error.constraint()) {
             for field in entity.fields.values() {
@@ -3914,10 +3943,13 @@ fn map_field_database_error(
                     };
                 }
             }
-            if let Some(disclosure) = disclosure {
+            if let Some(ConstraintDisclosure::DeclaredFields {
+                physical_names,
+                readable_fields,
+            }) = disclosure
+            {
                 for (constraint_id, declared) in &entity.constraints {
-                    if disclosure
-                        .physical_names
+                    if physical_names
                         .get(constraint_id)
                         .is_none_or(|physical| physical != constraint)
                     {
@@ -3925,8 +3957,8 @@ fn map_field_database_error(
                     }
                     let violation = match declared {
                         crate::contract::ConstraintSource::Compare { left, right, .. }
-                            if disclosure.readable_fields.contains(left)
-                                && disclosure.readable_fields.contains(right) =>
+                            if readable_fields.contains(left)
+                                && readable_fields.contains(right) =>
                         {
                             Some(RowLocalConstraintViolation::Compare {
                                 record_type: entity.id.clone(),
@@ -3936,7 +3968,7 @@ fn map_field_database_error(
                             })
                         }
                         crate::contract::ConstraintSource::IntRange { field, .. }
-                            if disclosure.readable_fields.contains(field) =>
+                            if readable_fields.contains(field) =>
                         {
                             Some(RowLocalConstraintViolation::IntRange {
                                 record_type: entity.id.clone(),
@@ -3945,7 +3977,7 @@ fn map_field_database_error(
                             })
                         }
                         crate::contract::ConstraintSource::Vocabulary { field, .. }
-                            if disclosure.readable_fields.contains(field) =>
+                            if readable_fields.contains(field) =>
                         {
                             Some(RowLocalConstraintViolation::Vocabulary {
                                 record_type: entity.id.clone(),

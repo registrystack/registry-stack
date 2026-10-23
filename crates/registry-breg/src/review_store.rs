@@ -12,6 +12,7 @@ use registry_review_client::{
     submission_digest, BearerToken, ReviewAuth, ReviewClient, ReviewClientError, ReviewCompletion,
     ReviewCompletionType, ReviewCreateRequest, ReviewRequestAccepted, ReviewResult,
     ReviewResultResponse, ReviewResultsQuery, SourceContextBinding, SubjectBinding,
+    SubmissionDigest,
 };
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -30,6 +31,41 @@ use crate::proposal_workflow::ProposalSnapshot;
 const APPLICATION_LEASE_MINIMUM_SECONDS: i64 = 30;
 pub(crate) const MAXIMUM_COMPLETION_RECIPIENT_BYTES: usize = 256;
 pub(crate) const MAXIMUM_REVIEW_RECOVERY_DAYS: u32 = 3_650;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum StoredSubmissionDigestCompatibility {
+    Current,
+    LegacyRegistryId,
+}
+
+/// Verify the digest retained with one frozen Review request. Current work is
+/// keyed by its configured source. Accepted work created before that correction
+/// may retain the registry-id-keyed digest, but only when the same complete
+/// request and accepted binding carry that exact historical digest.
+pub(crate) fn stored_submission_digest_compatibility(
+    producer: &str,
+    registry_id: &str,
+    request: &ReviewCreateRequest,
+    stored: &SubmissionDigest,
+    accepted: Option<&ReviewRequestAccepted>,
+) -> Result<(StoredSubmissionDigestCompatibility, SubmissionDigest), MutationError> {
+    let current = submission_digest(producer, &request.subject.source, request)
+        .map_err(|_| MutationError::PreconditionFailed)?;
+    let compatibility = if *stored == current {
+        StoredSubmissionDigestCompatibility::Current
+    } else {
+        let legacy = submission_digest(producer, registry_id, request)
+            .map_err(|_| MutationError::PreconditionFailed)?;
+        if *stored != legacy {
+            return Err(MutationError::PreconditionFailed);
+        }
+        StoredSubmissionDigestCompatibility::LegacyRegistryId
+    };
+    if accepted.is_some_and(|accepted| accepted.submission_digest != *stored) {
+        return Err(MutationError::PreconditionFailed);
+    }
+    Ok((compatibility, current))
+}
 
 /// A review submission is claimable once it is due and no live lease holds
 /// it: a `submitting` claim stays with its holder until its lease expires,
@@ -1285,12 +1321,13 @@ pub(crate) async fn load_status_binding(
         proposal_id,
         frozen.version().get()
     );
-    let expected_digest = registry_review_client::submission_digest(
-        &row.get::<_, String>(4),
-        registry.registry_id(),
-        &create,
-    )
-    .map_err(|_| MutationError::PreconditionFailed)?;
+    let stored_digest = SubmissionDigest::parse(&row.get::<_, String>(5))
+        .map_err(|_| MutationError::PreconditionFailed)?;
+    let accepted = row
+        .get::<_, Option<Value>>(6)
+        .map(serde_json::from_value::<registry_review_client::ReviewRequestAccepted>)
+        .transpose()
+        .map_err(|_| MutationError::PreconditionFailed)?;
     if row.get::<_, String>(0) != *expected_authority
         || row.get::<_, String>(1) != frozen.effect_digest().as_str()
         || row.get::<_, Value>(2)
@@ -1303,25 +1340,23 @@ pub(crate) async fn load_status_binding(
         || create.subject.digest.as_str() != frozen.effect_digest().as_str()
         || !matches!(&create.context,registry_review_client::ReviewContext::CurrentSource { binding }
                 if binding.reference == context_reference)
-        || expected_digest.as_str() != row.get::<_, String>(5)
+        || accepted.as_ref().is_some_and(|accepted| {
+            accepted.request_id.is_nil()
+                || accepted.subject.check().is_err()
+                || accepted.policy.check().is_err()
+                || accepted.subject != create.subject
+                || !policy.matches(&accepted.policy)
+        })
     {
         return Err(MutationError::PreconditionFailed);
     }
-    let accepted = row
-        .get::<_, Option<Value>>(6)
-        .map(serde_json::from_value::<registry_review_client::ReviewRequestAccepted>)
-        .transpose()
-        .map_err(|_| MutationError::PreconditionFailed)?;
-    if accepted.as_ref().is_some_and(|accepted| {
-        accepted.request_id.is_nil()
-            || accepted.subject.check().is_err()
-            || accepted.policy.check().is_err()
-            || accepted.subject != create.subject
-            || !policy.matches(&accepted.policy)
-            || accepted.submission_digest != expected_digest
-    }) {
-        return Err(MutationError::PreconditionFailed);
-    }
+    stored_submission_digest_compatibility(
+        &row.get::<_, String>(4),
+        registry.registry_id(),
+        &create,
+        &stored_digest,
+        accepted.as_ref(),
+    )?;
     Ok(accepted)
 }
 
@@ -1560,12 +1595,12 @@ pub(crate) async fn enqueue_submission(
     else {
         return Ok(());
     };
-    let source_namespace = registry.registry_id();
+    let registry_id = registry.registry_id();
     let (producer_id, recovery_days) = authorities
         .submission_binding(authority)
         .ok_or(MutationError::Unavailable)?;
     let source_reference = format!(
-        "breg:{source_namespace}:{action_id}:{proposal_id}:{}",
+        "breg:{registry_id}:{action_id}:{proposal_id}:{}",
         proposal.version().get()
     );
     let create = ReviewCreateRequest {
@@ -1587,7 +1622,7 @@ pub(crate) async fn enqueue_submission(
         },
         result_constraints: None,
     };
-    let expected_digest = submission_digest(producer_id, source_namespace, &create)
+    let expected_digest = submission_digest(producer_id, source, &create)
         .map_err(|_| MutationError::InvalidRequest)?;
     let job_id = Uuid::new_v4();
     let idempotency_key = format!("breg-review-{job_id}");
@@ -1826,23 +1861,29 @@ pub(crate) async fn schedule_cancellation(
     Ok(())
 }
 
-/// Withdraw an Action's package-blocked work with two set-based statements in
-/// the activation transaction. Jobs close across versions; only the current
-/// submitted Review round is withdrawn. Ordinary lifecycle calls share the
-/// same update predicates and cancellation state transitions above.
-pub(crate) async fn withdraw_blocked_proposals(
+/// Withdraw work for the Proposals an activation classified as incompatible.
+/// The caller supplies that classification independently of the durable
+/// blocked reason, whose application refusal remains dominant until Rebase.
+/// Jobs close across versions; only the current submitted Review round is
+/// withdrawn. Ordinary lifecycle calls share the same state transitions above.
+pub(crate) async fn withdraw_incompatible_proposals(
     transaction: &impl GenericClient,
     action_id: &str,
+    proposal_ids: &[Uuid],
 ) -> Result<(), MutationError> {
+    if proposal_ids.is_empty() {
+        return Ok(());
+    }
+    let proposal_ids = proposal_ids.to_vec();
     transaction
         .execute(
             &format!(
                 "{CLOSE_APPLICATION_JOBS_SQL} AND EXISTS (
             SELECT 1 FROM registry_internal.registry_proposal_state p
              WHERE p.action_id=$1 AND p.action_id=j.action_id AND p.proposal_id=j.proposal_id
-               AND p.state='submitted' AND p.blocked_reason IS NOT NULL)"
+               AND p.state='submitted' AND p.proposal_id=ANY($2::uuid[]))"
             ),
-            &[&action_id],
+            &[&action_id, &proposal_ids],
         )
         .await
         .map_err(|_| MutationError::Unavailable)?;
@@ -1853,9 +1894,9 @@ pub(crate) async fn withdraw_blocked_proposals(
             SELECT 1 FROM registry_internal.registry_proposal_state p
              WHERE p.action_id=$1 AND p.action_id=s.action_id AND p.proposal_id=s.proposal_id
                AND p.submission_version=s.submission_version
-               AND p.state='submitted' AND p.blocked_reason IS NOT NULL)"
+               AND p.state='submitted' AND p.proposal_id=ANY($2::uuid[]))"
             ),
-            &[&action_id],
+            &[&action_id, &proposal_ids],
         )
         .await
         .map_err(|_| MutationError::Unavailable)?;
@@ -1864,10 +1905,13 @@ pub(crate) async fn withdraw_blocked_proposals(
 
 #[derive(Clone, Debug)]
 pub struct ClaimedReviewSubmission {
+    pub attempt_count: i32,
+    pub legacy_digest_repairable: bool,
     pub producer_id: String,
     pub action_id: String,
     pub proposal_id: Uuid,
     pub submission_version: i64,
+    pub proposal_digest: String,
     pub authority: String,
     pub idempotency_key: String,
     pub request: ReviewCreateRequest,
@@ -1885,7 +1929,10 @@ pub async fn claim_submission(
     let row = client
         .query_opt(
             "WITH candidate AS (
-                 SELECT s.action_id, s.proposal_id, s.submission_version
+                 SELECT s.action_id, s.proposal_id, s.submission_version,
+                        s.state='pending' AND s.attempt_count=0
+                            AND s.accepted_binding IS NULL AND s.updated_at=s.created_at
+                            AS legacy_digest_repairable
                    FROM registry_internal.registry_proposal_review_submissions s
                   WHERE next_attempt_at <= transaction_timestamp()
                     AND authority=$2
@@ -1921,17 +1968,21 @@ pub async fn claim_submission(
                 AND s.proposal_id=c.proposal_id AND s.submission_version=c.submission_version
              RETURNING s.action_id,s.proposal_id,s.submission_version,s.authority,
                        s.idempotency_key,s.create_request,s.expected_submission_digest,
-                       s.lease_until,s.expected_policy,s.accepted_binding,s.producer_id",
+                       s.lease_until,s.expected_policy,s.accepted_binding,s.producer_id,s.attempt_count,
+                       s.proposal_digest,c.legacy_digest_repairable",
             &[&lease_seconds, &authority],
         )
         .await
         .map_err(|_| MutationError::Unavailable)?;
     row.map(|row| {
         Ok(ClaimedReviewSubmission {
+            attempt_count: row.get(11),
+            legacy_digest_repairable: row.get(13),
             producer_id: row.get(10),
             action_id: row.get(0),
             proposal_id: row.get(1),
             submission_version: row.get(2),
+            proposal_digest: row.get(12),
             authority: row.get(3),
             idempotency_key: row.get(4),
             request: serde_json::from_value(row.get(5)).map_err(|_| MutationError::Unavailable)?,
@@ -1960,9 +2011,94 @@ pub async fn run_one_submission(
     token: &BearerToken,
     lease_seconds: i64,
 ) -> Result<bool, MutationError> {
-    let Some(job) = claim_submission(client, authority, lease_seconds).await? else {
+    let Some(mut job) = claim_submission(client, authority, lease_seconds).await? else {
         return Ok(false);
     };
+    job.request
+        .check()
+        .map_err(|_| MutationError::PreconditionFailed)?;
+    let registry_review_client::ReviewContext::CurrentSource { binding } = &job.request.context
+    else {
+        return Err(MutationError::PreconditionFailed);
+    };
+    let suffix = format!(
+        ":{}:{}:{}",
+        job.action_id, job.proposal_id, job.submission_version
+    );
+    let registry_id = binding
+        .reference
+        .strip_prefix("breg:")
+        .and_then(|reference| reference.strip_suffix(&suffix))
+        .filter(|id| !id.is_empty())
+        .ok_or(MutationError::PreconditionFailed)?;
+    if job.authority != authority
+        || job.request.policy != job.expected_policy
+        || job.request.subject.subject_type != "proposal"
+        || job.request.subject.id != job.proposal_id.to_string()
+        || job.request.subject.version != job.submission_version.to_string()
+        || job.request.subject.digest.as_str() != job.proposal_digest
+        || job.accepted_binding.as_ref().is_some_and(|accepted| {
+            accepted.request_id.is_nil()
+                || accepted.subject.check().is_err()
+                || accepted.policy.check().is_err()
+                || accepted.subject != job.request.subject
+                || !job.expected_policy.matches(&accepted.policy)
+        })
+    {
+        return Err(MutationError::PreconditionFailed);
+    }
+    let (compatibility, current_digest) = stored_submission_digest_compatibility(
+        &job.producer_id,
+        registry_id,
+        &job.request,
+        &job.expected_submission_digest,
+        job.accepted_binding.as_ref(),
+    )?;
+    if compatibility == StoredSubmissionDigestCompatibility::LegacyRegistryId
+        && job.accepted_binding.is_none()
+        && job.attempt_count == 1
+        && job.legacy_digest_repairable
+    {
+        // The claim increments attempt_count before returning the job. One is
+        // necessary but not sufficient because operator resubmission resets the
+        // delivery budget; the candidate flag also requires the untouched
+        // initial row. Preserve every possibly delivered digest because its
+        // acceptance may exist remotely without a local accepted binding.
+        let updated = client
+            .execute(
+                "UPDATE registry_internal.registry_proposal_review_submissions
+                SET expected_submission_digest=$7,updated_at=transaction_timestamp()
+              WHERE action_id=$1 AND proposal_id=$2 AND submission_version=$3
+                AND state='submitting' AND lease_until=$4
+                AND expected_submission_digest=$5 AND producer_id=$6
+                AND accepted_binding IS NULL",
+                &[
+                    &job.action_id,
+                    &job.proposal_id,
+                    &job.submission_version,
+                    &job.lease_until,
+                    &job.expected_submission_digest.as_str(),
+                    &job.producer_id,
+                    &current_digest.as_str(),
+                ],
+            )
+            .await
+            .map_err(|_| MutationError::Unavailable)?;
+        if updated != 1 {
+            return Err(MutationError::PreconditionFailed);
+        }
+        job.expected_submission_digest = current_digest;
+    }
+    let proposal_reference =
+        registry_review_client::ContentDigest::for_bytes(job.proposal_id.to_string().as_bytes());
+    if job.attempt_count == 1 {
+        tracing::info!(
+            authority,
+            proposal_reference = %proposal_reference,
+            attempt = job.attempt_count,
+            "BReg review handoff started"
+        );
+    }
     let response = review_client
         .create_or_recover_request_for_producer(
             ReviewAuth::new(token, profile),
@@ -2030,6 +2166,13 @@ pub async fn run_one_submission(
             if updated != 1 {
                 return Err(MutationError::PreconditionFailed);
             }
+            tracing::info!(
+                authority,
+                proposal_reference = %proposal_reference,
+                attempt = job.attempt_count,
+                answer = "accepted",
+                "BReg review handoff settled"
+            );
         }
         Err(ReviewClientError::ProducerIdentityMismatch {
             expected, actual, ..
@@ -2103,6 +2246,10 @@ pub async fn run_one_submission(
                 .map_err(|_| MutationError::Unavailable)?;
             if updated == 1 {
                 tracing::warn!(
+                    authority,
+                    proposal_reference = %proposal_reference,
+                    attempt = job.attempt_count,
+                    answer = "remote-uncertain",
                     "BReg review handoff recorded remote-uncertain; retry the same submission to recover its acceptance"
                 );
             }
@@ -2635,6 +2782,122 @@ fn result_status(status: registry_review_client::ReviewResultStatus) -> &'static
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stored_digest_accepts_only_current_or_exact_legacy_request_and_binding() {
+        let proposal_id = Uuid::new_v4();
+        let request = ReviewCreateRequest {
+            policy: serde_json::from_value(serde_json::json!({"id":"review-policy"})).unwrap(),
+            subject: SubjectBinding {
+                source: "shared.registry:v1".to_owned(),
+                subject_type: "proposal".to_owned(),
+                id: proposal_id.to_string(),
+                version: "1".to_owned(),
+                digest: registry_review_client::ContentDigest::for_bytes(b"effect"),
+            },
+            requester_reference: "proposal-reference".to_owned(),
+            initiator: None,
+            context: registry_review_client::ReviewContext::CurrentSource {
+                binding: SourceContextBinding {
+                    reference: format!("breg:registry-id:correct-name:{proposal_id}:1"),
+                },
+            },
+            result_constraints: None,
+        };
+        let producer = "proposal-producer";
+        let current = submission_digest(producer, &request.subject.source, &request).unwrap();
+        let legacy = submission_digest(producer, "registry-id", &request).unwrap();
+        assert_ne!(current, legacy);
+        let mut accepted = ReviewRequestAccepted {
+            request_id: Uuid::new_v4(),
+            subject: request.subject.clone(),
+            policy: serde_json::from_value(serde_json::json!({
+                "id":"review-policy",
+                "version":"1",
+                "digest":registry_review_client::ContentDigest::for_bytes(b"policy"),
+            }))
+            .unwrap(),
+            submission_digest: legacy.clone(),
+        };
+
+        assert_eq!(
+            stored_submission_digest_compatibility(
+                producer,
+                "registry-id",
+                &request,
+                &current,
+                None,
+            )
+            .unwrap()
+            .0,
+            StoredSubmissionDigestCompatibility::Current
+        );
+        assert_eq!(
+            stored_submission_digest_compatibility(
+                producer,
+                "registry-id",
+                &request,
+                &legacy,
+                Some(&accepted),
+            )
+            .unwrap(),
+            (
+                StoredSubmissionDigestCompatibility::LegacyRegistryId,
+                current.clone(),
+            )
+        );
+
+        let arbitrary = SubmissionDigest::parse(&format!("sha256:{}", "c".repeat(64))).unwrap();
+        assert!(stored_submission_digest_compatibility(
+            producer,
+            "registry-id",
+            &request,
+            &arbitrary,
+            None,
+        )
+        .is_err());
+        accepted.submission_digest = current;
+        assert!(stored_submission_digest_compatibility(
+            producer,
+            "registry-id",
+            &request,
+            &legacy,
+            Some(&accepted),
+        )
+        .is_err());
+        let mut rebound_source = request.clone();
+        rebound_source.subject.source = "another-source".to_owned();
+        let mut rebound_policy = request.clone();
+        rebound_policy.policy =
+            serde_json::from_value(serde_json::json!({"id":"another-policy"})).unwrap();
+        let mut rebound_action = request.clone();
+        rebound_action.context = registry_review_client::ReviewContext::CurrentSource {
+            binding: SourceContextBinding {
+                reference: format!("breg:registry-id:other-action:{proposal_id}:1"),
+            },
+        };
+        let mut rebound_input = request.clone();
+        rebound_input.requester_reference = "another-reference".to_owned();
+        let mut rebound_effect = request;
+        rebound_effect.subject.digest =
+            registry_review_client::ContentDigest::for_bytes(b"another-effect");
+        for altered in [
+            rebound_source,
+            rebound_policy,
+            rebound_action,
+            rebound_input,
+            rebound_effect,
+        ] {
+            assert!(stored_submission_digest_compatibility(
+                producer,
+                "registry-id",
+                &altered,
+                &legacy,
+                None,
+            )
+            .is_err());
+        }
+    }
 
     fn authority(id: &str, completion: Option<(&str, &str)>) -> Arc<ReviewAuthorityClient> {
         let client = ReviewClient::new(registry_review_client::ReviewClientConfig::new(

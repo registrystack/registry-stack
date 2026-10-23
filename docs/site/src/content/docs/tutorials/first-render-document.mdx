@@ -184,10 +184,11 @@ grep -i '^x-registry' render-work/headers.txt
 ```text test-expect
 x-registry-pdf-sha256: 1e2dc9c981d19ef62549c3100395a106bc8fb30e01bef21c26844e45a0c29f9f
 x-registry-data-sha256: ad8d63dc40da68da4b3bc96144969c6ec85000cb460d9cbfe37c82688a944523
+x-registry-warning-count: 0
 x-registry-document-version: letter v1
 ```
 
-The headers carry the two hashes compile printed. Compare the files themselves:
+The headers carry the two hashes compile printed and the warning count. Compare the files themselves:
 
 ```sh
 cmp render-work/letter.pdf render-work/served.pdf && echo identical

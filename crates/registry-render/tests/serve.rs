@@ -735,6 +735,7 @@ fn render_returns_pdf_with_hash_headers_matching_golden() {
     assert_eq!(header("x-registry-pdf-sha256"), golden_receipt_sha());
     assert!(!header("x-registry-data-sha256").is_empty());
     assert_eq!(header("x-registry-document-version"), "receipt v3");
+    assert_eq!(header("x-registry-warning-count"), "0");
     assert_eq!(header("idempotency-key"), "effect-1234");
     // The served bytes are the golden bytes: cross-process determinism.
     let sha = sha256_hex(&reply.body);
@@ -776,6 +777,64 @@ fn json_variant_serves_openfn_clients() {
     assert_eq!(sha256_hex(&bytes), golden_receipt_sha());
     assert_eq!(json["documentVersion"].as_str().unwrap(), "receipt v3");
     assert_eq!(json["pdfSha256"].as_str().unwrap(), golden_receipt_sha());
+}
+
+#[test]
+fn a_render_with_warnings_reports_the_same_count_in_pdf_and_json() {
+    let (_scratch, bundle) = physical_tempdir();
+    std::fs::write(bundle.join("manifest.yaml"),
+        "apiVersion: id.registrystack.org/formats/render/bundle/v1alpha1\nkind: RenderBundle\nbundleVersion: 1\ndocuments:\n  - id: warning\n    version: 1\n    entryFile: warning.typ\n").unwrap();
+    std::fs::write(
+        bundle.join("warning.typ"),
+        "#set text(font: \"canary nonexistent font\")\nA document with a rendering warning.\n",
+    )
+    .unwrap();
+    registry_platform_config::package::write_sum_file(
+        &bundle,
+        None,
+        &registry_render::runtime::package_limits(),
+        "registry-render package",
+    )
+    .unwrap();
+    let (_home, runtime, _) = deployment(DEFAULT_LIMITS, &bundle);
+    let server = start_server(&runtime);
+    let body = r#"{"issuedAt":"2026-01-01T00:00:00Z","data":{}}"#;
+    let mut replies = Vec::new();
+    for accept in ["application/pdf", "application/json"] {
+        let reply = request(
+            server.port,
+            "POST",
+            "/v1/render/warning",
+            &[
+                ("Authorization", &format!("Bearer {API_KEY}")),
+                ("Content-Type", "application/json"),
+                ("Accept", accept),
+            ],
+            Some(body),
+        );
+        assert_eq!(
+            reply.status,
+            200,
+            "{}",
+            String::from_utf8_lossy(&reply.body)
+        );
+        replies.push(reply);
+    }
+    let count = replies[0]
+        .headers
+        .iter()
+        .find(|(name, _)| name == "x-registry-warning-count")
+        .expect("PDF warning count")
+        .1
+        .parse::<usize>()
+        .unwrap();
+    assert!(
+        count > 0,
+        "the synthetic missing font must produce a warning"
+    );
+    let json: serde_json::Value = serde_json::from_slice(&replies[1].body).unwrap();
+    assert_eq!(count, json["warnings"].as_array().unwrap().len());
+    assert!(replies[0].body.starts_with(b"%PDF"));
 }
 
 #[test]

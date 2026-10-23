@@ -895,7 +895,13 @@ impl MutationTransaction {
             let StoredResultMetadata::Proposal { .. } = stored.metadata else {
                 return Err(MutationError::Unavailable);
             };
-            let entry = self.proposal_terminal(input, &binding, &document, true, 0)?;
+            let entry = self.proposal_terminal(
+                input,
+                &binding,
+                &document,
+                TerminalAuditOutcome::Replayed,
+                0,
+            )?;
             check_current_proposal_grant(input.authority)?;
             guarded
                 .commit()
@@ -1058,7 +1064,13 @@ impl MutationTransaction {
                     .await?;
                 document
             };
-            let entry = self.proposal_terminal(&input, &binding, &document, true, 0)?;
+            let entry = self.proposal_terminal(
+                &input,
+                &binding,
+                &document,
+                TerminalAuditOutcome::Replayed,
+                0,
+            )?;
             check_current_proposal_grant(input.authority)?;
             guarded
                 .commit()
@@ -1076,6 +1088,7 @@ impl MutationTransaction {
         }
         let actor = self.proposal_actor(input.authority.common.principal())?;
         let mut result_count = 0u16;
+        let mut terminal_error = None;
         let (id, from_state, transition) = match input.operation {
             ProposalAuthorityOperation::Start => {
                 if existing.is_some() {
@@ -1555,7 +1568,10 @@ impl MutationTransaction {
                         )
                         .await?;
                         let application_id = Uuid::new_v4();
-                        let (observed, links) = self
+                        tx.batch_execute("SAVEPOINT proposal_application_effects")
+                            .await
+                            .map_err(map_database_error)?;
+                        let application = self
                             .apply_frozen_proposal(
                                 tx,
                                 registry,
@@ -1566,45 +1582,79 @@ impl MutationTransaction {
                                 &binding,
                                 application_id,
                             )
-                            .await?;
-                        result_count =
-                            u16::try_from(links.len()).map_err(|_| MutationError::Unavailable)?;
-                        let application = PreparedApplication::new(
-                            ApplicationId::new(application_id.to_string())
-                                .map_err(workflow_error)?,
-                            links,
-                        )
-                        .map_err(workflow_error)?;
-                        let applied_contract = workflow
-                            .current_proposal()
-                            .ok_or(MutationError::PreconditionFailed)?
-                            .contract_fingerprint()
-                            .clone();
-                        let workflow = workflow
-                            .apply(
-                                transition_context(&actor)?,
-                                crate::proposal_workflow::SubmissionVersion::new(
-                                    input
-                                        .submission_version
-                                        .ok_or(MutationError::InvalidRequest)?,
+                            .await;
+                        match application {
+                            Ok((observed, links)) => {
+                                tx.batch_execute("RELEASE SAVEPOINT proposal_application_effects")
+                                    .await
+                                    .map_err(map_database_error)?;
+                                result_count = u16::try_from(links.len())
+                                    .map_err(|_| MutationError::Unavailable)?;
+                                let application = PreparedApplication::new(
+                                    ApplicationId::new(application_id.to_string())
+                                        .map_err(workflow_error)?,
+                                    links,
                                 )
-                                .map_err(workflow_error)?,
-                                &ProposalDigest::new(
-                                    input.effect_digest.ok_or(MutationError::InvalidRequest)?,
+                                .map_err(workflow_error)?;
+                                let applied_contract = workflow
+                                    .current_proposal()
+                                    .ok_or(MutationError::PreconditionFailed)?
+                                    .contract_fingerprint()
+                                    .clone();
+                                let workflow = workflow
+                                    .apply(
+                                        transition_context(&actor)?,
+                                        crate::proposal_workflow::SubmissionVersion::new(
+                                            input
+                                                .submission_version
+                                                .ok_or(MutationError::InvalidRequest)?,
+                                        )
+                                        .map_err(workflow_error)?,
+                                        &ProposalDigest::new(
+                                            input
+                                                .effect_digest
+                                                .ok_or(MutationError::InvalidRequest)?,
+                                        )
+                                        .map_err(workflow_error)?,
+                                        &applied_contract,
+                                        review_evidence,
+                                        observed,
+                                        application,
+                                        input.reason.map(str::to_owned),
+                                    )
+                                    .map_err(workflow_error)?
+                                    .into_workflow();
+                                proposal_store::save(tx, &action.id, id, previous, &workflow)
+                                    .await?;
+                                proposal_store::retain_evidence(
+                                    tx,
+                                    application_id,
+                                    commit_evidence,
                                 )
-                                .map_err(workflow_error)?,
-                                &applied_contract,
-                                review_evidence,
-                                observed,
-                                application,
-                                input.reason.map(str::to_owned),
-                            )
-                            .map_err(workflow_error)?
-                            .into_workflow();
-                        proposal_store::save(tx, &action.id, id, previous, &workflow).await?;
-                        proposal_store::retain_evidence(tx, application_id, commit_evidence)
-                            .await?;
-                        (workflow, "applied")
+                                .await?;
+                                (workflow, "applied")
+                            }
+                            Err(error) => {
+                                tx.batch_execute(
+                                    "ROLLBACK TO SAVEPOINT proposal_application_effects;
+                                     RELEASE SAVEPOINT proposal_application_effects",
+                                )
+                                .await
+                                .map_err(map_database_error)?;
+                                if error == MutationError::ProposalUniqueConflict
+                                    && !input.authority.is_system()
+                                {
+                                    proposal_store::block_manual_application_refusal(
+                                        tx, &action.id, id, previous,
+                                    )
+                                    .await?;
+                                    terminal_error = Some(error);
+                                    (workflow, "application-refused")
+                                } else {
+                                    return Err(error);
+                                }
+                            }
+                        }
                     }
                     _ => return Err(MutationError::InvalidRequest),
                 };
@@ -1614,6 +1664,32 @@ impl MutationTransaction {
         };
         let document =
             proposal_store::load_document(tx, id, proposal_store::DocumentLock::None).await?;
+        if let Some(error) = terminal_error {
+            // An application refusal is the outcome of the requested Apply,
+            // not a Proposal workflow transition. Commit its durable marker
+            // and terminal audit without advertising a lifecycle event that
+            // observers could mistake for a successful state transition.
+            let entry = self.proposal_terminal(
+                &input,
+                &binding,
+                &document,
+                TerminalAuditOutcome::Refused,
+                0,
+            )?;
+            if tokio::time::Instant::now() >= deadline {
+                return Err(MutationError::Unavailable);
+            }
+            check_current_proposal_grant(input.authority)?;
+            guarded
+                .commit()
+                .await
+                .map_err(|_| MutationError::CommitUnresolved)?;
+            self.audit
+                .append(entry)
+                .await
+                .map_err(|_| MutationError::CommitUnresolved)?;
+            return Err(error);
+        }
         let workflow = proposal_store::load(tx, &action.id, id, false).await?;
         // A Proposal event names its public resource, as Scheduling names an
         // appointment; record hooks keep their hashed record reference.
@@ -1699,7 +1775,13 @@ impl MutationTransaction {
             &binding_revision,
         )
         .await?;
-        let entry = self.proposal_terminal(&input, &binding, &document, false, result_count)?;
+        let entry = self.proposal_terminal(
+            &input,
+            &binding,
+            &document,
+            TerminalAuditOutcome::Committed,
+            result_count,
+        )?;
         if tokio::time::Instant::now() >= deadline {
             return Err(MutationError::Unavailable);
         }
@@ -1767,41 +1849,42 @@ impl MutationTransaction {
         input: &ProposalMutationInput<'_>,
         binding: &crate::idempotency::ResolvedIdempotencyBinding,
         document: &ProposalDocument,
-        replayed: bool,
+        outcome: TerminalAuditOutcome,
         count: u16,
     ) -> Result<AuditEntry, MutationError> {
-        let entry = action_terminal_entry(
-            self.audit.profile(),
-            TerminalAudit {
-                grant: input.authority.common.grant_audit().cloned(),
-                outcome: if replayed {
-                    TerminalAuditOutcome::Replayed
-                } else {
-                    TerminalAuditOutcome::Committed
-                },
-                method: HttpMethod::Post,
-                operation_id: format!(
-                    "proposals.{}.{}",
-                    document.action_id,
-                    proposal_operation_name(input.operation)
-                ),
-                entity_id: None,
-                action_id: Some(document.action_id.clone()),
-                package_revision: self.expected.activation_id.clone(),
-                selected_access_profile: input.authority.common.access_profile().to_owned(),
-                purpose_present: input.authority.common.purpose().is_some(),
-                principal_reference: Some(binding.principal_reference.clone()),
-                record_reference: None,
-                record_revision: None,
-                result_count: Some(usize::from(count)),
-                field_set_reference: None,
-                correlation: input.correlation.clone(),
-            },
-            &format!(
-                "proposal:{}:{}",
-                document.proposal_id, document.header.workflow_revision
+        let terminal = TerminalAudit {
+            grant: input.authority.common.grant_audit().cloned(),
+            outcome,
+            method: HttpMethod::Post,
+            operation_id: format!(
+                "proposals.{}.{}",
+                document.action_id,
+                proposal_operation_name(input.operation)
             ),
-        )?;
+            entity_id: None,
+            action_id: Some(document.action_id.clone()),
+            package_revision: self.expected.activation_id.clone(),
+            selected_access_profile: input.authority.common.access_profile().to_owned(),
+            purpose_present: input.authority.common.purpose().is_some(),
+            principal_reference: Some(binding.principal_reference.clone()),
+            record_reference: None,
+            record_revision: None,
+            result_count: Some(usize::from(count)),
+            field_set_reference: None,
+            correlation: input.correlation.clone(),
+        };
+        let entry = if outcome == TerminalAuditOutcome::Refused {
+            terminal_entry(self.audit.profile(), terminal)
+        } else {
+            action_terminal_entry(
+                self.audit.profile(),
+                terminal,
+                &format!(
+                    "proposal:{}:{}",
+                    document.proposal_id, document.header.workflow_revision
+                ),
+            )
+        }?;
         let mut record = entry.record().clone();
         record["authorityKind"] = json!(if input.authority.is_system() {
             "system"
@@ -2336,6 +2419,7 @@ impl MutationTransaction {
                 write_fields,
                 target.before.as_ref(),
                 self.field_encryption.as_deref(),
+                PlanWriteOrigin::ProposalApplication,
             )
             .await?;
             let reference = record_reference(
@@ -2767,7 +2851,10 @@ impl MutationTransaction {
         if let Some(title) = &document.action_title {
             value["title"] = json!(title);
         }
-        if let Some(blocked) = &document.blocked_reason {
+        // `blockedReason` is the public package-compatibility marker. A
+        // refused manual application is exposed through `applicationStatus`
+        // instead, whose reason vocabulary already includes that outcome.
+        if let Some(blocked @ "package-changed") = document.blocked_reason.as_deref() {
             value["blockedReason"] = json!(blocked);
         }
         let workflow = if document.header.current_proposal_erased {
@@ -3033,8 +3120,13 @@ impl MutationTransaction {
                 {
                     link["availability"]["reason"] = json!("contract-changed");
                     link["availability"]["recovery"] = json!("refresh");
-                } else if document.blocked_reason.is_some() {
-                    link["availability"]["reason"] = json!("contract-changed");
+                } else if let Some(blocked_reason) = document.blocked_reason.as_deref() {
+                    link["availability"]["reason"] =
+                        json!(if blocked_reason == "application-refused" {
+                            "invalid-input"
+                        } else {
+                            "contract-changed"
+                        });
                     link["availability"]["recovery"] = json!("correct-input");
                 } else if operation == ProposalOperation::Retry && !retry_available {
                     // A review that has ended leaves nothing to retry: the
@@ -3173,9 +3265,13 @@ async fn proposal_application_status(
         "submitted" => {}
         _ => return Err(MutationError::PreconditionFailed),
     }
-    if document.blocked_reason.is_some() && !automatic {
+    if let Some(blocked_reason) = document.blocked_reason.as_deref().filter(|_| !automatic) {
         value["state"] = json!("blocked");
-        value["reason"] = json!("contract-changed");
+        value["reason"] = json!(if blocked_reason == "application-refused" {
+            "application-refused"
+        } else {
+            "contract-changed"
+        });
         value["recovery"] = json!("correct-input");
         return Ok(value);
     }

@@ -116,6 +116,8 @@ def rosters(
         f"evidence-oid4vci-{tag}-linux-amd64",
         f"registry-manifest-{tag}-linux-amd64",
     ]
+    if release_roster.rstack_in_release(parsed):
+        common.insert(0, f"rstack-{tag}-linux-amd64")
     if release_roster.relay_in_release(parsed):
         common.extend(
             [
@@ -127,7 +129,7 @@ def rosters(
         common.remove(f"mint-{tag}-linux-amd64")
     if release_roster.render_in_release(parsed):
         common.append(f"registry-render-{tag}-linux-amd64")
-    if release_roster.coordinator_in_release(parsed):
+    if release_roster.coordinator_binaries_in_release(parsed):
         common.extend(
             [
                 f"coordinator-{tag}-linux-amd64",

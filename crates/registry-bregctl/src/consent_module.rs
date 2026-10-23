@@ -125,6 +125,7 @@ pub(crate) fn add_consent_module(
         module: plan.module.clone(),
         bytes: plan.module_text.clone().into_bytes(),
         assets: Vec::new(),
+        diagnostics: Vec::new(),
     });
     let mut candidate = CapturedProjectSource {
         project_path: captured_project_path,
@@ -132,6 +133,7 @@ pub(crate) fn add_consent_module(
         project_bytes: rendered.clone(),
         project_assets,
         modules,
+        diagnostics: Vec::new(),
     };
     let (compiled, compiles) =
         match compile_captured_project(&candidate, ProfileArg::Authoring, COMMAND) {

@@ -187,6 +187,8 @@ class UnitPreparationTest(unittest.TestCase):
             self.assertEqual(expected, {path.name for path in output.iterdir()})
             pinned = (output / "discovery-v1.2.3-install.sh").read_text()
             self.assertIn('default_version="v1.2.3"', pinned)
+            self.assertIn('release_namespace="discovery"', pinned)
+            self.assertIn('numbered_platforms="linux-amd64"', pinned)
             self.assertEqual(1, len(installer_output))
             self.assertIn("toolset v1.2.3 installed", installer_output[0])
 

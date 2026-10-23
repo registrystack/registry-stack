@@ -36,7 +36,7 @@ pub fn report_documents() -> Result<BTreeMap<&'static str, String>, serde_json::
         .into_root_schema_for::<crate::report::CliReport>();
     let mut value = serde_json::to_value(schema)?;
     value["$id"] = Value::String(
-        "https://id.registrystack.org/schemas/casework/report/report.v1alpha1.schema.json".into(),
+        "https://id.registrystack.org/schemas/casework/report/report.v1alpha2.schema.json".into(),
     );
     value["title"] = Value::String("Casework command report".into());
     value["properties"] = serde_json::json!({"apiVersion":{"const":crate::report::REPORT_API_VERSION},"kind":{"const":crate::report::REPORT_KIND}});

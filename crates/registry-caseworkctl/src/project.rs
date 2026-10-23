@@ -3,7 +3,9 @@ use anyhow::{bail, Context, Result};
 use registry_casework::{
     open_audit, package_limits, secret_resolver, PostgresStore, RuntimeConfig, PACKAGE_COMMAND,
 };
-use registry_casework_core::{CaseworkProject, ConfigLoadError, ReviewContextPolicy};
+use registry_casework_core::{
+    CaseworkProject, CaseworkRole, ClockPolicy, ConfigLoadError, ReviewContextPolicy,
+};
 use registry_platform_config::{plan_package, write_package, SecretResolver};
 use registry_platform_yaml::{Decoded, Diagnostic, Report, Severity, Source};
 use serde_json::{json, Value};
@@ -548,12 +550,43 @@ pub(super) fn explain(project: &Path) -> Result<Value> {
     let policy = load_and_check_policy(project)?;
     let reviews = policy.review_policies.iter().map(|review| {
         let compiled = review.compile(&policy)?;
+        let used_queues = review
+            .stages
+            .iter()
+            .map(|stage| stage.queue.clone())
+            .chain(review.routing.iter().map(|rule| rule.queue.clone()))
+            .chain(compiled.dependencies.clocks.iter().flat_map(|clock| match clock {
+                ClockPolicy::Stage { steps, .. } => steps
+                    .iter()
+                    .map(|step| step.action.reassign.queue.clone())
+                    .collect::<Vec<_>>(),
+                ClockPolicy::Subject { .. } => Vec::new(),
+            }))
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        let deciding_profiles = review
+            .stages
+            .iter()
+            .flat_map(|stage| stage.deciding_profiles.iter().cloned())
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        let eligible_deciding_profiles = policy
+            .access_profiles
+            .iter()
+            .filter(|profile| matches!(profile.role, CaseworkRole::Staff | CaseworkRole::Supervisor))
+            .map(|profile| profile.id.clone())
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
         let custody = match review.context {
             ReviewContextPolicy::Submitted => "admitted bounded snapshot",
             ReviewContextPolicy::CurrentSource { .. } => "fresh human caller read; source values are ephemeral",
         };
         Ok(json!({
             "binding": compiled.identity,
+            "label": review.label,
             "purpose": review.purpose,
             "context": review.context,
             "contextCustody": custody,
@@ -563,6 +596,10 @@ pub(super) fn explain(project: &Path) -> Result<Value> {
             "outcomes": review.outcomes,
             "routing": review.routing,
             "routingFields": review.routing_fields(),
+            "usedQueues": used_queues,
+            "decidingProfiles": deciding_profiles,
+            "eligibleDecidingProfiles": eligible_deciding_profiles,
+            "dependencyScope": "whole-project access profiles, queues, teams and inbox; policy-referenced clocks, calendars, context provider, task templates and trusted producers",
             "clocks": review.clocks,
             "dependencies": compiled.dependencies,
             "retention": review.retention,
@@ -571,7 +608,7 @@ pub(super) fn explain(project: &Path) -> Result<Value> {
         }))
     }).collect::<std::result::Result<Vec<Value>,registry_casework_core::ReviewPolicyError>>()?;
     Ok(
-        json!({"ok":true,"command":"explain","project":policy.project,"reviewPolicies":reviews,"contextProviders":policy.context_providers,"staffing":{"next":"due ordered eligible visible tasks","holdings":"claimed or assigned tasks under current visibility","caseload":"atomic preview and revision-fenced apply","routing":"once per task or stage from compiled minimized fields","clockRecompute":"pinned policy closure"},"authority":"producer, human reviewer and downstream executor authenticate independently"}),
+        json!({"ok":true,"command":"explain","project":policy.project,"reviewPolicies":reviews,"contextProviders":policy.context_providers,"clocks":policy.clocks,"calendars":policy.calendars,"trustedProducers":policy.trusted_producers,"staffing":{"next":"due ordered eligible visible tasks","holdings":"claimed or assigned tasks under current visibility","caseload":"atomic preview and revision-fenced apply","routing":"once per task or stage from compiled minimized fields","clockRecompute":"pinned policy closure"},"authority":"producer, human reviewer and downstream executor authenticate independently"}),
     )
 }
 pub(super) fn test(project: &Path, deny_warnings: bool) -> Result<Value> {

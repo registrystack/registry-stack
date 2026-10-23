@@ -41,6 +41,12 @@ INSTALLERS = (
     Installer("crates/registry-casework/install.sh", "Registry Casework"),
     Installer("crates/registry-scheduling/install.sh", "Registry Scheduling"),
     Installer("crates/registry-evidencectl/install.sh", "the Evidence toolset"),
+    Installer("crates/registry-breg-mcp/install.sh", "Registry BReg MCP"),
+    Installer("crates/registry-breg-review/install.sh", "Registry BReg Review"),
+    Installer("crates/registry-coordinator/install.sh", "Registry Coordinator"),
+    Installer("crates/registry-manifest-cli/install.sh", "Registry Manifest"),
+    Installer("crates/registry-messaging/install.sh", "Registry Messaging"),
+    Installer("crates/registry-render/install.sh", "Registry Render"),
     Installer("crates/registry-rstack/install.sh", "Registry Stack"),
     Installer(
         "crates/registry-discovery/install.sh",

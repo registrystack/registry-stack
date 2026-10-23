@@ -550,7 +550,7 @@ fn a_project_check_reads_the_journeys_and_the_development_clients_it_holds() {
     let output = bregctl(&["check", path(&project)]);
     assert_eq!(output.status.code(), Some(0), "{output:?}");
     let human = String::from_utf8_lossy(&output.stdout);
-    assert!(human.contains("0 errors, 2 warnings in 4 files"), "{human}");
+    assert!(human.contains("0 errors, 1 warning in 4 files"), "{human}");
 
     for (relative, with_project) in [("tests/journeys.yaml", true), ("dev-clients.yaml", false)] {
         let file = project.join(relative);
@@ -639,7 +639,7 @@ fn a_project_check_reads_every_yaml_file_under_tests() {
     let output = bregctl(&["check", path(&project)]);
     assert_eq!(output.status.code(), Some(0), "{output:?}");
     let human = String::from_utf8_lossy(&output.stdout);
-    assert!(human.contains("0 errors, 2 warnings in 5 files"), "{human}");
+    assert!(human.contains("0 errors, 1 warning in 5 files"), "{human}");
 
     let second = project.join("tests/more-journeys.yml");
     fs::write(&second, format!("{journeys}unexpected: true\n")).unwrap();

@@ -1011,6 +1011,18 @@
         "authority": {
           "type": "string"
         },
+        "calendars": {
+          "items": {
+            "$ref": "#/$defs/CalendarPolicy"
+          },
+          "type": "array"
+        },
+        "clocks": {
+          "items": {
+            "$ref": "#/$defs/ClockPolicy"
+          },
+          "type": "array"
+        },
         "contextProviders": {
           "items": {
             "$ref": "#/$defs/ReviewContextProviderPolicy"
@@ -1028,12 +1040,21 @@
         },
         "staffing": {
           "$ref": "#/$defs/ExplainStaffing"
+        },
+        "trustedProducers": {
+          "items": {
+            "$ref": "#/$defs/ReviewProducerPolicy"
+          },
+          "type": "array"
         }
       },
       "required": [
         "project",
         "reviewPolicies",
         "contextProviders",
+        "clocks",
+        "calendars",
+        "trustedProducers",
         "staffing",
         "authority"
       ],
@@ -1057,11 +1078,32 @@
         "contextCustody": {
           "type": "string"
         },
+        "decidingProfiles": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "dependencies": {
           "$ref": "#/$defs/ReviewPolicyDependencies"
         },
+        "dependencyScope": {
+          "type": "string"
+        },
         "displaySchema": {
           "x-registry-foreign": "json-schema-2020-12"
+        },
+        "eligibleDecidingProfiles": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "label": {
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "outcomes": {
           "items": {
@@ -1107,6 +1149,12 @@
             "$ref": "#/$defs/ExplainStage"
           },
           "type": "array"
+        },
+        "usedQueues": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         }
       },
       "required": [
@@ -1121,6 +1169,10 @@
         "outcomes",
         "routing",
         "routingFields",
+        "usedQueues",
+        "decidingProfiles",
+        "eligibleDecidingProfiles",
+        "dependencyScope",
         "dependencies",
         "retention",
         "recovery",
@@ -1173,6 +1225,12 @@
         },
         "id": {
           "$ref": "#/$defs/LocalId"
+        },
+        "label": {
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "negativeDecisions": {
           "$ref": "#/$defs/ReviewNegativeDecisionMode"
@@ -2335,6 +2393,17 @@
         "id": {
           "$ref": "#/$defs/LocalId"
         },
+        "label": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DisplayText"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional presentation label. Stable references use `id`."
+        },
         "queue": {
           "type": "string"
         },
@@ -2949,7 +3018,7 @@
       "type": "string"
     }
   },
-  "$id": "https://id.registrystack.org/schemas/casework/report/report.v1alpha1.schema.json",
+  "$id": "https://id.registrystack.org/schemas/casework/report/report.v1alpha2.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "allOf": [
     {
@@ -2992,7 +3061,7 @@
       "additionalProperties": false,
       "properties": {
         "apiVersion": {
-          "const": "id.registrystack.org/formats/casework/report/v1alpha1",
+          "const": "id.registrystack.org/formats/casework/report/v1alpha2",
           "type": "string"
         },
         "command": {
@@ -3040,7 +3109,7 @@
       "additionalProperties": false,
       "properties": {
         "apiVersion": {
-          "const": "id.registrystack.org/formats/casework/report/v1alpha1",
+          "const": "id.registrystack.org/formats/casework/report/v1alpha2",
           "type": "string"
         },
         "command": {
@@ -3088,7 +3157,7 @@
       "additionalProperties": false,
       "properties": {
         "apiVersion": {
-          "const": "id.registrystack.org/formats/casework/report/v1alpha1",
+          "const": "id.registrystack.org/formats/casework/report/v1alpha2",
           "type": "string"
         },
         "command": {
@@ -3136,7 +3205,7 @@
       "additionalProperties": false,
       "properties": {
         "apiVersion": {
-          "const": "id.registrystack.org/formats/casework/report/v1alpha1",
+          "const": "id.registrystack.org/formats/casework/report/v1alpha2",
           "type": "string"
         },
         "command": {
@@ -3184,7 +3253,7 @@
       "additionalProperties": false,
       "properties": {
         "apiVersion": {
-          "const": "id.registrystack.org/formats/casework/report/v1alpha1",
+          "const": "id.registrystack.org/formats/casework/report/v1alpha2",
           "type": "string"
         },
         "command": {
@@ -3232,7 +3301,7 @@
       "additionalProperties": false,
       "properties": {
         "apiVersion": {
-          "const": "id.registrystack.org/formats/casework/report/v1alpha1",
+          "const": "id.registrystack.org/formats/casework/report/v1alpha2",
           "type": "string"
         },
         "command": {
@@ -3280,7 +3349,7 @@
       "additionalProperties": false,
       "properties": {
         "apiVersion": {
-          "const": "id.registrystack.org/formats/casework/report/v1alpha1",
+          "const": "id.registrystack.org/formats/casework/report/v1alpha2",
           "type": "string"
         },
         "command": {
@@ -3328,7 +3397,7 @@
       "additionalProperties": false,
       "properties": {
         "apiVersion": {
-          "const": "id.registrystack.org/formats/casework/report/v1alpha1",
+          "const": "id.registrystack.org/formats/casework/report/v1alpha2",
           "type": "string"
         },
         "command": {
@@ -3376,7 +3445,7 @@
       "additionalProperties": false,
       "properties": {
         "apiVersion": {
-          "const": "id.registrystack.org/formats/casework/report/v1alpha1",
+          "const": "id.registrystack.org/formats/casework/report/v1alpha2",
           "type": "string"
         },
         "command": {
@@ -3424,7 +3493,7 @@
       "additionalProperties": false,
       "properties": {
         "apiVersion": {
-          "const": "id.registrystack.org/formats/casework/report/v1alpha1",
+          "const": "id.registrystack.org/formats/casework/report/v1alpha2",
           "type": "string"
         },
         "command": {
@@ -3472,7 +3541,7 @@
       "additionalProperties": false,
       "properties": {
         "apiVersion": {
-          "const": "id.registrystack.org/formats/casework/report/v1alpha1",
+          "const": "id.registrystack.org/formats/casework/report/v1alpha2",
           "type": "string"
         },
         "command": {
@@ -3520,7 +3589,7 @@
       "additionalProperties": false,
       "properties": {
         "apiVersion": {
-          "const": "id.registrystack.org/formats/casework/report/v1alpha1",
+          "const": "id.registrystack.org/formats/casework/report/v1alpha2",
           "type": "string"
         },
         "command": {
@@ -3568,7 +3637,7 @@
       "additionalProperties": false,
       "properties": {
         "apiVersion": {
-          "const": "id.registrystack.org/formats/casework/report/v1alpha1",
+          "const": "id.registrystack.org/formats/casework/report/v1alpha2",
           "type": "string"
         },
         "command": {
@@ -3616,7 +3685,7 @@
       "additionalProperties": false,
       "properties": {
         "apiVersion": {
-          "const": "id.registrystack.org/formats/casework/report/v1alpha1",
+          "const": "id.registrystack.org/formats/casework/report/v1alpha2",
           "type": "string"
         },
         "command": {
@@ -3664,7 +3733,7 @@
       "additionalProperties": false,
       "properties": {
         "apiVersion": {
-          "const": "id.registrystack.org/formats/casework/report/v1alpha1",
+          "const": "id.registrystack.org/formats/casework/report/v1alpha2",
           "type": "string"
         },
         "command": {
@@ -3712,7 +3781,7 @@
       "additionalProperties": false,
       "properties": {
         "apiVersion": {
-          "const": "id.registrystack.org/formats/casework/report/v1alpha1",
+          "const": "id.registrystack.org/formats/casework/report/v1alpha2",
           "type": "string"
         },
         "command": {
@@ -3760,7 +3829,7 @@
       "additionalProperties": false,
       "properties": {
         "apiVersion": {
-          "const": "id.registrystack.org/formats/casework/report/v1alpha1",
+          "const": "id.registrystack.org/formats/casework/report/v1alpha2",
           "type": "string"
         },
         "command": {
@@ -3808,7 +3877,7 @@
       "additionalProperties": false,
       "properties": {
         "apiVersion": {
-          "const": "id.registrystack.org/formats/casework/report/v1alpha1",
+          "const": "id.registrystack.org/formats/casework/report/v1alpha2",
           "type": "string"
         },
         "command": {
@@ -3856,7 +3925,7 @@
       "additionalProperties": false,
       "properties": {
         "apiVersion": {
-          "const": "id.registrystack.org/formats/casework/report/v1alpha1",
+          "const": "id.registrystack.org/formats/casework/report/v1alpha2",
           "type": "string"
         },
         "command": {
@@ -3903,7 +3972,7 @@
   ],
   "properties": {
     "apiVersion": {
-      "const": "id.registrystack.org/formats/casework/report/v1alpha1"
+      "const": "id.registrystack.org/formats/casework/report/v1alpha2"
     },
     "kind": {
       "const": "CaseworkReport"

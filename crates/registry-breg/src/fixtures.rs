@@ -219,6 +219,16 @@ pub enum FixtureError {
     DuplicateIdentifier,
     LogicalReferenceRefused,
     LogicalReference(LogicalReferenceRefusal),
+    ExpectedFieldNotReadable {
+        step_id: String,
+        field: String,
+        access_profile: String,
+    },
+    RequiredActionInputMissing {
+        step_id: String,
+        input: String,
+        action: String,
+    },
     /// A create names a row boundary field the profile cannot write. The INSERT
     /// policy pins that field to the caller's claim, so it has to stay writable.
     CreateRowBoundaryNotWritable,
@@ -325,6 +335,28 @@ impl fmt::Display for FixtureError {
                 "journeys[{journey_index}] `{journey_id}`: {message}"
             );
         }
+        if let Self::ExpectedFieldNotReadable {
+            step_id,
+            field,
+            access_profile,
+        } = self
+        {
+            return write!(
+                formatter,
+                "step `{step_id}` expects field `{field}`, which access profile `{access_profile}` cannot read"
+            );
+        }
+        if let Self::RequiredActionInputMissing {
+            step_id,
+            input,
+            action,
+        } = self
+        {
+            return write!(
+                formatter,
+                "step `{step_id}` does not send required input `{input}` for Action `{action}`"
+            );
+        }
         formatter.write_str(match self {
             Self::JourneyTooLarge => "the fixture journey exceeded a fixed bound",
             Self::JourneyShapeRefused => "the fixture journey shape was refused",
@@ -355,7 +387,9 @@ impl fmt::Display for FixtureError {
             | Self::StepFailed { .. }
             | Self::JourneyDocument(_)
             | Self::ReceiptDocument(_)
-            | Self::JourneyRefused { .. } => {
+            | Self::JourneyRefused { .. }
+            | Self::ExpectedFieldNotReadable { .. }
+            | Self::RequiredActionInputMissing { .. } => {
                 unreachable!("handled above")
             }
         })
@@ -1336,6 +1370,7 @@ pub fn validate_fixture_journeys(
                         &step.request,
                         action,
                         &capture_sources,
+                        &step.id,
                         step.expect.outcome == ExpectedOutcome::Refusal
                             && step.expect.status == 400
                             && step.expect.problem_code.as_deref() == Some("request.invalid"),
@@ -1344,6 +1379,8 @@ pub fn validate_fixture_journeys(
                         &step.expect,
                         operation,
                         &profile.readable_fields,
+                        &step.id,
+                        &step.access_profile,
                         capture.is_some(),
                         !step.capture_results.is_empty(),
                     )?;
@@ -1438,6 +1475,8 @@ pub fn validate_fixture_journeys(
                         &expect,
                         operation,
                         &expected_response_fields,
+                        &step.id,
+                        &step.access_profile,
                         capture.is_some(),
                         !step.capture_results.is_empty(),
                     )?;
@@ -1804,12 +1843,20 @@ fn validate_immediate_action_fields(
     request: &ActionSource,
     action: &CompiledAction,
     captures: &BTreeMap<String, CaptureSource>,
+    step_id: &str,
     expects_invalid_request: bool,
 ) -> Result<(), FixtureError> {
     match request {
         ActionSource::TargetConditions { input } => {
             let required = condition_input_api_names(action);
-            validate_action_input_map(input, action, captures, Some(&required), false)?;
+            validate_action_input_map(
+                input,
+                action,
+                captures,
+                Some(&required),
+                Some(step_id),
+                false,
+            )?;
             if input.keys().collect::<BTreeSet<_>>() != required.iter().collect::<BTreeSet<_>>() {
                 return Err(FixtureError::LogicalReferenceRefused);
             }
@@ -1819,7 +1866,14 @@ fn validate_immediate_action_fields(
             preconditions,
             idempotency_key,
         } => {
-            validate_action_input_map(input, action, captures, None, expects_invalid_request)?;
+            validate_action_input_map(
+                input,
+                action,
+                captures,
+                None,
+                Some(step_id),
+                expects_invalid_request,
+            )?;
             let condition_inputs = condition_input_api_names(action);
             for (name, condition) in preconditions {
                 if !condition_inputs.contains(name) {
@@ -1858,6 +1912,7 @@ fn validate_action_input_map(
     action: &CompiledAction,
     captures: &BTreeMap<String, CaptureSource>,
     accepted_names: Option<&BTreeSet<String>>,
+    step_id: Option<&str>,
     expects_invalid_request: bool,
 ) -> Result<(), FixtureError> {
     let inputs_by_api_name = action
@@ -1898,7 +1953,14 @@ fn validate_action_input_map(
             && accepted_names.is_none_or(|accepted| accepted.contains(&declared.api_name))
             && !input.contains_key(&declared.api_name)
         {
-            return Err(FixtureError::LogicalReferenceRefused);
+            return Err(match step_id {
+                Some(step_id) => FixtureError::RequiredActionInputMissing {
+                    step_id: step_id.to_owned(),
+                    input: declared.api_name.clone(),
+                    action: action.id.clone(),
+                },
+                None => FixtureError::LogicalReferenceRefused,
+            });
         }
     }
     if canonical_size(&Value::Object(input.clone()))? > MAX_BODY_BYTES {
@@ -2660,6 +2722,8 @@ fn validate_expectation(
     expectation: &ExpectationSource,
     operation: Operation,
     readable_fields: &BTreeSet<String>,
+    step_id: &str,
+    access_profile: &str,
     captures: bool,
     captures_results: bool,
 ) -> Result<(), FixtureError> {
@@ -2686,10 +2750,20 @@ fn validate_expectation(
         {
             return Err(FixtureError::JourneyShapeRefused);
         }
+    } else if let Some(field) = expectation
+        .fields
+        .keys()
+        .find(|field| !readable_fields.contains(*field))
+    {
+        return Err(FixtureError::ExpectedFieldNotReadable {
+            step_id: step_id.to_owned(),
+            field: field.clone(),
+            access_profile: access_profile.to_owned(),
+        });
     } else if expectation
         .fields
         .keys()
-        .any(|field| !readable_fields.contains(field) || field.len() > MAX_IDENTIFIER_BYTES)
+        .any(|field| field.len() > MAX_IDENTIFIER_BYTES)
         || expectation.members.as_ref().is_some_and(|members| {
             members.values().any(|member| {
                 member.fields.keys().any(|field| {
@@ -6406,6 +6480,8 @@ mod tests {
                 &expectation,
                 Operation::Import,
                 &profile.readable_fields,
+                "import-records",
+                "loader",
                 false,
                 false,
             ),
@@ -6443,13 +6519,77 @@ mod tests {
             compile_project_with_assets(&project, &[], &[], CompileProfile::Authoring).unwrap();
         let action = &registry.actions().actions[0];
         let input = Map::from_iter([("displayLabel".to_owned(), json!("A label"))]);
-        assert!(validate_action_input_map(&input, action, &BTreeMap::new(), None, false).is_ok());
+        assert!(
+            validate_action_input_map(&input, action, &BTreeMap::new(), None, None, false).is_ok()
+        );
         let null = Map::from_iter([("displayLabel".to_owned(), Value::Null)]);
         assert_eq!(
-            validate_action_input_map(&null, action, &BTreeMap::new(), None, false),
+            validate_action_input_map(&null, action, &BTreeMap::new(), None, None, false),
             Err(FixtureError::LogicalReferenceRefused)
         );
-        assert!(validate_action_input_map(&null, action, &BTreeMap::new(), None, true).is_ok());
+        assert!(
+            validate_action_input_map(&null, action, &BTreeMap::new(), None, None, true).is_ok()
+        );
+    }
+
+    #[test]
+    fn journey_refusal_names_the_step_action_and_missing_required_input() {
+        let project = parse_project_yaml(include_bytes!(
+            "../tests/fixtures/fixed-optional-action-input.yaml"
+        ))
+        .unwrap();
+        let registry =
+            compile_project_with_assets(&project, &[], &[], CompileProfile::Authoring).unwrap();
+        let mut action = registry.actions().actions[0].clone();
+        action.inputs[0].required = true;
+
+        assert_eq!(
+            validate_action_input_map(
+                &Map::new(),
+                &action,
+                &BTreeMap::new(),
+                None,
+                Some("register"),
+                false,
+            ),
+            Err(FixtureError::RequiredActionInputMissing {
+                step_id: "register".to_owned(),
+                input: "displayLabel".to_owned(),
+                action: "create-entry".to_owned(),
+            })
+        );
+    }
+
+    #[test]
+    fn journey_refusal_names_the_step_profile_and_unreadable_expected_field() {
+        let expectation = ExpectationSource {
+            outcome: ExpectedOutcome::Success,
+            status: 200,
+            fields: Map::from_iter([("status".to_owned(), json!("active"))]),
+            count: None,
+            members: None,
+            problem_code: None,
+            refusal_code: None,
+            entity_id: None,
+            field_id: None,
+        };
+
+        assert_eq!(
+            validate_expectation(
+                &expectation,
+                Operation::Get,
+                &BTreeSet::new(),
+                "read-facility",
+                "facility-reader",
+                false,
+                false,
+            ),
+            Err(FixtureError::ExpectedFieldNotReadable {
+                step_id: "read-facility".to_owned(),
+                field: "status".to_owned(),
+                access_profile: "facility-reader".to_owned(),
+            })
+        );
     }
 
     #[test]

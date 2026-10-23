@@ -225,9 +225,17 @@ async fn shape_journey(change: Change) {
         json!([{"id":"local-review","protocol":"id.registrystack.org/protocols/review/v1"}]);
     let policy =
         json!({"id":"name-correction","version":"1","digest":format!("sha256:{}", "b".repeat(64))});
-    source["actions"][0]["execution"]["proposal"]["review"] = json!({"type":"required","authority":"local-review","source":"proposal-test","policy":policy});
-    let authority =
-        shape_authority::LocalAuthority::start(serde_json::from_value(policy).unwrap()).await;
+    let review_source = if matches!(&change, Change::DisplayOnly) {
+        "shared.facility.registry:v1"
+    } else {
+        "proposal-test"
+    };
+    source["actions"][0]["execution"]["proposal"]["review"] = json!({"type":"required","authority":"local-review","source":review_source,"policy":policy});
+    let authority = shape_authority::LocalAuthority::start_for_registry(
+        serde_json::from_value(policy).unwrap(),
+        review_source,
+    )
+    .await;
     let configured = authority.registry.clone();
     let fixture = client_http::ClientFixture::start_with_mutations(
         compile(source.clone()),
@@ -811,9 +819,6 @@ mod shape_authority {
         }
     }
     impl LocalAuthority {
-        pub async fn start(policy: PolicyBinding) -> Self {
-            Self::start_for_registry(policy, "proposal-test").await
-        }
         pub async fn start_for_registry(policy: PolicyBinding, registry_id: &str) -> Self {
             let state = Arc::new(StateData {
                 policy,

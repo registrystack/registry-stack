@@ -69,6 +69,18 @@ Do these tasks in order. Each one links to the section with the details.
 
 ## Install and package
 
+Starting with v0.44.0, release packaging includes `coordinator` and
+`coordinatorctl` for Linux amd64, Linux arm64 and macOS arm64. Once that release
+is published, install both using its checksum-verifying installer:
+
+```sh
+curl -fsSL https://github.com/registrystack/registry-stack/releases/download/v0.44.0/coordinator-v0.44.0-install.sh | bash
+```
+
+The installer keeps macOS FIPS libraries beside their executables. The binary
+release does not imply that the Coordinator container image has been released;
+its image-specific security evidence remains a separate gate.
+
 Build the two local binaries from the maintained checkout. On Linux, install the
 completed binaries in a service-owned executable directory:
 

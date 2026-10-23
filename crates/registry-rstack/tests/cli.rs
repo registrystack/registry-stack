@@ -20,14 +20,17 @@ fn root_command_metadata_states_the_human_default() {
 }
 
 #[test]
-fn version_and_root_help_work_without_an_installation() {
+fn version_matches_the_shared_build_identity() {
     let version = run(&["--version"]);
     assert!(version.status.success());
     assert_eq!(
         String::from_utf8(version.stdout).unwrap(),
-        "rstack 0.44.0\n"
+        format!("rstack {}\n", registry_platform_buildinfo::DISPLAY_VERSION)
     );
+}
 
+#[test]
+fn root_help_works_without_an_installation() {
     let help = run(&[]);
     assert!(help.status.success());
     let text = String::from_utf8(help.stdout).unwrap();

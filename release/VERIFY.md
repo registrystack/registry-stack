@@ -114,9 +114,13 @@ deployment path depends on is among the ones actually checked, not among the one
 
 Starting with v0.33.0, each macOS arm64 native executable asset is a
 checksum-covered `.tar.gz` archive. Its name is the executable asset stem plus
-`.tar.gz`. The archive is flat and contains exactly one same-stem executable,
-`THIRD_PARTY_NOTICES`, and one or more AWS-LC-FIPS shared libraries. Linux
-assets and releases through v0.32.0 retain their existing formats.
+`.tar.gz`, except Registry Manifest, which retains its historical flat
+executable format. Every archive is flat and contains exactly one same-stem
+executable and `THIRD_PARTY_NOTICES`. Archives for commands linked to
+AWS-LC-FIPS contain one or more shared libraries. Starting with v0.44.0,
+`rstack` and `discovery` are plain two-file archives with no dylib;
+`discoveryctl` and the other archived commands retain their FIPS libraries.
+Linux assets and releases through v0.32.0 retain their existing formats.
 
 After authenticating `SHA256SUMS` and checking every payload, verify the closed
 archive roster without extracting over an existing path:
@@ -129,7 +133,13 @@ if (( major > 0 || minor >= 33 )); then
   test -e "${bundles[0]}"
   for bundle in "${bundles[@]}"; do
     stem="${bundle%.tar.gz}"
-    tar -tzf "${bundle}" | awk -v executable="${stem}" '
+    require_libraries=1
+    case "${stem}" in
+      rstack-*|discovery-v*) require_libraries=0 ;;
+    esac
+    tar -tzf "${bundle}" | awk \
+      -v executable="${stem}" \
+      -v require_libraries="${require_libraries}" '
       {
         if (seen[$0]++) { bad = 1; exit }
         if ($0 == executable) { binaries++; next }
@@ -139,7 +149,10 @@ if (( major > 0 || minor >= 33 )); then
         }
         bad = 1; exit
       }
-      END { exit (bad || binaries != 1 || notices != 1 || libraries < 1) }
+      END {
+        exit (bad || binaries != 1 || notices != 1 ||
+          (require_libraries ? libraries < 1 : libraries != 0))
+      }
     '
   done
 fi
@@ -195,9 +208,7 @@ manifest="registry-stack-${tag}-release-manifest.json"
 jq -e --arg tag "${tag}" '
   ($tag | capture("^v(?<major>[0-9]+)\\.(?<minor>[0-9]+)\\.(?<patch>[0-9]+)$") |
     {major: (.major | tonumber), minor: (.minor | tonumber)}) as $version |
-  (if ($version.major > 0 or $version.minor >= 41)
-   then ["breg", "breg-mcp", "breg-review", "casework", "coordinator", "discovery", "evidence", "evidence-oid4vci", "messaging", "registry-render", "scheduling"]
-   elif $version.minor >= 39
+  (if ($version.major > 0 or $version.minor >= 39)
    then ["breg", "breg-mcp", "breg-review", "casework", "discovery", "evidence", "evidence-oid4vci", "messaging", "registry-render", "scheduling"]
    elif $version.minor >= 38
    then ["breg", "breg-mcp", "breg-review", "casework", "discovery", "evidence", "evidence-oid4vci", "messaging", "registry-render", "relay", "scheduling"]
@@ -262,12 +273,15 @@ and Registry Scheduling joins at `v0.33.0`. The citizen MCP gateway and review
 page (`breg-mcp` and `breg-review`), Registry Messaging, Registry Render, and
 the separate Evidence OID4VCI adapter image join at `v0.38.0`.
 Registry Relay's final numbered release is `v0.38.0`; releases from `v0.39.0`
-omit it from the image and payload rosters. Registry Coordinator runtime publication remains held. Its first binary and image release is
-set by `COORDINATOR_FIRST_RELEASE` once publication prerequisites are ready.
+omit it from the image and payload rosters. Registry Coordinator binaries join
+in `v0.44.0`, as set by `COORDINATOR_BINARY_FIRST_RELEASE`. Its image and client
+publication remain held; `COORDINATOR_FIRST_RELEASE` and
+`COORDINATOR_CLIENT_FIRST_RELEASE` remain unset until their separate
+publication prerequisites are ready.
 `BREG_SERVICES_FIRST_RELEASE`, `MESSAGING_FIRST_RELEASE`,
 `RENDER_FIRST_RELEASE`, `EVIDENCE_OID4VCI_IMAGE_FIRST_RELEASE`, and
-`COORDINATOR_FIRST_RELEASE` in `release/scripts/release_roster.py` own these
-boundaries. v0.38.0 also adds the
+the three Coordinator release constants in `release/scripts/release_roster.py`
+own these boundaries. v0.38.0 also adds the
 Linux amd64 Scheduling runtime and `discoveryctl` assets
 beside the existing Discovery runtime asset. Earlier releases require a source
 build of `discoveryctl`. Mint is retired from `v0.31.0`; historical releases
@@ -348,12 +362,20 @@ when the source revision label changes. The temporary rootfs is deleted after th
 decision and is not a release asset. `release/OPERATIONS.md` gives the exact
 private-candidate recovery and evidence-regeneration procedure for a failed gate.
 
-From `v0.38.0`, the checksum-covered Linux amd64 binary payload also includes `discoveryctl`
-and the standalone Scheduling runtime, alongside their existing runtime and operator artifacts.
-The Coordinator runtime `coordinator` and operator tool `coordinatorctl` join the
-verified binary payload only when `COORDINATOR_FIRST_RELEASE` enables publication.
-Until then, build them from the release source. The unified client packages carry no
-Coordinator client; build the `registry-coordinator-client` crate and its bindings from source.
+From `v0.38.0` through `v0.43.0`, the checksum-covered Linux amd64 binary
+payload also includes `discoveryctl` and the standalone Scheduling runtime,
+alongside their existing runtime and operator artifacts. The full Stack build
+roster from `v0.44.0` ships all 19 binary names for Linux amd64, Linux arm64,
+and macOS arm64, with all 11 installer pairs. An independent numbered
+Discovery release currently ships its two binaries and installer pair for
+Linux amd64 only. A Stack release that selects that release carries its exact
+published platform inventory forward through the distribution lock and does
+not rebuild or relabel Discovery assets for other platforms. The Coordinator
+runtime `coordinator` and
+operator tool `coordinatorctl` join that verified binary payload under
+`COORDINATOR_BINARY_FIRST_RELEASE`; its separately governed image remains held.
+The unified client packages carry no Coordinator client; build the
+`registry-coordinator-client` crate and its bindings from source.
 
 ## Verify client registries
 

@@ -24,17 +24,33 @@ class ComponentManifestTests(unittest.TestCase):
         self.assertEqual(inventory["rstack-install.sh"], "installer")
         self.assertNotIn("rstack-v0.43.0-linux-amd64", release_candidate._release_payload_inventory("0.43.0"))
 
-    def test_tooling_only_platform_and_absent_component_are_explicit(self) -> None:
+    def test_all_published_components_are_available_on_every_platform(self) -> None:
         document = rstack_components.build_component_manifest("0.44.0", payloads("0.44.0"))
         self.assertEqual(document["schema_version"], "registry-stack.components.v1")
         self.assertEqual(document["release"], "v0.44.0")
         self.assertEqual(set(document["launcher"]), set(rstack_components.PLATFORMS))
         scheduling = document["components"]["scheduling"]
         self.assertEqual(scheduling["entrypoint"], "schedulingctl")
-        self.assertFalse(scheduling["platforms"]["macos-arm64"]["capabilities"]["runtime"])
+        self.assertTrue(scheduling["platforms"]["macos-arm64"]["capabilities"]["runtime"])
         self.assertTrue(scheduling["platforms"]["linux-amd64"]["capabilities"]["runtime"])
-        self.assertNotIn("coordinator", document["components"])
-        self.assertNotIn("macos-arm64", document["components"]["manifest"]["platforms"])
+        self.assertEqual(
+            set(document["components"]["coordinator"]["platforms"]),
+            set(rstack_components.PLATFORMS),
+        )
+        self.assertEqual(
+            set(document["components"]["manifest"]["platforms"]),
+            set(rstack_components.PLATFORMS),
+        )
+
+    def test_plain_macos_binary_is_limited_to_registry_manifest(self) -> None:
+        self.assertEqual(
+            ("registry-manifest", "macos-arm64"),
+            rstack_components._binary_name(
+                "registry-manifest-v0.44.0-macos-arm64", "v0.44.0"
+            ),
+        )
+        with self.assertRaisesRegex(ValueError, "unclassified"):
+            rstack_components._binary_name("breg-v0.44.0-macos-arm64", "v0.44.0")
 
     def test_asset_references_retain_size_and_digest(self) -> None:
         document = rstack_components.build_component_manifest("0.44.0", payloads("0.44.0"))

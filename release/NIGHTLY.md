@@ -42,8 +42,13 @@ Coordinator joined. `registry-stack.nightly-roster.v2.1` adds the
 binaries, and nightlies use it from the base version that
 `COORDINATOR_FIRST_RELEASE` in `release/scripts/release_roster.py` names. The
 reader accepts both, so a v2.0 nightly built from the same base version before
-Coordinator joined stays readable. An incompatible inventory requires a new
-schema and profile. The reader still accepts frozen
+Coordinator joined stays readable. `registry-stack.nightly-roster.v2.2` adds
+the v0.44.0 binary roster for all supported platforms and additional installers
+that support nightly builds. The roster includes the `rstack` launcher on Linux
+amd64, Linux arm64, and macOS arm64.
+`registry-stack.nightly-roster.v2.3` adds the Coordinator image to that same
+binary and installer roster when its image release is enabled. An incompatible
+inventory requires a new schema and profile. The reader still accepts frozen
 `registry-stack.nightly.v1` manifests, including historical v0.39.0 nightlies
 that carried Relay, so an existing channel head can be reconciled and advanced
 without rewriting published bytes.
@@ -58,23 +63,49 @@ binary group. Linux arm64 contains the binaries supported for that platform by
 the current release inventory. macOS arm64 uses the current native release
 shards, including each binary's adjacent libraries and notices where the shard
 is an archive. Each installer installs the toolset its platform publishes in
-that build. The Registry Scheduling runtime is published for Linux amd64 only,
-so on Linux arm64 and macOS arm64 the Scheduling installer installs
-`schedulingctl` alone. An installer exits without changing the install directory
-when its operating system or architecture has no asset in that build.
+that build. Through base version v0.43.0, the Registry Scheduling runtime is
+published for Linux amd64 only, so those Linux arm64 and macOS arm64 builds
+install `schedulingctl` alone. From v0.44.0, Scheduling publishes and installs
+both binaries on all three platforms. An installer exits without changing the
+install directory when its operating system or architecture has no asset in
+that build.
 
 ## Install the latest successful nightly
 
 Use an installer from source when selecting a channel. With no channel or build
-argument, a source installer resolves the latest numbered release. The four
-nightly-aware installers are:
+argument, a source installer resolves the latest numbered release. The
+nightly-aware installers are listed below. The additional toolsets join from
+v0.44.0; older immutable nightly profiles retain their original inventory.
 
 | Toolset | Source installer | Install directory variable | Verified asset directory variable |
 | --- | --- | --- | --- |
-| Base Registry Engine | `crates/registry-breg/install.sh` | `BREG_INSTALL_DIR` | `BREG_ASSET_DIR` |
+| Base Registry Engine (BReg) | `crates/registry-breg/install.sh` | `BREG_INSTALL_DIR` | `BREG_ASSET_DIR` |
 | Evidence authoring | `crates/registry-evidencectl/install.sh` | `EVIDENCECTL_INSTALL_DIR` | `EVIDENCECTL_ASSET_DIR` |
 | Registry Casework | `crates/registry-casework/install.sh` | `CASEWORK_INSTALL_DIR` | `CASEWORK_ASSET_DIR` |
 | Registry Scheduling | `crates/registry-scheduling/install.sh` | `SCHEDULING_INSTALL_DIR` | `SCHEDULING_ASSET_DIR` |
+| BReg citizen gateway | `crates/registry-breg-mcp/install.sh` | `BREG_MCP_INSTALL_DIR` | `BREG_MCP_ASSET_DIR` |
+| BReg review page | `crates/registry-breg-review/install.sh` | `BREG_REVIEW_INSTALL_DIR` | `BREG_REVIEW_ASSET_DIR` |
+| Registry Messaging | `crates/registry-messaging/install.sh` | `MESSAGING_INSTALL_DIR` | `MESSAGING_ASSET_DIR` |
+| Registry Discovery | `crates/registry-discovery/install.sh` | `DISCOVERY_INSTALL_DIR` | `DISCOVERY_ASSET_DIR` |
+| Registry Render | `crates/registry-render/install.sh` | `REGISTRY_RENDER_INSTALL_DIR` | `REGISTRY_RENDER_ASSET_DIR` |
+| Registry Manifest | `crates/registry-manifest-cli/install.sh` | `REGISTRY_MANIFEST_INSTALL_DIR` | `REGISTRY_MANIFEST_ASSET_DIR` |
+| Registry Coordinator | `crates/registry-coordinator/install.sh` | `COORDINATOR_INSTALL_DIR` | `COORDINATOR_ASSET_DIR` |
+
+The nightly publishes the `rstack` launcher binary on every supported platform,
+but does not publish an `rstack` nightly installer. That installer bootstraps
+the component manifest of an exact numbered release, while the nightly channel
+has its own frozen roster and identity. Managed component installation uses
+numbered releases.
+
+From v0.44.0 every runtime and operator CLI has Linux amd64, Linux arm64 and
+macOS arm64 assets. Scheduling installs its runtime and CLI on all three.
+macOS binaries that use FIPS include their libraries in checksum-covered
+archives; Manifest has no crypto dependency and ships as a plain executable.
+Coordinator's binary distribution does not release its separately held image.
+
+The additional installer sources are generated from the transactional Casework
+template. After changing the shared installer behavior, run
+`python3 release/scripts/additional_installers.py --write` and its regression tests.
 
 `--channel nightly` resolves
 `https://raw.githubusercontent.com/registrystack/registry-stack/nightly-channel/nightly.json`.

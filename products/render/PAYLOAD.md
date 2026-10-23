@@ -79,6 +79,11 @@ including that every label character is drawable by some bundle or baseline
 font — a successful render that prints tofu is wrong on paper, so coverage
 gaps are named at check time and warnings fail `--strict` at render time.
 
+`serve` includes `X-Registry-Warning-Count` on every PDF response, including
+zero for a render without warnings. A host can withhold a document when that
+count is nonzero and request `Accept: application/json` to inspect `warnings`.
+Only the count reaches the header, never warning text or document values.
+
 See `bundles/` for three complete working examples (bilingual RTL receipt,
 PDF/A certificate, ID-1 card with photo). Ground truth when in doubt:
 

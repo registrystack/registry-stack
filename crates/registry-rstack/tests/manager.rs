@@ -54,9 +54,14 @@ fn asset_name_for(binary: &str, release: &str, platform: &str) -> String {
 }
 
 fn write_versioned_executable(path: &Path, binary: &str, version: &str) {
+    let version_suffix = if binary == "registry-render" {
+        " (typst 0.15.1)"
+    } else {
+        ""
+    };
     fs::write(
         path,
-        format!("#!/usr/bin/env sh\nprintf '%s\\n' '{binary} {version}'\n"),
+        format!("#!/usr/bin/env sh\nprintf '%s\\n' '{binary} {version}{version_suffix}'\n"),
     )
     .unwrap();
     let mut permissions = fs::metadata(path).unwrap().permissions();
@@ -86,21 +91,18 @@ fn component_asset_for(
             release.strip_prefix('v').unwrap(),
         );
         fs::write(contents.join("THIRD_PARTY_NOTICES"), "test fixture\n").unwrap();
-        fs::write(
-            contents.join(format!("libaws_lc_fips_{binary}.dylib")),
-            "test fixture\n",
-        )
-        .unwrap();
+        let mut entries = vec![archived_binary.to_owned(), "THIRD_PARTY_NOTICES".to_owned()];
+        if !matches!(binary, "discovery" | "rstack") {
+            let fips_library = format!("libaws_lc_fips_{binary}.dylib");
+            fs::write(contents.join(&fips_library), "test fixture\n").unwrap();
+            entries.push(fips_library);
+        }
         let result = Command::new("tar")
             .args(["-czf"])
             .arg(&path)
             .arg("-C")
             .arg(&contents)
-            .args([
-                archived_binary,
-                "THIRD_PARTY_NOTICES",
-                &format!("libaws_lc_fips_{binary}.dylib"),
-            ])
+            .args(&entries)
             .output()
             .unwrap();
         assert!(result.status.success(), "{result:?}");
@@ -131,17 +133,12 @@ impl Fixture {
         if platform == "macos-arm64" {
             let contents = assets.join("archive-rstack");
             fs::create_dir(&contents).unwrap();
-            fs::copy(
-                env!("CARGO_BIN_EXE_rstack"),
-                contents.join(launcher_name.strip_suffix(".tar.gz").unwrap()),
-            )
-            .unwrap();
+            write_versioned_executable(
+                &contents.join(launcher_name.strip_suffix(".tar.gz").unwrap()),
+                "rstack",
+                "0.44.0",
+            );
             fs::write(contents.join("THIRD_PARTY_NOTICES"), "test fixture\n").unwrap();
-            fs::write(
-                contents.join("libaws_lc_fips_rstack.dylib"),
-                "test fixture\n",
-            )
-            .unwrap();
             let result = Command::new("tar")
                 .args(["-czf"])
                 .arg(&launcher)
@@ -150,13 +147,12 @@ impl Fixture {
                 .args([
                     launcher_name.strip_suffix(".tar.gz").unwrap(),
                     "THIRD_PARTY_NOTICES",
-                    "libaws_lc_fips_rstack.dylib",
                 ])
                 .output()
                 .unwrap();
             assert!(result.status.success(), "{result:?}");
         } else {
-            fs::copy(env!("CARGO_BIN_EXE_rstack"), &launcher).unwrap();
+            write_versioned_executable(&launcher, "rstack", "0.44.0");
         }
 
         let mut payloads = Vec::new();
@@ -172,7 +168,9 @@ impl Fixture {
         for (component, binary, dependencies, component_platform) in [
             ("breg", "bregctl", Vec::<&str>::new(), platform),
             ("casework", "caseworkctl", vec!["breg"], platform),
+            ("discovery", "discovery", Vec::<&str>::new(), platform),
             ("evidence", "evidencectl", Vec::<&str>::new(), platform),
+            ("render", "registry-render", Vec::<&str>::new(), platform),
             (
                 "scheduling",
                 "schedulingctl",
@@ -377,6 +375,60 @@ impl Fixture {
         )
         .unwrap();
     }
+}
+
+#[test]
+fn bootstrap_and_update_accept_plain_macos_launcher_archives() {
+    if target_platform() != "macos-arm64" {
+        return;
+    }
+    let fixture = Fixture::new();
+    fixture.bootstrap(&[]);
+    fixture.write_release("v0.45.0", false, true);
+
+    let report = update(&fixture.manager_options(), "v0.45.0", false).unwrap();
+
+    assert!(report.activated);
+    let current = fixture.store().acquire_current().unwrap();
+    let version = Command::new(current.path().join("rstack"))
+        .arg("--version")
+        .output()
+        .unwrap();
+    assert!(version.status.success());
+    assert_eq!(version.stdout, b"rstack 0.45.0\n");
+}
+
+#[test]
+fn install_accepts_registry_render_typst_version_decoration() {
+    let fixture = Fixture::new();
+    fixture.bootstrap(&[]);
+
+    let report = install(fixture.manager_options(), vec!["render".into()], false).unwrap();
+
+    assert_eq!(report.components, vec!["render"]);
+    let current = fixture.store().acquire_current().unwrap();
+    assert!(current
+        .path()
+        .join("components/render/registry-render/registry-render")
+        .exists());
+}
+
+#[test]
+fn install_accepts_plain_macos_discovery_archive() {
+    if target_platform() != "macos-arm64" {
+        return;
+    }
+    let fixture = Fixture::new();
+    fixture.bootstrap(&[]);
+
+    let report = install(fixture.manager_options(), vec!["discovery".into()], false).unwrap();
+
+    assert_eq!(report.components, vec!["discovery"]);
+    let current = fixture.store().acquire_current().unwrap();
+    assert!(current
+        .path()
+        .join("components/discovery/discovery/discovery")
+        .exists());
 }
 
 #[test]

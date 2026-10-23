@@ -24,13 +24,109 @@ fn compile(
     compile_project_with_assets(
         project,
         &[],
-        &[ModuleAssetSource {
-            module: None,
-            path: "plans/correct-address.rhai".into(),
-            bytes: FUNCTION.to_vec(),
-        }],
+        &[
+            ModuleAssetSource {
+                module: None,
+                path: "plans/correct-address.rhai".into(),
+                bytes: FUNCTION.to_vec(),
+            },
+            ModuleAssetSource {
+                module: None,
+                path: "derived/directory-entry.sql".into(),
+                bytes: b"SELECT d.id AS id, d.name AS display_name FROM registry_source.directory_entry d\n".to_vec(),
+            },
+        ],
         CompileProfile::Authoring,
     )
+}
+
+fn parse_project(value: serde_json::Value) -> RegistryProject {
+    parse_project_yaml(&serde_json::to_vec(&value).expect("project serializes"))
+        .expect("project parses")
+}
+
+fn unfillable_paths(project: &RegistryProject) -> Vec<String> {
+    compile(project)
+        .expect("project compiles")
+        .findings()
+        .iter()
+        .filter(|finding| finding.code == "breg.record-type.stored-field-unfillable")
+        .map(|finding| finding.path.clone())
+        .collect()
+}
+
+#[test]
+fn optional_stored_fields_warn_only_when_no_supported_writer_can_fill_them() {
+    let mut value = project_source();
+    value["recordTypes"][3]["fields"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!({
+            "id": "note",
+            "type": "string",
+            "maximumLength": 500,
+            "classification": "internal"
+        }));
+    let project = parse_project(value.clone());
+    assert_eq!(
+        unfillable_paths(&project),
+        ["recordTypes[id=facility-assignment].fields[id=note]"]
+    );
+
+    value["actions"][0]["plan"]["effects"][1]["set"]["note"] =
+        serde_json::json!({"value": "created by action"});
+    assert!(unfillable_paths(&parse_project(value.clone())).is_empty());
+
+    value["actions"][0]["plan"]["effects"][1]["set"]
+        .as_object_mut()
+        .unwrap()
+        .remove("note");
+    value["accessProfiles"][1]["permissions"]["records"][2]["operations"] =
+        serde_json::json!(["get", "list", "import"]);
+    value["accessProfiles"][1]["permissions"]["records"][2]["writableFields"] =
+        serde_json::json!(["facility", "operator", "jurisdiction", "note"]);
+    value["recordTypes"][3]["batch"] =
+        serde_json::json!({"maximumItems": 100, "maximumBytes": 1048576});
+    assert!(unfillable_paths(&parse_project(value.clone())).is_empty());
+
+    value["accessProfiles"][1]["permissions"]["records"][2]["operations"] =
+        serde_json::json!(["get", "list"]);
+    value["accessProfiles"][1]["permissions"]["records"][2]
+        .as_object_mut()
+        .unwrap()
+        .remove("writableFields");
+    value["recordTypes"][0]["derived"] = serde_json::json!([{
+        "id": "display",
+        "sql": "derived/directory-entry.sql",
+        "key": "id",
+        "execution": "live",
+        "fields": [{
+            "id": "display-name",
+            "type": "string",
+            "maximumLength": 200,
+            "classification": "internal"
+        }]
+    }]);
+    assert_eq!(
+        unfillable_paths(&parse_project(value.clone())),
+        ["recordTypes[id=facility-assignment].fields[id=note]"]
+    );
+
+    value["actions"][1]["plan"]["writes"][0]["fields"] =
+        serde_json::json!(["address-line", "city", "postal-code", "note"]);
+    value["recordTypes"][2]["fields"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!({
+            "id": "note",
+            "type": "string",
+            "maximumLength": 500,
+            "classification": "internal"
+        }));
+    assert_eq!(
+        unfillable_paths(&parse_project(value)),
+        ["recordTypes[id=facility-assignment].fields[id=note]"]
+    );
 }
 #[test]
 fn standalone_native_records_need_no_manifest_or_external_products() {
@@ -947,6 +1043,11 @@ fn exact_permission_changes_do_not_change_the_action_behavior_revision() {
         assert_eq!(action.definition_revision, successor.definition_revision);
         if action.id == "register-facility" || action.id == "correct-address" {
             assert_ne!(
+                registry_breg::artifacts::inspect_action(action)["migrationReviewRevision"],
+                registry_breg::artifacts::inspect_action(successor)["migrationReviewRevision"],
+                "inspection exposes the same permission-sensitive identity migration review compares"
+            );
+            assert_ne!(
                 action.permissions, successor.permissions,
                 "current admission retains exact changed grants"
             );
@@ -985,6 +1086,35 @@ fn untouched_target_schema_is_part_of_a_patch_snapshot_revision() {
             revision(&after),
             "whole stored rows participate in Patch preparation and packet bounds"
         );
+        let inspection = |model: &registry_breg::CompiledRegistry| {
+            registry_breg::artifacts::inspect_action(
+                model
+                    .actions()
+                    .actions
+                    .iter()
+                    .find(|action| action.id == id)
+                    .unwrap(),
+            )["migrationReviewRevision"]
+                .clone()
+        };
+        assert!(inspection(&before)
+            .as_str()
+            .is_some_and(|value| value.starts_with("sha256:")));
+        assert_eq!(inspection(&before), inspection(&after));
+    }
+    #[cfg(feature = "runtime")]
+    {
+        let changes = compiled_registry_change_set(&before, &after, "sha256:before");
+        assert!(
+            changes
+                .changes
+                .iter()
+                .all(|change| change.code != CompiledRegistryChangeCode::ActionChanged),
+            "an unrelated optional field must not require Action migration review: {:?}",
+            changes.changes
+        );
+        registry_breg::package::change_set_to_applicable_migration_plan(&changes)
+            .expect("an unrelated optional field can be migrated without review");
     }
 }
 #[test]

@@ -355,7 +355,7 @@ impl Session {
         let report: Value = serde_json::from_slice(&output.stdout).expect("a JSON report");
         assert_eq!(
             report["apiVersion"],
-            "id.registrystack.org/formats/casework/report/v1alpha1"
+            "id.registrystack.org/formats/casework/report/v1alpha2"
         );
         assert_eq!(report["kind"], "CaseworkReport");
         assert_eq!(report["status"], "complete");

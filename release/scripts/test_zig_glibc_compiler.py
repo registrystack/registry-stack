@@ -295,14 +295,14 @@ class CanonicalCompilerIdentityTest(unittest.TestCase):
             "    sys.exit(7)\n"
             "target = pathlib.Path('target/release')\n"
             "target.mkdir(parents=True, exist_ok=True)\n"
-            "for binary in ('registry-manifest', 'relay', 'relayctl', 'evidence', "
+            "for binary in ('registry-manifest', 'rstack', 'relay', 'relayctl', 'evidence', "
             "'evidencectl', 'evidence-oid4vci', 'discovery', 'discoveryctl', 'breg', 'bregctl', "
             "'casework', 'caseworkctl', 'scheduling', 'schedulingctl', 'messaging', "
             "'messagingctl', 'registry-render', 'coordinator', 'coordinatorctl'):\n"
             "    path = target / binary\n"
-            "    if binary == 'registry-manifest':\n"
-            "        version = os.environ.get('FAKE_MANIFEST_VERSION') or os.environ.get('REGISTRY_NIGHTLY_TAG') or os.environ['REGISTRY_RELEASE_TAG']\n"
-            "        path.write_text('#!/bin/sh\\nprintf \\\'%s\\\\n\\\' \\\'registry-manifest ' + version.removeprefix('v') + '\\\'\\n')\n"
+            "    if binary in ('registry-manifest', 'rstack'):\n"
+            "        version = (os.environ.get('FAKE_MANIFEST_VERSION') if binary == 'registry-manifest' else None) or os.environ.get('REGISTRY_NIGHTLY_TAG') or os.environ['REGISTRY_RELEASE_TAG']\n"
+            "        path.write_text('#!/bin/sh\\nprintf \\\'%s\\\\n\\\' \\\'' + binary + ' ' + version.removeprefix('v') + '\\\'\\n')\n"
             "        path.chmod(0o755)\n"
             "    else:\n"
             "        path.write_text('fixture binary\\n')\n",
@@ -337,8 +337,10 @@ class CanonicalCompilerIdentityTest(unittest.TestCase):
             "    core.append('discoveryctl')\n"
             "if release_roster.render_in_release(parsed):\n"
             "    core.append('registry-render')\n"
-            "if release_roster.coordinator_in_release(parsed):\n"
+            "if release_roster.coordinator_binaries_in_release(parsed):\n"
             "    core += ['coordinator', 'coordinatorctl']\n"
+            "if release_roster.rstack_in_release(parsed):\n"
+            "    core.append('rstack')\n"
             "breg = ['breg', 'bregctl'] if parsed >= (0, 26, 0) else []\n"
             "if release_roster.breg_services_in_release(parsed):\n"
             "    breg += ['breg-mcp', 'breg-review']\n"
@@ -953,6 +955,22 @@ class CanonicalCompilerIdentityTest(unittest.TestCase):
         self.assertTrue(
             (self.root / "merge-0.39.0/merged-groups/image-bin/messaging").is_file()
         )
+
+    def test_v0_44_coordinator_binaries_do_not_stage_held_image_inputs(self) -> None:
+        result, _ = self.run_payload(version="0.44.0", group="core")
+        self.assertEqual(0, result.returncode, result.stderr)
+        binaries, images = self.staged()
+        self.assertIn("coordinator-v0.44.0-linux-amd64", binaries)
+        self.assertNotIn("coordinator", images)
+        self.assertNotIn("coordinatorctl", images)
+        self.assert_merged_groups_equivalent_to_all(
+            "0.44.0", ("core", "breg", "casework", "scheduling", "messaging")
+        )
+        merged = self.root / "merge-0.44.0/merged-groups"
+        sums = (merged / "bin/SHA256SUMS").read_text()
+        for binary in ("coordinator", "coordinatorctl"):
+            self.assertIn(f"{binary}-v0.44.0-linux-amd64", sums)
+            self.assertFalse((merged / "image-bin" / binary).exists())
 
     def test_v0_42_merged_groups_stage_coordinator_in_the_core_shard(self) -> None:
         # Enable only the copied test recipe's roster, including its child processes.

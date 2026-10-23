@@ -31,7 +31,7 @@ fn envelope(contract: &str) -> (&'static str, &'static str) {
             "BRegModelExplanation",
         ),
         "AccessExplanation" => (
-            "id.registrystack.org/formats/breg/access-explanation/v1alpha6",
+            "id.registrystack.org/formats/breg/access-explanation/v1alpha7",
             "BRegAccessExplanation",
         ),
         "AccessPreview" => (
@@ -47,11 +47,11 @@ fn envelope(contract: &str) -> (&'static str, &'static str) {
             "BRegQueriesExplanation",
         ),
         "ActionsExplanation" => (
-            "id.registrystack.org/formats/breg/actions-explanation/v1alpha6",
+            "id.registrystack.org/formats/breg/actions-explanation/v1alpha7",
             "BRegActionsExplanation",
         ),
         "ProposalsExplanation" => (
-            "id.registrystack.org/formats/breg/proposals-explanation/v1alpha2",
+            "id.registrystack.org/formats/breg/proposals-explanation/v1alpha3",
             "BRegProposalsExplanation",
         ),
         "EventsExplanation" => (
@@ -59,7 +59,7 @@ fn envelope(contract: &str) -> (&'static str, &'static str) {
             "BRegEventsExplanation",
         ),
         "LifecycleExplanation" => (
-            "id.registrystack.org/formats/breg/lifecycle-explanation/v1alpha7",
+            "id.registrystack.org/formats/breg/lifecycle-explanation/v1alpha8",
             "BRegLifecycleExplanation",
         ),
         _ => panic!("unknown contract {contract}"),
