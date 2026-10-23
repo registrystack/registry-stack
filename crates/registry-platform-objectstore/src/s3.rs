@@ -10,7 +10,9 @@ use quick_xml::{events::Event, Reader};
 use registry_platform_config::{
     ObjectStorageConfig, ProtectedSecret, SecretReference, SecretResolver,
 };
-use registry_platform_httputil::{read_bounded, validate_response_headers, OutboundClientBuilder};
+use registry_platform_httputil::{
+    read_bounded, validate_response_headers, BoundedReadError, OutboundClientBuilder,
+};
 use reqwest::{
     header::{HeaderMap, HeaderValue},
     Method, StatusCode, Url,
@@ -349,9 +351,14 @@ impl S3ObjectStore {
             .await?;
         require_success(&response)?;
         require_unversioned_headers(response.headers())?;
+        // A body lost or stalled in transit says nothing about the stored
+        // bytes; only a body larger than the object can be is integrity.
         let bytes = read_bounded(response, expected_size)
             .await
-            .map_err(|_| ObjectStoreError::Integrity)?;
+            .map_err(|error| match error {
+                BoundedReadError::Transport(_) => ObjectStoreError::Unavailable,
+                _ => ObjectStoreError::Integrity,
+            })?;
         self.verify_content(sha256, expected_size, &bytes)?;
         Ok(bytes)
     }

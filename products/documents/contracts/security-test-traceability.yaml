@@ -52,6 +52,9 @@ entries:
       - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_rejected_version_is_never_released}
       - {path: crates/registry-documents/tests/postgres_s3.rs, name: s3_content_is_staged_verified_over_http_and_released}
       - {path: crates/registry-documents/tests/postgres_s3.rs, name: an_s3_object_that_no_longer_matches_is_never_released}
+      - {path: crates/registry-documents/tests/postgres_s3.rs, name: an_s3_outage_on_download_is_journaled_unavailable_not_as_an_integrity_failure}
+      - {path: crates/registry-platform-objectstore/src/s3_tests.rs, name: an_interrupted_download_body_is_unavailable_not_an_integrity_failure}
+      - {path: crates/registry-platform-objectstore/src/s3_tests.rs, name: a_download_body_stalled_past_the_attempt_timeout_is_unavailable}
   - id: DOCUMENTS-SEC-10
     tests:
       - {path: crates/registry-documents/tests/postgres_startup.rs, name: a_prepared_runtime_serves_documents_only_to_a_verified_caller}

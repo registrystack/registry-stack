@@ -191,7 +191,8 @@ DOCUMENTS-SEC-14 to DOCUMENTS-SEC-20:
   content and checks digest and length before the first byte; a mismatch
   answers 503, sends no byte, and writes a `storage-integrity` audit entry.
   So does content gone from a version that is not under removal. A database
-  or object storage outage answers the same 503 but writes
+  or object storage outage, an object body lost or stalled in transit
+  included, answers the same 503 but writes
   `storage-unavailable`, logged at warn, so the integrity outcome stays a
   signal worth alarming on. Content removed between the record read and the
   content read is re-read and answered as a version under removal.
