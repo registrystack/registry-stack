@@ -69,6 +69,12 @@ pub(super) fn run(
     } else {
         evaluate_action_detailed(action, input, Instant::now() + PLANNER_TEST_DEADLINE)
     };
+    let expects_handler_failure = evaluation
+        .as_ref()
+        .is_err_and(|error| error.kind != ActionHandlerError::Input)
+        && expected
+            .as_ref()
+            .is_some_and(|value| value.get("failure").is_some());
     {
         let state = transcript.lock().map_err(|_| {
             failure(
@@ -83,7 +89,7 @@ pub(super) fn run(
                 "the helper call differs from the ordered synthetic transcript",
             ));
         }
-        if evaluation.is_ok() && state.next != state.calls.len() {
+        if (evaluation.is_ok() || expects_handler_failure) && state.next != state.calls.len() {
             return Err(action_test_failure(
                 "action-test.evidence.missing",
                 "expect/evidenceCalls",
@@ -92,11 +98,7 @@ pub(super) fn run(
         }
     }
     if let Err(error) = &evaluation {
-        if error.kind != ActionHandlerError::Input
-            && expected
-                .as_ref()
-                .is_some_and(|value| value.get("failure").is_some())
-        {
+        if expects_handler_failure {
             let actual = json!({"failure": {"code": error.kind.code()}});
             let mut expected = expected.take().expect("a failure expectation is present");
             normalize(&mut expected);
@@ -526,6 +528,101 @@ mod tests {
         args.action = Some("create-entry".into());
         let failure = run(&args, &compiled).unwrap_err();
         assert_eq!(failure.diagnostics[0].code, "action.input.invalid");
+    }
+
+    #[test]
+    fn expected_handler_failure_does_not_skip_unconsumed_evidence_calls() {
+        let project = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../products/breg/fixtures/action-plan-branches")
+            .canonicalize()
+            .unwrap();
+        let compiled = compile(&project, ProfileArg::Authoring, "project action-test")
+            .unwrap_or_else(|failure| panic!("{}", serde_json::to_string(&failure).unwrap()));
+        let directory = tempfile::tempdir().unwrap();
+        let expect = directory.path().canonicalize().unwrap().join("expect.json");
+        let mut expected: Value = serde_json::from_slice(
+            &fs::read(project.join("examples/handler-failure.expect.json")).unwrap(),
+        )
+        .unwrap();
+        expected["evidenceCalls"] = json!([{
+            "capability":"unused-capability-canary",
+            "selectors":{"private":"unused-selector-canary"},
+            "response":{"private":"unused-response-canary"}
+        }]);
+        fs::write(&expect, serde_json::to_vec(&expected).unwrap()).unwrap();
+        let failure = run(
+            &ProjectActionTestArgs {
+                project: project.clone(),
+                action: Some("invalid-copy".into()),
+                input: Some(project.join("examples/handler-failure.input.json")),
+                expect: Some(expect),
+            },
+            &compiled,
+        )
+        .expect_err("an expected failure must consume its complete evidence transcript");
+        assert_eq!(failure.diagnostics[0].code, "action-test.evidence.missing");
+        let rendered = serde_json::to_string(&failure).unwrap();
+        for canary in [
+            "unused-capability-canary",
+            "unused-selector-canary",
+            "unused-response-canary",
+        ] {
+            assert!(!rendered.contains(canary));
+        }
+    }
+
+    #[test]
+    fn expected_evidence_failure_requires_exact_transcript_consumption() {
+        let project = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../products/breg/acceptance/farmer-landholding-evidence")
+            .canonicalize()
+            .unwrap();
+        let compiled = compile(&project, ProfileArg::Authoring, "project action-test")
+            .unwrap_or_else(|failure| panic!("{}", serde_json::to_string(&failure).unwrap()));
+        let base: Value = serde_json::from_slice(
+            &fs::read(project.join("examples/status-only.expect.json")).unwrap(),
+        )
+        .unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let expect = directory.path().canonicalize().unwrap().join("expect.json");
+        for extra_call in [false, true] {
+            let mut calls = base["evidenceCalls"].clone();
+            calls[0]["response"] = json!({"active":"private-type-canary"});
+            if extra_call {
+                let unconsumed = calls[0].clone();
+                calls.as_array_mut().unwrap().push(unconsumed);
+            }
+            fs::write(
+                &expect,
+                serde_json::to_vec(&json!({
+                    "failure":{"code":ActionHandlerError::Evidence.code()},
+                    "evidenceCalls":calls
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+            let result = run(
+                &ProjectActionTestArgs {
+                    project: project.clone(),
+                    action: Some("register-landholding".into()),
+                    input: Some(project.join("examples/status-only.input.json")),
+                    expect: Some(expect.clone()),
+                },
+                &compiled,
+            );
+            if extra_call {
+                let failure = result.expect_err("a partial transcript must not pass");
+                assert_eq!(failure.diagnostics[0].code, "action-test.evidence.missing");
+                assert!(!serde_json::to_string(&failure)
+                    .unwrap()
+                    .contains("private-type-canary"));
+            } else {
+                let report = result.unwrap_or_else(|failure| {
+                    panic!("{}", serde_json::to_string(&failure).unwrap())
+                });
+                assert_eq!(report.assertions_passed, Some(true));
+            }
+        }
     }
 
     /// The minimal conforming guest ABI, mirroring the WASM admission suite's

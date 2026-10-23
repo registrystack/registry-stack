@@ -4631,6 +4631,16 @@ fn assert_response_with_observations(
                         .as_deref()
                         .ok_or(FixtureError::ResponseShapeRefused)?,
                 )
+            } else if code == "action.guard_failed" && document.get("guardReason").is_some() {
+                keys.push("guardReason");
+                if !document
+                    .get("guardReason")
+                    .and_then(Value::as_str)
+                    .is_some_and(|reason| registry_platform_yaml::LocalId::new(reason).is_ok())
+                {
+                    return Err(FixtureError::ResponseShapeRefused);
+                }
+                None
             } else if let Some((entity, field)) = &step.problem_bindings.pattern_field {
                 keys.extend(["recordType", "fieldId"]);
                 if document.get("recordType").and_then(Value::as_str) != Some(entity.as_str())
@@ -8439,6 +8449,74 @@ journeys:
         );
         validate_fixture_journeys(journeys.as_bytes(), &registry)
             .expect("constraint journeys validate")
+    }
+
+    #[test]
+    fn guard_failed_problem_accepts_only_a_local_id_guard_reason() {
+        let suite = row_local_constraint_suite(
+            "jurisdiction, label, note, quantity, valid-from, valid-to",
+            "validFrom: 2, validTo: 1",
+        );
+        let mut guard_step = suite.journeys[0].steps[0].clone();
+        guard_step.expect.status = 412;
+        guard_step.expect.problem_code = Some("action.guard_failed".to_owned());
+        let guard_problem = json!({
+            "type": crate::problem::type_uri("action.guard_failed"),
+            "title": "Precondition Failed",
+            "status": 412,
+            "detail": "The action guard was not satisfied.",
+            "code": "action.guard_failed",
+            "traceId": "11111111111111111111111111111111",
+            "guardReason": "parent-inactive"
+        });
+
+        for reason in [
+            "a",
+            "parent-inactive",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        ] {
+            let mut changed = guard_problem.clone();
+            changed["guardReason"] = json!(reason);
+            assert_response(&guard_step, StatusCode::PRECONDITION_FAILED, &changed)
+                .expect("a declared LocalId guard reason is an admitted guard-failure extension");
+        }
+
+        for malformed in [
+            "",
+            "123",
+            "Parent-inactive",
+            "parent inactive",
+            "parent-inactive-reason-that-exceeds-the-sixty-four-byte-local-id-boundary-1",
+        ] {
+            let mut changed = guard_problem.clone();
+            changed["guardReason"] = json!(malformed);
+            assert!(
+                assert_response(&guard_step, StatusCode::PRECONDITION_FAILED, &changed).is_err(),
+                "a malformed guard reason is refused"
+            );
+        }
+        let mut numeric = guard_problem.clone();
+        numeric["guardReason"] = json!(123);
+        assert!(
+            assert_response(&guard_step, StatusCode::PRECONDITION_FAILED, &numeric).is_err(),
+            "a non-string guard reason is refused"
+        );
+
+        let mut precondition_step = guard_step.clone();
+        precondition_step.expect.problem_code = Some("precondition.failed".to_owned());
+        let mut misplaced = guard_problem;
+        misplaced["type"] = json!(crate::problem::type_uri("precondition.failed"));
+        misplaced["detail"] = json!("The mutation precondition failed.");
+        misplaced["code"] = json!("precondition.failed");
+        assert!(
+            assert_response(
+                &precondition_step,
+                StatusCode::PRECONDITION_FAILED,
+                &misplaced,
+            )
+            .is_err(),
+            "guardReason is refused on another 412 Problem"
+        );
     }
 
     #[test]
