@@ -33,9 +33,9 @@
 - Warning findings now include a stable `rank` of `widens-access`, `performance`
   or `hygiene`. A profile that requires both scopes and purposes does not
   report `breg.access.profile-unrestricted-collection` or
-  `breg.access.profile-unrestricted-rows`; `breg.access.profile-higher-classification`
-  is always reported. Optional stored
-  fields that no supported Record grant or Action can fill report
+  `breg.access.profile-unrestricted-rows`;
+  `breg.access.profile-higher-classification` is always reported. Optional
+  stored fields that no supported Record grant or Action can fill report
   `breg.record-type.stored-field-unfillable`.
 - Add the closed `logLevel` runtime setting to BReg, `breg-mcp`, and
   `breg-review`. Each existing product environment variable takes precedence,
