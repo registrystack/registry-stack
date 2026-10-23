@@ -7,7 +7,8 @@
 mod postgres_harness;
 
 use std::collections::BTreeSet;
-use std::sync::Arc;
+use std::io;
+use std::sync::{Arc, Mutex};
 
 use postgres_harness::TestDatabase;
 use registry_breg::compiler::{compile_project, CompileProfile};
@@ -18,6 +19,7 @@ use registry_breg::mutation::{
 };
 use registry_breg::postgres::install_compiled_schema;
 use serde_json::{json, Map, Value};
+use tracing::instrument::WithSubscriber;
 use uuid::Uuid;
 
 fn registry() -> registry_breg::model::CompiledRegistry {
@@ -485,6 +487,75 @@ async fn supplied_values_are_refused_and_migration_seed_advances_sequence_state(
     transaction.rollback().await.expect("refusal rolls back");
 
     database.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn allocator_database_failures_log_a_value_free_sqlstate() {
+    let database = TestDatabase::create(2).await;
+    let (migration, migration_task) = database.connect_migration().await;
+    install_generated_identifier_schema_for_test(&migration, &database.runtime_role)
+        .await
+        .expect("allocation schema installs");
+    migration
+        .batch_execute(&format!(
+            "REVOKE EXECUTE ON FUNCTION
+                 registry_internal.reserve_generated_identifier(text, text, jsonb, text)
+             FROM {}",
+            quote_identifier(database.runtime_role.as_str())
+        ))
+        .await
+        .expect("migration role revokes the reservation function");
+    migration_task.abort();
+    let pool = database
+        .runtime_config
+        .build_pool()
+        .expect("runtime pool builds");
+
+    let entity = registry().entities()["entry"].clone();
+    let logs = Logs::default();
+    let subscriber = tracing_subscriber::fmt()
+        .json()
+        .with_writer(logs.clone())
+        .finish();
+    let mut client = pool.get_for_test().await.expect("runtime connection");
+    let transaction = client.transaction().await.expect("transaction");
+    let mut fields = create_fields("scope-canary");
+    assert_eq!(
+        reserve_generated_identifiers_for_test(&transaction, &entity, &mut fields)
+            .with_subscriber(subscriber)
+            .await,
+        Err(MutationError::Unavailable)
+    );
+    transaction.rollback().await.expect("failure rolls back");
+
+    let output = String::from_utf8(logs.0.lock().unwrap().clone()).unwrap();
+    assert!(output.contains("SQLSTATE 42501"), "{output}");
+    for canary in ["scope-canary", "P-0001"] {
+        assert!(
+            !output.contains(canary),
+            "allocator failure logs carry no record values: {output}"
+        );
+    }
+
+    database.cleanup().await;
+}
+
+#[derive(Clone, Default)]
+struct Logs(Arc<Mutex<Vec<u8>>>);
+impl io::Write for Logs {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Logs {
+    type Writer = Self;
+    fn make_writer(&'a self) -> Self::Writer {
+        self.clone()
+    }
 }
 
 fn quote_identifier(value: &str) -> String {
