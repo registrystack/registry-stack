@@ -9,14 +9,14 @@ own `breg/ctl-report/v1alpha1` version.
 | Subject | Format | Current version | Schema |
 |---|---|---|---|
 | `model` | `BRegModelExplanation` | `v1alpha6` | `ModelExplanation.schema.json` |
-| `access` | `BRegAccessExplanation` | `v1alpha6` | `AccessExplanation.schema.json` |
+| `access` | `BRegAccessExplanation` | `v1alpha7` | `AccessExplanation.schema.json` |
 | `access --scenario` | `BRegAccessPreview` | `v1alpha4` | `AccessPreview.schema.json` |
-| `actions` | `BRegActionsExplanation` | `v1alpha6` | `ActionsExplanation.schema.json` |
-| `proposals` | `BRegProposalsExplanation` | `v1alpha2` | `ProposalsExplanation.schema.json` |
+| `actions` | `BRegActionsExplanation` | `v1alpha7` | `ActionsExplanation.schema.json` |
+| `proposals` | `BRegProposalsExplanation` | `v1alpha3` | `ProposalsExplanation.schema.json` |
 | `routes` | `BRegRoutesExplanation` | `v1alpha6` | `RoutesExplanation.schema.json` |
 | `queries` | `BRegQueriesExplanation` | `v1alpha5` | `QueriesExplanation.schema.json` |
 | `events` | `BRegEventsExplanation` | `v1alpha6` | `EventsExplanation.schema.json` |
-| `lifecycle` | `BRegLifecycleExplanation` | `v1alpha7` | `LifecycleExplanation.schema.json` |
+| `lifecycle` | `BRegLifecycleExplanation` | `v1alpha8` | `LifecycleExplanation.schema.json` |
 
 Each format's identifier is
 `id.registrystack.org/formats/breg/<format>/<version>`, with the format name
@@ -30,6 +30,19 @@ execution. The removed `change-requests` subject has no current example or
 schema.
 
 ## Version changes
+
+Actions `v1alpha7` and Proposals `v1alpha3` add
+`migrationReviewRevision`, the digest of the Action behavior contract used to
+decide whether an activation change requires migration review.
+
+Access `v1alpha7` names the target Record type, through Record type, and route
+on every read-path grant. Its `rowReach` inventory includes a `read_path`
+surface under the disclosed target Record type, with the root profile's row
+boundaries and an exact source path back to the grant.
+
+Lifecycle `v1alpha8` adds `recoveryReasons` to every transition. `retry`
+recovers `dependency-outage` and `lease-expired`; other transitions currently
+report an empty list.
 
 Model and Access `v1alpha6` add dataset and access-profile display inventories.
 Model also retains field display and module origins, and adds `authoring.documents`.

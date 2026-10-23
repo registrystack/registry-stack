@@ -12,6 +12,18 @@ use registry_platform_yaml::{
 };
 use serde::{Deserialize, Deserializer};
 
+/// A bounded, nonblank display label intended to render on one line.
+///
+/// `DisplayText` owns the Unicode presentation-safety rule. Casework adds the
+/// single-line control-character rule for labels shown in compact lists and
+/// task headers.
+pub(crate) fn valid_display_label(value: &str, maximum_bytes: usize) -> bool {
+    !value.trim().is_empty()
+        && value.len() <= maximum_bytes
+        && value.chars().all(|character| !character.is_control())
+        && registry_platform_yaml::DisplayText::new(value).is_ok()
+}
+
 /// A whole number from `MIN` to `MAX` (CFG-QTY-4).
 pub fn bounded_u32<'de, D, const MIN: u32, const MAX: u32>(deserializer: D) -> Result<u32, D::Error>
 where

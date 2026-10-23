@@ -176,7 +176,7 @@ pub(super) fn validate_step(
             | ProposalJourneyOperation::Rebase
     ) || *operation == ProposalJourneyOperation::Revise && !input.is_empty()
     {
-        validate_action_input_map(input, action, captures, None, false)?;
+        validate_action_input_map(input, action, captures, None, Some(&step.id), false)?;
     } else if !input.is_empty() {
         return Err(FixtureError::JourneyShapeRefused);
     }
@@ -201,6 +201,8 @@ pub(super) fn validate_step(
         &expect,
         Operation::Invoke,
         &profile.readable_fields,
+        &step.id,
+        &step.access_profile,
         step.capture.is_some(),
         false,
     )?;

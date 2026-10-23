@@ -22,6 +22,7 @@ FIPS_DYLIB = re.compile(r"^libaws_lc_fips_[A-Za-z0-9_]+\.dylib$")
 SUPPORTED_SOURCE_PREFIX = "@rpath/"
 MACOS_DEPLOYMENT_TARGET = (11, 0, 0)
 MACOS_DEPLOYMENT_TARGET_TEXT = "11.0"
+SYSTEM_LOAD_PREFIXES = ("/usr/lib/", "/System/Library/")
 
 
 class PackagingError(ValueError):
@@ -103,6 +104,15 @@ def _assert_supported_macos_deployment_target(path: Path) -> None:
             raise PackagingError(
                 f"macOS deployment target {minimum} exceeds supported "
                 f"{MACOS_DEPLOYMENT_TARGET_TEXT}: {path}"
+            )
+
+
+def _assert_plain_macos_loads(path: Path) -> None:
+    _assert_supported_macos_deployment_target(path)
+    for command in _load_commands(path):
+        if not command.startswith(SYSTEM_LOAD_PREFIXES):
+            raise PackagingError(
+                f"non-system macOS load command in plain binary {path}: {command}"
             )
 
 
@@ -359,10 +369,69 @@ def archive_macos_fips_binary(
     return libraries
 
 
+def archive_plain_macos_binary(
+    *,
+    binary: Path,
+    asset_name: str,
+    notice: Path,
+    output: Path,
+) -> None:
+    """Create one deterministic macOS archive with no bundled runtime libraries."""
+
+    if Path(asset_name).name != asset_name or not asset_name:
+        raise PackagingError(f"asset name must be one basename: {asset_name}")
+    if not asset_name.endswith("-macos-arm64"):
+        raise PackagingError(
+            f"asset name is not a macOS arm64 release asset: {asset_name}"
+        )
+    _regular_file(binary, "macOS release binary")
+    _regular_file(notice, "third-party notice")
+    _assert_plain_macos_loads(binary)
+
+    with tempfile.TemporaryDirectory(prefix="registry-macos-plain-") as temporary:
+        staging = Path(temporary)
+        staged_binary = staging / asset_name
+        shutil.copyfile(binary, staged_binary)
+        staged_binary.chmod(0o755)
+        staged_notice = staging / "THIRD_PARTY_NOTICES"
+        shutil.copyfile(notice, staged_notice)
+        staged_notice.chmod(0o644)
+        _write_deterministic_archive(
+            output,
+            [
+                (staged_binary, asset_name, 0o755),
+                (staged_notice, "THIRD_PARTY_NOTICES", 0o644),
+            ],
+        )
+
+
 def extract_macos_binary_archive(
     archive: Path, destination: Path, expected_executable: str
 ) -> Path:
     """Strictly extract one self-contained Registry Stack macOS binary."""
+
+    return _extract_macos_binary_archive(
+        archive, destination, expected_executable, require_fips=True
+    )
+
+
+def extract_plain_macos_binary_archive(
+    archive: Path, destination: Path, expected_executable: str
+) -> Path:
+    """Strictly extract one Registry Stack macOS binary with no bundled dylibs."""
+
+    return _extract_macos_binary_archive(
+        archive, destination, expected_executable, require_fips=False
+    )
+
+
+def _extract_macos_binary_archive(
+    archive: Path,
+    destination: Path,
+    expected_executable: str,
+    *,
+    require_fips: bool,
+) -> Path:
 
     _regular_file(archive, "macOS binary archive")
     if Path(expected_executable).name != expected_executable or not expected_executable:
@@ -385,7 +454,14 @@ def extract_macos_binary_archive(
                 name for name in names if FIPS_DYLIB.fullmatch(name) is not None
             )
             expected = [expected_executable, *libraries, "THIRD_PARTY_NOTICES"]
-            if not libraries or names != expected:
+            if require_fips:
+                canonical_roster = bool(libraries) and names == expected
+            else:
+                canonical_roster = not libraries and len(names) == 2 and set(names) == {
+                    expected_executable,
+                    "THIRD_PARTY_NOTICES",
+                }
+            if not canonical_roster:
                 raise PackagingError(
                     "macOS binary archive member roster is not canonical: "
                     f"expected {expected}, found {names}"
@@ -438,10 +514,19 @@ def main() -> int:
     archive.add_argument("--library-root", required=True, action="append", type=Path)
     archive.add_argument("--notice", required=True, type=Path)
     archive.add_argument("--output", required=True, type=Path)
+    archive_plain = subparsers.add_parser("archive-plain")
+    archive_plain.add_argument("--binary", required=True, type=Path)
+    archive_plain.add_argument("--asset-name", required=True)
+    archive_plain.add_argument("--notice", required=True, type=Path)
+    archive_plain.add_argument("--output", required=True, type=Path)
     extract = subparsers.add_parser("extract")
     extract.add_argument("--archive", required=True, type=Path)
     extract.add_argument("--destination", required=True, type=Path)
     extract.add_argument("--expected-executable", required=True)
+    extract_plain = subparsers.add_parser("extract-plain")
+    extract_plain.add_argument("--archive", required=True, type=Path)
+    extract_plain.add_argument("--destination", required=True, type=Path)
+    extract_plain.add_argument("--expected-executable", required=True)
     args = parser.parse_args()
     try:
         if args.command == "archive":
@@ -452,8 +537,19 @@ def main() -> int:
                 notice=args.notice,
                 output=args.output,
             )
-        else:
+        elif args.command == "archive-plain":
+            archive_plain_macos_binary(
+                binary=args.binary,
+                asset_name=args.asset_name,
+                notice=args.notice,
+                output=args.output,
+            )
+        elif args.command == "extract":
             extract_macos_binary_archive(
+                args.archive, args.destination, args.expected_executable
+            )
+        else:
+            extract_plain_macos_binary_archive(
                 args.archive, args.destination, args.expected_executable
             )
     except (OSError, PackagingError) as error:

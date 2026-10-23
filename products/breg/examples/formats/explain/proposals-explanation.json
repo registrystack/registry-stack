@@ -338,6 +338,7 @@
           }
         }
       ],
+      "migrationReviewRevision": "sha256:0c2bfdcc4d48d0b8e7143ee4679c54c7e7a7265ade70c7c50b7c6b5fc4ccb495",
       "permissions": [
         {
           "default": false,
@@ -601,6 +602,7 @@
           }
         }
       ],
+      "migrationReviewRevision": "sha256:f47a8179064b71687f210b7455d382fe6629c6e4a9a962bebfd201d761ae3cf0",
       "permissions": [
         {
           "default": false,
@@ -683,6 +685,6 @@
       "revision": "sha256:9237300ee419a0014c3b123cc7ac90eb9623cb4c45bba4a65c03936083299f1d"
     }
   ],
-  "apiVersion": "id.registrystack.org/formats/breg/proposals-explanation/v1alpha2",
+  "apiVersion": "id.registrystack.org/formats/breg/proposals-explanation/v1alpha3",
   "kind": "BRegProposalsExplanation"
 }

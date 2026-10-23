@@ -313,13 +313,11 @@ if [[ "${platform}" == macos-arm64 ]]; then
 	entry_count=0
 	has_launcher=0
 	has_notices=0
-	has_fips_module=0
 	seen_entries=$'\n'
 	while IFS= read -r entry; do
 		case "${entry}" in
 		"${launcher_name%.tar.gz}") has_launcher=1 ;;
 		THIRD_PARTY_NOTICES) has_notices=1 ;;
-		libaws_lc_fips_*.dylib) has_fips_module=1 ;;
 		*)
 			printf 'Launcher archive has an unsupported entry.\n' >&2
 			exit 3
@@ -332,14 +330,17 @@ if [[ "${platform}" == macos-arm64 ]]; then
 		seen_entries+="${entry}"$'\n'
 		entry_count=$((entry_count + 1))
 	done <<<"${entries}"
-	if [[ "${has_launcher}" -ne 1 || "${has_notices}" -ne 1 ||
-		"${has_fips_module}" -ne 1 ]]; then
+	if [[ "${has_launcher}" -ne 1 || "${has_notices}" -ne 1 ]]; then
 		printf 'Launcher archive is incomplete.\n' >&2
 		exit 3
 	fi
 	listed_count=0
 	while IFS= read -r item; do
-		if [[ "${item:0:1}" != "-" ]]; then
+		mode="${item%% *}"
+		name="${item##* }"
+		if [[ "${mode:0:1}" != "-" ||
+			("${name}" == "${launcher_name%.tar.gz}" && "${mode}" != "-rwxr-xr-x") ||
+			("${name}" == THIRD_PARTY_NOTICES && "${mode}" != "-rw-r--r--") ]]; then
 			printf 'Launcher archive contains a nonregular entry.\n' >&2
 			exit 3
 		fi

@@ -107,6 +107,11 @@ class ReleaseRosterTest(TestCase):
             self.assertFalse(release_roster.coordinator_in_release((0, 41, 99)))
             self.assertTrue(release_roster.coordinator_in_release((0, 42, 0)))
 
+    def test_coordinator_binary_release_does_not_release_its_image(self):
+        self.assertFalse(release_roster.coordinator_binaries_in_release((0, 43, 99)))
+        self.assertTrue(release_roster.coordinator_binaries_in_release((0, 44, 0)))
+        self.assertFalse(release_roster.coordinator_in_release((0, 44, 0)))
+
     def test_relay_is_retired_from_v0_39(self) -> None:
         self.assertEqual((0, 39, 0), release_roster.RELAY_RETIREMENT_RELEASE)
         self.assertTrue(release_roster.relay_in_release((0, 38, 0)))

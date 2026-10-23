@@ -51,7 +51,10 @@ pub(crate) async fn install(
              action_title text,
              input jsonb CHECK (input IS NULL OR jsonb_typeof(input) = 'object'),
              input_targets jsonb NOT NULL DEFAULT '[]' CHECK (jsonb_typeof(input_targets) = 'array'),
-             blocked_reason text CHECK (blocked_reason IS NULL OR blocked_reason = 'package-changed'),
+             blocked_reason text
+                 CONSTRAINT registry_proposal_state_blocked_reason_values
+                 CHECK (blocked_reason IS NULL OR blocked_reason IN
+                     ('package-changed','application-refused')),
              detail_erased_at timestamptz,
              created_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
              updated_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
@@ -60,6 +63,28 @@ pub(crate) async fn install(
                  detail_erased_at IS NULL OR state IN ('cancelled','applied','rejected')
              )
          );
+         DO $proposal_state_blocked_reason$
+         BEGIN
+             IF EXISTS (
+                 SELECT 1 FROM pg_catalog.pg_constraint
+                  WHERE conname = 'registry_proposal_state_blocked_reason_check'
+                    AND conrelid = 'registry_internal.registry_proposal_state'::regclass
+             ) THEN
+                 ALTER TABLE registry_internal.registry_proposal_state
+                     DROP CONSTRAINT registry_proposal_state_blocked_reason_check;
+             END IF;
+             IF NOT EXISTS (
+                 SELECT 1 FROM pg_catalog.pg_constraint
+                  WHERE conname = 'registry_proposal_state_blocked_reason_values'
+                    AND conrelid = 'registry_internal.registry_proposal_state'::regclass
+             ) THEN
+                 ALTER TABLE registry_internal.registry_proposal_state
+                     ADD CONSTRAINT registry_proposal_state_blocked_reason_values
+                     CHECK (blocked_reason IS NULL OR blocked_reason IN
+                         ('package-changed','application-refused'));
+             END IF;
+         END;
+         $proposal_state_blocked_reason$;
          CREATE TABLE IF NOT EXISTS registry_internal.registry_proposal_submissions (
              action_id text NOT NULL,
              proposal_id uuid NOT NULL,
@@ -419,6 +444,35 @@ pub(crate) async fn clear_rebase_block(
         SET blocked_reason=NULL WHERE action_id=$1 AND proposal_id=$2 AND state='draft'
         AND detail_erased_at IS NULL",
             &[&action_id, &proposal_id],
+        )
+        .await
+        .map_err(map_store_error)?;
+    if changed != 1 {
+        return Err(MutationError::PreconditionFailed);
+    }
+    Ok(())
+}
+
+/// Mark an exact submitted manual application as refused after its effect
+/// savepoint rolled back. The surrounding transaction still owns the Proposal
+/// state lock, so the marker and revision advance persist together and no
+/// record effect can survive beside them.
+pub(crate) async fn block_manual_application_refusal(
+    transaction: &Transaction<'_>,
+    action_id: &str,
+    proposal_id: Uuid,
+    previous_revision: i64,
+) -> Result<(), MutationError> {
+    let changed = transaction
+        .execute(
+            "UPDATE registry_internal.registry_proposal_state
+                SET blocked_reason='application-refused',
+                    workflow_revision=workflow_revision+1,
+                    updated_at=transaction_timestamp()
+              WHERE action_id=$1 AND proposal_id=$2 AND state='submitted'
+                AND blocked_reason IS NULL AND detail_erased_at IS NULL
+                AND workflow_revision=$3",
+            &[&action_id, &proposal_id, &previous_revision],
         )
         .await
         .map_err(map_store_error)?;
@@ -1244,6 +1298,51 @@ mod tests {
                 .expect("request store schema installs repeatably");
         }
         (database, migration, migration_task)
+    }
+
+    #[tokio::test]
+    async fn install_upgrades_the_legacy_blocked_reason_constraint() {
+        let (database, migration, migration_task) = install_schema().await;
+        migration
+            .batch_execute(
+                "ALTER TABLE registry_internal.registry_proposal_state
+                     DROP CONSTRAINT registry_proposal_state_blocked_reason_values;
+                 ALTER TABLE registry_internal.registry_proposal_state
+                     ADD CONSTRAINT registry_proposal_state_blocked_reason_check
+                     CHECK (blocked_reason IS NULL OR blocked_reason = 'package-changed')",
+            )
+            .await
+            .expect("legacy blocked reason constraint installs");
+
+        install_mutation_schema(&migration, &database.runtime_role)
+            .await
+            .expect("proposal store upgrades the legacy constraint");
+        let proposal_id = Uuid::new_v4();
+        migration
+            .execute(
+                "INSERT INTO registry_internal.registry_proposal_state
+                 (action_id,proposal_id,owner_reference,state,submission_version,
+                  workflow_revision,action_revision,blocked_reason)
+                 VALUES ('legacy-action',$1,'owner','submitted',1,1,'revision',
+                         'application-refused')",
+                &[&proposal_id],
+            )
+            .await
+            .expect("upgraded constraint accepts a durable application refusal");
+        let legacy_constraints = migration
+            .query_one(
+                "SELECT count(*)::bigint FROM pg_catalog.pg_constraint
+                  WHERE conname='registry_proposal_state_blocked_reason_check'
+                    AND conrelid='registry_internal.registry_proposal_state'::regclass",
+                &[],
+            )
+            .await
+            .expect("legacy constraint count loads")
+            .get::<_, i64>(0);
+        assert_eq!(legacy_constraints, 0);
+
+        migration_task.abort();
+        database.cleanup().await;
     }
 
     fn entity(value: &str) -> EntityId {

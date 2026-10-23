@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://id.registrystack.org/schemas/breg/access-explanation/access-explanation.v1alpha6.schema.json",
+  "$id": "https://id.registrystack.org/schemas/breg/access-explanation/access-explanation.v1alpha7.schema.json",
   "title": "AccessExplanation",
   "description": "Wire shape of `explanation` for `bregctl explain access` without `--scenario`. Evaluation-rule strings are pinned. Record grants retain compiled authority with inspection-only explicit row boundaries and allowCount. Routes, actions and rowReach follow the compiled model, except pinned routes.entries[].recordType. claimContract remains opaque except principalClaims and its success/error relationship with claimContractError. Consent and statisticalDatasets are pinned in full.",
   "type": "object",
@@ -27,7 +27,7 @@
   ],
   "properties": {
     "apiVersion": {
-      "const": "id.registrystack.org/formats/breg/access-explanation/v1alpha6"
+      "const": "id.registrystack.org/formats/breg/access-explanation/v1alpha7"
     },
     "kind": {
       "const": "BRegAccessExplanation"
@@ -139,6 +139,34 @@
                 },
                 "allowCount": {
                   "type": "boolean"
+                },
+                "readPaths": {
+                  "type": "array",
+                  "description": "Relationship grants declared on this source Record type. Each grant names the disclosed target, joining Record type, and route without requiring a model-report join.",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "path",
+                      "targetRecordType",
+                      "throughRecordType",
+                      "route"
+                    ],
+                    "properties": {
+                      "path": {
+                        "$ref": "#/$defs/LocalId"
+                      },
+                      "targetRecordType": {
+                        "$ref": "#/$defs/LocalId"
+                      },
+                      "throughRecordType": {
+                        "$ref": "#/$defs/LocalId"
+                      },
+                      "route": {
+                        "$ref": "#/$defs/LocalId"
+                      }
+                    },
+                    "x-registry-passthrough": "The inspector retains the compiled read-path permission and adds targetRecordType, throughRecordType, and route for inspection."
+                  }
                 }
               },
               "x-registry-passthrough": "The inspector retains the compiled AccessProfileSource members unchanged except rowBoundaries and allowCount. Only those explicit defaults and the profile id are pinned here; other members follow the compiled contract."
@@ -154,10 +182,42 @@
     },
     "rowReach": {
       "type": "array",
-      "description": "Passthrough of the compiled model's row-reach explanation. Action target entries identify their runtime-enforced authority as additional to ordinary Record grants, state whether any direct Record grant exists for the same profile and Record type, and retain their compiled uses. Grant existence does not compare operations or row boundaries and does not imply that Action target authority grants ordinary CRUD. Shape follows RowReachExplanation and is outside this contract version.",
+      "description": "The compiled model's row-reach explanation. Read-path entries identify the disclosed target Record type while retaining the root profile's row boundaries and an exact source path to the grant. Action target entries identify their runtime-enforced authority as additional to ordinary Record grants, state whether any direct Record grant exists for the same profile and Record type, and retain their compiled uses. Grant existence does not compare operations or row boundaries and does not imply that Action target authority grants ordinary CRUD.",
       "items": {
         "type": "object",
-        "x-registry-passthrough": "bregctl writes each row-reach explanation as the engine holds it; its shape follows RowReachExplanation and is outside this contract version."
+        "required": [
+          "recordType",
+          "profile",
+          "sourcePath",
+          "surface",
+          "rowBoundaries"
+        ],
+        "properties": {
+          "recordType": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "profile": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "sourcePath": {
+            "type": "string",
+            "minLength": 1
+          },
+          "surface": {
+            "enum": [
+              "record",
+              "read_path",
+              "action_target",
+              "proposal_target"
+            ],
+            "x-registry-member-names": true
+          },
+          "rowBoundaries": {
+            "type": "array",
+            "x-registry-passthrough": "The inspector retains the compiler's boundary list exactly; an empty list is the compiled representation of unrestricted row reach."
+          }
+        },
+        "x-registry-passthrough": "bregctl writes each row-reach explanation as the engine holds it; the target Record type, profile, source path, surface, and row boundaries are pinned. Other members follow RowReachExplanation."
       }
     },
     "claimContract": {

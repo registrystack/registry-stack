@@ -276,6 +276,11 @@ deployment: the package, database, audit destination, identity provider, and the
 `breg` opens. [Check a file before you deploy
 it](../configuration-files/#check-a-file-before-you-deploy-it) describes diagnostics and exit codes.
 
+In JSON check output, every warning has a `rank`. `widens-access` identifies an unrestricted or
+otherwise additional disclosure path that deserves authority review. `performance` identifies an
+unindexed list filter or sort. `hygiene` covers the remaining warnings. Errors omit `rank` because
+they already block the check.
+
 {/* Evidence: crates/registry-bregctl/src/lib.rs, CheckArgs and DoctorArgs;
     crates/registry-bregctl/src/check.rs, check_runtime_file();
     crates/registry-breg/src/runtime_config.rs, check_runtime_config();

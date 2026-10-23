@@ -60,26 +60,29 @@ fn record_mut<'a>(source: &'a mut Value, id: &str) -> &'a mut Value {
 }
 
 fn validates(subject: &str, mut value: Value) {
-    let (schema, kind) = match subject {
+    let (schema, kind, version) = match subject {
         "model" => (
             include_str!("../../../products/breg/contracts/explain/ModelExplanation.schema.json"),
             "BRegModelExplanation",
+            "v1alpha6",
         ),
         "actions" => (
             include_str!("../../../products/breg/contracts/explain/ActionsExplanation.schema.json"),
             "BRegActionsExplanation",
+            "v1alpha7",
         ),
         "access" => (
             include_str!("../../../products/breg/contracts/explain/AccessExplanation.schema.json"),
             "BRegAccessExplanation",
+            "v1alpha7",
         ),
         "events" => (
             include_str!("../../../products/breg/contracts/explain/EventsExplanation.schema.json"),
             "BRegEventsExplanation",
+            "v1alpha6",
         ),
         _ => unreachable!(),
     };
-    let version = "v1alpha6";
     if subject == "model" {
         // The CLI adds source presence; this test covers the compiler projection.
         value["authoring"] = json!({"documents":[{

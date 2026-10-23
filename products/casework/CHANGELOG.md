@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- BREAKING: `caseworkctl --format json` reports now use
+  `id.registrystack.org/formats/casework/report/v1alpha2`. Successful `explain`
+  reports require the new per-policy usage and dependency-scope members and
+  the project-level clock, calendar, and trusted-producer members.
+- Add optional presentation labels to review policies, stages, and routing
+  rules without changing policy binding digests. `caseworkctl explain` now
+  reports those labels, per-policy queue/profile usage, eligible deciding
+  profiles, and project-level clocks, calendars, and trusted producers while
+  preserving the whole-project authority closure.
+- Refuse tabs, line feeds, and carriage returns in queue labels, aligning
+  queue, team, outcome, policy, stage, and routing labels as bounded
+  single-line display text. Warn when new peer labels are visually equivalent.
 - Add shared approval templates for one reviewer, two independent peers, and
   a technical check followed by authorization. `caseworkctl provider add`
   prepares the matching Casework project from a BReg Action, prints missing

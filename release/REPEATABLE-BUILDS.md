@@ -140,8 +140,8 @@ older contract.
 
 Before the payload is checksummed, `release/scripts/check-glibc-floor.sh` reads
 every staged binary and fails the build when one requires a newer GNU libc than
-the floor, or imports a strong symbol with no version at all. The three
-published installer scripts refuse the same two cases before they download
+the floor, or imports a strong symbol with no version at all. Every published
+installer script refuses the same two cases before it downloads
 anything, and carry the floor as a generated block written by
 `release/scripts/render-installer-libc-preflight.py`.
 

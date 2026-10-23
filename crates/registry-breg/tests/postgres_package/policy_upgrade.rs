@@ -187,6 +187,70 @@ async fn reviewed_successor_adds_optional_field_and_proposal_submitter_grant() {
     database.cleanup().await;
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unrelated_optional_field_applies_without_reviewing_proposal_actions() {
+    let (project, bytes) = proposal_policy_sources(false, false);
+    let baseline = compile_proposal_policy(&project, &bytes);
+    let database = TestDatabase::create(1).await;
+    let first = publish_proposal_policy_package(
+        None,
+        fresh_fingerprint(&baseline).await,
+        project,
+        bytes,
+        PackageMigrationPlanInput::InitialCompiledDdl,
+    );
+    let predecessor = load_package(first.path(), &local_context()).unwrap();
+    let active = apply_package(
+        &database,
+        &predecessor,
+        ApplyPrecondition::InitialActivation,
+        Duration::from_secs(5),
+        Duration::from_secs(5),
+    )
+    .await
+    .unwrap();
+    let (project, bytes) = proposal_policy_sources(false, true);
+    let candidate = compile_proposal_policy(&project, &bytes);
+    let fingerprint = fresh_fingerprint(&candidate).await;
+    let changes =
+        compiled_registry_change_set(predecessor.registry(), &candidate, &active.package_digest);
+    assert!(changes
+        .changes
+        .iter()
+        .any(|change| change.code == CompiledRegistryChangeCode::FieldAddedOptional));
+    assert!(!changes
+        .changes
+        .iter()
+        .any(|change| change.code == CompiledRegistryChangeCode::ActionChanged));
+    change_set_to_applicable_migration_plan(&changes)
+        .expect("an unrelated optional field needs no reviewed Action migration");
+    let next = publish_proposal_policy_package(
+        Some(&active.package_digest),
+        fingerprint.clone(),
+        project,
+        bytes,
+        PackageMigrationPlanInput::Successor {
+            prior_registry: Box::new(predecessor.registry().clone()),
+        },
+    );
+    let successor = load_package(next.path(), &local_context()).unwrap();
+    let upgraded = apply_package(
+        &database,
+        &successor,
+        ApplyPrecondition::Successor { current: &active },
+        Duration::from_secs(5),
+        Duration::from_secs(5),
+    )
+    .await
+    .expect("compiler-generated optional-field migration activates with Proposal Actions");
+    assert_eq!(upgraded.schema_fingerprint, fingerprint);
+    assert_eq!(
+        ledger_apply_order(&database, &upgraded.activation_id).await,
+        2
+    );
+    database.cleanup().await;
+}
+
 fn proposal_policy_sources(add_submitter: bool, add_optional_field: bool) -> (Vec<u8>, Vec<u8>) {
     let mut module = json!({
         "apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1", "kind":"BRegModule",

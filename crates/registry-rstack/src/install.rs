@@ -965,17 +965,20 @@ fn unique_generation_name(release: &str) -> Result<String, String> {
 }
 
 fn binary_name(asset_name: &str, release: &str, platform: &str) -> Result<String, String> {
-    let suffix = format!(
-        "-{release}-{platform}{}",
-        if platform == "macos-arm64" {
-            ".tar.gz"
+    let suffix = format!("-{release}-{platform}");
+    let binary = if platform == "macos-arm64" && asset_name == format!("registry-manifest{suffix}")
+    {
+        "registry-manifest"
+    } else {
+        let published_suffix = if platform == "macos-arm64" {
+            format!("{suffix}.tar.gz")
         } else {
-            ""
-        }
-    );
-    let binary = asset_name
-        .strip_suffix(&suffix)
-        .ok_or_else(|| format!("asset {asset_name} has the wrong release/platform suffix"))?;
+            suffix
+        };
+        asset_name
+            .strip_suffix(&published_suffix)
+            .ok_or_else(|| format!("asset {asset_name} has the wrong release/platform suffix"))?
+    };
     if binary.is_empty()
         || !binary
             .bytes()
@@ -1001,7 +1004,12 @@ fn stage_asset(
             .name
             .strip_suffix(".tar.gz")
             .ok_or("archive asset has an invalid name")?;
-        extract_macos_archive(&raw, destination, archived_binary)?;
+        extract_macos_archive(
+            &raw,
+            destination,
+            archived_binary,
+            !matches!(binary, "discovery" | "rstack"),
+        )?;
         fs::rename(destination.join(archived_binary), destination.join(binary))
             .map_err(|error| format!("cannot stage executable {binary}: {error}"))?;
         fs::remove_file(&raw)
@@ -1017,7 +1025,12 @@ fn stage_asset(
     Ok(())
 }
 
-fn extract_macos_archive(archive: &Path, destination: &Path, binary: &str) -> Result<(), String> {
+fn extract_macos_archive(
+    archive: &Path,
+    destination: &Path,
+    binary: &str,
+    requires_fips: bool,
+) -> Result<(), String> {
     let names = Command::new("tar")
         .arg("-tzf")
         .arg(archive)
@@ -1038,27 +1051,7 @@ fn extract_macos_archive(archive: &Path, destination: &Path, binary: &str) -> Re
         .map_err(|_| format!("{binary} archive has non-UTF-8 entry names"))?;
     let listing = std::str::from_utf8(&listing.stdout)
         .map_err(|_| format!("{binary} archive has a non-UTF-8 listing"))?;
-    let mut seen = BTreeSet::new();
-    let mut has_notices = false;
-    let mut has_fips = false;
-    for name in names.lines() {
-        if name == "THIRD_PARTY_NOTICES" {
-            has_notices = true;
-        } else if name.starts_with("libaws_lc_fips_") && name.ends_with(".dylib") {
-            has_fips = true;
-        } else if name != binary {
-            return Err(format!("{binary} archive has an unsupported entry"));
-        }
-        if !seen.insert(name.to_owned()) {
-            return Err(format!("{binary} archive has a duplicate entry"));
-        }
-    }
-    if !seen.contains(binary) || !has_notices || !has_fips {
-        return Err(format!("{binary} archive is incomplete"));
-    }
-    if listing.lines().count() != seen.len() || listing.lines().any(|line| !line.starts_with('-')) {
-        return Err(format!("{binary} archive contains a nonregular entry"));
-    }
+    let seen = validate_macos_archive_entries(names, listing, binary, requires_fips)?;
     let result = Command::new("tar")
         .env("COPYFILE_DISABLE", "1")
         .arg("-xzf")
@@ -1102,14 +1095,62 @@ fn extract_macos_archive(archive: &Path, destination: &Path, binary: &str) -> Re
     Ok(())
 }
 
+fn validate_macos_archive_entries(
+    names: &str,
+    listing: &str,
+    binary: &str,
+    requires_fips: bool,
+) -> Result<BTreeSet<String>, String> {
+    let mut seen = BTreeSet::new();
+    let mut has_notices = false;
+    let mut has_fips = false;
+    for name in names.lines() {
+        if name == "THIRD_PARTY_NOTICES" {
+            has_notices = true;
+        } else if requires_fips && name.starts_with("libaws_lc_fips_") && name.ends_with(".dylib") {
+            has_fips = true;
+        } else if name != binary {
+            return Err(format!("{binary} archive has an unsupported entry"));
+        }
+        if !seen.insert(name.to_owned()) {
+            return Err(format!("{binary} archive has a duplicate entry"));
+        }
+    }
+    if !seen.contains(binary) || !has_notices || (requires_fips && !has_fips) {
+        return Err(format!("{binary} archive is incomplete"));
+    }
+    if listing.lines().count() != seen.len() || listing.lines().any(|line| !line.starts_with('-')) {
+        return Err(format!("{binary} archive contains a nonregular entry"));
+    }
+    Ok(seen)
+}
+
 fn smoke_binary(path: &Path, binary: &str, expected_version: &str) -> Result<(), String> {
     let output = retry_executable_busy(|| Command::new(path).arg("--version").output())
         .map_err(|error| format!("cannot start staged {binary}: {error}"))?;
-    let expected = format!("{binary} {expected_version}\n");
-    if !output.status.success() || output.stdout != expected.as_bytes() {
+    if !output.status.success() || !version_output_matches(&output.stdout, binary, expected_version)
+    {
         return Err(format!("staged {binary} reports an unexpected version"));
     }
     Ok(())
+}
+
+fn version_output_matches(output: &[u8], binary: &str, expected_version: &str) -> bool {
+    let Ok(output) = std::str::from_utf8(output) else {
+        return false;
+    };
+    if binary != "registry-render" {
+        return output == format!("{binary} {expected_version}\n");
+    }
+
+    let prefix = format!("{binary} {expected_version} (typst ");
+    let Some(typst_version) = output
+        .strip_prefix(&prefix)
+        .and_then(|remainder| remainder.strip_suffix(")\n"))
+    else {
+        return false;
+    };
+    parse_release_version(&format!("v{typst_version}")).is_ok()
 }
 
 fn retry_executable_busy<T>(mut operation: impl FnMut() -> io::Result<T>) -> io::Result<T> {
@@ -1130,8 +1171,29 @@ fn retry_executable_busy<T>(mut operation: impl FnMut() -> io::Result<T>) -> io:
 
 #[cfg(test)]
 mod tests {
-    use super::{retry_executable_busy, EXECUTABLE_BUSY_RETRIES};
+    use super::{
+        binary_name, retry_executable_busy, validate_macos_archive_entries, version_output_matches,
+        EXECUTABLE_BUSY_RETRIES,
+    };
     use std::io;
+
+    #[test]
+    fn plain_macos_binary_is_limited_to_registry_manifest() {
+        assert_eq!(
+            binary_name(
+                "registry-manifest-v0.44.0-macos-arm64",
+                "v0.44.0",
+                "macos-arm64",
+            )
+            .unwrap(),
+            "registry-manifest"
+        );
+        assert!(binary_name("breg-v0.44.0-macos-arm64", "v0.44.0", "macos-arm64").is_err());
+        assert_eq!(
+            binary_name("breg-v0.44.0-macos-arm64.tar.gz", "v0.44.0", "macos-arm64",).unwrap(),
+            "breg"
+        );
+    }
 
     #[test]
     fn staged_binary_smoke_recovers_from_transient_executable_busy() {
@@ -1162,5 +1224,105 @@ mod tests {
             result.unwrap_err().kind(),
             io::ErrorKind::ExecutableFileBusy
         );
+    }
+
+    #[test]
+    fn render_version_requires_only_the_canonical_typst_decoration() {
+        assert!(version_output_matches(
+            b"registry-render 0.44.0 (typst 0.15.1)\n",
+            "registry-render",
+            "0.44.0"
+        ));
+
+        for output in [
+            b"registry-render 0.44.0\n".as_slice(),
+            b"registry-render 0.45.0 (typst 0.15.1)\n",
+            b"render 0.44.0 (typst 0.15.1)\n",
+            b"registry-render 0.44.0 (rustc 0.15.1)\n",
+            b"registry-render 0.44.0 (typst 00.15.1)\n",
+            b"registry-render 0.44.0 (typst 0.15.1) extra\n",
+        ] {
+            assert!(
+                !version_output_matches(output, "registry-render", "0.44.0"),
+                "unexpectedly accepted {}",
+                String::from_utf8_lossy(output)
+            );
+        }
+    }
+
+    #[test]
+    fn other_binaries_reject_render_version_decoration() {
+        assert!(version_output_matches(
+            b"bregctl 0.44.0\n",
+            "bregctl",
+            "0.44.0"
+        ));
+        assert!(!version_output_matches(
+            b"bregctl 0.44.0 (typst 0.15.1)\n",
+            "bregctl",
+            "0.44.0"
+        ));
+    }
+
+    #[test]
+    fn discovery_plain_archive_has_an_exact_two_file_roster() {
+        let binary = "discovery-v0.44.0-macos-arm64";
+        let names = format!("{binary}\nTHIRD_PARTY_NOTICES\n");
+        assert!(
+            validate_macos_archive_entries(&names, "- executable\n- notices\n", binary, false)
+                .is_ok()
+        );
+
+        for names in [
+            format!("{binary}\n"),
+            format!("{binary}\nTHIRD_PARTY_NOTICES\nlibaws_lc_fips_extra.dylib\n"),
+            format!("{binary}\nTHIRD_PARTY_NOTICES\nextra\n"),
+            format!("directory/{binary}\nTHIRD_PARTY_NOTICES\n"),
+        ] {
+            assert!(
+                validate_macos_archive_entries(&names, "- file\n- file\n", binary, false).is_err(),
+                "unexpectedly accepted {names:?}"
+            );
+        }
+        assert!(validate_macos_archive_entries(
+            &format!("THIRD_PARTY_NOTICES\n{binary}\n"),
+            "- notices\n- executable\n",
+            binary,
+            false
+        )
+        .is_ok());
+        assert!(validate_macos_archive_entries(
+            &format!("{binary}\nTHIRD_PARTY_NOTICES\n"),
+            "l executable\n- notices\n",
+            binary,
+            false
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn other_macos_archives_still_require_fips_and_notices() {
+        let binary = "bregctl-v0.44.0-macos-arm64";
+        assert!(validate_macos_archive_entries(
+            &format!("{binary}\nTHIRD_PARTY_NOTICES\nlibaws_lc_fips_test.dylib\n"),
+            "- executable\n- notices\n- dylib\n",
+            binary,
+            true
+        )
+        .is_ok());
+        assert!(validate_macos_archive_entries(
+            &format!("{binary}\nTHIRD_PARTY_NOTICES\n"),
+            "- executable\n- notices\n",
+            binary,
+            true
+        )
+        .is_err());
+        assert!(validate_macos_archive_entries(
+            &format!("{binary}\nlibaws_lc_fips_test.dylib\n"),
+            "- executable\n- dylib\n",
+            binary,
+            true
+        )
+        .is_err());
     }
 }

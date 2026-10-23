@@ -3642,20 +3642,20 @@
       }
     },
     {
-      "uri": "https://id.registrystack.org/schemas/breg/access-explanation/access-explanation.v1alpha6.schema.json",
+      "uri": "https://id.registrystack.org/schemas/breg/access-explanation/access-explanation.v1alpha7.schema.json",
       "kind": "schema",
       "status": "active",
-      "compatibilityLine": "v1alpha6",
+      "compatibilityLine": "v1alpha7",
       "owner": "breg",
       "title": "AccessExplanation",
       "description": "Base Registry Engine bregctl explain output JSON Schemas, written by hand and held to bregctl's output by its contract test.",
       "source": {
         "path": "products/breg/contracts/explain/AccessExplanation.schema.json",
-        "sha256": "4f7557a41597d271d3bb6109d327cda4ece33b794785cc4f5ec1d6bb6391d84f"
+        "sha256": "868846b864b32a31087c4c2fc8b99ef232151641a7fd848f3bca3d516f284544"
       },
       "artifact": {
         "path": "products/breg/contracts/explain/AccessExplanation.schema.json",
-        "sha256": "4f7557a41597d271d3bb6109d327cda4ece33b794785cc4f5ec1d6bb6391d84f",
+        "sha256": "868846b864b32a31087c4c2fc8b99ef232151641a7fd848f3bca3d516f284544",
         "mediaType": "application/schema+json"
       }
     },
@@ -3687,7 +3687,7 @@
       "description": "Base Registry Engine portable Action contract export schema, reproduced from the canonical compiled project.",
       "source": {
         "path": "crates/registry-breg/src/artifacts.rs",
-        "sha256": "6a9f6ae09d4f02d30cbe7694bf59249e9f3b2ed9ee0e29936bbd15852a034138"
+        "sha256": "23687fb23e57f4a886c53f5af845c8c1ffd0bc6d86008ef7e7faa4153ba63386"
       },
       "artifact": {
         "path": "products/breg/generated/facility/generated/action-contracts.schema.json",
@@ -3696,20 +3696,20 @@
       }
     },
     {
-      "uri": "https://id.registrystack.org/schemas/breg/actions-explanation/actions-explanation.v1alpha6.schema.json",
+      "uri": "https://id.registrystack.org/schemas/breg/actions-explanation/actions-explanation.v1alpha7.schema.json",
       "kind": "schema",
       "status": "active",
-      "compatibilityLine": "v1alpha6",
+      "compatibilityLine": "v1alpha7",
       "owner": "breg",
       "title": "ActionsExplanation",
       "description": "Base Registry Engine bregctl explain output JSON Schemas, written by hand and held to bregctl's output by its contract test.",
       "source": {
         "path": "products/breg/contracts/explain/ActionsExplanation.schema.json",
-        "sha256": "23566aecb0dc32a049df59c9b7c5eb9f9c838e12c3ff26b59c53c4e8e3740111"
+        "sha256": "d0263a9335d657c23078e5190210f580db884a0608bd6591daebfcb2447a7bbd"
       },
       "artifact": {
         "path": "products/breg/contracts/explain/ActionsExplanation.schema.json",
-        "sha256": "23566aecb0dc32a049df59c9b7c5eb9f9c838e12c3ff26b59c53c4e8e3740111",
+        "sha256": "d0263a9335d657c23078e5190210f580db884a0608bd6591daebfcb2447a7bbd",
         "mediaType": "application/schema+json"
       }
     },
@@ -3804,20 +3804,20 @@
       }
     },
     {
-      "uri": "https://id.registrystack.org/schemas/breg/lifecycle-explanation/lifecycle-explanation.v1alpha7.schema.json",
+      "uri": "https://id.registrystack.org/schemas/breg/lifecycle-explanation/lifecycle-explanation.v1alpha8.schema.json",
       "kind": "schema",
       "status": "active",
-      "compatibilityLine": "v1alpha7",
+      "compatibilityLine": "v1alpha8",
       "owner": "breg",
       "title": "LifecycleExplanation",
       "description": "Base Registry Engine bregctl explain output JSON Schemas, written by hand and held to bregctl's output by its contract test.",
       "source": {
         "path": "products/breg/contracts/explain/LifecycleExplanation.schema.json",
-        "sha256": "a1e56400da48517aa1cc72cb5707b78d7b091bd3cb2bc215d69375558c017b9d"
+        "sha256": "738c5151b6085ee5a5da8d60334f70b179e740bc1af9cb2888325436c338d546"
       },
       "artifact": {
         "path": "products/breg/contracts/explain/LifecycleExplanation.schema.json",
-        "sha256": "a1e56400da48517aa1cc72cb5707b78d7b091bd3cb2bc215d69375558c017b9d",
+        "sha256": "738c5151b6085ee5a5da8d60334f70b179e740bc1af9cb2888325436c338d546",
         "mediaType": "application/schema+json"
       }
     },
@@ -3930,20 +3930,20 @@
       }
     },
     {
-      "uri": "https://id.registrystack.org/schemas/breg/proposals-explanation/proposals-explanation.v1alpha2.schema.json",
+      "uri": "https://id.registrystack.org/schemas/breg/proposals-explanation/proposals-explanation.v1alpha3.schema.json",
       "kind": "schema",
       "status": "active",
-      "compatibilityLine": "v1alpha2",
+      "compatibilityLine": "v1alpha3",
       "owner": "breg",
       "title": "ProposalsExplanation",
       "description": "Base Registry Engine bregctl explain output JSON Schemas, written by hand and held to bregctl's output by its contract test.",
       "source": {
         "path": "products/breg/contracts/explain/ProposalsExplanation.schema.json",
-        "sha256": "9f61d4960c65b84d505d00f783e17387d327f0214784cba88e2a840c4a738fc9"
+        "sha256": "809cf2a9a47ab9ba73dd108671963982724f8c9852f5c3ff904496704d0c8357"
       },
       "artifact": {
         "path": "products/breg/contracts/explain/ProposalsExplanation.schema.json",
-        "sha256": "9f61d4960c65b84d505d00f783e17387d327f0214784cba88e2a840c4a738fc9",
+        "sha256": "809cf2a9a47ab9ba73dd108671963982724f8c9852f5c3ff904496704d0c8357",
         "mediaType": "application/schema+json"
       }
     },
@@ -4047,7 +4047,7 @@
       "description": "Registry Casework development clients JSON Schema.",
       "source": {
         "path": "crates/registry-caseworkctl/src/schema.rs",
-        "sha256": "78b8597ecf843091e0d23079e87a2b4edab3d9671375346a4ac1121635ee1745"
+        "sha256": "0410eb375ae9cb9ada7e7cd81bdb897b0843de84972dea876c70d3851c5b76c2"
       },
       "artifact": {
         "path": "products/casework/generated/dev-clients/dev-clients.schema.json",
@@ -4105,15 +4105,15 @@
       },
       "artifact": {
         "path": "products/casework/generated/project/project.schema.json",
-        "sha256": "2d8387b93154092233274435d0803231f02b84881374c34eb14e113daa9a39e1",
+        "sha256": "618dd00144eced267ce239c8412381a555e488af08cb7d6936e63dd963463b0a",
         "mediaType": "application/schema+json"
       }
     },
     {
-      "uri": "https://id.registrystack.org/schemas/casework/report/report.v1alpha1.schema.json",
+      "uri": "https://id.registrystack.org/schemas/casework/report/report.v1alpha2.schema.json",
       "kind": "schema",
       "status": "active",
-      "compatibilityLine": "v1alpha1",
+      "compatibilityLine": "v1alpha2",
       "owner": "casework",
       "title": "Casework command report",
       "description": "Registry Casework caseworkctl JSON report schemas, generated and held to caseworkctl's output by its contract test.",
@@ -4123,7 +4123,7 @@
       },
       "artifact": {
         "path": "products/casework/contracts/cli/report.schema.json",
-        "sha256": "9634939ed3cb7cfd5c2a6a12a8136fe19eb5ad7aa64d87839ef5c6c8d8fa38e2",
+        "sha256": "5f78c390982a9b7f84ce089d68d48a2cb3f1a69273c1a5bf7b49ca023785da32",
         "mediaType": "application/schema+json"
       }
     },

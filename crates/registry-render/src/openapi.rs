@@ -65,7 +65,13 @@ pub const OPENAPI_JSON: &str = r#"{
         },
         "responses": {
           "200": {
-            "description": "Rendered PDF. Default representation is application/pdf with X-Registry-Pdf-Sha256, X-Registry-Data-Sha256, X-Registry-Document-Version headers. With Accept: application/json, the body is {pdfBase64, pdfSha256, dataSha256, documentVersion, warnings}.",
+            "description": "Rendered PDF. Default representation is application/pdf with X-Registry-Pdf-Sha256, X-Registry-Data-Sha256, X-Registry-Document-Version and X-Registry-Warning-Count headers. A nonzero warning count means the host should inspect the JSON warnings before releasing the document. With Accept: application/json, the body is {pdfBase64, pdfSha256, dataSha256, documentVersion, warnings}.",
+            "headers": {
+              "X-Registry-Warning-Count": {
+                "description": "Number of rendering warnings, including zero. Present on PDF responses; warning text is available in the JSON representation.",
+                "schema": { "type": "integer", "minimum": 0 }
+              }
+            },
             "content": {
               "application/pdf": { "schema": { "type": "string", "format": "binary" } },
               "application/json": { "schema": { "type": "object" } }

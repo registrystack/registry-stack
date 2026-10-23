@@ -166,6 +166,15 @@ class NightlyWorkflowTest(unittest.TestCase):
         self.assertLess(install, select)
         self.assertLess(select, first_cargo.start())
 
+    def test_arm64_build_compiles_the_nightly_launcher(self):
+        recipe = (ROOT / "release/scripts/build-nightly-linux-arm64.sh").read_text()
+        self.assertIn('release_roster.py rstack-in-release "${version}"', recipe)
+        self.assertIn(
+            "cargo build --release --locked -p registry-rstack --bin rstack "
+            '--target "${target}"',
+            recipe,
+        )
+
     def test_no_numbered_release_promotion_or_mutable_image_alias(self):
         self.assertNotIn("REGISTRY_RELEASE_TAG:", self.text)
         self.assertNotIn(":nightly", self.text)

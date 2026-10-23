@@ -289,8 +289,13 @@ class ReleaseCandidateV3Test(TestCase):
         }
         inventory = self.module.stack_payload_inventory(version, [component])
         image_names = self.module.stack_image_names(version, [component])
-        self.assertNotIn(f"discovery-v{version}-linux-amd64", inventory)
-        self.assertNotIn(f"discoveryctl-v{version}-linux-amd64", inventory)
+        registry = self.module.release_units.load_registry()
+        discovery_assets = {
+            name
+            for name in inventory
+            if registry.artifact_owner(name) == "discovery"
+        }
+        self.assertEqual(set(), discovery_assets)
         self.assertEqual(
             "distribution",
             inventory[f"registry-stack-v{version}-distribution.json"],

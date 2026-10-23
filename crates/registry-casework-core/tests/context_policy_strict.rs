@@ -7,6 +7,8 @@ use serde_json::json;
 
 const STANDALONE: &str =
     include_str!("../../../products/casework/examples/standalone-decision/casework.yaml");
+const ADVANCED: &str =
+    include_str!("../../../products/casework/examples/multi-stage-routing-clocks/casework.yaml");
 
 #[test]
 fn submitted_context_refuses_unknown_members_in_json_and_located_yaml() {
@@ -88,6 +90,111 @@ fn project_check_keeps_a_positioned_duplicate_label_warning() {
     assert!(finding.message.contains("`decisions`"));
     assert!(finding.message.contains("`decisions-copy`"));
     assert!(!finding.message.contains("Decisions awaiting review"));
+}
+
+#[test]
+fn queue_labels_refuse_tab_line_feed_and_carriage_return() {
+    for (escaped, character) in [("\\t", '\t'), ("\\n", '\n'), ("\\r", '\r')] {
+        let changed = STANDALONE.replacen(
+            "label: Decisions awaiting review",
+            &format!("label: \"Decisions{escaped}awaiting review\""),
+            1,
+        );
+        let report = CaseworkProject::read("casework.yaml", changed.as_bytes())
+            .expect_err("a queue label must be one line");
+        let finding = report
+            .diagnostics()
+            .iter()
+            .find(|diagnostic| diagnostic.code == "casework.queue.invalid-label")
+            .unwrap_or_else(|| {
+                panic!("missing queue label refusal for {character:?}: {report:#?}")
+            });
+        assert_eq!(finding.path, "/queues/decisions/label");
+    }
+}
+
+#[test]
+fn team_and_outcome_labels_refuse_tab_line_feed_and_carriage_return() {
+    for character in ['\t', '\n', '\r'] {
+        let invalid = format!("Regional{character}review");
+
+        let mut team_project = CaseworkProject::read("casework.yaml", ADVANCED.as_bytes())
+            .unwrap()
+            .value;
+        team_project.teams[0].label.clone_from(&invalid);
+        assert!(team_project
+            .findings()
+            .iter()
+            .any(|finding| finding.pointer == "/teams/regional-team/label"));
+
+        let mut outcome_project = CaseworkProject::read("casework.yaml", ADVANCED.as_bytes())
+            .unwrap()
+            .value;
+        outcome_project.review_policies[0].outcomes[0]
+            .label
+            .clone_from(&invalid);
+        assert!(outcome_project.findings().iter().any(|finding| {
+            finding.pointer == "/reviewPolicies/regional-review/outcomes/approved/label"
+        }));
+    }
+}
+
+#[test]
+fn policy_stage_and_routing_labels_are_single_line() {
+    for (from, to, code, path) in [
+        (
+            "  regional-review:\n    label: Regional review",
+            "  regional-review:\n    label: \"Regional\\nreview\"",
+            "casework.review-policy.invalid-label",
+            "/reviewPolicies/regional-review/label",
+        ),
+        (
+            "label: Technical review",
+            "label: \"Technical\\treview\"",
+            "casework.review-policy.invalid-stage-label",
+            "/reviewPolicies/regional-review/stages/0/label",
+        ),
+        (
+            "label: Northern requests",
+            "label: \"Northern\\rrequests\"",
+            "casework.routing.invalid-label",
+            "/reviewPolicies/regional-review/routing/0/label",
+        ),
+    ] {
+        let changed = ADVANCED.replacen(from, to, 1);
+        let report = CaseworkProject::read("casework.yaml", changed.as_bytes())
+            .expect_err("compact labels must be one line");
+        let finding = report
+            .diagnostics()
+            .iter()
+            .find(|diagnostic| diagnostic.code == code)
+            .unwrap_or_else(|| panic!("missing {code}: {report:#?}"));
+        assert_eq!(finding.path, path);
+    }
+}
+
+#[test]
+fn duplicate_stage_labels_are_warned_without_repeating_the_label() {
+    let changed = ADVANCED.replacen("label: Final signoff", "label: technical review", 1);
+    let decoded = CaseworkProject::read("casework.yaml", changed.as_bytes())
+        .unwrap_or_else(|report| panic!("{}", report.render_human()));
+    let warning = decoded
+        .document
+        .warnings()
+        .diagnostics()
+        .iter()
+        .find(|diagnostic| diagnostic.code == "casework.review-policy.duplicate-stage-label")
+        .cloned()
+        .expect("duplicate stage labels produce a warning");
+    assert_eq!(
+        warning.path,
+        "/reviewPolicies/regional-review/stages/1/label"
+    );
+    assert_eq!(
+        warning.related[0].path,
+        "/reviewPolicies/regional-review/stages/0/label"
+    );
+    assert!(!warning.message.to_lowercase().contains("technical review"));
 }
 
 #[test]

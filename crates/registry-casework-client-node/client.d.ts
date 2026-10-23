@@ -72,7 +72,7 @@ export type DirectoryTargetPage = Page<DirectoryMember>
 export interface QueueRecord { id: string; label: string }
 export type RoutingPredicate = { equals: JsonValue } | { oneOf: ReadonlyArray<JsonValue> }
 export interface RoutingCondition { stage?: string; fields?: Readonly<Record<string, RoutingPredicate>> }
-export interface RoutingRule { id: string; because: string; when: RoutingCondition; queue: string }
+export interface RoutingRule { id: string; label?: string; because: string; when: RoutingCondition; queue: string }
 export type WorkingWeekday = 'monday' | 'tuesday' | 'wednesday' | 'thursday' | 'friday' | 'saturday' | 'sunday'
 export interface CalendarPolicy { id: string; timezone: string; workingWeekdays: ReadonlyArray<WorkingWeekday>; holidaySet: string }
 export interface WorkingDays { workingDays: SafeInteger }
@@ -364,15 +364,16 @@ export interface ReviewAccountabilityRecord {
   occurredAt: string; retainedUntil: string
   decisionReceipt?: ReviewDecisionReceipt
 }
-export interface ReviewStagePolicy { id: string; queue: string; decidingProfiles: ReadonlyArray<string>; requiredApprovals: SafeInteger; negativeDecisions?: 'settle' | 'advise'; excludeInitiator?: boolean; excludePreviousStageReviewers?: boolean }
+export interface ReviewStagePolicy { id: string; label?: string; queue: string; decidingProfiles: ReadonlyArray<string>; requiredApprovals: SafeInteger; negativeDecisions?: 'settle' | 'advise'; excludeInitiator?: boolean; excludePreviousStageReviewers?: boolean }
 export interface ReviewRetentionPolicy { terminalRetentionDays: SafeInteger; accountabilityRetentionDays: SafeInteger }
 export interface ReviewContextContract { id: string; revision: ContentDigest; schemaDigest: ContentDigest }
 export type ReviewContextPolicy = { mode: 'submitted' } | { mode: 'current-source'; provider: string; contract: ReviewContextContract }
 export type ReviewContextCapability = 'human-display' | 'service-status' | 'task-grant-context' | 'routing-context'
 export interface ReviewContextProviderPolicy { id: string; capabilities: ReadonlyArray<ReviewContextCapability>; sourceNamespace: string; deploymentRef: string; serviceProfiles?: Partial<Record<ReviewContextCapability, string>> }
-export interface ReviewPolicy { id: string; version: string; purpose: 'approval' | 'answer'; context: ReviewContextPolicy; routing?: ReadonlyArray<RoutingRule>; stages: ReadonlyArray<ReviewStagePolicy>; clocks?: ReadonlyArray<string>; retention: ReviewRetentionPolicy; displaySchema: JsonValue; resultSchema?: JsonValue; outcomes?: ReadonlyArray<{ id: string; label: string; settlement: 'approved' | 'rejected' | 'changes-requested' | 'answered'; reasonRequired: boolean; publicReason: 'required' | 'optional' | 'none'; resultRequired?: boolean }> }
+export interface ReviewPolicy { id: string; label?: string; version: string; purpose: 'approval' | 'answer'; context: ReviewContextPolicy; routing?: ReadonlyArray<RoutingRule>; stages: ReadonlyArray<ReviewStagePolicy>; clocks?: ReadonlyArray<string>; retention: ReviewRetentionPolicy; displaySchema: JsonValue; resultSchema?: JsonValue; outcomes?: ReadonlyArray<{ id: string; label: string; settlement: 'approved' | 'rejected' | 'changes-requested' | 'answered'; reasonRequired: boolean; publicReason: 'required' | 'optional' | 'none'; resultRequired?: boolean }> }
 export interface ReviewPolicyClosure {
   identity: PolicyBinding
+  label?: string
   purpose: 'approval' | 'answer'
   context: ReviewContextPolicy
   routing?: ReadonlyArray<RoutingRule>

@@ -35,6 +35,15 @@ retries use the original request and recover that acceptance, even if the active
 policy has changed. BReg keeps the original selection in the frozen Proposal;
 it stores the accepted policy separately and requires results to match it exactly.
 
+Set `review.source` to the source namespace configured in the Review provider.
+It may differ from the registry's `project.id`. BReg and the provider use that
+namespace for the Review subject and delivery digest; the opaque BReg context
+reference still identifies the registry. Retrying an unsettled request also
+repairs the legacy registry-id digest without changing its request or idempotency key.
+The first delivery and its accepted settlement are logged at `info`. Uncertain
+deliveries warn with the SHA-256 of the Proposal id string, authority, attempt
+count, and bounded outcome code; request values and credentials are not logged.
+
 This default lets the provider administrator evolve review policy for future
 submissions, including choosing human review or automatic assessment. When the
 registry owner must separately approve policy changes, supply both `version`
@@ -213,8 +222,17 @@ with its original prepared request and idempotency key.
 reads `awaiting-review` until an approved result exists, then `pending`,
 `applying`, `blocked`, `applied`, `cancelled` or `rejected`. Its
 `application-refused` reason means an executor refused the frozen effects; a
-review outcome never appears there. The `apply` link's availability reports
-Review instead:
+review outcome never appears there.
+
+A unique-constraint failure during manual Apply returns `409 mutation.conflict`
+without retaining any Record effects. Subsequent reads report
+`applicationStatus.state: blocked`, `reason: application-refused`, and
+`recovery: correct-input`. Apply is unavailable; Rebase remains available to
+correct the input and prepare a fresh submission. A stale Record revision
+instead returns `412 precondition.failed` without creating that application
+block. Read the current Proposal before choosing the next authorized operation.
+
+The `apply` link's availability reports Review separately:
 
 | Review of the current submission | Apply availability |
 |---|---|

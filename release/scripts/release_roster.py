@@ -43,11 +43,10 @@ release first adds the Registry Coordinator namespace and native bindings to the
 unified Node and Python client packages, beginning in v0.44.0. Client readiness
 does not admit the runtime artifacts, which follow their own roster gates.
 
-``COORDINATOR_FIRST_RELEASE`` is the single place that decides which release
-first ships the Registry Coordinator binaries, ``coordinator`` and
-``coordinatorctl``, its image, and its security evidence. Those packaging
-surfaces remain held until their package permissions and image-specific
-advisory evidence are ready; client facades are governed independently.
+``COORDINATOR_FIRST_RELEASE`` decides when the Registry Coordinator image and
+its image-specific security evidence join. They remain held until that evidence
+is ready. ``COORDINATOR_BINARY_FIRST_RELEASE`` independently adds the runtime,
+operator CLI, and installer in v0.44.0. Client facades are governed independently.
 
 ``PYTHON_311_ABI_FIRST_RELEASE`` is the single place that decides which
 release first builds the Python client wheels against the Python 3.11 stable
@@ -83,6 +82,59 @@ COORDINATOR_CLIENT_FIRST_RELEASE: tuple[int, int, int] | None = (0, 44, 0)
 RENDER_CLIENT_FIRST_RELEASE: tuple[int, int, int] | None = None
 
 COORDINATOR_FIRST_RELEASE: tuple[int, int, int] | None = None
+
+COORDINATOR_BINARY_FIRST_RELEASE: tuple[int, int, int] = (0, 44, 0)
+
+ALL_PLATFORMS_FIRST_RELEASE = (0, 44, 0)
+
+# Each pair is built separately to retain the product's feature boundary.
+ADDITIONAL_PLATFORM_BUILDS = (
+    ("registry-scheduling", "scheduling"),
+    ("registry-messaging", "messaging"),
+    ("registry-messagingctl", "messagingctl"),
+    ("registry-discovery", "discovery"),
+    ("registry-discoveryctl", "discoveryctl"),
+    ("registry-render", "registry-render"),
+    ("registry-manifest-cli", "registry-manifest"),
+    ("registry-coordinator", "coordinator"),
+    ("registry-coordinator", "coordinatorctl"),
+)
+
+ADDITIONAL_INSTALLERS = {
+    "breg-mcp": ("registry-breg-mcp", "BREG_MCP", ("breg-mcp",)),
+    "breg-review": ("registry-breg-review", "BREG_REVIEW", ("breg-review",)),
+    "messaging": ("registry-messaging", "MESSAGING", ("messaging", "messagingctl")),
+    "discovery": ("registry-discovery", "DISCOVERY", ("discovery", "discoveryctl")),
+    "registry-render": ("registry-render", "REGISTRY_RENDER", ("registry-render",)),
+    "registry-manifest": ("registry-manifest-cli", "REGISTRY_MANIFEST", ("registry-manifest",)),
+    "coordinator": ("registry-coordinator", "COORDINATOR", ("coordinator", "coordinatorctl")),
+}
+
+
+def additional_platform_builds(version: tuple[int, int, int]):
+    """Return the additional native binaries without changing historical releases."""
+    if tuple(version) < ALL_PLATFORMS_FIRST_RELEASE:
+        return ()
+    enabled = {
+        "registry-scheduling": scheduling_binary_in_release(version),
+        "registry-messaging": messaging_in_release(version),
+        "registry-messagingctl": messaging_in_release(version),
+        "registry-discoveryctl": discoveryctl_in_release(version),
+        "registry-render": render_in_release(version),
+        "registry-coordinator": coordinator_binaries_in_release(version),
+    }
+    return tuple((crate, binary) for crate, binary in ADDITIONAL_PLATFORM_BUILDS if enabled.get(crate, True))
+
+
+def additional_installers(version: tuple[int, int, int]):
+    if tuple(version) < ALL_PLATFORMS_FIRST_RELEASE:
+        return {}
+    enabled = {"breg-mcp": breg_services_in_release(version),
+               "breg-review": breg_services_in_release(version),
+               "messaging": messaging_in_release(version),
+               "registry-render": render_in_release(version),
+               "coordinator": coordinator_binaries_in_release(version)}
+    return {name: spec for name, spec in ADDITIONAL_INSTALLERS.items() if enabled.get(name, True)}
 
 PYTHON_311_ABI_FIRST_RELEASE: tuple[int, int, int] = (0, 41, 0)
 
@@ -182,6 +234,11 @@ def coordinator_in_release(version: tuple[int, int, int]) -> bool:
     return first_release is not None and tuple(version) >= first_release
 
 
+def coordinator_binaries_in_release(version: tuple[int, int, int]) -> bool:
+    """Binary distribution does not waive the independent image evidence gate."""
+    return tuple(version) >= COORDINATOR_BINARY_FIRST_RELEASE or coordinator_in_release(version)
+
+
 def python_wheel_abi_tag(version: tuple[int, int, int]) -> str:
     """Return the interpreter and ABI tag of the release's Python client wheels.
 
@@ -224,6 +281,11 @@ def version_argument(value: str) -> tuple[int, int, int]:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     commands = parser.add_subparsers(dest="command", required=True)
+    platforms = commands.add_parser("additional-platform-builds")
+    platforms.add_argument("version", type=version_argument)
+    coordinator_binaries = commands.add_parser("coordinator-binaries-in-release")
+    coordinator_binaries.add_argument("version", type=version_argument)
+    coordinator_binaries.set_defaults(in_release=coordinator_binaries_in_release)
     breg_services = commands.add_parser(
         "breg-services-in-release",
         help="print true when the release version ships breg-mcp and breg-review, else false",
@@ -303,6 +365,10 @@ def main(argv: list[str] | None = None) -> int:
     relay.add_argument("version", type=version_argument, help="release version as X.Y.Z")
     relay.set_defaults(in_release=relay_in_release)
     args = parser.parse_args(argv)
+    if args.command == "additional-platform-builds":
+        for crate, binary in additional_platform_builds(args.version):
+            print(crate, binary)
+        return 0
     print("true" if args.in_release(args.version) else "false")
     return 0
 

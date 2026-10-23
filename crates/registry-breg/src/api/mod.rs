@@ -5251,7 +5251,9 @@ fn mutation_problem(error: MutationError) -> Response {
         MutationError::AuthorizationRefused
         | MutationError::PreconditionFailed
         | MutationError::FieldGuardFailed { .. } => precondition_failed(),
-        MutationError::Conflict => fixed_problem(ProblemCode::MutationConflict),
+        MutationError::Conflict | MutationError::ProposalUniqueConflict => {
+            fixed_problem(ProblemCode::MutationConflict)
+        }
         MutationError::ProposalRejected => fixed_problem(ProblemCode::ProposalRejected),
         MutationError::ProposalReviewResultMismatch => {
             fixed_problem(ProblemCode::ProposalReviewResultMismatch)

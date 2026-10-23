@@ -335,11 +335,67 @@ fn relationship_grants_cannot_bypass_target_or_join_requirements() {
         json!({"id":"link","primaryDataset":"test-dataset","route":"links","mutationMode":"mutable","fields":[{"id":"entry","type":"reference","target":"entry","classification":"internal"},{"id":"child","type":"reference","target":"child","classification":"internal"}]})
     ]);
     let baseline = compile(&value).unwrap();
-    assert!(baseline
+    let warning = baseline
         .findings()
         .iter()
-        .any(|d| d.code == "breg.access.profile-related-disclosure"
-            && d.path.contains("readPaths[path=children]")));
+        .find(|d| {
+            d.code == "breg.access.profile-related-disclosure"
+                && d.path.contains("readPaths[path=children]")
+        })
+        .expect("the uncovered related disclosure warns");
+    for identifier in ["reader", "child", "entry", "link", "children", "code"] {
+        assert!(warning.message.contains(identifier), "{}", warning.message);
+    }
+    value["accessProfiles"][0]["permissions"]["records"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "recordType":"child",
+            "operations":["create","patch"],
+            "readableFields":["code"],
+            "writableFields":["code"],
+            "rowBoundaries":"unrestricted"
+        }));
+    assert!(compile(&value).unwrap().findings().iter().any(|d| {
+        d.code == "breg.access.profile-related-disclosure"
+            && d.path.contains("readPaths[path=children]")
+    }));
+    value["accessProfiles"][0]["permissions"]["records"][1]["operations"] = json!(["get"]);
+    value["accessProfiles"][0]["permissions"]["records"][1]
+        .as_object_mut()
+        .unwrap()
+        .remove("writableFields");
+    assert!(!compile(&value).unwrap().findings().iter().any(|d| {
+        d.code == "breg.access.profile-related-disclosure"
+            && d.path.contains("readPaths[path=children]")
+    }));
+    value["accessProfiles"][0]["permissions"]["records"][1]["rowBoundaries"] =
+        json!([{"field":"code","claim":"child_code","operator":"equals"}]);
+    assert!(compile(&value).unwrap().findings().iter().any(|d| {
+        d.code == "breg.access.profile-related-disclosure"
+            && d.path.contains("readPaths[path=children]")
+    }));
+    let explanation = serde_json::to_value(registry_breg::access::explain_access(&baseline))
+        .expect("access explanation serializes");
+    let entry = explanation["recordTypes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["recordType"] == "entry")
+        .expect("entry access explanation exists");
+    let grant = &entry["profiles"][0]["readPaths"][0];
+    assert_eq!(grant["targetRecordType"], "child");
+    assert_eq!(grant["throughRecordType"], "link");
+    assert_eq!(grant["route"], "children");
+    assert!(explanation["rowReach"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|reach| reach["surface"] == "read_path"
+            && reach["recordType"] == "child"
+            && reach["profile"] == "reader"
+            && reach["sourcePath"]
+                == "recordTypes[id=entry].accessProfiles[id=reader].readPaths[path=children]"));
     for index in [1, 2] {
         value["recordTypes"][index]["accessRequirements"] =
             json!({"requiredScopes":["entry:read"]});
@@ -436,6 +492,14 @@ fn footgun_findings_are_actionable_deterministic_and_do_not_change_authority() {
 #[test]
 fn history_sensitive_fields_and_writable_boundaries_are_visible_for_review() {
     let mut value = source();
+    value["recordTypes"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("accessRequirements");
+    value["accessProfiles"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("requiredPurposes");
     value["recordTypes"][0]["fields"][0]["classification"] = json!("restricted");
     let grant = &mut value["accessProfiles"][0]["permissions"]["records"][0];
     grant["operations"] = json!(["get", "list", "patch", "revisions"]);
@@ -465,6 +529,25 @@ fn history_sensitive_fields_and_writable_boundaries_are_visible_for_review() {
         .findings()
         .iter()
         .any(|d| d.code == "breg.access.profile-writable-row-boundary"));
+}
+
+#[test]
+fn token_requirements_do_not_clear_a_higher_classification() {
+    let mut value = source();
+    value["recordTypes"][0]["fields"][0]["classification"] = json!("restricted");
+
+    let compiled = compile(&value).expect("the project compiles with advisory findings");
+    let findings = compiled
+        .findings()
+        .iter()
+        .filter(|finding| finding.code == "breg.access.profile-higher-classification")
+        .collect::<Vec<_>>();
+
+    assert_eq!(findings.len(), 1, "{:#?}", compiled.findings());
+    assert_eq!(
+        findings[0].path,
+        "recordTypes[id=entry].accessProfiles[id=reader].readableFields[field=code]"
+    );
 }
 
 /// A row boundary compiles to an INSERT `WITH CHECK` pinning its field to the
@@ -1022,6 +1105,30 @@ fn unresolved_access_profile_fields_have_one_concrete_path_per_reference() {
 }
 
 #[test]
+fn processing_wider_than_read_names_each_access_profile_field() {
+    let mut value = source();
+    let grant = &mut value["accessProfiles"][0]["permissions"]["records"][0];
+    grant["readableFields"] = json!(["code"]);
+    grant["filterableFields"] = json!(["district"]);
+    grant["sortableFields"] = json!(["district"]);
+
+    let failure = compile(&value).expect_err("processing an unreadable field is refused");
+    let paths = failure
+        .diagnostics()
+        .iter()
+        .filter(|diagnostic| diagnostic.code == "breg.access-profile.processing-wider-than-read")
+        .map(|diagnostic| diagnostic.path.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        paths,
+        [
+            "recordTypes[id=entry].accessProfiles[id=reader].filterableFields[field=district]",
+            "recordTypes[id=entry].accessProfiles[id=reader].sortableFields[field=district]",
+        ]
+    );
+}
+
+#[test]
 fn unresolved_read_path_fields_have_one_concrete_path_per_reference() {
     let mut value = source();
     value["recordTypes"][0]["readPaths"] =
@@ -1058,6 +1165,40 @@ fn unresolved_read_path_fields_have_one_concrete_path_per_reference() {
     grant["filterableFields"] = json!(["code"]);
     grant["sortableFields"] = json!(["code"]);
     compile(&value).expect("known stored and engine-managed read-path fields compile");
+}
+
+#[test]
+fn read_path_processing_wider_than_read_names_each_target_field() {
+    let mut value = source();
+    value["recordTypes"][0]["readPaths"] =
+        json!([{"id":"children","through":"link","to":"child","route":"children"}]);
+    value["accessProfiles"][0]["permissions"]["records"][0]["readPaths"] = json!([{
+        "path":"children",
+        "readableFields":["id"],
+        "filterableFields":["code"],
+        "sortableFields":["code"]
+    }]);
+    value["recordTypes"].as_array_mut().unwrap().extend([
+        json!({"id":"child","primaryDataset":"test-dataset","route":"children","mutationMode":"mutable","fields":[{"id":"code","type":"string","maximumLength":32,"classification":"internal"}]}),
+        json!({"id":"link","primaryDataset":"test-dataset","route":"links","mutationMode":"mutable","fields":[{"id":"entry","type":"reference","target":"entry","classification":"internal"},{"id":"child","type":"reference","target":"child","classification":"internal"}]})
+    ]);
+
+    let failure = compile(&value).expect_err("read-path processing of an unreadable field fails");
+    let paths = failure
+        .diagnostics()
+        .iter()
+        .filter(|diagnostic| {
+            diagnostic.code == "breg.access-profile.read-path-processing-wider-than-read"
+        })
+        .map(|diagnostic| diagnostic.path.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        paths,
+        [
+            "recordTypes[id=entry].accessProfiles[id=reader].readPaths[path=children].filterableFields[field=code]",
+            "recordTypes[id=entry].accessProfiles[id=reader].readPaths[path=children].sortableFields[field=code]",
+        ]
+    );
 }
 
 #[test]

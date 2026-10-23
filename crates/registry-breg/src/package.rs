@@ -49,9 +49,9 @@ use crate::migration_plan::{
 };
 use crate::model::CompiledStatisticalDataset;
 use crate::model::{
-    CompiledAccessInventory, CompiledAction, CompiledActionExecution, CompiledActionInventory,
-    CompiledEntity, CompiledQueryInventory, CompiledQueryOperation, CompiledQueryTemporalValueKind,
-    CompiledRecipients, CompiledRouteInventory, REFERENCE_INDEX_PREFIX,
+    CompiledAccessInventory, CompiledActionInventory, CompiledEntity, CompiledQueryInventory,
+    CompiledQueryOperation, CompiledQueryTemporalValueKind, CompiledRecipients,
+    CompiledRouteInventory, REFERENCE_INDEX_PREFIX,
 };
 use crate::physical_names::PhysicalNameInventory;
 use crate::CompiledRegistry;
@@ -1751,7 +1751,10 @@ fn compare_actions(
         .collect::<BTreeMap<_, _>>();
     for (id, before) in &previous_actions {
         let (class, code) = match candidate_actions.get(id) {
-            Some(after) if action_behavior_value(before) == action_behavior_value(after) => {
+            Some(after)
+                if crate::immediate_actions::migration_review_revision(before)
+                    == crate::immediate_actions::migration_review_revision(after) =>
+            {
                 continue;
             }
             Some(_) => (
@@ -1780,25 +1783,6 @@ fn compare_actions(
             );
         }
     }
-}
-
-fn action_behavior_value(action: &CompiledAction) -> Value {
-    let mut action = action.clone();
-    action.display = Default::default();
-    for input in &mut action.inputs {
-        input.display = Default::default();
-    }
-    if let Some(handler) = &mut action.handler {
-        for label in handler.refusals.values_mut() {
-            label.clear();
-        }
-    }
-    if let CompiledActionExecution::Proposal { proposal } = &mut action.execution {
-        for hook in &mut proposal.hooks {
-            hook.display = Default::default();
-        }
-    }
-    serde_json::to_value(action).expect("compiled Action serializes")
 }
 
 /// Recipients are project-level runtime configuration: they change no DDL, so

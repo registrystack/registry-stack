@@ -11,3 +11,8 @@ expect:
     - code: any
       path: "{pointer}"
       at: {line: 1, column: 1}
+    - severity: warning
+      code: breg.compile.later-checks-skipped
+      path: ""
+      at: project
+      formats: [breg/project]

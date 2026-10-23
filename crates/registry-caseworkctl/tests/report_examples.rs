@@ -133,3 +133,38 @@ fn advanced_calendar_revision_example_is_readable() {
     assert_eq!(document.holiday_set, "office-holidays");
     assert_eq!(document.revision, 7);
 }
+
+#[test]
+fn explain_reports_policy_usage_and_project_level_resources() {
+    let root = repo_root();
+    let (report, _) = output(&root, &["explain", ADVANCED], 0);
+    let data = &report["data"];
+    let policy = &data["reviewPolicies"][0];
+
+    assert_eq!(policy["label"], "Regional review");
+    assert_eq!(policy["stages"][0]["label"], "Technical review");
+    assert_eq!(policy["routing"][0]["label"], "Northern requests");
+    assert_eq!(
+        policy["usedQueues"],
+        serde_json::json!(["northern-review", "overdue-review", "signoff", "triage"])
+    );
+    assert_eq!(
+        policy["decidingProfiles"],
+        serde_json::json!(["staff", "supervisor"])
+    );
+    assert_eq!(
+        policy["eligibleDecidingProfiles"],
+        serde_json::json!(["staff", "supervisor"])
+    );
+    assert_eq!(data["clocks"].as_array().map(Vec::len), Some(2));
+    assert_eq!(data["calendars"].as_array().map(Vec::len), Some(1));
+    assert_eq!(data["trustedProducers"].as_array().map(Vec::len), Some(1));
+
+    let (unlabelled, _) = output(&root, &["explain", STANDALONE], 0);
+    assert!(unlabelled["data"]["reviewPolicies"][0]
+        .get("label")
+        .is_none());
+    assert!(unlabelled["data"]["reviewPolicies"][0]["stages"][0]
+        .get("label")
+        .is_none());
+}

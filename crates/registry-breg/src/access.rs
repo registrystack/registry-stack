@@ -142,10 +142,13 @@ pub(crate) fn access_findings(entities: &BTreeMap<String, EntitySource>) -> Vec<
     for entity in entities.values() {
         for profile in &entity.access_profiles {
             let path = profile_path(&entity.id, &profile.id);
+            let caller_is_bounded =
+                !profile.required_scopes.is_empty() && !profile.required_purposes.is_empty();
             if entity.classification != Classification::Public
                 && profile.operations.contains(&Operation::List)
                 && profile.row_boundaries.is_empty()
                 && profile.membership_boundaries.is_empty()
+                && !caller_is_bounded
             {
                 findings.push(Diagnostic::finding("breg.access.profile-unrestricted-collection", format!("{path}.rowBoundaries"),
                     "this profile lists rows without claim-bound or membership restrictions; configured consent and other disclosure checks still apply. Caller filters are not authorization. Review this broad access and restrict the profile to intended callers. Statistical release publishers require unrestricted reads of their dataset dependencies"));
@@ -154,6 +157,7 @@ pub(crate) fn access_findings(entities: &BTreeMap<String, EntitySource>) -> Vec<
                 && profile.row_boundaries.is_empty()
                 && profile.membership_boundaries.is_empty()
                 && !profile.operations.contains(&Operation::List)
+                && !caller_is_bounded
             {
                 findings.push(Diagnostic::finding("breg.access.profile-unrestricted-rows", format!("{path}.rowBoundaries"),
                     "this profile has no claim-bound row restriction for its granted operations; Review this registry-wide access"));
@@ -232,8 +236,72 @@ pub(crate) fn access_findings(entities: &BTreeMap<String, EntitySource>) -> Vec<
                 }
             }
             for permission in &profile.read_paths {
-                findings.push(Diagnostic::finding("breg.access.profile-related-disclosure", format!("{path}.readPaths[path={}]", permission.path),
-                    "this permission discloses related records using the root profile, not target direct-access profiles; review its fields and the target/through record type accessRequirements"));
+                let Some(read_path) = entity
+                    .read_paths
+                    .iter()
+                    .find(|read_path| read_path.id == permission.path)
+                else {
+                    continue;
+                };
+                let direct_grant_covers_fields = entities
+                    .get(&read_path.to)
+                    .and_then(|target| {
+                        target
+                            .access_profiles
+                            .iter()
+                            .find(|target_profile| target_profile.id == profile.id)
+                    })
+                    .is_some_and(|target_profile| {
+                        let reads_directly = target_profile.operations.iter().any(|operation| {
+                            matches!(
+                                operation,
+                                Operation::Get
+                                    | Operation::Lookup
+                                    | Operation::List
+                                    | Operation::Snapshot
+                            ) || (*operation == Operation::Revisions
+                                && target_profile.revision_access)
+                        });
+                        // A path applies the root permission's caller and row
+                        // gates, never the target permission's. Treat a direct
+                        // target grant as covering it only when every root
+                        // caller can directly read every target row.
+                        reads_directly
+                            && target_profile.row_boundaries.is_empty()
+                            && target_profile.membership_boundaries.is_empty()
+                            && target_profile.require_consent.is_empty()
+                            && target_profile
+                                .required_scopes
+                                .is_subset(&profile.required_scopes)
+                            && admits_every_token_of(target_profile.into(), profile.into())
+                            && permission
+                                .readable_fields
+                                .iter()
+                                .all(|field| target_profile.readable_fields.contains(field))
+                    });
+                if direct_grant_covers_fields {
+                    continue;
+                }
+                let fields = permission
+                    .readable_fields
+                    .iter()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                findings.push(Diagnostic::finding(
+                    "breg.access.profile-related-disclosure",
+                    format!("{path}.readPaths[path={}]", permission.path),
+                    &format!(
+                        "profile `{}` can read `{}` records linked to `{}` through `{}` on read path `{}`; it sees fields {fields} under its own `{}` row boundaries, and access profiles declared for `{}` do not apply",
+                        profile.id,
+                        read_path.to,
+                        entity.id,
+                        read_path.through,
+                        read_path.id,
+                        entity.id,
+                        read_path.to,
+                    ),
+                ));
             }
         }
     }
@@ -662,12 +730,23 @@ pub struct EntityAccessExplanation {
 
 /// Make effective defaults explicit only in author inspection. The compiled
 /// profile's serialization remains the package and runtime authority contract.
-fn inspect_record_profile(profile: &AccessProfileSource) -> serde_json::Value {
+fn inspect_record_profile(
+    entity: &CompiledEntity,
+    profile: &AccessProfileSource,
+) -> serde_json::Value {
     let mut value = serde_json::to_value(profile).expect("compiled access profile serializes");
     if profile.row_boundaries.is_empty() {
         value["rowBoundaries"] = serde_json::json!("unrestricted");
     }
     value["allowCount"] = serde_json::json!(profile.allow_count);
+    for (index, grant) in profile.read_paths.iter().enumerate() {
+        let Some(path) = entity.read_paths.get(&grant.path) else {
+            continue;
+        };
+        value["readPaths"][index]["targetRecordType"] = serde_json::json!(path.to);
+        value["readPaths"][index]["throughRecordType"] = serde_json::json!(path.through);
+        value["readPaths"][index]["route"] = serde_json::json!(path.route);
+    }
     value
 }
 
@@ -754,6 +833,21 @@ fn row_reach(
                 false,
                 None,
             );
+            for grant in &profile.read_paths {
+                let Some(read_path) = entity.read_paths.get(&grant.path) else {
+                    continue;
+                };
+                add(
+                    &read_path.to,
+                    &profile.id,
+                    format!("{path}.readPaths[path={}]", grant.path),
+                    "read_path",
+                    &profile.row_boundaries,
+                    &profile.membership_boundaries,
+                    false,
+                    None,
+                );
+            }
         }
     }
     for action in &actions.actions {
@@ -853,7 +947,11 @@ pub fn explain_access(registry: &CompiledRegistry) -> AccessExplanation {
                 classification: entity.classification,
                 mutation_policy: crate::artifacts::render_mutation_policy(entity),
                 requirements: entity.access_requirements.clone(),
-                profiles: entity.access_profiles.values().map(inspect_record_profile).collect(),
+                profiles: entity
+                    .access_profiles
+                    .values()
+                    .map(|profile| inspect_record_profile(entity, profile))
+                    .collect(),
             })
             .collect(),
         actions: serde_json::json!({

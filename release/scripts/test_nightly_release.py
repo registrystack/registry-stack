@@ -36,9 +36,34 @@ SHA = "a" * 40
 ABSENT = object()
 BASE = "0.39.0"
 TAG = f"v{BASE}-nightly.20261002.{SHA}"
+GNU_MV_FIXTURE = """#!/usr/bin/env python3
+import os
+import sys
+
+if sys.argv[1:] == ["--version"]:
+    print("mv (GNU coreutils) test fixture")
+    raise SystemExit(0)
+os.replace(sys.argv[-2], sys.argv[-1])
+"""
 
 
 class NightlyTest(unittest.TestCase):
+    def test_current_platform_roster_preserves_historical_manifest_meaning(self):
+        tag = f"v0.44.0-nightly.20261023.{SHA}"
+        roster = nightly.current_roster("0.44.0", tag)
+        self.assertEqual(nightly.V2_2_ROSTER_PROFILE, roster["profile"])
+        self.assertNotIn("coordinator", roster["images"])
+        self.assertIn("coordinator", roster["installers"])
+        self.assertNotIn("rstack", roster["installers"])
+        inventory = release_candidate._release_payload_inventory("0.44.0")
+        expected = sorted(name.replace("v0.44.0", tag) for name, kind in inventory.items() if kind in {"binary", "notice"})
+        self.assertEqual(expected, roster["payloads"])
+        historical = nightly.frozen_roster(nightly.V2_ROSTER_PROFILE, tag)
+        self.assertNotIn("rstack", historical["installers"])
+        self.assertFalse(any(name.startswith(f"rstack-{tag}-") for name in historical["payloads"]))
+        self.assertNotIn(f"registry-render-{tag}-macos-arm64.tar.gz", historical["payloads"])
+        self.assertEqual(historical, nightly.validate_v2_roster(historical, tag))
+
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
@@ -455,7 +480,7 @@ class NightlyTest(unittest.TestCase):
         closure = nightly.require_file_closure(output, manifest)
         self.assertEqual(len(closure), len(manifest["assets"]) + 2)
         self.assertEqual(set(manifest["images"]), set(nightly.image_names(BASE)))
-        for product in nightly.INSTALLERS:
+        for product in manifest["roster"]["installers"]:
             self.assertIn(
                 f'default_version="{TAG}"',
                 (output / f"{product}-{TAG}-install.sh").read_text(),
@@ -1010,7 +1035,19 @@ class NightlyTest(unittest.TestCase):
             api.assert_not_called()
 
     def test_assembled_nightly_installs_through_the_real_channel_resolver(self):
-        output = self.assembled()
+        self.assert_channel_installers(self.assembled(), TAG, self.record["roster"])
+
+    def test_current_nightly_installs_all_toolsets_through_the_channel_resolver(self):
+        base = "0.44.0"
+        tag = f"v{base}-nightly.20261023.{SHA}"
+        roster = nightly.current_roster(base, tag)
+        self.plan.write_text(json.dumps(self.record | {"tag": tag, "base_version": base, "version": tag[1:], "roster": roster}))
+        directories, images = self.payload(base, tag)
+        output = self.root / "public"
+        nightly.assemble(self.plan, directories, images, output)
+        self.assert_channel_installers(output, tag, roster)
+
+    def assert_channel_installers(self, output, tag, roster):
         commands = self.root / "commands"
         commands.mkdir()
         scripts = {
@@ -1018,7 +1055,7 @@ class NightlyTest(unittest.TestCase):
             "getconf": '#!/bin/sh\necho "glibc 2.34"\n',
             "ldd": '#!/bin/sh\necho "ldd (GNU libc) 2.34"\n',
             # Emulate GNU mv's atomic replacement on macOS as well as Linux.
-            "mv": "#!/usr/bin/env python3\nimport os,sys\nos.replace(sys.argv[-2], sys.argv[-1])\n",
+            "mv": GNU_MV_FIXTURE,
             "curl": """#!/usr/bin/env bash
 set -euo pipefail
 url=""; destination=""
@@ -1040,13 +1077,14 @@ cp "$source" "$destination"
         for name, script in scripts.items():
             (commands / name).write_text(script)
             (commands / name).chmod(0o755)
-        for product, (crate, prefix, binaries) in nightly.INSTALLERS.items():
+        for product in roster["installers"]:
+            crate, prefix, binaries = nightly.INSTALLERS[product]
             with self.subTest(product=product):
                 destination = self.root / f"installed-{product}"
                 environment = os.environ | {
                     "PATH": str(commands) + os.pathsep + os.environ["PATH"],
                     "NIGHTLY_FIXTURE": str(output),
-                    "NIGHTLY_FIXTURE_TAG": TAG,
+                    "NIGHTLY_FIXTURE_TAG": tag,
                     f"{prefix}_INSTALL_DIR": str(destination),
                 }
                 environment.pop(f"{prefix}_VERSION", None)
@@ -1063,17 +1101,22 @@ cp "$source" "$destination"
                     capture_output=True,
                 )
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-                self.assertIn(f"/blob/{TAG}/release/NIGHTLY.md", result.stdout)
-                self.assertNotIn(f"/blob/{TAG}/release/VERIFY.md", result.stdout)
+                self.assertIn(f"/blob/{tag}/release/NIGHTLY.md", result.stdout)
+                self.assertNotIn(f"/blob/{tag}/release/VERIFY.md", result.stdout)
                 for binary in binaries:
+                    expected = f"{binary} {tag[1:]}"
+                    if binary == "registry-render":
+                        source = (nightly.ROOT / "crates/registry-render/src/lib.rs").read_text()
+                        pin = re.search(r'pub const TYPST_PIN: &str = "([^"]+)";', source)[1]
+                        expected += f" (typst {pin})"
                     self.assertEqual(
                         subprocess.check_output(
                             [str(destination / binary), "--version"], text=True
                         ).strip(),
-                        f"{binary} {TAG[1:]}",
+                        expected,
                     )
-        with patch.dict(os.environ, {"PATH": environment["PATH"]}):
-            nightly.smoke(output)
+        result = subprocess.run([sys.executable, str(SCRIPTS / "nightly_release.py"), "smoke", str(output)], env=os.environ | {"PATH": environment["PATH"]}, capture_output=True, text=True)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
 
     def test_pinned_installers_follow_the_arm64_platform_rosters(self):
         output = self.assembled()
@@ -1098,7 +1141,7 @@ cp "$source" "$destination"
                 "getconf": '#!/bin/sh\necho "glibc 2.34"\n',
                 "ldd": '#!/bin/sh\necho "ldd (GNU libc) 2.34"\n',
                 # Emulate GNU mv's atomic replacement on macOS as well as Linux.
-                "mv": "#!/usr/bin/env python3\nimport os,sys\nos.replace(sys.argv[-2], sys.argv[-1])\n",
+                "mv": GNU_MV_FIXTURE,
             }
             for name, script in scripts.items():
                 (commands / name).write_text(script)
@@ -1156,7 +1199,7 @@ cp "$source" "$destination"
             "getconf": '#!/bin/sh\necho "glibc 2.34"\n',
             "ldd": '#!/bin/sh\necho "ldd (GNU libc) 2.34"\n',
             # Emulate GNU mv's atomic replacement on macOS as well as Linux.
-            "mv": "#!/usr/bin/env python3\nimport os,sys\nos.replace(sys.argv[-2], sys.argv[-1])\n",
+            "mv": GNU_MV_FIXTURE,
         }
         for name, script in scripts.items():
             (commands / name).write_text(script)
@@ -1169,7 +1212,7 @@ cp "$source" "$destination"
             "casework": ("casework", "caseworkctl"),
             "scheduling": ("scheduling", "schedulingctl"),
         }
-        self.assertEqual(set(toolsets), set(nightly.INSTALLERS))
+        self.assertEqual(set(toolsets), set(self.record["roster"]["installers"]))
 
         def install(product, assets, destination):
             prefix = nightly.INSTALLERS[product][1]
@@ -1249,7 +1292,7 @@ cp "$source" "$destination"
             "getconf": '#!/bin/sh\necho "glibc 2.34"\n',
             "ldd": '#!/bin/sh\necho "ldd (GNU libc) 2.34"\n',
             # Emulate GNU mv's atomic replacement on macOS as well as Linux.
-            "mv": "#!/usr/bin/env python3\nimport os,sys\nos.replace(sys.argv[-2], sys.argv[-1])\n",
+            "mv": GNU_MV_FIXTURE,
         }
         for name, script in scripts.items():
             (commands / name).write_text(script)
@@ -1260,7 +1303,7 @@ cp "$source" "$destination"
             "casework": ("casework", "caseworkctl"),
             "scheduling": ("scheduling", "schedulingctl"),
         }
-        self.assertEqual(set(toolsets), set(nightly.INSTALLERS))
+        self.assertEqual(set(toolsets), set(self.record["roster"]["installers"]))
 
         for product, binaries in toolsets.items():
             with self.subTest(product=product):

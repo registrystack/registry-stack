@@ -509,6 +509,21 @@ class TypingContractTests(unittest.TestCase):
             annotations["negativeDecisions"],
             "NotRequired[Literal['settle', 'advise']]",
         )
+        self.assertEqual(annotations["label"], "NotRequired[str]")
+        routing = classes["RoutingRule"]
+        routing_annotations = {
+            node.target.id: ast.unparse(node.annotation)
+            for node in routing.body
+            if isinstance(node, ast.AnnAssign)
+        }
+        self.assertEqual(routing_annotations["label"], "NotRequired[str]")
+        optional_policy = classes["_ReviewPolicyOptional"]
+        optional_annotations = {
+            node.target.id: ast.unparse(node.annotation)
+            for node in optional_policy.body
+            if isinstance(node, ast.AnnAssign)
+        }
+        self.assertEqual(optional_annotations["label"], "str")
         for name in ("WorkItem", "Draft", "RecoverAttemptRequest", "MutationResponse"):
             self.assertNotIn(name, classes)
         request = classes["ReviewTaskDecisionRequest"]

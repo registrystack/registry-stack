@@ -61,7 +61,12 @@ def validate_nightly_tag(
         raise ShardError("nightly tag source SHA does not match --source-sha")
 
 
-def rosters(version: str, nightly_tag: str | None = None) -> dict[str, list[str]]:
+def rosters(
+    version: str,
+    nightly_tag: str | None = None,
+    *,
+    exclude_discovery: bool = False,
+) -> dict[str, list[str]]:
     match = VERSION.fullmatch(version)
     if match is None:
         raise ShardError("version must be canonical semantic version text")
@@ -77,6 +82,20 @@ def rosters(version: str, nightly_tag: str | None = None) -> dict[str, list[str]
         core.insert(0, f"relayctl-{tag}-{ASSET}")
     if parsed >= MINT_RETIREMENT_VERSION:
         core.remove(f"mint-{tag}-{ASSET}")
+    additional = release_roster.additional_platform_builds(parsed)
+    additional_core = [
+        f"{binary}-{tag}-{ASSET}"
+        for _, binary in additional
+        if binary != "scheduling"
+    ]
+    rstack = (
+        [f"rstack-{tag}-{ASSET}"]
+        if release_roster.rstack_in_release(parsed)
+        else []
+    )
+    # Keep this in the builder's checksum order: additional platform binaries,
+    # rstack, then the historical Evidence binaries.
+    core = [*additional_core, *rstack, *core]
     breg = []
     bregctl = []
     if parsed >= (0, 26, 0):
@@ -97,12 +116,20 @@ def rosters(version: str, nightly_tag: str | None = None) -> dict[str, list[str]
     scheduling = []
     if parsed >= SCHEDULINGCTL_MINIMUM_VERSION:
         scheduling = [f"schedulingctl-{tag}-{ASSET}"]
+        if ("registry-scheduling", "scheduling") in additional:
+            scheduling.insert(0, f"scheduling-{tag}-{ASSET}")
     if parsed >= MACOS_FIPS_ARCHIVE_MINIMUM_VERSION:
-        core = [f"{name}.tar.gz" for name in core]
+        core = [name if name.startswith("registry-manifest-") else f"{name}.tar.gz" for name in core]
         breg = [f"{name}.tar.gz" for name in breg]
         bregctl = [f"{name}.tar.gz" for name in bregctl]
         casework = [f"{name}.tar.gz" for name in casework]
         scheduling = [f"{name}.tar.gz" for name in scheduling]
+    if exclude_discovery:
+        core = [
+            asset
+            for asset in core
+            if not asset.startswith(("discovery-", "discoveryctl-"))
+        ]
     return {
         "core": core,
         "breg": breg,
@@ -237,9 +264,12 @@ def merge(
     output: Path,
     scheduling: Path | None = None,
     nightly_tag: str | None = None,
+    exclude_discovery: bool = False,
 ) -> None:
     validate_nightly_tag(version, source_sha, nightly_tag)
-    shard_rosters = rosters(version, nightly_tag)
+    shard_rosters = rosters(
+        version, nightly_tag, exclude_discovery=exclude_discovery
+    )
     if SOURCE_SHA.fullmatch(source_sha) is None:
         raise ShardError("source SHA must be an exact lowercase commit ID")
     if purpose not in PURPOSES:
@@ -353,6 +383,9 @@ def main() -> int:
     parser.add_argument("--casework", type=Path)
     parser.add_argument("--scheduling", type=Path)
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument(
+        "--exclude-unit", action="append", choices=("discovery",), default=[]
+    )
     args = parser.parse_args()
     try:
         merge(
@@ -366,6 +399,7 @@ def main() -> int:
             scheduling=args.scheduling,
             output=args.output,
             nightly_tag=args.nightly_tag,
+            exclude_discovery="discovery" in args.exclude_unit,
         )
     except (OSError, UnicodeError, ShardError) as error:
         parser.error(str(error))
