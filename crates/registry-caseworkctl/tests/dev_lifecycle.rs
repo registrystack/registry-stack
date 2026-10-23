@@ -243,6 +243,7 @@ impl NativeClients {
         )
         .expect("the canonical Python authentication provider is copied");
         for sibling in [
+            "render",
             "coordinator",
             "discovery",
             "evidence",
