@@ -294,13 +294,81 @@ class ReceiptRecoveryTests(unittest.TestCase):
         )
         return app
 
+    def test_token_failure_keeps_prepared_job_and_recovers_with_one_original_submit(
+        self,
+    ):
+        cases = (
+            ("credential-file", CompositionError("canary credential unavailable"), 0),
+            (
+                "token-endpoint",
+                RuntimeError("canary token endpoint unavailable"),
+                MAXIMUM_ATTEMPTS - 1,
+            ),
+        )
+        for fault, error, attempts in cases:
+            with self.subTest(fault=fault), tempfile.TemporaryDirectory() as root:
+                app = self.app(root)
+                with app.inbox.connect() as db:
+                    db.execute("UPDATE jobs SET attempts=?", (attempts,))
+                    original = db.execute(
+                        "SELECT body,state,attempts FROM jobs"
+                    ).fetchone()
+                submits = []
+                app.messages = SimpleNamespace(
+                    submit=lambda *args: submits.append(args),
+                    message_receipt=lambda *_: self.fail(
+                        "an unsent notice has no receipt"
+                    ),
+                )
+                with (
+                    patch.object(
+                        app.tokens["messaging"],
+                        "bearer_token",
+                        side_effect=[error, "canary-messaging-token"],
+                    ) as tokens,
+                    patch("service.LOG.error") as diagnostic,
+                ):
+                    with self.assertRaises(type(error)):
+                        app.reconcile()
+                    with app.inbox.connect() as db:
+                        body, state, count = db.execute(
+                            "SELECT body,state,attempts FROM jobs"
+                        ).fetchone()
+                        self.assertEqual((state, count), original[1:])
+                        self.assertEqual(body, original[0])
+                    self.assertEqual(submits, [])
+                    diagnostic.assert_not_called()
+                    self.assertEqual(app.reconcile(), 1)
+                    self.assertEqual(app.reconcile(), 0)
+                    self.assertEqual(tokens.call_count, 2)
+                self.assertEqual(
+                    submits,
+                    [
+                        (
+                            "canary-messaging-token",
+                            "proposal-one:1:notice",
+                            json.loads(original[0])["notice"],
+                        )
+                    ],
+                )
+                with app.inbox.connect() as db:
+                    self.assertEqual(
+                        db.execute("SELECT body,state,attempts FROM jobs").fetchone(),
+                        (original[0], "notified", attempts + 1),
+                    )
+
     def test_lost_notice_response_reads_original_receipt_without_resubmitting(self):
         with tempfile.TemporaryDirectory() as root:
             app = self.app(root)
             submits = []
             receipts = []
+            dispatch_states = []
 
             def lost(*args):
+                with app.inbox.connect() as db:
+                    dispatch_states.append(
+                        db.execute("SELECT state,attempts FROM jobs").fetchone()
+                    )
                 submits.append(args)
                 raise RuntimeError("synthetic lost response")
 
@@ -315,6 +383,7 @@ class ReceiptRecoveryTests(unittest.TestCase):
                 self.assertEqual(app.reconcile(), 0)
             self.assertEqual(app.inbox.jobs()[0][2], "notice-uncertain")
             self.assertEqual(app.reconcile(), 1)
+            self.assertEqual(dispatch_states, [("notice-uncertain", 1)])
             self.assertEqual(len(submits), 1)
             self.assertEqual(len(receipts), 1)
             self.assertEqual(submits[0], receipts[0])

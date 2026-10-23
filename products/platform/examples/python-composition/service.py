@@ -565,6 +565,7 @@ class Composition:
                 if attempts >= MAXIMUM_ATTEMPTS:
                     self._job_failed(proposal_id, "budget")
                     continue
+                token = self.tokens["messaging"].bearer_token()
                 with self.inbox.connect() as db:
                     db.execute(
                         "UPDATE jobs SET state='notice-uncertain',attempts=attempts+1 WHERE id=?",
@@ -572,7 +573,6 @@ class Composition:
                     )
                 # A lost response leaves notice-uncertain on disk. The next
                 # pass reads the receipt; it never blindly repeats submission.
-                token = self.tokens["messaging"].bearer_token()
                 try:
                     self.messages.submit(token, notice_key, notice)
                 except MessagingClientError as error:
