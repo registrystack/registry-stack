@@ -967,7 +967,7 @@ async fn a_success_answer_with_the_wrong_status_is_a_protocol_failure() {
         reservation_json().to_string(),
     )])
     .await;
-    let error = client(config(&url).with_maximum_mutation_retries(0))
+    let error = client(config(&url))
         .reserve_document(&token(), IDEMPOTENCY_KEY, &reservation_request())
         .await
         .expect_err("a reservation answers 201");

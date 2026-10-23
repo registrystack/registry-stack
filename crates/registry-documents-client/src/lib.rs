@@ -20,10 +20,11 @@
 //! before it was sent, a transport failure, a protocol failure, or a
 //! validated product problem surfaced as its typed code.
 //!
-//! Only the two idempotency-keyed mutations, reserving a document and
-//! issuing a grant, are ever resent, and only under the caller's own key
-//! while their outcome is unknown. A download is checked against the digest
-//! the caller expects before any of its bytes is returned.
+//! Every call is one HTTP exchange; the client never resends a request. A
+//! caller whose reservation or grant has an unknown outcome recovers by
+//! sending the same request under its own idempotency key, which the service
+//! replays. A download is checked against the digest the caller expects
+//! before any of its bytes is returned.
 
 #![deny(unsafe_code)]
 
