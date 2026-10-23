@@ -41,6 +41,7 @@ members = [
     "crates/registry-platform-hooks",
     "crates/registry-platform-httpsec",
     "crates/registry-platform-httputil",
+    "crates/registry-platform-objectstore",
     "crates/registry-platform-oidc",
     "crates/registry-platform-ratelimit",
     "crates/registry-platform-script",
@@ -76,6 +77,10 @@ members = [
     "crates/registry-messaging-client",
     "crates/registry-messaging-client-node",
     "crates/registry-messaging-client-py",
+    "crates/registry-documents-core",
+    "crates/registry-documents",
+    "crates/registry-documentsctl",
+    "crates/registry-documents-client",
 ]
 exclude = [
     "products/breg/wasm-handler-sdk",
@@ -136,6 +141,10 @@ registry-messaging = { path = "crates/registry-messaging", version = "0.44.0" }
 registry-messaging-core = { path = "crates/registry-messaging-core", version = "0.44.0" }
 registry-messagingctl = { path = "crates/registry-messagingctl", version = "0.44.0" }
 registry-messaging-client = { path = "crates/registry-messaging-client", version = "0.44.0" }
+registry-documents = { path = "crates/registry-documents", version = "0.44.0" }
+registry-documents-core = { path = "crates/registry-documents-core", version = "0.44.0" }
+registry-documentsctl = { path = "crates/registry-documentsctl", version = "0.44.0" }
+registry-documents-client = { path = "crates/registry-documents-client", version = "0.44.0" }
 registry-breg = { path = "crates/registry-breg", version = "0.44.0", default-features = false }
 registry-bregctl = { path = "crates/registry-bregctl", version = "0.44.0" }
 registry-platform-activation = { path = "crates/registry-platform-activation", version = "0.44.0" }
@@ -153,6 +162,7 @@ registry-platform-dispatch = { path = "crates/registry-platform-dispatch", versi
 registry-platform-hooks = { path = "crates/registry-platform-hooks", version = "0.44.0" }
 registry-platform-httpsec = { path = "crates/registry-platform-httpsec", version = "0.44.0", default-features = false }
 registry-platform-httputil = { path = "crates/registry-platform-httputil", version = "0.44.0" }
+registry-platform-objectstore = { path = "crates/registry-platform-objectstore", version = "0.44.0" }
 registry-platform-oidc = { path = "crates/registry-platform-oidc", version = "0.44.0" }
 registry-platform-ratelimit = { path = "crates/registry-platform-ratelimit", version = "0.44.0" }
 registry-platform-script = { path = "crates/registry-platform-script", version = "0.44.0" }
@@ -189,6 +199,7 @@ hickory-resolver = { version = "0.26.1", default-features = false, features = ["
 hex = { version = "0.4" }
 hmac = { version = "0.13" }
 http = { version = "1" }
+http-body = { version = "1" }
 icu_casemap = { version = "~2.2.0", default-features = false, features = ["compiled_data"] }
 icu_normalizer = { version = "~2.2.0", default-features = false, features = ["compiled_data"] }
 inquire = { version = "0.9.4" }

@@ -90,6 +90,54 @@ pub enum MigrationError {
     /// the same apply may be retried once that session releases the lock.
     #[error("another session held the migration lock before maintenance began")]
     MigrationLockHeld,
+    /// Refused before maintenance began: the package id derives no migration
+    /// lock key. Nothing was changed.
+    #[error("the package id derives no migration lock key")]
+    LockKeyRefused,
+    /// Refused before maintenance began: the migration connection is not the
+    /// configured migration role, the role holds database-level
+    /// administrative authority, or it does not own every managed schema.
+    /// Only the kernel's fixed reason crosses this boundary. Nothing was
+    /// changed.
+    #[error("the migration role was refused before maintenance began: {0}")]
+    MigrationRoleRefused(&'static str),
+    /// Refused before maintenance began: the migration database configuration
+    /// or the activation request is outside what the kernel accepts. Only the
+    /// kernel's fixed reason crosses this boundary. Nothing was changed.
+    #[error("the migration database configuration was refused before maintenance began: {0}")]
+    DatabaseConfigurationRefused(&'static str),
+    /// Refused before maintenance began: an administrator-owned prerequisite
+    /// the package requires, such as an extension or the spatial role, is
+    /// missing or does not match. Nothing was changed.
+    #[error("a database prerequisite is missing: {0}")]
+    PrerequisiteMissing(&'static str),
+    /// Refused before maintenance began: the managed catalog or registry state
+    /// does not admit the activation. Only the kernel's fixed reason crosses
+    /// this boundary. Nothing was changed.
+    #[error("the database catalog was refused before maintenance began: {0}")]
+    CatalogRefused(&'static str),
+    /// Refused before maintenance began: the schema fingerprint the package
+    /// declares differs from the one its DDL installs on this database, as
+    /// when the package was built by another release. Nothing was changed.
+    #[error("the package declares schema fingerprint {declared}, but its DDL installs {measured}")]
+    SchemaFingerprintMismatch { declared: String, measured: String },
+    /// The target catalog differed after maintenance began. Plain successor
+    /// DDL is rolled back before commit, while reviewed plans may have durable
+    /// checkpoints. The exact target remains pinned in either case.
+    #[error("the pinned package declares schema fingerprint {declared}, but the catalog measures {measured}")]
+    SchemaFingerprintMismatchAfterMaintenance { declared: String, measured: String },
+    /// Refused before maintenance began: PostgreSQL refused a statement of
+    /// a fresh initial activation when apply rehearsed its begin, DDL, and
+    /// grants in a transaction that rolled back. Only the SQLSTATE and the
+    /// object names the server reported cross this boundary. Nothing was
+    /// changed.
+    #[error("PostgreSQL refused the package's initial DDL before maintenance began: {0}")]
+    PackageDdlRefused(PostgresFailure),
+    /// Refused before maintenance began: PostgreSQL rejected the syntax of a
+    /// persisted field pattern when apply rehearsed a fresh initial
+    /// activation's DDL. Nothing was changed.
+    #[error("a persisted field pattern has invalid PostgreSQL syntax")]
+    FieldPatternSyntaxRefused { entity_id: String, field_id: String },
     #[error("a persisted field pattern has invalid PostgreSQL syntax")]
     FieldPatternSyntax { entity_id: String, field_id: String },
     #[error("existing rows do not conform to a persisted field pattern")]
@@ -135,6 +183,12 @@ pub enum MigrationError {
     /// changed.
     #[error("the database holds registry state this release does not recognise")]
     UnrecognizedDatabase,
+    /// The database carries the attachment verification shape a pre-1.0
+    /// release installed, which this release cannot upgrade in place: only a
+    /// fresh database recovers, and a backup carries the same shape. Nothing
+    /// was changed.
+    #[error("the database uses the attachment verification schema of a pre-1.0 release")]
+    Pre1_0Schema,
     /// The split-role runtime role could write the activation ledger or the
     /// registry state; the finding names the statement that removes it.
     #[error("{0}")]
@@ -474,7 +528,8 @@ pub async fn read_recorded_registry_state(
     migration_role: &SqlIdentifier,
     timeouts: ApplyTimeouts,
 ) -> Result<Option<RecordedRegistryState>> {
-    let lock_key = RegistryLockKey::derive(package_id).map_err(|_| MigrationError::ApplyFailed)?;
+    let lock_key =
+        RegistryLockKey::derive(package_id).map_err(|_| MigrationError::LockKeyRefused)?;
     let mut connection = VerifiedPackageApplyConnection::acquire_for_verified_package(
         config,
         lock_key,
@@ -491,6 +546,19 @@ pub async fn read_recorded_registry_state(
             .await
             .map_err(refusal_before_maintenance)?;
         return Err(MigrationError::UnrecognizedDatabase);
+    }
+    if matches!(shape, Ok(crate::postgres::RegistryStateShape::Ledger)) {
+        let pre_1_0 = connection.pre_1_0_attachment_verification_present().await;
+        if !matches!(pre_1_0, Ok(false)) {
+            connection
+                .release()
+                .await
+                .map_err(refusal_before_maintenance)?;
+            return match pre_1_0 {
+                Ok(_) => Err(MigrationError::Pre1_0Schema),
+                Err(error) => Err(refusal_before_maintenance(error)),
+            };
+        }
     }
     let snapshot = match shape {
         Ok(_) => match connection.maintenance_snapshot().await {
@@ -631,18 +699,75 @@ pub fn bind_active_package(
 /// Maps a failure to reach the migration database or to take the apply lock,
 /// before maintenance begins, to the refusal it is: nothing was changed, so a
 /// lost connection or an apply lock held past the lock timeout may simply be
-/// retried. A held lock stays distinct from an unreachable database. Every
-/// other failure keeps its exact-target reconciliation path.
+/// retried. A held lock stays distinct from an unreachable database. A
+/// refused migration role, configuration, or catalog keeps its own named
+/// refusal. Every other failure keeps its exact-target reconciliation path.
 fn refusal_before_maintenance(error: crate::postgres::PostgresKernelError) -> MigrationError {
     match error {
         crate::postgres::PostgresKernelError::Connection
+        | crate::postgres::PostgresKernelError::Pool
+        | crate::postgres::PostgresKernelError::PoolBuild
         | crate::postgres::PostgresKernelError::RegistryUnavailable => {
             MigrationError::DatabaseUnavailable
         }
         crate::postgres::PostgresKernelError::MigrationLockHeld => {
             MigrationError::MigrationLockHeld
         }
-        _ => MigrationError::ApplyFailed,
+        crate::postgres::PostgresKernelError::SchemaFingerprintMismatch { declared, measured } => {
+            MigrationError::SchemaFingerprintMismatch { declared, measured }
+        }
+        error => named_refusal(error).unwrap_or(MigrationError::ApplyFailed),
+    }
+}
+
+/// The named refusal of a kernel invariant raised before maintenance began,
+/// or inside a begin transaction that rolled back: nothing was changed, so
+/// the refusal names its fixed reason instead of a failed migration.
+fn named_refusal(error: crate::postgres::PostgresKernelError) -> Option<MigrationError> {
+    match error {
+        crate::postgres::PostgresKernelError::RoleInvariant(reason) => {
+            Some(MigrationError::MigrationRoleRefused(reason))
+        }
+        crate::postgres::PostgresKernelError::Configuration(reason) => {
+            Some(MigrationError::DatabaseConfigurationRefused(reason))
+        }
+        crate::postgres::PostgresKernelError::CatalogInvariant(reason) => {
+            Some(MigrationError::CatalogRefused(reason))
+        }
+        _ => None,
+    }
+}
+
+/// The refusal of a fresh initial activation's rehearsal, which rolled back
+/// before maintenance began: a statement PostgreSQL refused and a field
+/// pattern it rejected are named as package DDL refusals, and any other
+/// failure is refused as [`refusal_before_maintenance`] refuses it.
+fn initial_rehearsal_refusal(error: crate::postgres::PostgresKernelError) -> MigrationError {
+    match error {
+        crate::postgres::PostgresKernelError::Statement(failure) => {
+            MigrationError::PackageDdlRefused(failure)
+        }
+        crate::postgres::PostgresKernelError::FieldPatternSyntax {
+            entity_id,
+            field_id,
+        } => MigrationError::FieldPatternSyntaxRefused {
+            entity_id,
+            field_id,
+        },
+        error => refusal_before_maintenance(error),
+    }
+}
+
+/// The refusal of a compiled prerequisite check: a missing or mismatched
+/// administrator-owned prerequisite is named as such, and any other failure
+/// is refused as [`refusal_before_maintenance`] refuses it.
+fn prerequisite_refusal(error: crate::postgres::PostgresKernelError) -> MigrationError {
+    match error {
+        crate::postgres::PostgresKernelError::CatalogInvariant(reason)
+        | crate::postgres::PostgresKernelError::RoleInvariant(reason) => {
+            MigrationError::PrerequisiteMissing(reason)
+        }
+        error => refusal_before_maintenance(error),
     }
 }
 
@@ -802,7 +927,7 @@ impl<'a> ApplyVerifiedPackageRequest<'a> {
     /// Bind successor activation to the target runtime's activated,
     /// non-secret logical destination inventory. Omitting this inventory is
     /// equivalent to an empty inventory and therefore fails closed when any
-    /// retained non-terminal webhook work exists.
+    /// retained non-terminal hook work exists.
     #[must_use]
     pub fn with_event_destination_compatibility_inventory(
         mut self,
@@ -946,7 +1071,7 @@ impl PlannedActivation {
                 "prerequisites",
                 "proposals",
                 "history-coverage",
-                "webhook-bindings",
+                "hook-bindings",
                 "active-state",
             ],
             Self::RoleChange => &[
@@ -956,7 +1081,7 @@ impl PlannedActivation {
                 "prerequisites",
                 "active-roles",
                 "history-coverage",
-                "webhook-bindings",
+                "hook-bindings",
                 "active-state",
             ],
             Self::AlreadyActive => &[
@@ -1116,8 +1241,8 @@ async fn activate(request: ApplyVerifiedPackageRequest<'_>, mode: ApplyMode) -> 
         }
     }
 
-    let lock_key =
-        RegistryLockKey::derive(&manifest.package_id).map_err(|_| MigrationError::ApplyFailed)?;
+    let lock_key = RegistryLockKey::derive(&manifest.package_id)
+        .map_err(|_| MigrationError::LockKeyRefused)?;
     let mut connection = VerifiedPackageApplyConnection::acquire_for_verified_package(
         request.config,
         lock_key,
@@ -1127,14 +1252,28 @@ async fn activate(request: ApplyVerifiedPackageRequest<'_>, mode: ApplyMode) -> 
     )
     .await
     .map_err(refusal_before_maintenance)?;
-    // Registry state this release does not recognise is refused before any
-    // check reads it as the ledger's.
+    // Registry state this release does not recognise, and the attachment
+    // verification shape a pre-1.0 release installed, are refused before any
+    // check reads them as the ledger's.
     match connection.registry_state_shape().await {
         Ok(crate::postgres::RegistryStateShape::Unrecognized) => {
             let _ = connection.release().await;
             return Err(MigrationError::UnrecognizedDatabase);
         }
-        Ok(_) => {}
+        Ok(crate::postgres::RegistryStateShape::Ledger) => {
+            match connection.pre_1_0_attachment_verification_present().await {
+                Ok(false) => {}
+                Ok(true) => {
+                    let _ = connection.release().await;
+                    return Err(MigrationError::Pre1_0Schema);
+                }
+                Err(error) => {
+                    let _ = connection.release().await;
+                    return Err(refusal_before_maintenance(error));
+                }
+            }
+        }
+        Ok(crate::postgres::RegistryStateShape::Absent) => {}
         Err(error) => {
             let _ = connection.release().await;
             return Err(refusal_before_maintenance(error));
@@ -1146,13 +1285,12 @@ async fn activate(request: ApplyVerifiedPackageRequest<'_>, mode: ApplyMode) -> 
     }
     // Prerequisites are administrator-owned. Refuse a missing extension or
     // spatial role before the existing registry enters maintenance.
-    if connection
+    if let Err(error) = connection
         .verify_compiled_prerequisites(request.package.registry(), request.roles.runtime)
         .await
-        .is_err()
     {
         let _ = connection.release().await;
-        return Err(MigrationError::ApplyFailed);
+        return Err(prerequisite_refusal(error));
     }
     // A retry of the same target resumes the activation its first attempt
     // recorded, with the roles that attempt started with; any other apply is
@@ -1233,9 +1371,16 @@ async fn activate(request: ApplyVerifiedPackageRequest<'_>, mode: ApplyMode) -> 
                     .ok()
                     .filter(|retired| retired != request.roles.runtime)
             }
-            Ok(None) | Err(_) => {
+            // The database records an active package with no applied
+            // activation: its state is not one this release reads as the
+            // ledger's.
+            Ok(None) => {
                 let _ = connection.release().await;
-                return Err(MigrationError::ApplyFailed);
+                return Err(MigrationError::UnrecognizedDatabase);
+            }
+            Err(error) => {
+                let _ = connection.release().await;
+                return Err(refusal_before_maintenance(error));
             }
         }
     } else if current.is_some() {
@@ -1256,9 +1401,16 @@ async fn activate(request: ApplyVerifiedPackageRequest<'_>, mode: ApplyMode) -> 
                     runtime_role,
                 });
             }
-            Ok(None) | Err(_) => {
+            // The database records an active package with no applied
+            // activation: its state is not one this release reads as the
+            // ledger's.
+            Ok(None) => {
                 let _ = connection.release().await;
-                return Err(MigrationError::ApplyFailed);
+                return Err(MigrationError::UnrecognizedDatabase);
+            }
+            Err(error) => {
+                let _ = connection.release().await;
+                return Err(refusal_before_maintenance(error));
             }
         }
     } else {
@@ -1269,6 +1421,38 @@ async fn activate(request: ApplyVerifiedPackageRequest<'_>, mode: ApplyMode) -> 
         request.deployment.database_id(),
         ledger.activation_id,
     );
+    // A fresh initial activation rehearses its begin, DDL, and grants in a
+    // transaction that rolls back and measures the catalog they install, so
+    // a package that declares another schema fingerprint, as one built by
+    // another release, is refused before maintenance begins. A rehearsal
+    // that fails is refused here too, with its named reason: plan and apply
+    // alike report a statement PostgreSQL refuses before anything changed.
+    // A resumed or successor activation is not rehearsed, since its DDL
+    // meets tables that already exist.
+    if current.is_none() && resumes_activation_id.is_none() {
+        let measured = connection
+            .rehearse_initial_schema_fingerprint(
+                request.package.registry(),
+                &target,
+                &ledger,
+                &statements,
+                request.roles.runtime,
+                request.timeouts.statement,
+            )
+            .await;
+        let refusal = match measured {
+            Ok(measured) if measured == target.schema_fingerprint => None,
+            Ok(measured) => Some(MigrationError::SchemaFingerprintMismatch {
+                declared: target.schema_fingerprint.clone(),
+                measured,
+            }),
+            Err(error) => Some(initial_rehearsal_refusal(error)),
+        };
+        if let Some(refusal) = refusal {
+            let _ = connection.release().await;
+            return Err(refusal);
+        }
+    }
     if mode == ApplyMode::Plan {
         let rehearsed = rehearse_begin(&mut connection, &request, current, &target, &ledger).await;
         let released = connection.release().await;
@@ -1345,6 +1529,9 @@ async fn activate(request: ApplyVerifiedPackageRequest<'_>, mode: ApplyMode) -> 
     if let Err(error) = began {
         // The coverage check runs inside the begin transaction before its
         // first write, so a coverage refusal leaves maintenance state as it was.
+        // A begin that refuses rolls its transaction back, so a refused role,
+        // configuration, or catalog is named rather than reported as a
+        // failed migration.
         let refused = match error {
             crate::postgres::PostgresKernelError::HistoryCoverageIncomplete => {
                 MigrationError::HistoryCoverage
@@ -1352,7 +1539,7 @@ async fn activate(request: ApplyVerifiedPackageRequest<'_>, mode: ApplyMode) -> 
             crate::postgres::PostgresKernelError::RetainedLocalHooks(retained) => {
                 MigrationError::RetainedLocalHooks(retained)
             }
-            _ => MigrationError::ApplyFailed,
+            error => named_refusal(error).unwrap_or(MigrationError::ApplyFailed),
         };
         if matches!(&refused, MigrationError::RetainedLocalHooks(_)) {
             // This guard read only and rolled its transaction back. No
@@ -1506,7 +1693,7 @@ async fn activate(request: ApplyVerifiedPackageRequest<'_>, mode: ApplyMode) -> 
         {
             return fail_with_error_and_release(connection, attempt, &target, &ledger, error).await;
         }
-        let Ok(superseded) = connection
+        let activation_result = connection
             .activate_verified_package(
                 request.package.registry(),
                 request.proposal_activation_compatibility_inventory,
@@ -1519,9 +1706,13 @@ async fn activate(request: ApplyVerifiedPackageRequest<'_>, mode: ApplyMode) -> 
                     runtime_role: request.roles.runtime,
                 },
             )
-            .await
-        else {
-            return fail_and_release(connection, attempt, &target, &ledger).await;
+            .await;
+        let superseded = match activation_result {
+            Ok(superseded) => superseded,
+            Err(error) => {
+                return fail_with_error_and_release(connection, attempt, &target, &ledger, error)
+                    .await;
+            }
         };
         return finish_activation(connection, audit, attempt, superseded, target)
             .await
@@ -1557,8 +1748,15 @@ async fn activate(request: ApplyVerifiedPackageRequest<'_>, mode: ApplyMode) -> 
     let ddl_result = if current.is_some() {
         connection
             .execute_successor_package_ddl(
+                request.package.registry(),
                 &statements,
-                request.roles.runtime,
+                &target,
+                MaintenanceTransition {
+                    ledger: &ledger,
+                    expected_catalog: &expected_catalog,
+                    migration_role: request.roles.migration,
+                    runtime_role: request.roles.runtime,
+                },
                 request.timeouts.statement,
             )
             .await
@@ -1596,8 +1794,11 @@ async fn activate(request: ApplyVerifiedPackageRequest<'_>, mode: ApplyMode) -> 
             },
         )
         .await;
-    let Ok(superseded) = activation_result else {
-        return fail_and_release(connection, attempt, &target, &ledger).await;
+    let superseded = match activation_result {
+        Ok(superseded) => superseded,
+        Err(error) => {
+            return fail_with_error_and_release(connection, attempt, &target, &ledger, error).await;
+        }
     };
     finish_activation(connection, audit, attempt, superseded, target)
         .await
@@ -1618,7 +1819,7 @@ async fn rehearse_begin(
         return connection
             .rehearse_initial_package(target, ledger, request.roles.runtime)
             .await
-            .map_err(|_| MigrationError::ApplyFailed);
+            .map_err(|error| named_refusal(error).unwrap_or(MigrationError::ApplyFailed));
     };
     // The guard reads current Proposal state before successor maintenance.
     if !role_change {
@@ -1649,7 +1850,7 @@ async fn rehearse_begin(
             crate::postgres::PostgresKernelError::RetainedLocalHooks(retained) => {
                 MigrationError::RetainedLocalHooks(retained)
             }
-            _ => MigrationError::ApplyFailed,
+            error => named_refusal(error).unwrap_or(MigrationError::ApplyFailed),
         })
 }
 
@@ -1860,6 +2061,9 @@ async fn fail_with_error_and_release<T>(
 ) -> Result<T> {
     let _: Result<()> = fail_and_release(connection, attempt, target, ledger).await;
     Err(match error {
+        crate::postgres::PostgresKernelError::SchemaFingerprintMismatch { declared, measured } => {
+            MigrationError::SchemaFingerprintMismatchAfterMaintenance { declared, measured }
+        }
         crate::postgres::PostgresKernelError::FieldPatternSyntax {
             entity_id,
             field_id,
@@ -2267,6 +2471,23 @@ mod tests {
     use crate::physical_names::PhysicalNameInventory;
 
     use super::*;
+
+    #[test]
+    fn premaintenance_pool_failures_and_initial_invariants_keep_distinct_recovery() {
+        use crate::postgres::PostgresKernelError;
+        for error in [PostgresKernelError::Pool, PostgresKernelError::PoolBuild] {
+            assert_eq!(
+                refusal_before_maintenance(error),
+                MigrationError::DatabaseUnavailable
+            );
+        }
+        assert_eq!(
+            initial_rehearsal_refusal(PostgresKernelError::CatalogInvariant(
+                "initial activation requires empty registry tables",
+            )),
+            MigrationError::CatalogRefused("initial activation requires empty registry tables"),
+        );
+    }
 
     fn baseline(package_digest: &str, registry_id: &str) -> CompiledRegistryMigrationBaseline {
         CompiledRegistryMigrationBaseline {

@@ -34,8 +34,8 @@ use crate::audit::{
     RegistryAudit, RegistryAuditError, TerminalAudit, TerminalAuditOutcome,
 };
 use crate::compiler::{
-    event_classification_ceiling, WEBHOOK_ATTEMPT_TIMEOUT_MS, WEBHOOK_BACKOFF_MULTIPLIER,
-    WEBHOOK_INITIAL_BACKOFF_MS, WEBHOOK_MAXIMUM_ATTEMPTS, WEBHOOK_MAXIMUM_BACKOFF_MS,
+    event_classification_ceiling, HOOK_ATTEMPT_TIMEOUT_MS, HOOK_BACKOFF_MULTIPLIER,
+    HOOK_INITIAL_BACKOFF_MS, HOOK_MAXIMUM_ATTEMPTS, HOOK_MAXIMUM_BACKOFF_MS,
 };
 use crate::contract::{
     AccessProfileSource, EventTrigger, FieldTypeSource, MutationMode, Operation,
@@ -63,9 +63,9 @@ use crate::ingestion_store::{
 pub use crate::ingestion_store::{IngestionChunkBinding, IngestionRefusal};
 use crate::model::{
     ActionRouteKind, CompiledAction, CompiledEntity, CompiledEventDelivery, CompiledField,
-    CompiledFieldEncryption, CompiledPlanEffect, CompiledPlanMutation, CompiledPlanTargetBinding,
-    CompiledPlanValue, CompiledRegistry, CompiledRoute, CompiledWebhookDeliveryMode,
-    CompiledWebhookRetryProfile, HttpMethod,
+    CompiledFieldEncryption, CompiledHookDeliveryMode, CompiledHookRetryProfile,
+    CompiledPlanEffect, CompiledPlanMutation, CompiledPlanTargetBinding, CompiledPlanValue,
+    CompiledRegistry, CompiledRoute, HttpMethod,
 };
 use crate::outbox::{
     event_data_schemas, insert_configured_events, EnvelopeBinding, OutboxError, OutboxMutation,
@@ -125,7 +125,7 @@ pub async fn install_mutation_schema(
         ))
         .await
         .map_err(|_| MutationError::Unavailable)?;
-    registry_platform_hooks::delivery_schema::install(migration, crate::webhook::DELIVERY_SCHEMA)
+    registry_platform_hooks::delivery_schema::install(migration, crate::hooks::DELIVERY_SCHEMA)
         .await
         .map_err(|_| MutationError::Unavailable)?;
 
@@ -575,21 +575,21 @@ fn exact_entity_event_deliveries(
             || delivery.data_schema_fingerprint != data_schema.fingerprint
             || delivery.data_schema_artifact_path != data_schema.artifact_path
             || delivery.authentication_profile
-                != crate::contract::WebhookAuthenticationProfile::HmacSha256V1
-            || delivery.delivery_mode != CompiledWebhookDeliveryMode::AfterCommit
-            || delivery.retry_profile != CompiledWebhookRetryProfile::RegistryV1
-            || delivery.attempt_timeout_ms != WEBHOOK_ATTEMPT_TIMEOUT_MS
-            || delivery.initial_backoff_ms != WEBHOOK_INITIAL_BACKOFF_MS
-            || delivery.maximum_backoff_ms != WEBHOOK_MAXIMUM_BACKOFF_MS
-            || delivery.exponential_backoff_multiplier != WEBHOOK_BACKOFF_MULTIPLIER
-            || delivery.maximum_attempts != WEBHOOK_MAXIMUM_ATTEMPTS
+                != crate::contract::HookAuthenticationProfile::HmacSha256V1
+            || delivery.delivery_mode != CompiledHookDeliveryMode::AfterCommit
+            || delivery.retry_profile != CompiledHookRetryProfile::RegistryV1
+            || delivery.attempt_timeout_ms != HOOK_ATTEMPT_TIMEOUT_MS
+            || delivery.initial_backoff_ms != HOOK_INITIAL_BACKOFF_MS
+            || delivery.maximum_backoff_ms != HOOK_MAXIMUM_BACKOFF_MS
+            || delivery.exponential_backoff_multiplier != HOOK_BACKOFF_MULTIPLIER
+            || delivery.maximum_attempts != HOOK_MAXIMUM_ATTEMPTS
             || delivery.retry_delays_ms
                 != expected_retry_delays(
-                    WEBHOOK_INITIAL_BACKOFF_MS,
-                    WEBHOOK_MAXIMUM_BACKOFF_MS,
-                    WEBHOOK_MAXIMUM_ATTEMPTS,
+                    HOOK_INITIAL_BACKOFF_MS,
+                    HOOK_MAXIMUM_BACKOFF_MS,
+                    HOOK_MAXIMUM_ATTEMPTS,
                 )
-            || delivery.dead_letter != crate::contract::WebhookDeadLetterMode::Required
+            || delivery.dead_letter != crate::contract::HookDeadLetterMode::Required
             || !delivery.operator_replay
             || Some(delivery.maximum_payload_bytes)
                 != expected_maximum_event_payload_bytes(registry.registry_id(), entity, event)
@@ -746,7 +746,7 @@ impl MutationTransaction {
         audit: RegistryAudit,
         event_destinations: Option<Arc<ActivatedEventDestinationRegistry>>,
     ) -> Self {
-        let event_source = crate::webhook::delivery_source(&expected.package_id, instance_id);
+        let event_source = crate::hooks::delivery_source(&expected.package_id, instance_id);
         Self {
             lock_key,
             lock_timeout,

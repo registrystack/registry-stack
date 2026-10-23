@@ -562,6 +562,13 @@ fn tls(
 /// The activation migration ledger records the one protected state schema version.
 const SCHEMA_VERSION: i64 = crate::store::SCHEMA_VERSION as i64;
 
+/// The DDL of the activation migration ledger and activation history, run
+/// with the namespace as the search path. Pinned with the protected state
+/// schema it records.
+pub(crate) fn activation_ledger_statements() -> String {
+    format!("CREATE TABLE IF NOT EXISTS coordinator_migrations(version bigint PRIMARY KEY); INSERT INTO coordinator_migrations VALUES({SCHEMA_VERSION}) ON CONFLICT DO NOTHING; CREATE TABLE IF NOT EXISTS coordinator_activations(activation_id uuid PRIMARY KEY,apply_order bigint UNIQUE NOT NULL,package_digest text NOT NULL,predecessor_package_digest text,database_id text NOT NULL,plan_kind text NOT NULL,applied_at timestamptz NOT NULL,operator_reference_hash text,backup_references text[] NOT NULL,role_mode text NOT NULL,runtime_role text NOT NULL)")
+}
+
 fn layout() -> Result<Layout> {
     Layout::new(
         "coordinator",
@@ -884,7 +891,9 @@ pub async fn apply(
     {
         return Err(fail("remove default TRIGGER grants to the runtime role"));
     }
-    tx.batch_execute(&format!("CREATE TABLE IF NOT EXISTS coordinator_migrations(version bigint PRIMARY KEY); INSERT INTO coordinator_migrations VALUES({SCHEMA_VERSION}) ON CONFLICT DO NOTHING; CREATE TABLE IF NOT EXISTS coordinator_activations(activation_id uuid PRIMARY KEY,apply_order bigint UNIQUE NOT NULL,package_digest text NOT NULL,predecessor_package_digest text,database_id text NOT NULL,plan_kind text NOT NULL,applied_at timestamptz NOT NULL,operator_reference_hash text,backup_references text[] NOT NULL,role_mode text NOT NULL,runtime_role text NOT NULL)")).await.map_err(|_|fail("restore activation schema"))?;
+    tx.batch_execute(&activation_ledger_statements())
+        .await
+        .map_err(|_| fail("restore activation schema"))?;
     let prior = activation::active_activation(&tx, &l)
         .await
         .map_err(|_| fail("restore ledger"))?;

@@ -24,6 +24,7 @@ mod config;
 mod error;
 mod extended_mutation;
 mod geojson;
+mod hook;
 mod ingestion;
 mod metadata;
 mod mutation;
@@ -35,7 +36,6 @@ mod response;
 mod statistics;
 mod strict_json;
 mod transport;
-mod webhook;
 
 pub use actions::*;
 pub use attachment::*;
@@ -47,6 +47,7 @@ pub use error::{
     BRegRefusalCode, BaseRegistryClientError, TransportKind,
 };
 pub use geojson::*;
+pub use hook::*;
 pub use ingestion::*;
 pub use metadata::*;
 pub use mutation::*;
@@ -69,7 +70,6 @@ pub use registry_review_protocol::PolicySelection;
 pub use response::*;
 pub use statistics::*;
 pub use uuid::Uuid;
-pub use webhook::*;
 
 pub const DEFAULT_ATTEMPT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 pub const DEFAULT_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);

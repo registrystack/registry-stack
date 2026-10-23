@@ -17,7 +17,7 @@ use crate::store::{
 
 const MAX_BACKUPS: usize = 16;
 
-fn layout() -> Layout {
+pub(crate) fn layout() -> Layout {
     Layout::new(
         "messaging",
         "messaging_activations",
@@ -28,7 +28,7 @@ fn layout() -> Layout {
     .expect("static Messaging activation identifiers")
 }
 
-fn platform_error(error: platform::Error) -> StoreError {
+pub(crate) fn platform_error(error: platform::Error) -> StoreError {
     match error {
         platform::Error::Database(error) => error.into(),
         platform::Error::UnsupportedPostgres => StoreError::UnsupportedPostgres,

@@ -5,7 +5,7 @@ const { test } = require('node:test');
 
 const {
   BaseRegistryClientError,
-  verifyWebhookDelivery,
+  verifyHookDelivery,
 } = process.env.BREG_CLIENT_PACKAGE
   ? require(process.env.BREG_CLIENT_PACKAGE).breg : require('..');
 
@@ -43,7 +43,7 @@ function input(overrides = {}) {
 
 function assertRefusal(code) {
   return (error) => error instanceof BaseRegistryClientError
-    && error.kind === 'webhook-verification'
+    && error.kind === 'hook-verification'
     && error.code === code
     && !error.message.includes(signature)
     && !error.message.includes(key.toString());
@@ -54,7 +54,7 @@ function assertExactRefusal(code, message) {
 }
 
 test('accepts the fixed BReg signing vector and returns exact delivery values', () => {
-  const verified = verifyWebhookDelivery(input());
+  const verified = verifyHookDelivery(input());
 
   assert.deepEqual(verified, {
     id: '00000000-0000-4000-8000-000000000001',
@@ -72,71 +72,71 @@ test('accepts the fixed BReg signing vector and returns exact delivery values', 
 });
 
 test('refuses a tampered signed header', () => {
-  assert.throws(() => verifyWebhookDelivery(input({
+  assert.throws(() => verifyHookDelivery(input({
     headers: { ...headers(), 'ce-type': 'case-patched-v1' },
   })), assertRefusal('signature-mismatch'));
 });
 
 test('refuses a tampered body', () => {
   assert.throws(
-    () => verifyWebhookDelivery(input({ body: Buffer.from('{"tampered":true}') })),
+    () => verifyHookDelivery(input({ body: Buffer.from('{"tampered":true}') })),
     assertRefusal('signature-mismatch'),
   );
 });
 
 test('refuses the wrong key', () => {
   assert.throws(
-    () => verifyWebhookDelivery(input({ key: Buffer.alloc(32, 0x6b) })),
+    () => verifyHookDelivery(input({ key: Buffer.alloc(32, 0x6b) })),
     assertRefusal('signature-mismatch'),
   );
 });
 
 test('refuses a truncated signature', () => {
-  assert.throws(() => verifyWebhookDelivery(input({
+  assert.throws(() => verifyHookDelivery(input({
     headers: { ...headers(), 'x-registry-signature': 'v1=truncated' },
   })), assertRefusal('malformed-signature'));
 });
 
 test('reports an invalid delivery time with its fix', () => {
-  assert.throws(() => verifyWebhookDelivery(input({
+  assert.throws(() => verifyHookDelivery(input({
     headers: { ...headers(), 'x-registry-delivery-time': 'not-a-time' },
   })), assertExactRefusal(
     'invalid-delivery-time',
-    'the Base Registry Engine webhook delivery time is invalid; check the signed delivery time and sender clock',
+    'the Base Registry Engine hook delivery time is invalid; check the signed delivery time and sender clock',
   ));
 });
 
 test('reports a duplicate signed header with its fix', () => {
-  assert.throws(() => verifyWebhookDelivery(input({
+  assert.throws(() => verifyHookDelivery(input({
     headers: { ...headers(), 'CE-TYPE': 'case-created-v1' },
   })), assertExactRefusal(
     'duplicate-header',
-    'a Base Registry Engine webhook header is repeated; remove duplicate signed headers',
+    'a Base Registry Engine hook header is repeated; remove duplicate signed headers',
   ));
 });
 
 test('reports an oversized body with its fix', () => {
   assert.throws(
-    () => verifyWebhookDelivery(input({ body: Buffer.alloc(1_048_577, 0x78) })),
+    () => verifyHookDelivery(input({ body: Buffer.alloc(1_048_577, 0x78) })),
     assertExactRefusal(
       'body-too-large',
-      'the Base Registry Engine webhook body exceeds the Version 1 limit; reduce the body size',
+      'the Base Registry Engine hook body exceeds the Version 1 limit; reduce the body size',
     ),
   );
 });
 
 test('reports an invalid key with its fix', () => {
   assert.throws(
-    () => verifyWebhookDelivery(input({ key: Buffer.from('short-key') })),
+    () => verifyHookDelivery(input({ key: Buffer.from('short-key') })),
     assertExactRefusal(
       'invalid-key',
-      'the Base Registry Engine webhook verification key is too short; configure a key of at least 32 bytes',
+      'the Base Registry Engine hook verification key is too short; configure a key of at least 32 bytes',
     ),
   );
 });
 
 test('refuses an unknown signature version', () => {
-  assert.throws(() => verifyWebhookDelivery(input({
+  assert.throws(() => verifyHookDelivery(input({
     headers: { ...headers(), 'x-registry-signature': signature.replace('v1=', 'v2=') },
   })), assertRefusal('unsupported-version'));
 });
@@ -145,7 +145,7 @@ test('refuses a missing signed header', () => {
   const deliveryHeaders = headers();
   delete deliveryHeaders['ce-time'];
   assert.throws(
-    () => verifyWebhookDelivery(input({ headers: deliveryHeaders })),
+    () => verifyHookDelivery(input({ headers: deliveryHeaders })),
     assertRefusal('missing-header'),
   );
 });
@@ -155,7 +155,7 @@ test('refuses shared backing stores before native verification', () => {
     const shared = Buffer.from(new SharedArrayBuffer(value.length));
     value.copy(shared);
     assert.throws(
-      () => verifyWebhookDelivery(input({ [field]: shared })),
+      () => verifyHookDelivery(input({ [field]: shared })),
       (error) => error instanceof BaseRegistryClientError && error.kind === 'invalid-request',
     );
   }

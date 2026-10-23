@@ -431,7 +431,8 @@ invariants:
       change it describes.
     enforcementPoint: >-
       A closed policy compiler admitting only after-phase URL handlers for
-      three appointment lifecycle triggers; product-owned projections that
+      three appointment lifecycle triggers, with the url-only hook capability
+      set re-checked when the runtime compiles the declarations; product-owned projections that
       cannot name actor, credential, capacity, duplicate-key, or cancellation
       reason fields; outbox capture in the appointment transaction; an
       attempt audit entry accepted before egress; and a delivery seam that
@@ -762,8 +763,9 @@ deferred:
       separately under claimOwnerRetentionDays (SCHEDULING-SEC-34), but the
       claim, history, and actionable or uncertain outbox rows remain. Delivered
       outbox intents of every purpose (confirmation, change, cancellation,
-      reminder) and terminal hook metadata use receiptRetentionDays in bounded
-      transactions, preserving replay through payload expiry. Rotated audit files are removed
+      reminder), reminders cancelled before any attempt or set aside as
+      superseded, and terminal hook metadata use receiptRetentionDays in
+      bounded transactions, preserving replay through payload expiry. Rotated audit files are removed
       after audit.retentionDays.
     compensatingControl: >-
       The configuration reference says so explicitly rather than implying a

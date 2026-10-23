@@ -197,7 +197,7 @@ class SignatureContractTests(unittest.TestCase):
         }
         signature = SIGNER.webhook_signature(key, headers, body, "/hooks/registry")
         self.assertEqual(signature, "v1=OzL5k0ghZJb9nPbb-JOVsroWeanipBlZXbeKDd52RcM")
-        verified = RECEIVER.breg.verify_webhook_delivery(
+        verified = RECEIVER.breg.verify_hook_delivery(
             method="POST", path="/hooks/registry", body=body, key=key,
             headers={**headers, "content-type": "application/json",
                      "x-registry-signature": signature},

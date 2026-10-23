@@ -32,6 +32,16 @@ pub(crate) const ATTACHMENT_TABLES: &[(&str, &[&str])] = &[
     ),
 ];
 
+/// The verification job table in the shape `registry-platform-dispatch`
+/// declares, and the runtime grants on it. It holds only job identities,
+/// states, and timestamps, so it carries no row-level security: the shared
+/// dispatch core reads it for observation outside an admitted transaction,
+/// and every verdict, blob, and reference row it joins keeps its own.
+pub(crate) const VERIFICATION_JOB_TABLE: (&str, &[&str]) = (
+    "registry_attachment_verification_jobs",
+    &["INSERT", "SELECT", "UPDATE", "DELETE"],
+);
+
 pub(crate) async fn install(
     client: &impl GenericClient,
     role: &SqlIdentifier,
@@ -59,16 +69,9 @@ pub(crate) async fn install(
             policy_digest text NOT NULL CHECK (policy_digest <> 'disabled' AND policy_digest <> ''),
             content_type text NOT NULL,
             verdict text NOT NULL DEFAULT 'pending' CHECK (verdict IN ('pending','approved','rejected')),
-            next_attempt_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
-            lease_id uuid,
-            lease_expires_at timestamptz,
-            attempts bigint NOT NULL DEFAULT 0 CHECK (attempts >= 0),
-            PRIMARY KEY (sha256,policy_digest,content_type),
-            CHECK ((lease_id IS NULL) = (lease_expires_at IS NULL))
+            verification_id uuid NOT NULL UNIQUE DEFAULT gen_random_uuid(),
+            PRIMARY KEY (sha256,policy_digest,content_type)
         );
-        CREATE INDEX IF NOT EXISTS registry_attachment_verification_pending
-            ON registry_internal.registry_attachment_verification
-                (policy_digest,next_attempt_at,sha256,content_type) WHERE verdict='pending';
         CREATE TABLE IF NOT EXISTS registry_internal.registry_proposal_attachments (
             action_id text NOT NULL,
             proposal_id uuid NOT NULL,
@@ -92,6 +95,23 @@ pub(crate) async fn install(
         .await
         .map_err(unavailable)?
         .with_public();
+    let job_table = crate::attachment_verification_worker::job_table();
+    for statement in job_table.create_statements() {
+        client
+            .batch_execute(&statement)
+            .await
+            .map_err(unavailable)?;
+    }
+    let (table, grants) = VERIFICATION_JOB_TABLE;
+    client
+        .batch_execute(&format!(
+            "REVOKE ALL ON registry_internal.{table} FROM {revoke_grantees};
+             GRANT {} ON registry_internal.{table} TO {role};",
+            grants.join(", "),
+            role = role.quoted()
+        ))
+        .await
+        .map_err(unavailable)?;
     for (table, grants) in ATTACHMENT_TABLES {
         // The SQL role is trusted engine code. RLS requires an admitted runtime
         // transaction, while current request-row authority is checked by callers.
@@ -351,14 +371,22 @@ pub(crate) async fn put(
         .await
         .map_err(unavailable)?;
     if verification_policy != "disabled" {
-        client
-            .execute(
+        // A new verdict row and its verification job commit together, so
+        // every pending verdict has exactly one job a worker can claim.
+        let created = client
+            .query_opt(
                 "INSERT INTO registry_internal.registry_attachment_verification
-             (sha256,policy_digest,content_type) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING",
+             (sha256,policy_digest,content_type) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING
+             RETURNING verification_id",
                 &[&hash, &verification_policy, &content_type],
             )
             .await
             .map_err(unavailable)?;
+        if let Some(row) = created {
+            crate::attachment_verification_worker::enqueue(client, row.get(0))
+                .await
+                .map_err(|_| MutationError::Unavailable)?;
+        }
     }
     let row=client.query_one("INSERT INTO registry_internal.registry_proposal_attachments
              (action_id,proposal_id,submission_version,slot_id,sha256,content_type,byte_size,uploaded_at,uploaded_by)
@@ -416,11 +444,18 @@ pub(crate) async fn remove(
 }
 
 async fn retire_unreferenced(client: &impl GenericClient, hash: &str) -> Result<(), MutationError> {
+    // A retired verdict takes its job with it. A job a worker holds leased
+    // stays until that worker finishes it, so its attempt is answered: the
+    // finish finds no verdict to record and discards the job.
     client
         .execute(
-            "DELETE FROM registry_internal.registry_attachment_verification v WHERE sha256=$1
-         AND NOT EXISTS (SELECT 1 FROM registry_internal.registry_proposal_attachments a
-             WHERE a.sha256=v.sha256 AND a.content_type=v.content_type AND a.erased_at IS NULL)",
+            "WITH retired AS (
+                 DELETE FROM registry_internal.registry_attachment_verification v WHERE sha256=$1
+                 AND NOT EXISTS (SELECT 1 FROM registry_internal.registry_proposal_attachments a
+                     WHERE a.sha256=v.sha256 AND a.content_type=v.content_type AND a.erased_at IS NULL)
+                 RETURNING verification_id)
+             DELETE FROM registry_internal.registry_attachment_verification_jobs j
+              USING retired WHERE j.verification_id=retired.verification_id AND j.state<>'leased'",
             &[&hash],
         )
         .await
@@ -867,16 +902,6 @@ pub mod test_support {
         .await
         .map(|_| ())
     }
-    #[derive(Clone)]
-    pub struct VerificationLease(super::VerificationJob);
-    impl VerificationLease {
-        pub fn content_type(&self) -> &str {
-            &self.0.content_type
-        }
-        pub fn lease_id(&self) -> uuid::Uuid {
-            self.0.lease_id
-        }
-    }
     #[allow(clippy::too_many_arguments)]
     pub async fn put_verified(
         client: &tokio_postgres::Transaction<'_>,
@@ -892,33 +917,6 @@ pub mod test_support {
         )
         .await
         .map(|_| ())
-    }
-    pub async fn claim(
-        client: &tokio_postgres::Transaction<'_>,
-        policy: &str,
-    ) -> Result<Option<VerificationLease>, MutationError> {
-        super::claim_verification(client, policy)
-            .await
-            .map(|job| job.map(VerificationLease))
-    }
-    pub async fn finish(
-        client: &tokio_postgres::Transaction<'_>,
-        job: &VerificationLease,
-        approved: bool,
-    ) -> Result<bool, MutationError> {
-        super::finish_verification(client, &job.0, approved).await
-    }
-    pub async fn retry(
-        client: &tokio_postgres::Transaction<'_>,
-        job: &VerificationLease,
-    ) -> Result<bool, MutationError> {
-        super::retry_verification(client, &job.0).await
-    }
-    pub async fn verification_content(
-        client: &tokio_postgres::Transaction<'_>,
-        job: &VerificationLease,
-    ) -> Result<Option<Vec<u8>>, MutationError> {
-        super::load_verification_content(client, &job.0).await
     }
     pub async fn content_available(
         client: &tokio_postgres::Transaction<'_>,
@@ -959,6 +957,46 @@ pub mod test_support {
     ) -> Result<(), MutationError> {
         super::verify_backend_binding(client, backend, policy).await
     }
+    /// Load the bytes of one verdict row under `lease_token`, as a leased
+    /// verification job does: `true` when the row still waits for a
+    /// verdict, `false` when it is settled.
+    pub async fn load_leased_content(
+        client: &tokio_postgres::Transaction<'_>,
+        verification_id: uuid::Uuid,
+        lease_token: uuid::Uuid,
+    ) -> Result<bool, MutationError> {
+        let row = client
+            .query_one(
+                "SELECT v.sha256, v.content_type, b.byte_size, b.backend_id
+                   FROM registry_internal.registry_attachment_verification v
+                   JOIN registry_internal.registry_attachment_blobs b ON b.sha256=v.sha256
+                  WHERE v.verification_id=$1",
+                &[&verification_id],
+            )
+            .await
+            .map_err(|_| MutationError::Unavailable)?;
+        let byte_size: i64 = row.get(2);
+        let target = super::VerificationTarget {
+            verification_id,
+            sha256: row.get(0),
+            content_type: row.get(1),
+            byte_size: u64::try_from(byte_size).map_err(|_| MutationError::Unavailable)?,
+            backend_id: row.get(3),
+        };
+        super::load_verification_content(client, &target, lease_token)
+            .await
+            .map(|content| matches!(content, super::VerificationContent::Pending(_)))
+    }
+    /// Record one verdict under `lease_token`, as a finishing verification
+    /// job does.
+    pub async fn record_leased_verdict(
+        client: &tokio_postgres::Transaction<'_>,
+        verification_id: uuid::Uuid,
+        lease_token: uuid::Uuid,
+        approved: bool,
+    ) -> Result<bool, MutationError> {
+        super::record_verification_verdict(client, verification_id, lease_token, approved).await
+    }
 }
 
 pub(crate) async fn persisted_verification_policy(
@@ -989,152 +1027,124 @@ async fn verification_status(
     AttachmentVerificationStatus::from_storage(&verdict)
 }
 
-/// Metadata-only lease. Workers audit the attempt before loading any bytes.
-#[derive(Clone, Debug)]
-pub(crate) struct VerificationJob {
+/// The verdict row one verification job names, read in its claim.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct VerificationTarget {
+    pub verification_id: Uuid,
     pub sha256: String,
     pub content_type: String,
     pub byte_size: u64,
     pub backend_id: String,
-    pub lease_id: Uuid,
-    policy_digest: String,
 }
 
-pub(crate) async fn claim_verification(
-    transaction: &Transaction<'_>,
-    policy: &str,
-) -> Result<Option<VerificationJob>, MutationError> {
-    if policy == "disabled" || persisted_verification_policy(transaction).await? != policy {
-        return Ok(None);
-    }
-    let candidate = transaction
-        .query_opt(
-            "SELECT v.sha256,v.content_type,b.byte_size,b.backend_id
-         FROM registry_internal.registry_attachment_verification v
-         JOIN registry_internal.registry_attachment_blobs b ON b.sha256=v.sha256
-         WHERE v.policy_digest=$1 AND v.verdict='pending' AND b.state='live'
-           AND v.next_attempt_at<=transaction_timestamp()
-           AND (v.lease_expires_at IS NULL OR v.lease_expires_at<=transaction_timestamp())
-           AND EXISTS (SELECT 1 FROM registry_internal.registry_proposal_attachments a
-               WHERE a.sha256=v.sha256 AND a.content_type=v.content_type AND a.erased_at IS NULL)
-         ORDER BY v.next_attempt_at,v.sha256,v.content_type LIMIT 1 FOR UPDATE OF v SKIP LOCKED",
-            &[&policy],
-        )
-        .await
-        .map_err(unavailable)?;
-    let Some(row) = candidate else {
-        return Ok(None);
-    };
-    let sha256: String = row.get(0);
-    let content_type: String = row.get(1);
-    let lease_id = Uuid::new_v4();
-    transaction.execute(
-        "UPDATE registry_internal.registry_attachment_verification
-         SET lease_id=$4,lease_expires_at=transaction_timestamp()+interval '240 seconds',attempts=attempts+1
-         WHERE sha256=$1 AND policy_digest=$2 AND content_type=$3",
-        &[&sha256,&policy,&content_type,&lease_id],
-    ).await.map_err(unavailable)?;
-    Ok(Some(VerificationJob {
-        sha256,
-        content_type,
-        byte_size: u64::try_from(row.get::<_, i64>(2)).map_err(|_| MutationError::Unavailable)?,
-        backend_id: row.get(3),
-        lease_id,
-        policy_digest: policy.to_owned(),
-    }))
+/// What a leased verification job finds when it loads its bytes.
+pub(crate) enum VerificationContent {
+    /// The verdict row is gone or already decided: no verifier request may
+    /// follow, and the job ends without a verdict.
+    Settled,
+    /// The job may be verified. External storage returns `None` only for a
+    /// still-live lease whose bytes reside in the pinned backend.
+    Pending(Option<Vec<u8>>),
 }
 
-/// Whether a job that an earlier attempt failed still waits for its retry
-/// under `policy`. A job another worker holds a live lease on is not waiting.
-pub(crate) async fn verification_retry_waiting(
-    transaction: &Transaction<'_>,
-    policy: &str,
-) -> Result<bool, MutationError> {
-    if policy == "disabled" || persisted_verification_policy(transaction).await? != policy {
-        return Ok(false);
-    }
-    let row = transaction
-        .query_one(
-            "SELECT EXISTS (SELECT 1
-         FROM registry_internal.registry_attachment_verification v
-         JOIN registry_internal.registry_attachment_blobs b ON b.sha256=v.sha256
-         WHERE v.policy_digest=$1 AND v.verdict='pending' AND b.state='live' AND v.attempts>0
-           AND (v.lease_expires_at IS NULL OR v.lease_expires_at<=transaction_timestamp())
-           AND EXISTS (SELECT 1 FROM registry_internal.registry_proposal_attachments a
-               WHERE a.sha256=v.sha256 AND a.content_type=v.content_type AND a.erased_at IS NULL))",
-            &[&policy],
-        )
-        .await
-        .map_err(unavailable)?;
-    Ok(row.get(0))
-}
-
-/// A missing or retired lease refuses byte loading. External storage returns
-/// None only for a still-live lease whose bytes reside in the pinned backend.
+/// A missing or retired lease refuses byte loading.
 pub(crate) async fn load_verification_content(
     transaction: &Transaction<'_>,
-    job: &VerificationJob,
-) -> Result<Option<Vec<u8>>, MutationError> {
-    lock_hash(transaction, &job.sha256).await?;
+    target: &VerificationTarget,
+    lease_token: Uuid,
+) -> Result<VerificationContent, MutationError> {
+    lock_hash(transaction, &target.sha256).await?;
+    let pending = transaction
+        .query_opt(
+            "SELECT verdict='pending' FROM registry_internal.registry_attachment_verification
+             WHERE verification_id=$1",
+            &[&target.verification_id],
+        )
+        .await
+        .map_err(unavailable)?
+        .is_some_and(|row| row.get::<_, bool>(0));
+    if !pending {
+        return Ok(VerificationContent::Settled);
+    }
     let row = transaction
         .query_opt(
             "SELECT b.content FROM registry_internal.registry_attachment_verification v
          JOIN registry_internal.registry_attachment_blobs b ON b.sha256=v.sha256
-         WHERE v.sha256=$1 AND v.policy_digest=$2 AND v.content_type=$3
-           AND v.lease_id=$4 AND v.verdict='pending' AND v.lease_expires_at>transaction_timestamp()
+         JOIN registry_internal.registry_attachment_verification_jobs j
+           ON j.verification_id=v.verification_id
+         WHERE v.verification_id=$1 AND v.sha256=$2 AND v.content_type=$3 AND v.verdict='pending'
+           AND j.state='leased' AND j.lease_token=$4 AND j.lease_expires_at>transaction_timestamp()
            AND b.state='live' AND b.backend_id=$5 AND b.byte_size=$6
            AND EXISTS (SELECT 1 FROM registry_internal.registry_proposal_attachments a
                WHERE a.sha256=v.sha256 AND a.content_type=v.content_type AND a.erased_at IS NULL)",
             &[
-                &job.sha256,
-                &job.policy_digest,
-                &job.content_type,
-                &job.lease_id,
-                &job.backend_id,
-                &(job.byte_size as i64),
+                &target.verification_id,
+                &target.sha256,
+                &target.content_type,
+                &lease_token,
+                &target.backend_id,
+                &i64::try_from(target.byte_size).map_err(|_| MutationError::Unavailable)?,
             ],
         )
         .await
         .map_err(unavailable)?
         .ok_or(MutationError::PreconditionFailed)?;
-    Ok(row.get(0))
+    Ok(VerificationContent::Pending(row.get(0)))
 }
 
-/// Lease comparison makes delayed completion after erasure or reclaim inert.
-pub(crate) async fn finish_verification(
+/// Record one verdict while its job's lease is still live. Returns whether
+/// the verdict row was still pending: erasure or replacement can win while
+/// the external verifier runs, and a stale verdict is then never recorded.
+///
+/// # Errors
+///
+/// [`MutationError::PreconditionFailed`] when the lease is no longer live,
+/// so a timed-out worker never records a verdict after its lease expires.
+pub(crate) async fn record_verification_verdict(
     transaction: &Transaction<'_>,
-    job: &VerificationJob,
+    verification_id: Uuid,
+    lease_token: Uuid,
     approved: bool,
 ) -> Result<bool, MutationError> {
+    let live: bool = transaction
+        .query_one(
+            "SELECT EXISTS (SELECT 1 FROM registry_internal.registry_attachment_verification_jobs
+             WHERE verification_id=$1 AND state='leased' AND lease_token=$2
+               AND lease_expires_at>transaction_timestamp())",
+            &[&verification_id, &lease_token],
+        )
+        .await
+        .map_err(unavailable)?
+        .get(0);
+    if !live {
+        return Err(MutationError::PreconditionFailed);
+    }
     let verdict = if approved { "approved" } else { "rejected" };
     let count = transaction
         .execute(
-            "UPDATE registry_internal.registry_attachment_verification
-         SET verdict=$5,lease_id=NULL,lease_expires_at=NULL
-         WHERE sha256=$1 AND policy_digest=$2 AND content_type=$3 AND lease_id=$4
-           AND verdict='pending' AND lease_expires_at>transaction_timestamp()",
-            &[
-                &job.sha256,
-                &job.policy_digest,
-                &job.content_type,
-                &job.lease_id,
-                &verdict,
-            ],
+            "UPDATE registry_internal.registry_attachment_verification SET verdict=$2
+             WHERE verification_id=$1 AND verdict='pending'",
+            &[&verification_id, &verdict],
         )
         .await
         .map_err(unavailable)?;
     Ok(count == 1)
 }
 
-pub(crate) async fn retry_verification(
+/// Remove a finished job whose verdict row no longer exists.
+pub(crate) async fn forget_retired_verification(
     transaction: &Transaction<'_>,
-    job: &VerificationJob,
-) -> Result<bool, MutationError> {
-    let count=transaction.execute(
-        "UPDATE registry_internal.registry_attachment_verification
-         SET next_attempt_at=transaction_timestamp()+interval '30 seconds',lease_id=NULL,lease_expires_at=NULL
-         WHERE sha256=$1 AND policy_digest=$2 AND content_type=$3 AND lease_id=$4 AND verdict='pending'",
-        &[&job.sha256,&job.policy_digest,&job.content_type,&job.lease_id]
-    ).await.map_err(unavailable)?;
-    Ok(count == 1)
+    verification_id: Uuid,
+) -> Result<(), MutationError> {
+    transaction
+        .execute(
+            "DELETE FROM registry_internal.registry_attachment_verification_jobs j
+             WHERE j.verification_id=$1 AND j.state<>'leased'
+               AND NOT EXISTS (SELECT 1 FROM registry_internal.registry_attachment_verification v
+                   WHERE v.verification_id=j.verification_id)",
+            &[&verification_id],
+        )
+        .await
+        .map_err(unavailable)?;
+    Ok(())
 }

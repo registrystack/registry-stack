@@ -1,0 +1,35 @@
+{
+  "$id": "https://id.registrystack.org/schemas/documents/events/document-version-rejected.v1alpha1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "The data of a document-version.rejected event: content verification rejected a document version.",
+  "properties": {
+    "documentId": {
+      "description": "The document the event is about.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "policyId": {
+      "description": "The document policy the document is held under.",
+      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+      "type": "string"
+    },
+    "policyVersion": {
+      "description": "The version of that policy the document was placed under.",
+      "minLength": 1,
+      "type": "string"
+    },
+    "versionDigest": {
+      "description": "The SHA-256 digest of the version's content.",
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "versionId": {
+      "description": "The exact document version the event is about.",
+      "format": "uuid",
+      "type": "string"
+    }
+  },
+  "title": "Registry Stack Document Store document-version.rejected event data",
+  "type": "object"
+}

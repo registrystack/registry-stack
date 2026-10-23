@@ -64,7 +64,7 @@ python3 editors/configure.py manifest /path/to/metadata-project --document publi
 python3 editors/configure.py evidence-oid4vci /path/to/issuer --document config/wallet.yaml
 ```
 
-The product argument also accepts `casework`, `messaging`, `discovery`,
+The product argument also accepts `casework`, `messaging`, `documents`, `discovery`,
 `render`, `evidence`, `evidence-deployment` (an Evidence deployment project
 directory holding `runtime.yaml`), `platform` (a directory holding a task
 connection file, `task-connection.yaml`), and `breg-mcp` and `breg-review` (a
@@ -89,6 +89,8 @@ Coordinator maps `workflow.yaml`, its runtime files, and `scenarios.yaml`, and a
 `coordinatorctl check --project <project>`. Its semantic index reads the authored
 workflow only; logical connections and producer event identifiers remain with
 the deployment and product validators.
+Document Store maps `documents.yaml` and its runtime files, and adds
+`documentsctl check --project <project>`.
 
 For multiple product directories in one workspace, pass `--workspace` with the
 ancestor directory. Schema mappings name the specific project's paths so one

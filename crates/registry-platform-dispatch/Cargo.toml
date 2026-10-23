@@ -16,6 +16,7 @@ workspace = true
 default = []
 postgres = [
     "dep:async-trait",
+    "dep:deadpool-postgres",
     "dep:getrandom",
     "dep:tokio",
     "dep:tokio-postgres",
@@ -27,6 +28,7 @@ postgres-test = ["postgres"]
 
 [dependencies]
 async-trait = { workspace = true, optional = true }
+deadpool-postgres = { workspace = true, optional = true }
 getrandom = { workspace = true, optional = true }
 hex.workspace = true
 sha2.workspace = true

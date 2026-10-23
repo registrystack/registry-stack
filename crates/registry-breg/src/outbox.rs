@@ -17,13 +17,13 @@ use uuid::Uuid;
 use crate::artifacts::event_data_schema_binding;
 use crate::contract::{
     Classification, EventConditionSource, EventScalarValue, EventTrigger,
-    WebhookAuthenticationProfile, WebhookDeadLetterMode,
+    HookAuthenticationProfile, HookDeadLetterMode,
 };
 use crate::event_destination::ActivatedEventDestinationRegistry;
+use crate::hooks::DELIVERY_SCHEMA;
 use crate::model::{
-    CompiledEntity, CompiledEventDelivery, CompiledField, CompiledWebhookDeliveryMode,
+    CompiledEntity, CompiledEventDelivery, CompiledField, CompiledHookDeliveryMode,
 };
-use crate::webhook::DELIVERY_SCHEMA;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum OutboxError {
@@ -300,10 +300,10 @@ pub(crate) async fn insert_configured_events(
             return Err(OutboxError::Unavailable);
         }
         if let Some(activated) = activated {
-            insert_webhook_delivery(
+            insert_hook_delivery(
                 transaction,
                 event_id,
-                WebhookCapture {
+                HookCapture {
                     activated: &activated,
                     payload: &payload,
                     package_revision: mutation.package_revision,
@@ -405,7 +405,7 @@ fn scalar_value(value: &EventScalarValue) -> Value {
     }
 }
 
-pub(crate) struct WebhookCapture<'a> {
+pub(crate) struct HookCapture<'a> {
     pub activated: &'a ActivatedDelivery<'a>,
     pub payload: &'a [u8],
     pub package_revision: &'a str,
@@ -461,14 +461,14 @@ pub(crate) fn activate_delivery<'a>(
     })
 }
 
-/// Capture one webhook delivery through the platform delivery INSERT, under
+/// Capture one hook delivery through the platform delivery INSERT, under
 /// Base Registry Engine's schema and stored vocabulary.
-pub(crate) async fn insert_webhook_delivery(
+pub(crate) async fn insert_hook_delivery(
     transaction: &Transaction<'_>,
     event_id: Uuid,
-    capture: WebhookCapture<'_>,
+    capture: HookCapture<'_>,
 ) -> Result<(), OutboxError> {
-    let WebhookCapture {
+    let HookCapture {
         activated,
         payload,
         package_revision,
@@ -529,21 +529,21 @@ fn classification_name(classification: Classification) -> &'static str {
     }
 }
 
-fn authentication_profile_name(profile: WebhookAuthenticationProfile) -> &'static str {
+fn authentication_profile_name(profile: HookAuthenticationProfile) -> &'static str {
     match profile {
-        WebhookAuthenticationProfile::HmacSha256V1 => "hmac-sha256-v1",
+        HookAuthenticationProfile::HmacSha256V1 => "hmac-sha256-v1",
     }
 }
 
-fn delivery_mode_name(mode: CompiledWebhookDeliveryMode) -> &'static str {
+fn delivery_mode_name(mode: CompiledHookDeliveryMode) -> &'static str {
     match mode {
-        CompiledWebhookDeliveryMode::AfterCommit => "after-commit",
+        CompiledHookDeliveryMode::AfterCommit => "after-commit",
     }
 }
 
-fn dead_letter_name(mode: WebhookDeadLetterMode) -> &'static str {
+fn dead_letter_name(mode: HookDeadLetterMode) -> &'static str {
     match mode {
-        WebhookDeadLetterMode::Required => "required",
+        HookDeadLetterMode::Required => "required",
     }
 }
 
@@ -754,7 +754,7 @@ mod tests {
         const REGISTRY_ID: &str = "widest-registry-identifier";
         const ENTITY_ID: &str = "widest-entity-identifier";
         const EVENT_ID: &str = "widest-event-identifier";
-        let source = crate::webhook::delivery_source(
+        let source = crate::hooks::delivery_source(
             REGISTRY_ID,
             &"i".repeat(crate::compiler::MAX_BUILD_ID_BYTES as usize),
         );
@@ -820,7 +820,7 @@ mod tests {
         for escaped in ['"', '\\', '\n', '\r', '\t'] {
             assert!(!crate::package::valid_build_id(&format!("a{escaped}")));
         }
-        let source = crate::webhook::delivery_source("widest-registry-identifier", &widest);
+        let source = crate::hooks::delivery_source("widest-registry-identifier", &widest);
         let serialized = serde_json::to_string(&source).expect("serialized source");
         assert_eq!(serialized.len(), 2 + source.len());
     }

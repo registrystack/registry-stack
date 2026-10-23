@@ -124,8 +124,8 @@ Preferred terms.
 | Domain                | Preferred                                            |
 | --------------------- | ---------------------------------------------------- |
 | Product family        | `registry stack` (lowercase) for the concept; `Registry Docs` for the site and repo |
-| Formal product names  | `Base Registry Engine`, `Registry Evidence`, `Registry Discovery`, `Registry Manifest`, `Registry Platform`, and `Registry Render` (Title Case) |
-| Short forms           | Write the formal name on the page's first use, then the short form for the rest of that page: `BReg`, introduced as `Base Registry Engine (BReg)`; `Evidence` for Registry Evidence; `Discovery` for Registry Discovery; `Render` for Registry Render. A page may keep the formal name throughout. |
+| Formal product names  | `Base Registry Engine`, `Registry Evidence`, `Registry Discovery`, `Registry Manifest`, `Registry Platform`, `Registry Render`, and `Registry Document Store` (Title Case) |
+| Short forms           | Write the formal name on the page's first use, then the short form for the rest of that page: `BReg`, introduced as `Base Registry Engine (BReg)`; `Evidence` for Registry Evidence; `Discovery` for Registry Discovery; `Render` for Registry Render; `the Document Store` for the Registry Document Store, never `the Store`. A page may keep the formal name throughout. |
 | Names that never appear | `BREG`, `Breg`, `bReg`, `B-Reg`, and `EG`. `Registry Server` was renamed to Base Registry Engine and survives only in an explicit rename note. Binaries stay lowercase and monospace, and none of them is the product name. |
 | Retired products      | `Registry Relay` and `Registry Notary` keep their Title Case names, but only where the same block says the product is retired |
 | External adopter demo | `Solmara Lab` (Title Case); not a formal Registry Stack product |

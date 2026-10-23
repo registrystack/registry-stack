@@ -115,8 +115,17 @@ A failed call returns to the queue and is tried again after `retryDelaySeconds` 
 5000). Delivery stops when the attempts run out or the result window closes; the result stays
 readable until `availableUntil`.
 
+An attempt interrupted by a crash or restart counts as a failed attempt, so an interrupted final
+attempt is not tried again. The producer still learns the result from the result feed,
+`GET /v1/review-results`, which the Base Registry Engine polls. With `maximumAttempts: 1`, any
+interrupted attempt ends the delivery as `dead-lettered`.
+
 {/* Evidence: products/casework/generated/runtime/runtime.schema.json, ReviewCompletionRuntimeConfig;
-    crates/registry-casework/src/runtime.rs, ReviewCompletionDispatcher, lease_one() and finish(). */}
+    crates/registry-casework/src/runtime/completion.rs, CompletionStore and completion_policy();
+    crates/registry-casework/src/runtime.rs, review_completion_worker();
+    crates/registry-casework/tests/review_postgres.rs, an_interrupted_final_completion_attempt_dead_letters_without_another_send();
+    crates/registry-casework/src/http.rs, review_result_feed();
+    crates/registry-breg/src/review_store.rs, consume_result_feed(). */}
 
 ## Keep the audit file
 

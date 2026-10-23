@@ -17,11 +17,14 @@ use base64::Engine as _;
 use hmac::{Hmac, KeyInit, Mac};
 use postgres_harness::TestDatabase;
 use rcgen::{generate_simple_self_signed, CertifiedKey};
-use registry_breg::audit::WEBHOOK_AUDIT_SCHEMA;
+use registry_breg::audit::HOOK_AUDIT_SCHEMA;
 use registry_breg::compiler::{compile_project, compile_project_with_assets, CompileProfile};
 use registry_breg::contract::{parse_project_json, ModuleAssetSource};
 use registry_breg::event_destination::ActivatedEventDestinationRegistry;
-use registry_breg::hook_handler::HookHandlerRegistry;
+use registry_breg::hooks::{
+    HookDeliveryError, HookDeliveryFailureReason, HookDeliveryService, HookDeliveryStatusKind,
+    HookRetainedBindingError, HookWorkOutcome, HookWorker,
+};
 use registry_breg::model::CompiledRegistry;
 use registry_breg::mutation::{MutationBody, MutationPlan, MutationRequest, MutationTransaction};
 use registry_breg::postgres::{
@@ -29,10 +32,6 @@ use registry_breg::postgres::{
     ExpectedRegistryIdentity, RegistryLockKey, RegistryStateTestIdentity, RowBoundaryContext,
 };
 use registry_breg::runtime_config::parse_runtime_config;
-use registry_breg::webhook::{
-    WebhookDeliveryError, WebhookDeliveryFailureReason, WebhookDeliveryService,
-    WebhookDeliveryStatusKind, WebhookRetainedBindingError, WebhookWorkOutcome, WebhookWorker,
-};
 use registry_platform_audit::AuditProfile;
 use registry_platform_canonical_json::canonicalize_json;
 use registry_platform_hooks::MAX_OUTPUT_BYTES;
@@ -68,8 +67,19 @@ type HmacSha256 = Hmac<Sha256>;
 /// The local hook handlers the running package holds. A package whose hooks
 /// are all `url` yields an empty registry, and every delivery it claims takes
 /// the destination path.
-fn hook_handlers(compiled: &CompiledRegistry, package_revision: &str) -> Arc<HookHandlerRegistry> {
-    Arc::new(HookHandlerRegistry::new(compiled, package_revision))
+/// The local hook programs `compiled` holds, with a hook WASM runtime on the
+/// default budgets: assembling the delivery path directly bypasses the server
+/// startup path, so this embedder starts the hook runtime itself.
+fn hook_handlers(
+    compiled: &CompiledRegistry,
+    package_revision: &str,
+) -> Arc<registry_platform_hooks::executor::LocalHookHandlers> {
+    let handlers = registry_breg::hooks::local_hook_handlers(compiled, package_revision);
+    #[cfg(feature = "wasm")]
+    let handlers = handlers.with_wasm_runtime(
+        registry_breg::hooks::default_hook_wasm_runtime().expect("the hook wasm runtime starts"),
+    );
+    Arc::new(handlers)
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 6)]
@@ -120,7 +130,7 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
         database.audit(audit_profile.clone()),
         Some(Arc::clone(&destinations)),
     );
-    let service = WebhookDeliveryService::new(
+    let service = HookDeliveryService::new(
         pool.clone(),
         Arc::clone(&destinations),
         hook_handlers(&compiled, &identity.activation_id),
@@ -138,14 +148,8 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
         .get_for_test()
         .await
         .expect("runtime mutation connection is available");
-    assert_eq!(
-        service.list(0).await,
-        Err(WebhookDeliveryError::Unavailable)
-    );
-    assert_eq!(
-        service.list(101).await,
-        Err(WebhookDeliveryError::Unavailable)
-    );
+    assert_eq!(service.list(0).await, Err(HookDeliveryError::Unavailable));
+    assert_eq!(service.list(101).await, Err(HookDeliveryError::Unavailable));
 
     receiver.enqueue(ResponsePlan::Status(500)).await;
     receiver.enqueue(ResponsePlan::Status(204)).await;
@@ -173,8 +177,8 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
         worker_a.expect("first worker returns a closed outcome"),
         worker_b.expect("second worker returns a closed outcome"),
     ];
-    assert!(outcomes.contains(&WebhookWorkOutcome::RetryScheduled));
-    assert!(outcomes.contains(&WebhookWorkOutcome::Idle));
+    assert!(outcomes.contains(&HookWorkOutcome::RetryScheduled));
+    assert!(outcomes.contains(&HookWorkOutcome::Idle));
     receiver.wait_for_count(1).await;
     let first_attempt = receiver.request(0).await;
     assert_exact_request(&first_attempt, &first).await;
@@ -196,10 +200,7 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
     );
 
     wait_until_retry_is_due(&database, &first).await;
-    assert_eq!(
-        service.deliver_once().await,
-        Ok(WebhookWorkOutcome::Delivered)
-    );
+    assert_eq!(service.deliver_once().await, Ok(HookWorkOutcome::Delivered));
     receiver.wait_for_count(2).await;
     let second_attempt = receiver.request(1).await;
     assert_exact_request(&second_attempt, &first).await;
@@ -227,7 +228,7 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
         service
             .replay(first.event_id, &first.compiled_delivery_id, 1)
             .await,
-        Err(WebhookDeliveryError::Unavailable),
+        Err(HookDeliveryError::Unavailable),
         "delivered work is never replayable"
     );
 
@@ -254,15 +255,15 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
         .await
         .expect("administrator expires one retained pending payload");
     let egress_before_expiry = receiver.count().await;
-    assert_eq!(service.deliver_once().await, Ok(WebhookWorkOutcome::Idle));
+    assert_eq!(service.deliver_once().await, Ok(HookWorkOutcome::Idle));
     assert_eq!(receiver.count().await, egress_before_expiry);
-    assert_eq!(service.deliver_once().await, Ok(WebhookWorkOutcome::Idle));
+    assert_eq!(service.deliver_once().await, Ok(HookWorkOutcome::Idle));
     assert_eq!(
         delivery_state(&database, &pending_expired).await,
         (1, "expired".to_owned(), 0)
     );
     assert!(!outbox_payload_available(&database, &pending_expired).await);
-    assert_eq!(service.deliver_once().await, Ok(WebhookWorkOutcome::Idle));
+    assert_eq!(service.deliver_once().await, Ok(HookWorkOutcome::Idle));
     let expired_sibling = CapturedEvent {
         event_id: pending_expired.event_id,
         compiled_delivery_id: expired_sibling_id.to_owned(),
@@ -348,7 +349,7 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
         .expect("administrator erases and expires the shared payload");
     let egress_before_erased_expiry = receiver.count().await;
     for _ in 0..2 {
-        assert_eq!(service.deliver_once().await, Ok(WebhookWorkOutcome::Idle));
+        assert_eq!(service.deliver_once().await, Ok(HookWorkOutcome::Idle));
     }
     assert_eq!(receiver.count().await, egress_before_erased_expiry);
     let sibling_expiry: (String, bool) = database
@@ -384,7 +385,7 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
         delivery_state(&database, &erased_before_expiry).await,
         (1, "expired".to_owned(), 0)
     );
-    assert_eq!(service.deliver_once().await, Ok(WebhookWorkOutcome::Idle));
+    assert_eq!(service.deliver_once().await, Ok(HookWorkOutcome::Idle));
     assert_exact_audit_outcome(
         &database,
         &audit_profile,
@@ -403,7 +404,7 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
                 1,
             )
             .await,
-        Err(WebhookDeliveryError::Unavailable)
+        Err(HookDeliveryError::Unavailable)
     );
     let statuses = service
         .list(100)
@@ -413,7 +414,7 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
         .iter()
         .find(|status| status.event_id == pending_expired.event_id)
         .expect("expired work remains visible without values");
-    assert_eq!(expired_status.state, WebhookDeliveryStatusKind::Expired);
+    assert_eq!(expired_status.state, HookDeliveryStatusKind::Expired);
     assert!(!expired_status.payload_available);
     assert_exact_audit_outcome(
         &database,
@@ -443,12 +444,12 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
     .await;
     assert_eq!(
         service.deliver_once().await,
-        Ok(WebhookWorkOutcome::RetryScheduled)
+        Ok(HookWorkOutcome::RetryScheduled)
     );
     wait_until_retry_is_due(&database, &timeout_event).await;
     assert_eq!(
         service.deliver_once().await,
-        Ok(WebhookWorkOutcome::DeadLettered)
+        Ok(HookWorkOutcome::DeadLettered)
     );
     receiver.wait_for_count(4).await;
     let timeout_first = receiver.request(2).await;
@@ -522,14 +523,11 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
                 1,
             )
             .await,
-        Err(WebhookDeliveryError::Unavailable),
+        Err(HookDeliveryError::Unavailable),
         "a stale generation and a nonterminal generation share one refusal"
     );
     receiver.enqueue(ResponsePlan::Status(204)).await;
-    assert_eq!(
-        service.deliver_once().await,
-        Ok(WebhookWorkOutcome::Delivered)
-    );
+    assert_eq!(service.deliver_once().await, Ok(HookWorkOutcome::Delivered));
     receiver.wait_for_count(5).await;
     let replay_request = receiver.request(4).await;
     assert_ne!(
@@ -572,7 +570,7 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
                 2,
             )
             .await,
-        Err(WebhookDeliveryError::Unavailable)
+        Err(HookDeliveryError::Unavailable)
     );
 
     receiver.enqueue(ResponsePlan::Status(204)).await;
@@ -604,7 +602,7 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
         )
         .await
         .expect("administrator simulates one expired post-audit lease");
-    assert_eq!(service.deliver_once().await, Ok(WebhookWorkOutcome::Idle));
+    assert_eq!(service.deliver_once().await, Ok(HookWorkOutcome::Idle));
     assert_eq!(
         delivery_retry_delay(&database, &recovered).await,
         Duration::from_millis(1_000),
@@ -613,7 +611,7 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
     wait_until_retry_is_due(&database, &recovered).await;
     assert_eq!(
         service.deliver_once().await,
-        Ok(WebhookWorkOutcome::Delivered),
+        Ok(HookWorkOutcome::Delivered),
         "recovery consumes the interrupted attempt before claiming the next bounded attempt"
     );
     receiver.wait_for_count(6).await;
@@ -678,12 +676,12 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
     .await;
     assert_eq!(
         service.deliver_once().await,
-        Ok(WebhookWorkOutcome::RetryScheduled)
+        Ok(HookWorkOutcome::RetryScheduled)
     );
     wait_until_retry_is_due(&database, &transport_event).await;
     assert_eq!(
         service.deliver_once().await,
-        Ok(WebhookWorkOutcome::DeadLettered)
+        Ok(HookWorkOutcome::DeadLettered)
     );
     receiver.wait_for_count(8).await;
     assert_exact_audit_outcome(
@@ -717,7 +715,7 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
         )
         .await
         .expect("administrator expires one retained dead letter");
-    assert_eq!(service.deliver_once().await, Ok(WebhookWorkOutcome::Idle));
+    assert_eq!(service.deliver_once().await, Ok(HookWorkOutcome::Idle));
     assert_eq!(
         delivery_state(&database, &transport_event).await,
         (1, "dead-lettered".to_owned(), 2),
@@ -734,7 +732,7 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
         .expect("dead letter remains visible without values");
     assert_eq!(
         dead_letter_status.state,
-        WebhookDeliveryStatusKind::DeadLettered
+        HookDeliveryStatusKind::DeadLettered
     );
     assert!(!dead_letter_status.payload_available);
     assert_eq!(
@@ -745,7 +743,7 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
                 1,
             )
             .await,
-        Err(WebhookDeliveryError::Unavailable),
+        Err(HookDeliveryError::Unavailable),
         "an erased dead letter cannot be replayed"
     );
 
@@ -776,7 +774,7 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
         .expect("administrator installs a binding mismatch canary");
     assert_eq!(
         service.deliver_once().await,
-        Ok(WebhookWorkOutcome::RetryScheduled)
+        Ok(HookWorkOutcome::RetryScheduled)
     );
     assert_eq!(receiver.count().await, egress_before_refusals);
     assert_exact_audit_outcome(
@@ -792,7 +790,7 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
     wait_until_retry_is_due(&database, &binding_refused).await;
     assert_eq!(
         service.deliver_once().await,
-        Ok(WebhookWorkOutcome::DeadLettered)
+        Ok(HookWorkOutcome::DeadLettered)
     );
     assert_eq!(receiver.count().await, egress_before_refusals);
     assert_exact_audit_outcome(
@@ -832,17 +830,17 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
         .expect("administrator installs a newer binding mismatch canary");
     assert_eq!(
         service.deliver_once().await,
-        Ok(WebhookWorkOutcome::RetryScheduled)
+        Ok(HookWorkOutcome::RetryScheduled)
     );
     wait_until_retry_is_due(&database, &newer_binding_refused).await;
     assert_eq!(
         service.deliver_once().await,
-        Ok(WebhookWorkOutcome::DeadLettered)
+        Ok(HookWorkOutcome::DeadLettered)
     );
     assert_eq!(receiver.count().await, egress_before_refusals);
     assert_eq!(
         service.verify_retained_bindings().await,
-        Err(WebhookRetainedBindingError::Mismatch {
+        Err(HookRetainedBindingError::Mismatch {
             retained_deliveries: 2,
         }),
         "retained replayable dead letters with an incompatible binding block startup"
@@ -857,7 +855,7 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
     assert_eq!(binding_status.event_id, newer_binding_refused.event_id);
     assert_eq!(
         binding_status.dead_letter_reason,
-        Some(WebhookDeliveryFailureReason::DestinationBindingRefused)
+        Some(HookDeliveryFailureReason::DestinationBindingRefused)
     );
     assert!(!binding_status.binding_active);
     assert!(binding_status.discard_eligible);
@@ -869,7 +867,7 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
                 1,
             )
             .await,
-        Err(WebhookDeliveryError::Unavailable),
+        Err(HookDeliveryError::Unavailable),
         "replay fails closed when the current destination does not match the captured binding"
     );
     assert_eq!(
@@ -924,7 +922,7 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
             .as_slice(),
         ["discard-requested", "discard-committed"],
     );
-    let restarted_service = WebhookDeliveryService::new(
+    let restarted_service = HookDeliveryService::new(
         pool.clone(),
         Arc::clone(&destinations),
         hook_handlers(&compiled, &identity.activation_id),
@@ -948,7 +946,7 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
         .find(|status| status.event_id == binding_refused.event_id)
         .expect("discarded delivery remains visible");
     assert_eq!(discarded.generation, 2);
-    assert_eq!(discarded.state, WebhookDeliveryStatusKind::Expired);
+    assert_eq!(discarded.state, HookDeliveryStatusKind::Expired);
     assert!(!discarded.payload_available);
     assert!(!discarded.discard_eligible);
     assert_eq!(discarded.dead_letter_reason, None);
@@ -982,7 +980,7 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
         .expect("administrator installs a payload tamper canary");
     assert_eq!(
         service.deliver_once().await,
-        Ok(WebhookWorkOutcome::RetryScheduled)
+        Ok(HookWorkOutcome::RetryScheduled)
     );
     assert_eq!(receiver.count().await, egress_before_refusals);
     assert_exact_audit_outcome(
@@ -998,7 +996,7 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
     wait_until_retry_is_due(&database, &payload_refused).await;
     assert_eq!(
         service.deliver_once().await,
-        Ok(WebhookWorkOutcome::DeadLettered)
+        Ok(HookWorkOutcome::DeadLettered)
     );
     assert_eq!(receiver.count().await, egress_before_refusals);
     assert_exact_audit_outcome(
@@ -1027,7 +1025,7 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
     database.audit_capture().fail_after(0);
     assert_eq!(
         service.deliver_once().await,
-        Err(WebhookDeliveryError::Unavailable)
+        Err(HookDeliveryError::Unavailable)
     );
     assert_eq!(receiver.count().await, egress_before_refusals);
     assert_eq!(
@@ -1037,7 +1035,7 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
     // The refused writer stays failed; a worker opened over the recovered
     // destination delivers the same work.
     database.audit_capture().restore();
-    let service = WebhookDeliveryService::new(
+    let service = HookDeliveryService::new(
         pool.clone(),
         Arc::clone(&destinations),
         hook_handlers(&compiled, &identity.activation_id),
@@ -1049,10 +1047,7 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
         database.audit(audit_profile.clone()),
     );
     receiver.enqueue(ResponsePlan::Status(204)).await;
-    assert_eq!(
-        service.deliver_once().await,
-        Ok(WebhookWorkOutcome::Delivered)
-    );
+    assert_eq!(service.deliver_once().await, Ok(HookWorkOutcome::Delivered));
     receiver.wait_for_count(egress_before_refusals + 1).await;
     assert_eq!(
         delivery_state(&database, &audit_refused).await,
@@ -1085,7 +1080,7 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
     refuse_delivery_state_commit(&database, "delivered").await;
     assert_eq!(
         service.deliver_once().await,
-        Err(WebhookDeliveryError::Unavailable)
+        Err(HookDeliveryError::Unavailable)
     );
     allow_delivery_state_commit(&database).await;
     receiver.wait_for_count(commit_egress_before + 1).await;
@@ -1138,7 +1133,7 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
     refuse_delivery_state_commit(&database, "leased").await;
     assert_eq!(
         service.deliver_once().await,
-        Err(WebhookDeliveryError::Unavailable)
+        Err(HookDeliveryError::Unavailable)
     );
     allow_delivery_state_commit(&database).await;
     assert_eq!(receiver.count().await, lease_egress_before, "no egress");
@@ -1169,7 +1164,7 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
     receiver.enqueue(ResponsePlan::Status(204)).await;
     assert_eq!(
         service.deliver_once().await,
-        Ok(WebhookWorkOutcome::Delivered),
+        Ok(HookWorkOutcome::Delivered),
         "the refused lease is claimed again once the commit succeeds"
     );
 
@@ -1199,10 +1194,10 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
     terminal_response_release.notify_one();
     assert_eq!(
         attempt.await.expect("terminal audit fault task joins"),
-        Err(WebhookDeliveryError::Unavailable)
+        Err(HookDeliveryError::Unavailable)
     );
     database.audit_capture().restore();
-    let service = WebhookDeliveryService::new(
+    let service = HookDeliveryService::new(
         pool.clone(),
         Arc::clone(&destinations),
         hook_handlers(&compiled, &identity.activation_id),
@@ -1250,8 +1245,8 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
     add_sibling_delivery(&database, &concurrent_siblings, concurrent_sibling_id).await;
     let (first_sibling, second_sibling) =
         tokio::join!(service.deliver_once(), service.deliver_once());
-    assert_eq!(first_sibling, Ok(WebhookWorkOutcome::Delivered));
-    assert_eq!(second_sibling, Ok(WebhookWorkOutcome::Delivered));
+    assert_eq!(first_sibling, Ok(HookWorkOutcome::Delivered));
+    assert_eq!(second_sibling, Ok(HookWorkOutcome::Delivered));
     assert!(!outbox_payload_available(&database, &concurrent_siblings).await);
     let terminal_sibling_states = database
         .admin
@@ -1394,13 +1389,13 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
                 && status.compiled_delivery_id == sibling_delivery_id
         })
         .expect("active sibling lease remains visible");
-    assert_eq!(active_lease.state, WebhookDeliveryStatusKind::Leased);
+    assert_eq!(active_lease.state, HookDeliveryStatusKind::Leased);
     assert!(!active_lease.discard_eligible);
     assert_eq!(
         service
             .discard(sibling_event.event_id, sibling_delivery_id, 1)
             .await,
-        Err(WebhookDeliveryError::Unavailable),
+        Err(HookDeliveryError::Unavailable),
         "discard never races a live delivery lease"
     );
     database
@@ -1424,7 +1419,7 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
                 && status.compiled_delivery_id == sibling_delivery_id
         })
         .expect("expired sibling lease remains visible");
-    assert_eq!(expired_lease.state, WebhookDeliveryStatusKind::Leased);
+    assert_eq!(expired_lease.state, HookDeliveryStatusKind::Leased);
     assert!(expired_lease.discard_eligible);
     assert_eq!(
         service
@@ -1446,7 +1441,7 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
         )
         .await
         .expect("administrator presents the prior active storage shape");
-    let legacy_storage_service = WebhookDeliveryService::new(
+    let legacy_storage_service = HookDeliveryService::new(
         pool.clone(),
         Arc::clone(&destinations),
         hook_handlers(&compiled, &identity.activation_id),
@@ -1475,12 +1470,12 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
     .await;
     assert_eq!(
         legacy_storage_service.deliver_once().await,
-        Ok(WebhookWorkOutcome::RetryScheduled)
+        Ok(HookWorkOutcome::RetryScheduled)
     );
     wait_until_retry_is_due(&database, &legacy_dead_letter).await;
     assert_eq!(
         legacy_storage_service.deliver_once().await,
-        Ok(WebhookWorkOutcome::DeadLettered)
+        Ok(HookWorkOutcome::DeadLettered)
     );
     let statuses = legacy_storage_service
         .list(100)
@@ -1585,7 +1580,7 @@ async fn real_postgres_webhook_delivery_finishes_prior_package_work_after_compat
     let compiled = compiled_registry();
     install_compiled_schema(&migration, &compiled, &database.runtime_role)
         .await
-        .expect("migration installs webhook delivery state");
+        .expect("migration installs hook delivery state");
     let original_identity = initialize_compiled_registry_state_for_test(
         &migration,
         &database.runtime_role,
@@ -1660,7 +1655,7 @@ async fn real_postgres_webhook_delivery_finishes_prior_package_work_after_compat
         .expect("compatible successor identity activates");
     assert_eq!(changed, 1);
 
-    let service = WebhookDeliveryService::new(
+    let service = HookDeliveryService::new(
         pool.clone(),
         Arc::clone(&destinations),
         hook_handlers(&compiled, &successor_identity.activation_id),
@@ -1678,7 +1673,7 @@ async fn real_postgres_webhook_delivery_finishes_prior_package_work_after_compat
     receiver.enqueue(ResponsePlan::Status(204)).await;
     assert_eq!(
         service.deliver_once().await,
-        Ok(WebhookWorkOutcome::Delivered),
+        Ok(HookWorkOutcome::Delivered),
         "the successor worker delivers immutable work captured by the prior package"
     );
     receiver.wait_for_count(1).await;
@@ -1724,7 +1719,7 @@ async fn real_postgres_webhook_worker_records_its_last_success_on_an_idle_iterat
     let compiled = compiled_registry();
     install_compiled_schema(&migration, &compiled, &database.runtime_role)
         .await
-        .expect("migration installs webhook delivery state");
+        .expect("migration installs hook delivery state");
     let identity = initialize_compiled_registry_state_for_test(
         &migration,
         &database.runtime_role,
@@ -1743,7 +1738,7 @@ async fn real_postgres_webhook_worker_records_its_last_success_on_an_idle_iterat
         .expect("bounded runtime pool builds");
     let audit_profile = AuditProfile::production_from_secret_bytes(vec![0x7d; 32].into())
         .expect("test owns a keyed audit profile");
-    let service = WebhookDeliveryService::new(
+    let service = HookDeliveryService::new(
         pool.clone(),
         destinations,
         hook_handlers(&compiled, &identity.activation_id),
@@ -1759,7 +1754,7 @@ async fn real_postgres_webhook_worker_records_its_last_success_on_an_idle_iterat
     assert!(last_success.age().is_none(), "no iteration has run yet");
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
-    let worker = tokio::spawn(WebhookWorker::new(service).run(shutdown_rx));
+    let worker = tokio::spawn(HookWorker::new(service).run(shutdown_rx));
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     while last_success.age().is_none() {
         assert!(
@@ -1783,7 +1778,7 @@ async fn real_postgres_webhook_delivery_reap_refuses_an_out_of_bounds_captured_a
     let compiled = compiled_registry();
     install_compiled_schema(&migration, &compiled, &database.runtime_role)
         .await
-        .expect("migration installs webhook delivery state");
+        .expect("migration installs hook delivery state");
     let identity = initialize_compiled_registry_state_for_test(
         &migration,
         &database.runtime_role,
@@ -1830,7 +1825,7 @@ async fn real_postgres_webhook_delivery_reap_refuses_an_out_of_bounds_captured_a
     )
     .await;
 
-    let service = WebhookDeliveryService::new(
+    let service = HookDeliveryService::new(
         pool.clone(),
         Arc::clone(&destinations),
         hook_handlers(&compiled, &identity.activation_id),
@@ -1886,7 +1881,7 @@ async fn real_postgres_webhook_delivery_reap_refuses_an_out_of_bounds_captured_a
         .expect("administrator installs an out-of-bounds attempt timeout canary");
     assert_eq!(
         service.deliver_once().await,
-        Err(WebhookDeliveryError::Unavailable),
+        Err(HookDeliveryError::Unavailable),
         "claim refuses a pending row whose captured attempt timeout is out of bounds"
     );
     assert_eq!(
@@ -1914,7 +1909,7 @@ async fn real_postgres_webhook_delivery_reap_refuses_an_out_of_bounds_captured_a
         .expect("administrator simulates one expired lease over the same corrupted policy");
     assert_eq!(
         service.deliver_once().await,
-        Err(WebhookDeliveryError::Unavailable),
+        Err(HookDeliveryError::Unavailable),
         "the lease reaper refuses the same captured attempt timeout corruption claim refuses"
     );
     assert_eq!(
@@ -1949,7 +1944,7 @@ async fn real_postgres_webhook_delivery_reap_refuses_an_out_of_bounds_captured_a
         .expect("the deployed attempt timeout bound constraint is restored");
     assert_eq!(
         service.deliver_once().await,
-        Ok(WebhookWorkOutcome::Idle),
+        Ok(HookWorkOutcome::Idle),
         "the exhausted attempt reaps normally once its captured policy is valid again"
     );
     assert_eq!(
@@ -2022,7 +2017,7 @@ async fn real_postgres_local_hook_delivery_runs_in_process_and_records_its_answe
         database.audit(audit_profile.clone()),
         Some(Arc::clone(&destinations)),
     );
-    let service = WebhookDeliveryService::new(
+    let service = HookDeliveryService::new(
         pool.clone(),
         Arc::clone(&destinations),
         hook_handlers(&compiled, &identity.activation_id),
@@ -2078,7 +2073,7 @@ async fn real_postgres_local_hook_delivery_runs_in_process_and_records_its_answe
 
     assert_eq!(
         service.deliver_once().await,
-        Ok(WebhookWorkOutcome::Delivered),
+        Ok(HookWorkOutcome::Delivered),
         "the post-commit worker runs the local program and accepts its answer"
     );
     assert_eq!(
@@ -2178,7 +2173,7 @@ async fn real_postgres_url_hook_delivery_records_its_answer_and_refuses_one_over
         database.audit(audit_profile.clone()),
         Some(Arc::clone(&destinations)),
     );
-    let service = WebhookDeliveryService::new(
+    let service = HookDeliveryService::new(
         pool.clone(),
         Arc::clone(&destinations),
         hook_handlers(&compiled, &identity.activation_id),
@@ -2215,7 +2210,7 @@ async fn real_postgres_url_hook_delivery_records_its_answer_and_refuses_one_over
     .await;
     assert_eq!(
         service.deliver_once().await,
-        Ok(WebhookWorkOutcome::Delivered),
+        Ok(HookWorkOutcome::Delivered),
         "the worker delivers a 2xx answer and accepts its message"
     );
     assert_eq!(
@@ -2247,7 +2242,7 @@ async fn real_postgres_url_hook_delivery_records_its_answer_and_refuses_one_over
     .await;
     assert_eq!(
         service.deliver_once().await,
-        Ok(WebhookWorkOutcome::Delivered),
+        Ok(HookWorkOutcome::Delivered),
         "the worker delivers a bodyless 2xx as the none answer"
     );
     assert_eq!(
@@ -2284,7 +2279,7 @@ async fn real_postgres_url_hook_delivery_records_its_answer_and_refuses_one_over
     .await;
     assert_eq!(
         service.deliver_once().await,
-        Ok(WebhookWorkOutcome::RetryScheduled),
+        Ok(HookWorkOutcome::RetryScheduled),
         "a 2xx body over the ceiling is refused and retried"
     );
     assert_eq!(
@@ -2383,7 +2378,7 @@ async fn create_event(
             },
         )
         .await
-        .expect("record mutation atomically captures one webhook delivery");
+        .expect("record mutation atomically captures one hook delivery");
     let row = database
         .admin
         .query_one(
@@ -2678,7 +2673,7 @@ async fn audit_outcomes(
     let event_reference = profile
         .key_hasher()
         .audit_reference_hash(
-            "breg-webhook-event-v1",
+            "breg-hook-event-v1",
             &event.package_revision,
             &event.event_id.to_string(),
         )
@@ -2686,7 +2681,7 @@ async fn audit_outcomes(
     let delivery_reference = profile
         .key_hasher()
         .audit_reference_hash(
-            "breg-webhook-delivery-v1",
+            "breg-hook-delivery-v1",
             &event.package_revision,
             &event.compiled_delivery_id,
         )
@@ -2694,7 +2689,7 @@ async fn audit_outcomes(
     database
         .audit_entries()
         .into_iter()
-        .filter(|entry| entry["schema"] == WEBHOOK_AUDIT_SCHEMA)
+        .filter(|entry| entry["schema"] == HOOK_AUDIT_SCHEMA)
         .filter_map(|entry| entry.get("record").cloned())
         .filter(|record| {
             record.get("eventReference").and_then(Value::as_str) == Some(event_reference.as_str())
@@ -2717,7 +2712,7 @@ async fn assert_webhook_audits_are_closed_and_value_free(database: &TestDatabase
     let audits = database
         .audit_entries()
         .into_iter()
-        .filter(|entry| entry["schema"] == WEBHOOK_AUDIT_SCHEMA)
+        .filter(|entry| entry["schema"] == HOOK_AUDIT_SCHEMA)
         .map(|entry| entry.to_string())
         .collect::<Vec<_>>();
     assert!(!audits.is_empty());
@@ -2733,10 +2728,7 @@ async fn assert_webhook_audits_are_closed_and_value_free(database: &TestDatabase
         "x-registry-signature",
         "upstream",
     ] {
-        assert!(
-            !joined.contains(forbidden),
-            "webhook audit remains value-free"
-        );
+        assert!(!joined.contains(forbidden), "hook audit remains value-free");
     }
 }
 
@@ -2745,7 +2737,7 @@ fn header<'a>(request: &'a ReceivedRequest, name: &str) -> &'a str {
         .headers
         .get(name)
         .map(String::as_str)
-        .expect("closed webhook header is present")
+        .expect("closed hook header is present")
 }
 
 async fn assert_exact_request(request: &ReceivedRequest, event: &CapturedEvent) {
@@ -2862,9 +2854,9 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
           }]
         }"#,
     )
-    .expect("webhook delivery fixture parses");
+    .expect("hook delivery fixture parses");
     compile_project(&project, &[], CompileProfile::Authoring)
-        .expect("webhook delivery fixture compiles")
+        .expect("hook delivery fixture compiles")
 }
 
 /// The same registry as [`compiled_registry`], with its one hook bound to a
@@ -2983,24 +2975,25 @@ impl DestinationFixture {
         compiled: &registry_breg::CompiledRegistry,
     ) -> ActivatedEventDestinationRegistry {
         parse_runtime_config(&self.runtime_config(&format!(
-            r#"eventDestinations:
-  {DESTINATION_ID}:
-    origin: https://localhost:{}/
-    path: {DELIVERY_PATH}
-    networkProfile: pinned-loopback-https-test
-    dnsFamily: ipv4-only
-    allowedPrivateCidrs: []
-    hmacSha256KeyRef: secret:file/{KEY_REF_CANARY}
-    classificationCeiling: restricted
-    tls:
-      caBundleRef: secret:file/{CA_REF_CANARY}
-    deliveryCeilings:
-      # The captured attempt timeout is measured from the claim transaction, so
-      # it covers the claim commit and the reload transaction that precede
-      # egress as well as the request itself. Two seconds leaves room for those
-      # database round trips on a loaded host.
-      attemptTimeoutMilliseconds: 2000
-      maximumAttempts: 2
+            r#"destinations:
+  hooks:
+    {DESTINATION_ID}:
+      origin: https://localhost:{}/
+      path: {DELIVERY_PATH}
+      networkProfile: pinned-loopback-https-test
+      dnsFamily: ipv4-only
+      allowedPrivateCidrs: []
+      hmacSha256KeyRef: secret:file/{KEY_REF_CANARY}
+      classificationCeiling: restricted
+      tls:
+        caBundleRef: secret:file/{CA_REF_CANARY}
+      deliveryCeilings:
+        # The captured attempt timeout is measured from the claim transaction, so
+        # it covers the claim commit and the reload transaction that precede
+        # egress as well as the request itself. Two seconds leaves room for those
+        # database round trips on a loaded host.
+        attemptTimeoutMilliseconds: 2000
+        maximumAttempts: 2
 "#,
             self.receiver_port,
         )))
@@ -3057,7 +3050,7 @@ package:
 authentication:
   oidc:
     issuer: https://issuer.example
-    audience: urn:breg:webhook-delivery
+    audience: urn:breg:hook-delivery
     allowedAlgorithm: EdDSA
     accessTokenType: JWT
     scopeClaim: scope
@@ -3384,7 +3377,7 @@ async fn runtime_prunes_old_terminal_hooks_and_keeps_recent_and_pending_work() {
         database.audit(audit_profile.clone()),
         Some(Arc::clone(&destinations)),
     );
-    let service = WebhookDeliveryService::new(
+    let service = HookDeliveryService::new(
         pool.clone(),
         Arc::clone(&destinations),
         hook_handlers(&compiled, &identity.activation_id),
@@ -3485,7 +3478,7 @@ async fn runtime_prunes_old_terminal_hooks_and_keeps_recent_and_pending_work() {
     drop(mutation_client);
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let worker =
-        tokio::spawn(registry_breg::webhook::WebhookWorker::new(service.clone()).run(shutdown_rx));
+        tokio::spawn(registry_breg::hooks::HookWorker::new(service.clone()).run(shutdown_rx));
     let pruned = tokio::time::timeout(Duration::from_secs(10), async {
         loop {
             let n: i64 = database
@@ -3555,7 +3548,7 @@ async fn runtime_prunes_old_terminal_hooks_and_keeps_recent_and_pending_work() {
     .await;
     drop(mutation_client);
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
-    let worker = tokio::spawn(registry_breg::webhook::WebhookWorker::new(service).run(shutdown_rx));
+    let worker = tokio::spawn(registry_breg::hooks::HookWorker::new(service).run(shutdown_rx));
     receiver.wait_for_count(3).await;
     shutdown_tx.send_replace(true);
     tokio::time::timeout(Duration::from_secs(3), worker)
@@ -3617,7 +3610,7 @@ async fn exercise_terminal_metadata_horizons(check_dead_letter: bool) {
         database.audit(audit_profile.clone()),
         Some(Arc::clone(&destinations)),
     );
-    let service = WebhookDeliveryService::new(
+    let service = HookDeliveryService::new(
         pool.clone(),
         Arc::clone(&destinations),
         hook_handlers(&compiled, &identity.activation_id),
@@ -3678,7 +3671,7 @@ async fn exercise_terminal_metadata_horizons(check_dead_letter: bool) {
         )
         .await
         .unwrap();
-    assert_eq!(service.deliver_once().await, Ok(WebhookWorkOutcome::Idle));
+    assert_eq!(service.deliver_once().await, Ok(HookWorkOutcome::Idle));
     assert_eq!(delivery_state(&database, &natural).await.1, "expired");
     assert!(!outbox_payload_available(&database, &natural).await);
 
@@ -3696,12 +3689,12 @@ async fn exercise_terminal_metadata_horizons(check_dead_letter: bool) {
     .await;
     assert_eq!(
         service.deliver_once().await,
-        Ok(WebhookWorkOutcome::RetryScheduled)
+        Ok(HookWorkOutcome::RetryScheduled)
     );
     wait_until_retry_is_due(&database, &dead_letter).await;
     assert_eq!(
         service.deliver_once().await,
-        Ok(WebhookWorkOutcome::DeadLettered)
+        Ok(HookWorkOutcome::DeadLettered)
     );
     database
         .admin
@@ -3745,7 +3738,7 @@ async fn exercise_terminal_metadata_horizons(check_dead_letter: bool) {
         transaction.rollback().await.unwrap();
         assert!(outbox_payload_available(&database, &dead_letter).await);
     }
-    assert_eq!(service.deliver_once().await, Ok(WebhookWorkOutcome::Idle));
+    assert_eq!(service.deliver_once().await, Ok(HookWorkOutcome::Idle));
     assert_eq!(
         delivery_state(&database, &dead_letter).await.1,
         "dead-lettered"

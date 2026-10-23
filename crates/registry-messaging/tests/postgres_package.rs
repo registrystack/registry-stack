@@ -485,7 +485,7 @@ async fn apply_refuses_a_newer_schema_before_activation_and_audits_the_refusal()
         .iter()
         .map(|row| row.get(0))
         .collect();
-    assert_eq!(versions, [100, 199]);
+    assert_eq!(versions, [100, 101, 199]);
 
     let operator_audit = match config
         .audit
@@ -812,7 +812,7 @@ async fn split_role_activation_binds_identity_and_withholds_both_ledgers() {
     )
     .await
     .expect("one transactional split-role activation");
-    assert_eq!(applied.schema_versions_applied, [100]);
+    assert_eq!(applied.schema_versions_applied, [100, 101]);
     assert!(applied.recorded);
     assert_eq!(applied.activation.database_id, "messaging-test");
     assert_eq!(applied.activation.role_mode.as_str(), "split");
@@ -911,6 +911,23 @@ async fn split_role_activation_binds_identity_and_withholds_both_ledgers() {
         ))
         .await
         .expect("make the activation ledger unreadable");
+    let startup = registry_messaging::activation::check_runtime(
+        &runtime,
+        config.database_id(),
+        deployment.loaded().digest(),
+    )
+    .await
+    .expect_err("startup names the unreadable activation ledger");
+    assert!(
+        matches!(
+            startup,
+            ActivationError::Store(registry_messaging::store::StoreError::LedgerUnreadable)
+        ),
+        "{startup:?}"
+    );
+    assert!(startup
+        .to_string()
+        .contains("messagingctl apply --runtime-config FILE"));
     let unreadable = registry_messaging::activation::status(&runtime)
         .await
         .expect_err("status refuses an unreadable ledger");
@@ -921,6 +938,56 @@ async fn split_role_activation_binds_identity_and_withholds_both_ledgers() {
         ),
         other => panic!("expected a ledger refusal, got {other}"),
     }
+}
+
+#[tokio::test]
+async fn startup_names_unreadable_schema_before_reading_migrations() {
+    let (isolated, _migration_role, runtime_role) = isolated_split_schema().await;
+    let deployment = Deployment::new(&isolated);
+    let config = deployment.config();
+    apply_activation(&config, &ApplyRequest::default())
+        .await
+        .expect("split-role apply");
+    let runtime =
+        PostgresStore::connect_runtime(&config.database, &config.secret_resolver().unwrap())
+            .expect("runtime store");
+    for denial in [
+        format!("REVOKE USAGE ON SCHEMA {} FROM {runtime_role}", isolated.schema),
+        format!("GRANT USAGE ON SCHEMA {schema} TO {runtime_role}; REVOKE SELECT ON {schema}.messaging_schema_migrations FROM {runtime_role}", schema = isolated.schema),
+    ] {
+        isolated
+            .admin
+            .batch_execute(&denial)
+            .await
+            .expect("remove runtime ledger access");
+        let error = registry_messaging::activation::check_runtime(
+            &runtime,
+            config.database_id(),
+            deployment.loaded().digest(),
+        )
+        .await
+        .expect_err("startup refuses unreadable ledger");
+        assert!(
+            matches!(
+                error,
+                ActivationError::Store(registry_messaging::store::StoreError::LedgerUnreadable)
+            ),
+            "{error:?}"
+        );
+        assert!(error
+            .to_string()
+            .contains("messagingctl apply --runtime-config FILE"));
+    }
+    apply_activation(&config, &ApplyRequest::default())
+        .await
+        .expect("apply restores grants");
+    registry_messaging::activation::check_runtime(
+        &runtime,
+        config.database_id(),
+        deployment.loaded().digest(),
+    )
+    .await
+    .expect("startup recovers after grant repair");
 }
 
 /// Every entry the operator process wrote to its audit destination.

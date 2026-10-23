@@ -19,26 +19,30 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chrono::{DateTime, SecondsFormat, TimeDelta, Timelike, Utc};
 use jsonwebtoken::{Algorithm, EncodingKey, Header};
 use registry_platform_audit::{AuditHashSecret, AuditKeyHasher};
-use registry_platform_config::{SecretProvider, SecretResolver};
+use registry_platform_config::{SecretProvider, SecretReference, SecretResolver};
 use registry_platform_hooks::delivery::DeliveryOutcome;
 use registry_platform_hooks::{EnvelopeLimits, HookEnvelope, HookHandlerSource};
 use registry_platform_oidc::{
     task_grant::{TaskGrantStatusEndpoint, TaskGrantStatusRegistry},
     JwksFetcher, JwksFetcherConfig, TokenVerifierConfig,
 };
+use registry_platform_yaml::Url;
 use registry_scheduling::audit::{AuditCapture, SchedulingAudit, SCHEDULING_AUDIT_SCHEMA};
 use registry_scheduling::auth::SchedulingAuthenticator;
 use registry_scheduling::config::{
     DatabaseConfig, JwksSource, OidcClientsConfig, OidcConfig, OidcIssuerConfig,
 };
-use registry_scheduling::config::{HookDestinationConfig, ReminderDestinationConfig};
+use registry_scheduling::config::{ReminderDestinationConfig, UrlHookDestinationConfig};
 use registry_scheduling::hooks::{ActivatedHooks, HookRuntimeIdentity};
 use registry_scheduling::http::{router, HttpState};
-use registry_scheduling::runtime::{dispatch_due_intents, reminder_transport};
+use registry_scheduling::runtime::{
+    claim_due_intent_for_test, dispatch_due_intents, finish_intent_for_test, reminder_transport,
+    send_claimed_intent_for_test, IntentLeaseForTest, ReminderTransport,
+};
 use registry_scheduling::service::SchedulingService;
 use registry_scheduling::store::{
-    attempt_key_reference, ActivationRequest, ActivePackage, CommitError, CommitOutcome,
-    Commitment, PostgresStore, RoleMode, StoreError, SupplyContext,
+    activation_layout, attempt_key_reference, ActivationRequest, ActivePackage, CommitError,
+    CommitOutcome, Commitment, PostgresStore, RoleMode, StoreError, SupplyContext,
 };
 use registry_scheduling_core::{
     location_closure_intervals, location_open_intervals, AdmissionRefusal, AdmissionRequest,
@@ -65,6 +69,11 @@ const AUDIENCE: &str = "urn:registry-scheduling:test";
 const CLIENT: &str = "task-agent";
 const SECRET: &[u8] = b"01234567890123456789012345678901";
 const SCHEDULING_ID: &str = "commitments-test";
+/// The database identity and package the fixture records as active, which
+/// the hook worker's identity check reads back from the activation record.
+const DATABASE_ID: &str = "commitments-test-database";
+const PACKAGE_DIGEST: &str =
+    "sha256:0000000000000000000000000000000000000000000000000000000000000001";
 const OFFERING: &str = "registry-update-30";
 const SECOND_OFFERING: &str = "registry-review-45";
 /// An offering whose service runs twice its start increment, so consecutive
@@ -384,9 +393,12 @@ async fn fixture_publishing_with_hook_and_status(
     }) {
         hook_destinations.insert(
             destination_id.clone(),
-            HookDestinationConfig {
-                url: hook_url.to_owned(),
-                hmac_sha256_key_ref: format!("secret:env/{hook_secret_name}"),
+            UrlHookDestinationConfig {
+                url: Url::new(hook_url).expect("the test hook URL"),
+                hmac_sha256_key_ref: SecretReference::parse(format!(
+                    "secret:env/{hook_secret_name}"
+                ))
+                .expect("the test hook key reference"),
                 attempt_timeout_milliseconds: 5_000,
                 maximum_attempts: 1,
             },
@@ -397,6 +409,8 @@ async fn fixture_publishing_with_hook_and_status(
         &hook_destinations,
         &secrets,
         HookRuntimeIdentity {
+            database_id: DATABASE_ID.to_owned(),
+            package_digest: PACKAGE_DIGEST.to_owned(),
             scheduling_id: SCHEDULING_ID.to_owned(),
             policy_revision: revision,
             policy_digest: digest.clone(),
@@ -1551,14 +1565,33 @@ async fn hook_fixture() -> Fixture {
     hook_fixture_at("http://127.0.0.1:9/scheduling-hooks").await
 }
 
+/// A deployment publishing the observer policy, with the activation record
+/// naming the package its hook worker serves, as `schedulingctl apply`
+/// records it, since the worker checks that record in every transaction.
 async fn hook_fixture_at(hook_url: &str) -> Fixture {
     let policy = read_policy(&observer_policy()).expect("the scheduling hook policy");
-    fixture_publishing_with_hook_url(
+    let fx = fixture_publishing_with_hook_url(
         policy,
         &["north-counter".to_owned(), "two-counter".to_owned()],
         hook_url,
     )
+    .await;
+    registry_platform_activation::append_activation(
+        &fx.admin,
+        &activation_layout(),
+        &registry_platform_activation::NewActivation {
+            activation_id: Uuid::new_v4(),
+            package_digest: PACKAGE_DIGEST,
+            database_id: DATABASE_ID,
+            operator_reference_hash: None,
+            backup_references: &[],
+            role_mode: RoleMode::Single,
+            runtime_role: Some("scheduling_test"),
+        },
+    )
     .await
+    .expect("record the fixture activation");
+    fx
 }
 
 async fn captured_hook_envelopes(
@@ -1994,6 +2027,141 @@ async fn hook_delivery_audit_failure_prevents_egress() {
     assert_eq!(state.get::<_, i16>(1), 0);
 }
 
+/// Run one delivery pass that the activation identity check must refuse, and
+/// prove the captured delivery was not claimed, not sent, and not audited.
+async fn assert_delivery_refused_before_claim(fx: &Fixture, destination: &MockServer, why: &str) {
+    let delivery = fx
+        .hooks
+        .delivery_service(fx.store.clone(), fx.audit.clone());
+    assert!(delivery.deliver_once().await.is_err(), "{why}");
+    assert!(
+        destination
+            .received_requests()
+            .await
+            .expect("read hook requests")
+            .is_empty(),
+        "{why}: nothing is sent"
+    );
+    assert!(
+        hook_delivery_entries(fx).is_empty(),
+        "{why}: no attempt is audited"
+    );
+    let state = fx
+        .admin
+        .query_one(
+            "SELECT state, attempt, lease_token FROM registry_webhook_delivery_state",
+            &[],
+        )
+        .await
+        .expect("read the untouched claim state");
+    assert_eq!(state.get::<_, String>(0), "pending", "{why}");
+    assert_eq!(state.get::<_, i16>(1), 0, "{why}");
+    assert_eq!(state.get::<_, Option<Uuid>>(2), None, "{why}: not claimed");
+}
+
+#[tokio::test]
+async fn hook_delivery_is_refused_when_the_activation_record_names_another_database() {
+    let destination = MockServer::start().await;
+    let fx = hook_fixture_at(&format!("{}/scheduling-hooks", destination.uri())).await;
+    let _ = booked(&fx, 300, 440, "hook-swapped-database").await;
+    // A later activation names the same package for a different database,
+    // as when a backup of another deployment is restored over this one.
+    registry_platform_activation::append_activation(
+        &fx.admin,
+        &activation_layout(),
+        &registry_platform_activation::NewActivation {
+            activation_id: Uuid::new_v4(),
+            package_digest: PACKAGE_DIGEST,
+            database_id: "another-scheduling-database",
+            operator_reference_hash: None,
+            backup_references: &[],
+            role_mode: RoleMode::Single,
+            runtime_role: Some("scheduling_test"),
+        },
+    )
+    .await
+    .expect("record an activation naming another database");
+
+    assert_delivery_refused_before_claim(
+        &fx,
+        &destination,
+        "a worker whose database id the activation record does not name",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn hook_delivery_is_refused_without_an_activation_record() {
+    let destination = MockServer::start().await;
+    let policy = read_policy(&observer_policy()).expect("the scheduling hook policy");
+    let fx = fixture_publishing_with_hook_url(
+        policy,
+        &["north-counter".to_owned(), "two-counter".to_owned()],
+        &format!("{}/scheduling-hooks", destination.uri()),
+    )
+    .await;
+    let _ = booked(&fx, 300, 440, "hook-no-activation").await;
+
+    assert_delivery_refused_before_claim(
+        &fx,
+        &destination,
+        "a worker with no activation record to check",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn hook_delivery_stops_once_the_activation_record_names_another_package() {
+    let destination = MockServer::start().await;
+    let fx = hook_fixture_at(&format!("{}/scheduling-hooks", destination.uri())).await;
+    let _ = booked(&fx, 300, 440, "hook-superseded-package").await;
+    // A later activation names a different package for the same database;
+    // the worker started under the fixture's package must not serve it.
+    registry_platform_activation::append_activation(
+        &fx.admin,
+        &activation_layout(),
+        &registry_platform_activation::NewActivation {
+            activation_id: Uuid::new_v4(),
+            package_digest:
+                "sha256:0000000000000000000000000000000000000000000000000000000000000002",
+            database_id: DATABASE_ID,
+            operator_reference_hash: None,
+            backup_references: &[],
+            role_mode: RoleMode::Single,
+            runtime_role: Some("scheduling_test"),
+        },
+    )
+    .await
+    .expect("record a superseding activation");
+
+    let delivery = fx
+        .hooks
+        .delivery_service(fx.store.clone(), fx.audit.clone());
+    assert!(delivery.deliver_once().await.is_err());
+    assert!(
+        destination
+            .received_requests()
+            .await
+            .expect("read hook requests")
+            .is_empty(),
+        "a worker serving a superseded package sends nothing"
+    );
+    assert!(
+        hook_delivery_entries(&fx).is_empty(),
+        "no attempt is audited under a superseded package"
+    );
+    let state = fx
+        .admin
+        .query_one(
+            "SELECT state, attempt FROM registry_webhook_delivery_state",
+            &[],
+        )
+        .await
+        .expect("read the untouched claim state");
+    assert_eq!(state.get::<_, String>(0), "pending");
+    assert_eq!(state.get::<_, i16>(1), 0);
+}
+
 #[tokio::test]
 async fn changed_retained_hook_destination_binding_is_refused() {
     let fx = hook_fixture().await;
@@ -2003,9 +2171,11 @@ async fn changed_retained_hook_destination_binding_is_refused() {
         .expect("the scheduling hook secret resolver");
     let destinations = BTreeMap::from([(
         "appointment-events".to_owned(),
-        HookDestinationConfig {
-            url: "http://127.0.0.1:9/changed-scheduling-hooks".to_owned(),
-            hmac_sha256_key_ref: fx.hook_secret_ref.clone(),
+        UrlHookDestinationConfig {
+            url: Url::new("http://127.0.0.1:9/changed-scheduling-hooks")
+                .expect("the changed hook URL"),
+            hmac_sha256_key_ref: SecretReference::parse(fx.hook_secret_ref.clone())
+                .expect("the test hook key reference"),
             attempt_timeout_milliseconds: 5_000,
             maximum_attempts: 1,
         },
@@ -2015,6 +2185,8 @@ async fn changed_retained_hook_destination_binding_is_refused() {
         &destinations,
         &secrets,
         HookRuntimeIdentity {
+            database_id: DATABASE_ID.to_owned(),
+            package_digest: PACKAGE_DIGEST.to_owned(),
             scheduling_id: SCHEDULING_ID.to_owned(),
             policy_revision: i64::try_from(fx.revision).expect("a bounded policy revision"),
             policy_digest: policy.policy_digest(),
@@ -4075,7 +4247,8 @@ async fn a_policy_applied_under_a_running_process_refuses_the_older_revision() {
 /// A reminder intent is minted when the appointment commits, and a delivery
 /// that failed waits out its back-off. Re-claiming a failing intent on every
 /// tick would hammer the destination and burn the attempts ceiling in
-/// seconds, so the claim predicate reads the back-off the retry wrote.
+/// seconds, so the claim reads the back-off the failed attempt wrote: thirty
+/// seconds after the first, doubling after each one that follows.
 #[tokio::test]
 async fn a_failing_reminder_intent_waits_out_its_back_off() {
     let fx = fixture().await;
@@ -4084,72 +4257,171 @@ async fn a_failing_reminder_intent_waits_out_its_back_off() {
     // The commitment's own confirmation is due at once; the authored reminder
     // offset is an hour before a start at least ninety minutes out, so the
     // reminder is not due with it.
-    let now_due = fx
-        .store
-        .claim_due_intents(pinned_now(), 100, TimeDelta::minutes(10))
+    bring_intents_due(&fx, pinned_now()).await;
+    let confirmation = claim_due_intent_for_test(&fx.store)
         .await
-        .expect("the delivery sweep runs");
-    assert_eq!(
-        now_due
-            .iter()
-            .map(|intent| intent.purpose.as_str())
-            .collect::<Vec<_>>(),
-        vec!["confirmation"],
+        .expect("the delivery claim runs")
+        .expect("the confirmation is due");
+    assert_eq!(confirmation.purpose(), "confirmation");
+    finish_intent_for_test(&fx.store, &confirmation, true)
+        .await
+        .expect("the confirmation is delivered");
+    assert!(
+        claim_due_intent_for_test(&fx.store)
+            .await
+            .expect("the delivery claim runs")
+            .is_none(),
         "a reminder ahead of its offset is not due yet"
     );
 
-    let due = pinned_now() + TimeDelta::days(1);
-    let claimed: Vec<_> = fx
-        .store
-        .claim_due_intents(due, 100, TimeDelta::minutes(10))
+    bring_intents_due(&fx, pinned_now() + TimeDelta::days(1)).await;
+    let reminder = claim_due_intent_for_test(&fx.store)
         .await
-        .expect("the delivery sweep runs")
-        .into_iter()
-        .filter(|intent| intent.purpose == "reminder")
-        .collect();
-    assert_eq!(
-        claimed.len(),
-        1,
-        "the commitment minted one reminder intent"
-    );
-    assert_eq!(claimed[0].claim_id.to_string(), appointment_id);
-    assert_eq!(claimed[0].attempts, 1);
-    assert_eq!(claimed[0].payload["appointmentId"], appointment_id);
+        .expect("the delivery claim runs")
+        .expect("the commitment minted one reminder intent");
+    assert_eq!(reminder.purpose(), "reminder");
+    assert_eq!(reminder.claim_id().to_string(), appointment_id);
+    assert_eq!(reminder.attempt(), 1);
+    assert_eq!(reminder.payload()["appointmentId"], appointment_id);
 
     // The send failed, so the intent goes back to pending behind a back-off.
-    fx.store
-        .retry_intent(
-            claimed[0].outbox_id,
-            due + TimeDelta::minutes(5),
-            8,
-            claimed[0].attempts,
-        )
+    finish_intent_for_test(&fx.store, &reminder, false)
         .await
         .expect("the failed delivery is scheduled to retry");
-
-    let early: Vec<_> = fx
-        .store
-        .claim_due_intents(due + TimeDelta::seconds(2), 100, TimeDelta::minutes(10))
-        .await
-        .expect("the delivery sweep runs")
-        .into_iter()
-        .filter(|intent| intent.outbox_id == claimed[0].outbox_id)
-        .collect();
+    assert_eq!(
+        outbox_row(&fx, reminder.outbox_id()).await,
+        (
+            "pending".to_owned(),
+            1,
+            Some("delivery_failed".to_owned()),
+            Some(30_000)
+        ),
+        "the first failure waits thirty seconds"
+    );
     assert!(
-        early.is_empty(),
+        claim_due_intent_for_test(&fx.store)
+            .await
+            .expect("the delivery claim runs")
+            .is_none(),
         "an intent inside its back-off is not claimed again"
     );
 
-    let later: Vec<_> = fx
-        .store
-        .claim_due_intents(due + TimeDelta::minutes(6), 100, TimeDelta::minutes(10))
+    make_intent_due(&fx, reminder.outbox_id()).await;
+    let second = claim_due_intent_for_test(&fx.store)
         .await
-        .expect("the delivery sweep runs")
-        .into_iter()
-        .filter(|intent| intent.outbox_id == claimed[0].outbox_id)
-        .collect();
-    assert_eq!(later.len(), 1, "the back-off passed, so the intent is due");
-    assert_eq!(later[0].attempts, 2, "the second attempt is counted once");
+        .expect("the delivery claim runs")
+        .expect("the back-off passed, so the intent is due");
+    assert_eq!(second.outbox_id(), reminder.outbox_id());
+    assert_eq!(second.attempt(), 2, "the second attempt is counted once");
+    finish_intent_for_test(&fx.store, &second, false)
+        .await
+        .expect("the second failure is scheduled to retry");
+    assert_eq!(
+        outbox_row(&fx, reminder.outbox_id()).await,
+        (
+            "pending".to_owned(),
+            2,
+            Some("delivery_failed".to_owned()),
+            Some(60_000)
+        ),
+        "the second failure doubles the wait"
+    );
+}
+
+/// Make every intent not yet attempted that falls due by `instant`, on the
+/// store's pinned clock, due now on the database clock the dispatch claim
+/// reads. Intents due later keep their own instant.
+async fn bring_intents_due(fx: &Fixture, instant: DateTime<Utc>) {
+    fx.admin
+        .execute(
+            "UPDATE scheduling_outbox SET next_attempt_at = transaction_timestamp() \
+             WHERE state = 'pending' AND attempt = 0 AND next_attempt_at <= $1",
+            &[&instant],
+        )
+        .await
+        .expect("bring the due intents forward");
+}
+
+/// Make one pending intent due now, ending any back-off it waits out.
+async fn make_intent_due(fx: &Fixture, outbox_id: Uuid) {
+    let changed = fx
+        .admin
+        .execute(
+            "UPDATE scheduling_outbox SET next_attempt_at = transaction_timestamp() \
+             WHERE outbox_id = $1 AND state = 'pending'",
+            &[&outbox_id],
+        )
+        .await
+        .expect("make the intent due");
+    assert_eq!(changed, 1, "the intent is pending");
+}
+
+/// Let one leased intent's lease lapse, as a dispatcher that stopped after
+/// its claim leaves it.
+async fn lapse_intent_lease(fx: &Fixture, outbox_id: Uuid) {
+    let changed = fx
+        .admin
+        .execute(
+            "UPDATE scheduling_outbox \
+                SET attempt_started_at = transaction_timestamp() - interval '10 minutes', \
+                    lease_expires_at = transaction_timestamp() - interval '1 minute' \
+              WHERE outbox_id = $1 AND state = 'leased'",
+            &[&outbox_id],
+        )
+        .await
+        .expect("lapse the lease");
+    assert_eq!(changed, 1, "the intent is leased");
+}
+
+/// The intent for one appointment and purpose. Each purpose but the
+/// reminder is minted once per commitment, and the test names the one it
+/// means.
+async fn intent_of(fx: &Fixture, claim_id: &str, purpose: &str) -> Uuid {
+    let claim = Uuid::parse_str(claim_id).expect("a claim identifier");
+    fx.admin
+        .query_one(
+            "SELECT outbox_id FROM scheduling_outbox WHERE claim_id=$1 AND purpose=$2",
+            &[&claim, &purpose],
+        )
+        .await
+        .expect("the commitment minted this intent")
+        .get(0)
+}
+
+/// How one intent stands: its dispatch state, the attempts it consumed, why
+/// it was last set aside or failed, and the back-off its last failure wrote,
+/// in milliseconds.
+async fn outbox_row(fx: &Fixture, outbox_id: Uuid) -> (String, i32, Option<String>, Option<i64>) {
+    let row = fx
+        .admin
+        .query_one(
+            "SELECT state, attempt::integer, last_failure_class, \
+                    (extract(epoch FROM next_attempt_at - updated_at) * 1000)::bigint \
+               FROM scheduling_outbox WHERE outbox_id=$1",
+            &[&outbox_id],
+        )
+        .await
+        .expect("read one intent back");
+    (row.get(0), row.get(1), row.get(2), row.get(3))
+}
+
+/// A frozen transport to a destination this test controls.
+fn transport_to(destination: &MockServer) -> Arc<ReminderTransport> {
+    // The destination declares no bearer reference, so nothing is resolved;
+    // the resolver still has to exist, and refuses to be built with no
+    // provider enabled at all.
+    let secrets = SecretResolver::new([SecretProvider::Environment], std::path::Path::new(""))
+        .expect("a resolver this destination asks nothing of");
+    Arc::new(
+        reminder_transport(
+            &ReminderDestinationConfig {
+                url: format!("{}/events", destination.uri()),
+                bearer_token_ref: None,
+            },
+            &secrets,
+        )
+        .expect("the configured destination compiles into a frozen transport"),
+    )
 }
 
 /// The environment records the fixture seeds, minus the named resources: the
@@ -5370,90 +5642,117 @@ async fn an_unknown_offering_and_a_malformed_body_answer_their_own_codes() {
 async fn the_intents_nobody_will_deliver_are_readable_by_an_operator() {
     let fx = fixture().await;
     let (appointment_id, _) = booked(&fx, 90, 200, "held-1").await;
-    let due = pinned_now() + TimeDelta::days(1);
-    let claimed = fx
-        .store
-        .claim_due_intents(due, 100, TimeDelta::minutes(10))
-        .await
-        .expect("the delivery sweep runs");
-    let intent = |purpose: &str| {
-        claimed
-            .iter()
-            .find(|intent| intent.purpose == purpose)
-            .expect("the commitment minted this intent")
-            .outbox_id
-    };
+    let reminder = intent_of(&fx, &appointment_id, "reminder").await;
+    let confirmation = intent_of(&fx, &appointment_id, "confirmation").await;
 
-    // One deployment declares no destination, so its reminder stays recorded
-    // rather than pretending a delivery happened. One send exhausted its
-    // attempts. One was delivered, and one is still inside its back-off.
-    fx.store
-        .hold_intent_local(intent("reminder"), 1)
+    // A deployment that declares no destination sets its reminder aside
+    // locally rather than pretending a delivery happened.
+    make_intent_due(&fx, reminder).await;
+    dispatch_due_intents(&fx.store, SCHEDULING_ID, None)
         .await
-        .expect("the reminder is held locally");
-    fx.store
-        .retry_intent(intent("confirmation"), due, 0, 1)
-        .await
-        .expect("the confirmation exhausts its attempts");
+        .expect("the dispatch pass runs");
+    assert_eq!(
+        outbox_row(&fx, reminder).await,
+        (
+            "dead-lettered".to_owned(),
+            1,
+            Some("destination_unconfigured".to_owned()),
+            None
+        ),
+        "with no destination the reminder is set aside after one attempt"
+    );
+
+    // One send exhausts its eight attempts.
+    make_intent_due(&fx, confirmation).await;
+    for attempt in 1..=8 {
+        let lease = claim_due_intent_for_test(&fx.store)
+            .await
+            .expect("the delivery claim runs")
+            .expect("the confirmation is due");
+        assert_eq!(lease.outbox_id(), confirmation);
+        assert_eq!(lease.attempt(), attempt);
+        finish_intent_for_test(&fx.store, &lease, false)
+            .await
+            .expect("the failed attempt is recorded");
+        if attempt < 8 {
+            make_intent_due(&fx, confirmation).await;
+        }
+    }
+    assert_eq!(
+        outbox_row(&fx, confirmation).await,
+        (
+            "dead-lettered".to_owned(),
+            8,
+            Some("delivery_failed".to_owned()),
+            None
+        ),
+        "the eighth failure is the last"
+    );
 
     let held = fx
         .store
         .undelivered_intents(100)
         .await
         .expect("the operator reads the undelivered intents");
-    let mut seen: Vec<(String, String)> = held
+    let mut seen: Vec<(String, String, i32)> = held
         .iter()
-        .map(|intent| (intent.purpose.clone(), intent.delivery_state.clone()))
+        .map(|intent| {
+            (
+                intent.purpose.clone(),
+                intent.delivery_state.clone(),
+                intent.attempts,
+            )
+        })
         .collect();
     seen.sort();
     assert_eq!(
         seen,
         vec![
-            ("confirmation".to_owned(), "failed".to_owned()),
-            ("reminder".to_owned(), "local".to_owned()),
+            ("confirmation".to_owned(), "failed".to_owned(), 8),
+            ("reminder".to_owned(), "local".to_owned(), 1),
         ],
         "an intent nothing will deliver is invisible to the operator"
     );
 
-    let reminder = held
+    let listed = held
         .iter()
         .find(|intent| intent.purpose == "reminder")
         .expect("the held reminder is listed");
-    assert_eq!(reminder.claim_id.to_string(), appointment_id);
-    assert_eq!(reminder.attempts, 1);
-    assert_eq!(reminder.payload["appointmentId"], appointment_id);
+    assert_eq!(listed.claim_id.to_string(), appointment_id);
+    assert_eq!(listed.payload["appointmentId"], appointment_id);
 
     // A delivered intent needs no operator, and neither does one still
     // waiting out its back-off.
     let (second, _) = booked(&fx, 210, 320, "held-2").await;
-    let pending = fx
-        .store
-        .claim_due_intents(pinned_now(), 100, TimeDelta::minutes(10))
+    let delivered = intent_of(&fx, &second, "confirmation").await;
+    make_intent_due(&fx, delivered).await;
+    let lease = claim_due_intent_for_test(&fx.store)
         .await
-        .expect("the delivery sweep runs");
-    let delivered = pending
-        .iter()
-        .find(|intent| intent.claim_id.to_string() == second)
-        .expect("the second commitment confirms at once")
-        .outbox_id;
-    fx.store
-        .mark_intent_delivered(delivered, 1)
+        .expect("the delivery claim runs")
+        .expect("the second confirmation is due");
+    finish_intent_for_test(&fx.store, &lease, true)
         .await
         .expect("the confirmation is delivered");
+    let waiting = intent_of(&fx, &second, "reminder").await;
+    make_intent_due(&fx, waiting).await;
+    let lease = claim_due_intent_for_test(&fx.store)
+        .await
+        .expect("the delivery claim runs")
+        .expect("the second reminder is due");
+    finish_intent_for_test(&fx.store, &lease, false)
+        .await
+        .expect("the reminder waits out a back-off");
     let held = fx
         .store
         .undelivered_intents(100)
         .await
         .expect("the operator reads the undelivered intents");
     assert!(
-        held.iter().all(|intent| intent.outbox_id != delivered),
-        "a delivered intent is listed as needing an operator"
+        held.iter()
+            .all(|intent| intent.outbox_id != delivered && intent.outbox_id != waiting),
+        "a delivered or retrying intent is listed as needing an operator"
     );
-    assert_eq!(
-        held.len(),
-        2,
-        "an intent the sweep will still retry needs no operator"
-    );
+    assert_eq!(held.len(), 2);
 }
 
 /// AT-01 run in parallel: two callers reach for the same last unit at the same
@@ -5835,17 +6134,18 @@ async fn the_retention_sweep_erases_its_two_tables_and_leaves_the_rest_standing(
     );
 }
 
-/// How one intent stands after a dispatch pass: the state written back, how
-/// many attempts it has consumed, and whether its next attempt is held behind
-/// a back-off.
+/// How one confirmation stands after a dispatch pass: the state written
+/// back, how many attempts it has consumed, and whether its next attempt is
+/// held behind a back-off.
 async fn intent_state(fx: &Fixture, claim_id: &str) -> (String, i32, bool) {
     let claim = Uuid::parse_str(claim_id).expect("a claim identifier");
     let row = fx
         .admin
         .query_one(
-            "SELECT delivery_state, attempts, next_attempt_at > $2 \
+            "SELECT state, attempt::integer, \
+                    coalesce(next_attempt_at > transaction_timestamp(), false) \
              FROM scheduling_outbox WHERE claim_id=$1 AND purpose='confirmation'",
-            &[&claim, &pinned_now()],
+            &[&claim],
         )
         .await
         .expect("read one intent back");
@@ -5881,21 +6181,9 @@ async fn a_dispatch_pass_delivers_retries_and_holds_by_what_the_destination_answ
             .await;
     }
 
-    // The destination declares no bearer reference, so nothing is resolved;
-    // the resolver still has to exist, and refuses to be built with no
-    // provider enabled at all.
-    let secrets = SecretResolver::new([SecretProvider::Environment], std::path::Path::new(""))
-        .expect("a resolver this destination asks nothing of");
-    let transport = reminder_transport(
-        &ReminderDestinationConfig {
-            url: format!("{}/events", destination.uri()),
-            bearer_token_ref: None,
-        },
-        &secrets,
-    )
-    .expect("the configured destination compiles into a frozen transport");
-
-    dispatch_due_intents(&fx.store, SCHEDULING_ID, Some(&transport))
+    let transport = transport_to(&destination);
+    bring_intents_due(&fx, pinned_now()).await;
+    dispatch_due_intents(&fx.store, SCHEDULING_ID, Some(Arc::clone(&transport)))
         .await
         .expect("the dispatch pass runs");
 
@@ -5913,8 +6201,15 @@ async fn a_dispatch_pass_delivers_retries_and_holds_by_what_the_destination_answ
     assert!(backed_off, "so the next attempt waits out a back-off");
     assert_eq!(
         intent_state(&fx, &refused).await,
-        ("failed".to_owned(), 1, false),
+        ("dead-lettered".to_owned(), 1, false),
         "a destination that refused outright is held for an operator"
+    );
+    assert_eq!(
+        outbox_row(&fx, intent_of(&fx, &refused, "confirmation").await)
+            .await
+            .2
+            .as_deref(),
+        Some("destination_refused")
     );
 
     // What went on the wire is one shared hook envelope per intent, naming
@@ -5948,7 +6243,7 @@ async fn a_dispatch_pass_delivers_retries_and_holds_by_what_the_destination_answ
 
     // A second pass repeats nothing: the delivered intent is done and the
     // other two are held or backed off, so the destination hears no more.
-    dispatch_due_intents(&fx.store, SCHEDULING_ID, Some(&transport))
+    dispatch_due_intents(&fx.store, SCHEDULING_ID, Some(transport))
         .await
         .expect("the second dispatch pass runs");
     assert_eq!(
@@ -8035,126 +8330,130 @@ async fn a_records_swap_refuses_a_commitment_resolving_the_old_facts() {
     );
 }
 
-/// The dispatch lease: a claimed intent is not claimable again until its
-/// lease passes, and an outcome write only lands for the attempt that owns
-/// the intent.
+/// The dispatch lease: a claimed intent is not claimable again while its
+/// lease holds, a lapsed lease is recovered as a failed attempt behind a
+/// back-off, and an outcome lands only for the lease that owns the intent.
 #[tokio::test]
-async fn a_claimed_intent_is_leased_and_its_outcome_is_fenced_by_the_attempt() {
+async fn a_claimed_intent_is_leased_and_its_outcome_is_fenced_by_the_lease() {
     let fx = fixture().await;
-    let _ = booked(&fx, 90, 200, "lease-1").await;
-    let due = pinned_now() + TimeDelta::days(1);
-    let claimed: Vec<_> = fx
-        .store
-        .claim_due_intents(due, 100, TimeDelta::minutes(10))
+    let (appointment, _) = booked(&fx, 90, 200, "lease-1").await;
+    let reminder = intent_of(&fx, &appointment, "reminder").await;
+    make_intent_due(&fx, reminder).await;
+    let first = claim_due_intent_for_test(&fx.store)
         .await
-        .expect("the delivery sweep runs")
-        .into_iter()
-        .filter(|intent| intent.purpose == "reminder")
-        .collect();
-    assert_eq!(
-        claimed.len(),
-        1,
-        "the commitment minted one reminder intent"
-    );
-    let row = &claimed[0];
-    assert_eq!(row.attempts, 1);
+        .expect("the delivery claim runs")
+        .expect("the reminder is due");
+    assert_eq!(first.outbox_id(), reminder);
+    assert_eq!(first.attempt(), 1);
 
     // Inside the lease a second dispatcher claims nothing of this intent.
-    let leased = fx
-        .store
-        .claim_due_intents(due + TimeDelta::minutes(9), 100, TimeDelta::minutes(10))
-        .await
-        .expect("the delivery sweep runs");
     assert!(
-        leased
-            .iter()
-            .all(|intent| intent.outbox_id != row.outbox_id),
+        claim_due_intent_for_test(&fx.store)
+            .await
+            .expect("the delivery claim runs")
+            .is_none(),
         "a leased intent is not claimable again"
     );
 
-    // Past the lease the intent is recoverable, as a new attempt.
-    let reclaimed: Vec<_> = fx
-        .store
-        .claim_due_intents(due + TimeDelta::minutes(11), 100, TimeDelta::minutes(10))
+    // Past the lease the attempt is recovered as a failure, behind the
+    // first back-off, and the intent is claimed again as a new attempt.
+    lapse_intent_lease(&fx, reminder).await;
+    assert!(claim_due_intent_for_test(&fx.store)
         .await
-        .expect("the delivery sweep runs")
-        .into_iter()
-        .filter(|intent| intent.outbox_id == row.outbox_id)
-        .collect();
-    assert_eq!(reclaimed.len(), 1, "the lease passed, so the intent is due");
+        .expect("the delivery claim runs")
+        .is_none());
     assert_eq!(
-        reclaimed[0].attempts, 2,
-        "the second attempt is counted once"
+        outbox_row(&fx, reminder).await,
+        (
+            "pending".to_owned(),
+            1,
+            Some("delivery_failed".to_owned()),
+            Some(30_000)
+        ),
+        "a lapsed attempt is retried as a failed one"
     );
+    make_intent_due(&fx, reminder).await;
+    let second = claim_due_intent_for_test(&fx.store)
+        .await
+        .expect("the delivery claim runs")
+        .expect("the back-off passed, so the intent is due");
+    assert_eq!(second.attempt(), 2, "the second attempt is counted once");
 
     // The superseded attempt cannot settle the intent; the owning one can.
-    assert!(!fx
-        .store
-        .mark_intent_delivered(row.outbox_id, 1)
+    assert!(
+        finish_intent_for_test(&fx.store, &first, true)
+            .await
+            .is_err(),
+        "an obsolete attempt's outcome is refused"
+    );
+    assert_eq!(outbox_row(&fx, reminder).await.0, "leased");
+    finish_intent_for_test(&fx.store, &second, true)
         .await
-        .expect("the stale outcome write runs"));
-    let state: String = fx
-        .admin
-        .query_one(
-            "SELECT delivery_state FROM scheduling_outbox WHERE outbox_id=$1",
-            &[&row.outbox_id],
+        .expect("the owning outcome write runs");
+    assert_eq!(outbox_row(&fx, reminder).await.0, "delivered");
+}
+
+/// A dispatcher that stops during the last attempt the policy allows leaves
+/// an intent nobody will retry: its recovery sets the intent aside as
+/// failed, where an operator reads it.
+#[tokio::test]
+async fn a_lapsed_final_attempt_is_set_aside_for_an_operator() {
+    let fx = fixture().await;
+    let (appointment, _) = booked(&fx, 90, 200, "lapsed-final").await;
+    let reminder = intent_of(&fx, &appointment, "reminder").await;
+    fx.admin
+        .execute(
+            "UPDATE scheduling_outbox SET attempt = 7, next_attempt_at = transaction_timestamp() \
+             WHERE outbox_id = $1",
+            &[&reminder],
         )
         .await
-        .expect("read the intent")
-        .get(0);
-    assert_eq!(state, "pending", "an obsolete attempt changes nothing");
-    assert!(fx
-        .store
-        .mark_intent_delivered(row.outbox_id, 2)
+        .expect("spend seven attempts");
+    let last = claim_due_intent_for_test(&fx.store)
         .await
-        .expect("the owning outcome write runs"));
+        .expect("the delivery claim runs")
+        .expect("the reminder is due");
+    assert_eq!(last.attempt(), 8);
+    lapse_intent_lease(&fx, reminder).await;
+    assert!(claim_due_intent_for_test(&fx.store)
+        .await
+        .expect("the delivery claim runs")
+        .is_none());
+    assert_eq!(
+        outbox_row(&fx, reminder).await,
+        (
+            "dead-lettered".to_owned(),
+            8,
+            Some("delivery_failed".to_owned()),
+            None
+        )
+    );
+    let held = fx
+        .store
+        .undelivered_intents(100)
+        .await
+        .expect("the operator reads the undelivered intents");
+    assert_eq!(held.len(), 1);
+    assert_eq!(held[0].outbox_id, reminder);
+    assert_eq!(held[0].delivery_state, "failed");
+    assert_eq!(held[0].attempts, 8);
 }
 
+/// A reminder whose appointment is cancelled before any attempt is
+/// cancelled in the same transaction, is never sent, and is not listed for
+/// an operator: nobody is meant to deliver it. The cancellation the caller
+/// made is still delivered.
 #[tokio::test]
-async fn an_expired_dispatch_lease_cannot_start_a_send() {
-    let fx = fixture().await;
-    let _ = booked(&fx, 90, 200, "expired-dispatch").await;
-    let due = pinned_now() + TimeDelta::days(1);
-    let rows = fx
-        .store
-        .claim_due_intents(due, 1, TimeDelta::minutes(10))
-        .await
-        .expect("claim one intent");
-    let row = rows.first().expect("a due intent");
-    for (remaining, dispatchable) in [(6, true), (5, false), (0, false), (-1, false)] {
-        let now = due + TimeDelta::minutes(10) - TimeDelta::seconds(remaining);
-        fx.store.pin_clock(Arc::new(move || now));
-        assert_eq!(
-            fx.store
-                .intent_still_dispatchable(row.outbox_id, row.attempts)
-                .await
-                .expect("check dispatch eligibility"),
-            dispatchable,
-            "remaining lease seconds: {remaining}"
-        );
-    }
-}
-
-/// Suppression wins up to the send: a reminder claimed for dispatch whose
-/// appointment is then cancelled is skipped, its row is retained as
-/// accounting, and the in-flight attempt's outcome cannot land.
-#[tokio::test]
-async fn a_suppressed_reminder_is_skipped_and_keeps_its_accounting() {
+async fn a_cancelled_appointments_reminder_is_cancelled_without_a_send() {
+    let destination = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/events"))
+        .respond_with(ResponseTemplate::new(202))
+        .mount(&destination)
+        .await;
     let fx = fixture().await;
     let (appointment, revision) = booked(&fx, 300, 440, "suppress-1").await;
-    let due = pinned_now() + TimeDelta::days(1);
-    let claimed: Vec<_> = fx
-        .store
-        .claim_due_intents(due, 100, TimeDelta::minutes(10))
-        .await
-        .expect("the delivery sweep runs")
-        .into_iter()
-        .filter(|intent| intent.purpose == "reminder")
-        .collect();
-    assert_eq!(claimed.len(), 1);
-    let reminder = &claimed[0];
-
-    // The caller cancels while the claimed reminder is in flight.
+    let reminder = intent_of(&fx, &appointment, "reminder").await;
     let (status, _) = fx
         .post(
             &format!("/v1/appointments/{appointment}/cancel"),
@@ -8164,54 +8463,50 @@ async fn a_suppressed_reminder_is_skipped_and_keeps_its_accounting() {
         )
         .await;
     assert_eq!(status, StatusCode::OK);
-
-    // The pre-send check skips the suppressed reminder.
-    assert!(
-        !fx.store
-            .intent_still_dispatchable(reminder.outbox_id, reminder.attempts)
-            .await
-            .expect("the liveness read runs"),
-        "a suppressed reminder is not sent"
+    assert_eq!(
+        outbox_row(&fx, reminder).await,
+        ("cancelled".to_owned(), 0, None, None),
+        "the cancel transaction cancels the unattempted reminder"
     );
-    // The in-flight attempt's outcome write cannot land either.
-    assert!(!fx
-        .store
-        .mark_intent_delivered(reminder.outbox_id, reminder.attempts)
-        .await
-        .expect("the stale outcome write runs"));
-    // The row survives as accounting, suppressed rather than deleted.
-    let state: String = fx
-        .admin
-        .query_one(
-            "SELECT delivery_state FROM scheduling_outbox WHERE outbox_id=$1",
-            &[&reminder.outbox_id],
-        )
-        .await
-        .expect("read the intent")
-        .get(0);
-    assert_eq!(state, "suppressed");
+    let cancellation = intent_of(&fx, &appointment, "cancellation").await;
+    assert_eq!(outbox_row(&fx, cancellation).await.0, "pending");
 
-    // The cancellation the caller made is still live for its own dispatch:
-    // suppression takes reminders, not the audit trail of the change.
-    let cancellation: Uuid = fx
-        .admin
-        .query_one(
-            "SELECT outbox_id FROM scheduling_outbox WHERE claim_id=$1 AND purpose='cancellation'",
-            &[&Uuid::parse_str(&appointment).expect("a claim identifier")],
-        )
+    bring_intents_due(&fx, pinned_now() + TimeDelta::days(1)).await;
+    dispatch_due_intents(&fx.store, SCHEDULING_ID, Some(transport_to(&destination)))
         .await
-        .expect("the cancellation intent is minted")
-        .get(0);
-    fx.store
-        .claim_due_intents(due, 100, TimeDelta::minutes(10))
+        .expect("the dispatch pass runs");
+
+    // The row survives as accounting until retention, cancelled rather
+    // than deleted, and no dispatch claims it.
+    assert_eq!(
+        outbox_row(&fx, reminder).await,
+        ("cancelled".to_owned(), 0, None, None)
+    );
+    assert_eq!(outbox_row(&fx, cancellation).await.0, "delivered");
+    let types: Vec<String> = destination
+        .received_requests()
         .await
-        .expect("lease the cancellation before dispatch");
+        .expect("the requests")
+        .iter()
+        .map(|request| {
+            serde_json::from_slice::<Value>(&request.body).expect("a JSON event")["type"]
+                .as_str()
+                .expect("an event type")
+                .to_owned()
+        })
+        .collect();
+    assert!(
+        !types.contains(&"org.registrystack.scheduling.reminder".to_owned()),
+        "a superseded reminder is never sent: {types:?}"
+    );
+    assert!(types.contains(&"org.registrystack.scheduling.cancellation".to_owned()));
     assert!(
         fx.store
-            .intent_still_dispatchable(cancellation, 1)
+            .undelivered_intents(100)
             .await
-            .expect("the liveness read runs"),
-        "the cancellation intent stays dispatchable"
+            .expect("the operator reads the undelivered intents")
+            .is_empty(),
+        "a superseded reminder needs no operator"
     );
 }
 
@@ -8325,30 +8620,21 @@ async fn a_default_availability_request_continues_its_own_cursor() {
     assert_eq!(status, StatusCode::OK);
 }
 
-/// A reschedule suppresses the reminder its obsolete revision minted and
-/// mints the replacement at the new revision: the obsolete row is retained
-/// as accounting, the replacement stays live for dispatch, and a reminder
-/// that names anything but the appointment's current revision is never
-/// sent, whether a swap marked it or not.
+/// A reschedule mints the replacement reminder at the new revision beside
+/// the one its obsolete revision minted. The obsolete one is cancelled in
+/// the reschedule transaction and retained as accounting, and the
+/// replacement is delivered: a reminder that names anything but the
+/// appointment's current revision is never sent.
 #[tokio::test]
-async fn a_reschedule_suppresses_the_obsolete_reminder_and_mints_its_replacement() {
+async fn a_reschedule_supersedes_the_obsolete_reminder_and_mints_its_replacement() {
+    let destination = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/events"))
+        .respond_with(ResponseTemplate::new(202))
+        .mount(&destination)
+        .await;
     let fx = fixture().await;
     let (appointment, revision) = booked(&fx, 300, 440, "reschedule-remind").await;
-    let due = pinned_now() + TimeDelta::days(1);
-    let claimed: Vec<_> = fx
-        .store
-        .claim_due_intents(due, 100, TimeDelta::minutes(10))
-        .await
-        .expect("the delivery sweep runs")
-        .into_iter()
-        .filter(|intent| intent.purpose == "reminder")
-        .collect();
-    assert_eq!(
-        claimed.len(),
-        1,
-        "the booking minted one reminder at revision 1"
-    );
-    let obsolete = &claimed[0];
 
     // The caller moves the appointment clear of the old slot.
     let later = first_slot(&fx, OFFERING, 480, 620).await;
@@ -8370,8 +8656,8 @@ async fn a_reschedule_suppresses_the_obsolete_reminder_and_mints_its_replacement
     let rows = fx
         .admin
         .query(
-            "SELECT outbox_id, appointment_revision, delivery_state FROM scheduling_outbox \
-             WHERE claim_id=$1 AND purpose='reminder' ORDER BY created_at",
+            "SELECT outbox_id, appointment_revision FROM scheduling_outbox \
+             WHERE claim_id=$1 AND purpose='reminder' ORDER BY appointment_revision",
             &[&claim_id],
         )
         .await
@@ -8381,60 +8667,364 @@ async fn a_reschedule_suppresses_the_obsolete_reminder_and_mints_its_replacement
         2,
         "the obsolete reminder is retained beside its replacement"
     );
-    let obsolete_state: String = rows[0].get(2);
-    assert_eq!(
-        obsolete_state, "suppressed",
-        "the claimed reminder is suppressed, not deleted"
-    );
+    let obsolete: Uuid = rows[0].get(0);
     let replacement: Uuid = rows[1].get(0);
+    assert_eq!(rows[0].get::<_, i64>(1), 1);
     assert_eq!(
         rows[1].get::<_, i64>(1),
         2,
         "the replacement names the new revision"
     );
     assert_eq!(
-        rows[1].get::<_, String>(2),
-        "pending",
-        "the replacement is live for dispatch"
+        outbox_row(&fx, obsolete).await,
+        ("cancelled".to_owned(), 0, None, None),
+        "the reschedule transaction cancels the obsolete reminder"
+    );
+    assert_eq!(outbox_row(&fx, replacement).await.0, "pending");
+
+    bring_intents_due(&fx, pinned_now() + TimeDelta::days(1)).await;
+    dispatch_due_intents(&fx.store, SCHEDULING_ID, Some(transport_to(&destination)))
+        .await
+        .expect("the dispatch pass runs");
+    assert_eq!(
+        outbox_row(&fx, obsolete).await,
+        ("cancelled".to_owned(), 0, None, None),
+        "the obsolete reminder stays cancelled, not sent"
+    );
+    assert_eq!(outbox_row(&fx, replacement).await.0, "delivered");
+    let reminders: Vec<Value> = destination
+        .received_requests()
+        .await
+        .expect("the requests")
+        .iter()
+        .map(|request| serde_json::from_slice::<Value>(&request.body).expect("a JSON event"))
+        .filter(|event| event["type"] == "org.registrystack.scheduling.reminder")
+        .collect();
+    assert_eq!(reminders.len(), 1, "only the replacement is sent");
+    assert_eq!(reminders[0]["id"], replacement.to_string());
+    assert_eq!(reminders[0]["subject"]["recordRevision"], 2);
+}
+
+/// A destination that answers every event with 202.
+async fn accepting_destination() -> MockServer {
+    let destination = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/events"))
+        .respond_with(ResponseTemplate::new(202))
+        .mount(&destination)
+        .await;
+    destination
+}
+
+/// The requests a destination received.
+async fn requests_to(destination: &MockServer) -> usize {
+    destination
+        .received_requests()
+        .await
+        .expect("the requests")
+        .len()
+}
+
+/// Book one appointment, deliver its confirmation, and lease its reminder,
+/// so the test holds the reminder between its claim and its send.
+async fn leased_reminder(
+    fx: &Fixture,
+    destination: &MockServer,
+    key: &str,
+) -> (String, u64, Uuid, IntentLeaseForTest) {
+    let (appointment, revision) = booked(fx, 300, 440, key).await;
+    let reminder = intent_of(fx, &appointment, "reminder").await;
+    bring_intents_due(fx, pinned_now()).await;
+    dispatch_due_intents(&fx.store, SCHEDULING_ID, Some(transport_to(destination)))
+        .await
+        .expect("the confirmation is delivered");
+    make_intent_due(fx, reminder).await;
+    let lease = claim_due_intent_for_test(&fx.store)
+        .await
+        .expect("the delivery claim runs")
+        .expect("the reminder is due");
+    assert_eq!(lease.outbox_id(), reminder);
+    (appointment, revision, reminder, lease)
+}
+
+/// The order "claimed, then cancelled, then sent": a reminder a dispatcher
+/// already holds is not cancelled under it, and the liveness read under its
+/// lease sets it aside at the send instead, so it is never sent and needs
+/// no operator.
+#[tokio::test]
+async fn a_reminder_claimed_before_its_cancellation_is_set_aside_at_its_send() {
+    let destination = accepting_destination().await;
+    let fx = fixture().await;
+    let (appointment, revision, reminder, lease) =
+        leased_reminder(&fx, &destination, "backstop-1").await;
+    let sent_before = requests_to(&destination).await;
+
+    let (status, _) = fx
+        .post(
+            &format!("/v1/appointments/{appointment}/cancel"),
+            &fx.agent,
+            "backstop-cancel",
+            json!({"observedRevision": revision, "reason": null}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        outbox_row(&fx, reminder).await.0,
+        "leased",
+        "the cancel leaves a leased reminder to its dispatcher"
     );
 
-    fx.store
-        .claim_due_intents(due, 100, TimeDelta::minutes(10))
-        .await
-        .expect("lease the replacement before dispatch");
-    // The obsolete reminder is skipped, and the replacement is live.
-    assert!(!fx
-        .store
-        .intent_still_dispatchable(obsolete.outbox_id, obsolete.attempts)
-        .await
-        .expect("the liveness read runs"));
+    send_claimed_intent_for_test(
+        &fx.store,
+        SCHEDULING_ID,
+        Some(transport_to(&destination)),
+        &lease,
+    )
+    .await
+    .expect("the send runs under its lease");
+    assert_eq!(
+        outbox_row(&fx, reminder).await,
+        (
+            "dead-lettered".to_owned(),
+            1,
+            Some("superseded".to_owned()),
+            None
+        )
+    );
+    assert_eq!(
+        requests_to(&destination).await,
+        sent_before,
+        "a superseded reminder is never sent"
+    );
     assert!(fx
         .store
-        .intent_still_dispatchable(replacement, 1)
+        .undelivered_intents(100)
         .await
-        .expect("the liveness read runs"));
+        .expect("the operator reads the undelivered intents")
+        .is_empty());
+}
 
-    // The revision clause decides on its own: a pending reminder that names
-    // an appointment revision other than the current one is not sent, even
-    // when nothing marked the row.
+/// A dispatcher whose lease lapsed between its claim and its send starts no
+/// send: the liveness read runs under the lease, and a lapsed lease answers
+/// nothing.
+#[tokio::test]
+async fn a_lapsed_dispatch_lease_starts_no_send() {
+    let destination = accepting_destination().await;
+    let fx = fixture().await;
+    let (_, _, reminder, lease) = leased_reminder(&fx, &destination, "lapsed-send").await;
+    let sent_before = requests_to(&destination).await;
+    lapse_intent_lease(&fx, reminder).await;
+
+    let outcome = send_claimed_intent_for_test(
+        &fx.store,
+        SCHEDULING_ID,
+        Some(transport_to(&destination)),
+        &lease,
+    )
+    .await;
+    assert!(
+        matches!(outcome, Err(StoreError::IntentDispatch)),
+        "a lapsed lease refuses the send: {outcome:?}"
+    );
+    assert_eq!(
+        requests_to(&destination).await,
+        sent_before,
+        "no request leaves under a lapsed lease"
+    );
+    assert_eq!(
+        outbox_row(&fx, reminder).await.0,
+        "leased",
+        "the lapsed lease is left for recovery"
+    );
+}
+
+/// A payload that cannot become an event is held on its first attempt
+/// with that class, and nothing is sent.
+#[tokio::test]
+async fn an_unrenderable_intent_is_held_on_its_first_attempt_without_a_send() {
+    let destination = accepting_destination().await;
+    let fx = fixture().await;
+    let (appointment, _) = booked(&fx, 300, 440, "unrenderable-1").await;
+    let reminder = intent_of(&fx, &appointment, "reminder").await;
+    bring_intents_due(&fx, pinned_now()).await;
+    dispatch_due_intents(&fx.store, SCHEDULING_ID, Some(transport_to(&destination)))
+        .await
+        .expect("the confirmation is delivered");
+    let sent_before = requests_to(&destination).await;
+
+    // Past the event body bound, so the envelope cannot be rendered.
     fx.admin
         .execute(
-            "UPDATE scheduling_outbox SET appointment_revision=1 WHERE outbox_id=$1",
-            &[&replacement],
+            "UPDATE scheduling_outbox SET payload = jsonb_build_object('padding', repeat('x', 20000)) \
+             WHERE outbox_id = $1",
+            &[&reminder],
         )
         .await
-        .expect("age the replacement's revision");
-    assert!(
-        !fx.store
-            .intent_still_dispatchable(replacement, 1)
-            .await
-            .expect("the liveness read runs"),
-        "a reminder naming an obsolete revision is not sent"
+        .expect("corrupt the payload");
+    make_intent_due(&fx, reminder).await;
+    dispatch_due_intents(&fx.store, SCHEDULING_ID, Some(transport_to(&destination)))
+        .await
+        .expect("the dispatch pass runs");
+
+    assert_eq!(
+        outbox_row(&fx, reminder).await,
+        (
+            "dead-lettered".to_owned(),
+            1,
+            Some("event_unrenderable".to_owned()),
+            None
+        )
     );
+    assert_eq!(requests_to(&destination).await, sent_before);
+    let undelivered = fx
+        .store
+        .undelivered_intents(100)
+        .await
+        .expect("the operator reads the undelivered intents");
+    assert_eq!(undelivered.len(), 1);
+    assert_eq!(undelivered[0].outbox_id, reminder);
+    assert_eq!(undelivered[0].delivery_state, "failed");
+}
+
+/// A row the claim cannot read as an intent is set aside without a send,
+/// and never stalls the rows behind it. Never attempted, it lands in
+/// `expired` and an operator sees it as failed.
+#[tokio::test]
+async fn an_unreadable_intent_is_quarantined_without_stalling_the_rows_behind_it() {
+    let destination = accepting_destination().await;
+    let fx = fixture().await;
+    let (broken_appointment, _) = booked(&fx, 90, 200, "quarantine-broken").await;
+    let (sound_appointment, _) = booked(&fx, 300, 440, "quarantine-sound").await;
+    bring_intents_due(&fx, pinned_now()).await;
+    dispatch_due_intents(&fx.store, SCHEDULING_ID, Some(transport_to(&destination)))
+        .await
+        .expect("the confirmations are delivered");
+    let broken = intent_of(&fx, &broken_appointment, "reminder").await;
+    let sound = intent_of(&fx, &sound_appointment, "reminder").await;
+    let sent_before = requests_to(&destination).await;
+
+    // An instant no timestamp type in the runtime can hold, due first.
+    fx.admin
+        .execute(
+            "UPDATE scheduling_outbox SET due_at = 'infinity', \
+                    next_attempt_at = transaction_timestamp() - interval '1 minute' \
+              WHERE outbox_id = $1",
+            &[&broken],
+        )
+        .await
+        .expect("make the intent unreadable");
+    make_intent_due(&fx, sound).await;
+    dispatch_due_intents(&fx.store, SCHEDULING_ID, Some(transport_to(&destination)))
+        .await
+        .expect("the dispatch pass runs");
+
+    assert_eq!(
+        outbox_row(&fx, broken).await,
+        (
+            "expired".to_owned(),
+            0,
+            Some("delivery_unreadable".to_owned()),
+            None
+        ),
+        "an intent never attempted is set aside as expired"
+    );
+    assert_eq!(
+        outbox_row(&fx, sound).await.0,
+        "delivered",
+        "the row behind it is still sent"
+    );
+    assert_eq!(requests_to(&destination).await, sent_before + 1);
+    // The operator listing reads the instant too, so the row is given a
+    // readable one back before the listing is asked how it stands.
+    fx.admin
+        .execute(
+            "UPDATE scheduling_outbox SET due_at = created_at WHERE outbox_id = $1",
+            &[&broken],
+        )
+        .await
+        .expect("make the intent readable again");
+    let undelivered = fx
+        .store
+        .undelivered_intents(100)
+        .await
+        .expect("the operator reads the undelivered intents");
+    assert_eq!(undelivered.len(), 1);
+    assert_eq!(undelivered[0].outbox_id, broken);
+    assert_eq!(undelivered[0].delivery_state, "failed");
+    assert_eq!(undelivered[0].attempts, 0);
+}
+
+/// Due intents are claimed by `next_attempt_at`, then `outbox_id`, then
+/// `purpose`. An outbox identifier names one intent, so `purpose` never
+/// decides between two rows; the earlier instant wins over the lower
+/// identifier, and the lower identifier breaks a tie on the instant.
+#[tokio::test]
+async fn due_intents_are_claimed_by_instant_then_identifier() {
+    let fx = fixture().await;
+    let mut reminders = Vec::new();
+    for (from, to, key) in [
+        (90, 200, "order-1"),
+        (300, 440, "order-2"),
+        (480, 620, "order-3"),
+    ] {
+        let (appointment, _) = booked(&fx, from, to, key).await;
+        reminders.push(intent_of(&fx, &appointment, "reminder").await);
+    }
+    // Leave the confirmations out of the way.
+    fx.admin
+        .execute(
+            "UPDATE scheduling_outbox SET next_attempt_at = transaction_timestamp() + interval '1 day' \
+             WHERE purpose <> 'reminder'",
+            &[],
+        )
+        .await
+        .expect("defer the confirmations");
+    reminders.sort();
+    let (lowest, middle, highest) = (reminders[0], reminders[1], reminders[2]);
+    for (id, offset) in [
+        (highest, "2 minutes"),
+        (lowest, "1 minute"),
+        (middle, "1 minute"),
+    ] {
+        fx.admin
+            .execute(
+                &format!(
+                    "UPDATE scheduling_outbox \
+                        SET next_attempt_at = transaction_timestamp() - interval '{offset}' \
+                      WHERE outbox_id = $1"
+                ),
+                &[&id],
+            )
+            .await
+            .expect("schedule the reminder");
+    }
+    let mut claimed = Vec::new();
+    for _ in 0..3 {
+        let lease = claim_due_intent_for_test(&fx.store)
+            .await
+            .expect("the delivery claim runs")
+            .expect("a reminder is due");
+        claimed.push(lease.outbox_id());
+        finish_intent_for_test(&fx.store, &lease, true)
+            .await
+            .expect("the reminder is delivered");
+    }
+    assert_eq!(claimed, vec![highest, lowest, middle]);
 }
 
 #[tokio::test]
 async fn a_pre_1_0_schema_is_refused_by_migrate_and_readiness() {
+    refuses_a_pre_1_0_ledger_at_migrate_and_readiness(1).await;
+}
+
+/// v0.42.0 and v0.43.0 recorded their baseline as version 100, whose outbox
+/// is not the shared dispatch shape this release reads.
+#[tokio::test]
+async fn a_v0_43_0_baseline_ledger_is_refused_by_migrate_and_readiness() {
+    refuses_a_pre_1_0_ledger_at_migrate_and_readiness(100).await;
+}
+
+async fn refuses_a_pre_1_0_ledger_at_migrate_and_readiness(version: i64) {
     let base = std::env::var("SCHEDULING_TEST_DATABASE_URL")
         .expect("SCHEDULING_TEST_DATABASE_URL names a disposable PostgreSQL test server");
     let schema = format!("scheduling_{}", Uuid::new_v4().simple());
@@ -8452,7 +9042,7 @@ async fn a_pre_1_0_schema_is_refused_by_migrate_and_readiness() {
                  applied_at timestamptz NOT NULL
              );
              INSERT INTO {schema}.scheduling_schema_migrations(version, applied_at)
-                 VALUES (1, now());"
+                 VALUES ({version}, now());"
         ))
         .await
         .expect("seed the ledger a pre-1.0 release left");
@@ -8474,12 +9064,12 @@ async fn a_pre_1_0_schema_is_refused_by_migrate_and_readiness() {
         .expect_err("a pre-1.0 schema is never upgraded in place");
     assert!(matches!(
         &refusal,
-        StoreError::Pre1_0Schema { versions } if versions == &vec![1]
+        StoreError::Pre1_0Schema { versions } if versions == &vec![version]
     ));
     assert!(refusal.to_string().contains("fresh database"), "{refusal}");
     assert!(matches!(
         store.ready().await,
-        Err(StoreError::Pre1_0Schema { versions }) if versions == vec![1]
+        Err(StoreError::Pre1_0Schema { versions }) if versions == vec![version]
     ));
 }
 
@@ -9777,38 +10367,115 @@ mod terminal_retention {
         let old = cutoff - TimeDelta::microseconds(1);
         let recent = cutoff + TimeDelta::microseconds(1);
         let mut cases = Vec::new();
-        // Suppressed work may have an uncertain in-flight send. Local and failed
-        // intents remain operator-visible rather than being presumed disposable.
-        // Every purpose is terminal dispatch metadata once delivered, so the
-        // receipt cutoff applies to confirmations, changes and cancellations
-        // exactly as it does to reminders.
-        for (purpose, state, attempts, terminal_at, remove) in [
-            ("reminder", "delivered", 1_i32, old, true),
-            ("reminder", "delivered", 1, cutoff, true),
-            ("reminder", "delivered", 1, recent, false),
-            ("confirmation", "delivered", 1, old, true),
-            ("confirmation", "delivered", 1, recent, false),
-            ("change", "delivered", 1, cutoff, true),
-            ("change", "delivered", 1, recent, false),
-            ("cancellation", "delivered", 1, old, true),
-            ("cancellation", "delivered", 1, recent, false),
-            ("cancellation", "pending", 1, old, false),
-            ("reminder", "pending", 0, old, false),
-            ("reminder", "pending", 1, old, false),
-            ("reminder", "pending", 1, now + TimeDelta::minutes(1), false),
-            ("reminder", "local", 1, old, false),
-            ("reminder", "failed", 1, old, false),
-            ("reminder", "suppressed", 1, old, false),
+        // A leased intent may have an uncertain in-flight send. Intents set
+        // aside as local or failed remain operator-visible accounting rather
+        // than being presumed disposable. Every purpose is terminal dispatch
+        // metadata once delivered, so the receipt cutoff applies to
+        // confirmations, changes and cancellations exactly as it does to
+        // reminders. A reminder cancelled before any attempt or set aside as
+        // superseded needs nobody, so it ages out on the same cutoff.
+        for (purpose, state, attempts, terminal_at, class, remove) in [
+            ("reminder", "delivered", 1_i16, old, None, true),
+            ("reminder", "delivered", 1, cutoff, None, true),
+            ("reminder", "delivered", 1, recent, None, false),
+            ("confirmation", "delivered", 1, old, None, true),
+            ("confirmation", "delivered", 1, recent, None, false),
+            ("change", "delivered", 1, cutoff, None, true),
+            ("change", "delivered", 1, recent, None, false),
+            ("cancellation", "delivered", 1, old, None, true),
+            ("cancellation", "delivered", 1, recent, None, false),
+            ("cancellation", "pending", 1, old, None, false),
+            ("reminder", "pending", 0, old, None, false),
+            ("reminder", "pending", 1, old, None, false),
+            (
+                "reminder",
+                "pending",
+                1,
+                now + TimeDelta::minutes(1),
+                None,
+                false,
+            ),
+            ("reminder", "leased", 1, old, None, false),
+            (
+                "reminder",
+                "dead-lettered",
+                1,
+                old,
+                Some("destination_unconfigured"),
+                false,
+            ),
+            (
+                "reminder",
+                "dead-lettered",
+                8,
+                old,
+                Some("delivery_failed"),
+                false,
+            ),
+            (
+                "reminder",
+                "dead-lettered",
+                1,
+                old,
+                Some("superseded"),
+                true,
+            ),
+            (
+                "reminder",
+                "dead-lettered",
+                1,
+                cutoff,
+                Some("superseded"),
+                true,
+            ),
+            (
+                "reminder",
+                "dead-lettered",
+                1,
+                recent,
+                Some("superseded"),
+                false,
+            ),
+            ("reminder", "cancelled", 0, old, None, true),
+            ("reminder", "cancelled", 0, cutoff, None, true),
+            ("reminder", "cancelled", 0, recent, None, false),
+            (
+                "reminder",
+                "expired",
+                0,
+                old,
+                Some("delivery_unreadable"),
+                false,
+            ),
         ] {
             let id = Uuid::new_v4();
             fx.admin
                 .execute(
                     "INSERT INTO scheduling_outbox
-             (outbox_id,purpose,claim_id,appointment_revision,due_at,delivery_state,
-              attempts,next_attempt_at,payload,created_at,delivered_at)
-             VALUES ($1,$7,$2,1,$3,$4,$5,$6,'{}'::jsonb,$3,
-                     CASE WHEN $4='delivered' THEN $6::timestamptz ELSE NULL END)",
-                    &[&id, &claim, &old, &state, &attempts, &terminal_at, &purpose],
+             (outbox_id,purpose,generation,state,attempt,next_attempt_at,attempt_started_at,
+              lease_expires_at,lease_token,delivered_at,dead_lettered_at,expired_at,claim_id,
+              appointment_revision,due_at,payload,created_at,last_failure_class,updated_at)
+             VALUES ($1,$7,1,$4,$5,
+                     CASE WHEN $4='pending' THEN $6::timestamptz END,
+                     CASE WHEN $4='leased' THEN $6::timestamptz END,
+                     CASE WHEN $4='leased' THEN $6::timestamptz + interval '10 seconds' END,
+                     CASE WHEN $4='leased' THEN gen_random_uuid() END,
+                     CASE WHEN $4='delivered' THEN $6::timestamptz END,
+                     CASE WHEN $4='dead-lettered' THEN $6::timestamptz END,
+                     CASE WHEN $4='expired' THEN $6::timestamptz END,
+                     $2,1,$3,'{}'::jsonb,$3,$8,
+                     CASE WHEN $4='cancelled' THEN $6::timestamptz
+                          ELSE transaction_timestamp() END)",
+                    &[
+                        &id,
+                        &claim,
+                        &old,
+                        &state,
+                        &attempts,
+                        &terminal_at,
+                        &purpose,
+                        &class,
+                    ],
                 )
                 .await
                 .unwrap();
@@ -9838,7 +10505,7 @@ mod terminal_retention {
                 .is_some();
             assert_eq!(
                 exists, !remove,
-                "{purpose} intent {id}: only delivered rows at or before receipt cutoff are disposable"
+                "{purpose} intent {id}: only settled rows at or before receipt cutoff are disposable"
             );
         }
         let after = rows(&fx, "scheduling_outbox").await;
@@ -10043,9 +10710,9 @@ mod terminal_retention {
         fx.admin
             .execute(
                 "INSERT INTO scheduling_outbox
-         (outbox_id,purpose,claim_id,appointment_revision,due_at,delivery_state,
-          attempts,next_attempt_at,payload,created_at,delivered_at)
-         SELECT gen_random_uuid(),'reminder',$1,1,$2,'delivered',1,$2,'{}'::jsonb,$2,$2
+         (outbox_id,purpose,generation,state,attempt,claim_id,appointment_revision,due_at,
+          payload,created_at,delivered_at)
+         SELECT gen_random_uuid(),'reminder',1,'delivered',1,$1,1,$2,'{}'::jsonb,$2,$2
          FROM generate_series(1,257)",
                 &[&claim, &old],
             )

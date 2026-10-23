@@ -2315,121 +2315,6 @@ impl PostgresStore {
         Ok(1)
     }
 
-    #[cfg(feature = "postgres-test")]
-    #[doc(hidden)]
-    pub async fn lease_review_completions_for_test(
-        &self,
-        limit: usize,
-        lease_until: DateTime<Utc>,
-    ) -> Result<Vec<registry_casework_core::ReviewCompletion>, ReviewRuntimeError> {
-        Ok(self
-            .lease_review_completions(limit, lease_until)
-            .await?
-            .into_iter()
-            .map(|delivery| delivery.event)
-            .collect())
-    }
-
-    #[cfg(feature = "postgres-test")]
-    #[doc(hidden)]
-    pub async fn finish_review_completion_for_test(
-        &self,
-        event_id: Uuid,
-        delivered: bool,
-        maximum_attempts: u32,
-        retry_at: DateTime<Utc>,
-    ) -> Result<(), ReviewRuntimeError> {
-        self.finish_review_completion(event_id, delivered, maximum_attempts, retry_at)
-            .await
-    }
-
-    #[cfg(feature = "postgres-test")]
-    pub(crate) async fn lease_review_completions(
-        &self,
-        limit: usize,
-        lease_until: DateTime<Utc>,
-    ) -> Result<Vec<LeasedReviewCompletion>, ReviewRuntimeError> {
-        let mut client = self.client().await?;
-        let transaction = client.transaction().await?;
-        let rows = transaction
-            .query(
-                "WITH due AS (
-                    SELECT event_id FROM casework_review_completion_outbox
-                    WHERE retained_until>now() AND next_attempt_at<=now()
-                      AND (state='pending' OR (state='leased' AND lease_until<=now()))
-                    ORDER BY next_attempt_at,event_id LIMIT $1 FOR UPDATE SKIP LOCKED
-                 ), leased AS (
-                    UPDATE casework_review_completion_outbox o
-                    SET state='leased',lease_until=$2,attempt_count=attempt_count+1
-                    FROM due WHERE o.event_id=due.event_id
-                    RETURNING o.event_id,o.destination_id,o.recipient_binding,o.attempt_count
-                 )
-                 SELECT l.event_id,e.request_id,e.result_id,e.completed_at,
-                        l.destination_id,l.recipient_binding
-                 FROM leased l JOIN casework_review_terminal_events e ON e.event_id=l.event_id",
-                &[
-                    &i64::try_from(limit.min(100)).map_err(|_| ReviewRuntimeError::Invalid)?,
-                    &lease_until,
-                ],
-            )
-            .await?;
-        transaction.commit().await?;
-        rows.into_iter()
-            .map(|row| {
-                Ok(LeasedReviewCompletion {
-                    event: registry_casework_core::ReviewCompletion {
-                        event_type: registry_casework_core::ReviewCompletionType::ReviewCompleted,
-                        event_id: row.get(0),
-                        request_id: row.get(1),
-                        result_id: row.get(2),
-                        completed_at: row.get(3),
-                    },
-                    destination_id: row.get(4),
-                    recipient_binding: row.get(5),
-                })
-            })
-            .collect()
-    }
-
-    #[cfg(feature = "postgres-test")]
-    pub(crate) async fn finish_review_completion(
-        &self,
-        event_id: Uuid,
-        delivered: bool,
-        maximum_attempts: u32,
-        retry_at: DateTime<Utc>,
-    ) -> Result<(), ReviewRuntimeError> {
-        let client = self.client().await?;
-        if delivered {
-            client
-                .execute(
-                    "UPDATE casework_review_completion_outbox
-                     SET state='delivered',delivered_at=now(),lease_until=NULL,last_failure_class=NULL
-                     WHERE event_id=$1 AND state='leased'",
-                    &[&event_id],
-                )
-                .await?;
-        } else {
-            client
-                .execute(
-                    "UPDATE casework_review_completion_outbox
-                     SET state=CASE WHEN attempt_count >= $2 OR $3>=retained_until
-                                    THEN 'exhausted' ELSE 'pending' END,
-                         next_attempt_at=LEAST($3,retained_until - interval '1 microsecond'),
-                         lease_until=NULL,last_failure_class='delivery_failed'
-                     WHERE event_id=$1 AND state='leased'",
-                    &[
-                        &event_id,
-                        &i32::try_from(maximum_attempts)
-                            .map_err(|_| ReviewRuntimeError::Invalid)?,
-                        &retry_at,
-                    ],
-                )
-                .await?;
-        }
-        Ok(())
-    }
-
     async fn review_request_for_task(
         &self,
         task_id: Uuid,
@@ -5460,9 +5345,9 @@ async fn settle_review(
             transaction
                 .execute(
                     "INSERT INTO casework_review_completion_outbox(
-                    event_id,request_id,destination_id,recipient_binding,state,attempt_count,
-                    next_attempt_at,retained_until)
-                 VALUES($1,$2,$3,$4,'pending',0,$5,$6)",
+                    event_id,request_id,destination_id,recipient_binding,generation,state,
+                    attempt,next_attempt_at,retained_until)
+                 VALUES($1,$2,$3,$4,1,'pending',0,$5,$6)",
                     &[
                         &event_id,
                         &record.request_id,

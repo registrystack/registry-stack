@@ -348,7 +348,7 @@ class ProductSelectionTest(unittest.TestCase):
                         None, tag, "linux-amd64", True
                     )
                     self.assertEqual(products, ["evidence"])
-                    self.assertEqual(list(omitted), ["breg", "casework", "messaging"])
+                    self.assertEqual(list(omitted), ["breg", "casework", "scheduling", "messaging"])
                     self.assertEqual(omitted["casework"], MODULE.CASEWORK_NO_IN_PLACE_UPGRADE)
                     self.assertIn("messaging has not joined a release yet",
                                   omitted["messaging"])
@@ -363,7 +363,7 @@ class ProductSelectionTest(unittest.TestCase):
     def test_a_default_run_omits_a_product_the_starting_release_did_not_ship(self) -> None:
         products, omitted = MODULE.select_products(None, "v0.35.0", "linux-amd64", True)
         self.assertEqual(products, ["evidence"])
-        self.assertEqual(list(omitted), ["breg", "casework", "messaging"])
+        self.assertEqual(list(omitted), ["breg", "casework", "scheduling", "messaging"])
         self.assertEqual(omitted["casework"], MODULE.CASEWORK_NO_IN_PLACE_UPGRADE)
         self.assertIn("first shipped in v0.36.0", omitted["messaging"])
 
@@ -375,7 +375,20 @@ class ProductSelectionTest(unittest.TestCase):
                 self.assertEqual(omitted, {
                     "breg": MODULE.BREG_NO_IN_PLACE_UPGRADE,
                     "casework": MODULE.CASEWORK_NO_IN_PLACE_UPGRADE,
+                    "scheduling": MODULE.SCHEDULING_NO_IN_PLACE_UPGRADE,
                 })
+
+    def test_casework_scheduling_and_breg_name_the_fresh_baselines_of_0_44_0(self) -> None:
+        for product in ("casework", "scheduling"):
+            with self.subTest(product=product):
+                reason = MODULE.RETIRED_PRODUCTS[product]
+                self.assertIn("0.44.0", reason)
+                self.assertIn("version 200", reason)
+                self.assertIn("fresh database", reason)
+        self.assertIn("0.43.0", MODULE.BREG_NO_IN_PLACE_UPGRADE)
+        self.assertIn("attachment verification", MODULE.BREG_NO_IN_PLACE_UPGRADE)
+        with self.assertRaisesRegex(Error, "version 200"):
+            MODULE.select_products(["scheduling"], "v0.43.0", "linux-amd64", True)
 
     def test_a_named_unavailable_product_is_refused(self) -> None:
         with self.assertRaisesRegex(Error, "messaging was first shipped in v0.36.0"):
@@ -1140,6 +1153,21 @@ class MessagingAssertionsTest(unittest.TestCase):
     ACTIVE = "sha256:" + "a" * 64
     OTHER = "sha256:" + "b" * 64
 
+    # pg_get_constraintdef renders the leased arm with each term parenthesized.
+    LEASED_ARM_0100 = ("CHECK ((((state = 'leased'::text) AND (attempt > 0) "
+                       "AND (lease_expires_at > attempt_started_at))))")
+    LEASED_ARM_0101 = ("CHECK ((((state = 'leased'::text) AND (attempt > 0) "
+                       "AND (lease_expires_at IS NOT NULL) "
+                       "AND (lease_expires_at > attempt_started_at))))")
+
+    def test_the_upgraded_dispatch_shape_refuses_a_lease_without_expiry(self) -> None:
+        self.assertEqual(MODULE.dispatch_shape_differences(self.LEASED_ARM_0101), [])
+        differences = MODULE.dispatch_shape_differences(self.LEASED_ARM_0100)
+        self.assertEqual(len(differences), 1)
+        self.assertIn("messaging_dispatch_jobs_shape", differences[0])
+        self.assertIn("lease_expires_at", differences[0])
+        self.assertEqual(len(MODULE.dispatch_shape_differences(None)), 1)
+
     def plan(self, **members: str | None) -> dict[str, str | None]:
         return {"activeDigest": self.ACTIVE, "packageDigest": self.ACTIVE, "change": "none",
                 **members}
@@ -1194,7 +1222,8 @@ class MessagingAssertionsTest(unittest.TestCase):
         self.assertEqual(len(MODULE.retention_audit_losses(2, 2, 2, 2)), 2)
 
     def rehearse(self, *, erase_events: int = 1,
-                 ledger_differences: tuple[str, ...] = ()) -> tuple[dict, Any, Any]:
+                 ledger_differences: tuple[str, ...] = (),
+                 dispatch_shape: str | None = None) -> tuple[dict, Any, Any]:
         """Run rehearse_messaging with every process and database faked. The
         erase command writes `erase_events` requested and erased records."""
         old, new = unittest.mock.Mock(), unittest.mock.Mock()
@@ -1219,6 +1248,8 @@ class MessagingAssertionsTest(unittest.TestCase):
         new.run.side_effect = erase
         postgres = unittest.mock.Mock()
         postgres.row_counts.return_value = {"public.messages": 3}
+        postgres.sql.return_value = (self.LEASED_ARM_0101 if dispatch_shape is None
+                                     else dispatch_shape) + "\n"
         report: dict[str, Any] = {}
         with tempfile.TemporaryDirectory() as directory, \
                 unittest.mock.patch.object(MODULE, "Messaging", return_value=messaging), \
@@ -1261,6 +1292,11 @@ class MessagingAssertionsTest(unittest.TestCase):
     def test_the_leg_fails_on_a_ledger_difference_the_upgrade_names(self) -> None:
         with self.assertRaisesRegex(MODULE.RehearsalError, "names another predecessor"):
             self.rehearse(ledger_differences=("the ledger names another predecessor",))
+
+    def test_the_leg_fails_when_the_upgrade_keeps_the_version_100_dispatch_shape(
+            self) -> None:
+        with self.assertRaisesRegex(MODULE.RehearsalError, "without a lease_expires_at"):
+            self.rehearse(dispatch_shape=self.LEASED_ARM_0100)
 
     def test_each_stream_is_held_to_the_records_the_upgrade_writes_to_it(self) -> None:
         self.assertEqual(MODULE.MESSAGING_UPGRADED_AUDIT_RECORDS,

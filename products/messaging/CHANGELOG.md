@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- `messaging --help` and `messaging --version` work even when `MESSAGING_LOG`
+  is invalid; `messaging serve` still refuses that invalid log level.
+- Startup names unreadable activation-ledger grants before schema reads, so a
+  runtime role that lost schema usage or ledger read access gets actionable
+  recovery guidance.
+- The runtime dependency gate covers Discovery and Render while preserving
+  public clients, shared protocols and development tooling. Transitive dev-only
+  dependencies of linked crates do not become runtime dependencies.
+
+- `messaging_dispatch_jobs` refuses a `leased` row without a
+  `lease_expires_at`, through the corrected shared dispatch job shape. A
+  v0.42.0 or v0.43.0 database migrates forward in place: `messagingctl apply`
+  runs schema version 101, which replaces the job shape check in one
+  transaction and keeps every message, job, and spent idempotency key.
+  Startup refuses a database at version 100 as not current until `apply` has
+  run. The dispatcher writes an expiry on every claim, so no row it wrote
+  fails the stricter check.
+
 ## 0.43.0 - 2026-10-21
 
 - BREAKING: authored display fields reject prohibited Unicode controls, and

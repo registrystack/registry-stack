@@ -9,13 +9,16 @@ import subprocess
 import sys
 from pathlib import Path
 
-# The runtime products whose crates must never reach a Messaging crate,
-# directly or through any shared dependency. Products reach Messaging over its
-# public HTTP contract, like any external caller.
+# The runtime products whose crates must never reach the Messaging runtime,
+# directly or through any shared dependency. They may use its public client
+# to reach Messaging over HTTP, like any external caller.
 PRODUCT_PREFIXES = (
     "registry-breg",
     "registry-casework",
     "registry-coordinator",
+    "registry-documents",
+    "registry-discovery",
+    "registry-render",
     "registry-scheduling",
     "registry-evidence",
 )
@@ -35,40 +38,58 @@ MESSAGING_CLIENT_PREFIX = "registry-messaging-client"
 UNIFIED_CLIENT_PREFIX = "registry-stack-client"
 
 
-def package_graph(metadata: dict) -> tuple[dict[str, str], dict[str, set[str]]]:
+def package_graph(
+    metadata: dict,
+) -> tuple[dict[str, str], dict[str, set[str]], dict[str, set[str]]]:
+    """All root edges and linked edges, excluding dependencies' test tooling."""
     names = {package["id"]: package["name"] for package in metadata["packages"]}
     resolve = metadata.get("resolve")
     if not resolve:
         raise ValueError("cargo metadata did not include a resolved dependency graph")
-    edges = {
-        node["id"]: {
-            dependency["pkg"] if isinstance(dependency, dict) else dependency
-            for dependency in node.get("deps", node.get("dependencies", []))
-        }
-        for node in resolve["nodes"]
-    }
-    return names, edges
+    every: dict[str, set[str]] = {}
+    linked: dict[str, set[str]] = {}
+    for node in resolve["nodes"]:
+        every[node["id"]] = set()
+        linked[node["id"]] = set()
+        for dependency in node.get("deps", node.get("dependencies", [])):
+            package_id = dependency["pkg"] if isinstance(dependency, dict) else dependency
+            every[node["id"]].add(package_id)
+            kinds = (
+                {kind.get("kind") for kind in dependency.get("dep_kinds", [{}])}
+                if isinstance(dependency, dict)
+                else {None}
+            )
+            if kinds - {"dev"}:
+                linked[node["id"]].add(package_id)
+    return names, every, linked
 
 
-def closure(start: str, edges: dict[str, set[str]]) -> set[str]:
+def closure(
+    start: str, every: dict[str, set[str]], linked: dict[str, set[str]]
+) -> set[str]:
+    """The root's test dependencies count; its dependencies' tests do not link."""
     seen: set[str] = set()
-    pending = list(edges.get(start, set()))
+    pending = list(every.get(start, set()))
     while pending:
         package = pending.pop()
         if package in seen:
             continue
         seen.add(package)
-        pending.extend(edges.get(package, set()) - seen)
+        pending.extend(linked.get(package, set()) - seen)
     return seen
 
 
 def product_violations(
-    name: str, package_id: str, names: dict[str, str], edges: dict[str, set[str]]
+    name: str,
+    package_id: str,
+    names: dict[str, str],
+    every: dict[str, set[str]],
+    linked: dict[str, set[str]],
 ) -> list[str]:
     forbidden = sorted(
         {
             names[item]
-            for item in closure(package_id, edges)
+            for item in closure(package_id, every, linked)
             if names[item].startswith(PRODUCT_PREFIXES)
         }
     )
@@ -80,10 +101,14 @@ def product_violations(
 
 
 def internal_violations(
-    name: str, package_id: str, names: dict[str, str], edges: dict[str, set[str]]
+    name: str,
+    package_id: str,
+    names: dict[str, str],
+    every: dict[str, set[str]],
+    linked: dict[str, set[str]],
 ) -> list[str]:
     failures: list[str] = []
-    reached = closure(package_id, edges)
+    reached = closure(package_id, every, linked)
     if name == "registry-messaging-core":
         # The core is the bottom of the product: it may depend on no other
         # Messaging crate, or the runtime would follow every caller of it.
@@ -110,12 +135,16 @@ def internal_violations(
 
 
 def violations(metadata: dict) -> list[str]:
-    names, edges = package_graph(metadata)
+    names, every, linked = package_graph(metadata)
     failures: list[str] = []
     for package_id, package_name in sorted(names.items(), key=lambda item: item[1]):
         if package_name.startswith(MESSAGING_PREFIX):
-            failures.extend(product_violations(package_name, package_id, names, edges))
-            failures.extend(internal_violations(package_name, package_id, names, edges))
+            failures.extend(
+                product_violations(package_name, package_id, names, every, linked)
+            )
+            failures.extend(
+                internal_violations(package_name, package_id, names, every, linked)
+            )
 
     # The boundary runs both ways: no other runtime product, and no unified
     # client, may reach the Messaging runtime through a dependency either.
@@ -125,7 +154,7 @@ def violations(metadata: dict) -> list[str]:
         forbidden = sorted(
             {
                 names[item]
-                for item in closure(package_id, edges)
+                for item in closure(package_id, every, linked)
                 if names[item] in MESSAGING_RUNTIME
             }
         )

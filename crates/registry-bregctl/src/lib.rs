@@ -53,6 +53,7 @@ mod field_encryption_lifecycle;
 mod file_check;
 mod history_erasure_lifecycle;
 mod history_rebaseline_lifecycle;
+mod hook_lifecycle;
 mod import_authority_lifecycle;
 mod init_from_model;
 mod instance_claim_lifecycle;
@@ -71,7 +72,6 @@ mod statistics_lifecycle;
 mod test_lifecycle;
 #[cfg(feature = "schema")]
 pub mod tool_schema;
-mod webhook_lifecycle;
 
 use active_registry::ActiveRegistryError;
 use apply_lifecycle::{
@@ -91,6 +91,9 @@ use history_erasure_lifecycle::{
 use history_rebaseline_lifecycle::{
     HistoryRebaselineLifecycleError, HistoryRebaselineLifecycleOutcome,
     HistoryRebaselineLifecycleRequest,
+};
+use hook_lifecycle::{
+    HookDiscardOutcome, HookLifecycleError, HookListOutcome, HookReplayOutcome, HookSampleOutcome,
 };
 use import_authority_lifecycle::ImportAuthorityCliError;
 use instance_claim_lifecycle::InstanceClaimCliError;
@@ -115,10 +118,6 @@ use statistics_lifecycle::{
     StatisticsLifecycleError, StatisticsPublishRequest, StatisticsWithdrawRequest,
 };
 use test_lifecycle::{TestLifecycleError, TestLifecycleRequest};
-use webhook_lifecycle::{
-    WebhookDiscardOutcome, WebhookLifecycleError, WebhookListOutcome, WebhookReplayOutcome,
-    WebhookSampleOutcome,
-};
 
 const DOMAIN_REFUSAL_EXIT: u8 = 1;
 const USAGE_EXIT: u8 = 2;
@@ -163,6 +162,9 @@ const AUTHORED_SOURCE_REDERIVATION_MAX_BYTES: u64 = 1024 * 1024;
 const MAX_DERIVED_SQL_ASSET_BYTES: u64 = 256 * 1024;
 const MAX_PLANNER_TEST_REQUEST_BYTES: u64 = 64 * 1024;
 const PLANNER_TEST_DEADLINE: Duration = Duration::from_secs(1);
+/// The recovery `doctor` names for a database a pre-1.0 release installed,
+/// which `plan`, `apply`, and the maintenance commands name too.
+pub(crate) const PRE_1_0_SCHEMA_RECOVERY: &str = "the database uses the attachment verification schema of a pre-1.0 release, which this release cannot upgrade in place: keep the registry stopped, create a fresh database, rebuild the package with this release's bregctl test and bregctl package, and run bregctl apply --package DIR --initial against it; a backup of this database carries the same schema";
 const UNRECOGNIZED_DATABASE_RECOVERY: &str = "the database does not match this BReg release's catalog and activation ledger; verify the binary, package and database pairing, or restore a verified backup. Retired registry models require a new database. Nothing was changed";
 static STAGING_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -245,8 +247,8 @@ enum Command {
     Data(DataArgs),
     /// Publish or withdraw statistical releases through authenticated Registry HTTP APIs.
     Statistics(StatisticsArgs),
-    /// Inspect and operate configured webhook deliveries.
-    Webhook(WebhookArgs),
+    /// Inspect and operate configured hook deliveries.
+    Hook(HookArgs),
     /// Inspect and erase eligible Proposal retention detail.
     ProposalRetention(ProposalRetentionArgs),
     /// Recover a lost review or an automatic application blocked by executor authorization.
@@ -811,9 +813,9 @@ struct DataArgs {
 }
 
 #[derive(Debug, Args)]
-struct WebhookArgs {
+struct HookArgs {
     #[command(subcommand)]
-    command: WebhookCommand,
+    command: HookCommand,
 }
 
 #[derive(Debug, Args)]
@@ -823,17 +825,17 @@ struct ProposalRetentionArgs {
 }
 
 #[derive(Debug, Subcommand)]
-enum WebhookCommand {
+enum HookCommand {
     /// Render one deterministic exact CloudEvents request with synthetic values.
-    Sample(WebhookSampleArgs),
+    Sample(HookSampleArgs),
     /// List bounded value-free delivery metadata, including superseded bindings.
-    List(WebhookListArgs),
+    List(HookListArgs),
     /// Attempt due local hooks under the active package with bounded time and attempts.
-    Drain(WebhookDrainArgs),
+    Drain(HookDrainArgs),
     /// Replay one eligible retained dead-letter using optimistic generation binding.
-    Replay(WebhookReplayArgs),
+    Replay(HookReplayArgs),
     /// Permanently discard one retained delivery using optimistic generation binding.
-    Discard(WebhookDiscardArgs),
+    Discard(HookDiscardArgs),
 }
 
 #[derive(Debug, Subcommand)]
@@ -1055,7 +1057,7 @@ struct ImportAuthorityRuntimeArgs {
 }
 
 #[derive(Debug, Args)]
-struct WebhookSampleArgs {
+struct HookSampleArgs {
     /// Base Registry Engine authoring project directory.
     #[arg(value_name = "PROJECT")]
     project: PathBuf,
@@ -1066,7 +1068,7 @@ struct WebhookSampleArgs {
 }
 
 #[derive(Debug, Args)]
-struct WebhookListArgs {
+struct HookListArgs {
     /// Runtime configuration file.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
@@ -1077,7 +1079,7 @@ struct WebhookListArgs {
 }
 
 #[derive(Debug, Args)]
-struct WebhookDrainArgs {
+struct HookDrainArgs {
     /// Runtime configuration file.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
@@ -1092,39 +1094,39 @@ struct WebhookDrainArgs {
 }
 
 #[derive(Debug, Args)]
-struct WebhookReplayArgs {
+struct HookReplayArgs {
     /// Runtime configuration file.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
 
-    /// Stable event UUID shown by `webhook list`.
+    /// Stable event UUID shown by `hook list`.
     #[arg(long, value_name = "UUID")]
     event_id: String,
 
-    /// Compiled delivery identifier shown by `webhook list`.
+    /// Compiled delivery identifier shown by `hook list`.
     #[arg(long, value_name = "ID")]
     delivery_id: String,
 
-    /// Current generation shown by `webhook list`.
+    /// Current generation shown by `hook list`.
     #[arg(long, value_name = "NUMBER")]
     expected_generation: i64,
 }
 
 #[derive(Debug, Args)]
-struct WebhookDiscardArgs {
+struct HookDiscardArgs {
     /// Runtime configuration file.
     #[arg(long, value_name = "ABSOLUTE_FILE")]
     runtime_config: PathBuf,
 
-    /// Stable event UUID shown by `webhook list`.
+    /// Stable event UUID shown by `hook list`.
     #[arg(long, value_name = "UUID")]
     event_id: String,
 
-    /// Compiled delivery identifier shown by `webhook list`.
+    /// Compiled delivery identifier shown by `hook list`.
     #[arg(long, value_name = "ID")]
     delivery_id: String,
 
-    /// Current generation shown by `webhook list`.
+    /// Current generation shown by `hook list`.
     #[arg(long, value_name = "NUMBER")]
     expected_generation: i64,
 }
@@ -1816,8 +1818,8 @@ enum DiagnosticArtifact {
     DataCheckpoint,
     DataTransport,
     StatisticsOperation,
-    WebhookSample,
-    WebhookOperations,
+    HookSample,
+    HookOperations,
     ProposalRetentionOperation,
     ReviewRecoveryOperation,
     EvidenceRetentionOperation,
@@ -1855,6 +1857,7 @@ enum SuggestedAction {
     CorrectFixtureJourneys,
     SupplySchemaTestCredentials,
     PrepareSchemaTestDatabase,
+    CorrectDatabaseSetup,
     RecreateDisposableDatabase,
     ChooseSchemaTestOutput,
     VerifyMigrationAuthority,
@@ -1869,8 +1872,8 @@ enum SuggestedAction {
     VerifyDataCheckpoint,
     VerifyDataTransport,
     VerifyStatisticsOperation,
-    SelectWebhookEvent,
-    VerifyWebhookOperation,
+    SelectHookEvent,
+    VerifyHookOperation,
     VerifyProposalRetentionOperation,
     VerifyReviewRecoveryOperation,
     VerifyEvidenceRetentionOperation,
@@ -2171,47 +2174,47 @@ struct StatisticsMutationSuccessReport {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct WebhookSampleSuccessReport {
+struct HookSampleSuccessReport {
     ok: bool,
     command: &'static str,
     #[serde(flatten)]
-    outcome: WebhookSampleOutcome,
+    outcome: HookSampleOutcome,
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct WebhookListSuccessReport {
+struct HookListSuccessReport {
     ok: bool,
     command: &'static str,
     #[serde(flatten)]
-    outcome: WebhookListOutcome,
+    outcome: HookListOutcome,
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct WebhookDrainSuccessReport {
+struct HookDrainSuccessReport {
     ok: bool,
     command: &'static str,
     #[serde(flatten)]
-    outcome: registry_breg::webhook::WebhookDrainReport,
+    outcome: registry_breg::hooks::HookDrainReport,
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct WebhookReplaySuccessReport {
+struct HookReplaySuccessReport {
     ok: bool,
     command: &'static str,
     #[serde(flatten)]
-    outcome: WebhookReplayOutcome,
+    outcome: HookReplayOutcome,
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct WebhookDiscardSuccessReport {
+struct HookDiscardSuccessReport {
     ok: bool,
     command: &'static str,
     #[serde(flatten)]
-    outcome: WebhookDiscardOutcome,
+    outcome: HookDiscardOutcome,
 }
 
 #[derive(Serialize)]
@@ -2800,26 +2803,26 @@ where
                 };
             }
         },
-        Command::Webhook(args) => {
+        Command::Hook(args) => {
             return match args.command {
-                WebhookCommand::Sample(args) => match webhook_sample(&args) {
-                    Ok(report) => write_webhook_sample_success(&report, format, stdout, stderr),
+                HookCommand::Sample(args) => match hook_sample(&args) {
+                    Ok(report) => write_hook_sample_success(&report, format, stdout, stderr),
                     Err(failure) => write_failure(&failure, format, stdout, stderr),
                 },
-                WebhookCommand::List(args) => match webhook_list(&args) {
-                    Ok(report) => write_webhook_list_success(&report, format, stdout, stderr),
+                HookCommand::List(args) => match hook_list(&args) {
+                    Ok(report) => write_hook_list_success(&report, format, stdout, stderr),
                     Err(failure) => write_failure(&failure, format, stdout, stderr),
                 },
-                WebhookCommand::Drain(args) => match webhook_drain(&args) {
-                    Ok(report) => write_webhook_drain_success(&report, format, stdout, stderr),
+                HookCommand::Drain(args) => match hook_drain(&args) {
+                    Ok(report) => write_hook_drain_success(&report, format, stdout, stderr),
                     Err(failure) => write_failure(&failure, format, stdout, stderr),
                 },
-                WebhookCommand::Replay(args) => match webhook_replay(&args) {
-                    Ok(report) => write_webhook_replay_success(&report, format, stdout, stderr),
+                HookCommand::Replay(args) => match hook_replay(&args) {
+                    Ok(report) => write_hook_replay_success(&report, format, stdout, stderr),
                     Err(failure) => write_failure(&failure, format, stdout, stderr),
                 },
-                WebhookCommand::Discard(args) => match webhook_discard(&args) {
-                    Ok(report) => write_webhook_discard_success(&report, format, stdout, stderr),
+                HookCommand::Discard(args) => match hook_discard(&args) {
+                    Ok(report) => write_hook_discard_success(&report, format, stdout, stderr),
                     Err(failure) => write_failure(&failure, format, stdout, stderr),
                 },
             };
@@ -4596,72 +4599,69 @@ fn field_encryption_erase_history_failure(
     }
 }
 
-fn webhook_sample(args: &WebhookSampleArgs) -> Result<WebhookSampleSuccessReport, FailureReport> {
-    let compiled = compile(&args.project, ProfileArg::Authoring, "webhook sample")?;
-    let outcome =
-        webhook_lifecycle::sample(&compiled, &args.event).map_err(|error| match error {
-            WebhookLifecycleError::Event => unavailable_webhook_event(&compiled),
-            error => webhook_lifecycle_failure("webhook sample", error),
-        })?;
-    Ok(WebhookSampleSuccessReport {
+fn hook_sample(args: &HookSampleArgs) -> Result<HookSampleSuccessReport, FailureReport> {
+    let compiled = compile(&args.project, ProfileArg::Authoring, "hook sample")?;
+    let outcome = hook_lifecycle::sample(&compiled, &args.event).map_err(|error| match error {
+        HookLifecycleError::Event => unavailable_hook_event(&compiled),
+        error => hook_lifecycle_failure("hook sample", error),
+    })?;
+    Ok(HookSampleSuccessReport {
         ok: true,
-        command: "webhook sample",
+        command: "hook sample",
         outcome,
     })
 }
 
-fn webhook_list(args: &WebhookListArgs) -> Result<WebhookListSuccessReport, FailureReport> {
-    let outcome = webhook_lifecycle::list(&args.runtime_config, args.limit)
-        .map_err(|error| webhook_lifecycle_failure("webhook list", error))?;
-    Ok(WebhookListSuccessReport {
+fn hook_list(args: &HookListArgs) -> Result<HookListSuccessReport, FailureReport> {
+    let outcome = hook_lifecycle::list(&args.runtime_config, args.limit)
+        .map_err(|error| hook_lifecycle_failure("hook list", error))?;
+    Ok(HookListSuccessReport {
         ok: true,
-        command: "webhook list",
+        command: "hook list",
         outcome,
     })
 }
 
-fn webhook_drain(args: &WebhookDrainArgs) -> Result<WebhookDrainSuccessReport, FailureReport> {
-    let outcome = webhook_lifecycle::drain(
+fn hook_drain(args: &HookDrainArgs) -> Result<HookDrainSuccessReport, FailureReport> {
+    let outcome = hook_lifecycle::drain(
         &args.runtime_config,
         args.max_attempts,
         args.timeout_seconds,
     )
-    .map_err(|error| webhook_lifecycle_failure("webhook drain", error))?;
-    Ok(WebhookDrainSuccessReport {
+    .map_err(|error| hook_lifecycle_failure("hook drain", error))?;
+    Ok(HookDrainSuccessReport {
         ok: true,
-        command: "webhook drain",
+        command: "hook drain",
         outcome,
     })
 }
 
-fn webhook_replay(args: &WebhookReplayArgs) -> Result<WebhookReplaySuccessReport, FailureReport> {
-    let outcome = webhook_lifecycle::replay(
+fn hook_replay(args: &HookReplayArgs) -> Result<HookReplaySuccessReport, FailureReport> {
+    let outcome = hook_lifecycle::replay(
         &args.runtime_config,
         &args.event_id,
         &args.delivery_id,
         args.expected_generation,
     )
-    .map_err(|error| webhook_lifecycle_failure("webhook replay", error))?;
-    Ok(WebhookReplaySuccessReport {
+    .map_err(|error| hook_lifecycle_failure("hook replay", error))?;
+    Ok(HookReplaySuccessReport {
         ok: true,
-        command: "webhook replay",
+        command: "hook replay",
         outcome,
     })
 }
 
-fn webhook_discard(
-    args: &WebhookDiscardArgs,
-) -> Result<WebhookDiscardSuccessReport, FailureReport> {
-    let outcome = webhook_lifecycle::discard(
+fn hook_discard(args: &HookDiscardArgs) -> Result<HookDiscardSuccessReport, FailureReport> {
+    let outcome = hook_lifecycle::discard(
         &args.runtime_config,
         &args.event_id,
         &args.delivery_id,
         args.expected_generation,
     )
-    .map_err(|error| webhook_lifecycle_failure("webhook discard", error))?;
-    Ok(WebhookDiscardSuccessReport {
+    .map_err(|error| hook_lifecycle_failure("hook discard", error))?;
+    Ok(HookDiscardSuccessReport {
         ok: true,
-        command: "webhook discard",
+        command: "hook discard",
         outcome,
     })
 }
@@ -4669,7 +4669,7 @@ fn webhook_discard(
 /// Name the authored event ids this project delivers, so an adopter selects one
 /// without reading the project again. The selection an adopter typed is not
 /// rendered back.
-fn unavailable_webhook_event(compiled: &CompiledRegistry) -> FailureReport {
+fn unavailable_hook_event(compiled: &CompiledRegistry) -> FailureReport {
     let mut authored: Vec<&str> = compiled
         .event_deliveries()
         .deliveries
@@ -4679,49 +4679,49 @@ fn unavailable_webhook_event(compiled: &CompiledRegistry) -> FailureReport {
     authored.sort_unstable();
     authored.dedup();
     let message = if authored.is_empty() {
-        "this project authors no webhook delivery, so there is no event to sample".to_owned()
+        "this project authors no hook delivery, so there is no event to sample".to_owned()
     } else {
         format!(
-            "the selected webhook event is unavailable; this project delivers: {}",
+            "the selected hook event is unavailable; this project delivers: {}",
             authored.join(", ")
         )
     };
     FailureReport {
         ok: false,
-        command: "webhook sample",
+        command: "hook sample",
         diagnostics: vec![tool_diagnostic(
-            diagnostic("webhook.sample.event-refused", "event", &message),
-            DiagnosticArtifact::WebhookSample,
-            SuggestedAction::SelectWebhookEvent,
+            diagnostic("hook.sample.event-refused", "event", &message),
+            DiagnosticArtifact::HookSample,
+            SuggestedAction::SelectHookEvent,
         )],
     }
 }
 
-fn webhook_lifecycle_failure(command: &'static str, error: WebhookLifecycleError) -> FailureReport {
+fn hook_lifecycle_failure(command: &'static str, error: HookLifecycleError) -> FailureReport {
     let (code, path, message, artifact, action) = match error {
-        WebhookLifecycleError::PackagePinMismatch(mismatch) => {
-            return package_pin_failure(command, "webhook.package.refused", "package", &mismatch);
+        HookLifecycleError::PackagePinMismatch(mismatch) => {
+            return package_pin_failure(command, "hook.package.refused", "package", &mismatch);
         }
-        WebhookLifecycleError::Event => (
-            "webhook.sample.event-refused",
+        HookLifecycleError::Event => (
+            "hook.sample.event-refused",
             "event",
-            "the selected webhook event is unavailable",
-            DiagnosticArtifact::WebhookSample,
-            SuggestedAction::SelectWebhookEvent,
+            "the selected hook event is unavailable",
+            DiagnosticArtifact::HookSample,
+            SuggestedAction::SelectHookEvent,
         ),
-        WebhookLifecycleError::Sample => (
-            "webhook.sample.render-refused",
+        HookLifecycleError::Sample => (
+            "hook.sample.render-refused",
             "sample",
-            "the webhook sample could not be rendered",
-            DiagnosticArtifact::WebhookSample,
-            SuggestedAction::SelectWebhookEvent,
+            "the hook sample could not be rendered",
+            DiagnosticArtifact::HookSample,
+            SuggestedAction::SelectHookEvent,
         ),
-        WebhookLifecycleError::Operator => (
-            "webhook.operation.refused",
-            "webhook",
-            "the webhook operation was refused",
-            DiagnosticArtifact::WebhookOperations,
-            SuggestedAction::VerifyWebhookOperation,
+        HookLifecycleError::Operator => (
+            "hook.operation.refused",
+            "hook",
+            "the hook operation was refused",
+            DiagnosticArtifact::HookOperations,
+            SuggestedAction::VerifyHookOperation,
         ),
     };
     FailureReport {
@@ -5982,13 +5982,13 @@ fn schema_test_runtime_setup_failure(
         SchemaTestRuntimeSetupError::EventDestinations(
             EventDestinationActivationError::InventoryMismatch,
         ) => (
-            "test.event-destinations.inventory-mismatch",
-            "eventDestinations",
+            "test.hook-destinations.inventory-mismatch",
+            "destinations.hooks",
             "configure exactly the logical destination bindings required by the candidate event deliveries before retrying",
         ),
         SchemaTestRuntimeSetupError::EventDestinations(_) => (
-            "test.event-destinations.activation-failed",
-            "eventDestinations",
+            "test.hook-destinations.activation-failed",
+            "destinations.hooks",
             "check the destination bindings, delivery ceilings, and referenced secret, signing, and TLS material before retrying",
         ),
         SchemaTestRuntimeSetupError::Evidence => (
@@ -6145,6 +6145,23 @@ fn test_lifecycle_failure(error: TestLifecycleError) -> FailureReport {
             DiagnosticArtifact::SchemaTestDatabase,
             SuggestedAction::RecreateDisposableDatabase,
         ),
+        TestLifecycleError::DatabaseSetupRefused(invariant) => {
+            return FailureReport {
+                ok: false,
+                command: "test",
+                diagnostics: vec![tool_diagnostic(
+                    diagnostic(
+                        "test.database.setup-refused",
+                        "database",
+                        &format!(
+                            "the schema-test database setup was refused: {invariant}; correct that prerequisite (see Provision PostgreSQL for the roles, grants, and extensions), then retry; recreate the disposable database if it is no longer clean"
+                        ),
+                    ),
+                    DiagnosticArtifact::SchemaTestDatabase,
+                    SuggestedAction::CorrectDatabaseSetup,
+                )],
+            };
+        }
         TestLifecycleError::Execution => (
             "test.execution.refused",
             "execution",
@@ -6347,6 +6364,20 @@ fn lifecycle_failure(command: &'static str, error: ApplyLifecycleError) -> Failu
             DiagnosticArtifact::VerifiedPackage,
             SuggestedAction::CorrectPackageBuild,
         ),
+        ApplyLifecycleError::TargetPackage(PackageError::Derivation) => (
+            "apply.package.build-mismatch",
+            "package",
+            PACKAGE_BUILD_MISMATCH,
+            DiagnosticArtifact::VerifiedPackage,
+            SuggestedAction::CorrectPackageBuild,
+        ),
+        ApplyLifecycleError::CurrentPackage(PackageError::Derivation) => (
+            "apply.package.build-mismatch",
+            "package.root",
+            PACKAGE_BUILD_MISMATCH,
+            DiagnosticArtifact::VerifiedPackage,
+            SuggestedAction::CorrectPackageBuild,
+        ),
         ApplyLifecycleError::TargetPackage(error) => (
             "apply.package.refused",
             "package",
@@ -6371,8 +6402,8 @@ fn lifecycle_failure(command: &'static str, error: ApplyLifecycleError) -> Failu
             SuggestedAction::VerifyMigrationAuthority,
         ),
         ApplyLifecycleError::EventDestinations => (
-            "apply.event-destinations.refused",
-            "eventDestinations",
+            "apply.hook-destinations.refused",
+            "destinations.hooks",
             "the event destination bindings were refused",
             DiagnosticArtifact::RuntimeConfiguration,
             SuggestedAction::CorrectRuntimeConfiguration,
@@ -6609,6 +6640,132 @@ fn lifecycle_failure(command: &'static str, error: ApplyLifecycleError) -> Failu
                     SuggestedAction::ReconcileFailedMigration,
                 );
             }
+            registry_breg::migration::MigrationError::LockKeyRefused => (
+                "apply.package.lock-key-refused",
+                "package",
+                "the package id derives no migration lock key: the Registry id is missing or outside its bound. Nothing was changed. Correct the project id and rebuild the package with `bregctl package`",
+                DiagnosticArtifact::PackageActivation,
+                SuggestedAction::CorrectPackageBuild,
+            ),
+            registry_breg::migration::MigrationError::SchemaFingerprintMismatch {
+                declared,
+                measured,
+            } => {
+                return source_failure(
+                    command,
+                    diagnostic(
+                        "apply.package.fingerprint-mismatch",
+                        "package",
+                        &format!(
+                            "the package declares schema fingerprint {declared}, but its DDL installs {measured} on this database, as when the package was built by another release. Nothing was changed. Rebuild the package with this release: run `bregctl test`, then `bregctl package`"
+                        ),
+                    ),
+                    DiagnosticArtifact::PackageActivation,
+                    SuggestedAction::CorrectPackageBuild,
+                );
+            }
+            registry_breg::migration::MigrationError::SchemaFingerprintMismatchAfterMaintenance {
+                declared,
+                measured,
+            } => {
+                return source_failure(
+                    command,
+                    diagnostic(
+                        "apply.package.fingerprint-mismatch",
+                        "package",
+                        &format!(
+                            "the pinned package declares schema fingerprint {declared}, but the target catalog measures {measured}. Maintenance remains pinned to the exact target; reviewed migration checkpoints may already be committed. Inspect the package build and database prerequisites, then assess the exact target with `bregctl migration reconcile` or restore the pre-activation backup. Do not replace the pinned target with a rebuilt package"
+                        ),
+                    ),
+                    DiagnosticArtifact::PackageActivation,
+                    SuggestedAction::ReconcileFailedMigration,
+                );
+            }
+            registry_breg::migration::MigrationError::PackageDdlRefused(failure) => {
+                return source_failure(
+                    command,
+                    diagnostic(
+                        "apply.package.ddl-refused",
+                        "database",
+                        &format!(
+                            "PostgreSQL refused the package's initial DDL with {failure} when apply rehearsed it before maintenance began. Nothing was changed. Fix the cause the SQLSTATE and the named objects point at in the database setup, or correct the package and rebuild it with `bregctl test`, then `bregctl package`, and run the same command again"
+                        ),
+                    ),
+                    DiagnosticArtifact::DatabaseMigration,
+                    SuggestedAction::VerifyMigrationAuthority,
+                );
+            }
+            registry_breg::migration::MigrationError::FieldPatternSyntaxRefused {
+                entity_id,
+                field_id,
+            } => {
+                return source_failure(
+                    command,
+                    diagnostic(
+                        "breg.field.pattern-syntax-invalid",
+                        &format!("recordTypes[{entity_id}].fields[{field_id}].pattern"),
+                        "PostgreSQL rejected the native pattern syntax when apply rehearsed the package's initial DDL before maintenance began. Nothing was changed. Correct the PostgreSQL ARE syntax, then run `bregctl test` and `bregctl package` and apply the rebuilt package",
+                    ),
+                    DiagnosticArtifact::PackageActivation,
+                    SuggestedAction::CorrectPackageBuild,
+                );
+            }
+            registry_breg::migration::MigrationError::MigrationRoleRefused(reason) => {
+                return source_failure(
+                    command,
+                    diagnostic(
+                        "apply.database.migration-role-refused",
+                        "database.roles.migration",
+                        &format!(
+                            "{reason}: the connection must use database.roles.migration, which must own the registry schemas and hold no superuser, CREATEDB, CREATEROLE, or BYPASSRLS authority. Nothing was changed. Correct the role, then run the same command again"
+                        ),
+                    ),
+                    DiagnosticArtifact::DatabaseMigration,
+                    SuggestedAction::VerifyMigrationAuthority,
+                );
+            }
+            registry_breg::migration::MigrationError::DatabaseConfigurationRefused(reason) => {
+                return source_failure(
+                    command,
+                    diagnostic(
+                        "apply.database-configuration.refused",
+                        "database",
+                        &format!(
+                            "the migration database configuration was refused: {reason}. Nothing was changed"
+                        ),
+                    ),
+                    DiagnosticArtifact::DatabaseMigration,
+                    SuggestedAction::VerifyMigrationAuthority,
+                );
+            }
+            registry_breg::migration::MigrationError::PrerequisiteMissing(reason) => {
+                return source_failure(
+                    command,
+                    diagnostic(
+                        "apply.database.prerequisite-missing",
+                        "database",
+                        &format!(
+                            "{reason}: an administrator installs the prerequisites this package requires in the target database. Nothing was changed. Run the same command again once they are in place"
+                        ),
+                    ),
+                    DiagnosticArtifact::DatabaseMigration,
+                    SuggestedAction::VerifyMigrationAuthority,
+                );
+            }
+            registry_breg::migration::MigrationError::CatalogRefused(reason) => {
+                return source_failure(
+                    command,
+                    diagnostic(
+                        "apply.database.catalog-refused",
+                        "database",
+                        &format!(
+                            "the database catalog does not admit this activation: {reason}. Nothing was changed by this command"
+                        ),
+                    ),
+                    DiagnosticArtifact::DatabaseMigration,
+                    SuggestedAction::VerifyMigrationAuthority,
+                );
+            }
             registry_breg::migration::MigrationError::ApplyFailed => (
                 "apply.migration.failed",
                 "database",
@@ -6624,7 +6781,7 @@ fn lifecycle_failure(command: &'static str, error: ApplyLifecycleError) -> Failu
                         "apply.hooks.local-retained",
                         "hooks",
                         &format!(
-                            "{qualifier}{} retained local hook deliveries prevent activation; compiled delivery ids: {}. Nothing was changed: the registry remains ready with no pinned target. Run `bregctl webhook drain` with the active package's runtime configuration, then inspect retained blockers with `webhook list` and explicitly replay or discard eligible work",
+                            "{qualifier}{} retained local hook deliveries prevent activation; compiled delivery ids: {}. Nothing was changed: the registry remains ready with no pinned target. Run `bregctl hook drain` with the active package's runtime configuration, then inspect retained blockers with `hook list` and explicitly replay or discard eligible work",
                             retained.retained_deliveries,
                             retained.compiled_delivery_ids.join(", "),
                         ),
@@ -6647,6 +6804,18 @@ fn lifecycle_failure(command: &'static str, error: ApplyLifecycleError) -> Failu
                 DiagnosticArtifact::PackageActivation,
                 SuggestedAction::CorrectRuntimeConfiguration,
             ),
+            registry_breg::migration::MigrationError::Pre1_0Schema => {
+                return source_failure(
+                    command,
+                    diagnostic(
+                        "apply.database.pre-1-0-schema",
+                        "database",
+                        &format!("{PRE_1_0_SCHEMA_RECOVERY}. Nothing was changed"),
+                    ),
+                    DiagnosticArtifact::PackageActivation,
+                    SuggestedAction::CorrectRuntimeConfiguration,
+                );
+            }
             registry_breg::migration::MigrationError::RuntimeWriteAuthority(finding) => {
                 return source_failure(
                     command,
@@ -7037,7 +7206,7 @@ fn inspection_failure(
             (
                 format!("{prefix}.package.{suffix}"),
                 "package",
-                "the configured package was refused",
+                package_refusal_message(&error, "the configured package was refused"),
                 DiagnosticArtifact::VerifiedPackage,
                 action,
             )
@@ -7051,6 +7220,16 @@ fn inspection_failure(
             artifact,
             action,
         )],
+    }
+}
+
+const PACKAGE_BUILD_MISMATCH: &str = "the package cannot be reproduced by this compiler: a different compiler build or changed packaged content can cause this mismatch. Nothing was changed. Verify the reviewed sources, then rebuild with matching bregctl and breg executables: run `bregctl test`, then `bregctl package`; keep the exact pinned package for any activation already in maintenance";
+
+fn package_refusal_message(error: &PackageError, fallback: &'static str) -> &'static str {
+    if matches!(error, PackageError::Derivation) {
+        PACKAGE_BUILD_MISMATCH
+    } else {
+        fallback
     }
 }
 
@@ -7073,7 +7252,6 @@ fn package_refusal(error: &PackageError) -> (&'static str, SuggestedAction) {
         | PackageError::Closure
         | PackageError::Integrity
         | PackageError::CanonicalJson
-        | PackageError::Derivation
         | PackageError::MigrationPlan
         | PackageError::ReviewedMigration(_) => {
             ("integrity-refused", SuggestedAction::VerifyPackageIntegrity)
@@ -7081,6 +7259,7 @@ fn package_refusal(error: &PackageError) -> (&'static str, SuggestedAction) {
         PackageError::Bounds | PackageError::Read => {
             ("package-refused", SuggestedAction::VerifyPackageIntegrity)
         }
+        PackageError::Derivation => ("build-mismatch", SuggestedAction::CorrectPackageBuild),
         PackageError::RetiredApiVersion => {
             ("retired-api-version", SuggestedAction::CorrectPackageBuild)
         }
@@ -7088,13 +7267,7 @@ fn package_refusal(error: &PackageError) -> (&'static str, SuggestedAction) {
 }
 
 fn package_refusal_action(error: &PackageError) -> SuggestedAction {
-    match error {
-        PackageError::UnsafePath => SuggestedAction::VerifyPackagePath,
-        PackageError::Permissions => SuggestedAction::VerifyPackagePermissions,
-        PackageError::Binding => SuggestedAction::VerifyPackageBinding,
-        PackageError::DeploymentIdentity => SuggestedAction::CorrectPackageBuild,
-        _ => SuggestedAction::VerifyPackageIntegrity,
-    }
+    package_refusal(error).1
 }
 
 /// The configured active package does not match the runtime file's
@@ -7154,6 +7327,13 @@ fn active_registry_failure(
             DiagnosticArtifact::DatabaseMigration,
             SuggestedAction::CorrectRuntimeConfiguration,
         ),
+        ActiveRegistryError::Pre1_0Schema => (
+            "pre-1-0-schema",
+            "database",
+            PRE_1_0_SCHEMA_RECOVERY,
+            DiagnosticArtifact::DatabaseMigration,
+            SuggestedAction::CorrectRuntimeConfiguration,
+        ),
         ActiveRegistryError::DatabaseMismatch => (
             "database-mismatch",
             "identity.databaseId",
@@ -7187,7 +7367,10 @@ fn baseline_package_failure(command: &'static str, error: PackageError) -> Failu
         command,
         &format!("package.baseline.{suffix}"),
         "baselinePackage",
-        "the baseline package was refused; name the chain tip package directory with --baseline-package as an absolute path",
+        package_refusal_message(
+            &error,
+            "the baseline package was refused; name the chain tip package directory with --baseline-package as an absolute path",
+        ),
         DiagnosticArtifact::BaselinePackage,
         action,
     )
@@ -7237,7 +7420,7 @@ fn package_diff_failure(error: PackageError) -> FailureReport {
     diff_failure_with_action(
         &format!("diff.baseline.{suffix}"),
         "baseline",
-        "the baseline package was refused",
+        package_refusal_message(&error, "the baseline package was refused"),
         DiagnosticArtifact::BaselinePackage,
         action,
     )
@@ -12518,8 +12701,8 @@ fn write_statistics_success(
     write_result(result, stderr)
 }
 
-fn write_webhook_sample_success(
-    report: &WebhookSampleSuccessReport,
+fn write_hook_sample_success(
+    report: &HookSampleSuccessReport,
     format: OutputFormat,
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
@@ -12553,8 +12736,8 @@ fn write_webhook_sample_success(
     write_result(result, stderr)
 }
 
-fn write_webhook_list_success(
-    report: &WebhookListSuccessReport,
+fn write_hook_list_success(
+    report: &HookListSuccessReport,
     format: OutputFormat,
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
@@ -12574,7 +12757,7 @@ fn write_webhook_list_success(
             .and_then(|deliveries| {
                 let mut lines = report::Lines::new();
                 lines.lead(&format!(
-                    "Listed the webhook deliveries. {}.",
+                    "Listed the hook deliveries. {}.",
                     report::counted(deliveries.len(), "delivery")
                 ));
                 if !deliveries.is_empty() {
@@ -12589,8 +12772,8 @@ fn write_webhook_list_success(
     write_result(result, stderr)
 }
 
-fn write_webhook_drain_success(
-    report: &WebhookDrainSuccessReport,
+fn write_hook_drain_success(
+    report: &HookDrainSuccessReport,
     format: OutputFormat,
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
@@ -12602,9 +12785,9 @@ fn write_webhook_drain_success(
     } else {
         let outcome = &report.outcome;
         let stopped = match outcome.stop_reason {
-            registry_breg::webhook::WebhookDrainStopReason::Idle => "no local attempt due",
-            registry_breg::webhook::WebhookDrainStopReason::AttemptBudget => "attempt budget",
-            registry_breg::webhook::WebhookDrainStopReason::TimeBudget => {
+            registry_breg::hooks::HookDrainStopReason::Idle => "no local attempt due",
+            registry_breg::hooks::HookDrainStopReason::AttemptBudget => "attempt budget",
+            registry_breg::hooks::HookDrainStopReason::TimeBudget => {
                 "time budget; an unfinished lease may remain"
             }
         };
@@ -12614,7 +12797,7 @@ fn write_webhook_drain_success(
             ""
         };
         render_report(
-            "Finished the bounded local hook drain. Inspect retained work with webhook list before go-live.",
+            "Finished the bounded local hook drain. Inspect retained work with hook list before go-live.",
             &[
                 ("activation id", outcome.activation_id.clone()),
                 ("completed attempts", outcome.completed_attempts.to_string()),
@@ -12630,8 +12813,8 @@ fn write_webhook_drain_success(
     write_result(result, stderr)
 }
 
-fn write_webhook_replay_success(
-    report: &WebhookReplaySuccessReport,
+fn write_hook_replay_success(
+    report: &HookReplaySuccessReport,
     format: OutputFormat,
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
@@ -12654,8 +12837,8 @@ fn write_webhook_replay_success(
     write_result(result, stderr)
 }
 
-fn write_webhook_discard_success(
-    report: &WebhookDiscardSuccessReport,
+fn write_hook_discard_success(
+    report: &HookDiscardSuccessReport,
     format: OutputFormat,
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
@@ -14477,7 +14660,7 @@ mod tests {
                 "history",
                 "data",
                 "statistics",
-                "webhook",
+                "hook",
                 "proposal-retention",
                 "review-recovery",
                 "evidence-retention",
@@ -14831,7 +15014,7 @@ mod tests {
                  \u{20}\u{20}audit                pass\n\
                  \u{20}\u{20}cursor               pass\n\
                  \u{20}\u{20}authentication.oidc  pass\n\
-                 \u{20}\u{20}eventDestinations    pass\n\
+                 \u{20}\u{20}destinations.hooks   pass\n\
                  \u{20}\u{20}reviewBindings       pass\n\
                  \u{20}\u{20}authentication       pass\n\
                  \u{20}\u{20}fieldEncryption      pass\n\
@@ -14839,7 +15022,7 @@ mod tests {
             ),
             (
                 OutputFormat::Json,
-                "{\n  \"apiVersion\": \"id.registrystack.org/formats/breg/ctl-report/v1alpha1\",\n  \"kind\": \"BRegCtlReport\",\n  \"ok\": true,\n  \"command\": \"doctor\",\n  \"checked\": [\n    \"runtimeConfig\",\n    \"package\",\n    \"database\",\n    \"audit\",\n    \"cursor\",\n    \"authentication.oidc\",\n    \"eventDestinations\",\n    \"reviewBindings\",\n    \"authentication\",\n    \"fieldEncryption\"\n  ],\n  \"roleMode\": \"split\",\n  \"advisories\": []\n}\n",
+                "{\n  \"apiVersion\": \"id.registrystack.org/formats/breg/ctl-report/v1alpha1\",\n  \"kind\": \"BRegCtlReport\",\n  \"ok\": true,\n  \"command\": \"doctor\",\n  \"checked\": [\n    \"runtimeConfig\",\n    \"package\",\n    \"database\",\n    \"audit\",\n    \"cursor\",\n    \"authentication.oidc\",\n    \"destinations.hooks\",\n    \"reviewBindings\",\n    \"authentication\",\n    \"fieldEncryption\"\n  ],\n  \"roleMode\": \"split\",\n  \"advisories\": []\n}\n",
             ),
         ] {
             let mut stdout = Vec::new();
@@ -16005,6 +16188,12 @@ fn apply_chain_refusals_name_the_operators_next_command() {
             "verify the binary, package and database pairing",
         ),
         (
+            ApplyLifecycleError::Apply(MigrationError::Pre1_0Schema),
+            "apply.database.pre-1-0-schema",
+            "database",
+            "create a fresh database, rebuild the package with this release's bregctl test and bregctl package, and run bregctl apply --package DIR --initial against it; a backup of this database carries the same schema",
+        ),
+        (
             ApplyLifecycleError::Apply(MigrationError::RuntimeWriteAuthority(
                 registry_breg::postgres::RuntimeWriteAuthority::Privilege {
                     grantee: "PUBLIC".to_owned(),
@@ -16147,6 +16336,225 @@ fn apply_reports_an_unavailable_database_before_maintenance_as_retryable() {
         "{}",
         diagnostic.message
     );
+}
+
+#[cfg(test)]
+#[test]
+fn package_derivation_refuses_with_build_guidance_and_preserves_integrity_refusals() {
+    assert_eq!(
+        package_refusal(&PackageError::Derivation),
+        ("build-mismatch", SuggestedAction::CorrectPackageBuild)
+    );
+    assert_eq!(
+        package_refusal(&PackageError::Integrity),
+        ("integrity-refused", SuggestedAction::VerifyPackageIntegrity)
+    );
+    for command in ["apply", "plan"] {
+        for (error, path) in [
+            (
+                ApplyLifecycleError::TargetPackage(PackageError::Derivation),
+                "package",
+            ),
+            (
+                ApplyLifecycleError::CurrentPackage(PackageError::Derivation),
+                "package.root",
+            ),
+        ] {
+            let report = lifecycle_failure(command, error);
+            let diagnostic = &report.diagnostics[0];
+            assert_eq!(diagnostic.code, "apply.package.build-mismatch");
+            assert_eq!(diagnostic.path, path);
+            assert_eq!(
+                diagnostic.suggested_action,
+                SuggestedAction::CorrectPackageBuild
+            );
+            for fragment in [
+                "different compiler build",
+                "changed packaged content",
+                "reviewed sources",
+                "bregctl test",
+                "bregctl package",
+                "exact pinned package",
+            ] {
+                assert!(
+                    diagnostic.message.contains(fragment),
+                    "{fragment}: {}",
+                    diagnostic.message
+                );
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn fingerprint_failure_after_maintenance_keeps_exact_target_recovery() {
+    use registry_breg::migration::MigrationError;
+    let declared = format!("sha256:{}", "0".repeat(64));
+    let measured = format!("sha256:{}", "1".repeat(64));
+    let report = lifecycle_failure(
+        "apply",
+        ApplyLifecycleError::Apply(MigrationError::SchemaFingerprintMismatchAfterMaintenance {
+            declared: declared.clone(),
+            measured: measured.clone(),
+        }),
+    );
+    let diagnostic = &report.diagnostics[0];
+    assert_eq!(diagnostic.code, "apply.package.fingerprint-mismatch");
+    assert_eq!(
+        diagnostic.suggested_action,
+        SuggestedAction::ReconcileFailedMigration
+    );
+    for fragment in [
+        &declared,
+        &measured,
+        "Maintenance remains pinned",
+        "checkpoints may already be committed",
+        "Do not replace",
+    ] {
+        assert!(
+            diagnostic.message.contains(fragment),
+            "{fragment}: {}",
+            diagnostic.message
+        );
+    }
+    assert!(!diagnostic.message.contains("Nothing was changed"));
+}
+
+#[cfg(test)]
+#[test]
+fn apply_names_both_schema_fingerprints_and_the_rebuild() {
+    use registry_breg::migration::MigrationError;
+
+    let declared = format!("sha256:{}", "0".repeat(64));
+    let measured = format!("sha256:{}", "1".repeat(64));
+    let report = lifecycle_failure(
+        "apply",
+        ApplyLifecycleError::Apply(MigrationError::SchemaFingerprintMismatch {
+            declared: declared.clone(),
+            measured: measured.clone(),
+        }),
+    );
+    let message = &report.diagnostics[0].message;
+    for fragment in [&declared, &measured, "bregctl test", "bregctl package"] {
+        assert!(message.contains(fragment), "{fragment}: {message}");
+    }
+}
+
+/// A refusal before maintenance began has its own code for `apply` and
+/// `plan` alike: it keeps the kernel's value-free reason, says nothing was
+/// changed, and never sends the operator to reconcile a migration that
+/// never started.
+#[test]
+fn apply_names_each_refusal_before_maintenance() {
+    use registry_breg::migration::MigrationError;
+    use registry_breg::postgres::PostgresFailure;
+
+    let cases = [
+        (
+            MigrationError::LockKeyRefused,
+            "apply.package.lock-key-refused",
+            "package",
+            DiagnosticArtifact::PackageActivation,
+            SuggestedAction::CorrectPackageBuild,
+            "migration lock key",
+        ),
+        (
+            MigrationError::MigrationRoleRefused("migration connection uses the wrong role"),
+            "apply.database.migration-role-refused",
+            "database.roles.migration",
+            DiagnosticArtifact::DatabaseMigration,
+            SuggestedAction::VerifyMigrationAuthority,
+            "migration connection uses the wrong role",
+        ),
+        (
+            MigrationError::DatabaseConfigurationRefused(
+                "PostgreSQL identifier is outside the governed identifier grammar",
+            ),
+            "apply.database-configuration.refused",
+            "database",
+            DiagnosticArtifact::DatabaseMigration,
+            SuggestedAction::VerifyMigrationAuthority,
+            "PostgreSQL identifier is outside the governed identifier grammar",
+        ),
+        (
+            MigrationError::PrerequisiteMissing("administrator-installed btree_gist is required"),
+            "apply.database.prerequisite-missing",
+            "database",
+            DiagnosticArtifact::DatabaseMigration,
+            SuggestedAction::VerifyMigrationAuthority,
+            "administrator-installed btree_gist is required",
+        ),
+        (
+            MigrationError::CatalogRefused(
+                "a managed NOT NULL constraint is not validated; validate it before applying the package",
+            ),
+            "apply.database.catalog-refused",
+            "database",
+            DiagnosticArtifact::DatabaseMigration,
+            SuggestedAction::VerifyMigrationAuthority,
+            "a managed NOT NULL constraint is not validated",
+        ),
+        (
+            MigrationError::SchemaFingerprintMismatch {
+                declared: format!("sha256:{}", "0".repeat(64)),
+                measured: format!("sha256:{}", "1".repeat(64)),
+            },
+            "apply.package.fingerprint-mismatch",
+            "package",
+            DiagnosticArtifact::PackageActivation,
+            SuggestedAction::CorrectPackageBuild,
+            "built by another release",
+        ),
+        (
+            MigrationError::PackageDdlRefused(PostgresFailure {
+                sqlstate: Some("42501".to_owned()),
+                table: Some("registry_data.asset".to_owned()),
+                ..PostgresFailure::default()
+            }),
+            "apply.package.ddl-refused",
+            "database",
+            DiagnosticArtifact::DatabaseMigration,
+            SuggestedAction::VerifyMigrationAuthority,
+            "SQLSTATE 42501 (syntax error or access rule violation), table registry_data.asset",
+        ),
+        (
+            MigrationError::FieldPatternSyntaxRefused {
+                entity_id: "asset".to_owned(),
+                field_id: "legacy".to_owned(),
+            },
+            "breg.field.pattern-syntax-invalid",
+            "recordTypes[asset].fields[legacy].pattern",
+            DiagnosticArtifact::PackageActivation,
+            SuggestedAction::CorrectPackageBuild,
+            "native pattern syntax",
+        ),
+    ];
+    for (error, code, path, artifact, action, reason) in cases {
+        for command in ["apply", "plan"] {
+            let report = lifecycle_failure(command, ApplyLifecycleError::Apply(error.clone()));
+            assert_eq!(report.command, command);
+            let diagnostic = &report.diagnostics[0];
+            assert_eq!(diagnostic.code, code, "{error:?}");
+            assert_eq!(diagnostic.path, path, "{error:?}");
+            assert_eq!(diagnostic.artifact, artifact, "{error:?}");
+            assert_eq!(diagnostic.suggested_action, action, "{error:?}");
+            for fragment in [reason, "Nothing was changed"] {
+                assert!(
+                    diagnostic.message.contains(fragment),
+                    "{fragment}: {}",
+                    diagnostic.message
+                );
+            }
+            for fragment in ["reconcil", "requires exact-target"] {
+                assert!(
+                    !diagnostic.message.contains(fragment),
+                    "{fragment}: {}",
+                    diagnostic.message
+                );
+            }
+        }
+    }
 }
 
 /// A held migration lock has its own `apply.database.in_progress` code for
@@ -16859,7 +17267,7 @@ fn webhook_drain_requires_bounded_attempts_and_time_before_io() {
     ] {
         assert!(Cli::try_parse_from([
             "bregctl",
-            "webhook",
+            "hook",
             "drain",
             "--runtime-config",
             "/runtime.yaml",
@@ -16870,7 +17278,7 @@ fn webhook_drain_requires_bounded_attempts_and_time_before_io() {
     }
     let parsed = Cli::try_parse_from([
         "bregctl",
-        "webhook",
+        "hook",
         "drain",
         "--runtime-config",
         "/runtime.yaml",
@@ -16880,8 +17288,8 @@ fn webhook_drain_requires_bounded_attempts_and_time_before_io() {
         "1",
     ])
     .unwrap();
-    let Command::Webhook(WebhookArgs {
-        command: WebhookCommand::Drain(args),
+    let Command::Hook(HookArgs {
+        command: HookCommand::Drain(args),
     }) = parsed.command
     else {
         panic!("drain command")

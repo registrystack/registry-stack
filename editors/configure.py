@@ -24,6 +24,7 @@ PRODUCT_FILES = {
     "coordinator": "workflow.yaml",
     "scheduling": "scheduling.yaml",
     "messaging": "messaging.yaml",
+    "documents": "documents.yaml",
     "discovery": "origins.yaml",
     "manifest": "metadata.yaml",
     "render": "manifest.yaml",
@@ -95,6 +96,11 @@ SCHEMAS = {
         ("products/messaging/generated/authoring/provider.schema.json", "providers/*/provider.yaml"),
         ("products/messaging/generated/runtime/runtime.schema.json", "runtime.yaml"),
         ("products/messaging/generated/runtime/runtime.schema.json", "runtime.example.yaml"),
+    ),
+    "documents": (
+        ("products/documents/generated/project/project.schema.json", "documents.yaml"),
+        ("products/documents/generated/runtime/runtime.schema.json", "runtime.yaml"),
+        ("products/documents/generated/runtime/runtime.schema.json", "runtime.example.yaml"),
     ),
     "evidence-oid4vci": (
         ("products/evidence/generated/oid4vci-runtime/oid4vci-runtime.schema.json", "{document}"),
@@ -186,6 +192,7 @@ CHECKS = {
     "coordinator": ("coordinatorctl", "check", "--project", "{project}"),
     "scheduling": ("schedulingctl", "check", "{project}"),
     "messaging": ("messagingctl", "check", "--project", "{project}"),
+    "documents": ("documentsctl", "check", "--project", "{project}"),
     "discovery": ("discoveryctl", "check", "--project", "{project}"),
     "manifest": ("registry-manifest", "validate", "{document}"),
     "render": ("registry-render", "check", "--bundle", "{project}"),

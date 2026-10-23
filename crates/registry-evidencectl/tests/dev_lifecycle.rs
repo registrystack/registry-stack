@@ -1,8 +1,9 @@
 //! Focused local Evidence lifecycle proofs.
 //!
 //! Ordinary tests stop at the process and filesystem boundary. The ignored
-//! gate starts the pinned stock issuer container and the real Evidence binary,
-//! acquires a token through the public CLI, and verifies its typed claims.
+//! gates use the real Evidence binary. The full lifecycle also starts the
+//! pinned stock issuer container, acquires a token through the public CLI,
+//! and verifies its typed claims.
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use serde_json::Value;
@@ -325,6 +326,72 @@ fn dev_grant_prints_every_connection_file_finding_without_its_values() {
     assert_eq!(report["diagnostics"][0]["code"], "config.missing-envelope");
     assert!(!report.to_string().contains("agent-keys"));
     assert!(!scratch.path().join(".evidence").exists());
+}
+
+#[test]
+#[ignore = "exact gate: uses the real Evidence binary with a failing issuer-engine stub"]
+fn failed_issuer_setup_keeps_redacted_logs_through_start_rollback() {
+    let evidence = required_binary("EVIDENCE_BIN");
+    let fixture = Project::new();
+    fixture.generate_evidence_keys();
+    let engine = fixture.root.join("engine-stub");
+    fs::write(
+        &engine,
+        "#!/bin/sh\n\
+         case \"$1\" in\n\
+           image|ps) exit 0;;\n\
+           run) if [ -n \"$ADMIN_PASSWORD\" ]; then\n\
+                  printf 'setup stdout %s\\n' \"$ADMIN_PASSWORD\"\n\
+                  printf 'setup stderr %s\\n' \"$ADMIN_PASSWORD\" >&2\n\
+                  printf 'Direct Auth Secret: canary-evidence-generated-credential\\n'\n\
+                  exit 17\n\
+                fi\n\
+                exit 0;;\n\
+         esac\n\
+         exit 1\n",
+    )
+    .expect("engine stub");
+    fs::set_permissions(&engine, fs::Permissions::from_mode(0o700)).unwrap();
+    let (evidence_port, issuer_port) = unused_port_pair();
+    let output = fixture.dev_start(&evidence, &engine, evidence_port, issuer_port);
+    assert!(!output.status.success());
+    let diagnostic = String::from_utf8_lossy(&output.stderr);
+    let kept = fixture.root.join(".evidence/failed-start");
+    assert!(
+        diagnostic.contains(&kept.display().to_string()),
+        "{diagnostic}"
+    );
+    assert!(!fixture.root.join(".evidence/dev").exists());
+    assert_mode(&kept, 0o700);
+    let supervisor = fs::read_to_string(kept.join("supervisor.log")).expect("supervisor log");
+    assert!(supervisor.contains("exited with status 17"), "{supervisor}");
+    let setup_logs: Vec<_> = fs::read_dir(&kept)
+        .expect("retained logs")
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| {
+            path.file_name()
+                .unwrap()
+                .to_string_lossy()
+                .contains("setup")
+        })
+        .collect();
+    assert!(!setup_logs.is_empty(), "retained setup diagnostics");
+    for path in setup_logs {
+        assert_mode(&path, 0o600);
+        let log = fs::read_to_string(path).expect("setup log");
+        assert!(log.contains("setup stdout [redacted]"), "{log}");
+        assert!(log.contains("setup stderr [redacted]"), "{log}");
+        assert!(
+            !log.contains("canary-evidence-generated-credential"),
+            "{log}"
+        );
+    }
+    for text in [diagnostic.as_ref(), supervisor.as_str()] {
+        assert!(
+            !text.contains("canary-evidence-generated-credential"),
+            "{text}"
+        );
+    }
 }
 
 #[test]

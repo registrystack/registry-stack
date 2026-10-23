@@ -448,6 +448,24 @@ class MergeReleaseBinaryShardsTest(unittest.TestCase):
         )
         self.assertNotIn("coordinator", dict(images_held))
 
+    def test_no_shard_carries_the_document_store_while_it_is_held_out(self) -> None:
+        # The Document Store is held out by DOCUMENTS_FIRST_RELEASE and has no
+        # release packaging yet, so no shard roster or image may name it.
+        self.assertIsNone(MODULE.release_roster.DOCUMENTS_FIRST_RELEASE)
+        for version in ("0.44.0", "1.0.0"):
+            with self.subTest(version=version):
+                rosters, images = MODULE.rosters(version)
+                self.assertFalse(
+                    any(
+                        name.startswith("documents")
+                        for names in rosters.values()
+                        for name in names
+                    )
+                )
+                self.assertFalse(
+                    any(name.startswith("documents") for name, _ in images)
+                )
+
     def test_no_version_ships_messaging_until_the_roster_names_a_first_release(
         self,
     ) -> None:

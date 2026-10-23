@@ -2,6 +2,61 @@
 
 ## Unreleased
 
+- Startup reports an unreadable activation ledger before attempting schema
+  reads, matching plan/status when the runtime role lost schema usage or ledger
+  read access.
+- The runtime dependency gate covers Discovery and Render while preserving
+  public clients, shared protocols and development tooling. Transitive dev-only
+  dependencies of linked crates do not become runtime dependencies.
+
+- BREAKING: Scheduling installs its schema, with the hook delivery tables, as
+  a new baseline numbered version 200, and later migrations take 201, 202,
+  and onward. A database whose ledger holds any version below 200, including
+  the version 100 that v0.42.0 and v0.43.0 recorded, is refused by name as a
+  pre-1.0 schema at `schedulingctl plan`, `apply`, and startup. Recovery:
+  keep the old database with the release that wrote it, create a fresh
+  database, and apply the package. Holds, appointments, and queued intents in
+  the old database are not carried forward.
+
+- `scheduling_outbox` and the hook delivery state refuse a `leased` row
+  without a `lease_expires_at`, through the corrected shared dispatch job and
+  delivery state shapes. Apply this release to a fresh database.
+
+- BREAKING: confirmation, change, cancellation, and reminder delivery runs on
+  the shared dispatch core. `scheduling_outbox` takes the dispatch job table
+  shape: the attempt count is `attempt`, a lease carries `lease_token`, and an
+  intent that stops without delivery ends `dead-lettered` with a
+  `last_failure_class` instead of `local` or `failed`. A cancellation or
+  reschedule cancels the obsolete reminder in its own transaction, ending it
+  `cancelled` instead of `suppressed`; a reminder a dispatcher already holds
+  is read under its lease just before its send and set aside as `superseded`
+  without one. Delivered, cancelled, and superseded intents age out on the
+  receipt retention cutoff. A lapsed lease counts as a failed attempt and
+  waits the next back-off. `schedulingctl intents` reports the same `local`
+  and `failed` delivery states as before. Apply this release to a fresh
+  database.
+- `destinations.hooks` entries are the shared `UrlHookDestinationConfig`
+  block from `registry-platform-config`, activated by
+  `registry-platform-hooks`. The keys, bounds, defaults, refusals, and the
+  recorded binding digest are unchanged; the runtime schema names the
+  definition `UrlHookDestinationConfig` instead of `HookDestinationConfig`.
+- BREAKING: the hook delivery worker checks its identity against the
+  activation record instead of the `scheduling_meta` row. Every claim,
+  finalization, and replay transaction now requires the active activation in
+  `scheduling_activations` to name the database and package the worker was
+  started with; a worker left running after a later activation stops
+  delivering instead of serving the superseded package. Migration: none for a
+  deployment activated with `schedulingctl apply`, which records the
+  activation the runtime starts from; restart the runtime after each apply, as
+  before.
+- The URL hook destination, signing, pooled connection, audit mapping, and
+  retry schedule come from `registry-platform-hooks`, and the runtime
+  re-checks every hook declaration against the url-only hook capability set,
+  refusing anything else with `hook.capability.unsupported`. The policy shape,
+  the `destinations.hooks` keys, the audit schema and the
+  `scheduling.hook-delivery` event, the envelope, and the delivery refusals
+  are unchanged.
+
 ## 0.43.0 - 2026-10-21
 
 - BREAKING: authored display fields reject prohibited Unicode controls, and

@@ -2857,9 +2857,12 @@ fn supervise(args: SupervisorArgs, terminate: &AtomicBool) -> Result<()> {
         };
         verify_borrowed_issuer(&owner)
     } else {
-        registry_thunderid_tooling::local::start(&issuer_session, &args.docker_bin, &mut || {
-            terminate.load(Ordering::Relaxed)
-        })
+        registry_thunderid_tooling::local::start_with_logs(
+            &issuer_session,
+            &args.docker_bin,
+            &mut || terminate.load(Ordering::Relaxed),
+            &dev_root.join("logs"),
+        )
         .map(|_| ())
         .map_err(anyhow::Error::from)
     };

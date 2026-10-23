@@ -168,10 +168,10 @@ breg_pool_connections{state="maximum-size"} 4
 breg_pool_connections{state="size"} 3
 breg_pool_connections{state="available"} 3
 breg_pool_connections{state="waiting"} 0
-breg_worker_last_success_age_seconds{worker="webhook"} 0.026604833
+breg_worker_last_success_age_seconds{worker="hook"} 0.026604833
 breg_worker_last_success_age_seconds{worker="review"} 0.420682917
 breg_worker_last_success_age_seconds{worker="subject-access-log-retention"} 7.509861375
-breg_queue_oldest_pending_age_seconds{queue="webhook-delivery"} 0
+breg_queue_oldest_pending_age_seconds{queue="hook-delivery"} 0
 breg_queue_oldest_pending_age_seconds{queue="review-submission"} 0
 breg_queue_oldest_pending_age_seconds{queue="review-application"} 0
 breg_active_package_info{package_digest="sha256:ae245974f8da79cd441669fbe0e2461ceb26e216cd1f7f25a7240fd131d20fee"} 1
@@ -215,7 +215,7 @@ Use [blocked Proposal recovery](../breg-changes/#recover-a-blocked-proposal) for
     activation_blocked_application_remains_counted_without_queue_age. */}
 
 The process writes JSON lines on standard output. A failed iteration is a warning with a `code` such
-as `webhook.worker.iteration_failed`, `review.result_lookups.unavailable`, or
+as `hook.worker.iteration_failed`, `review.result_lookups.unavailable`, or
 `metrics.queue_sample.failed`, and serving continues. When a worker or the metrics listener panics
 or returns, the process logs a code naming it, such as `review.worker.panicked`, drains requests,
 and exits with status 1. The same code on every restart names the worker to investigate.
@@ -242,8 +242,14 @@ Find the code the command, log, or HTTP problem printed. A `*` stands for any pa
 | `startup.database.configuration-refused` | The runtime file's `database` settings were refused. | Correct them. |
 | `startup.database.secret-refused` | A connection secret could not be resolved. | Check `database.runtimeUrlRef`, `database.migrationUrlRef`, and `database.trustedRootCertificateRef`, and enable the secret provider that owns them. |
 | `apply.database.unavailable` | The migration database could not be reached before an apply changed anything. | Check the migration URL secret, the role, and `database.trustedRootCertificateRef`, then retry. |
+| `apply.database.migration-role-refused` | Before an apply changed anything, the migration connection was not `database.roles.migration`, or that role holds superuser, `CREATEDB`, `CREATEROLE`, or `BYPASSRLS`, or does not own every registry schema; the message names which. | Correct the role, then rerun. |
+| `apply.database.prerequisite-missing` | Before an apply changed anything, an administrator-installed prerequisite the package requires (`btree_gist`, PostGIS, or the spatial bbox role) was missing or did not match; the message names it. | Install it as an administrator, then rerun. |
+| `apply.database.catalog-refused` | Before an apply changed anything, the registry catalog or state did not admit the activation; the message names why. | Fix what the message names, then rerun. |
+| `apply.database-configuration.refused` | The migration database settings or timeouts were refused before an apply changed anything. | Correct them in the runtime file, then rerun. |
 | `startup.database.uninitialized` | No package was ever activated. | Run `plan`, then `apply --initial`. |
 | `startup.database.unrecognized` | The database holds state this release does not recognize. | Apply the package to a fresh database. |
+| `startup.database.pre-1-0-schema` | The database holds the attachment verification tables of a pre-1.0 release, which this release cannot upgrade in place; a backup carries the same tables. | Keep the registry stopped, rebuild the package with this release's `bregctl test` and `bregctl package`, and run `apply --initial` against a fresh database. |
+| `apply.database.pre-1-0-schema` | The same, from `plan` or `apply`, before anything changed. | As above. |
 | `startup.database.catalog-drift` | Managed schemas, tables, views, sequences, functions, or indexes differ from the active package, or a unique constraint, a required column, or its `NOT NULL` marker was removed; the message names up to 64 affected identifiers. | Keep the registry stopped. Restore the database from a backup taken under the active package by following [Back up, restore, and drill recovery](../advanced/back-up-and-restore/#restore-base-registry-engine). The identifiers locate drift but do not establish that deleting or reconstructing an object preserves its data. Applying the active package again is refused with `apply.package.already-active` and does not repair the catalog. After the restore, rerun `doctor`. If `doctor` reports more catalog drift, recover from a suitable backup and rerun the command until clean. Other shape changes report `startup.database.unready`. |
 | `startup.database.identity-mismatch` | The database id differs from `identity.databaseId`. | Fix the database URLs or the id. |
 | `apply.database.identity-mismatch` | The same, from `plan` or `apply`. | As above. |
@@ -270,6 +276,9 @@ Find the code the command, log, or HTTP problem printed. A `*` stands for any pa
 | `apply.package.digest-mismatch` | The package is not the one `--expected-digest` names. | Pass the digest `plan` reports. |
 | `apply.package.already-active` | This package already serves. | Nothing to do. |
 | `apply.package.empty-plan` | The successor changes nothing. | Keep the active package. |
+| `apply.package.lock-key-refused` | The package's Registry id derives no migration lock key. Nothing changed. | Correct the project id and rebuild the package. |
+| `apply.package.fingerprint-mismatch` | Before an initial apply changed anything, the schema fingerprint the package declares differed from the one its DDL installs on this database, as when the package was built by another release; the message names both. | Rebuild the package with this release: run `bregctl test`, then `bregctl package`, then rerun. |
+| `apply.package.ddl-refused` | Before an initial apply changed anything, PostgreSQL refused a statement of the package's DDL when apply rehearsed it; the SQLSTATE and the objects the server named are reported. | Fix the database setup the SQLSTATE points at, or correct and rebuild the package, then rerun. |
 | `apply.package.deployment-identity-refused` | The package's `canonicalBaseIri` is in the reserved `.invalid` namespace, which only a database initialized for `local` accepts. | Point `canonicalBaseIri` at a hostname you control, rerun `schema-test`, and rebuild the package. |
 | `apply.backup-evidence.refused` | The backup binding is missing, stale, or for another database. | Take a fresh backup; pass it with `--backup`. |
 | `apply.history.coverage-incomplete` | An erasure left history uncovered. | Run [`history rebaseline`](../breg-retention/#restore-snapshot-coverage-after-an-erasure). |
@@ -279,9 +288,9 @@ Find the code the command, log, or HTTP problem printed. A `*` stands for any pa
 | `apply.audit.incomplete` | Activation committed, but the audit trail is incomplete. | Repair the audit path and directory permissions; run `bregctl status` to see the active package. Do not apply again. |
 | `apply.migration.statement-failed` | PostgreSQL refused a statement; the SQLSTATE is named. | Fix the cause and retry, or run `migration reconcile`. |
 | `apply.migration.failed` | The apply failed mid-maintenance. | Retry the same target, or run `migration reconcile`. |
-| `apply.event-destinations.refused` | Destinations and bindings do not match. | Compare `eventDestinations` with `bregctl explain events`. |
-| `startup.event-destinations.refused` | A destination binding was refused. | Check the key file, the origin, and `allowedPrivateCidrs`. |
-| `startup.webhook.retained-bindings` | Pending deliveries need a removed binding. | Restore it until `webhook list` shows them drained. |
+| `apply.hook-destinations.refused` | Destinations and bindings do not match. | Compare `destinations.hooks` with `bregctl explain events`. |
+| `startup.hook-destinations.refused` | A destination binding was refused. | Check the key file, the origin, and `allowedPrivateCidrs`. |
+| `startup.hook.retained-bindings` | Pending deliveries need a removed binding. | Restore it until `hook list` shows them drained. |
 | `startup.instance-id.pending-deliveries` | Pending deliveries carry the previous `identity.instanceId`. | Restore it until they drain. |
 | `migration.review.*` | The reviewed migration directory was refused. | See [write a reviewed migration descriptor](../breg-changes/#write-a-reviewed-migration-descriptor). |
 | `migration.rehearsal.*` | PostgreSQL refused the rehearsal, so `apply` would too. | Correct the SQL or the project. |
@@ -308,6 +317,8 @@ Find the code the command, log, or HTTP problem printed. A `*` stands for any pa
     crates/registry-breg/src/package.rs, PackageFileRole::GeneratedDdl;
     crates/registry-breg/src/migration.rs, verify_successor_package_binding(), MigrationError::AlreadyActive;
     crates/registry-bregctl/src/lib.rs, apply.package.already-active;
+    crates/registry-breg/src/postgres/catalog.rs, pre_1_0_attachment_verification_present();
+    crates/registry-bregctl/src/lib.rs, PRE_1_0_SCHEMA_RECOVERY and apply.database.pre-1-0-schema;
     crates/registry-breg/src/package.rs, validate_deployment_identity();
     crates/registry-bregctl/src/lib.rs, apply.package.deployment-identity-refused;
     crates/registry-breg/src/postgres/config.rs, DatabaseConnectionCause;

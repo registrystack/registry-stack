@@ -11,7 +11,15 @@ from pathlib import Path
 
 # The runtime products whose protocol surfaces must never reach a scheduling
 # crate, directly or through any shared dependency.
-PRODUCT_PREFIXES = ("registry-breg", "registry-casework", "registry-evidence")
+PRODUCT_PREFIXES = (
+    "registry-breg",
+    "registry-casework",
+    "registry-documents",
+    "registry-discovery",
+    "registry-render",
+    "registry-evidence",
+    "registry-messaging",
+)
 
 # The Coordinator composes products through their public clients. It may use
 # the Scheduling client and core, never the runtime or adopter tooling, and no
@@ -35,38 +43,58 @@ SCHEDULING_CLIENT_PREFIX = "registry-scheduling-client"
 UNIFIED_CLIENT_PREFIX = "registry-stack-client"
 
 
-def package_graph(metadata: dict) -> tuple[dict[str, str], dict[str, set[str]]]:
+def package_graph(
+    metadata: dict,
+) -> tuple[dict[str, str], dict[str, set[str]], dict[str, set[str]]]:
+    """All root edges and linked edges, excluding dependencies' test tooling."""
     names = {package["id"]: package["name"] for package in metadata["packages"]}
     resolve = metadata.get("resolve")
     if not resolve:
         raise ValueError("cargo metadata did not include a resolved dependency graph")
-    edges = {
-        node["id"]: {
-            dependency["pkg"] if isinstance(dependency, dict) else dependency
-            for dependency in node.get("deps", node.get("dependencies", []))
-        }
-        for node in resolve["nodes"]
-    }
-    return names, edges
+    every: dict[str, set[str]] = {}
+    linked: dict[str, set[str]] = {}
+    for node in resolve["nodes"]:
+        every[node["id"]] = set()
+        linked[node["id"]] = set()
+        for dependency in node.get("deps", node.get("dependencies", [])):
+            package_id = dependency["pkg"] if isinstance(dependency, dict) else dependency
+            every[node["id"]].add(package_id)
+            kinds = (
+                {kind.get("kind") for kind in dependency.get("dep_kinds", [{}])}
+                if isinstance(dependency, dict)
+                else {None}
+            )
+            if kinds - {"dev"}:
+                linked[node["id"]].add(package_id)
+    return names, every, linked
 
 
-def closure(start: str, edges: dict[str, set[str]]) -> set[str]:
+def closure(
+    start: str, every: dict[str, set[str]], linked: dict[str, set[str]]
+) -> set[str]:
+    """The root's test dependencies count; its dependencies' tests do not link."""
     seen: set[str] = set()
-    pending = list(edges.get(start, set()))
+    pending = list(every.get(start, set()))
     while pending:
         package = pending.pop()
         if package in seen:
             continue
         seen.add(package)
-        pending.extend(edges.get(package, set()) - seen)
+        pending.extend(linked.get(package, set()) - seen)
     return seen
 
 
-def product_violations(name: str, package_id: str, names: dict[str, str], edges: dict[str, set[str]]) -> list[str]:
+def product_violations(
+    name: str,
+    package_id: str,
+    names: dict[str, str],
+    every: dict[str, set[str]],
+    linked: dict[str, set[str]],
+) -> list[str]:
     forbidden = sorted(
         {
             names[item]
-            for item in closure(package_id, edges)
+            for item in closure(package_id, every, linked)
             if names[item].startswith((*PRODUCT_PREFIXES, COORDINATOR_PREFIX))
         }
     )
@@ -77,9 +105,15 @@ def product_violations(name: str, package_id: str, names: dict[str, str], edges:
     return []
 
 
-def internal_violations(name: str, package_id: str, names: dict[str, str], edges: dict[str, set[str]]) -> list[str]:
+def internal_violations(
+    name: str,
+    package_id: str,
+    names: dict[str, str],
+    every: dict[str, set[str]],
+    linked: dict[str, set[str]],
+) -> list[str]:
     failures: list[str] = []
-    reached = closure(package_id, edges)
+    reached = closure(package_id, every, linked)
     if name == "registry-scheduling-core":
         # The core is the bottom of the product: it may depend on no other
         # scheduling crate, or the runtime and every replay would follow it.
@@ -104,7 +138,7 @@ def internal_violations(name: str, package_id: str, names: dict[str, str], edges
 
 
 def violations(metadata: dict) -> list[str]:
-    names, edges = package_graph(metadata)
+    names, every, linked = package_graph(metadata)
     ids_by_name: dict[str, list[str]] = {}
     for package_id, name in names.items():
         ids_by_name.setdefault(name, []).append(package_id)
@@ -114,8 +148,12 @@ def violations(metadata: dict) -> list[str]:
         if not scheduling_name.startswith("registry-scheduling"):
             continue
         for package_id in package_ids:
-            failures.extend(product_violations(scheduling_name, package_id, names, edges))
-            failures.extend(internal_violations(scheduling_name, package_id, names, edges))
+            failures.extend(
+                product_violations(scheduling_name, package_id, names, every, linked)
+            )
+            failures.extend(
+                internal_violations(scheduling_name, package_id, names, every, linked)
+            )
 
     # The boundary runs both ways: no other runtime product may reach into
     # scheduling through a dependency either.
@@ -125,7 +163,7 @@ def violations(metadata: dict) -> list[str]:
         forbidden = sorted(
             {
                 names[item]
-                for item in closure(package_id, edges)
+                for item in closure(package_id, every, linked)
                 if names[item].startswith("registry-scheduling")
             }
         )
@@ -144,7 +182,7 @@ def violations(metadata: dict) -> list[str]:
         forbidden = sorted(
             {
                 names[item]
-                for item in closure(package_id, edges)
+                for item in closure(package_id, every, linked)
                 if names[item] in SCHEDULING_RUNTIME
             }
         )

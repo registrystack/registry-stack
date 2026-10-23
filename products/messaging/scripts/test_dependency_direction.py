@@ -21,10 +21,19 @@ NAMES = {
     "breg": "registry-breg",
     "coordinator": "registry-coordinator",
     "coordinator-client": "registry-coordinator-client",
+    "documents-core": "registry-documents-core",
     "casework-core": "registry-casework-core",
     "scheduling-core": "registry-scheduling-core",
     "evidence-client": "registry-evidence-client",
     "cli-docs": "registry-cli-docs",
+    "discovery": "registry-discovery",
+    "discovery-client": "registry-discovery-client",
+    "discovery-profile": "registry-discovery-profile",
+    "render": "registry-render",
+    "review-protocol": "registry-review-protocol",
+    "review-client": "registry-review-client",
+    "thunderid": "registry-thunderid-tooling",
+    "manifest-core": "registry-manifest-core",
     "platform": "registry-platform-httpsec",
     "serde": "serde",
 }
@@ -40,6 +49,7 @@ INTENDED = {
     "breg": [],
     "coordinator": [],
     "coordinator-client": [],
+    "documents-core": [],
     "casework-core": [],
     "scheduling-core": [],
     "evidence-client": [],
@@ -89,6 +99,7 @@ class DependencyDirectionTests(unittest.TestCase):
             "breg",
             "casework-core",
             "coordinator",
+            "documents-core",
             "scheduling-core",
             "evidence-client",
         ):
@@ -210,11 +221,59 @@ class DependencyDirectionTests(unittest.TestCase):
         )
 
     def test_a_product_may_use_the_messaging_client(self):
-        self.assertEqual(MODULE.violations(metadata(breg=["client"])), [])
+        for product in ("breg", "coordinator", "discovery", "discovery-client", "render"):
+            with self.subTest(product=product):
+                self.assertEqual(MODULE.violations(metadata(**{product: ["client"]})), [])
 
     def test_a_graph_without_a_resolve_is_an_error(self):
         with self.assertRaises(ValueError):
             MODULE.violations({"packages": [], "resolve": None})
+
+
+    def test_discovery_and_render_boundaries_are_checked_in_both_directions(self):
+        for product in ("discovery", "discovery-client", "discovery-profile", "render"):
+            with self.subTest(product=product):
+                edges = {"runtime": ["platform"], "platform": [product]}
+                failures = "\n".join(MODULE.violations(metadata(**edges)))
+                self.assertIn("registry-messaging transitively depends on other-product", failures)
+                edges = {product: ["platform"], "platform": ["runtime"]}
+                failures = "\n".join(MODULE.violations(metadata(**edges)))
+                self.assertIn(f"registry-{product} transitively depends on Messaging", failures)
+
+    def test_shared_protocols_and_tooling_do_not_become_runtime_products(self):
+        edges = {
+            "runtime": ["core", "review-protocol"],
+            "core": ["platform"],
+            "client": ["core", "review-client"],
+            "review-client": ["review-protocol"],
+            "review-protocol": ["platform"],
+            "ctl": ["runtime", "thunderid", "manifest-core"],
+            "cli-docs": ["runtime", "ctl"],
+        }
+        self.assertEqual(MODULE.violations(metadata(**edges)), [])
+
+    def test_a_dependency_test_tool_does_not_become_a_product_dependency(self):
+        edges = {"runtime": ["platform"], "core": ["platform"], "platform": ["discovery"]}
+        graph = metadata(**edges)
+        node = next(n for n in graph["resolve"]["nodes"] if n["id"] == "platform")
+        node["deps"][0]["dep_kinds"] = [{"kind": "dev", "target": None}]
+        self.assertEqual(MODULE.violations(graph), [])
+        # The same edge in a supported build is still part of the boundary.
+        node["deps"][0]["dep_kinds"].append({"kind": "build", "target": None})
+        failures = "\n".join(MODULE.violations(graph))
+        self.assertIn("registry-messaging transitively depends on other-product", failures)
+
+    def test_the_products_own_dev_dependencies_still_count(self):
+        edges = {"runtime": ["discovery"]}
+        graph = metadata(**edges)
+        node = next(n for n in graph["resolve"]["nodes"] if n["id"] == "runtime")
+        node["deps"][0]["dep_kinds"] = [{"kind": "dev", "target": None}]
+        failures = "\n".join(MODULE.violations(graph))
+        self.assertIn("registry-messaging transitively depends on other-product", failures)
+
+    def test_test_tooling_may_use_the_public_client(self):
+        edges = {"thunderid": ["client"], "client": ["core"], "core": ["platform"]}
+        self.assertEqual(MODULE.violations(metadata(**edges)), [])
 
 
 if __name__ == "__main__":

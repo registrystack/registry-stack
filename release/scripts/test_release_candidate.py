@@ -1323,6 +1323,33 @@ class ReleaseCandidateTest(TestCase):
                     self.assertEqual(0, result)
                     self.assertNotIn("coordinator", stdout.getvalue().split())
 
+    def test_no_version_ships_the_document_store_while_it_is_held_out(
+        self,
+    ) -> None:
+        # The Document Store is held out by DOCUMENTS_FIRST_RELEASE and has no
+        # release packaging yet, so no candidate roster may name it.
+        self.assertIsNone(self.module.release_roster.DOCUMENTS_FIRST_RELEASE)
+        for version in ("0.44.0", "1.0.0"):
+            with self.subTest(version=version):
+                self.assertFalse(
+                    any(
+                        name.startswith("documents")
+                        for name in self.module._candidate_image_names(version)
+                    )
+                )
+                self.assertFalse(
+                    any(
+                        name.startswith("documents")
+                        for name in self.module._release_payload_inventory(version)
+                    )
+                )
+                self.assertFalse(
+                    any(
+                        name.startswith("documents")
+                        for name in self.module.image_operator_tools(version)
+                    )
+                )
+
     def test_breg_services_join_only_the_rosters_from_their_first_release(
         self,
     ) -> None:

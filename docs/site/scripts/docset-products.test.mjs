@@ -32,6 +32,8 @@ const withBregServices = { products: { 'registry-breg-services': { ref: 'HEAD' }
 const withoutBregServices = withoutMessaging;
 const withCoordinator = { products: { 'registry-coordinator': { ref: 'HEAD' } } };
 const withoutCoordinator = withoutMessaging;
+const withDocuments = { products: { 'registry-documents': { ref: 'HEAD' } } };
+const withoutDocuments = withoutMessaging;
 const withSchedulingAndRender = {
   products: { 'registry-scheduling': { ref: 'HEAD' }, 'registry-render': { ref: 'HEAD' } },
 };
@@ -67,6 +69,19 @@ test('the latest docset publishes Registry Coordinator', () => {
     latest.products?.['registry-coordinator'],
     { version: 'main source (unreleased)', ref: 'HEAD' },
   );
+});
+
+// The Document Store is unreleased and held out of releases. The latest
+// docset publishes it from main source, and no archived docset names it.
+test('the latest docset alone publishes the Document Store', () => {
+  const manifest = parse(readFileSync(resolve(siteRoot, 'src/data/docsets.yaml'), 'utf8'));
+  for (const docset of manifest.docsets) {
+    assert.deepEqual(
+      docset.products?.['registry-documents'],
+      docset.id === 'latest' ? { version: 'main source (unreleased)', ref: 'HEAD' } : undefined,
+      docset.id,
+    );
+  }
 });
 
 test('no docset archived before v0.41.0 publishes Registry Coordinator', () => {
@@ -227,6 +242,13 @@ test('every gated page exists and maps to its route', () => {
     '/reference/coordinator-configuration/',
     '/reference/apis/registry-coordinator/',
   ]);
+  assert.deepEqual(productRoutes('registry-documents'), [
+    '/start/documents/',
+    '/tutorials/first-documents/',
+    '/operate/documents/',
+    '/reference/documents-configuration/',
+    '/reference/apis/registry-documents/',
+  ]);
   assert.deepEqual(productRoutes('registry-unknown'), []);
 });
 
@@ -253,10 +275,10 @@ test('drops a gated product\'s pages and CLI references from the docs collection
   }
   assert.deepEqual(omittedCliBinaries(withoutMessaging), [
     'breg-mcp', 'breg-review', 'scheduling', 'schedulingctl', 'registry-render',
-    'messaging', 'messagingctl', 'coordinator', 'coordinatorctl',
+    'messaging', 'messagingctl', 'coordinator', 'coordinatorctl', 'documents', 'documentsctl',
   ]);
   assert.deepEqual(omittedCliBinaries(withMessaging), [
-    'breg-mcp', 'breg-review', 'scheduling', 'schedulingctl', 'registry-render', 'coordinator', 'coordinatorctl',
+    'breg-mcp', 'breg-review', 'scheduling', 'schedulingctl', 'registry-render', 'coordinator', 'coordinatorctl', 'documents', 'documentsctl',
   ]);
 });
 
@@ -278,7 +300,7 @@ test('drops Registry Scheduling\'s and Registry Render\'s pages and CLI referenc
     assert.equal(isEntryGatedOut(id, withoutSchedulingAndRender), false, id);
   }
   assert.deepEqual(omittedCliBinaries(withSchedulingAndRender), [
-    'breg-mcp', 'breg-review', 'messaging', 'messagingctl', 'coordinator', 'coordinatorctl',
+    'breg-mcp', 'breg-review', 'messaging', 'messagingctl', 'coordinator', 'coordinatorctl', 'documents', 'documentsctl',
   ]);
 });
 
@@ -303,7 +325,7 @@ test('drops the citizen services\' pages and CLI references from the docs collec
     assert.equal(isEntryGatedOut(id, withoutBregServices), false, id);
   }
   assert.deepEqual(omittedCliBinaries(withBregServices), [
-    'scheduling', 'schedulingctl', 'registry-render', 'messaging', 'messagingctl', 'coordinator', 'coordinatorctl',
+    'scheduling', 'schedulingctl', 'registry-render', 'messaging', 'messagingctl', 'coordinator', 'coordinatorctl', 'documents', 'documentsctl',
   ]);
 });
 
@@ -322,7 +344,23 @@ test('drops Registry Coordinator\'s pages and CLI references from the docs colle
   }
   assert.deepEqual(omittedCliBinaries(withCoordinator), [
     'breg-mcp', 'breg-review', 'scheduling', 'schedulingctl', 'registry-render', 'messaging', 'messagingctl',
+    'documents', 'documentsctl',
   ]);
+});
+
+test('drops the Document Store\'s pages and CLI references from the docs collection', () => {
+  for (const id of [
+    ...PRODUCT_PAGES['registry-documents'],
+    'reference/cli/documents',
+    'reference/cli/documentsctl',
+    'reference/cli/documentsctl/package',
+  ]) {
+    assert.equal(isEntryGatedOut(id, withoutDocuments), true, id);
+    assert.equal(isEntryGatedOut(id, withDocuments), false, id);
+  }
+  for (const id of ['index', 'reference/apis', 'reference/glossary', 'reference/cli/documentsx']) {
+    assert.equal(isEntryGatedOut(id, withoutDocuments), false, id);
+  }
 });
 
 function region(type, children, { absent = false, product = 'registry-messaging' } = {}) {
@@ -466,6 +504,19 @@ for (const page of [
     assert.doesNotMatch(resolved, /DocsetProduct/, 'every region must be closed and unnested');
     assert.doesNotMatch(resolved, /breg-mcp|breg-review|first-citizen-mcp|citizen chat assistant|citizen gateway|review page/i);
     assert.doesNotMatch(resolveDocsetProductRegions(source, withBregServices), /DocsetProduct/);
+  });
+}
+
+// A docset that does not publish the Document Store keeps no link to its
+// pages and no description of it on the shared pages.
+for (const page of ['index.mdx', 'reference/apis/index.mdx', 'reference/client-api.mdx', 'reference/configuration-files.mdx']) {
+  test(`${page} mentions the Document Store only inside DocsetProduct regions`, () => {
+    const source = readFileSync(resolve(docsRoot, page), 'utf8');
+    assert.match(source, /<DocsetProduct product="registry-documents">/);
+    const resolved = resolveDocsetProductRegions(source, withoutDocuments);
+    assert.doesNotMatch(resolved, /DocsetProduct product="registry-documents"/, 'every region must be closed and unnested');
+    assert.doesNotMatch(resolved, /Document Store|documentsctl|registry-documents-client|start\/documents|apis\/documents|documents-configuration/);
+    assert.doesNotMatch(resolveDocsetProductRegions(source, withDocuments), /DocsetProduct product="registry-documents"/);
   });
 }
 

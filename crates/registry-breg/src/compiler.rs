@@ -16,11 +16,11 @@ use crate::contract::{
     parsed_bbox, valid_decimal_bounds, valid_structured_schema, AccessProfileSource,
     ActionExecutionSource, ActionSource, Classification, ConstraintSource, DerivedExecutionSource,
     DerivedFieldSource, DisplaySource, EntityExtensionSource, EntitySource, EventConditionSource,
-    EventTrigger, FieldSource, FieldTypeSource, GeoJsonSource, HookHandlerSource, HookPhase,
-    LookupValueOrigin, ManifestProjectionTextSource, ModuleAssetSource, MutationMode, Operation,
-    PresentationSource, ReadPathPermissionSource, RegistryModule, RegistryProject,
-    SpatialBboxPermissionSource, SpatialQueryPermissionSource, UniqueWhenPredicate, ValidTimeRole,
-    WebhookAuthenticationProfile, WebhookDeadLetterMode, DECIMAL_BOUNDS_REQUIREMENTS,
+    EventTrigger, FieldSource, FieldTypeSource, GeoJsonSource, HookAuthenticationProfile,
+    HookDeadLetterMode, HookHandlerSource, HookPhase, LookupValueOrigin,
+    ManifestProjectionTextSource, ModuleAssetSource, MutationMode, Operation, PresentationSource,
+    ReadPathPermissionSource, RegistryModule, RegistryProject, SpatialBboxPermissionSource,
+    SpatialQueryPermissionSource, UniqueWhenPredicate, ValidTimeRole, DECIMAL_BOUNDS_REQUIREMENTS,
     MAX_ACCESS_LOG_EXEMPTIONS, MAX_ACCESS_LOG_EXEMPTION_REASON_BYTES,
     MAX_ACCESS_LOG_RETENTION_DAYS, MAX_ACCESS_LOG_SUBJECT_CHARACTERS,
     MAX_ACCESS_LOG_TRUSTED_INTERMEDIARIES, MAX_ENCRYPTED_FIELD_PLAINTEXT_BYTES,
@@ -43,18 +43,18 @@ use crate::model::{
     CompiledAccessEntry, CompiledAccessInventory, CompiledBboxQueryCapability, CompiledBlindIndex,
     CompiledChangeControl, CompiledDerivedField, CompiledDerivedRelation, CompiledEntity,
     CompiledEntityModuleOrigins, CompiledEventDelivery, CompiledEventDeliveryInventory,
-    CompiledField, CompiledFieldEncryption, CompiledGeoJsonBinding, CompiledHookHandler,
-    CompiledHookHandlerKind, CompiledLogicalField, CompiledManifestAuthority,
-    CompiledManifestDataService, CompiledManifestDataset, CompiledManifestDistribution,
-    CompiledManifestProjection, CompiledManifestPublicService, CompiledMetadataEntity,
-    CompiledMetadataEntry, CompiledMetadataInventory, CompiledModuleIdentity,
-    CompiledQueryFilterField, CompiledQueryFilterOperator, CompiledQueryInventory,
-    CompiledQueryKind, CompiledQueryOperation, CompiledQuerySortDirection, CompiledQuerySortField,
-    CompiledQueryTemporalBinding, CompiledQueryTemporalSemantics, CompiledReadPath,
-    CompiledRegistry, CompiledRevisionKind, CompiledRoute, CompiledRouteInventory,
-    CompiledSelectorProfile, CompiledSourceRelation, CompiledSpatialQueryCapability,
-    CompiledStoredField, CompiledTemporal, CompiledWebhookDeliveryMode,
-    CompiledWebhookRetryProfile, HttpMethod, MAX_REVISION_HISTORY_RECORDS,
+    CompiledField, CompiledFieldEncryption, CompiledGeoJsonBinding, CompiledHookDeliveryMode,
+    CompiledHookHandler, CompiledHookHandlerKind, CompiledHookRetryProfile, CompiledLogicalField,
+    CompiledManifestAuthority, CompiledManifestDataService, CompiledManifestDataset,
+    CompiledManifestDistribution, CompiledManifestProjection, CompiledManifestPublicService,
+    CompiledMetadataEntity, CompiledMetadataEntry, CompiledMetadataInventory,
+    CompiledModuleIdentity, CompiledQueryFilterField, CompiledQueryFilterOperator,
+    CompiledQueryInventory, CompiledQueryKind, CompiledQueryOperation, CompiledQuerySortDirection,
+    CompiledQuerySortField, CompiledQueryTemporalBinding, CompiledQueryTemporalSemantics,
+    CompiledReadPath, CompiledRegistry, CompiledRevisionKind, CompiledRoute,
+    CompiledRouteInventory, CompiledSelectorProfile, CompiledSourceRelation,
+    CompiledSpatialQueryCapability, CompiledStoredField, CompiledTemporal, HttpMethod,
+    MAX_REVISION_HISTORY_RECORDS,
 };
 use crate::physical_names::{
     hex_prefix, EntityPhysicalNames, PhysicalNameBuilder, PhysicalNameInventory,
@@ -80,13 +80,13 @@ pub const INGESTION_CHUNK_REQUEST_CEILING: u32 = MAX_BATCH_BYTES + 1024;
 /// The attempt budget starts at the claim's database timestamp and covers the claim
 /// commit and reload round trips before the request leaves, so this floor is a
 /// validation bound: samples and fixtures should use a realistic value such as 1000 ms.
-pub const MIN_WEBHOOK_ATTEMPT_TIMEOUT_MS: u32 = 100;
-pub const WEBHOOK_ATTEMPT_TIMEOUT_MS: u32 = 5_000;
-pub const WEBHOOK_INITIAL_BACKOFF_MS: u32 = 1_000;
-pub const WEBHOOK_MAXIMUM_BACKOFF_MS: u32 = 8_000;
-pub const WEBHOOK_MAXIMUM_ATTEMPTS: u8 = 5;
-pub const MAX_WEBHOOK_ATTEMPT_TIMEOUT_MS: u32 = WEBHOOK_ATTEMPT_TIMEOUT_MS;
-pub const MAX_WEBHOOK_ATTEMPTS: u8 = WEBHOOK_MAXIMUM_ATTEMPTS;
+pub const MIN_HOOK_ATTEMPT_TIMEOUT_MS: u32 = 100;
+pub const HOOK_ATTEMPT_TIMEOUT_MS: u32 = 5_000;
+pub const HOOK_INITIAL_BACKOFF_MS: u32 = 1_000;
+pub const HOOK_MAXIMUM_BACKOFF_MS: u32 = 8_000;
+pub const HOOK_MAXIMUM_ATTEMPTS: u8 = 5;
+pub const MAX_HOOK_ATTEMPT_TIMEOUT_MS: u32 = HOOK_ATTEMPT_TIMEOUT_MS;
+pub const MAX_HOOK_ATTEMPTS: u8 = HOOK_MAXIMUM_ATTEMPTS;
 pub const MAX_EVENT_PACKAGE_REVISION_BYTES: u32 = 256;
 /// The longest build identity value, shared by the environment, instance, and
 /// database identifiers a package build request carries.
@@ -94,13 +94,13 @@ pub const MAX_BUILD_ID_BYTES: u32 = 64;
 /// Largest canonical statistical release document admitted by compilation
 /// and retained by the runtime release store.
 pub(crate) const MAX_STATISTICAL_RELEASE_DOCUMENT_BYTES: usize = 8 * 1024 * 1024;
-/// Maximum canonical event body accepted by the governed webhook transport.
+/// Maximum canonical event body accepted by the governed hook transport.
 ///
 /// This intentionally matches the platform event-destination body ceiling.
 /// The compiler uses this bound without constructing a transport; the runtime
 /// integration pins the equality.
-pub const MAX_WEBHOOK_PAYLOAD_BYTES: u32 = 1_048_576;
-pub const WEBHOOK_BACKOFF_MULTIPLIER: u8 = 2;
+pub const MAX_HOOK_PAYLOAD_BYTES: u32 = 1_048_576;
+pub const HOOK_BACKOFF_MULTIPLIER: u8 = 2;
 
 /// One ingestion-run operation of the published HTTP surface, carrying the
 /// problem-response catalogue the operation's OpenAPI entry must publish.
@@ -5641,20 +5641,19 @@ fn validate_hooks(
                 continue;
             }
         };
-        if maximum_payload_bytes
-            .is_some_and(|maximum| maximum > u64::from(MAX_WEBHOOK_PAYLOAD_BYTES))
+        if maximum_payload_bytes.is_some_and(|maximum| maximum > u64::from(MAX_HOOK_PAYLOAD_BYTES))
         {
             errors.push(Diagnostic::error(
-                "breg.event.webhook-projection-too-large",
+                "breg.event.hook-projection-too-large",
                 format!("{hook_path}.projection"),
-                "the webhook projection can exceed the governed transport body bound",
+                "the hook projection can exceed the governed transport body bound",
             ));
         }
         if destination_id.is_some_and(|value| !valid_logical_destination_id(value)) {
             errors.push(Diagnostic::error(
-                "breg.event.webhook-destination-invalid",
+                "breg.event.hook-destination-invalid",
                 format!("{hook_path}.handler.destinationId"),
-                "a webhook destination must use the closed logical identifier grammar",
+                "a hook destination must use the closed logical identifier grammar",
             ));
         }
     }
@@ -5792,7 +5791,9 @@ fn validate_hook_module_structure(bytes: &[u8], errors: &mut Vec<Diagnostic>) {
 fn validate_hook_module_structure(_bytes: &[u8], _errors: &mut Vec<Diagnostic>) {}
 
 pub(crate) fn validate_hook_script_asset(bytes: &[u8], errors: &mut Vec<Diagnostic>) {
-    if bytes.is_empty() || bytes.len() > crate::rhai_planner::MAXIMUM_SOURCE_BYTES {
+    if bytes.is_empty()
+        || bytes.len() > registry_platform_hooks::executor::RHAI_HOOK_MAX_SOURCE_BYTES
+    {
         errors.push(Diagnostic::error(
             "breg.hook.handler-source-bound",
             "recordTypes[].hooks[].handler.script",
@@ -5808,14 +5809,16 @@ pub(crate) fn validate_hook_script_asset(bytes: &[u8], errors: &mut Vec<Diagnost
         ));
         return;
     };
-    if let Err(error) = crate::rhai_planner::compile_entrypoint_detailed(script, "handle") {
-        use crate::rhai_planner::EntrypointCompileError;
+    // A hook program runs on the bare platform engine under the shared hook
+    // profile, so admission compiles it the same way the executor does.
+    if let Err(error) = registry_platform_hooks::executor::compile_rhai_hook(script) {
+        use registry_platform_script::rhai::RhaiCompileError;
         let (code, message) = match error {
-            EntrypointCompileError::SourceBound => (
+            RhaiCompileError::SourceBound => (
                 "breg.hook.handler-source-bound",
                 "the handler source exceeds its fixed byte bound".to_owned(),
             ),
-            EntrypointCompileError::Parse(position) => {
+            RhaiCompileError::Parse(position) => {
                 let location = match (position.line(), position.position()) {
                     (Some(line), Some(column)) => format!(" at line {line}, column {column}"),
                     (Some(line), None) => format!(" at line {line}"),
@@ -5826,7 +5829,7 @@ pub(crate) fn validate_hook_script_asset(bytes: &[u8], errors: &mut Vec<Diagnost
                     format!("correct the Rhai syntax or unsupported construct{location}"),
                 )
             }
-            EntrypointCompileError::Entrypoint => (
+            RhaiCompileError::Entrypoint => (
                 "breg.hook.handler-entrypoint",
                 "declare exactly one public fn handle(ctx) entry point and do not overload functions"
                     .to_owned(),
@@ -6108,7 +6111,7 @@ pub(crate) fn maximum_envelope_wrapper_bytes(
     )?;
     // `id` is a quoted UUID.
     total = total.checked_add(38)?;
-    // `source` is the quoted deployment URN `crate::webhook::delivery_source`
+    // `source` is the quoted deployment URN `crate::hooks::delivery_source`
     // builds. Its package id is this registry's id; its instance id is the
     // runtime configuration's `identity.instanceId`, recorded in registry
     // state by `bregctl apply`, which the configuration loader holds to the
@@ -6281,26 +6284,26 @@ fn compile_event_delivery_inventory(
                 data_schema: binding.data_schema,
                 data_schema_fingerprint: binding.fingerprint,
                 data_schema_artifact_path: binding.artifact_path,
-                authentication_profile: WebhookAuthenticationProfile::HmacSha256V1,
-                delivery_mode: CompiledWebhookDeliveryMode::AfterCommit,
-                retry_profile: CompiledWebhookRetryProfile::RegistryV1,
-                attempt_timeout_ms: WEBHOOK_ATTEMPT_TIMEOUT_MS,
-                initial_backoff_ms: WEBHOOK_INITIAL_BACKOFF_MS,
-                maximum_backoff_ms: WEBHOOK_MAXIMUM_BACKOFF_MS,
-                exponential_backoff_multiplier: WEBHOOK_BACKOFF_MULTIPLIER,
-                maximum_attempts: WEBHOOK_MAXIMUM_ATTEMPTS,
-                retry_delays_ms: webhook_retry_delays(
-                    WEBHOOK_INITIAL_BACKOFF_MS,
-                    WEBHOOK_MAXIMUM_BACKOFF_MS,
-                    WEBHOOK_MAXIMUM_ATTEMPTS,
+                authentication_profile: HookAuthenticationProfile::HmacSha256V1,
+                delivery_mode: CompiledHookDeliveryMode::AfterCommit,
+                retry_profile: CompiledHookRetryProfile::RegistryV1,
+                attempt_timeout_ms: HOOK_ATTEMPT_TIMEOUT_MS,
+                initial_backoff_ms: HOOK_INITIAL_BACKOFF_MS,
+                maximum_backoff_ms: HOOK_MAXIMUM_BACKOFF_MS,
+                exponential_backoff_multiplier: HOOK_BACKOFF_MULTIPLIER,
+                maximum_attempts: HOOK_MAXIMUM_ATTEMPTS,
+                retry_delays_ms: hook_retry_delays(
+                    HOOK_INITIAL_BACKOFF_MS,
+                    HOOK_MAXIMUM_BACKOFF_MS,
+                    HOOK_MAXIMUM_ATTEMPTS,
                 ),
                 maximum_payload_bytes: maximum_compiled_event_payload_bytes(
                     registry_id,
                     entity,
                     event,
                 )
-                .expect("validated webhook projection fields are bounded"),
-                dead_letter: WebhookDeadLetterMode::Required,
+                .expect("validated hook projection fields are bounded"),
+                dead_letter: HookDeadLetterMode::Required,
                 operator_replay: true,
             })
         })
@@ -6493,21 +6496,17 @@ fn valid_relative_asset_path(path: &str) -> bool {
             .all(|part| !part.is_empty() && part != "." && part != "..")
 }
 
-pub(crate) fn webhook_retry_delays(
+pub(crate) fn hook_retry_delays(
     initial_ms: u32,
     maximum_ms: u32,
     maximum_attempts: u8,
 ) -> Vec<u32> {
-    let mut delay = initial_ms;
-    (1..maximum_attempts)
-        .map(|_| {
-            let current = delay;
-            delay = delay
-                .saturating_mul(u32::from(WEBHOOK_BACKOFF_MULTIPLIER))
-                .min(maximum_ms);
-            current
-        })
-        .collect()
+    registry_platform_hooks::exponential_retry_delays_ms(
+        initial_ms,
+        maximum_ms,
+        u32::from(HOOK_BACKOFF_MULTIPLIER),
+        maximum_attempts,
+    )
 }
 
 /// Projects one entity's slice out of a whole-project `(entity_id, item_id) ->

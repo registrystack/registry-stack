@@ -555,11 +555,15 @@ fn find_removed(
     let Some((segment, rest)) = segments.split_first() else {
         return;
     };
+    let (segment, guard) = split_guard(segment);
     let wildcard = segment == "*";
     match &node.value {
         NodeValue::Mapping(entries) => {
             for entry in entries {
-                if !wildcard && entry.key != *segment {
+                if !wildcard && entry.key != segment {
+                    continue;
+                }
+                if guard.is_some_and(|guard| !holds_guard(&entry.value, guard)) {
                     continue;
                 }
                 let child = format!("{path}/{}", escape_pointer_segment(&entry.key));
@@ -575,13 +579,36 @@ fn find_removed(
                 }
             }
         }
-        NodeValue::Sequence(items) if !rest.is_empty() => {
+        NodeValue::Sequence(items) if !rest.is_empty() && guard.is_none() => {
             for (index, item) in items.iter().enumerate() {
-                if wildcard || *segment == index.to_string() {
+                if wildcard || segment == index.to_string() {
                     find_removed(item, rest, format!("{path}/{index}"), rule, out);
                 }
             }
         }
         _ => {}
     }
+}
+
+/// A removed-key segment may end in a variant guard, `name[tag=value]`: the
+/// member `name` matches only when it is a mapping whose `tag` member is the
+/// text `value`. A key renamed in some variants of a tagged union is then
+/// named as renamed only where the replacement is accepted.
+fn split_guard(segment: &str) -> (&str, Option<(&str, &str)>) {
+    let Some((name, guard)) = segment
+        .strip_suffix(']')
+        .and_then(|rest| rest.split_once('['))
+    else {
+        return (segment, None);
+    };
+    match guard.split_once('=') {
+        Some(guard) => (name, Some(guard)),
+        None => (segment, None),
+    }
+}
+
+fn holds_guard(node: &Node, (tag, value): (&str, &str)) -> bool {
+    node.get(tag).is_some_and(
+        |entry| matches!(&entry.value.value, NodeValue::String(text) if text.text == value),
+    )
 }

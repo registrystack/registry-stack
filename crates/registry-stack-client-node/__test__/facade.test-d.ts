@@ -46,7 +46,7 @@ void bregClient.registryContract('reader').then((metadata) => {
     datasets[0].periodKind satisfies 'flow' | 'stock'
   }
 })
-breg.verifyWebhookDelivery({
+breg.verifyHookDelivery({
   method: 'POST',
   path: '/hooks/registry',
   headers: { 'X-Registry-Signature': 'v1=opaque' },

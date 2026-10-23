@@ -2,11 +2,12 @@
 
 //! `intents` against a real PostgreSQL, on a disposable schema.
 //!
-//! The test proves the read path end to end: a pending intent the sweep is
-//! still carrying and a delivered one are never listed, a `local` intent (no
-//! destination declared) and a `failed` one (every attempt refused) both are,
-//! oldest due first, and a `--limit` narrower than the qualifying rows keeps
-//! only the earliest of them. Every field the command reports is pinned
+//! The test proves the read path end to end: a pending intent the dispatcher
+//! is still carrying, a delivered one, a superseded reminder and a reminder
+//! cancelled before any attempt are never listed, a `local` intent (set aside because no destination is declared)
+//! and a `failed` one (every attempt refused) both are, oldest due first, and
+//! a `--limit` narrower than the qualifying rows keeps only the earliest of
+//! them. Every field the command reports is pinned
 //! against what was seeded, so nothing beyond what the test asserts on is
 //! carried through.
 
@@ -107,23 +108,37 @@ async fn seed_outbox(
     appointment_revision: i64,
     due_at: DateTime<Utc>,
     delivery_state: &str,
-    attempts: i32,
+    attempts: i16,
     payload: &Value,
 ) {
+    // The command reports the dispatch core's terminal states in the
+    // store's own terms; seed each in the core's vocabulary.
+    let (state, class) = match delivery_state {
+        "local" => ("dead-lettered", Some("destination_unconfigured")),
+        "failed" => ("dead-lettered", Some("delivery_failed")),
+        "superseded" => ("dead-lettered", Some("superseded")),
+        other => (other, None),
+    };
     client
         .execute(
-            "INSERT INTO scheduling_outbox(outbox_id, purpose, claim_id, \
-             appointment_revision, due_at, delivery_state, attempts, next_attempt_at, \
-             payload) VALUES($1,$2,$3,$4,$5,$6,$7,$5,$8)",
+            "INSERT INTO scheduling_outbox(outbox_id, purpose, generation, state, attempt, \
+             next_attempt_at, delivered_at, dead_lettered_at, claim_id, \
+             appointment_revision, due_at, payload, last_failure_class) \
+             VALUES($1,$2,1,$6,$7, \
+                    CASE WHEN $6='pending' THEN $5::timestamptz END, \
+                    CASE WHEN $6='delivered' THEN $5::timestamptz END, \
+                    CASE WHEN $6='dead-lettered' THEN $5::timestamptz END, \
+                    $3,$4,$5,$8,$9)",
             &[
                 &outbox_id,
                 &purpose,
                 &claim_id,
                 &appointment_revision,
                 &due_at,
-                &delivery_state,
+                &state,
                 &attempts,
                 payload,
+                &class,
             ],
         )
         .await
@@ -219,6 +234,7 @@ async fn intents_lists_local_and_failed_oldest_due_first_and_respects_limit() {
     let failed_id = Uuid::new_v4();
     let delivered_id = Uuid::new_v4();
     let local_second_id = Uuid::new_v4();
+    let cancelled_id = Uuid::new_v4();
 
     let local_first_payload =
         json!({"appointmentId": claim_a, "revision": 1, "offering": "registry-update-30"});
@@ -227,7 +243,7 @@ async fn intents_lists_local_and_failed_oldest_due_first_and_respects_limit() {
     let local_second_payload =
         json!({"appointmentId": claim_a, "revision": 3, "offering": "registry-update-30"});
 
-    // Still carried by the sweep: never listed.
+    // Still carried by the dispatcher: never listed.
     seed_outbox(
         &seed,
         pending_id,
@@ -249,7 +265,7 @@ async fn intents_lists_local_and_failed_oldest_due_first_and_respects_limit() {
         1,
         base_time + Duration::seconds(60),
         "local",
-        0,
+        1,
         &local_first_payload,
     )
     .await;
@@ -262,7 +278,7 @@ async fn intents_lists_local_and_failed_oldest_due_first_and_respects_limit() {
         2,
         base_time + Duration::seconds(120),
         "failed",
-        3,
+        8,
         &failed_payload,
     )
     .await;
@@ -279,6 +295,33 @@ async fn intents_lists_local_and_failed_oldest_due_first_and_respects_limit() {
         &json!({"appointmentId": claim_b, "revision": 2, "offering": "registry-update-30"}),
     )
     .await;
+    // Superseded by a later revision: retained as accounting, never listed.
+    seed_outbox(
+        &seed,
+        Uuid::new_v4(),
+        "reminder",
+        claim_b,
+        1,
+        base_time + Duration::seconds(200),
+        "superseded",
+        1,
+        &json!({"appointmentId": claim_b, "revision": 1, "offering": "registry-update-30"}),
+    )
+    .await;
+    // Cancelled by its appointment's cancellation before any attempt:
+    // never sent and never listed.
+    seed_outbox(
+        &seed,
+        cancelled_id,
+        "reminder",
+        claim_b,
+        1,
+        base_time + Duration::seconds(220),
+        "cancelled",
+        0,
+        &json!({"appointmentId": claim_b, "revision": 1, "offering": "registry-update-30"}),
+    )
+    .await;
     // A second, later local intent: listed last.
     seed_outbox(
         &seed,
@@ -288,7 +331,7 @@ async fn intents_lists_local_and_failed_oldest_due_first_and_respects_limit() {
         3,
         base_time + Duration::seconds(240),
         "local",
-        0,
+        1,
         &local_second_payload,
     )
     .await;
@@ -307,7 +350,7 @@ async fn intents_lists_local_and_failed_oldest_due_first_and_respects_limit() {
         (base_time + Duration::seconds(60)).to_rfc3339()
     );
     assert_eq!(intents[0]["deliveryState"], "local");
-    assert_eq!(intents[0]["attempts"], 0);
+    assert_eq!(intents[0]["attempts"], 1);
     assert_eq!(intents[0]["payload"], local_first_payload);
 
     assert_eq!(intents[1]["outboxId"], failed_id.to_string());
@@ -319,21 +362,23 @@ async fn intents_lists_local_and_failed_oldest_due_first_and_respects_limit() {
         (base_time + Duration::seconds(120)).to_rfc3339()
     );
     assert_eq!(intents[1]["deliveryState"], "failed");
-    assert_eq!(intents[1]["attempts"], 3);
+    assert_eq!(intents[1]["attempts"], 8);
     assert_eq!(intents[1]["payload"], failed_payload);
 
     assert_eq!(intents[2]["outboxId"], local_second_id.to_string());
     assert_eq!(intents[2]["deliveryState"], "local");
     assert_eq!(intents[2]["payload"], local_second_payload);
 
-    // A pending intent the sweep still carries and a delivered one are never
-    // listed, regardless of the limit.
+    // A pending intent the dispatcher still carries, a delivered one, a
+    // superseded reminder and a cancelled one are never listed, regardless
+    // of the limit.
     let outbox_ids: Vec<&str> = intents
         .iter()
         .map(|intent| intent["outboxId"].as_str().unwrap())
         .collect();
     assert!(!outbox_ids.contains(&pending_id.to_string().as_str()));
     assert!(!outbox_ids.contains(&delivered_id.to_string().as_str()));
+    assert!(!outbox_ids.contains(&cancelled_id.to_string().as_str()));
 
     // A limit narrower than the qualifying rows keeps only the earliest due.
     let limited = undelivered(&config_path, 2);

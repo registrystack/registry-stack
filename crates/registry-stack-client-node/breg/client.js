@@ -82,7 +82,7 @@ function plainDataObject(value, expectedFields) {
   return result;
 }
 
-function webhookHeaders(value) {
+function hookHeaders(value) {
   if (value === null || typeof value !== 'object' || Array.isArray(value) || isProxy(value)) {
     throw inputError('invalid-request');
   }
@@ -102,7 +102,7 @@ function webhookHeaders(value) {
   return result;
 }
 
-function verifyWebhookDelivery(value) {
+function verifyHookDelivery(value) {
   try {
     const input = plainDataObject(value, ['method', 'path', 'headers', 'body', 'key']);
     if (typeof input.method !== 'string' || typeof input.path !== 'string'
@@ -110,10 +110,10 @@ function verifyWebhookDelivery(value) {
       || isSharedArrayBuffer(input.body.buffer) || isSharedArrayBuffer(input.key.buffer)) {
       throw inputError('invalid-request');
     }
-    input.headers = webhookHeaders(input.headers);
+    input.headers = hookHeaders(input.headers);
     input.body = Buffer.from(input.body);
     input.key = Buffer.from(input.key);
-    return native.verifyWebhookDelivery(input);
+    return native.verifyHookDelivery(input);
   } catch (error) {
     throw normalize(error, 'invalid-request');
   }
@@ -373,7 +373,7 @@ class PrivateKeyJwt {
 }
 
 module.exports = {
-  verifyWebhookDelivery,
+  verifyHookDelivery,
   PrivateKeyJwt,
   BaseRegistryClient,
   BaseRegistryClientError,

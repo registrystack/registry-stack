@@ -1,0 +1,816 @@
+{
+  "$defs": {
+    "AuditConfig": {
+      "additionalProperties": false,
+      "description": "Where the audit journal is written and the key its hashes are made with.",
+      "properties": {
+        "destination": {
+          "$ref": "#/$defs/AuditDestinationKind",
+          "default": "file",
+          "description": "Where audit entries go: a rotated `file` (the default) or `stdout`."
+        },
+        "hashKeyRef": {
+          "$ref": "#/$defs/SecretReference",
+          "description": "Secret reference to the audit hash key."
+        },
+        "path": {
+          "description": "The absolute path of the active audit file, for `destination: file`.",
+          "pattern": "^/",
+          "type": "string"
+        },
+        "retentionDays": {
+          "description": "How many days a sealed audit file is kept, for `destination: file`;\n90 when omitted.",
+          "format": "uint32",
+          "maximum": 36500,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "rotateBytes": {
+          "description": "The size at which the active file is sealed and a new one begun,\nfor `destination: file`; 100 MiB when omitted.",
+          "format": "uint64",
+          "maximum": 4294967295,
+          "minimum": 1048576,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "hashKeyRef"
+      ],
+      "type": "object"
+    },
+    "AuditDestinationKind": {
+      "description": "The configured audit destination kind, as written in product configuration.",
+      "oneOf": [
+        {
+          "const": "file",
+          "description": "Durable, rotated JSON Lines file.",
+          "type": "string"
+        },
+        {
+          "const": "stdout",
+          "description": "One JSON line per entry on standard output, flushed per entry.",
+          "type": "string"
+        }
+      ]
+    },
+    "AuthenticationConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "oidc": {
+          "$ref": "#/$defs/OidcConfig"
+        }
+      },
+      "required": [
+        "oidc"
+      ],
+      "type": "object"
+    },
+    "CleanupConfig": {
+      "additionalProperties": false,
+      "description": "Erasure of the bytes of documents whose custodian asked for their\nremoval.",
+      "properties": {
+        "erasure": {
+          "$ref": "#/$defs/Erasure"
+        }
+      },
+      "required": [
+        "erasure"
+      ],
+      "type": "object"
+    },
+    "ContentVerificationConfig": {
+      "description": "The content verifier every document version passes before it becomes\nreleasable.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "An HTTP verifier the runtime asks about each document version.",
+          "properties": {
+            "attemptTimeoutMilliseconds": {
+              "default": 10000,
+              "description": "The longest one verification attempt may run, body included.\nOmitted, 10000.",
+              "format": "uint64",
+              "maximum": 60000,
+              "minimum": 100,
+              "type": "integer"
+            },
+            "authorizationRef": {
+              "$ref": "#/$defs/SecretReference"
+            },
+            "policyId": {
+              "description": "Non-secret identity of the external scanner and its rules generation.",
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[\\x21-\\x7E]+$",
+              "type": "string"
+            },
+            "type": {
+              "const": "http",
+              "type": "string"
+            },
+            "url": {
+              "$ref": "#/$defs/Url",
+              "description": "The URL the content is posted to. It is `https`; `http` is accepted\nonly for a loopback host, for local development."
+            }
+          },
+          "required": [
+            "type",
+            "url",
+            "authorizationRef",
+            "policyId"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "No verifier, accepted only beside `tlsTermination:\ndevelopment-loopback`. Every finalized version is recorded as\napproved under the `disabled` verifier binding.",
+          "properties": {
+            "type": {
+              "const": "disabled",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "DatabaseConfig": {
+      "additionalProperties": false,
+      "description": "The PostgreSQL connection a stateful runtime uses. Both URLs are secret\nreferences and may name the same secret.",
+      "properties": {
+        "migrationUrlRef": {
+          "$ref": "#/$defs/SecretReference",
+          "description": "Secret reference to the migration connection URL."
+        },
+        "runtimeUrlRef": {
+          "$ref": "#/$defs/SecretReference",
+          "description": "Secret reference to the least-privileged runtime connection URL."
+        },
+        "testOnlyPlaintext": {
+          "default": false,
+          "description": "Allow a plaintext connection. Refused outside test builds.",
+          "type": "boolean"
+        },
+        "trustedRootCertificateRef": {
+          "$ref": "#/$defs/SecretReference",
+          "description": "Secret reference to a PEM root certificate the connection trusts.\nAbsent, the connection trusts the platform's root certificates."
+        }
+      },
+      "required": [
+        "runtimeUrlRef",
+        "migrationUrlRef"
+      ],
+      "type": "object"
+    },
+    "DestinationsConfig": {
+      "additionalProperties": false,
+      "description": "Where the project's hooks deliver, by destination id.",
+      "properties": {
+        "hooks": {
+          "additionalProperties": {
+            "$ref": "#/$defs/UrlHookDestinationConfig"
+          },
+          "default": {},
+          "description": "Logical URL hook destinations. The project names only these ids; the\nURL, signing key, and delivery budget stay deployment-owned. At most\n128 are bound, each keyed by a local identifier.",
+          "maxProperties": 128,
+          "propertyNames": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
+    "Digest": {
+      "description": "A SHA-256 digest: `sha256:` followed by 64 lowercase hex digits.",
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "EnvironmentSecretProviderConfig": {
+      "additionalProperties": false,
+      "description": "The environment secret provider. It takes no settings.",
+      "type": "object"
+    },
+    "Erasure": {
+      "description": "Whether erasure work runs. `paused` stops every erasure and the sweep\nof orphaned objects; a removal request still stops release at once, and\nlapsed uploads are still expired.",
+      "enum": [
+        "active",
+        "paused"
+      ],
+      "type": "string"
+    },
+    "ExternalId": {
+      "description": "An identifier another system issues, written exactly as its issuer gives it.",
+      "maxLength": 512,
+      "minLength": 1,
+      "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$",
+      "type": "string"
+    },
+    "FileSecretProviderConfig": {
+      "additionalProperties": false,
+      "description": "The file secret provider.",
+      "properties": {
+        "root": {
+          "description": "Absolute directory holding one file per secret. Each file must be a\nregular file owned by the runtime user, mode 0400 or 0600, with exactly\none hard link.",
+          "pattern": "^/",
+          "type": "string"
+        }
+      },
+      "required": [
+        "root"
+      ],
+      "type": "object"
+    },
+    "JwksSource": {
+      "description": "Where a runtime obtains the OIDC issuer's signing keys.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Read `jwks_uri` from the issuer's OpenID Connect discovery document.",
+          "properties": {
+            "type": {
+              "const": "discovery",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Fetch the key set from this absolute `https` URI, skipping discovery.\nA plain `http` URI is accepted on loopback for supervised local\ndevelopment, and beyond loopback only when the issuer block sets\n`allowInsecureHttp`.",
+          "properties": {
+            "type": {
+              "const": "uri",
+              "type": "string"
+            },
+            "uri": {
+              "$ref": "#/$defs/Url"
+            }
+          },
+          "required": [
+            "type",
+            "uri"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Read the key set from a secret, for deployments without network access\nto the issuer.",
+          "properties": {
+            "documentRef": {
+              "$ref": "#/$defs/SecretReference"
+            },
+            "type": {
+              "const": "static",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "documentRef"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ListenerBind": {
+      "description": "Socket address the runtime listens on, written host:port with an IP address host ([addr]:port for IPv6).",
+      "maxLength": 128,
+      "minLength": 1,
+      "type": "string"
+    },
+    "ListenerNetworkExposure": {
+      "description": "The operator-declared private network placement of an HTTP listener.",
+      "enum": [
+        "private-address",
+        "container-private"
+      ],
+      "type": "string"
+    },
+    "LocalId": {
+      "description": "A local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`.",
+      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+      "type": "string"
+    },
+    "OidcConfig": {
+      "additionalProperties": false,
+      "description": "The OIDC issuer whose access tokens this runtime accepts, the clients it\nadmits, and the claim carrying their scopes.",
+      "properties": {
+        "allowInsecureHttp": {
+          "default": false,
+          "description": "Permit plain HTTP beyond loopback to the configured issuer and to a\nJWKS URI declared in configuration. TLS remains required unless the\noperator explicitly accepts this transport risk.",
+          "type": "boolean"
+        },
+        "allowedClients": {
+          "description": "Client identifiers whose access tokens are admitted. Required in every\nfile; an omitted or empty list, an empty or repeated client, and\n`unrestricted` are refused.",
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "assertionIssuers": {
+          "additionalProperties": {
+            "items": {
+              "maxLength": 512,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 16,
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "description": "Assertion authorities each client may exchange a subject token from,\nkeyed by client identifier. Omitted, no assertion-issuer rule applies;\nwritten, it lists at least one client, each with at least one\nauthority. Once a client is listed, a token it exchanged is accepted\nonly for one of that client's declared authorities, and a client that\nis not listed may exchange from no authority.",
+          "maxProperties": 64,
+          "minProperties": 1,
+          "propertyNames": {
+            "$ref": "#/$defs/ExternalId",
+            "maxLength": 128
+          },
+          "type": "object"
+        },
+        "audience": {
+          "description": "The audience every accepted access token must carry in `aud`.",
+          "maxLength": 512,
+          "minLength": 1,
+          "type": "string"
+        },
+        "issuer": {
+          "$ref": "#/$defs/Url",
+          "description": "Exact issuer accepted in access-token `iss` claims, an absolute\n`https` URL, or a plain `http` URL when `allowInsecureHttp` is set."
+        },
+        "jwksSource": {
+          "$ref": "#/$defs/JwksSource",
+          "default": {
+            "type": "discovery"
+          },
+          "description": "Where the issuer's signing keys come from. Absent reads the issuer's\nOpenID Connect discovery document."
+        },
+        "scopeClaim": {
+          "$ref": "#/$defs/ExternalId",
+          "default": "scope"
+        }
+      },
+      "required": [
+        "issuer",
+        "audience",
+        "allowedClients"
+      ],
+      "type": "object"
+    },
+    "PackageConfig": {
+      "additionalProperties": false,
+      "description": "The package a runtime serves: `root` is the absolute package directory,\nand `expectedDigest`, when set, pins the package digest the runtime must\nfind there. The package digest is the digest of the package's\n`SHA256SUMS` file; see [`crate::package`].",
+      "properties": {
+        "expectedDigest": {
+          "$ref": "#/$defs/Digest",
+          "description": "`sha256:` label of the package digest, the digest of the package's\n`SHA256SUMS` file. When set, the runtime refuses to start on any other\npackage."
+        },
+        "root": {
+          "description": "Absolute path of the package directory.",
+          "pattern": "^/",
+          "type": "string"
+        }
+      },
+      "required": [
+        "root"
+      ],
+      "type": "object"
+    },
+    "PrivateListenerConfig": {
+      "additionalProperties": false,
+      "description": "The listener of a runtime that declares its TLS termination and network\nexposure.",
+      "properties": {
+        "bind": {
+          "$ref": "#/$defs/ListenerBind"
+        },
+        "networkExposure": {
+          "$ref": "#/$defs/ListenerNetworkExposure",
+          "default": "private-address"
+        },
+        "tlsTermination": {
+          "$ref": "#/$defs/TlsTermination"
+        }
+      },
+      "required": [
+        "bind",
+        "tlsTermination"
+      ],
+      "type": "object"
+    },
+    "RetentionConfig": {
+      "additionalProperties": false,
+      "description": "Retention periods, in days. A jurisdiction's retention schedule approves\nthe deployed values; the bounds only keep a typo from becoming a policy.",
+      "properties": {
+        "hookPayloadRetentionDays": {
+          "default": 7,
+          "format": "uint32",
+          "maximum": 30,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "receiptRetentionDays": {
+          "default": 7,
+          "format": "uint32",
+          "maximum": 365,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "SecretProvidersConfig": {
+      "additionalProperties": false,
+      "anyOf": [
+        {
+          "properties": {
+            "file": {
+              "$ref": "#/$defs/FileSecretProviderConfig"
+            }
+          },
+          "required": [
+            "file"
+          ]
+        },
+        {
+          "properties": {
+            "environment": {
+              "$ref": "#/$defs/EnvironmentSecretProviderConfig"
+            }
+          },
+          "required": [
+            "environment"
+          ]
+        }
+      ],
+      "description": "The secret providers a runtime enables. A reference is resolved only by a\nprovider declared here: `secret:file/name` under `file.root`, and\n`secret:env/NAME` only when `environment: {}` is present.",
+      "properties": {
+        "environment": {
+          "$ref": "#/$defs/EnvironmentSecretProviderConfig",
+          "description": "Enables `secret:env/NAME` references, read from the process\nenvironment. Declared as an empty mapping: `environment: {}`."
+        },
+        "file": {
+          "$ref": "#/$defs/FileSecretProviderConfig",
+          "description": "Enables `secret:file/name` references, read from files under `root`."
+        }
+      },
+      "type": "object"
+    },
+    "SecretReference": {
+      "description": "An exact secret reference: secret:file/name, resolved under secretProviders.file.root, or secret:env/NAME, resolved only when secretProviders.environment is declared.",
+      "pattern": "^(?:secret:env/[A-Z][A-Z0-9_]{0,127}|secret:file/[a-z][a-z0-9._-]{0,127})$",
+      "type": "string"
+    },
+    "StorageConfig": {
+      "description": "Where document version bytes are held.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Document version bytes held in PostgreSQL `bytea`.",
+          "properties": {
+            "maximumDocumentBytes": {
+              "default": 16777216,
+              "description": "The deployment ceiling on one document version; a policy's\nmandatory restriction may only be lower. Omitted, 16 MiB.",
+              "format": "uint64",
+              "maximum": 16777216,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "type": {
+              "const": "database",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Document version bytes held in one S3-compatible bucket, under\nserver-chosen opaque keys.",
+          "properties": {
+            "accessKeyIdRef": {
+              "$ref": "#/$defs/SecretReference"
+            },
+            "attemptTimeoutMilliseconds": {
+              "default": 10000,
+              "description": "The longest one request may run, body included. Omitted, 10000.",
+              "format": "uint64",
+              "maximum": 60000,
+              "minimum": 100,
+              "type": "integer"
+            },
+            "bucket": {
+              "description": "The bucket name: lowercase letters, digits, `-` and `.`.",
+              "maxLength": 63,
+              "minLength": 3,
+              "type": "string"
+            },
+            "caBundleRef": {
+              "$ref": "#/$defs/SecretReference",
+              "description": "PEM CA bundle for the service. Omitted, the platform's trusted roots\nverify it."
+            },
+            "maximumDocumentBytes": {
+              "default": 16777216,
+              "description": "The deployment ceiling on one document version; a policy's\nmandatory restriction may only be lower. Omitted, 16 MiB.",
+              "format": "uint64",
+              "maximum": 67108864,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "pathStyle": {
+              "default": true,
+              "description": "Address the bucket as a path under `url` rather than as a host name.\nOmitted, `true`.",
+              "type": "boolean"
+            },
+            "region": {
+              "description": "The signing region: lowercase letters, digits and `-`.",
+              "maxLength": 64,
+              "minLength": 1,
+              "type": "string"
+            },
+            "secretAccessKeyRef": {
+              "$ref": "#/$defs/SecretReference"
+            },
+            "sessionTokenRef": {
+              "$ref": "#/$defs/SecretReference"
+            },
+            "type": {
+              "const": "s3",
+              "type": "string"
+            },
+            "url": {
+              "$ref": "#/$defs/Url",
+              "description": "The service's base URL, with no path. It is `https`; `http` is\naccepted only for a loopback host, for local development."
+            }
+          },
+          "required": [
+            "type",
+            "url",
+            "bucket",
+            "region",
+            "accessKeyIdRef",
+            "secretAccessKeyRef"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "TlsTermination": {
+      "description": "Declares the trusted transport boundary for a runtime's plaintext HTTP\nlistener. Production listeners require operator-controlled upstream TLS\ntermination; direct plaintext is limited to the explicit loopback-only\ndevelopment mode.",
+      "enum": [
+        "operator-controlled-upstream",
+        "development-loopback"
+      ],
+      "type": "string"
+    },
+    "TransfersConfig": {
+      "additionalProperties": false,
+      "description": "How long one upload or download may take: a floor, plus an allowance\nfor every mebibyte the document carries. A transfer still running at its\ndeadline is cut off and lets go of its bytes.",
+      "properties": {
+        "mebibyteAllowanceSeconds": {
+          "default": 8,
+          "description": "The time added for every started mebibyte of the document.",
+          "format": "uint32",
+          "maximum": 600,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "minimumDeadlineSeconds": {
+          "default": 60,
+          "description": "The deadline of the smallest transfer.",
+          "format": "uint32",
+          "maximum": 3600,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "Url": {
+      "description": "An absolute http or https URL with a host preserved as written, no user information, and no backslash, whitespace or control character. DNS case and equivalent IPv6 literals are permitted.",
+      "format": "uri",
+      "maxLength": 2048,
+      "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://[^/?#@\\u005C\\u0000-\\u0020\\u007F-\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]+([/?#][^\\u005C\\u0000-\\u0020\\u007F-\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*)?$",
+      "type": "string"
+    },
+    "UrlHookDestinationConfig": {
+      "additionalProperties": false,
+      "description": "One URL hook destination a runtime signs and sends hook deliveries to:\nthe URL, the HMAC-SHA256 key reference, and the delivery budget. The\noutbound policy is fixed: `registry-platform-hooks` activates it with no\nprivate address range and no client certificate. A runtime whose\ndestinations need either configures its own full outbound policy instead.",
+      "properties": {
+        "attemptTimeoutMilliseconds": {
+          "default": 5000,
+          "description": "How long one delivery attempt may take, from 100 through 10000\nmilliseconds.",
+          "format": "uint32",
+          "maximum": 10000,
+          "minimum": 100,
+          "type": "integer"
+        },
+        "hmacSha256KeyRef": {
+          "$ref": "#/$defs/SecretReference"
+        },
+        "maximumAttempts": {
+          "default": 8,
+          "description": "How many delivery attempts one event gets, from 1 through 20.",
+          "format": "uint8",
+          "maximum": 20,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "url": {
+          "$ref": "#/$defs/Url",
+          "description": "An https URL, or http on 127.0.0.1, localhost, or [::1], without a\nquery or fragment."
+        }
+      },
+      "required": [
+        "url",
+        "hmacSha256KeyRef"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "https://id.registrystack.org/schemas/documents/runtime/runtime.v1alpha1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "authentication": {
+            "properties": {
+              "oidc": {
+                "properties": {
+                  "jwksSource": {
+                    "properties": {
+                      "documentRef": {
+                        "pattern": "^secret:env/"
+                      }
+                    },
+                    "required": [
+                      "documentRef"
+                    ]
+                  }
+                },
+                "required": [
+                  "jwksSource"
+                ]
+              }
+            },
+            "required": [
+              "oidc"
+            ]
+          }
+        },
+        "required": [
+          "authentication"
+        ]
+      },
+      "then": {
+        "properties": {
+          "secretProviders": {
+            "properties": {
+              "environment": {
+                "$ref": "#/$defs/EnvironmentSecretProviderConfig"
+              }
+            },
+            "required": [
+              "environment"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "authentication": {
+            "properties": {
+              "oidc": {
+                "properties": {
+                  "jwksSource": {
+                    "properties": {
+                      "documentRef": {
+                        "pattern": "^secret:file/"
+                      }
+                    },
+                    "required": [
+                      "documentRef"
+                    ]
+                  }
+                },
+                "required": [
+                  "jwksSource"
+                ]
+              }
+            },
+            "required": [
+              "oidc"
+            ]
+          }
+        },
+        "required": [
+          "authentication"
+        ]
+      },
+      "then": {
+        "properties": {
+          "secretProviders": {
+            "properties": {
+              "file": {
+                "$ref": "#/$defs/FileSecretProviderConfig"
+              }
+            },
+            "required": [
+              "file"
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "description": "The operator runtime configuration document.",
+  "properties": {
+    "apiVersion": {
+      "const": "id.registrystack.org/formats/documents/runtime/v1alpha1",
+      "type": "string"
+    },
+    "audit": {
+      "$ref": "#/$defs/AuditConfig"
+    },
+    "authentication": {
+      "$ref": "#/$defs/AuthenticationConfig"
+    },
+    "cleanup": {
+      "$ref": "#/$defs/CleanupConfig"
+    },
+    "contentVerification": {
+      "$ref": "#/$defs/ContentVerificationConfig"
+    },
+    "database": {
+      "$ref": "#/$defs/DatabaseConfig"
+    },
+    "destinations": {
+      "$ref": "#/$defs/DestinationsConfig"
+    },
+    "identity": {
+      "additionalProperties": false,
+      "description": "Optional in the type so a missing block gets a refusal naming the key\nto add; the document requires it.",
+      "properties": {
+        "databaseId": {
+          "$ref": "#/$defs/LocalId"
+        }
+      },
+      "required": [
+        "databaseId"
+      ],
+      "type": "object"
+    },
+    "kind": {
+      "const": "DocumentsRuntimeConfig",
+      "type": "string"
+    },
+    "listener": {
+      "$ref": "#/$defs/PrivateListenerConfig"
+    },
+    "package": {
+      "$ref": "#/$defs/PackageConfig"
+    },
+    "retention": {
+      "$ref": "#/$defs/RetentionConfig"
+    },
+    "secretProviders": {
+      "$ref": "#/$defs/SecretProvidersConfig"
+    },
+    "storage": {
+      "$ref": "#/$defs/StorageConfig"
+    },
+    "transfers": {
+      "$ref": "#/$defs/TransfersConfig"
+    }
+  },
+  "required": [
+    "apiVersion",
+    "kind",
+    "package",
+    "listener",
+    "secretProviders",
+    "database",
+    "authentication",
+    "audit",
+    "storage",
+    "contentVerification",
+    "cleanup",
+    "identity"
+  ],
+  "title": "Registry Stack Document Store runtime configuration",
+  "type": "object"
+}

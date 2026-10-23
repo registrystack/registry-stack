@@ -2814,7 +2814,7 @@
         },
         "handler": {
           "$ref": "#/$defs/HookHandlerSource",
-          "description": "Governed, destination-neutral delivery. `destinationId` is a key in\nruntime `eventDestinations`; the project carries no URL or secret, and\ndeployment configuration may tighten the bounds it binds but cannot\nsupply or widen this authority. Production compilation requires it."
+          "description": "Governed, destination-neutral delivery. `destinationId` is a key in\nruntime `destinations.hooks`; the project carries no URL or secret, and\ndeployment configuration may tighten the bounds it binds but cannot\nsupply or widen this authority. Production compilation requires it."
         },
         "id": {
           "$ref": "#/$defs/LocalId",
