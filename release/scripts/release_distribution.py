@@ -53,8 +53,8 @@ def _require_selection(value: object, label: str) -> dict[str, str]:
         release_units.asset_tag(selection["version"])
     except release_units.UnitRegistryError as exc:
         raise DistributionError(str(exc)) from exc
-    if selection["policy"] not in {"compatible-patch", "exact"}:
-        raise DistributionError(f"{label}.policy must be compatible-patch or exact")
+    if selection["policy"] != "exact":
+        raise DistributionError(f"{label}.policy must be exact")
     return selection
 
 
@@ -99,25 +99,16 @@ def load_components(repo: Path, stack_version: str) -> list[dict[str, str]]:
 
 
 def validate_selected_version(selection: object, selected_version: str) -> None:
-    """Apply the pilot's tested patch-line or explicit exact-version policy."""
+    """Require the resolved release to be the exact committed version."""
 
     selected = _require_selection(selection, "component selection")
     try:
         release_units.asset_tag(selected_version)
     except release_units.UnitRegistryError as exc:
         raise DistributionError(str(exc)) from exc
-    baseline = tuple(int(part) for part in selected["version"].split("."))
-    actual = tuple(int(part) for part in selected_version.split("."))
-    if selected["policy"] == "exact":
-        if actual != baseline:
-            raise DistributionError(
-                f"selected release must equal exact version {selected['version']}"
-            )
-        return
-    if actual[:2] != baseline[:2] or actual[2] < baseline[2]:
+    if selected_version != selected["version"]:
         raise DistributionError(
-            "selected release is not a compatible patch on recommended line "
-            f"{baseline[0]}.{baseline[1]}.x at or after {selected['version']}"
+            f"selected release must equal exact version {selected['version']}"
         )
 
 

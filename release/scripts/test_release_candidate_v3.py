@@ -200,6 +200,13 @@ class ReleaseCandidateV3Test(TestCase):
         schema = json.loads((SCRIPT.parent.parent / "schemas/release-candidate-v3.schema.json").read_text())
         jsonschema.Draft202012Validator(schema).validate(candidate)
 
+    def test_stack_unit_expectation_refuses_a_discovery_candidate(self) -> None:
+        candidate, _, _ = self.make_candidate()
+        with self.assertRaisesRegex(self.module.CandidateError, "unit mismatch"):
+            self.module.validate_candidate_manifest(
+                candidate, expected_unit="stack", now=self.now
+            )
+
     def test_discovery_v3_refuses_wrong_tag_extra_payload_and_extra_image(self) -> None:
         candidate, _, _ = self.make_candidate()
         wrong_tag = copy.deepcopy(candidate)
@@ -356,8 +363,14 @@ class ReleaseCandidateV3Test(TestCase):
         manifest["components"] = self.module.rstack_components.build_component_manifest(
             version, manifest["payloads"]
         )
-        result = self.module.validate_candidate_manifest(manifest, now=self.now)
+        result = self.module.validate_candidate_manifest(
+            manifest, expected_unit="stack", now=self.now
+        )
         self.assertEqual([component], result["distribution_components"])
+        with self.assertRaisesRegex(self.module.CandidateError, "release unit"):
+            self.module.validate_candidate_manifest(
+                manifest, expected_unit="discovery", now=self.now
+            )
         self.assertEqual(
             "registry-stack.components.v1", result["components"]["schema_version"]
         )

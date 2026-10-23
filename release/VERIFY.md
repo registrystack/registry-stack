@@ -209,8 +209,13 @@ jq -e --arg tag "${tag}" '
    elif $version.minor >= 26 then ["breg", "discovery", "evidence", "mint", "relay"]
    elif $version.minor >= 24 then ["discovery", "evidence", "mint", "relay"]
    elif $version.minor >= 21 then ["evidence", "mint", "relay"]
-   else ["relay"] end) as $image_names |
-  .schema_version == "registry-stack.release-candidate.v2" and
+   else ["relay"] end) as $roster |
+  ([.distribution_components[]?.images[].name]) as $carried |
+  ($roster - $carried) as $image_names |
+  ((.schema_version == "registry-stack.release-candidate.v2" and
+    (has("distribution_components") | not)) or
+   (.schema_version == "registry-stack.release-candidate.v3" and
+    (.distribution_components | type == "array" and length > 0))) and
   .repository == "registrystack/registry-stack" and
   .release.tag == $tag and
   (.release.source_sha | test("^[0-9a-f]{40}$")) and
@@ -226,6 +231,29 @@ jq -e --arg tag "${tag}" '
   .advisory.verdict == "passed"
 ' "${manifest}"
 ```
+
+A Stack release that carries a unit forward (see the Discovery section above)
+is a schema v3 candidate with a `distribution_components` array. The filter
+above accepts that shape and removes each carried-forward unit's images from the
+expected Stack roster, so Discovery is absent from `.images` in such a release.
+Its identity is instead recorded in `.distribution_components`, and that array
+must equal the `components` of the authenticated distribution lock:
+
+```sh
+lock="registry-stack-${tag}-distribution.json"
+
+jq -e --arg tag "${tag}" --slurpfile lock "${lock}" '
+  $lock[0].schema_version == "registry-stack.distribution-lock.v1" and
+  $lock[0].stack_version == ($tag | ltrimstr("v")) and
+  $lock[0].components == .distribution_components
+' "${manifest}"
+```
+
+Equality covers each component's unit, version, `release_tag`, `source_sha`,
+manifest name and SHA-256, payload names and hashes, and image `final_ref` and
+digest. Verify each carried-forward unit's own release with
+`release/scripts/registry-release verify-public --tag <release_tag>`.
+A manifest without `distribution_components` skips this step.
 
 Starting with `v0.21.0`, the exact image set is Evidence Gateway, Registry
 Mint, and Registry Relay. Registry Discovery joins at `v0.24.0`, and Base
@@ -258,7 +286,7 @@ while IFS=$'\t' read -r name digest final_ref; do
     echo "digest mismatch for ${name}: manifest ${digest}, resolved ${resolved_digest}" >&2
     exit 1
   fi
-done < <(jq -r '.images[] | [.name,.digest,.final_ref] | @tsv' "${manifest}")
+done < <(jq -r '(.images[], .distribution_components[]?.images[]) | [.name,.digest,.final_ref] | @tsv' "${manifest}")
 ```
 
 ## Verify SBOM and security evidence
@@ -291,7 +319,10 @@ reports and Grype reports for `evidence`, `mint`, and `relay`, joined by
 `v0.38.0`. Coordinator reports join when its runtime publication is enabled in the
 release roster. Mint reports are excluded from `v0.31.0` onward; `v0.19.x` and
 `v0.20.x` archives contain those reports for `relay`
-only. The archive also
+only. For a Stack release that carries a unit forward, the archive holds reports
+only for the images in `.images`; the carried-forward unit's reports (for
+example `discovery`) are in that unit's own release evidence, which
+`verify-public --tag <release_tag>` checks. The archive also
 contains the advisory verdict used for candidate acceptance. Each report names
 the exact candidate digest that was promoted. The archive hash is covered by
 the authenticated checksum chain. The candidate workflow also evaluates any

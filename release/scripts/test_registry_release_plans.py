@@ -647,6 +647,17 @@ version = "1.1.0"
 ''',
             )
         write_editor_surfaces(self.root, "1.1.0")
+        write_json(
+            root / "crates/registry-stack-client/compatibility.json",
+            {
+                "namespaces": {
+                    "discovery": {
+                        "testedServerBaseline": "1.1.0",
+                        "compatibleServerPatchLine": "1.1.x",
+                    }
+                }
+            },
+        )
         write(
             root / "products/manifest/CHANGELOG.md",
             "# Changelog\n\n## [1.1.0]\n\n- Ready.\n",
