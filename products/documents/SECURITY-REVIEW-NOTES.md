@@ -168,9 +168,12 @@ DOCUMENTS-SEC-14 to DOCUMENTS-SEC-20:
   Each attempt commits a staged row naming a fresh, server-chosen object
   before writing it, and the write checks versioning again before it sends. Identical content is never shared between
   documents.
-- The storage binding is pinned at the first write; a later start under
-  another backend, bucket, or scope is refused, and a running deployment
-  whose pin moved finalizes nothing.
+- The storage binding is pinned at the first write: on S3 in the
+  transaction that commits the first staged row, before its object is
+  sent, so an object a failed first write leaves behind is still under
+  the pin; on database storage when the first version is finalized. A
+  later start under another backend, bucket, or scope is refused, and a
+  running deployment whose pin moved stages and finalizes nothing.
 - Verification runs on the shared dispatch worker, enqueued in the
   finalizing transaction under a key of the version and the verifier binding
   digest. Backoff starts at 30 seconds, doubles to at most one hour with

@@ -443,6 +443,50 @@ async fn switching_storage_after_the_first_s3_write_is_refused_at_startup() {
     );
 }
 
+/// A first S3 write that stores its object but is answered as failed never
+/// finalizes, yet it already pinned the storage: a restart on database
+/// storage, whose sweep never looks at objects, would strand the bytes.
+#[tokio::test]
+async fn a_first_s3_write_that_never_finalizes_still_pins_the_storage() {
+    let mut fixture = Fixture::new().await;
+    {
+        let (_prepared, api) = fixture.start().await;
+        let content = pdf(400, 29);
+        let (_, _, path) = reservation(
+            &api.reserve(APP, "citizen-delivery", CITIZEN.subject, &content, PDF)
+                .await,
+        );
+        fixture.state.mode.store(PUT_STORES_FAILS, Ordering::SeqCst);
+        api.put(APP, &path, PDF, Body::from(content))
+            .await
+            .assert_problem(ProblemCode::ServiceUnavailable);
+        fixture.state.mode.store(NORMAL, Ordering::SeqCst);
+        assert_eq!(fixture.state.bytes.lock().await.len(), 1);
+        assert_eq!(
+            fixture
+                .count("SELECT count(*) FROM documents_staged_objects WHERE NOT committed")
+                .await,
+            1
+        );
+        assert_eq!(
+            fixture
+                .count("SELECT count(*) FROM documents_storage_binding WHERE backend = 's3'")
+                .await,
+            1,
+            "the write pinned the storage before it stored the object"
+        );
+    }
+    let verifier = "contentVerification:\n  type: disabled\n";
+    fixture.deployment.reconfigure(DATABASE_STORAGE, verifier);
+    let error = prepare(&fixture.deployment.runtime)
+        .await
+        .expect_err("startup is refused");
+    assert!(
+        matches!(error, RuntimeError::StorageBindingChanged),
+        "{error}"
+    );
+}
+
 /// S3 storage is activated once, at startup: an upload probes bucket
 /// versioning only through the write's own check, and verification and
 /// release read without probing or activating again.
