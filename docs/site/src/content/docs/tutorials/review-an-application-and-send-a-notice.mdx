@@ -109,7 +109,7 @@ its schema as the database superuser and serves as a separate runtime role: a lo
 
 ```sh
 mkdir -p tutorial-work
-uv run --project products/coordinator/examples/reviewed-notice --locked \
+uv run --quiet --project products/coordinator/examples/reviewed-notice --locked \
   --with "${REGISTRY_STACK_CLIENT:-registry-stack-client==$REGISTRY_STACK_VERSION}" \
   products/coordinator/examples/reviewed-notice/session.py start \
   --released-clients --messaging-image "$MESSAGING_IMAGE" \
