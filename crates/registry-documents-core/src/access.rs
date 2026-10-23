@@ -76,6 +76,9 @@ impl AccessProfiles {
         if kind != profile.actor_kind {
             return Err(AccessRefusal::Profile);
         }
+        // The principal may be stored as a custodian and rendered back as an
+        // external identifier, so one outside that grammar is refused here,
+        // before anything is written under it.
         let principal = if profile.principal_claim.as_str() == "sub" {
             token.subject
         } else {
@@ -84,7 +87,7 @@ impl AccessProfiles {
                 .get(profile.principal_claim.as_str())
                 .and_then(Value::as_str)
         }
-        .filter(|value| !value.is_empty())
+        .filter(|value| ExternalId::new(*value).is_ok())
         .ok_or(AccessRefusal::Claims)?;
         let issuer = token
             .issuer
@@ -575,6 +578,39 @@ mod tests {
         assert_eq!(profiles.resolve(&no_issuer), Err(AccessRefusal::Claims));
         assert_eq!(AccessRefusal::Claims.problem().http_status(), 401);
         assert_eq!(AccessRefusal::Profile.problem().http_status(), 403);
+    }
+
+    #[test]
+    fn a_principal_the_store_could_not_render_is_refused_as_claims() {
+        let profiles = AccessProfiles::new(&project());
+        let claims = Map::new();
+        let custody = vec!["documents:custody".to_owned()];
+        let present = ActorKindClaim::Present(ActorKind::Service);
+        let longest = "s".repeat(registry_platform_yaml::MAXIMUM_EXTERNAL_ID_CHARS);
+        let resolved = profiles
+            .resolve(&facts(
+                "civil-registry-app",
+                &longest,
+                &custody,
+                present,
+                &claims,
+            ))
+            .unwrap();
+        assert!(ExternalId::new(resolved.subject).is_ok());
+        let too_long = format!("{longest}s");
+        for refused in [too_long.as_str(), "registry\napp", "registry\u{7f}app"] {
+            assert_eq!(
+                profiles.resolve(&facts(
+                    "civil-registry-app",
+                    refused,
+                    &custody,
+                    present,
+                    &claims,
+                )),
+                Err(AccessRefusal::Claims),
+                "{refused:?}"
+            );
+        }
     }
 
     #[test]
