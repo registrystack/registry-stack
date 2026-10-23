@@ -9,6 +9,7 @@ mod support;
 
 use std::pin::Pin;
 use std::task::{Context, Poll};
+use std::time::Duration;
 
 use axum::http::{Method, StatusCode};
 use bytes::Bytes;
@@ -433,6 +434,87 @@ async fn an_upload_the_service_refuses_is_its_typed_code() {
         ),
         "{error:?}"
     );
+    server.abort();
+}
+
+/// A transfer is held to the attempt timeout plus its transfer deadline,
+/// not to the attempt timeout alone, so content still arriving within the
+/// runtime's deadline is not cut off by the client.
+#[tokio::test]
+async fn an_upload_or_a_download_is_allowed_its_transfer_deadline() {
+    let mut finalized = document_json();
+    finalized["version"]["status"] = "pending".into();
+    finalized["version"]["finalizedAt"] = "2026-10-22T08:01:00Z".into();
+    let slow = |answer| Answer::Slow(Duration::from_millis(700), Box::new(answer));
+    let (url, script, server) = serve(vec![
+        slow(Answer::json(StatusCode::OK, finalized.to_string())),
+        slow(Answer::content(CONTENT)),
+        slow(Answer::json(StatusCode::OK, document_json().to_string())),
+    ])
+    .await;
+    let client = client(
+        config(&url)
+            .with_attempt_timeout(Duration::from_millis(300))
+            .with_transfer_deadline(Duration::from_secs(2), Duration::from_millis(1)),
+    );
+    client
+        .upload_content(&token(), &reservation(), UploadBody::from(CONTENT))
+        .await
+        .expect("the upload answers within its transfer deadline");
+    client
+        .download_content(&token(), DOCUMENT_ID, VERSION_ID, &expected_digest())
+        .await
+        .expect("the download arrives within its transfer deadline");
+    // Any other route keeps the attempt timeout.
+    let read = client
+        .document(&token(), DOCUMENT_ID)
+        .await
+        .expect_err("a read is held to the attempt timeout");
+    assert!(
+        matches!(
+            read,
+            DocumentsClientError::Transport {
+                kind: TransportKind::Timeout
+            }
+        ),
+        "{read:?}"
+    );
+    assert_eq!(script.observations().len(), 3);
+    server.abort();
+}
+
+#[tokio::test]
+async fn a_transfer_past_its_transfer_deadline_times_out() {
+    let slow = |answer| Answer::Slow(Duration::from_secs(5), Box::new(answer));
+    let (url, _script, server) = serve(vec![
+        slow(Answer::json(StatusCode::OK, document_json().to_string())),
+        slow(Answer::content(CONTENT)),
+    ])
+    .await;
+    let client = client(
+        config(&url)
+            .with_attempt_timeout(Duration::from_millis(200))
+            .with_transfer_deadline(Duration::from_millis(300), Duration::from_millis(1)),
+    );
+    let upload = client
+        .upload_content(&token(), &reservation(), UploadBody::from(CONTENT))
+        .await
+        .expect_err("the upload outlasts its transfer deadline");
+    let download = client
+        .download_content(&token(), DOCUMENT_ID, VERSION_ID, &expected_digest())
+        .await
+        .expect_err("the download outlasts its transfer deadline");
+    for error in [upload, download] {
+        assert!(
+            matches!(
+                error,
+                DocumentsClientError::Transport {
+                    kind: TransportKind::Timeout
+                }
+            ),
+            "{error:?}"
+        );
+    }
     server.abort();
 }
 
