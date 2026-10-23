@@ -28,16 +28,17 @@ strategies and a Proposal Action:
 
 `sequence` allocates `APP-0001`, `APP-0002`, and so on within each distinct
 `jurisdiction`. `minimumDigits` pads the number but does not cap the sequence;
-the field's `maximumLength` must fit its full range. `random` generates the
-specified number of characters after the prefix. Its default alphabet is
-`23456789ABCDEFGHJKLMNPQRSTUVWXYZ`; `alphabet` can replace it with distinct
-printable ASCII characters. Choose enough length for the expected number of
+the field's `maximumLength` must fit its full range. `random` generates
+`length` characters after the prefix from the fixed alphabet
+`23456789ABCDEFGHJKLMNPQRSTUVWXYZ`, which leaves out characters that are easy
+to misread. Choose enough length for the expected number of
 records. BReg retries a collision within a bounded attempt count and refuses
 the create if the code space cannot supply a free value.
 
-`scope` lists required stored scalar fields. BReg includes their values in
-both the allocation namespace and a database uniqueness constraint. Omit it
-for one namespace across that Record type. Include the scope fields when
+`scope`, accepted on `sequence` only, lists required stored scalar fields.
+BReg includes their values in both the allocation namespace and a database
+uniqueness constraint. Omit it for one namespace across that Record type; a
+`random` code always has one namespace across its Record type. Include the scope fields when
 looking up a scoped identifier, since the same code can exist in another scope.
 The compiler limits the combined maximum size of the identifier field and its
 scope fields to a 1 KiB index budget. For string and text fields, it counts
@@ -60,4 +61,5 @@ existing registry requires a reviewed migration. Backfill any missing values
 first, then the compiler seeds reservations and sequence high-water marks from
 retained rows and checks uniqueness before activation. Existing identifiers
 are preserved. Changing or removing an active generation rule is currently
-unsupported, so plan prefix, scope, and alphabet as part of the issuing scheme.
+unsupported, so plan the strategy, prefix, length, and scope as part of the
+issuing scheme.

@@ -66,7 +66,7 @@ fn registry() -> registry_breg::CompiledRegistry {
                     "minimumDigits":4,"scope":["jurisdiction"]}},
                 {"id":"token","type":"string","required":true,"maximumLength":32,
                     "classification":"internal","generate":{"type":"random","prefix":"R-",
-                    "length":8,"alphabet":"AB","scope":["jurisdiction"]}},
+                    "length":8}},
                 {"id":"name","type":"string","required":true,"maximumLength":64,
                     "classification":"internal"},
                 {"id":"jurisdiction","type":"string","required":true,"maximumLength":64,
@@ -372,9 +372,11 @@ async fn proposal_submit_freezes_generated_identifiers_and_recovery_never_alloca
     let first_token = first["token"].as_str().unwrap();
     assert!(first_token.starts_with("R-"));
     assert_eq!(first_token.len(), 10);
-    assert!(first_token[2..]
-        .bytes()
-        .all(|byte| matches!(byte, b'A' | b'B')));
+    assert!(first_token[2..].bytes().all(|byte| {
+        registry_breg::contract::DEFAULT_GENERATED_IDENTIFIER_ALPHABET
+            .as_bytes()
+            .contains(&byte)
+    }));
     let first_frozen =
         frozen_effect_fields(&fixture, submitted.id(), submitted.submission_version()).await;
     assert_eq!(first_frozen["code"], first["code"]);

@@ -232,8 +232,10 @@
   stored fields that no supported Record grant or Action can fill report
   `breg.record-type.stored-field-unfillable`.
 - Add compiler-configured business identifiers on stored string fields. Records
-  retain their internal UUID while `sequence` or `random` values, optional
-  prefixes, and field-based uniqueness scopes are allocated transactionally.
+  retain their internal UUID while BReg allocates, inside the write transaction,
+  either a `sequence` number (`minimumDigits`, with an optional field-based
+  `scope`) or a `random` code (`length`, from a fixed alphabet), each with an
+  optional `prefix`.
   Existing fields can adopt generation through a reviewed backfill migration;
   Proposal Submit freezes generated values for Apply and Retry.
 - Add the closed `logLevel` runtime setting to BReg, `breg-mcp`, and
