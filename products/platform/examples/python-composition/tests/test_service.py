@@ -8,7 +8,7 @@ import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
-from registry_client import breg
+from registry_client import breg, messaging
 from service import (
     Composition,
     CompositionError,
@@ -155,12 +155,27 @@ class PublishedClientTests(unittest.TestCase):
             "casework": SimpleNamespace(bearer_token=lambda: "canary-casework-token")
         }
         calls = []
+        def record(*args, **kwargs):
+            calls.append((args, kwargs))
         app.reviews = SimpleNamespace(
-            review_task_context=lambda *args, **kwargs: calls.append((args, kwargs))
+            review_task_context=record, review_tasks=record, decide_review_task=record
         )
         app.review_context("task-id")
+        app.review_tasks()
+        app.decide(
+            "task-id",
+            1,
+            "key",
+            {"decision": {"type": "approve", "outcome": "approved"}},
+        )
+        self.assertEqual(len(calls), 3)
+        self.assertTrue(
+            all(
+                kwargs == {"source_profile": "proposal-reviewer"} for _, kwargs in calls
+            )
+        )
         self.assertEqual(
-            calls,
+            calls[:1],
             [
                 (
                     ("canary-casework-token", "staff", "task-id"),
@@ -303,3 +318,118 @@ class ReceiverHttpTests(unittest.TestCase):
                 server.shutdown()
                 server.server_close()
                 thread.join(timeout=5)
+
+
+class NativeFailureRecoveryTests(unittest.TestCase):
+    app = ReceiptRecoveryTests.app
+
+    def test_native_known_pre_send_failure_restores_prepared_state(self):
+        with tempfile.TemporaryDirectory() as root:
+            app = self.app(root)
+            # This fixture notice is deliberately outside the native wire schema.
+            # The actual released SDK rejects it before opening a connection.
+            app.messages = messaging.MessagingClient(
+                "http://127.0.0.1:1", max_mutation_retries=0
+            )
+            with self.assertRaises(messaging.MessagingClientError) as raised:
+                app.reconcile()
+            self.assertIs(raised.exception.outcome_unknown, False)
+            self.assertEqual(app.inbox.jobs()[0][2], "prepared")
+
+    def test_receipt_recovery_still_runs_at_the_attempt_budget(self):
+        with tempfile.TemporaryDirectory() as root:
+            app = self.app(root)
+            with app.inbox.connect() as db:
+                db.execute("UPDATE jobs SET state='notice-uncertain',attempts=12")
+            app.messages = SimpleNamespace(
+                submit=lambda *_: self.fail("must not resubmit"),
+                message_receipt=lambda *_: {
+                    "kind": "complete",
+                    "value": {"id": "message-one"},
+                },
+            )
+            self.assertEqual(app.reconcile(), 1)
+            self.assertEqual(app.inbox.jobs(), [])
+
+
+class IntakeCopyTests(unittest.TestCase):
+    def app(self, application="application-one"):
+        calls = []
+        app = Composition.__new__(Composition)
+        app.config = {"bregProfile": "officer"}
+        intake = SimpleNamespace(
+            document={
+                "actionId": "submit-application",
+                "state": "applied",
+                "submissionVersion": 1,
+                "effectDigest": "sha256:" + "a" * 64,
+                "application": {
+                    "submissionVersion": 1,
+                    "effectDigest": "sha256:" + "a" * 64,
+                    "resultLinks": [
+                        {
+                            "recordType": "application",
+                            "recordId": application,
+                            "revision": 1,
+                        }
+                    ],
+                },
+            }
+        )
+        app.registry = SimpleNamespace(
+            registry_contract=lambda _: SimpleNamespace(
+                select_proposal_get=lambda _: "get", select_action=lambda *_: "action"
+            ),
+            get_proposal=lambda *_: intake,
+            download_proposal_attachment=lambda *_: {
+                "media_type": "application/pdf",
+                "body": b"synthetic PDF",
+            },
+            start_proposal=lambda *_: calls.append("start") or "draft",
+            upload_proposal_attachment=lambda *args: (
+                calls.append(("copy", args)) or "draft-with-document"
+            ),
+            prepare_proposal=lambda *args: calls.append(("submit", args)) or "prepared",
+            execute_proposal=lambda _: "submitted",
+        )
+        return app, calls
+
+    def test_native_intake_slot_copy_precedes_submit_with_its_updated_draft(self):
+        app, calls = self.app()
+        self.assertEqual(
+            app.prepare(
+                "issue-licence",
+                {"application": "application-one"},
+                "key",
+                intake_proposal_id="intake",
+            ),
+            "submitted",
+        )
+        self.assertEqual(
+            calls,
+            [
+                "start",
+                (
+                    "copy",
+                    (
+                        "draft",
+                        "supporting-document",
+                        "application/pdf",
+                        b"synthetic PDF",
+                        "key:document",
+                    ),
+                ),
+                ("submit", ("draft-with-document", "submit", {}, "key:submit")),
+            ],
+        )
+
+    def test_cross_application_intake_refuses_before_creating_an_issuance_draft(self):
+        app, calls = self.app("another-application")
+        with self.assertRaises(CompositionError):
+            app.prepare(
+                "issue-licence",
+                {"application": "application-one"},
+                "key",
+                intake_proposal_id="intake",
+            )
+        self.assertEqual(calls, [])

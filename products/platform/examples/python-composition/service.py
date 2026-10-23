@@ -255,14 +255,52 @@ class Composition:
             else None
         )
 
-    def prepare(self, action, inputs, key):
+    def prepare(self, action, inputs, key, intake_proposal_id=None):
         profile = self.config["bregProfile"]
+        attachment = None
+        if intake_proposal_id is not None:
+            get_binding = self.registry.registry_contract(profile).select_proposal_get(
+                profile
+            )
+            intake = self.registry.get_proposal(get_binding, intake_proposal_id)
+            document = intake.document
+            receipt = document.get("application", {})
+            if (
+                document.get("actionId") != "submit-application"
+                or document.get("state") != "applied"
+                or not document.get("effectDigest")
+                or receipt.get("effectDigest") != document.get("effectDigest")
+                or receipt.get("submissionVersion") != document.get("submissionVersion")
+                or not inputs.get("application")
+                or receipt.get("resultLinks")
+                != [
+                    {
+                        "recordType": "application",
+                        "recordId": inputs["application"],
+                        "revision": 1,
+                    }
+                ]
+            ):
+                raise CompositionError(
+                    "the native intake receipt does not bind this application"
+                )
+            attachment = self.registry.download_proposal_attachment(
+                intake, "supporting-document"
+            )
         binding = self.registry.registry_contract(profile).select_action(
             action, profile
         )
         draft = self.registry.start_proposal(binding, inputs, key + ":draft")
-        # Inputs are the officer's separate issuance terms. Original intake
-        # and attachment references remain explicit fields in that Action.
+        # The optional licensing adaptation copies a governed slot before
+        # Submit. Attachment bytes are never invented Action input fields.
+        if attachment is not None:
+            draft = self.registry.upload_proposal_attachment(
+                draft,
+                "supporting-document",
+                attachment["media_type"],
+                attachment["body"],
+                key + ":document",
+            )
         return self.registry.execute_proposal(
             self.registry.prepare_proposal(draft, "submit", {}, key + ":submit")
         )
@@ -273,7 +311,9 @@ class Composition:
                 "configure the selected Casework deployment before listing tasks"
             )
         return self.reviews.review_tasks(
-            self.tokens["casework"].bearer_token(), self.config["caseworkProfile"]
+            self.tokens["casework"].bearer_token(),
+            self.config["caseworkProfile"],
+            source_profile=self.config.get("caseworkSourceProfile"),
         )
 
     def review_context(self, task_id):
@@ -299,6 +339,7 @@ class Composition:
             revision,
             key,
             decision,
+            source_profile=self.config.get("caseworkSourceProfile"),
         )
 
     def reconcile(self):
@@ -306,11 +347,13 @@ class Composition:
             raise CompositionError(
                 "configure Messaging before applying and notifying registered jobs"
             )
+        from registry_client.messaging import MessagingClientError
+
         profile = self.config["bregProfile"]
         binding = self.registry.registry_contract(profile).select_proposal_get(profile)
         count = 0
         for proposal_id, body, state, attempts in self.inbox.jobs():
-            if attempts >= MAXIMUM_ATTEMPTS:
+            if state != "notice-uncertain" and attempts >= MAXIMUM_ATTEMPTS:
                 LOG.error(
                     "job needs operator recovery after its bounded attempt budget"
                 )
@@ -370,9 +413,26 @@ class Composition:
                     )
                 # A lost response leaves notice-uncertain on disk. The next
                 # pass reads the receipt; it never blindly repeats submission.
-                self.messages.submit(
-                    self.tokens["messaging"].bearer_token(), notice_key, job["notice"]
-                )
+                try:
+                    self.messages.submit(
+                        self.tokens["messaging"].bearer_token(),
+                        notice_key,
+                        job["notice"],
+                    )
+                except MessagingClientError as error:
+                    # A native known refusal permits another bounded attempt.
+                    # Expired or conflicting keys can describe earlier accepted
+                    # work and still require original-command investigation.
+                    if error.outcome_unknown is False and error.code not in {
+                        "idempotency.expired",
+                        "idempotency.key-reused",
+                    }:
+                        with self.inbox.connect() as db:
+                            db.execute(
+                                "UPDATE jobs SET state='prepared' WHERE id=?",
+                                (proposal_id,),
+                            )
+                    raise
             with self.inbox.connect() as db:
                 db.execute(
                     "UPDATE jobs SET state='notified' WHERE id=?", (proposal_id,)
@@ -471,6 +531,10 @@ def main():
     prepare.add_argument("action")
     prepare.add_argument("inputs", type=Path)
     prepare.add_argument("key")
+    prepare.add_argument(
+        "--intake-proposal",
+        help="copy the native licensing intake supporting-document slot before Submit",
+    )
     register = sub.add_parser("register")
     register.add_argument("proposal_id")
     register.add_argument("version", type=int)
@@ -513,7 +577,10 @@ def main():
     app = Composition(config, inbox)
     if args.command == "prepare":
         proposal = app.prepare(
-            args.action, strict_json(args.inputs.read_bytes()), args.key
+            args.action,
+            strict_json(args.inputs.read_bytes()),
+            args.key,
+            intake_proposal_id=args.intake_proposal,
         )
         print(
             json.dumps(

@@ -7,8 +7,8 @@ no Coordinator. Choose only the products your application uses; this example's
 apply-and-notify command deliberately uses all three.
 
 The application Record remains the original intake. An officer's issuance
-Action creates a separate Proposal whose inputs include the application and
-attachment provenance references. Casework reviews that exact version and its
+Action creates a separate Proposal whose inputs name the application and
+separate issuance terms. Attachment bytes occupy a governed Proposal slot. Casework reviews that exact version and its
 effects. Only BReg applies it, with source-owned revision, uniqueness, and
 permission checks. The example never consumes a review as transferable write
 authority and never bypasses the native SDK's lifecycle link or ETag.
@@ -44,10 +44,18 @@ as well: a missing hook must not prevent an authoritative source reread.
 Run commands from this directory. Use an officer configuration for preparation
 and an independently authorized applier configuration for reconciliation.
 Supply domain inputs from the configured issuance Action; `inputs.json` is the
-inputs object itself, including its original application and attachment refs.
+inputs object itself. It follows the configured Action's schema; do not add
+fictitious provenance or attachment fields. The optional licensing adaptation
+accepts `--intake-proposal <id>`: it reads an applied native `submit-application`
+Proposal, checks its exact receipt version, effect digest, and application result
+link, downloads its frozen `supporting-document` slot, and uploads those bytes
+into the issuance Proposal before Submit. It refuses a cross-application intake
+before creating the new draft. This adaptation expects the reviewed-licensing
+starter's Action and slot contract; generic preparation without that option
+copies no document.
 
 ```sh
-uv run --locked service.py --config officer.json prepare issue-licence inputs.json issue-example
+uv run --locked service.py --config officer.json prepare issue-licence inputs.json issue-example --intake-proposal <applied-intake-proposal-id>
 uv run --locked service.py --config staff.json review-tasks
 uv run --locked service.py --config staff.json review-context <task-id>
 ```
@@ -80,7 +88,10 @@ version and effect digest, and uses the source-issued Apply capability.
 After source application is confirmed, it records `notice-uncertain` before
 submitting the unchanged notice under one stable Messaging key. If the response
 is lost, later passes read the original command receipt with the same caller,
-key, and body. They do not resubmit it. An unresolved or expired receipt leaves
+key, and body, including at the attempt budget. They do not resubmit it. A typed
+native failure with `outcome_unknown=false` restores the prepared state for a
+bounded retry, except an expired or conflicting original key, which requires
+investigation. Unknown outcomes and untyped failures retain uncertainty. An unresolved or expired receipt leaves
 the job uncertain and requires investigation; it does not establish no effect.
 A submission receipt proves admission, not delivery; read Messaging's message
 state when delivery matters.
