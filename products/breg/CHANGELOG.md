@@ -235,8 +235,9 @@
   retain their internal UUID while BReg allocates, inside the write transaction,
   either a `sequence` number (`minimumDigits`, with an optional field-based
   `scope`) or a `random` code (`length`, from a fixed alphabet), each with an
-  optional `prefix`. Scope fields must be `public` or `internal` and cannot be
-  references, because issued values and their scopes outlive record erasure.
+  optional `prefix`. Generated fields and their scope fields must be `public` or
+  `internal`, and scope fields cannot be references, because issued values and
+  their scopes outlive record erasure.
   Existing fields can adopt generation through a reviewed backfill migration;
   Proposal Submit freezes generated values for Apply and Retry.
 - Add the closed `logLevel` runtime setting to BReg, `breg-mcp`, and
