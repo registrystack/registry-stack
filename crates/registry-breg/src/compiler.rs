@@ -4073,10 +4073,18 @@ fn validate_generated_identifier(
     };
     if minimum_output_length < *min_length as usize || maximum_output_length > *max_length as usize
     {
+        let message = match generate {
+            FieldGenerationSource::Sequence { .. } => format!(
+                "a sequence identifier is the prefix plus max(minimumDigits, 19) digits, because the sequence is not capped at minimumDigits and must fit the longest i64 value; this field needs minimumLength at most {minimum_output_length} and maximumLength at least {maximum_output_length}"
+            ),
+            FieldGenerationSource::Random { .. } => format!(
+                "a random identifier is the prefix plus length, exactly {maximum_output_length} characters here; this field needs minimumLength at most {minimum_output_length} and maximumLength at least {maximum_output_length}"
+            ),
+        };
         errors.push(Diagnostic::error(
             "breg.field.generate-length-outside-field",
             &path,
-            "every generated identifier must satisfy the string field minimumLength and maximumLength, including the longest i64 sequence value",
+            &message,
         ));
     }
 
