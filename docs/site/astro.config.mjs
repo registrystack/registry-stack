@@ -584,6 +584,8 @@ export default defineConfig({
           label: 'Start',
           items: [
             { label: 'Overview', link: '/' },
+            { label: 'Four ways to adopt', slug: 'start/adopt' },
+            { label: 'Module conventions', slug: 'configure/module-conventions' },
             { label: 'How the products fit together', slug: 'start/concepts' },
           ],
         },

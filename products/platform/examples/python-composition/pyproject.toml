@@ -1,0 +1,7 @@
+[project]
+name = "registry-python-composition"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "registry-stack-client==0.43.0",
+]

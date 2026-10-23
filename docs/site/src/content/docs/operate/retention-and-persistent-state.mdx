@@ -15,6 +15,31 @@ standards_referenced: []
 Use this page to decide which Registry Stack state needs backup, off-host shipping, expiry, or
 deletion policy outside the products.
 
+## Find the owning retention control
+
+- [Base Registry Engine (BReg) retention](../breg-retention/): Action `execution.proposal.retention.mode`, runtime
+  `retention.receiptRetentionDays`, and the owned history, Proposal, attachment, and Evidence
+  erasure commands. Retained Evidence assertions have the documented fixed 24-hour window.
+- [Casework retention](../casework-retention/): authored
+  `reviewPolicies.<id>.retention.terminalRetentionDays`,
+  `reviewPolicies.<id>.retention.accountabilityRetentionDays`, and
+  `trustedProducers.<id>.retention.receiptRetentionDays`.
+- [Messaging retention](../messaging/#erase-expired-data-on-demand): runtime
+  `retention.payloadRetentionDays`, `retention.recordRetentionDays`, and
+  `retention.receiptRetentionDays`.
+- [Scheduling retention](../scheduling/#retention): runtime `retention.receiptRetentionDays`,
+  `retention.hookPayloadRetentionDays`, and `retention.claimOwnerRetentionDays`.
+- [Coordinator erasure](../coordinator/#erase-ended-payloads): explicit operator-selected terminal
+  payload cutoffs, with the source's unresolved effects and retention boundaries preserved.
+- [Evidence audit](../evidence-audit/) and [Render audit](../registry-render/#keep-the-audit-file):
+  runtime `audit.retentionDays`; these products do not retain source registry Records or issued
+  PDF storage for the application.
+- [Audit retention](#audit-retention): runtime `audit.rotateBytes` and `audit.retentionDays`
+  apply to each file writer. A `stdout` destination delegates collection and expiry to your
+  platform. Retain database backups and external attachments under their own owning policy.
+
+This map identifies the controls; each linked product guide defines their meaning and recovery.
+
 ## Operator boundary
 
 Registry Stack gives operators rotation knobs, TTL-bound protocol stores, and pseudonymized audit

@@ -71,7 +71,7 @@ import client_registry
 
 
 ROOT = Path(__file__).resolve().parents[2]
-PRODUCTS = ("discovery", "evidence", "breg", "casework", "messaging", "scheduling")
+PRODUCTS = ("discovery", "evidence", "breg", "casework", "messaging", "scheduling", "coordinator",)
 NODE_PRODUCTS = PRODUCTS
 MACOS_SHARED_FIPS_MINIMUM_VERSION = (0, 33, 0)
 # BReg and Casework publish no standalone wheel, so their internal wheels use
@@ -83,6 +83,7 @@ WHEEL_STEMS = {
     "casework": "registry_casework_client_native",
     "messaging": "registry_messaging_client_native",
     "scheduling": "registry_scheduling_client_native",
+    "coordinator": "registry_coordinator_client_native",
 }
 # The platform, wheel tag, and maturin flags each release matrix entry uses.
 PLATFORMS = {
@@ -269,6 +270,7 @@ def python_steps(
     macos_library_roots: tuple[Path, ...] = (),
     include_messaging: bool = False,
     include_scheduling: bool = False,
+    include_coordinator: bool = False,
 ) -> list[Step]:
     if python_profile not in ("release", "ci"):
         raise ValueError(f"unsupported Python build profile: {python_profile}")
@@ -333,6 +335,8 @@ def python_steps(
         assemble.append("--include-messaging")
     if include_scheduling:
         assemble.append("--include-scheduling")
+    if include_coordinator:
+        assemble.append("--include-coordinator")
     for product in PRODUCTS:
         assemble += [
             f"--{product}-wheel",
@@ -365,6 +369,7 @@ def plan(
     macos_library_roots: tuple[Path, ...] = (),
     include_messaging: bool = False,
     include_scheduling: bool = False,
+    include_coordinator: bool = False,
 ) -> list[Step]:
     if not client_registry.includes_casework(
         version, include_casework=include_casework
@@ -411,6 +416,7 @@ def plan(
             macos_library_roots,
             include_messaging,
             include_scheduling,
+            include_coordinator,
         )
     return steps
 
@@ -468,6 +474,7 @@ def main() -> int:
         help="include Scheduling in an explicit local integration before its first release",
     )
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--include-coordinator", action="store_true")
     args = parser.parse_args()
 
     napi_platform = args.napi_platform or host_platform()
@@ -507,6 +514,7 @@ def main() -> int:
             macos_library_roots,
             args.include_messaging,
             args.include_scheduling,
+            args.include_coordinator,
         )
     except (ValueError, client_registry.ClientRegistryError) as exc:
         parser.error(str(exc))

@@ -25,8 +25,9 @@ Render is not: a document store (attachments live in the owning registry),
 an e-signature or seal, a credentials-issuance system (no keys, chips, or
 MRZ), an HTML converter, an imposition engine, or offline-branch
 synchronization. Printed QR verification belongs to the app that owns the
-record (the App Kit `registry-public-check` pattern), optionally backed by
-an Evidence definition; Render mints nothing and does nothing at scan time.
+record through an app-owned public check route and an Evidence-backed relying
+service. The app owns the bounded answer and its disclosure policy; Render
+mints nothing and does nothing at scan time.
 
 ## Runtime anatomy
 
@@ -63,8 +64,9 @@ equality; the two-OS golden CI job keeps it proven.
 
 ## Consumers
 
-- **App Kit hosts** — a documents route block over loopback (the
-  `taskDispatch` config precedent); see `integrations/app-kit/`.
+- **App Kit hosts**: an app-owned route through the existing host-route seam;
+  author `bundle/`, package it into verified `package/`, and serve that output.
+  See `integrations/app-kit/`.
 - **OpenFn jobs** — plain HTTP with API-key auth and a JSON response
   variant built for `util.request`; deterministic rendering makes
   at-least-once redelivery safe; see `integrations/openfn/`.

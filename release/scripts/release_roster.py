@@ -78,7 +78,8 @@ SCHEDULING_INSTALLER_FIRST_RELEASE: tuple[int, int, int] | None = (0, 42, 0)
 # The first release with the unified local command and component manager.
 RSTACK_FIRST_RELEASE: tuple[int, int, int] | None = (0, 44, 0)
 
-COORDINATOR_CLIENT_FIRST_RELEASE: tuple[int, int, int] | None = None
+COORDINATOR_CLIENT_FIRST_RELEASE: tuple[int, int, int] | None = (0, 44, 0)
+
 
 COORDINATOR_FIRST_RELEASE: tuple[int, int, int] | None = None
 

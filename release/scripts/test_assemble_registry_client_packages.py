@@ -189,7 +189,7 @@ class AssembleClientPackagesTest(unittest.TestCase):
             for index, line in enumerate(self.rendered)
             if "maturin build --release --locked" in line
         ]
-        self.assertEqual(6, len(builds))
+        self.assertEqual(len(self.module.PRODUCTS), len(builds))
         assemble = next(
             index
             for index, line in enumerate(self.rendered)
@@ -276,7 +276,7 @@ class AssembleClientPackagesTest(unittest.TestCase):
             Path("/work"), Path("/out"), zig_python="/maturin/python",
             python_profile="ci", include_messaging=True, include_scheduling=True,
         )
-        self.assertEqual(6, sum(step.argv[0].endswith("build-linux-python-client") for step in steps))
+        self.assertEqual(len(self.module.PRODUCTS), sum(step.argv[0].endswith("build-linux-python-client") for step in steps))
         self.assertIn("--include-messaging", steps[-1].argv)
 
     def test_source_integration_can_explicitly_include_unreleased_scheduling(self) -> None:
@@ -285,7 +285,7 @@ class AssembleClientPackagesTest(unittest.TestCase):
             Path("/work"), Path("/out"), zig_python="/maturin/python",
             python_profile="ci", include_scheduling=True,
         )
-        self.assertEqual(6, sum(step.argv[0].endswith("build-linux-python-client") for step in steps))
+        self.assertEqual(len(self.module.PRODUCTS), sum(step.argv[0].endswith("build-linux-python-client") for step in steps))
         self.assertIn("--include-scheduling", steps[-1].argv)
         self.assertNotIn("--include-messaging", steps[-1].argv)
 
@@ -300,8 +300,8 @@ class AssembleClientPackagesTest(unittest.TestCase):
         result = subprocess.run(
             [*command, "--python-profile", "ci"], capture_output=True, text=True, check=True
         )
-        self.assertEqual(result.stdout.count("build-linux-python-client"), 6)
-        self.assertEqual(result.stdout.count("--profile ci"), 6)
+        self.assertEqual(result.stdout.count("build-linux-python-client"), len(self.module.PRODUCTS))
+        self.assertEqual(result.stdout.count("--profile ci"), len(self.module.PRODUCTS))
         self.assertNotIn("--profile release", result.stdout)
         invalid = subprocess.run(
             [*command, "--python-profile", "dev"], capture_output=True, text=True
@@ -332,7 +332,7 @@ class AssembleClientPackagesTest(unittest.TestCase):
             for step in steps
             if step.argv[0].endswith("build-linux-python-client")
         ]
-        self.assertEqual(len(builds), 6)
+        self.assertEqual(len(builds), len(self.module.PRODUCTS))
         for product, step in zip(self.module.PRODUCTS, builds):
             self.assertEqual(step.cwd, ROOT)
             self.assertIn(("--client", product), tuple(zip(step.argv, step.argv[1:])))

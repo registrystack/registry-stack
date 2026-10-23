@@ -142,3 +142,5 @@ pub mod auth {
         TokenProvider, MAXIMUM_TRUSTED_ROOT_CERTIFICATE_BUNDLE_BYTES,
     };
 }
+
+pub use registry_coordinator_client as coordinator;

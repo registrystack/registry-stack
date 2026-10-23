@@ -16,6 +16,10 @@ the deployment runbook and the client crate instructions. The release binaries a
 image are not yet distributed, and the Coordinator client is not part of the unified Rust,
 Node.js, or Python packages.
 
+Coordinator is optional. A direct application can prepare a BReg Proposal, obtain Casework review
+of its exact version and effects, and ask BReg to apply it without running Coordinator. Every
+product retains its own authorization and source mutation boundary.
+
 ## Create and check a project
 
 From the maintained Registry Stack checkout:

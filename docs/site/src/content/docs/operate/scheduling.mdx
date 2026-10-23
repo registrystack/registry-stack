@@ -202,6 +202,12 @@ schemaVersionsApplied: [100]
 Callers send the published `policyRevision` with each booking. Applying the active package again is
 refused with `schedulingctl.activation.package-already-active`.
 
+For commitment authorization, use the existing
+[task-grant contract](../../reference/apis/registry-scheduling/#task-grants). The
+[Scheduling deployment guide](https://github.com/registrystack/registry-stack/blob/main/products/scheduling/RUNTIME-CONFIG.md)
+explains `duplicateKey` identity configuration and remediation. Resolve those diagnostics in the
+owning offering and identity configuration before retrying a commitment.
+
 ## Apply the environment records
 
 The supply lives in the database, not in the package. Apply `records.yaml`:

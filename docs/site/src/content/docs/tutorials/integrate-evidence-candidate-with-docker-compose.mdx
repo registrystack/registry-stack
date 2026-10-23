@@ -154,6 +154,8 @@ Evidence package <package-digest> passed check (<count> requirements)
 
 `--require-runtime-dependencies` validates the mounted secrets and signs a self-test message
 through the proxy, so a missing socket fails with `evidence.deployment.signing-unavailable`.
+It also checks the configured runtime dependencies and applicable extract freshness on this host.
+It does not query source data endpoints or guarantee that a source will remain available.
 `--require-audit-under` refuses an audit path that does not resolve inside the volume. See
 [`evidence check`](../../reference/cli/evidence/check/).
 
@@ -183,7 +185,18 @@ The image's default command is `serve --runtime-config /etc/registry-evidence/ru
 `up` needs no arguments. The log carries an `evidence service listening` record once every listener
 is bound; if it is missing, the log names the startup failure. The adapter publishes no port, so
 reach the listener from another service on the Compose network and put TLS termination ahead of it.
-To read the audit log, see [Operate the Registry Evidence audit log](../../operate/evidence-audit/).
+A passing `/ready` healthcheck establishes the runtime's readiness boundary, not upstream
+source-data availability. Run the target-host preflight above before deployment. A stale or
+unavailable source can refuse evaluations that need it while other sources remain serviceable.
+Keep the [operator contract](https://github.com/registrystack/registry-stack/blob/main/products/evidence/OPERATOR-CONTRACT.md)
+as the owning definition of readiness and dependency checks.
+
+Use the safe source diagnostic categories and
+[value-free audit outcomes](../../operate/evidence-audit/#read-what-an-entry-establishes) for alerts.
+Alert on sustained dependency failures and audit/readiness faults without exporting selectors,
+source responses, credentials, or raw transport errors. Follow the configured operator recovery
+and retry budget; an unavailable upstream does not establish a recovery time, so do not invent a
+`Retry-After` interval.
 
 {/* Evidence: release/docker/Dockerfile.evidence; crates/registry-evidence/src/server.rs */}
 

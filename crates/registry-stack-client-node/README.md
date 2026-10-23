@@ -173,3 +173,7 @@ without the cursor after `410 review.result-expired`.
 ## License
 
 Apache-2.0
+
+The source facade includes the optional Coordinator namespace as `coordinator`,
+with the `@registrystack/client/coordinator` subpath. It preserves each product's
+authority, and a direct BReg and Casework application needs no Coordinator.

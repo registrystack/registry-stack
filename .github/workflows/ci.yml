@@ -2833,6 +2833,10 @@ jobs:
             )
           done
 
+      - name: Test direct Python composition receiver
+        working-directory: products/platform/examples/python-composition
+        run: python3 -m unittest discover -s tests -v
+
   release-linux-node-clients:
     name: Release Linux native clients (${{ matrix.asset }})
     needs: changes

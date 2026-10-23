@@ -28,7 +28,7 @@ from macos_fips_packaging import bundle_macos_fips
 ROOT = Path(__file__).resolve().parents[2]
 FACADE = ROOT / "crates" / "registry-stack-client-py"
 COMPATIBILITY = ROOT / "crates" / "registry-stack-client" / "compatibility.json"
-PRODUCTS = ("discovery", "evidence", "breg", "casework", "messaging", "scheduling")
+PRODUCTS = ("discovery", "evidence", "breg", "casework", "messaging", "scheduling", "coordinator",)
 WHEEL_PATTERN = re.compile(r"^[^-]+-(?P<version>[^-]+)-(?P<tag>.+)\.whl$")
 MACOS_SHARED_FIPS_MINIMUM_VERSION = (0, 33, 0)
 
@@ -140,6 +140,7 @@ def main() -> int:
         action="store_true",
         help="include Scheduling in an explicit local integration before its first release",
     )
+    parser.add_argument("--include-coordinator", action="store_true")
     for product in PRODUCTS:
         parser.add_argument(f"--{product}-wheel", type=Path, required=True)
     args = parser.parse_args()
@@ -168,6 +169,11 @@ def main() -> int:
             "this checkout contains the Scheduling Python facade; versions before "
             "its first release require --include-scheduling for local integration; use the release tag for published bytes"
         )
+
+    for product in ("coordinator",):
+        include = getattr(args, f"include_{product}")
+        if not getattr(client_registry, f"includes_{product}")(args.version, **{f"include_{product}": include}):
+            parser.error(f"this checkout contains the {product} facade; readiness hold requires --include-{product} for local integration")
 
     configured_version = None
     try:

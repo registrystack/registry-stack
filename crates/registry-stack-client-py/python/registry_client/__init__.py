@@ -7,6 +7,7 @@ import registry_client.discovery as discovery
 import registry_client.evidence as evidence
 import registry_client.messaging as messaging
 import registry_client.scheduling as scheduling
+import registry_client.coordinator as coordinator
 
-__all__ = ["auth", "breg", "casework", "discovery", "evidence", "messaging", "scheduling"]
+__all__ = ["auth", "breg", "casework", "discovery", "evidence", "messaging", "scheduling", "coordinator"]
 __version__ = "0.44.0"

@@ -1,0 +1,16 @@
+{
+  "bregUrl": "https://registry.example.org/",
+  "bregProfile": "issuance-applier",
+  "caseworkUrl": "https://casework.example.org/",
+  "caseworkProfile": "staff",
+  "messagingUrl": "https://messaging.example.org/",
+  "tokens": {
+    "breg": {"headerFile": "/run/secrets/app/breg.headers"},
+    "casework": {"headerFile": "/run/secrets/app/casework.headers"},
+    "messaging": {"headerFile": "/run/secrets/app/messaging.headers"}
+  },
+  "inbox": "/var/lib/example-application/inbox.sqlite",
+  "listen": "127.0.0.1:9300",
+  "wakeTokenFile": "/run/secrets/app/wake-token",
+  "wakeRecipientBinding": "licensing-application"
+}
