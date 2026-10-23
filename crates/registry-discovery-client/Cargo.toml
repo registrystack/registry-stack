@@ -15,7 +15,6 @@ workspace = true
 registry-discovery = { workspace = true, default-features = false }
 registry-discovery-profile.workspace = true
 registry-platform-canonical-json.workspace = true
-registry-platform-httpsec.workspace = true
 registry-platform-httputil.workspace = true
 reqwest.workspace = true
 serde.workspace = true

@@ -11,7 +11,6 @@ use registry_discovery::{
     MAXIMUM_RESULT_RECORDS,
 };
 use registry_platform_canonical_json::parse_json_strict;
-use registry_platform_httpsec::{response_trace_id, TraceId};
 use registry_platform_httputil::client::{
     build_client, read_failure_kind, send_failure_kind, OutboundOptions, ServiceBaseUrl,
 };
@@ -264,15 +263,6 @@ impl DiscoveryClient {
         if status.is_success() && status != StatusCode::OK {
             return Err(DiscoveryClientError::Protocol);
         }
-        let problem_trace =
-            if !status.is_success() && response.headers().contains_key("traceparent") {
-                Some(
-                    response_trace_id(response.headers())
-                        .map_err(|_| DiscoveryClientError::Protocol)?,
-                )
-            } else {
-                None
-            };
         let content_type = response_content_type(response.headers());
         let maximum = if status.is_success() {
             self.maximum_response_bytes
@@ -297,11 +287,7 @@ impl DiscoveryClient {
             {
                 return Err(DiscoveryClientError::Protocol);
             }
-            Err(problem_from_response(
-                status,
-                &bytes,
-                problem_trace.as_ref(),
-            )?)
+            Err(problem_from_response(status, &bytes)?)
         }
     }
 }
@@ -399,7 +385,6 @@ struct ProblemBody {
 fn problem_from_response(
     status: StatusCode,
     bytes: &[u8],
-    response_trace: Option<&TraceId>,
 ) -> Result<DiscoveryClientError, DiscoveryClientError> {
     let body: ProblemBody = strict_decode(bytes)?;
     if body.status != status.as_u16() {
@@ -431,61 +416,31 @@ fn problem_from_response(
         }
         _ if known_problem_type(&body.type_uri) => return Err(DiscoveryClientError::Protocol),
         _ if valid_unrecognized_problem(&body, status) => {
-            validate_supplied_problem_fields(&body, response_trace, None)?;
             return Ok(DiscoveryClientError::UnrecognizedProblem {
                 status: status.as_u16(),
             });
         }
         _ => return Err(DiscoveryClientError::Protocol),
     };
-    validate_supplied_problem_fields(&body, response_trace, Some(expected_code))?;
+    validate_supplied_code(&body, expected_code)?;
     Ok(DiscoveryClientError::Problem {
         status: status.as_u16(),
         problem,
     })
 }
 
-/// Legacy documents need only the original trio. Recognized supplied members
-/// are checked, while genuinely additive members stay opaque and bounded by
-/// the whole problem-body limit.
-fn validate_supplied_problem_fields(
+/// Legacy documents carry no `code`. When a known problem supplies one it must
+/// be that problem's code; every other supplied member stays opaque and bounded
+/// by the whole problem-body limit.
+fn validate_supplied_code(
     body: &ProblemBody,
-    response_trace: Option<&TraceId>,
-    expected_code: Option<&str>,
+    expected_code: &str,
 ) -> Result<(), DiscoveryClientError> {
-    if let Some(value) = body.additional.get("code") {
-        let code = value.as_str().ok_or(DiscoveryClientError::Protocol)?;
-        let bounded_code = code.len() <= 128
-            && (valid_problem_code(code)
-                || code.split_once('.').is_some_and(|(family, reason)| {
-                    [family, reason].into_iter().all(|segment| {
-                        segment
-                            .as_bytes()
-                            .first()
-                            .is_some_and(u8::is_ascii_lowercase)
-                            && segment.bytes().all(|byte| {
-                                byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-'
-                            })
-                    })
-                }));
-        if !bounded_code || expected_code.is_some_and(|expected| code != expected) {
-            return Err(DiscoveryClientError::Protocol);
-        }
+    match body.additional.get("code") {
+        None => Ok(()),
+        Some(value) if value.as_str() == Some(expected_code) => Ok(()),
+        Some(_) => Err(DiscoveryClientError::Protocol),
     }
-    if let Some(value) = body.additional.get("detail") {
-        let detail = value.as_str().ok_or(DiscoveryClientError::Protocol)?;
-        if detail.chars().count() > 1024 || detail.chars().any(char::is_control) {
-            return Err(DiscoveryClientError::Protocol);
-        }
-    }
-    if let Some(value) = body.additional.get("traceId") {
-        let trace = value.as_str().ok_or(DiscoveryClientError::Protocol)?;
-        let trace = TraceId::parse(trace).map_err(|_| DiscoveryClientError::Protocol)?;
-        if response_trace != Some(&trace) {
-            return Err(DiscoveryClientError::Protocol);
-        }
-    }
-    Ok(())
 }
 
 fn known_problem_type(type_uri: &str) -> bool {
@@ -977,57 +932,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn supplied_problem_fields_are_bounded_and_known_codes_are_consistent() {
-        for (field, value) in [
-            ("code", json!("service.unavailable")),
-            ("code", json!("canary".repeat(30))),
-            ("code", json!(null)),
-            ("detail", json!("canary\nprivate-detail")),
-            ("detail", json!("x".repeat(1025))),
-            ("detail", json!(false)),
-            ("detail", json!(null)),
-            ("traceId", json!("not-a-trace")),
-            ("traceId", json!("0".repeat(32))),
-            ("traceId", json!(null)),
-        ] {
-            let mut body = legacy_problem();
-            body[field] = value;
-            let error = exchange_problem(body, &[]).await;
-            assert!(
-                matches!(error, DiscoveryClientError::Protocol),
-                "supplied {field} must be validated"
-            );
-            assert!(!error.to_string().contains("canary"));
-        }
-    }
-
-    #[tokio::test]
-    async fn future_problem_codes_keep_legacy_and_current_bounded_grammar() {
-        for (code, accepted) in [
-            ("future-conflict", true),
-            ("future-.conflict-", true),
-            ("1future.conflict", false),
-            ("future.1conflict", false),
-        ] {
-            let mut body = legacy_problem();
-            body["type"] =
-                json!("https://id.registrystack.org/problems/registry-discovery/future-conflict");
-            body["title"] = json!("Future conflict");
-            body["code"] = json!(code);
-            let error = exchange_problem(body, &[]).await;
-            assert_eq!(
-                matches!(
-                    error,
-                    DiscoveryClientError::UnrecognizedProblem { status: 400 }
-                ),
-                accepted,
-                "supplied code grammar: {code}"
-            );
-        }
-    }
-
-    #[tokio::test]
-    async fn supplied_problem_trace_correlates_without_requiring_new_legacy_fields() {
+    async fn problem_classification_ignores_the_response_traceparent() {
         const TRACE: &str = "11111111111111111111111111111111";
         const HEADER: &str = "00-11111111111111111111111111111111-2222222222222222-01";
         let mut current = legacy_problem();
@@ -1036,36 +941,37 @@ mod tests {
         current["traceId"] = json!(TRACE);
         current["futureRecovery"] = json!({"retry":false});
         for body in [legacy_problem(), current.clone()] {
-            assert!(matches!(
-                exchange_problem(body, &[HEADER]).await,
-                DiscoveryClientError::Problem {
-                    problem: DiscoveryProblem::InvalidRequest,
-                    ..
-                }
-            ));
-        }
-        assert!(matches!(
-            exchange_problem(legacy_problem(), &[]).await,
-            DiscoveryClientError::Problem {
-                problem: DiscoveryProblem::InvalidRequest,
-                ..
+            for headers in [
+                vec![],
+                vec![HEADER],
+                vec!["00-33333333333333333333333333333333-2222222222222222-01"],
+                vec![HEADER, HEADER],
+                vec!["invalid"],
+            ] {
+                assert!(
+                    matches!(
+                        exchange_problem(body.clone(), &headers).await,
+                        DiscoveryClientError::Problem {
+                            problem: DiscoveryProblem::InvalidRequest,
+                            ..
+                        }
+                    ),
+                    "traceparent {headers:?} must not change the classification"
+                );
             }
-        ));
-        for headers in [
-            vec![],
-            vec!["00-33333333333333333333333333333333-2222222222222222-01"],
-            vec!["00-11111111111111111111111111111111-0000000000000000-01"],
-            vec![HEADER, HEADER],
-        ] {
+        }
+    }
+
+    #[tokio::test]
+    async fn a_supplied_code_must_match_the_known_problem() {
+        for value in [json!("service.unavailable"), json!(null)] {
+            let mut body = legacy_problem();
+            body["code"] = value;
             assert!(matches!(
-                exchange_problem(current.clone(), &headers).await,
+                exchange_problem(body, &[]).await,
                 DiscoveryClientError::Protocol
             ));
         }
-        assert!(matches!(
-            exchange_problem(legacy_problem(), &["invalid"]).await,
-            DiscoveryClientError::Protocol
-        ));
     }
 
     #[tokio::test]

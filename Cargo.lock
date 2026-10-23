@@ -5565,7 +5565,6 @@ dependencies = [
  "registry-evidence-verifier",
  "registry-platform-canonical-json",
  "registry-platform-crypto",
- "registry-platform-httpsec",
  "registry-platform-httputil",
  "reqwest 0.12.28",
  "serde",
