@@ -6,7 +6,10 @@
   effects and durably blocks that application. It returns the same value-free
   `409 mutation.conflict`, disables Apply, and leaves Rebase available to correct
   the input. Stale Record revisions remain `412 precondition.failed` and do not
-  create that block.
+  create that block. Every package activation keeps that block until Rebase;
+  one that changes the Action withdraws its Review round but keeps the refusal.
+  Review recovery, `bregctl` and `applicationStatus` report it as
+  `application-refused` rather than as a package change.
 - Bind Proposal review delivery digests to the configured `review.source`,
   including source namespaces distinct from the registry id. Pending legacy
   submissions recover their acceptance under the same request and idempotency

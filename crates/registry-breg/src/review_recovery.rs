@@ -64,6 +64,8 @@ pub enum ReviewRecoveryRefusal {
     ProposalNotSubmitted,
     /// Activation blocked the current submission; its requester must Rebase or Cancel.
     PackageChanged,
+    /// A manual Apply was refused for the current submission; its requester must Rebase or Cancel.
+    ApplicationRefused,
     /// The submission's state and code do not call for this operation.
     SubmissionState,
     /// The application job has no transient failure with remaining attempts.
@@ -80,6 +82,7 @@ impl ReviewRecoveryRefusal {
             Self::DetailErased => "detail-erased",
             Self::ProposalNotSubmitted => "proposal-not-submitted",
             Self::PackageChanged => "package-changed",
+            Self::ApplicationRefused => "application-refused",
             Self::SubmissionState => "submission-state",
             Self::ApplicationState => "application-state",
             Self::ApprovalUnavailable => "approval-unavailable",
@@ -340,12 +343,13 @@ impl ReviewRecoveryOperatorService {
         let request_retained: bool = row.get(4);
         let result_recorded: bool = row.get(5);
         let proposal_submitted = row.get::<_, Option<bool>>(6) == Some(true);
-        if operation == Operation::Resubmit
-            && proposal_submitted
-            && row.get::<_, Option<String>>(7).is_some()
-        {
+        if let (Operation::Resubmit, true, Some(blocked)) = (
+            operation,
+            proposal_submitted,
+            row.get::<_, Option<String>>(7),
+        ) {
             return Err(ReviewRecoveryError::Ineligible {
-                reason: ReviewRecoveryRefusal::PackageChanged,
+                reason: block_refusal(&blocked),
                 state,
                 code,
             }
@@ -461,8 +465,11 @@ async fn retry_application_in_transaction(
         .ok_or(ReviewRecoveryError::NotFound)?;
     let state: String = row.get(0);
     let code: Option<String> = row.get(1);
-    let reason = if row.get::<_, bool>(4) && row.get::<_, Option<String>>(7).is_some() {
-        Some(ReviewRecoveryRefusal::PackageChanged)
+    let blocked = row
+        .get::<_, Option<String>>(7)
+        .filter(|_| row.get::<_, bool>(4));
+    let reason = if let Some(blocked) = blocked {
+        Some(block_refusal(&blocked))
     } else if row.get::<_, bool>(3) {
         Some(ReviewRecoveryRefusal::Withdrawn)
     } else if !row.get::<_, bool>(4) {
@@ -572,6 +579,15 @@ fn eligibility(
     }
 }
 
+/// The refusal for a Proposal whose lifecycle row carries `blocked_reason`.
+fn block_refusal(blocked_reason: &str) -> ReviewRecoveryRefusal {
+    if blocked_reason == "application-refused" {
+        ReviewRecoveryRefusal::ApplicationRefused
+    } else {
+        ReviewRecoveryRefusal::PackageChanged
+    }
+}
+
 fn unavailable(_error: ProposalRetentionError) -> ReviewRecoveryError {
     ReviewRecoveryError::Unavailable
 }
@@ -644,6 +660,22 @@ mod tests {
                 Some(refusal)
             );
         }
+    }
+
+    #[test]
+    fn a_refused_apply_block_is_its_own_refusal_not_a_package_change() {
+        assert_eq!(
+            block_refusal("application-refused"),
+            ReviewRecoveryRefusal::ApplicationRefused
+        );
+        assert_eq!(
+            block_refusal("package-changed"),
+            ReviewRecoveryRefusal::PackageChanged
+        );
+        assert_eq!(
+            ReviewRecoveryRefusal::ApplicationRefused.as_str(),
+            "application-refused"
+        );
     }
 
     #[test]

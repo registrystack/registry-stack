@@ -3463,6 +3463,10 @@ fn review_recovery_failure(command: &'static str, error: ReviewRecoveryCliError)
             "review-recovery.submission.ineligible",
             "the current request is blocked by a package change (package-changed); its requester must Rebase and submit for fresh Review, or Cancel it; restoring the old package does not reopen the closed work".to_owned(),
         ),
+        ReviewRecoveryCliError::Ineligible { reason: "application-refused", .. } => (
+            "review-recovery.submission.ineligible",
+            "the current request is blocked by a refused Apply (application-refused); its requester must Rebase and submit for fresh Review, or Cancel it".to_owned(),
+        ),
         ReviewRecoveryCliError::Ineligible {
             reason,
             state,
@@ -13960,6 +13964,23 @@ mod tests {
             }
             assert!(!encoded.contains("proposal-not-submitted"));
         }
+    }
+
+    #[test]
+    fn refused_apply_recovery_names_the_refusal_not_a_package_change() {
+        let report = review_recovery_failure(
+            "review-recovery resubmit",
+            ReviewRecoveryCliError::Ineligible {
+                reason: "application-refused",
+                state: "accepted".into(),
+                code: None,
+            },
+        );
+        let encoded = serde_json::to_string(&report).unwrap();
+        for expected in ["application-refused", "Rebase", "fresh Review", "Cancel"] {
+            assert!(encoded.contains(expected));
+        }
+        assert!(!encoded.contains("package change"));
     }
 
     #[test]
