@@ -287,7 +287,8 @@ DOCUMENTS-SEC-54:
   when the policy permits it. Under citizen
   delivery the citizen is the custodian and the policy lists no granting
   profile, so the reserving system never grants (DOCUMENTS-DEC-10); it keeps
-  metadata and status visibility only. Nothing extends
+  metadata and status visibility only, and it cannot list the grants either
+  (DOCUMENTS-DEC-35). Nothing extends
   a grant, names an organization, or invites a reader; release consults the
   stored grant row only, never current claims beyond the recipient's
   identity and recipient-role profile.
@@ -347,8 +348,11 @@ decisions above carry them:
 - Under citizen delivery the reserving system holds no grant authority: the
   citizen is the custodian, and a reserving system that is not the custodian
   never grants even if its profile were listed, so a grant attempt by the reserving system answers 403 `profile.not-authorized`
-  and the owning system keeps only the metadata and grant-history list
-  (DOCUMENTS-DEC-10, DOCUMENTS-SEC-26).
+  and the owning system keeps only metadata and status. Listing a
+  document's grants is the custodian's alone: the reserving system's list
+  answers 403 `profile.not-authorized` and its document `actions` omit
+  `list-shares`, so the issuer never learns whom the citizen shared with
+  (DOCUMENTS-DEC-10, DOCUMENTS-DEC-35, DOCUMENTS-SEC-26).
 - The owning system that sees a document but may not download it gets 403
   `profile.not-authorized`, not 404 (DOCUMENTS-SEC-10, DOCUMENTS-DEC-10).
 - Requests that find the transfer budget spent are refused at once; the

@@ -35,8 +35,8 @@ Use the principal selected by that claim when naming a custodian or recipient; i
 The probes take no token.
 
 A document's custodian can read its verified bytes and request erasure.
-The system that reserved it may retain metadata access and authority to manage grants under the
-policy without direct access to the bytes.
+The system that reserved it for another custodian keeps metadata and status access only: it cannot
+read the bytes, manage grants, or list them.
 Use the returned document's `actions` to present available operations, and handle refusal when an
 operation runs: authority and verification state can change after a read.
 An unknown document and one you may not see both return `404 resource.not-found`.
@@ -110,8 +110,9 @@ current access profile must remain one of the policy's recipient profiles.
 Issuing a grant does not check which profile a recipient's future token will select.
 
 `GET /v1/document-grants` lists only grants you can redeem now.
-`GET /v1/documents/{documentId}/grants` gives the custodian or the owning system the document's
-grant history, including revoked and expired grants.
+`GET /v1/documents/{documentId}/grants` gives the custodian the document's grant history, including
+revoked and expired grants. The reserving system that is not the custodian gets
+`403 profile.not-authorized`, so it never learns whom the custodian shared with.
 An authorized `DELETE /v1/document-grants/{grantId}` revokes a grant; repeating it returns its
 current view without another change.
 Revocation and expiry stop new downloads, while a download already admitted can finish within

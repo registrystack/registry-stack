@@ -434,8 +434,9 @@ invariants:
       Grant issue and revoke require the custodian, under a granting
       profile the policy lists or as the represented principal when the policy
       permits it; a reserving system that is not the custodian never grants;
-      the grant list is also open to the owning system; a caller with no standing on the document gets
-      the answer an unknown identifier gets.
+      the grant list is the custodian's alone, so the owning system that is not
+      the custodian is refused it and is not offered list-shares; a caller with
+      no standing on the document gets the answer an unknown identifier gets.
     refusal: >-
       Answer 403 profile.not-authorized only to a caller who already sees the
       document, and 404 resource.not-found to every other caller.

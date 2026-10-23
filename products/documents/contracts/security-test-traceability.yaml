@@ -137,6 +137,7 @@ entries:
     tests:
       - {path: crates/registry-documents/tests/postgres_documents.rs, name: grant_authority_and_unknown_ids_answer_without_disclosing_a_document}
       - {path: crates/registry-documents-core/src/access.rs, name: the_owner_matches_the_reserver_s_kind_as_well_as_its_subject}
+      - {path: crates/registry-documents-core/src/access.rs, name: the_reserving_system_sees_a_delivered_document_but_may_neither_grant_nor_read_it}
   - id: DOCUMENTS-SEC-27
     tests:
       - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_version_approved_under_another_binding_is_released_to_nobody}

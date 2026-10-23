@@ -104,7 +104,7 @@ fn status(answer: &support::Answer) -> String {
 
 async fn grant_state(api: &Api, document: &str) -> String {
     let grants = api
-        .get(APP, &format!("/v1/documents/{document}/grants"))
+        .get(CITIZEN, &format!("/v1/documents/{document}/grants"))
         .await;
     assert_eq!(grants.status, 200);
     grants.json()["items"][0]["state"]
