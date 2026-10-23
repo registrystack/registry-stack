@@ -40,9 +40,8 @@ v0.42.0.
 
 ``COORDINATOR_CLIENT_FIRST_RELEASE`` is the single place that decides which
 release first adds the Registry Coordinator namespace and native bindings to the
-unified Node and Python client packages. The facades carry no Coordinator
-namespace yet, so the client stays held until its process-instance client
-returns.
+unified Node and Python client packages, beginning in v0.44.0. Client readiness
+does not admit the runtime artifacts, which follow their own roster gates.
 
 ``COORDINATOR_FIRST_RELEASE`` is the single place that decides which release
 first ships the Registry Coordinator binaries, ``coordinator`` and
