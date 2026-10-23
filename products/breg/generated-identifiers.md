@@ -40,23 +40,34 @@ classified `public` or `internal`, and never a `reference`. BReg keeps every
 issued value with its scope values after the record is erased, so a scope must
 not hold restricted data or point at a person; use a jurisdiction or category
 code. BReg includes the scope values in both the allocation namespace and a
-database uniqueness constraint. Omit it for one namespace across that Record type; a
-`random` code always has one namespace across its Record type. Include the scope fields when
-looking up a scoped identifier, since the same code can exist in another scope.
-The compiler limits the combined maximum size of the identifier field and its
-scope fields to a 1 KiB index budget. For string and text fields, it counts
-four bytes per character to cover UTF-8 values, including retained identifiers
-seeded during migration. Use short keys for scope fields rather than descriptions.
-A scope field cannot change after
-the record is created, because moving a number to another namespace would
+database uniqueness constraint. Omit it for one namespace across that Record
+type; a `random` code always has one namespace across its Record type. Include
+the scope fields when looking up a scoped identifier, since the same code can
+exist in another scope. The compiler limits the combined maximum size of the
+identifier field and its scope fields to a 1 KiB index budget. For string and
+text fields, it counts four bytes per character to cover UTF-8 values,
+including retained identifiers seeded during migration. Use short keys for
+scope fields rather than descriptions. A scope field cannot change after the
+record is created, because moving a number to another namespace would
 invalidate its issued meaning. Issued values are never recycled, including
-after a record is tombstoned or erased. Sequences are monotonic, not gapless.
+after a record is tombstoned or erased.
 
 Direct create, batch/import create, and Action create allocate in the write
 transaction. A Proposal allocates on Submit and freezes the exact values in
 its reviewed effects. A replay of Submit, Apply, or Retry reuses those values.
-Revising and submitting again can allocate fresh values; canceled or replaced
-values remain reserved.
+
+Sequences are monotonic, not gapless. A create that rolls back releases its
+number, so a failed write leaves no gap. Gaps come from three places: a
+Proposal that is rejected or cancelled after Submit keeps the values Submit
+allocated; Revise followed by a fresh Submit can allocate new values and
+leaves the earlier ones reserved; and a sequence adopted on an existing field
+starts after the highest retained number and skips values already reserved.
+A register that must issue gapless numbers therefore cannot use `sequence`
+with a Proposal Action.
+
+A `sequence` value is guessable and shows how many values its scope has
+issued. Use `random` for a code that people outside the registry see, such as
+one printed on a certificate and checked on a public verification page.
 
 For a new registry, the compiler installs allocation state and the unique
 constraint with the initial schema. Enabling generation on a field in an
