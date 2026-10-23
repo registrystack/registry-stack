@@ -367,6 +367,79 @@ pub fn check_runtime_file(path: &Path, environment: bool) -> OfflineCheck {
     check
 }
 
+/// Check one generated runtime document against an already loaded bundle.
+///
+/// This is the internal authoring seam used before a candidate is published.
+/// It applies the runtime's own grammar, listener, signer, secret-provider,
+/// TLS, extract, and acquisition binding rules without resolving a secret,
+/// opening an extract, loading activated authority, or contacting a service.
+pub fn check_runtime_bindings_file(path: &Path, bundle: &Bundle) -> OfflineCheck {
+    let mut check = OfflineCheck::new(path.display().to_string());
+    let bytes = match read_bounded(path, MAX_CONFIG_BYTES as u64) {
+        Ok(bytes) => bytes,
+        Err(_) => {
+            check.push_deployment(
+                Severity::Error,
+                "evidence.runtime.unavailable",
+                "the runtime file could not be read",
+                "Generate a readable runtime file from the selected Evidence target.",
+            );
+            check.mark_unavailable();
+            return check;
+        }
+    };
+    check.files_checked = 1;
+    let config = match RuntimeConfig::decode_yaml_with(&bytes, |name| Some(format!("${{{name}}}")))
+    {
+        Ok(loaded) => loaded.config,
+        Err(ConfigError::Refused(report)) => {
+            push_offline_refusal(&mut check, *report, &bytes);
+            return check;
+        }
+        Err(other) => {
+            check.push_deployment(
+                Severity::Error,
+                "evidence.runtime.invalid",
+                other.fault().cause(),
+                "Correct the selected target as the message says.",
+            );
+            return check;
+        }
+    };
+    let layout = Layout::scan(&check.file, &bytes);
+    for finding in &config.findings() {
+        if layout.substituted(&finding.pointer) {
+            continue;
+        }
+        check.push_runtime(
+            &layout,
+            finding.code,
+            &finding.pointer,
+            finding.at_key,
+            finding.message(),
+            finding.action.as_str(),
+        );
+    }
+    for finding in runtime_binding_findings(&bundle.config, &config) {
+        if layout.substituted(&finding.pointer) {
+            continue;
+        }
+        let message = match finding.error.artifact_fault() {
+            Some(fault) => fault.fault().cause().to_owned(),
+            None => finding.error.to_string(),
+        };
+        check.push_runtime(
+            &layout,
+            finding.code,
+            &finding.pointer,
+            false,
+            message,
+            finding.action,
+        );
+    }
+    check
+}
+
 /// Report a runtime file the reader refused while expressions stood for
 /// themselves.
 ///

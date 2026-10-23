@@ -350,6 +350,78 @@ fn package_accepts_local_targets_with_the_same_complete_grant_model() {
 }
 
 #[test]
+fn provisioning_reports_the_bundle_and_runtime_secret_union_once() {
+    let expected = [
+        "audit-hmac-key",
+        "signing-p256-private-jwk",
+        "source-token",
+        "subject-binding-hmac-key",
+    ];
+    for format in ["human", "json"] {
+        let fixture = Fixture::new();
+        fixture.use_default_local_signer();
+        edit_json(&fixture.target, |target| {
+            target["connections"]["registry-http"]["authentication"] =
+                json!({"type":"bearer","tokenRef":"secret:file/source-token"});
+        });
+
+        let output = fixture.package(format);
+
+        assert_success(&output, "local package provisioning report");
+        assert_value_free(&output);
+        if format == "json" {
+            let report: Value = serde_json::from_slice(&output.stdout).expect("JSON report");
+            assert_eq!(
+                report["requiredSecrets"],
+                json!(expected),
+                "the JSON report must include the exact sorted union"
+            );
+        } else {
+            let stdout = String::from_utf8(output.stdout).expect("human report");
+            let reported = stdout
+                .lines()
+                .filter_map(|line| line.strip_prefix("Provision secret:file/"))
+                .collect::<Vec<_>>();
+            assert_eq!(reported, expected);
+        }
+    }
+}
+
+#[test]
+fn target_check_and_package_refuse_runtime_mismatches_at_the_authored_location() {
+    for command in ["check", "package"] {
+        let fixture = Fixture::new();
+        edit_json(&fixture.target, |target| {
+            target["listener"]["trustProxyIdentityHeaders"] = json!(true);
+        });
+
+        let output = if command == "check" {
+            fixture.check_production("json")
+        } else {
+            fixture.package("json")
+        };
+
+        assert_failed(&output, "invalid target listener");
+        assert_value_free(&output);
+        assert!(!fixture.output.exists());
+        let report: Value = serde_json::from_slice(&output.stdout).expect("JSON refusal report");
+        let diagnostic = report["diagnostics"]
+            .as_array()
+            .and_then(|items| {
+                items
+                    .iter()
+                    .find(|item| item["code"] == "evidence.runtime.invalid-listener")
+            })
+            .unwrap_or_else(|| panic!("{command}: missing listener diagnostic: {report}"));
+        assert_eq!(diagnostic["path"], "/listener/trustProxyIdentityHeaders");
+        assert!(diagnostic["source"]["file"]
+            .as_str()
+            .is_some_and(|file| file.ends_with("production-target/target.yaml")));
+        fixture.assert_no_staging_residue();
+    }
+}
+
+#[test]
 fn local_target_bootstrap_generates_matching_keys_and_repairs_only_the_public_half() {
     let fixture = Fixture::new();
     fixture.use_default_local_signer();
@@ -1962,12 +2034,19 @@ fi
 
 fixture=''
 json=0
+runtime=''
 previous=''
 for arg in "$@"; do
   if [ "$previous" = '--fixture' ]; then fixture=$arg; fi
+  if [ "$previous" = '--runtime-config' ]; then runtime=$arg; fi
   if [ "$arg" = '--json' ]; then json=1; fi
   previous=$arg
 done
+
+if [ -n "$runtime" ] && grep -q 'trustProxyIdentityHeaders: true' "$runtime"; then
+  printf '{"ok":false,"command":"bundle-check","status":"domain-refusal","apiVersion":"id.registrystack.org/formats/evidence/ctl-report/v1alpha1","kind":"EvidenceCtlReport","filesChecked":1,"diagnostics":[{"severity":"error","code":"evidence.runtime.invalid-listener","path":"/listener/trustProxyIdentityHeaders","message":"proxy identity headers must not be trusted","suggestedAction":"Write false; Evidence authenticates every request itself.","source":{"file":"%s","line":9,"column":31}}]}\n' "$runtime"
+  exit 1
+fi
 
 failure=${FAKE_EVIDENCE_FAIL:-}
 if [ "$failure" = 'check' ] && [ -z "$fixture" ]; then

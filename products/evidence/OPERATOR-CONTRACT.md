@@ -113,7 +113,9 @@ unsafe bundle safe.
 target into a new candidate directory. It is a create-only authoring command,
 not an approval, promotion, deployment, key-generation, caller-registration,
 or service-start command. It runs the real `evidence` binary through its
-bundle-only validation entry point and evaluates every referenced fixture
+offline bundle-and-runtime validation entry point, including exact extract,
+signer-assurance, listener, secret-provider, TLS, and acquisition bindings,
+and evaluates every referenced fixture
 without generating a temporary signing key or other validation secret. It then
 atomically publishes a candidate containing immutable `bundle/` with `SHA256SUMS`
 and an optional `REVISION`, plus separate `runtime.yaml` and
@@ -121,9 +123,11 @@ and an optional `REVISION`, plus separate `runtime.yaml` and
 local request, audit entry, or source response.
 
 The operator reviews and transfers the exact package, records its package
-digest, and independently provisions the signing key, audit HMAC key,
-subject-binding HMAC key, and source credentials below the runtime's secret
-root. Secret ownership and mode requirements remain unchanged: each referenced
+digest, and independently provisions every logical file-secret reference the
+package report lists. The list is the deduplicated union of governed bundle
+references and generated runtime references, including a local signer's
+private-key reference; it never resolves or reports a value. Secret ownership
+and mode requirements remain unchanged: each referenced
 secret is a regular owner-only file accepted by the eventual service identity.
 The package and runtime must be non-writable to that identity. The
 runtime is target-specific and remains outside the immutable `bundle/`. Signed assertions continue to carry only a configuration
@@ -206,7 +210,9 @@ stock ThunderID.
 Docker Compose remains a documented deployment adapter, never build output.
 It mounts the approved package unchanged and read-only, supplies a
 separate container runtime file and owner-readable secret mounts, gives only
-the audit path persistent writable storage, binds Evidence privately, and
+the audit path persistent writable storage while serving, activates target
+authority explicitly through a one-shot service, mounts that activated state
+read-only into the serving process, binds Evidence privately, and
 keeps public TLS and routing operator-controlled. The OIDC issuer retains its
 public HTTPS issuer identity and JWKS URI: internal plain-HTTP service
 names do not replace either value. Container images and their provenance are

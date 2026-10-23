@@ -482,16 +482,24 @@ impl FixtureTarget {
                 Some(runtime_path),
                 &["--format", "json"],
             ),
-            Self::TargetedEditable { compilation } => run_evidence_step(
-                evidence_bin,
-                &["bundle-check", "--bundle"],
-                Some(&compilation.bundle_path),
-                &["--json"],
-            ),
+            Self::TargetedEditable { compilation } => {
+                let runtime = compilation.runtime_path.to_string_lossy();
+                run_evidence_step(
+                    evidence_bin,
+                    &["bundle-check", "--bundle"],
+                    Some(&compilation.bundle_path),
+                    &["--runtime-config", runtime.as_ref(), "--json"],
+                )
+            }
         };
         if let Self::TargetedEditable { compilation } = self {
-            let report = crate::authored::runtime_bundle_refusal(
+            let report = crate::authored::runtime_target_refusal(
                 Report::new(std::mem::take(&mut outcome.diagnostics)),
+                &compilation.runtime_path,
+                Some(&compilation.target_path),
+            );
+            let report = crate::authored::runtime_bundle_refusal(
+                report,
                 &compilation.bundle_path,
                 project,
                 &compilation.fixture_paths,

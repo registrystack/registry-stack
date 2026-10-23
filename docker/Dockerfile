@@ -23,7 +23,17 @@ ARG SOURCE_DATE_EPOCH=0
 
 # Keep the tag for humans and the digest for reproducible pulls.
 FROM rust:1.95-trixie@sha256:f49565f188ee00bc2a18dd418183f2c5f23ef7d6e691890517ed341a598f67c3 AS chef
-RUN cargo install cargo-chef --locked --version 0.1.77
+# aws-lc-fips-sys needs the same native build tools as the release builder.
+RUN rm -f /etc/apt/sources.list.d/debian.sources \
+    && printf '%s\n' \
+        'deb [check-valid-until=no] https://snapshot.debian.org/archive/debian/20250810T000000Z trixie main' \
+        >/etc/apt/sources.list \
+    && apt-get update -qq \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        cmake=3.31.6-2 \
+        golang-go=2:1.24~2 \
+        libclang-19-dev=1:19.1.7-3+b1 \
+    && cargo install cargo-chef --locked --version 0.1.77
 WORKDIR /workspace
 
 # The planner reruns on any source change, but that is cheap: the recipes it
@@ -54,9 +64,12 @@ RUN --mount=type=bind,source=release/scripts/install-runtime-packages.sh,target=
     && mkdir -p \
         /workspace/runtime-root/etc/registry-evidence \
         /workspace/runtime-root/var/lib/registry-evidence/audit \
+        /workspace/runtime-root/var/lib/registry-evidence/authority \
     && /workspace/install-runtime-packages.sh /workspace/runtime-root /workspace/runtime-packages \
     && chown -R 65532:65532 /workspace/runtime-root/var/lib/registry-evidence \
-    && chmod 0700 /workspace/runtime-root/var/lib/registry-evidence/audit \
+    && chmod 0700 \
+        /workspace/runtime-root/var/lib/registry-evidence/audit \
+        /workspace/runtime-root/var/lib/registry-evidence/authority \
     && find /workspace/runtime-root -exec touch -h --date="@${SOURCE_DATE_EPOCH}" {} +
 
 FROM gcr.io/distroless/cc-debian13:nonroot@sha256:e792ab3d241a468a4fd7519ddbbebe66b49b5f365771716ea688ad40b6c6f1c2 AS evidence

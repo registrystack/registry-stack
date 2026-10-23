@@ -7,6 +7,7 @@ import contextlib
 import importlib.util
 import io
 import json
+import os
 import subprocess
 import sys
 import unittest
@@ -15,7 +16,39 @@ from pathlib import Path
 
 
 SCRIPT = Path(__file__).with_name("runtime-preflight.py")
+COMPOSE_FILE = Path(__file__).with_name("compose") / "docker-compose.yaml"
+DOCKERFILE = Path(__file__).with_name("Dockerfile")
+RELEASE_DOCKERFILE = Path(__file__).parents[1] / "release/docker/Dockerfile.evidence"
 DIGEST = "a" * 64
+
+
+def render_compose_services(*services: str) -> subprocess.CompletedProcess[str]:
+    environment = os.environ.copy()
+    environment.pop("COMPOSE_PROFILES", None)
+    environment.update(
+        {
+            "EVIDENCE_CANDIDATE_DIR": "/tmp/evidence-candidate",
+            "EVIDENCE_IMAGE": f"example.invalid/evidence@sha256:{DIGEST}",
+            "EVIDENCE_RUNTIME_FILE": "/tmp/evidence-runtime.yaml",
+            "EVIDENCE_SECRET_ROOT": "/tmp/evidence-secrets",
+            "EVIDENCE_TRANSIT_SOCKET_DIR": "/tmp/evidence-transit",
+        }
+    )
+    command = ["docker", "compose", "-f", str(COMPOSE_FILE), "config"]
+    if services:
+        command.extend(["--format", "json", *services])
+    else:
+        command.append("--services")
+    return subprocess.run(
+        command,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        env=environment,
+    )
+
+
 def load_module():
     spec = importlib.util.spec_from_file_location("runtime_preflight", SCRIPT)
     if spec is None or spec.loader is None:
@@ -51,6 +84,12 @@ def service(name: str) -> dict[str, object]:
                 "read_only": False,
             },
             {
+                "type": "volume",
+                "source": f"{name}-authority",
+                "target": "/var/lib/registry-evidence/authority",
+                "read_only": True,
+            },
+            {
                 "type": "tmpfs",
                 "target": "/dev/shm",
                 "read_only": True,
@@ -62,7 +101,11 @@ def service(name: str) -> dict[str, object]:
 def deployment(services: dict[str, dict[str, object]]) -> dict[str, object]:
     return {
         "services": services,
-        "volumes": {f"{name}-audit": {} for name in services},
+        "volumes": {
+            key: {}
+            for name in services
+            for key in (f"{name}-audit", f"{name}-authority")
+        },
     }
 
 
@@ -129,6 +172,54 @@ class RuntimePreflightTest(unittest.TestCase):
         ):
             result = self.module.main(self.argv if argv is None else argv)
         return result, stdout.getvalue(), stderr.getvalue(), run
+
+    def test_authority_activation_is_an_explicit_one_shot_service(self) -> None:
+        default = render_compose_services()
+        self.assertEqual(0, default.returncode, default.stderr)
+        self.assertEqual(["evidence"], default.stdout.splitlines())
+
+        selected = render_compose_services("authority-activate")
+        self.assertEqual(0, selected.returncode, selected.stderr)
+        model = json.loads(selected.stdout)
+        self.assertEqual(["authority-activate"], list(model["services"]))
+        activation = model["services"]["authority-activate"]
+        self.assertEqual("65532:65532", activation["user"])
+        self.assertNotIn("depends_on", activation)
+        readme = COMPOSE_FILE.with_name("README.md").read_text(encoding="utf-8")
+        self.assertIn(
+            "docker compose -f docker-compose.yaml run --rm authority-activate",
+            readme,
+        )
+
+    def test_image_seeds_the_authority_volume_for_the_nonroot_identity(self) -> None:
+        development = DOCKERFILE.read_text(encoding="utf-8").split(
+            "FROM chef AS evidence-builder", 1
+        )[1].split("FROM gcr.io/distroless", 1)[0]
+        release = RELEASE_DOCKERFILE.read_text(encoding="utf-8").split(
+            "FROM docker.io/library/debian", 1
+        )[1].split("FROM gcr.io/distroless", 1)[0]
+        for recipe, evidence_stage in [
+            ("development", development),
+            ("release", release),
+        ]:
+            with self.subTest(recipe=recipe):
+                self.assertIn("/var/lib/registry-evidence/authority", evidence_stage)
+                self.assertIn(
+                    "chown -R 65532:65532 /workspace/runtime-root/var/lib/registry-evidence",
+                    evidence_stage,
+                )
+
+    def test_adopter_builder_carries_locked_fips_build_dependencies(self) -> None:
+        chef_stage = DOCKERFILE.read_text(encoding="utf-8").split(
+            "FROM rust:1.95-trixie", 1
+        )[1].split("FROM chef AS planner", 1)[0]
+        for dependency in [
+            "cmake=3.31.6-2",
+            "golang-go=2:1.24~2",
+            "libclang-19-dev=1:19.1.7-3+b1",
+        ]:
+            with self.subTest(dependency=dependency):
+                self.assertIn(dependency, chef_stage)
 
     def test_all_services_use_native_checks_after_complete_static_preflight(
         self,
@@ -444,6 +535,7 @@ class RuntimePreflightTest(unittest.TestCase):
                 self.module.ServiceSelection("evidence", "evidence"),
                 deployment({"evidence": selected}),
             )
+
         selected = service("evidence")
         selected["volumes"][1]["type"] = "tmpfs"  # type: ignore[index]
         with self.assertRaises(self.module.PreflightError):
@@ -468,6 +560,22 @@ class RuntimePreflightTest(unittest.TestCase):
         with self.assertRaises(self.module.PreflightError):
             self.module.validate_service(
                 self.module.ServiceSelection("evidence", "evidence"), ephemeral
+            )
+
+    def test_activated_authority_state_is_mounted_read_only_for_serving(self) -> None:
+        selected = service("evidence")
+        self.module.validate_service(
+            self.module.ServiceSelection("evidence", "evidence"),
+            deployment({"evidence": selected}),
+        )
+        selected["volumes"][2]["read_only"] = False  # type: ignore[index]
+        with self.assertRaisesRegex(
+            self.module.PreflightError,
+            "audit mount must be the service's only writable mount",
+        ):
+            self.module.validate_service(
+                self.module.ServiceSelection("evidence", "evidence"),
+                deployment({"evidence": selected}),
             )
 
     def test_audit_sink_can_only_succeed_on_the_one_durable_mount(self) -> None:
