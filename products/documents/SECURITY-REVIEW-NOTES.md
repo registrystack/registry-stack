@@ -179,10 +179,11 @@ DOCUMENTS-SEC-14 to DOCUMENTS-SEC-20:
   digest. Backoff starts at 30 seconds, doubles to at most one hour with
   equal jitter, and gives up after about seven days. An unavailable verifier
   never releases; a dead-lettered job leaves the version pending and
-  suspended. At startup, every finalized version not rejected and recorded
-  under another binding is suspended and re-queued, and its pending job under
-  the old binding is cancelled; a job already leased under it ends without a
-  verdict. A worker whose binding differs from the version's retries the job
+  suspended. At startup, once every other startup step has succeeded and the
+  listener is bound, every finalized version not rejected and recorded under
+  another binding is suspended and re-queued, and its pending job under the
+  old binding is cancelled; a start refused before then suspends nothing. A
+  job already leased under the old binding ends without a verdict. A worker whose binding differs from the version's retries the job
   rather than ending it, so instances with different verifiers can run side
   by side during a rollout. A verdict that changes no row while the version
   is still under the same binding and not rejected is not delivered; the job

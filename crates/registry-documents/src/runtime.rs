@@ -4,13 +4,15 @@
 //! configuration, confirms the database answers over the runtime
 //! credential and that its activation ledger names the deployed package
 //! for this deployment, opens the audit journal, activates content storage and the
-//! content verifier, suspends every version verified under another
-//! verifier binding, loads the token issuer's signing keys, binds the
-//! listener, and serves the HTTP surface beside the content verification
+//! content verifier, loads the token issuer's signing keys, binds the
+//! listener, suspends every version verified under another verifier
+//! binding, and serves the HTTP surface beside the content verification
 //! worker, the erasure worker, and the cleanup pass.
 //!
 //! Every step that can refuse a deployment runs before the listener binds,
-//! so a mis-provisioned deployment never answers a request.
+//! so a mis-provisioned deployment never answers a request. The verifier
+//! binding sweep runs after the bind, so a start that is refused never
+//! suspends what an instance already serving released.
 //!
 //! On SIGTERM or SIGINT, `serve` stops accepting, finishes the requests it
 //! is answering, and exits 0.
@@ -310,18 +312,6 @@ async fn prepare_with(
         None => activate_verifier(&config.content_verification, ceiling, &secrets)
             .map_err(|error| RuntimeError::Verifier(error.to_string()))?,
     };
-    let suspended = sweep_bindings(&store, verifier.binding_digest())
-        .await
-        .map_err(|source| RuntimeError::Database {
-            stage: "verifier binding sweep",
-            source,
-        })?;
-    if suspended > 0 {
-        tracing::warn!(
-            suspended,
-            "versions verified under another verifier binding were suspended for verification again"
-        );
-    }
     let schema = store
         .current_schema()
         .await
@@ -379,6 +369,23 @@ async fn prepare_with(
     };
     let project = Arc::new(package.project);
     let keys = config.jwks_fetcher(&secrets).await?;
+    let listener = tokio::net::TcpListener::bind(config.listener.bind.socket_addr())
+        .await
+        .map_err(RuntimeError::Listen)?;
+    // The sweep changes what the instances already serving release, so it
+    // runs only once every step that could refuse this start has succeeded.
+    let suspended = sweep_bindings(&store, verifier.binding_digest())
+        .await
+        .map_err(|source| RuntimeError::Database {
+            stage: "verifier binding sweep",
+            source,
+        })?;
+    if suspended > 0 {
+        tracing::warn!(
+            suspended,
+            "versions verified under another verifier binding were suspended for verification again"
+        );
+    }
     let authenticator = Arc::new(DocumentsAuthenticator::new(
         config.verifier_profile(),
         keys,
@@ -400,9 +407,6 @@ async fn prepare_with(
         },
         hooks,
     ));
-    let listener = tokio::net::TcpListener::bind(config.listener.bind.socket_addr())
-        .await
-        .map_err(RuntimeError::Listen)?;
     Ok(Prepared {
         listener,
         routes: DocumentRoutes {

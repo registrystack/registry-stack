@@ -301,10 +301,12 @@ invariants:
       An operator replaces the content verifier and versions approved under
       the old one keep being released without the new verifier's verdict.
     enforcementPoint: >-
-      At startup, every finalized version not rejected and recorded under
-      another binding digest is suspended and re-enqueued under the current
-      binding, and its pending job under the old binding is cancelled; a
-      rejected version stays rejected. A job already leased under a
+      At startup, once every other startup step has succeeded and the
+      listener is bound, every finalized version not rejected and recorded
+      under another binding digest is suspended and re-enqueued under the
+      current binding, and its pending job under the old binding is
+      cancelled; a rejected version stays rejected. A start refused before
+      then suspends nothing. A job already leased under a
       superseded binding ends without a verdict, and a worker under another
       binding retries a current job rather than ending it.
     refusal: >-

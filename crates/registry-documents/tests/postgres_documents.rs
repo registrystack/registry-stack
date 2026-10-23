@@ -940,6 +940,64 @@ async fn a_verifier_binding_change_at_restart_suspends_and_verifies_again() {
     );
 }
 
+/// SEC-18: a start under another verifier binding that is refused after the
+/// binding sweep could run, here because its listener cannot bind, leaves
+/// every version as the running instance verified it.
+#[tokio::test]
+async fn a_start_refused_at_its_listener_does_not_suspend_verified_versions() {
+    let deployment = deployment().await;
+    let running = FakeVerifier::new("binding-a", APPROVE);
+    let (prepared, api) = start(&deployment, &running).await;
+    let (ready, ready_version) = upload(&api, &pdf(300, 13)).await;
+    prepared.verify_due().await;
+    assert_eq!(status(&api.read(APP, &ready).await), "ready");
+
+    // A candidate under a new binding, with its own audit journal, whose
+    // listener address is already taken.
+    let taken = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let audit = deployment.audit_path();
+    let candidate_runtime = deployment.directory.path().join("runtime-candidate.yaml");
+    std::fs::write(
+        &candidate_runtime,
+        std::fs::read_to_string(&deployment.runtime)
+            .unwrap()
+            .replace(
+                &audit.display().to_string(),
+                &audit
+                    .with_extension("candidate.ndjson")
+                    .display()
+                    .to_string(),
+            )
+            .replace(
+                "bind: 127.0.0.1:0",
+                &format!("bind: {}", taken.local_addr().unwrap()),
+            ),
+    )
+    .unwrap();
+    let candidate = FakeVerifier::new("binding-b", APPROVE);
+    let error = prepare_with_verifier(&candidate_runtime, candidate.clone())
+        .await
+        .expect_err("the candidate cannot bind its listener");
+    assert!(matches!(error, RuntimeError::Listen(_)), "{error}");
+
+    assert_eq!(status(&api.read(APP, &ready).await), "ready");
+    let (binding, jobs): (String, i64) = (
+        deployment
+            .scalar(&format!(
+                "SELECT verified_binding_digest FROM documents_versions WHERE version_id = '{ready_version}'"
+            ))
+            .await,
+        deployment
+            .scalar("SELECT count(*) FROM documents_verification_jobs WHERE state = 'pending'")
+            .await,
+    );
+    assert_eq!((binding.as_str(), jobs), ("binding-a", 0));
+    assert_eq!(
+        api.download(CITIZEN, &ready, &ready_version).await.status,
+        200
+    );
+}
+
 /// SEC-18: while two instances run under different verifier bindings, a
 /// job is never dead-lettered only because the worker that claimed it holds
 /// the other binding. It stays pending for a worker under the version's own
