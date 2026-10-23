@@ -192,7 +192,14 @@ invariants:
       Audit records carry operation, caller pseudonym, sender profile,
       template reference, correlation, outcome class, and a keyed recipient
       reference; log fields never carry payload values; metric labels are
-      closed sets fixed in code. The audit writer opens before serving and its
+      closed sets fixed in code. Authentication refusal diagnostics use only
+      fixed stage labels and static remedy keys, at most once per stage per
+      minute per verifier. This includes HTTP bearer and compact-token
+      admission failures; required time claims and maximum-lifetime failures
+      are time-stage refusals. These diagnostics never contain credentials,
+      claim or scope values, issuer URLs, or underlying error text, and do not
+      change public refusal/outage status or audit acceptance.
+      The audit writer opens before serving and its
       sticky health participates in readiness. Request records precede effects;
       response records describe only established outcomes. Package activation
       applies schema, grants, database identity, and the append-only ledger row

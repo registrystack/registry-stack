@@ -30,26 +30,34 @@ const PUBLIC_URL_PATTERN: &str =
     "^(?:https://[^\\s\\u0000-\\u001f\\u007f-\\u009f/?#@]+|http://(?:localhost|127\\.0\\.0\\.1|\\[::1\\])(?::[0-9]+)?)(?!.*//)(?:/[^\\s\\u0000-\\u001f\\u007f-\\u009f?#]*)?$";
 const TEXT_PATTERN: &str = "^[^\\u0000-\\u001f\\u007f-\\u009f]+$";
 const URI_IDENTIFIER_PATTERN: &str = "^[A-Za-z][A-Za-z0-9+.-]*:";
-pub(crate) const PROBLEM_CONTRACTS: [(&str, &str, u16); 4] = [
+pub(crate) const PROBLEM_CONTRACTS: [(&str, &str, u16, &str, &str); 4] = [
     (
         "https://id.registrystack.org/problems/registry-discovery/invalid-request",
         "Invalid request",
         400,
+        "request.invalid",
+        "The Discovery request is invalid.",
     ),
     (
         "https://id.registrystack.org/problems/registry-discovery/not-found",
         "Not found",
         404,
+        "request.not-found",
+        "The requested Discovery resource was not found.",
     ),
     (
         "https://id.registrystack.org/problems/registry-discovery/result-bound-exceeded",
         "Result bound exceeded",
         422,
+        "request.result-bound-exceeded",
+        "The complete Discovery result exceeds its configured bound.",
     ),
     (
         "https://id.registrystack.org/problems/registry-discovery/unavailable",
         "Unavailable",
         503,
+        "service.unavailable",
+        "Registry Discovery is temporarily unavailable.",
     ),
 ];
 
@@ -338,6 +346,16 @@ fn problem_responses() -> Value {
 fn problem_response(description: &str) -> Value {
     json!({
         "description": description,
+        "headers": {
+            "traceparent": {
+                "description": "Canonical W3C Trace Context version 0; the trace identifier equals the problem traceId.",
+                "required": true,
+                "schema": {
+                    "type": "string", "minLength": 55, "maxLength": 55,
+                    "pattern": "^00-(?!0{32}-)[0-9a-f]{32}-(?!0{16}-)[0-9a-f]{16}-[0-9a-f]{2}$"
+                }
+            }
+        },
         "content": {
             (PROBLEM_JSON): {
                 "schema": {"$ref": "#/components/schemas/Problem"}
@@ -485,7 +503,7 @@ fn bounded_array_schema(
 fn problem_schema() -> Value {
     let variants = PROBLEM_CONTRACTS
         .into_iter()
-        .map(|(type_uri, title, status)| {
+        .map(|(type_uri, title, status, code, detail)| {
             object_schema(
                 &["type", "title", "status", "detail", "code", "traceId"],
                 &[
@@ -495,9 +513,9 @@ fn problem_schema() -> Value {
                     ),
                     ("title", json!({"type": "string", "const": title})),
                     ("status", json!({"type": "integer", "const": status})),
-                    ("detail", json!({"type":"string", "maxLength":1024})),
-                    ("code", json!({"type":"string", "maxLength":128, "pattern":"^[a-z][a-z0-9-]*[.][a-z][a-z0-9-]*$"})),
-                    ("traceId", json!({"type":"string", "pattern":"^[0-9a-f]{32}$"})),
+                    ("detail", json!({"type":"string", "maxLength":1024, "const":detail})),
+                    ("code", json!({"type":"string", "maxLength":128, "pattern":"^[a-z][a-z0-9-]*[.][a-z][a-z0-9-]*$", "const":code})),
+                    ("traceId", json!({"type":"string", "minLength":32, "maxLength":32, "pattern":"^[0-9a-f]{32}$", "not":{"const":"00000000000000000000000000000000"}})),
                 ],
             )
         })
@@ -515,6 +533,40 @@ mod tests {
     #[test]
     fn committed_openapi_is_the_deterministic_generator_output() {
         assert_eq!(generated_bytes().unwrap(), OPENAPI_BYTES);
+    }
+
+    #[cfg(feature = "server")]
+    #[test]
+    fn problem_schema_pins_the_runtime_inventory_and_trace_header() {
+        let generated = document();
+        let variants = generated["components"]["schemas"]["Problem"]["oneOf"]
+            .as_array()
+            .unwrap();
+        for problem in crate::problem::ProblemCode::ALL {
+            let variant = variants
+                .iter()
+                .find(|variant| variant["properties"]["type"]["const"] == problem.type_uri())
+                .unwrap();
+            assert_eq!(variant["properties"]["title"]["const"], problem.title());
+            assert_eq!(
+                variant["properties"]["status"]["const"],
+                problem.status().as_u16()
+            );
+            assert_eq!(variant["properties"]["code"]["const"], problem.code());
+            assert_eq!(
+                variant["properties"]["detail"]["const"],
+                problem.description()
+            );
+        }
+        for response in generated["components"]["responses"]
+            .as_object()
+            .unwrap()
+            .values()
+        {
+            let header = &response["headers"]["traceparent"];
+            assert_eq!(header["required"], true);
+            assert_eq!(header["schema"]["maxLength"], 55);
+        }
     }
 
     #[test]
@@ -658,10 +710,14 @@ mod tests {
         );
         let problems = schemas["Problem"]["oneOf"].as_array().unwrap();
         assert_eq!(problems.len(), PROBLEM_CONTRACTS.len());
-        for (schema, (type_uri, title, status)) in problems.iter().zip(PROBLEM_CONTRACTS) {
+        for (schema, (type_uri, title, status, code, detail)) in
+            problems.iter().zip(PROBLEM_CONTRACTS)
+        {
             assert_eq!(schema["properties"]["type"]["const"], type_uri);
             assert_eq!(schema["properties"]["title"]["const"], title);
             assert_eq!(schema["properties"]["status"]["const"], status);
+            assert_eq!(schema["properties"]["code"]["const"], code);
+            assert_eq!(schema["properties"]["detail"]["const"], detail);
         }
     }
 

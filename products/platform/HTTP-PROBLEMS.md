@@ -32,7 +32,13 @@ contract explicitly accepts them; sharing the core envelope does not widen it.
 Discovery preserves its problem type URIs and adds `request.invalid`,
 `request.not-found`, `request.result-bound-exceeded`, and `service.unavailable`
 codes, fixed `detail`, and `traceId`. Its indeterminate 503 carries no guessed
-retry interval. Render uses the same core with its own vocabulary and extensions.
+retry interval. Its client also accepts the original `type`/`title`/`status`
+trio and genuinely additive members. When supplied, recognized members must be
+bounded and valid: a known type's `code` must agree, `detail` must be safe text,
+and `traceId` must match a valid response `traceparent`. Compatible guidance
+may change without exact-text matching. Unknown future Discovery problem types
+retain their bounded, status-only fallback. Render uses the same core with its
+own vocabulary and extensions.
 
 ## Deliberate response exceptions
 

@@ -4220,3 +4220,23 @@ in `crates/registry-breg/src/mutation/proposal.rs` covers the comparison.
   decode the Proposal document strictly. Explain output shows the compiled
   grant.
 - Attachments keep their separate `writableAttachments` grant.
+
+## Bounded authentication refusal stages
+
+Credential diagnostics can disclose credentials or create unbounded log volume.
+`RegistryAuthenticator::record_header_refusal` uses the verifier's existing
+per-stage limiter before recording the fixed Header stage for missing or
+malformed HTTP bearer credentials and compact-token admission failures. No
+credential, claim, issuer, subject, profile, or raw error value enters the log.
+Shared OIDC lifetime failures use the fixed Time stage; malformed token structure
+continues to use Header. The public generic 401 and the refusal before record
+I/O remain unchanged.
+
+`compact_token_admission_logs_one_value_free_header_diagnostic` in
+`crates/registry-breg/tests/http_auth.rs` covers empty, oversized, invalid-base64,
+and duplicate-member credentials with repeated calls and canaries.
+`malformed_or_duplicate_bearer_is_refused_before_record_io` covers absent,
+malformed, and duplicate HTTP credentials, the fixed diagnostic, generic 401,
+and zero record reads. The shared OIDC lifetime test covers missing, nonpositive,
+and overlong time bounds. These are operational diagnostics, with no new audit
+release condition or authentication authority.

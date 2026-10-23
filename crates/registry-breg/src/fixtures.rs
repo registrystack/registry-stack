@@ -3883,6 +3883,7 @@ fn fixture_verification_error(error: registry_platform_oidc::OidcError) -> Fixtu
         | OidcError::AudienceMismatch
         | OidcError::SignatureInvalid
         | OidcError::InvalidToken
+        | OidcError::InvalidTimeClaims
         | OidcError::ClientNotAllowed
         | OidcError::AssertionIssuerNotAllowed => FixtureError::AuthenticationCredentialRefused,
         _ => FixtureError::RequestConstructionRefused,
@@ -6179,6 +6180,7 @@ mod tests {
             registry_platform_oidc::OidcError::AudienceMismatch,
             registry_platform_oidc::OidcError::SignatureInvalid,
             registry_platform_oidc::OidcError::InvalidToken,
+            registry_platform_oidc::OidcError::InvalidTimeClaims,
             registry_platform_oidc::OidcError::ClientNotAllowed,
             registry_platform_oidc::OidcError::AssertionIssuerNotAllowed,
         ] {

@@ -6,6 +6,9 @@ compile_error!(
     "registry-platform-testing is a test-only crate; enable feature \"test-utils\" from dev-dependencies"
 );
 
+mod diagnostic_capture;
+pub use diagnostic_capture::{malformed_access_token_fixtures, CapturedDiagnosticLogs};
+
 #[cfg(feature = "test-authorization-server")]
 mod authorization_server;
 

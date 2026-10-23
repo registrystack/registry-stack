@@ -52,7 +52,9 @@ impl OidcError {
             Self::SignatureInvalid => AuthenticationStage::Signature,
             Self::IssuerMismatch { .. } => AuthenticationStage::Issuer,
             Self::AudienceMismatch => AuthenticationStage::Audience,
-            Self::TokenExpired | Self::TokenNotYetValid => AuthenticationStage::Time,
+            Self::TokenExpired | Self::TokenNotYetValid | Self::InvalidTimeClaims => {
+                AuthenticationStage::Time
+            }
             Self::ClientNotAllowed | Self::AssertionIssuerNotAllowed => AuthenticationStage::Client,
             Self::Transport(_)
             | Self::BoundedRead(_)
@@ -100,6 +102,18 @@ impl AuthenticationDiagnostics {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn malformed_tokens_remain_header_failures() {
+        assert_eq!(
+            OidcError::MalformedToken.authentication_stage().label(),
+            "header"
+        );
+        assert_eq!(
+            OidcError::InvalidToken.authentication_stage().label(),
+            "header"
+        );
+    }
 
     #[test]
     fn diagnostics_are_value_free_and_bounded_per_stage() {

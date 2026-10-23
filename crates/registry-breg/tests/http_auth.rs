@@ -47,6 +47,55 @@ use zeroize::Zeroizing;
 const AUDIENCE: &str = "urn:example:breg";
 
 #[tokio::test]
+async fn compact_token_admission_logs_one_value_free_header_diagnostic() {
+    use registry_platform_testing::{malformed_access_token_fixtures, CapturedDiagnosticLogs};
+    use tracing::instrument::WithSubscriber;
+    let captured = CapturedDiagnosticLogs::default();
+    let writer = captured.clone();
+    let subscriber = tracing::Dispatch::new(
+        tracing_subscriber::fmt()
+            .json()
+            .without_time()
+            .with_ansi(false)
+            .with_writer(move || writer.clone())
+            .finish(),
+    );
+    let tokens = malformed_access_token_fixtures();
+    let registry = compile_project(
+        &parse_project_yaml(PROJECT.as_bytes()).unwrap(),
+        &[],
+        CompileProfile::Authoring,
+    )
+    .unwrap();
+    let idp = MockIdp::start().await;
+    let auth = authenticator(&registry, &idp, authority_claims()).unwrap();
+    for _ in 0..3 {
+        for token in &tokens {
+            assert!(matches!(
+                auth.authenticate(token)
+                    .with_subscriber(subscriber.clone())
+                    .await,
+                Err(AuthenticationError::MalformedCredential)
+            ));
+        }
+    }
+    let rendered = captured.text();
+    assert_eq!(
+        rendered.lines().count(),
+        1,
+        "one bounded diagnostic per header stage"
+    );
+    assert!(rendered.contains(r#""stage":"header""#));
+    assert!(!rendered.contains("canary"));
+    for token in tokens.iter().filter(|token| !token.is_empty()) {
+        assert!(
+            !rendered.contains(token),
+            "diagnostics must not contain credentials"
+        );
+    }
+}
+
+#[tokio::test]
 async fn separate_resource_rs256_and_es256_profiles_refuse_cross_resource_reuse() {
     use registry_platform_testing::{access_token_test_key, sign_compact_jwt_with_key};
     let registry = compile_project(
@@ -1666,15 +1715,28 @@ async fn discovery_key_misses_and_denied_keys_do_not_diagnose_rotation() {
 
 #[tokio::test]
 async fn malformed_or_duplicate_bearer_is_refused_before_record_io() {
-    let harness = Harness::new().await;
+    use registry_platform_testing::CapturedDiagnosticLogs;
+    use tracing::instrument::WithSubscriber;
     for values in [
-        vec![HeaderValue::from_static("Bearer malformed")],
-        vec![HeaderValue::from_static("Bearer  malformed")],
+        vec![],
+        vec![HeaderValue::from_static("Bearer canary-not-compact")],
+        vec![HeaderValue::from_static("Bearer  canary-double-space")],
         vec![
-            HeaderValue::from_static("Bearer one.two.three"),
-            HeaderValue::from_static("Bearer four.five.six"),
+            HeaderValue::from_static("Bearer canary-one.two.three"),
+            HeaderValue::from_static("Bearer canary-four.five.six"),
         ],
     ] {
+        let harness = Harness::new().await;
+        let captured = CapturedDiagnosticLogs::default();
+        let writer = captured.clone();
+        let subscriber = tracing::Dispatch::new(
+            tracing_subscriber::fmt()
+                .json()
+                .without_time()
+                .with_ansi(false)
+                .with_writer(move || writer.clone())
+                .finish(),
+        );
         let before = harness.records.calls.load(Ordering::SeqCst);
         let response = harness
             .send(
@@ -1682,10 +1744,21 @@ async fn malformed_or_duplicate_bearer_is_refused_before_record_io() {
                 &values,
                 None,
             )
+            .with_subscriber(subscriber)
             .await;
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
         assert_eq!(body_json(response).await["code"], "authentication.refused");
         assert_eq!(harness.records.calls.load(Ordering::SeqCst), before);
+        let rendered = captured.text();
+        let diagnostics = rendered
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).expect("JSON diagnostic"))
+            .filter(|event| event["fields"]["message"] == "BReg authentication refused")
+            .collect::<Vec<_>>();
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0]["fields"]["stage"], "header");
+        assert!(!rendered.contains("canary"));
+        assert!(!rendered.contains("Bearer"));
     }
 }
 

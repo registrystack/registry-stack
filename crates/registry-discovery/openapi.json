@@ -9,7 +9,19 @@
             }
           }
         },
-        "description": "Invalid request or request body exceeds the configured bound"
+        "description": "Invalid request or request body exceeds the configured bound",
+        "headers": {
+          "traceparent": {
+            "description": "Canonical W3C Trace Context version 0; the trace identifier equals the problem traceId.",
+            "required": true,
+            "schema": {
+              "maxLength": 55,
+              "minLength": 55,
+              "pattern": "^00-(?!0{32}-)[0-9a-f]{32}-(?!0{16}-)[0-9a-f]{16}-[0-9a-f]{2}$",
+              "type": "string"
+            }
+          }
+        }
       },
       "ResultBoundExceeded": {
         "content": {
@@ -19,7 +31,19 @@
             }
           }
         },
-        "description": "Complete result exceeds the configured bound"
+        "description": "Complete result exceeds the configured bound",
+        "headers": {
+          "traceparent": {
+            "description": "Canonical W3C Trace Context version 0; the trace identifier equals the problem traceId.",
+            "required": true,
+            "schema": {
+              "maxLength": 55,
+              "minLength": 55,
+              "pattern": "^00-(?!0{32}-)[0-9a-f]{32}-(?!0{16}-)[0-9a-f]{16}-[0-9a-f]{2}$",
+              "type": "string"
+            }
+          }
+        }
       },
       "Unavailable": {
         "content": {
@@ -29,7 +53,19 @@
             }
           }
         },
-        "description": "Request exceeded the configured time limit or the response could not be produced"
+        "description": "Request exceeded the configured time limit or the response could not be produced",
+        "headers": {
+          "traceparent": {
+            "description": "Canonical W3C Trace Context version 0; the trace identifier equals the problem traceId.",
+            "required": true,
+            "schema": {
+              "maxLength": 55,
+              "minLength": 55,
+              "pattern": "^00-(?!0{32}-)[0-9a-f]{32}-(?!0{16}-)[0-9a-f]{16}-[0-9a-f]{2}$",
+              "type": "string"
+            }
+          }
+        }
       }
     },
     "schemas": {
@@ -102,11 +138,13 @@
             "additionalProperties": false,
             "properties": {
               "code": {
+                "const": "request.invalid",
                 "maxLength": 128,
                 "pattern": "^[a-z][a-z0-9-]*[.][a-z][a-z0-9-]*$",
                 "type": "string"
               },
               "detail": {
+                "const": "The Discovery request is invalid.",
                 "maxLength": 1024,
                 "type": "string"
               },
@@ -119,6 +157,11 @@
                 "type": "string"
               },
               "traceId": {
+                "maxLength": 32,
+                "minLength": 32,
+                "not": {
+                  "const": "00000000000000000000000000000000"
+                },
                 "pattern": "^[0-9a-f]{32}$",
                 "type": "string"
               },
@@ -142,11 +185,13 @@
             "additionalProperties": false,
             "properties": {
               "code": {
+                "const": "request.not-found",
                 "maxLength": 128,
                 "pattern": "^[a-z][a-z0-9-]*[.][a-z][a-z0-9-]*$",
                 "type": "string"
               },
               "detail": {
+                "const": "The requested Discovery resource was not found.",
                 "maxLength": 1024,
                 "type": "string"
               },
@@ -159,6 +204,11 @@
                 "type": "string"
               },
               "traceId": {
+                "maxLength": 32,
+                "minLength": 32,
+                "not": {
+                  "const": "00000000000000000000000000000000"
+                },
                 "pattern": "^[0-9a-f]{32}$",
                 "type": "string"
               },
@@ -182,11 +232,13 @@
             "additionalProperties": false,
             "properties": {
               "code": {
+                "const": "request.result-bound-exceeded",
                 "maxLength": 128,
                 "pattern": "^[a-z][a-z0-9-]*[.][a-z][a-z0-9-]*$",
                 "type": "string"
               },
               "detail": {
+                "const": "The complete Discovery result exceeds its configured bound.",
                 "maxLength": 1024,
                 "type": "string"
               },
@@ -199,6 +251,11 @@
                 "type": "string"
               },
               "traceId": {
+                "maxLength": 32,
+                "minLength": 32,
+                "not": {
+                  "const": "00000000000000000000000000000000"
+                },
                 "pattern": "^[0-9a-f]{32}$",
                 "type": "string"
               },
@@ -222,11 +279,13 @@
             "additionalProperties": false,
             "properties": {
               "code": {
+                "const": "service.unavailable",
                 "maxLength": 128,
                 "pattern": "^[a-z][a-z0-9-]*[.][a-z][a-z0-9-]*$",
                 "type": "string"
               },
               "detail": {
+                "const": "Registry Discovery is temporarily unavailable.",
                 "maxLength": 1024,
                 "type": "string"
               },
@@ -239,6 +298,11 @@
                 "type": "string"
               },
               "traceId": {
+                "maxLength": 32,
+                "minLength": 32,
+                "not": {
+                  "const": "00000000000000000000000000000000"
+                },
                 "pattern": "^[0-9a-f]{32}$",
                 "type": "string"
               },

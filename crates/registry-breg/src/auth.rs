@@ -158,6 +158,15 @@ pub struct RegistryAuthenticator {
 }
 
 impl RegistryAuthenticator {
+    pub(crate) fn record_header_refusal(&self) {
+        if let Some(stage) = self
+            .verifier
+            .authentication_diagnostic(registry_platform_oidc::AuthenticationStage::Header)
+        {
+            tracing::info!(stage, "BReg authentication refused");
+        }
+    }
+
     /// Bind one exact platform verifier profile and one exact authority mapping
     /// to the immutable compiled Registry served by this process.
     pub fn new(
@@ -194,8 +203,10 @@ impl RegistryAuthenticator {
         &self,
         token: &str,
     ) -> Result<VerifiedRequestClaims, AuthenticationError> {
-        validate_compact_access_token(token)
-            .map_err(|_| AuthenticationError::MalformedCredential)?;
+        validate_compact_access_token(token).map_err(|_| {
+            self.record_header_refusal();
+            AuthenticationError::MalformedCredential
+        })?;
         let verified = self.verifier.verify(token).await.map_err(|error| {
             if let Some(stage) = self
                 .verifier
@@ -403,9 +414,11 @@ pub(crate) async fn authenticate_request(
 ) -> Response {
     request.extensions_mut().remove::<VerifiedRequestClaims>();
     let token = match bearer_token(request.headers()) {
-        Ok(None) => return authentication_refused(),
         Ok(Some(token)) => token,
-        Err(_) => return authentication_refused(),
+        Ok(None) | Err(_) => {
+            authenticator.record_header_refusal();
+            return authentication_refused();
+        }
     };
     let claims = match authenticator.authenticate(token).await {
         Ok(claims) => claims,

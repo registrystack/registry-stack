@@ -11,6 +11,7 @@ use registry_discovery::{
     MAXIMUM_RESULT_RECORDS,
 };
 use registry_platform_canonical_json::parse_json_strict;
+use registry_platform_httpsec::{response_trace_id, TraceId};
 use registry_platform_httputil::client::{
     build_client, read_failure_kind, send_failure_kind, OutboundOptions, ServiceBaseUrl,
 };
@@ -263,6 +264,15 @@ impl DiscoveryClient {
         if status.is_success() && status != StatusCode::OK {
             return Err(DiscoveryClientError::Protocol);
         }
+        let problem_trace =
+            if !status.is_success() && response.headers().contains_key("traceparent") {
+                Some(
+                    response_trace_id(response.headers())
+                        .map_err(|_| DiscoveryClientError::Protocol)?,
+                )
+            } else {
+                None
+            };
         let content_type = response_content_type(response.headers());
         let maximum = if status.is_success() {
             self.maximum_response_bytes
@@ -287,7 +297,11 @@ impl DiscoveryClient {
             {
                 return Err(DiscoveryClientError::Protocol);
             }
-            Err(problem_from_response(status, &bytes)?)
+            Err(problem_from_response(
+                status,
+                &bytes,
+                problem_trace.as_ref(),
+            )?)
         }
     }
 }
@@ -378,47 +392,100 @@ struct ProblemBody {
     type_uri: String,
     title: String,
     status: u16,
+    #[serde(flatten)]
+    additional: serde_json::Map<String, serde_json::Value>,
 }
 
 fn problem_from_response(
     status: StatusCode,
     bytes: &[u8],
+    response_trace: Option<&TraceId>,
 ) -> Result<DiscoveryClientError, DiscoveryClientError> {
     let body: ProblemBody = strict_decode(bytes)?;
     if body.status != status.as_u16() {
         return Err(DiscoveryClientError::Protocol);
     }
-    let problem = match (body.type_uri.as_str(), body.title.as_str()) {
+    let (problem, expected_code) = match (body.type_uri.as_str(), body.title.as_str()) {
         (
             "https://id.registrystack.org/problems/registry-discovery/invalid-request",
             "Invalid request",
-        ) if status == StatusCode::BAD_REQUEST => DiscoveryProblem::InvalidRequest,
+        ) if status == StatusCode::BAD_REQUEST => {
+            (DiscoveryProblem::InvalidRequest, "request.invalid")
+        }
         ("https://id.registrystack.org/problems/registry-discovery/not-found", "Not found")
             if status == StatusCode::NOT_FOUND =>
         {
-            DiscoveryProblem::NotFound
+            (DiscoveryProblem::NotFound, "request.not-found")
         }
         (
             "https://id.registrystack.org/problems/registry-discovery/result-bound-exceeded",
             "Result bound exceeded",
-        ) if status == StatusCode::UNPROCESSABLE_ENTITY => DiscoveryProblem::ResultBoundExceeded,
+        ) if status == StatusCode::UNPROCESSABLE_ENTITY => (
+            DiscoveryProblem::ResultBoundExceeded,
+            "request.result-bound-exceeded",
+        ),
         ("https://id.registrystack.org/problems/registry-discovery/unavailable", "Unavailable")
             if status == StatusCode::SERVICE_UNAVAILABLE =>
         {
-            DiscoveryProblem::Unavailable
+            (DiscoveryProblem::Unavailable, "service.unavailable")
         }
         _ if known_problem_type(&body.type_uri) => return Err(DiscoveryClientError::Protocol),
         _ if valid_unrecognized_problem(&body, status) => {
+            validate_supplied_problem_fields(&body, response_trace, None)?;
             return Ok(DiscoveryClientError::UnrecognizedProblem {
                 status: status.as_u16(),
-            })
+            });
         }
         _ => return Err(DiscoveryClientError::Protocol),
     };
+    validate_supplied_problem_fields(&body, response_trace, Some(expected_code))?;
     Ok(DiscoveryClientError::Problem {
         status: status.as_u16(),
         problem,
     })
+}
+
+/// Legacy documents need only the original trio. Recognized supplied members
+/// are checked, while genuinely additive members stay opaque and bounded by
+/// the whole problem-body limit.
+fn validate_supplied_problem_fields(
+    body: &ProblemBody,
+    response_trace: Option<&TraceId>,
+    expected_code: Option<&str>,
+) -> Result<(), DiscoveryClientError> {
+    if let Some(value) = body.additional.get("code") {
+        let code = value.as_str().ok_or(DiscoveryClientError::Protocol)?;
+        let bounded_code = code.len() <= 128
+            && (valid_problem_code(code)
+                || code.split_once('.').is_some_and(|(family, reason)| {
+                    [family, reason].into_iter().all(|segment| {
+                        segment
+                            .as_bytes()
+                            .first()
+                            .is_some_and(u8::is_ascii_lowercase)
+                            && segment.bytes().all(|byte| {
+                                byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-'
+                            })
+                    })
+                }));
+        if !bounded_code || expected_code.is_some_and(|expected| code != expected) {
+            return Err(DiscoveryClientError::Protocol);
+        }
+    }
+    if let Some(value) = body.additional.get("detail") {
+        let detail = value.as_str().ok_or(DiscoveryClientError::Protocol)?;
+        if detail.chars().count() > 1024 || detail.chars().any(char::is_control) {
+            return Err(DiscoveryClientError::Protocol);
+        }
+    }
+    if let Some(value) = body.additional.get("traceId") {
+        let trace = value.as_str().ok_or(DiscoveryClientError::Protocol)?;
+        let trace = TraceId::parse(trace).map_err(|_| DiscoveryClientError::Protocol)?;
+        if response_trace != Some(&trace) {
+            return Err(DiscoveryClientError::Protocol);
+        }
+    }
+    Ok(())
 }
 
 fn known_problem_type(type_uri: &str) -> bool {
@@ -866,6 +933,139 @@ mod tests {
             DiscoveryClientConfig::new(url::Url::parse(&format!("http://{address}")).unwrap())
                 .with_maximum_response_bytes(maximum);
         (DiscoveryClient::new(config).unwrap(), state)
+    }
+
+    fn legacy_problem() -> serde_json::Value {
+        json!({"type":"https://id.registrystack.org/problems/registry-discovery/invalid-request",
+            "title":"Invalid request", "status":400})
+    }
+
+    async fn exchange_problem(
+        body: serde_json::Value,
+        traceparents: &[&str],
+    ) -> DiscoveryClientError {
+        let bytes = serde_json::to_vec(&body).unwrap();
+        let parents = traceparents
+            .iter()
+            .map(|value| reqwest::header::HeaderValue::from_str(value).unwrap())
+            .collect::<Vec<_>>();
+        let app = Router::new().route(
+            "/{*path}",
+            any(move || {
+                let bytes = bytes.clone();
+                let parents = parents.clone();
+                async move {
+                    let mut response =
+                        response_with_media_type(StatusCode::BAD_REQUEST, PROBLEM_JSON, bytes);
+                    for parent in parents {
+                        response.headers_mut().append("traceparent", parent);
+                    }
+                    response
+                }
+            }),
+        );
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let client = DiscoveryClient::new(DiscoveryClientConfig::new(
+            url::Url::parse(&format!("http://{address}")).unwrap(),
+        ))
+        .unwrap();
+        let result = client.search_services(ServiceFilters::default()).await;
+        server.abort();
+        result.expect_err("fixture responds with a problem")
+    }
+
+    #[tokio::test]
+    async fn supplied_problem_fields_are_bounded_and_known_codes_are_consistent() {
+        for (field, value) in [
+            ("code", json!("service.unavailable")),
+            ("code", json!("canary".repeat(30))),
+            ("code", json!(null)),
+            ("detail", json!("canary\nprivate-detail")),
+            ("detail", json!("x".repeat(1025))),
+            ("detail", json!(false)),
+            ("detail", json!(null)),
+            ("traceId", json!("not-a-trace")),
+            ("traceId", json!("0".repeat(32))),
+            ("traceId", json!(null)),
+        ] {
+            let mut body = legacy_problem();
+            body[field] = value;
+            let error = exchange_problem(body, &[]).await;
+            assert!(
+                matches!(error, DiscoveryClientError::Protocol),
+                "supplied {field} must be validated"
+            );
+            assert!(!error.to_string().contains("canary"));
+        }
+    }
+
+    #[tokio::test]
+    async fn future_problem_codes_keep_legacy_and_current_bounded_grammar() {
+        for (code, accepted) in [
+            ("future-conflict", true),
+            ("future-.conflict-", true),
+            ("1future.conflict", false),
+            ("future.1conflict", false),
+        ] {
+            let mut body = legacy_problem();
+            body["type"] =
+                json!("https://id.registrystack.org/problems/registry-discovery/future-conflict");
+            body["title"] = json!("Future conflict");
+            body["code"] = json!(code);
+            let error = exchange_problem(body, &[]).await;
+            assert_eq!(
+                matches!(
+                    error,
+                    DiscoveryClientError::UnrecognizedProblem { status: 400 }
+                ),
+                accepted,
+                "supplied code grammar: {code}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn supplied_problem_trace_correlates_without_requiring_new_legacy_fields() {
+        const TRACE: &str = "11111111111111111111111111111111";
+        const HEADER: &str = "00-11111111111111111111111111111111-2222222222222222-01";
+        let mut current = legacy_problem();
+        current["code"] = json!("request.invalid");
+        current["detail"] = json!("Different safe guidance from a compatible server.");
+        current["traceId"] = json!(TRACE);
+        current["futureRecovery"] = json!({"retry":false});
+        for body in [legacy_problem(), current.clone()] {
+            assert!(matches!(
+                exchange_problem(body, &[HEADER]).await,
+                DiscoveryClientError::Problem {
+                    problem: DiscoveryProblem::InvalidRequest,
+                    ..
+                }
+            ));
+        }
+        assert!(matches!(
+            exchange_problem(legacy_problem(), &[]).await,
+            DiscoveryClientError::Problem {
+                problem: DiscoveryProblem::InvalidRequest,
+                ..
+            }
+        ));
+        for headers in [
+            vec![],
+            vec!["00-33333333333333333333333333333333-2222222222222222-01"],
+            vec!["00-11111111111111111111111111111111-0000000000000000-01"],
+            vec![HEADER, HEADER],
+        ] {
+            assert!(matches!(
+                exchange_problem(current.clone(), &headers).await,
+                DiscoveryClientError::Protocol
+            ));
+        }
+        assert!(matches!(
+            exchange_problem(legacy_problem(), &["invalid"]).await,
+            DiscoveryClientError::Protocol
+        ));
     }
 
     #[tokio::test]

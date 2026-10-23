@@ -34,6 +34,15 @@ pub struct MessagingAuthenticator {
 }
 
 impl MessagingAuthenticator {
+    pub(crate) fn record_header_refusal(&self) {
+        if let Some(stage) = self
+            .verifier
+            .authentication_diagnostic(registry_platform_oidc::AuthenticationStage::Header)
+        {
+            tracing::info!(stage, "Messaging authentication refused");
+        }
+    }
+
     #[must_use]
     pub fn new(
         verifier: TokenVerifierConfig,
@@ -55,7 +64,10 @@ impl MessagingAuthenticator {
 
     /// Verify one credential and resolve it to exactly one access profile.
     pub async fn authenticate(&self, token: &str) -> Result<Caller, AuthenticationError> {
-        validate_compact_access_token(token).map_err(|_| AuthenticationError::Refused)?;
+        validate_compact_access_token(token).map_err(|_| {
+            self.record_header_refusal();
+            AuthenticationError::Refused
+        })?;
         let verified = self.verifier.verify(token).await.map_err(|error| {
             if let Some(stage) = self
                 .verifier
@@ -560,6 +572,7 @@ pub(crate) mod tests {
             OidcError::AudienceMismatch,
             OidcError::SignatureInvalid,
             OidcError::InvalidToken,
+            OidcError::InvalidTimeClaims,
             OidcError::ClientNotAllowed,
             OidcError::AssertionIssuerNotAllowed,
         ] {
@@ -570,6 +583,48 @@ pub(crate) mod tests {
             );
         }
     }
+    #[tokio::test]
+    async fn compact_token_admission_logs_one_value_free_header_diagnostic() {
+        use registry_platform_testing::{malformed_access_token_fixtures, CapturedDiagnosticLogs};
+        use tracing::instrument::WithSubscriber;
+        let captured = CapturedDiagnosticLogs::default();
+        let writer = captured.clone();
+        let subscriber = tracing::Dispatch::new(
+            tracing_subscriber::fmt()
+                .json()
+                .without_time()
+                .with_ansi(false)
+                .with_writer(move || writer.clone())
+                .finish(),
+        );
+        let tokens = malformed_access_token_fixtures();
+        let auth = authenticator();
+        for _ in 0..3 {
+            for token in &tokens {
+                assert!(matches!(
+                    auth.authenticate(token)
+                        .with_subscriber(subscriber.clone())
+                        .await,
+                    Err(AuthenticationError::Refused)
+                ));
+            }
+        }
+        let rendered = captured.text();
+        assert_eq!(
+            rendered.lines().count(),
+            1,
+            "one bounded diagnostic per header stage"
+        );
+        assert!(rendered.contains(r#""stage":"header""#));
+        assert!(!rendered.contains("canary"));
+        for token in tokens.iter().filter(|token| !token.is_empty()) {
+            assert!(
+                !rendered.contains(token),
+                "diagnostics must not contain credentials"
+            );
+        }
+    }
+
     #[tokio::test]
     async fn separate_resource_rs256_and_es256_profiles_refuse_cross_resource_reuse() {
         for algorithm in [Algorithm::RS256, Algorithm::ES256] {

@@ -134,6 +134,8 @@ mod tests {
                 problem.type_uri(),
                 problem.title(),
                 problem.status().as_u16(),
+                problem.code(),
+                problem.description(),
             )));
         }
     }
