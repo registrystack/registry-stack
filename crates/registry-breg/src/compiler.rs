@@ -4044,6 +4044,15 @@ fn validate_generated_identifier(
             "a generated identifier cannot be encrypted, looked up through a blind index, pattern-constrained, a valid-time boundary, or a relationship",
         ));
     }
+    // The migration seed copies retained values into the append-only
+    // reservation ledger, which keeps them after record erasure.
+    if field.classification > Classification::Internal {
+        errors.push(Diagnostic::error(
+            "breg.field.generate-classification-sensitive",
+            &path,
+            "a generated identifier must be classified public or internal, because the reservation ledger keeps issued and migrated values after record erasure",
+        ));
+    }
 
     let prefix = generate.prefix();
     if prefix.len() > MAX_GENERATED_IDENTIFIER_COMPONENT_LENGTH as usize
