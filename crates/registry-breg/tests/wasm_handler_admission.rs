@@ -215,6 +215,27 @@ fn a_minimal_abi_module_compiles_into_the_handler_inventory() {
 }
 
 #[test]
+fn generated_only_create_accepts_an_empty_wasm_write_slot() {
+    let mut project = wasm_project();
+    project["recordTypes"][0]["fields"] = json!([{
+        "id": "person-number",
+        "type": "string",
+        "minimumLength": 1,
+        "maximumLength": 32,
+        "required": true,
+        "classification": "restricted",
+        "generate": {"type": "sequence", "minimumDigits": 1}
+    }]);
+    project["actions"][0]["plan"]["writes"][0]["fields"] = json!([]);
+
+    let registry = compile_with_module(project, "wasm/handler.wasm", binary(MINIMAL_ABI_WAT))
+        .expect("a generated-only create write slot compiles for WASM");
+    let handler = compiled_handler(&registry);
+    assert!(handler.writes[0].ceiling.fields.is_empty());
+    assert!(handler.writes[0].ceiling.required_fields.is_empty());
+}
+
+#[test]
 fn a_missing_module_asset_reports_the_authored_path() {
     // The module is declared but its asset is never supplied to the compiler.
     let project = parse_project_json(&serde_json::to_vec(&wasm_project()).unwrap()).unwrap();

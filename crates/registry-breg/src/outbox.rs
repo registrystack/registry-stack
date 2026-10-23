@@ -861,6 +861,7 @@ mod tests {
                     physical_name: "payload".to_owned(),
                     pattern: None,
                     encryption: None,
+                    generate: None,
                 },
             ),
             (
@@ -879,6 +880,7 @@ mod tests {
                     physical_name: "secret".to_owned(),
                     pattern: None,
                     encryption: Some(crate::model::CompiledFieldEncryption { blind_index: None }),
+                    generate: None,
                 },
             ),
         ]);

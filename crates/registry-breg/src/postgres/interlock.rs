@@ -369,6 +369,16 @@ impl DedicatedApplyConnection {
         let runtime_role = transition.runtime_role;
         let transaction = self.client.transaction().await?;
         set_local_statement_timeout(&transaction, statement_timeout).await?;
+        // A predecessor installed before generated identifiers has no
+        // allocation tables. Install them before the first seed statement.
+        if statements
+            .iter()
+            .any(|statement| is_generated_identifier_seed(statement))
+        {
+            crate::generated_identifiers::install(&transaction, runtime_role)
+                .await
+                .map_err(|_| PostgresKernelError::Connection)?;
+        }
         for statement in statements {
             validate_statement_checksum(statement)?;
             if let Err(error) = execute_compiled_ddl_statement(
@@ -432,6 +442,20 @@ impl DedicatedApplyConnection {
         ledger.validate()?;
         if plan.migrations().is_empty() {
             return Err(PostgresKernelError::RegistryUnavailable);
+        }
+
+        // Reviewed successors execute compiler DDL before runtime ACL
+        // reconciliation. The seed step needs allocation state during that
+        // compiler phase, including when the predecessor predates this feature.
+        if compiler_statements
+            .iter()
+            .any(|statement| is_generated_identifier_seed(statement))
+        {
+            let transaction = self.client.transaction().await?;
+            crate::generated_identifiers::install(&transaction, runtime_role)
+                .await
+                .map_err(|_| PostgresKernelError::Connection)?;
+            transaction.commit().await?;
         }
 
         self.ensure_successor_history_ready(current, predecessor_history_descriptor)
@@ -2307,6 +2331,11 @@ async fn reconcile_runtime_acl_in(
     install_mutation_schema(transaction, runtime_role)
         .await
         .map_err(|_| PostgresKernelError::Connection)?;
+    if crate::generated_identifiers::registry_uses_generated_identifiers(registry) {
+        crate::generated_identifiers::install(transaction, runtime_role)
+            .await
+            .map_err(|_| PostgresKernelError::Connection)?;
+    }
     reconcile_compiled_runtime_acl(transaction, registry, runtime_role).await
 }
 
@@ -2468,6 +2497,11 @@ async fn execute_initial_package_ddl_in(
     install_mutation_schema(transaction, runtime_role)
         .await
         .map_err(|_| PostgresKernelError::Connection)?;
+    if crate::generated_identifiers::registry_uses_generated_identifiers(registry) {
+        crate::generated_identifiers::install(transaction, runtime_role)
+            .await
+            .map_err(|_| PostgresKernelError::Connection)?;
+    }
     install_history_schema_store(transaction, runtime_role)
         .await
         .map_err(|_| PostgresKernelError::Connection)?;
@@ -2796,7 +2830,24 @@ pub(super) fn compiler_statement_runs_after_reviewed_steps(
     statement.kind == DdlStatementKind::View
         || is_spatial_projection_addition(statement)
         || is_deferred_not_null(statement)
+        || is_generated_identifier_seed(statement)
+        || is_deferred_unique_constraint(statement)
         || is_active_reference_constraint_addition(statement)
+}
+
+/// A reviewed backfill may populate an identifier field. Reserve its retained
+/// values and validate uniqueness only after the last reviewed data step.
+fn is_generated_identifier_seed(statement: &PackageDdlStatement<'_>) -> bool {
+    statement.kind == DdlStatementKind::Constraint
+        && statement
+            .sql
+            .contains("registry_internal.registry_generated_identifier_reservations")
+}
+
+fn is_deferred_unique_constraint(statement: &PackageDdlStatement<'_>) -> bool {
+    statement.kind == DdlStatementKind::Constraint
+        && statement.sql.contains(" ADD CONSTRAINT ")
+        && statement.sql.contains(" UNIQUE (")
 }
 
 /// A column a successor adds for a required field arrives accepting NULL, so
@@ -4154,6 +4205,14 @@ mod tests {
         assert!(!compiler_statement_runs_after_reviewed_steps(&statement(
             "ALTER TABLE registry_data.\"breg_e_asset\" ALTER COLUMN \"breg_f_batch\" DROP NOT NULL",
             DdlStatementKind::Column,
+        )));
+        assert!(compiler_statement_runs_after_reviewed_steps(&statement(
+            "INSERT INTO registry_internal.registry_generated_identifier_reservations SELECT 1",
+            DdlStatementKind::Constraint,
+        )));
+        assert!(compiler_statement_runs_after_reviewed_steps(&statement(
+            "ALTER TABLE registry_data.\"breg_e_asset\" ADD CONSTRAINT \"breg_generated_number\" UNIQUE (\"breg_f_number\")",
+            DdlStatementKind::Constraint,
         )));
         assert!(compiler_statement_runs_after_reviewed_steps(&statement(
             "ALTER TABLE registry_data.\"breg_e_asset\" NO FORCE ROW LEVEL SECURITY;\n\

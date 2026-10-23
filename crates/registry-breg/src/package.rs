@@ -319,6 +319,7 @@ pub enum CompiledRegistryChangeCode {
     FieldLengthWidened,
     FieldPhysicalNameChanged,
     FieldRequirednessChanged,
+    FieldGenerationChanged,
     FieldPatternAdded,
     FieldPatternChanged,
     FieldPatternRemoved,
@@ -1128,6 +1129,9 @@ impl CompiledRegistryChangeCode {
             Self::FieldAddedRequired => Some(
                 "a required field on an existing entity needs a reviewed backfill; when the field is encrypted, add it as optional, populate it through authorized Registry writes, then make it required in a later package",
             ),
+            Self::FieldGenerationChanged => Some(
+                "enabling generation on a retained field needs a reviewed backfill of missing values; changing or removing an active generator is unsupported",
+            ),
             _ => None,
         }
     }
@@ -1140,6 +1144,13 @@ fn compare_entities(
 ) {
     for (entity_id, previous_entity) in &previous.entities {
         let Some(candidate_entity) = candidate.entities.get(entity_id) else {
+            for field_id in previous_entity
+                .fields
+                .iter()
+                .filter_map(|(field_id, field)| field.generate.is_some().then_some(field_id))
+            {
+                push_removed_generator_change(changes, entity_id, field_id);
+            }
             push_change(
                 changes,
                 CompiledRegistryChangeClass::DestructiveOrIrreversible,
@@ -1386,6 +1397,23 @@ fn compare_entities(
     }
 }
 
+fn push_removed_generator_change(
+    changes: &mut Vec<CompiledRegistryChange>,
+    entity_id: &str,
+    field_id: &str,
+) {
+    push_change(
+        changes,
+        CompiledRegistryChangeClass::Unsupported,
+        CompiledRegistryChangeCode::FieldGenerationChanged,
+        target(
+            CompiledRegistryChangeTargetKind::Field,
+            Some(entity_id),
+            Some(field_id),
+        ),
+    );
+}
+
 fn compare_derived_relations(
     entity_id: &str,
     previous: &CompiledEntity,
@@ -1452,6 +1480,9 @@ fn compare_fields(
 ) {
     for (field_id, previous_field) in &previous.fields {
         let Some(candidate_field) = candidate.fields.get(field_id) else {
+            if previous_field.generate.is_some() {
+                push_removed_generator_change(changes, entity_id, field_id);
+            }
             push_change(
                 changes,
                 CompiledRegistryChangeClass::DestructiveOrIrreversible,
@@ -1624,6 +1655,22 @@ fn compare_fields(
                 changes,
                 class,
                 CompiledRegistryChangeCode::FieldRequirednessChanged,
+                target(
+                    CompiledRegistryChangeTargetKind::Field,
+                    Some(entity_id),
+                    Some(field_id.as_str()),
+                ),
+            );
+        }
+        if previous_field.generate != candidate_field.generate {
+            push_change(
+                changes,
+                if previous_field.generate.is_none() && candidate_field.generate.is_some() {
+                    CompiledRegistryChangeClass::DataBackfillRequired
+                } else {
+                    CompiledRegistryChangeClass::Unsupported
+                },
+                CompiledRegistryChangeCode::FieldGenerationChanged,
                 target(
                     CompiledRegistryChangeTargetKind::Field,
                     Some(entity_id),
@@ -2268,6 +2315,16 @@ fn additive_migration_plan(
             }
         }
         for (field_id, field) in &candidate_entity.fields {
+            if field.generate.is_some()
+                && previous_entity
+                    .fields
+                    .get(field_id)
+                    .is_none_or(|previous| previous.generate.is_none())
+            {
+                new_statement_ids.insert(format!(
+                    "entity.{entity_id}.field.{field_id}.generated-identifiers.seed"
+                ));
+            }
             // Added checks always scan existing data, including when a previously
             // unconstrained column is present. Changes/removals require reviewed
             // DDL. An encrypted column stores ciphertext, which no authored
@@ -2282,6 +2339,19 @@ fn additive_migration_plan(
                 new_statement_ids.insert(format!("entity.{entity_id}.field.{field_id}.pattern"));
             }
             if let Some(previous_field) = previous_entity.fields.get(field_id) {
+                // Generated identifiers are required in the compiled model even
+                // when the retained authored field was optional. The reviewed
+                // backfill populates its missing values before this compiler-owned
+                // constraint brings the upgraded catalog in line with a fresh one.
+                if previous_field.generate.is_none()
+                    && field.generate.is_some()
+                    && !previous_field.required
+                {
+                    added_columns
+                        .entry(entity_id.clone())
+                        .or_default()
+                        .extend(set_column_not_null_statement(candidate_entity, field));
+                }
                 if previous_field.field_type != field.field_type
                     && field
                         .field_type

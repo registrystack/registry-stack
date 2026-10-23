@@ -231,10 +231,16 @@
   `breg.access.profile-higher-classification` is always reported. Optional
   stored fields that no supported Record grant or Action can fill report
   `breg.record-type.stored-field-unfillable`.
+- Add compiler-configured business identifiers on stored string fields. Records
+  retain their internal UUID while `sequence` or `random` values, optional
+  prefixes, and field-based uniqueness scopes are allocated transactionally.
+  Existing fields can adopt generation through a reviewed backfill migration;
+  Proposal Submit freezes generated values for Apply and Retry.
 - Add the closed `logLevel` runtime setting to BReg, `breg-mcp`, and
   `breg-review`. Each existing product environment variable takes precedence,
   then the runtime file, then `info`; an unknown environment or configuration
   value refuses startup instead of falling back.
+
 - Add optional `writableInputs` to Proposal grants. When present, Start refuses
   a value for any other Action input, and Edit, Revise and Rebase refuse a
   change to one, with `400 request.invalid` located at `/input/<apiName>`.

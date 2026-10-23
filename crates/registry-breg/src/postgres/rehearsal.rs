@@ -278,6 +278,11 @@ async fn rehearse_in_transaction(
     };
 
     let candidate = rehearsal.candidate.registry();
+    if crate::generated_identifiers::registry_uses_generated_identifiers(candidate) {
+        crate::generated_identifiers::install(transaction, runtime_role)
+            .await
+            .map_err(|_| MigrationRehearsalError::Database)?;
+    }
     match plan {
         Some(plan) => {
             let prior_tables = entity_tables(&predecessor);

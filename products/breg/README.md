@@ -109,6 +109,9 @@ project can build on. An action handler can also be a WebAssembly module:
 [WASM action handlers](wasm-action-handlers.md) covers what ships, the
 server-compatibility contract, operator configuration, and the upgrade and
 rollback paths.
+For institution-facing record numbers and codes, [Generated business
+identifiers](generated-identifiers.md) explains sequences, random codes,
+uniqueness scopes, and migration from retained values.
 
 ## Pilot operator lifecycle
 

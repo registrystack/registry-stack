@@ -150,6 +150,65 @@ fn facility_plans_proposal_grants_and_guards_navigate_and_complete_in_scope() {
     );
 }
 
+#[test]
+fn generated_identifier_scopes_navigate_and_complete_within_the_record_type() {
+    let project = Project::new(&[file(
+        "registry.yaml",
+        "apiVersion: id.registrystack.org/formats/breg/project/v1alpha1\nkind: BRegProject\nproject: {id: generated-identifiers}\nrecordTypes:\n  - id: application\n    fields:\n      - {id: <|field|>jurisdiction, type: string}\n      - id: number\n        type: string\n        generate: {type: sequence, minimumDigits: 4, scope: [<|scope|>jurisdiction]}\n  - id: unrelated\n    fields: [{id: other-scope, type: string}]\n",
+    )]);
+    let index = ProjectIndex::load_product(project.root(), ProductKind::Breg).unwrap();
+    assert!(index.diagnostics().is_empty(), "{:?}", index.diagnostics());
+    let path = project.path("registry.yaml");
+    let position = project.cursor("registry.yaml", "scope");
+    let definitions = index.definitions_at(&path, position);
+    assert_eq!(definitions.len(), 1, "{definitions:?}");
+    assert_eq!(
+        definitions[0].range.start,
+        project.cursor("registry.yaml", "field")
+    );
+    assert!(index.hover_at(&path, position).is_some());
+    let candidates = index.completions_at(&path, position);
+    assert!(candidates.iter().any(|item| item.label == "jurisdiction"));
+    assert!(!candidates.iter().any(|item| item.label == "other-scope"));
+}
+
+#[test]
+fn module_extension_generated_identifier_scopes_use_the_extended_record_type() {
+    let project = Project::new(&[
+        file(
+            "registry.yaml",
+            "apiVersion: id.registrystack.org/formats/breg/project/v1alpha1\nkind: BRegProject\nproject: {id: generated-identifiers}\nmodules: [{id: core}, {id: identifiers}]\n",
+        ),
+        file(
+            "modules/core/module.yaml",
+            "kind: BRegModule\nid: core\nrecordTypes:\n  - id: application\n    fields: [{id: <|field|>jurisdiction, type: string}]\n  - id: unrelated\n    fields: [{id: other-scope, type: string}]\n",
+        ),
+        file(
+            "modules/identifiers/module.yaml",
+            "kind: BRegModule\nid: identifiers\ndependencies: [core]\nextendRecordTypes:\n  - recordType: application\n    fields:\n      - id: number\n        type: string\n        generate: {type: sequence, minimumDigits: 4, scope: [<|scope|>jurisdiction]}\n      - id: broken-number\n        type: string\n        generate: {type: sequence, minimumDigits: 4, scope: [<|missing|>missing-scope]}\n",
+        ),
+    ]);
+    let index = ProjectIndex::load_product(project.root(), ProductKind::Breg).unwrap();
+    let extension = project.path("modules/identifiers/module.yaml");
+    let position = project.cursor("modules/identifiers/module.yaml", "scope");
+    let definitions = index.definitions_at(&extension, position);
+    assert_eq!(definitions.len(), 1, "{definitions:?}");
+    assert_eq!(
+        definitions[0].range.start,
+        project.cursor("modules/core/module.yaml", "field")
+    );
+    assert!(index.hover_at(&extension, position).is_some());
+    let candidates = index.completions_at(&extension, position);
+    assert!(candidates.iter().any(|item| item.label == "jurisdiction"));
+    assert!(!candidates.iter().any(|item| item.label == "other-scope"));
+    assert!(index.diagnostics().iter().any(|diagnostic| {
+        diagnostic.path == extension
+            && diagnostic.range.start
+                == project.cursor("modules/identifiers/module.yaml", "missing")
+            && diagnostic.message.contains("missing-scope")
+    }));
+}
+
 #[tokio::test]
 async fn canonical_function_reference_changes_are_visible_through_lsp() {
     let project = facility();
