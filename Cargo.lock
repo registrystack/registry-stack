@@ -6460,6 +6460,7 @@ dependencies = [
  "comemo",
  "hex",
  "jsonschema",
+ "jsonwebtoken",
  "registry-platform-audit",
  "registry-platform-authcommon",
  "registry-platform-buildinfo",
@@ -6467,7 +6468,9 @@ dependencies = [
  "registry-platform-config",
  "registry-platform-crypto",
  "registry-platform-httpsec",
+ "registry-platform-oidc",
  "registry-platform-yaml",
+ "registry-render-client",
  "rustix 1.1.5",
  "schemars",
  "serde",
@@ -6485,6 +6488,49 @@ dependencies = [
  "typst-assets",
  "typst-pdf",
  "uuid",
+]
+
+[[package]]
+name = "registry-render-client"
+version = "0.44.0"
+dependencies = [
+ "axum",
+ "base64 0.23.1",
+ "chrono",
+ "hex",
+ "registry-platform-canonical-json",
+ "registry-platform-httpsec",
+ "registry-platform-httputil",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "sha2 0.11.1",
+ "thiserror 2.0.21",
+ "tokio",
+ "url",
+]
+
+[[package]]
+name = "registry-render-client-node"
+version = "0.44.0"
+dependencies = [
+ "napi",
+ "napi-build",
+ "napi-derive",
+ "registry-render-client",
+ "serde_json",
+]
+
+[[package]]
+name = "registry-render-client-py"
+version = "0.44.0"
+dependencies = [
+ "pyo3",
+ "pyo3-build-config",
+ "registry-platform-canonical-json",
+ "registry-render-client",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]
@@ -6683,6 +6729,7 @@ dependencies = [
  "registry-messaging-client",
  "registry-platform-httputil",
  "registry-record",
+ "registry-render-client",
  "registry-scheduling-client",
  "serde_json",
 ]

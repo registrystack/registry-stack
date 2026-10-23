@@ -32,7 +32,8 @@ readable form of the recipe.
 
 Python wheels use the release profile by default. `--python-profile ci` opts
 into the workspace's cheaper CI profile for installed-package tutorial checks;
-it still assembles all six bindings with the same platform and package layout.
+it uses the same platform and package layout. Coordinator joins the released
+client roster in v0.44.0; held Render requires --include-render for local candidates.
 
 The checked-in `crates/registry-stack-client-node/package.json` is never
 modified: the optional platform dependencies bind in a staging copy, because
@@ -71,7 +72,7 @@ import client_registry
 
 
 ROOT = Path(__file__).resolve().parents[2]
-PRODUCTS = ("discovery", "evidence", "breg", "casework", "messaging", "scheduling", "coordinator",)
+PRODUCTS = ("discovery", "evidence", "breg", "casework", "messaging", "scheduling", "render", "coordinator")
 NODE_PRODUCTS = PRODUCTS
 MACOS_SHARED_FIPS_MINIMUM_VERSION = (0, 33, 0)
 # BReg and Casework publish no standalone wheel, so their internal wheels use
@@ -83,6 +84,7 @@ WHEEL_STEMS = {
     "casework": "registry_casework_client_native",
     "messaging": "registry_messaging_client_native",
     "scheduling": "registry_scheduling_client_native",
+    "render": "registry_render_client_native",
     "coordinator": "registry_coordinator_client_native",
 }
 # The platform, wheel tag, and maturin flags each release matrix entry uses.
@@ -270,6 +272,7 @@ def python_steps(
     macos_library_roots: tuple[Path, ...] = (),
     include_messaging: bool = False,
     include_scheduling: bool = False,
+    include_render: bool = False,
     include_coordinator: bool = False,
 ) -> list[Step]:
     if python_profile not in ("release", "ci"):
@@ -335,6 +338,8 @@ def python_steps(
         assemble.append("--include-messaging")
     if include_scheduling:
         assemble.append("--include-scheduling")
+    if include_render:
+        assemble.append("--include-render")
     if include_coordinator:
         assemble.append("--include-coordinator")
     for product in PRODUCTS:
@@ -369,6 +374,7 @@ def plan(
     macos_library_roots: tuple[Path, ...] = (),
     include_messaging: bool = False,
     include_scheduling: bool = False,
+    include_render: bool = False,
     include_coordinator: bool = False,
 ) -> list[Step]:
     if not client_registry.includes_casework(
@@ -391,6 +397,11 @@ def plan(
         raise ValueError(
             "this checkout contains the Scheduling client; versions before its "
             "first release require --include-scheduling for local integration; use the release tag for published bytes"
+        )
+    if not client_registry.includes_render(version, include_render=include_render):
+        raise ValueError(
+            "this checkout contains the held Render client; use --include-render "
+            "for a local candidate or the release tag for published bytes"
         )
     steps: list[Step] = []
     if artifacts in ("all", "node"):
@@ -416,6 +427,7 @@ def plan(
             macos_library_roots,
             include_messaging,
             include_scheduling,
+            include_render,
             include_coordinator,
         )
     return steps
@@ -474,6 +486,7 @@ def main() -> int:
         help="include Scheduling in an explicit local integration before its first release",
     )
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--include-render", action="store_true")
     parser.add_argument("--include-coordinator", action="store_true")
     args = parser.parse_args()
 
@@ -514,6 +527,7 @@ def main() -> int:
             macos_library_roots,
             args.include_messaging,
             args.include_scheduling,
+            args.include_render,
             args.include_coordinator,
         )
     except (ValueError, client_registry.ClientRegistryError) as exc:

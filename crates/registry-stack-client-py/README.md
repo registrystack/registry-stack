@@ -91,10 +91,14 @@ directly. `release/scripts/assemble-registry-client-wheel.py` combines the versi
 version-matched internal native wheels with the facade and emits the only
 publishable Python distribution, using this file as the PyPI description.
 
-The source facade includes `registry_client.coordinator`. The published
-version's release roster determines availability; source integration alone is
-not proof of published assets. Coordinator is optional for direct BReg and
-Casework applications.
+Coordinator joins the seven-product roster at v0.44.0. The source facade also
+contains held `registry_client.render`; building that local candidate requires
+`--include-render` and does not authorize publication.
+Render accepts a resource-specific token or `registry_client.auth.PrivateKeyJwt`
+provider and returns the checked JSON PDF representation. Errors expose
+`outcome_unknown` and `transport_kind`; provider failures keep their own class.
+Coordinator remains
+optional for direct BReg and Casework applications.
 
 `from registry_client.auth import PrivateKeyJwt` selects the identical canonical
 class exposed by the legacy `registry_client.breg.PrivateKeyJwt` spelling.

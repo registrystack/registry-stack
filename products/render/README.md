@@ -9,14 +9,16 @@ library.
 > returns the identical PDF every time, with the hashes and audit events an
 > institution needs to stand behind the printed artifact.
 
-Render is a **pure function**: data in, PDF out. One secret file in serve
-mode (the caller API key), no database, no outbound calls. It runs three ways
-with the same guarantees:
+Render is a **pure function**: data in, PDF out, with no database. The optional
+HTTP adapter validates resource-bound access tokens through the shared OIDC
+verifier or uses an explicit legacy API key. Only the adapter fetches issuer
+metadata and keys; CLI and library rendering remain offline. It runs three ways
+with the same rendering guarantees:
 
 - **CLI** — `registry-render compile --bundle … --data … --issued-at … --output …`,
   offline, zero config: branch printing, template authoring, CI.
 - **Service** — `registry-render serve`: one POST endpoint (`/v1/render/{type}`),
-  API-key auth, supervised worker processes, and value-free audit entries
+  resource-token or legacy API-key auth, supervised workers, and value-free audit entries
   written before every render and before every response.
 - **Library** — `registry_render::render(bundle, document, request)` for
   embedding.
@@ -60,7 +62,7 @@ Latin font set. Scripts beyond Latin (Arabic, Hebrew, …) need a bundle font
 Every CLI failure is one closed vocabulary (`ProblemKind`), and each kind
 has one stable exit code — scripts branch exactly. With `--format json`, the same
 failure prints one RFC 9457 problem document on stdout. 0 is success; the
-failure codes are 2-22 (clap's own usage errors also exit 2, and a panic
+failure codes are 2-25 (clap's own usage errors also exit 2, and a panic
 exits 101):
 
 | Code | Kind | Meaning |
@@ -80,12 +82,57 @@ exits 101):
 | 14 | `output-too-large` | rendered PDF exceeded the output cap |
 | 15 | `render-timeout` | render exceeded its wall-clock budget and was killed |
 | 16 | `render-panicked` | render worker panicked; the worker is recycled |
-| 17 | `unauthorized` | missing or wrong API key (serve, HTTP 401) |
+| 17 | `unauthorized` | missing or invalid bearer credential (serve, HTTP 401) |
 | 18 | `rate-limited` | caller exceeded a limit (reserved; HTTP 429) |
 | 19 | `audit-failed` | audit destination refused or failed (fail closed) |
 | 20 | `runtime-invalid` | serve runtime configuration invalid |
 | 21 | `internal` | internal invariant broke; never carries data |
 | 22 | `body-too-large` | request body over the configured ceiling (serve, HTTP 413) |
+| 23 | `forbidden` | verified credential lacks `render:render` (serve, HTTP 403) |
+| 24 | `authentication-unavailable` | verifier cannot reach a verdict (serve, HTTP 503) |
+| 25 | `not-found` | route is not exposed by the adapter (HTTP 404) |
+
+## Authenticate the serving adapter
+
+Choose exactly one non-null authentication mode. For OIDC, replace `auth` in
+`examples/runtime.yaml` with:
+
+```yaml
+auth:
+  oidc:
+    issuer: https://issuer.example.invalid
+    audience: urn:example:render
+    allowedClients: [portal]
+```
+
+The shared verifier checks signature, expiry, issuer, resource audience membership
+and the configured client binding. Tokens need `render:render`; an audience array
+may contain the configured resource alongside other audiences. Unrelated signed
+task-grant claims confer no Render authority. OIDC discovery and JWKS fetches
+belong to the serving adapter; deployments may instead configure a URI or static
+JWKS through the shared issuer block. Omitted unused secret providers are allowed;
+any provider declared in the runtime is validated. Legacy `auth.apiKeyRef` remains
+available, with the existing secret-provider and entropy checks. Do not configure
+both modes or use null as an absent member.
+
+Invalid credentials return `401` with a Bearer challenge. A verified token without
+scope returns `403`; an issuer-key outage with no usable cached keys returns `503`.
+`/ready` checks the same key source, including the shared bounded cache/outage
+tolerance, plus audit readiness. All HTTP problems carry the shared six members
+and optional bounded pointers, fixed guidance, response trace context, and
+`Cache-Control: no-store`. Detailed package, request and compiler diagnostics
+remain available through local operator commands.
+
+The audit `caller` is the canonical fingerprint of the exact verified credential,
+not a durable person identifier. The same token correlates across calls; a newly
+issued token for the same principal has a different fingerprint. Raw tokens,
+issuer, subject and client claims are absent from audit events.
+
+The internal Rust, Node and Python serving clients use this HTTP contract and the
+JSON PDF representation. Their source is ready for local candidates only; Render's
+release-client hold remains in place. A lost response does not establish that a
+render failed. Clients expose transport uncertainty and perform no automatic retry;
+retaining identical inputs preserves byte determinism when the caller repeats it.
 
 ## Guarantees, mechanistically
 

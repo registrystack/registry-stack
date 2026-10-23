@@ -1,0 +1,27 @@
+[package]
+name = "registry-render-client-py"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+name = "registry_render_client"
+crate-type = ["cdylib", "rlib"]
+
+[lints]
+workspace = true
+
+[features]
+extension-module = ["pyo3/extension-module"]
+
+[dependencies]
+pyo3.workspace = true
+render-client-sdk = { package = "registry-render-client", path = "../registry-render-client", version = "0.44.0" }
+registry-platform-canonical-json.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+
+[build-dependencies]
+pyo3-build-config.workspace = true

@@ -18,7 +18,7 @@ from unittest import TestCase, main, mock
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "release/scripts/assemble-registry-client-wheel.py"
-PRODUCTS = ("discovery", "evidence", "breg", "casework", "messaging", "scheduling", "coordinator")
+PRODUCTS = ("discovery", "evidence", "breg", "casework", "messaging", "scheduling", "render", "coordinator")
 TAG = "cp311-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64"
 COMPATIBILITY = ROOT / "crates/registry-stack-client/compatibility.json"
 
@@ -101,6 +101,7 @@ class AssembleRegistryClientWheelTest(TestCase):
             version or self.version,
             "--output-dir",
             str(self.directory / "dist"),
+            "--include-render",
         ]
         if include_coordinator:
             command.append("--include-coordinator")

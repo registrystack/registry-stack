@@ -107,7 +107,7 @@ SHARDS = {
         "registry-cli-reference",
         "registry-language-server",
     ),
-    "render": ("registry-render",),
+    "render": ("registry-render", "registry-render-client", "registry-render-client-node", "registry-render-client-py"),
 }
 
 EVIDENCE_PACKAGES = frozenset(SHARDS["evidence"])
@@ -460,6 +460,7 @@ NATIVE_BINDING_PACKAGES = (
     | MESSAGING_BINDING_PACKAGES
     | SCHEDULING_BINDING_PACKAGES
     | COORDINATOR_BINDING_PACKAGES
+    | frozenset({"registry-render-client-node", "registry-render-client-py"})
 )
 
 # The breg-contracts matrix lanes. Review runs the first; the merge queue, the

@@ -176,6 +176,12 @@ fn install_runtime_constraints(schema: &mut Value) {
             json!([{"properties": {"root": {"not": {"pattern": "(^|/)\\.{1,2}(/|$)"}}}}]),
         );
     }
+    if let Some(auth) = schema.pointer_mut("/$defs/AuthRuntime").and_then(Value::as_object_mut) {
+        auth.insert("oneOf".to_owned(), json!([
+            {"required":["oidc"], "not":{"required":["apiKeyRef"]}},
+            {"required":["apiKeyRef"], "not":{"required":["oidc"]}}
+        ]));
+    }
     set_audit_destination_constraints(schema);
     if let Some(definitions) = schema.get_mut("$defs").and_then(Value::as_object_mut) {
         definitions.extend(socket_definitions());

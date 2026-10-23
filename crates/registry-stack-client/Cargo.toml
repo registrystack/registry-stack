@@ -19,6 +19,7 @@ registry-evidence-client.workspace = true
 registry-messaging-client.workspace = true
 registry-platform-httputil.workspace = true
 registry-record.workspace = true
+registry-render-client.workspace = true
 registry-coordinator-client.workspace = true
 registry-scheduling-client.workspace = true
 

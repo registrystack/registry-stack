@@ -16,6 +16,7 @@
     "casework",
     "messaging",
     "scheduling",
+    "render",
     "coordinator"
   ],
   "publishConfig": {
@@ -35,6 +36,10 @@
       "default": "./index.js"
     },
     "./compatibility.json": "./compatibility.json",
+    "./render": {
+      "types": "./render/client.d.ts",
+      "default": "./render/client.js"
+    },
     "./coordinator": {
       "types": "./coordinator/client.d.ts",
       "default": "./coordinator/client.js"
@@ -51,6 +56,7 @@
     "casework",
     "messaging",
     "scheduling",
+    "render",
     "coordinator"
   ],
   "engines": {

@@ -185,6 +185,11 @@ without the cursor after `410 review.result-expired`.
 
 Apache-2.0
 
-The source facade includes the optional Coordinator namespace as `coordinator`,
-with the `@registrystack/client/coordinator` subpath. It preserves each product's
-authority, and a direct BReg and Casework application needs no Coordinator.
+Coordinator joins the seven-product roster at v0.44.0. The source facade also
+contains held `render` and `@registrystack/client/render` namespaces; building
+that local candidate requires `--include-render` and does not authorize
+publication. Render takes a token or a resource-bound provider with
+`bearerToken()` and performs one bounded render exchange. A correlation key is
+not a durable idempotency promise. `outcomeUnknown` and `transportKind` preserve
+whether an exchange may have completed; provider errors keep their own class.
+Coordinator is optional.

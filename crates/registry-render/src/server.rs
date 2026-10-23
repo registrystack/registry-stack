@@ -1,5 +1,5 @@
 //! `registry-render serve`: the HTTP rendering API. One POST endpoint, one GET
-//! discovery endpoint, a private listener, API-key auth, bounded body,
+//! discovery endpoint, a private listener, resource-token auth, bounded body,
 //! supervised worker renders, an audit request entry accepted before every
 //! render starts, and an audit response entry accepted before every render
 //! response, refusals included, whatever refusal class they are.
@@ -23,7 +23,7 @@ use registry_platform_authcommon::{
     parse_bearer_token, validate_api_key_entropy, MIN_API_KEY_ENTROPY_BYTES,
 };
 use registry_platform_canonical_json::parse_json_preserving_integers;
-use registry_platform_httpsec::{request_body_limit, security_headers, CspBuilder, Problem};
+use registry_platform_httpsec::{request_body_limit, security_headers, CspBuilder};
 
 use crate::audit::{RenderAudit, RenderAuditEvent};
 use crate::bundle::Bundle;
@@ -35,6 +35,7 @@ pub struct Service {
     bundle: Bundle,
     audit: RenderAudit,
     api_key: Vec<u8>,
+    oidc: Option<registry_platform_oidc::TokenVerifier>,
     caller_fingerprint: String,
     limits: crate::runtime::LimitsRuntime,
     bundle_path: PathBuf,
@@ -67,27 +68,43 @@ pub fn serve(runtime_path: &Path) -> Result<i32, RenderProblem> {
 async fn serve_async(runtime_path: &Path) -> Result<i32, RenderProblem> {
     init_tracing();
     let (runtime, config_id) = runtime::load(runtime_path)?;
-    let api_key = normalize_api_key(runtime::resolve_secret(
-        &runtime,
-        &runtime.auth.api_key_ref,
-    )?)?;
-    if api_key.len() < MIN_API_KEY_ENTROPY_BYTES {
+    let oidc = crate::auth::verifier(&runtime).await?;
+    let api_key = if oidc.is_none() {
+        normalize_api_key(runtime::resolve_secret(
+            &runtime,
+            runtime
+                .auth
+                .api_key_ref
+                .as_deref()
+                .expect("validated key mode"),
+        )?)?
+    } else {
+        Vec::new()
+    };
+    if oidc.is_none() && api_key.len() < MIN_API_KEY_ENTROPY_BYTES {
         return Err(RenderProblem::new(
             ProblemKind::RuntimeInvalid,
             format!("caller API key must be at least {MIN_API_KEY_ENTROPY_BYTES} bytes"),
         ));
     }
-    validate_api_key_entropy(&String::from_utf8_lossy(&api_key)).map_err(|err| {
-        RenderProblem::new(
-            ProblemKind::RuntimeInvalid,
-            format!("API key rejected: {err}"),
-        )
-    })?;
+    if oidc.is_none() {
+        validate_api_key_entropy(&String::from_utf8_lossy(&api_key)).map_err(|err| {
+            RenderProblem::new(
+                ProblemKind::RuntimeInvalid,
+                format!("API key rejected: {err}"),
+            )
+        })?;
+    }
     // The address is settled before the steps with side effects (opening
     // the audit destination creates its directory), so a refused bind
     // leaves nothing half-made behind.
     let bind: SocketAddr = runtime.listener.bind.socket_addr();
-    runtime::validate_bind(bind)?;
+    if !runtime.listener.bind_allowed() {
+        return Err(RenderProblem::new(
+            ProblemKind::RuntimeInvalid,
+            "listener.bind is outside the declared private network exposure",
+        ));
+    }
     let bundle = runtime::load_package(&runtime)?;
     crate::check::check_labels(&bundle)?;
     let audit = RenderAudit::open(runtime.audit.destination()?).await?;
@@ -98,6 +115,7 @@ async fn serve_async(runtime_path: &Path) -> Result<i32, RenderProblem> {
         bundle,
         audit,
         api_key,
+        oidc,
         limits: runtime.limits.clone(),
         bundle_path: runtime.package.root.clone(),
         concurrency: Arc::new(tokio::sync::Semaphore::new(
@@ -243,30 +261,42 @@ fn router(service: Arc<Service>) -> Router {
 /// shape-checked first, because the audit log is append-only.
 async fn require_bearer(
     State(service): State<Arc<Service>>,
-    request: axum::extract::Request,
+    mut request: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> Response {
-    if !authorized(&service, request.headers()) {
-        let target = sanitize_route_target(request.uri().path());
-        let correlation = correlation_id(request.headers());
-        let event = RenderAuditEvent::refused(
-            &target,
-            &RenderProblem::new(ProblemKind::Unauthorized, "missing or wrong API key"),
-            "unknown",
-            correlation.as_deref(),
-            trace_id(request.headers()).as_deref(),
-        );
-        let envelope = crate::audit::correlation();
-        if let Err(audit_problem) = service.audit.response(&envelope, event).await {
-            tracing::error!(problem = %audit_problem, "401 audit append failed");
+    let caller = match authorized(&service, request.headers()).await {
+        Ok(caller) => caller,
+        Err(error) => {
+            use crate::auth::AuthenticationError;
+            let kind = match error {
+                AuthenticationError::Refused => ProblemKind::Unauthorized,
+                AuthenticationError::Forbidden => ProblemKind::Forbidden,
+                AuthenticationError::Unavailable => ProblemKind::AuthenticationUnavailable,
+            };
+            let problem = RenderProblem::new(kind, "Render access could not be authorized");
+            let target = sanitize_route_target(request.uri().path());
+            let correlation = correlation_id(request.headers());
+            let trace = trace_id(request.headers());
+            let event = RenderAuditEvent::refused(
+                &target,
+                &problem,
+                "unknown",
+                correlation.as_deref(),
+                trace.as_deref(),
+            );
+            let envelope = crate::audit::correlation();
+            if let Err(audit_problem) = service.audit.response(&envelope, event).await {
+                return problem_response(&audit_problem, trace.as_deref());
+            }
+            return problem_response(&problem, trace.as_deref());
         }
-        return problem_response(&RenderProblem::new(
-            ProblemKind::Unauthorized,
-            "missing or wrong API key",
-        ));
-    }
+    };
+    request.extensions_mut().insert(Caller(caller));
     next.run(request).await
 }
+
+#[derive(Clone)]
+struct Caller(String);
 
 /// Post-auth body-framing refusal, before any body byte is read (a healthy
 /// connection can still be answered here): a declared Content-Length beyond
@@ -309,7 +339,11 @@ async fn refuse_oversized_bodies(
     let event = RenderAuditEvent::refused(
         &target,
         &problem,
-        &service.caller_fingerprint,
+        &request
+            .extensions()
+            .get::<Caller>()
+            .expect("auth middleware precedes body checks")
+            .0,
         correlation.as_deref(),
         trace_id(request.headers()).as_deref(),
     );
@@ -317,7 +351,7 @@ async fn refuse_oversized_bodies(
     if let Err(audit_problem) = service.audit.response(&envelope, event).await {
         tracing::error!(problem = %audit_problem, "413 audit append failed");
     }
-    problem_response(&problem)
+    problem_response(&problem, trace_id(request.headers()).as_deref())
 }
 
 /// The audit event's document id for pre-auth refusals: the route's last
@@ -330,12 +364,18 @@ fn sanitize_route_target(path: &str) -> String {
 
 /// One value-free lifecycle line per request: method class, route
 /// template, status, latency, trace id — the operability contract.
-async fn lifecycle_log(request: axum::extract::Request, next: axum::middleware::Next) -> Response {
+async fn lifecycle_log(
+    mut request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    let context = registry_platform_httpsec::TraceContext::from_headers(request.headers());
+    context.apply(request.headers_mut());
     let method = operational_method(request.method());
     let template = route_template(request.uri().path());
     let started = std::time::Instant::now();
     let trace = trace_id(request.headers()).unwrap_or_else(|| "none".to_owned());
-    let response = next.run(request).await;
+    let mut response = next.run(request).await;
+    context.apply(response.headers_mut());
     tracing::info!(
         target: "registry_render::http",
         method,
@@ -370,43 +410,66 @@ fn route_template(path: &str) -> &'static str {
     }
 }
 
-/// Some details name the offending request field (an undeclared locale, a
-/// badly named asset), and the caller decides how long that value is. The
-/// cap keeps a refusal small enough to log and read; the marker says the
-/// detail is not the whole message.
-const MAX_DETAIL_CHARS: usize = 2_048;
-const TRUNCATION_MARKER: &str = " [truncated]";
-
-fn bounded_detail(detail: &str) -> String {
-    if detail.chars().count() <= MAX_DETAIL_CHARS {
-        return detail.to_owned();
+/// HTTP callers receive fixed, value-free guidance. Operator diagnostics stay
+/// with the local CLI and audit boundary; the problem code identifies recovery.
+fn problem_response(problem: &RenderProblem, trace: Option<&str>) -> Response {
+    let mut context = registry_platform_httpsec::TraceContext::server_created();
+    if let Some(trace_id) =
+        trace.and_then(|value| registry_platform_httpsec::TraceId::parse(value).ok())
+    {
+        context.trace_id = trace_id;
     }
-    let keep = MAX_DETAIL_CHARS - TRUNCATION_MARKER.chars().count();
-    let mut bounded: String = detail.chars().take(keep).collect();
-    bounded.push_str(TRUNCATION_MARKER);
-    bounded
+    let body = registry_platform_httpsec::ProblemBody {
+        type_uri: format!("{}/{}", PROBLEM_TYPE_BASE, problem.kind.slug()),
+        title: problem.kind.slug(),
+        status: problem.kind.http_status(),
+        detail: match problem.kind {
+            ProblemKind::Unauthorized => "Present a valid bearer credential for this Render resource.",
+            ProblemKind::Forbidden => "Obtain a Render resource credential with the render:render scope.",
+            ProblemKind::AuthenticationUnavailable => "Credential verification is unavailable; retry when the issuer keys are available.",
+            ProblemKind::NotFound => "Use a route exposed by this Render adapter.",
+            ProblemKind::InvalidArgument => "Check the request method, Content-Length, JSON body, and document type.",
+            ProblemKind::BodyTooLarge => "Reduce the request body to the configured size limit.",
+            ProblemKind::AuditFailed => "The audit destination is unavailable; contact the operator before retrying.",
+            ProblemKind::RateLimited => "The renderer is at capacity; retry later.",
+            _ => "The render request was refused; use the problem code and the operator diagnostics to correct it.",
+        },
+        code: problem.kind.http_code(),
+        trace_id: context.trace_id.clone(),
+    };
+    let status = StatusCode::from_u16(body.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+    let mut value = serde_json::to_value(body).expect("fixed problem serializes");
+    // JSON pointers are bounded structural diagnostics, never request values.
+    if !problem.pointers.is_empty() {
+        value["pointers"] = serde_json::json!(problem
+            .pointers
+            .iter()
+            .take(32)
+            .map(|pointer| pointer.chars().take(256).collect::<String>())
+            .collect::<Vec<_>>());
+    }
+    let mut response = (status, Json(value)).into_response();
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/problem+json"),
+    );
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    if problem.kind == ProblemKind::Unauthorized {
+        response
+            .headers_mut()
+            .insert(header::WWW_AUTHENTICATE, HeaderValue::from_static("Bearer"));
+    }
+    context.apply(response.headers_mut());
+    response
 }
 
-fn problem_response(problem: &RenderProblem) -> Response {
-    Problem::new(
-        &format!("{}/{}", PROBLEM_TYPE_BASE, problem.kind.slug()),
-        problem.kind.slug(),
-        StatusCode::from_u16(problem.kind.http_status())
-            .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+async fn not_found(headers: HeaderMap) -> Response {
+    problem_response(
+        &RenderProblem::new(ProblemKind::NotFound, "route not found"),
+        trace_id(&headers).as_deref(),
     )
-    .detail(bounded_detail(&problem.detail))
-    .with_extra("pointers", serde_json::json!(problem.pointers))
-    .with_extra("locations", serde_json::json!(problem.locations))
-    .into_response()
-}
-
-async fn not_found() -> Response {
-    Problem::new(
-        &format!("{PROBLEM_TYPE_BASE}/not-found"),
-        "not-found",
-        StatusCode::NOT_FOUND,
-    )
-    .into_response()
 }
 
 async fn health(State(service): State<Arc<Service>>) -> Response {
@@ -422,7 +485,11 @@ async fn health(State(service): State<Arc<Service>>) -> Response {
 }
 
 async fn ready(State(service): State<Arc<Service>>) -> Response {
-    if service.audit.ready().await {
+    let keys_ready = match &service.oidc {
+        Some(verifier) => verifier.key_source().ensure_key_set().await.is_ok(),
+        None => true,
+    };
+    if keys_ready && service.audit.ready().await {
         minimal_json(StatusCode::OK, "{\"status\":\"ready\"}")
     } else {
         minimal_json(
@@ -455,13 +522,7 @@ async fn openapi() -> Response {
         .into_response()
 }
 
-async fn documents(State(service): State<Arc<Service>>, headers: HeaderMap) -> Response {
-    if !authorized(&service, &headers) {
-        return problem_response(&RenderProblem::new(
-            ProblemKind::Unauthorized,
-            "missing or wrong API key",
-        ));
-    }
+async fn documents(State(service): State<Arc<Service>>) -> Response {
     let documents: Vec<serde_json::Value> = service
         .bundle
         .documents
@@ -509,22 +570,26 @@ fn normalize_api_key(raw: Vec<u8>) -> Result<Vec<u8>, RenderProblem> {
     Ok(text.into_bytes())
 }
 
-fn authorized(service: &Service, headers: &HeaderMap) -> bool {
-    let Some(value) = headers.get(header::AUTHORIZATION) else {
-        return false;
-    };
-    let Ok(text) = value.to_str() else {
-        return false;
-    };
-    let Ok(token) = parse_bearer_token(text) else {
-        return false;
-    };
+async fn authorized(
+    service: &Service,
+    headers: &HeaderMap,
+) -> Result<String, crate::auth::AuthenticationError> {
+    use crate::auth::AuthenticationError;
+    let mut values = headers.get_all(header::AUTHORIZATION).iter();
+    let value = values.next().ok_or(AuthenticationError::Refused)?;
+    if values.next().is_some() {
+        return Err(AuthenticationError::Refused);
+    }
+    let token = parse_bearer_token(value.to_str().map_err(|_| AuthenticationError::Refused)?)
+        .map_err(|_| AuthenticationError::Refused)?;
+    if let Some(verifier) = &service.oidc {
+        return crate::auth::authenticate(verifier, token).await;
+    }
     let expected = service.api_key.as_slice();
     let presented = token.as_bytes();
-    if presented.len() != expected.len() {
-        return false;
-    }
-    presented.ct_eq(expected).into()
+    (presented.len() == expected.len() && bool::from(presented.ct_eq(expected)))
+        .then(|| service.caller_fingerprint.clone())
+        .ok_or(AuthenticationError::Refused)
 }
 
 /// Caller-supplied trace id from a W3C traceparent header, fully
@@ -566,6 +631,7 @@ fn correlation_id(headers: &HeaderMap) -> Option<String> {
 async fn render_route(
     State(service): State<Arc<Service>>,
     RoutePath(document_type): RoutePath<String>,
+    axum::Extension(Caller(caller)): axum::Extension<Caller>,
     headers: HeaderMap,
     method: Method,
     body: Result<axum::body::Bytes, axum::extract::rejection::BytesRejection>,
@@ -576,7 +642,7 @@ async fn render_route(
     // One server-drawn envelope correlation joins this call's request and
     // response entries; the caller's key is only echoed in the record.
     let envelope = crate::audit::correlation();
-    let caller = service.caller_fingerprint.clone();
+
     if method != Method::POST {
         return refuse(
             &service,
@@ -637,7 +703,7 @@ async fn render_route(
     // dropped from here on writes its unfinished response.
     let _request = match service.audit.request(&envelope, started.clone()).await {
         Ok(request) => request,
-        Err(audit_problem) => return problem_response(&audit_problem),
+        Err(audit_problem) => return problem_response(&audit_problem, trace.as_deref()),
     };
     // The answer is built before its response entry, so the entry records
     // the outcome the caller actually receives.
@@ -668,7 +734,7 @@ async fn render_route(
     // The response entry is accepted before anything leaves: audit failure
     // fails closed and withholds the document.
     if let Err(audit_problem) = service.audit.response(&envelope, event).await {
-        return problem_response(&audit_problem);
+        return problem_response(&audit_problem, trace.as_deref());
     }
     match outcome {
         Ok(mut response) => {
@@ -682,7 +748,7 @@ async fn render_route(
             }
             response
         }
-        Err(problem) => problem_response(&problem),
+        Err(problem) => problem_response(&problem, trace.as_deref()),
     }
 }
 
@@ -700,9 +766,9 @@ async fn refuse(
 ) -> Response {
     let event = RenderAuditEvent::refused(document_type, &problem, caller, correlation, trace);
     if let Err(audit_problem) = service.audit.response(envelope, event).await {
-        return problem_response(&audit_problem);
+        return problem_response(&audit_problem, trace);
     }
-    problem_response(&problem)
+    problem_response(&problem, trace)
 }
 
 /// Map a failed body extraction to the problem vocabulary: the tower
@@ -906,26 +972,6 @@ pub fn healthcheck(runtime_path: &Path) -> Result<i32, RenderProblem> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn a_detail_at_the_cap_is_kept_verbatim() {
-        let detail = "e".repeat(MAX_DETAIL_CHARS);
-        assert_eq!(bounded_detail(&detail), detail);
-    }
-
-    #[test]
-    fn a_long_detail_is_cut_on_a_character_boundary() {
-        // Multibyte input: the cut counts characters, so it may never split
-        // one and produce invalid text.
-        let detail = "é".repeat(MAX_DETAIL_CHARS + 1);
-        let bounded = bounded_detail(&detail);
-        assert_eq!(bounded.chars().count(), MAX_DETAIL_CHARS);
-        assert!(bounded.ends_with(TRUNCATION_MARKER));
-        assert!(bounded
-            .trim_end_matches(TRUNCATION_MARKER)
-            .chars()
-            .all(|c| c == 'é'));
-    }
-
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Mutex;
 
@@ -992,12 +1038,220 @@ mod tests {
             bundle,
             audit: RenderAudit::new(AuditWriter::from_line_sink(Box::new(lines.clone()))),
             api_key: TEST_API_KEY.as_bytes().to_vec(),
+            oidc: None,
             caller_fingerprint: "caller-fingerprint".to_owned(),
             limits: runtime::LimitsRuntime::default(),
             bundle_path,
             concurrency: Arc::new(tokio::sync::Semaphore::new(permits)),
             max_concurrency: permits,
         })
+    }
+
+    #[tokio::test]
+    async fn oidc_router_accepts_resource_token_and_refuses_with_common_problem() {
+        use axum::body::to_bytes;
+        use tower::ServiceExt as _;
+        let lines = AuditLines::new(None);
+        let mut service = service(&lines, 1);
+        Arc::get_mut(&mut service)
+            .expect("fixture owns service")
+            .oidc = Some(crate::auth::tests::test_verifier());
+        for (overrides, status) in [
+            (serde_json::json!({}), StatusCode::OK),
+            (
+                serde_json::json!({"aud":["urn:other","urn:render:test"],"registry_grant_id":"canary-unrelated"}),
+                StatusCode::OK,
+            ),
+            (serde_json::json!({"scope":"other"}), StatusCode::FORBIDDEN),
+            (
+                serde_json::json!({"aud":"urn:other"}),
+                StatusCode::UNAUTHORIZED,
+            ),
+            (serde_json::json!({"exp":1}), StatusCode::UNAUTHORIZED),
+        ] {
+            let app = router(Arc::clone(&service)).layer(axum::middleware::from_fn(lifecycle_log));
+            let request = axum::http::Request::builder()
+                .uri("/v1/documents")
+                .header(
+                    header::AUTHORIZATION,
+                    format!("Bearer {}", crate::auth::tests::token(overrides)),
+                )
+                .body(axum::body::Body::empty())
+                .unwrap();
+            let response = app.oneshot(request).await.unwrap();
+            assert_eq!(response.status(), status);
+            if status != StatusCode::OK {
+                assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+                if status == StatusCode::UNAUTHORIZED {
+                    assert!(response.headers().contains_key(header::WWW_AUTHENTICATE));
+                } else {
+                    assert!(!response.headers().contains_key(header::WWW_AUTHENTICATE));
+                }
+                let trace = registry_platform_httpsec::response_trace_id(response.headers())
+                    .unwrap()
+                    .to_owned();
+                assert_eq!(
+                    response.headers()[header::CONTENT_TYPE],
+                    "application/problem+json"
+                );
+                let body = to_bytes(response.into_body(), 16384).await.unwrap();
+                let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+                assert_eq!(body["traceId"], trace.as_str());
+                assert_eq!(
+                    body["code"],
+                    if status == StatusCode::UNAUTHORIZED {
+                        "render.unauthorized"
+                    } else {
+                        "render.forbidden"
+                    }
+                );
+                assert!(body["detail"]
+                    .as_str()
+                    .is_some_and(|detail| !detail.is_empty()));
+                assert!(!String::from_utf8_lossy(&body.to_string().into_bytes())
+                    .contains("canary-principal"));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn fallback_has_the_same_complete_safe_problem_envelope() {
+        use axum::body::to_bytes;
+        use tower::ServiceExt as _;
+        let lines = AuditLines::new(None);
+        let response = router(service(&lines, 1))
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/canary-unknown-route")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+        let trace = registry_platform_httpsec::response_trace_id(response.headers())
+            .unwrap()
+            .to_owned();
+        let body = to_bytes(response.into_body(), 16384).await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(body["detail"]
+            .as_str()
+            .is_some_and(|detail| !detail.is_empty()));
+        assert_eq!(body["traceId"], trace.as_str());
+        assert_eq!(body["code"], "render.not-found");
+        assert!(!body.to_string().contains("canary-unknown-route"));
+    }
+
+    #[tokio::test]
+    async fn issuer_outage_distinguishes_unavailable_from_refused_and_respects_cached_keys() {
+        use axum::body::to_bytes;
+        use std::sync::atomic::AtomicBool;
+        let available = Arc::new(AtomicBool::new(false));
+        let origin = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/jwks", origin.local_addr().unwrap());
+        let keys_app = Router::new()
+            .route(
+                "/jwks",
+                get(|State(available): State<Arc<AtomicBool>>| async move {
+                    if available.load(Ordering::SeqCst) {
+                        Json(crate::auth::tests::test_jwks()).into_response()
+                    } else {
+                        StatusCode::SERVICE_UNAVAILABLE.into_response()
+                    }
+                }),
+            )
+            .with_state(Arc::clone(&available));
+        let keys_server = tokio::spawn(async move {
+            axum::serve(origin, keys_app).await.unwrap();
+        });
+        let lines = AuditLines::new(None);
+        let mut service = service(&lines, 1);
+        let mut config = registry_platform_oidc::JwksFetcherConfig::defaults();
+        config.cache_ttl = Duration::from_millis(1);
+        config.refresh_cooldown = Duration::ZERO;
+        config.outage_tolerance = Duration::from_secs(30);
+        let fetch_policy = registry_platform_oidc::IssuerNetworkPolicy::new(&url, true)
+            .unwrap()
+            .declared_jwks_fetch_policy();
+        Arc::get_mut(&mut service).unwrap().oidc =
+            Some(crate::auth::tests::test_verifier_over(Arc::new(
+                registry_platform_oidc::JwksFetcher::new_with_fetch_url_policy(
+                    url,
+                    config,
+                    fetch_policy,
+                ),
+            )));
+        let credential = crate::auth::tests::token(serde_json::json!({}));
+        for (keys_available, status) in [
+            (false, StatusCode::SERVICE_UNAVAILABLE),
+            (true, StatusCode::OK),
+            (false, StatusCode::OK),
+        ] {
+            available.store(keys_available, Ordering::SeqCst);
+            tokio::time::sleep(Duration::from_millis(2)).await;
+            for route in ["/ready", "/v1/documents"] {
+                let request = axum::http::Request::builder()
+                    .uri(route)
+                    .header(header::AUTHORIZATION, format!("Bearer {credential}"))
+                    .body(axum::body::Body::empty())
+                    .unwrap();
+                let response = router(Arc::clone(&service)).oneshot(request).await.unwrap();
+                assert_eq!(
+                    response.status(),
+                    status,
+                    "{route}, keys available: {keys_available}"
+                );
+                if route == "/v1/documents" && status == StatusCode::SERVICE_UNAVAILABLE {
+                    assert!(!response.headers().contains_key(header::WWW_AUTHENTICATE));
+                    assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+                    let bytes = to_bytes(response.into_body(), 16384).await.unwrap();
+                    let problem: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+                    assert_eq!(problem["code"], "render.authentication-unavailable");
+                    assert!(!problem.to_string().contains("canary-principal"));
+                }
+            }
+        }
+        keys_server.abort();
+    }
+
+    #[tokio::test]
+    async fn oidc_audit_contains_only_the_canonical_credential_fingerprint() {
+        let lines = AuditLines::new(None);
+        let mut service = service(&lines, 1);
+        Arc::get_mut(&mut service).unwrap().oidc = Some(crate::auth::tests::test_verifier());
+        for id in ["canary-first", "canary-second"] {
+            let credential = crate::auth::tests::token(serde_json::json!({"jti":id}));
+            let request = axum::http::Request::builder()
+                .method(Method::POST)
+                .uri("/v1/render/receipt")
+                .header(header::AUTHORIZATION, format!("Bearer {credential}"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::CONTENT_LENGTH, 11)
+                .body(axum::body::Body::from(r#"{"data":{}}"#))
+                .unwrap();
+            let response = router(Arc::clone(&service)).oneshot(request).await.unwrap();
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+            let records = lines.accepted.lock().unwrap();
+            let record = records.last().expect("audited refusal").to_string();
+            assert!(
+                record.contains(&registry_platform_authcommon::fingerprint_api_key(
+                    &credential
+                ))
+            );
+            for protected in [
+                &credential,
+                "canary-principal",
+                "issuer.example.test",
+                "portal",
+                id,
+            ] {
+                assert!(
+                    !record.contains(protected),
+                    "protected credential claims are absent"
+                );
+            }
+        }
     }
 
     fn render_request(idempotency_key: Option<&str>) -> axum::extract::Request {

@@ -36,4 +36,10 @@ if (Object.hasOwn(client, 'coordinator')) {
   assert.ok(new client.coordinator.CoordinatorClient({ baseUrl: 'https://coordinator.invalid' }));
 }
 
+// Held Render is exercised when explicitly assembled into a local candidate.
+if (Object.hasOwn(client, 'render')) {
+  assert.strictEqual(typeof client.render.RenderClient, 'function');
+  assert.ok(new client.render.RenderClient({ baseUrl: 'https://render.invalid' }));
+}
+
 console.log('Unified Node Registry client package smoke passed');

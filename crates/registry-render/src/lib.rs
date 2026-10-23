@@ -26,6 +26,7 @@
 //!   absolute components, then must name an exact immutable snapshot key.
 
 pub mod audit;
+mod auth;
 pub mod bundle;
 pub mod check;
 pub mod cli;

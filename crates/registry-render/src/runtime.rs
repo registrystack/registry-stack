@@ -14,8 +14,9 @@ use registry_platform_audit::{
     MAX_AUDIT_RETAIN_DAYS, MIN_AUDIT_ROTATE_BYTES,
 };
 use registry_platform_config::{
-    ConfigBlockError, ConfigBlockErrorKind, ListenerBind, LoadedRuntimeConfig, PackageConfig,
-    RemovedKey, RuntimeConfigLoader, RuntimeEnvelope, RuntimeFileCheck, SecretProvidersConfig,
+    ConfigBlockError, ConfigBlockErrorKind, ListenerBind, ListenerNetworkExposure,
+    LoadedRuntimeConfig, OidcClientsConfig, OidcIssuerConfig, PackageConfig, RemovedKey,
+    RuntimeConfigLoader, RuntimeEnvelope, RuntimeFileCheck, SecretProvidersConfig,
 };
 use registry_platform_yaml::{
     escape_pointer_segment, BoundedU32, BoundedU64, Diagnostic, RetiredApiVersion, Source,
@@ -97,6 +98,7 @@ pub struct RenderRuntime {
     pub listener: ListenerRuntime,
     /// The verified bundle package Render serves.
     pub package: PackageConfig,
+    #[serde(default)]
     pub secret_providers: SecretProvidersConfig,
     pub auth: AuthRuntime,
     #[serde(default)]
@@ -121,6 +123,8 @@ pub struct ListenerRuntime {
     /// all-interfaces bind is refused when the file is read. TLS is the
     /// proxy's job, not Render's.
     pub bind: ListenerBind,
+    #[serde(default)]
+    pub network_exposure: ListenerNetworkExposure,
     /// Time allowed for renders in flight to finish at shutdown, in
     /// milliseconds. Open connections get the same again.
     #[serde(default = "default_shutdown_grace")]
@@ -129,6 +133,14 @@ pub struct ListenerRuntime {
 }
 
 impl ListenerRuntime {
+    /// Wildcard container listeners require an explicit private-network declaration.
+    pub fn bind_allowed(&self) -> bool {
+        let address = self.bind.socket_addr();
+        bind_allowed(address)
+            || (self.network_exposure == ListenerNetworkExposure::ContainerPrivate
+                && address.ip().is_unspecified())
+    }
+
     /// `shutdownGraceMilliseconds` as a duration.
     #[must_use]
     pub fn shutdown_grace(&self) -> Duration {
@@ -185,7 +197,32 @@ pub struct AuthRuntime {
         feature = "schema",
         schemars(with = "registry_platform_config::SecretReference")
     )]
-    pub api_key_ref: String,
+    #[serde(default, deserialize_with = "present_auth_member")]
+    pub api_key_ref: Option<String>,
+    #[serde(default, deserialize_with = "present_auth_member")]
+    #[cfg_attr(feature = "schema", schemars(with = "OidcRuntime"))]
+    pub oidc: Option<OidcRuntime>,
+}
+
+fn present_auth_member<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    T::deserialize(deserializer).map(Some)
+}
+
+/// Serving-adapter OIDC configuration. The pure rendering library never reads it.
+#[derive(Debug, Clone, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct OidcRuntime {
+    #[serde(rename(deserialize = "registry-platform-yaml/shared-block/oidc-issuer"))]
+    #[cfg_attr(feature = "schema", schemars(flatten))]
+    pub provider: OidcIssuerConfig,
+    #[serde(rename(deserialize = "registry-platform-yaml/shared-block/oidc-clients"))]
+    #[cfg_attr(feature = "schema", schemars(flatten))]
+    pub clients: OidcClientsConfig,
 }
 
 /// The longest render a runtime may allow.
@@ -546,7 +583,7 @@ struct Finding {
 
 fn findings(runtime: &RenderRuntime) -> Vec<Finding> {
     let mut findings = Vec::new();
-    if !bind_allowed(runtime.listener.bind.socket_addr()) {
+    if !runtime.listener.bind_allowed() {
         findings.push(Finding {
             code: "render.runtime.public-bind",
             pointer: "/listener/bind".to_owned(),
@@ -557,19 +594,39 @@ fn findings(runtime: &RenderRuntime) -> Vec<Finding> {
                 .to_owned(),
         });
     }
-    let blocks = [
-        runtime.package.check(),
-        runtime.secret_providers.check(),
-        runtime
-            .secret_providers
-            .check_reference("auth.apiKeyRef", &runtime.auth.api_key_ref),
-    ];
+    let blocks = [runtime.package.check()];
     findings.extend(
         blocks
             .iter()
             .filter_map(|result| result.as_ref().err())
             .map(block_finding),
     );
+    let needs_secrets = runtime.auth.oidc.as_ref().is_none_or(|oidc| {
+        matches!(
+            oidc.provider.jwks_source,
+            registry_platform_config::JwksSource::Static { .. }
+        )
+    });
+    if needs_secrets
+        || runtime.secret_providers.file.is_some()
+        || runtime.secret_providers.environment.is_some()
+    {
+        if let Err(error) = runtime.secret_providers.check() {
+            findings.push(block_finding(&error));
+        }
+    }
+    match (&runtime.auth.oidc, &runtime.auth.api_key_ref) {
+        (Some(oidc), None) => {
+            findings.extend([oidc.provider.check("auth.oidc", true), oidc.clients.check("auth.oidc")].iter().filter_map(|result| result.as_ref().err()).map(block_finding));
+            if let registry_platform_config::JwksSource::Static { document_ref } = &oidc.provider.jwks_source {
+                if let Err(error) = runtime.secret_providers.check_reference("auth.oidc.jwksSource.documentRef", document_ref) { findings.push(block_finding(&error)); }
+            }
+        }
+        (None, Some(api_key_ref)) => {
+            if let Err(error) = runtime.secret_providers.check_reference("auth.apiKeyRef", api_key_ref) { findings.push(block_finding(&error)); }
+        }
+        _ => findings.push(Finding { code: "render.runtime.authentication", pointer: "/auth".to_owned(), message: "auth must configure exactly one of oidc or apiKeyRef".to_owned(), action: "Configure auth.oidc for the Render resource, or one legacy apiKeyRef; remove the other mode.".to_owned() }),
+    }
     if let Err(error) = runtime.audit.settings() {
         findings.push(audit_finding(&error));
     }
@@ -1063,7 +1120,11 @@ mod tests {
         write_secret(&home.join("audit.key"), b"beside-the-runtime-file");
         let runtime = load_text(&home, &minimal(&home)).expect("runtime loads");
         assert_eq!(
-            resolve_secret(&runtime, &runtime.auth.api_key_ref).expect("declared root"),
+            resolve_secret(
+                &runtime,
+                runtime.auth.api_key_ref.as_deref().expect("key mode")
+            )
+            .expect("declared root"),
             b"from-the-declared-root"
         );
         resolve_secret(&runtime, "secret:file/audit.key")
@@ -1167,6 +1228,76 @@ mod tests {
         std::fs::write(path, bytes).expect("secret file");
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
             .expect("secret mode");
+    }
+
+    #[test]
+    fn container_private_exposure_is_explicit_and_still_refuses_public_addresses() {
+        let (_dir, home) = home();
+        let text = minimal(&home).replace(
+            "bind: 127.0.0.1:8080",
+            "bind: 0.0.0.0:8080\n  networkExposure: container-private",
+        );
+        assert!(
+            load_text(&home, &text).is_ok(),
+            "container-private wildcard must load"
+        );
+        let public = text.replace("0.0.0.0:8080", "203.0.113.9:8080");
+        assert!(
+            load_text(&home, &public).is_err(),
+            "public address stays refused"
+        );
+    }
+
+    #[test]
+    fn oidc_is_an_explicit_alternative_to_the_legacy_key() {
+        let (_dir, home) = home();
+        let oidc = "oidc:\n    issuer: https://issuer.example.test\n    audience: https://render.example.test\n    allowedClients: [portal]";
+        let text = minimal(&home).replace("apiKeyRef: secret:file/api.key", oidc);
+        assert!(
+            load_text(&home, &text).is_ok(),
+            "OIDC runtime loads without caller API key"
+        );
+        let both = text.replace("auth:\n", "auth:\n  apiKeyRef: secret:file/api.key\n");
+        assert!(
+            load_text(&home, &both).is_err(),
+            "no ambiguous authentication fallback"
+        );
+        assert!(load_text(
+            &home,
+            &minimal(&home).replace("apiKeyRef: secret:file/api.key", "{}")
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn oidc_optional_auth_members_refuse_explicit_null_and_validate_declared_providers() {
+        let (_dir, home) = home();
+        let oidc = "oidc:\n    issuer: https://issuer.example.test\n    audience: https://render.example.test\n    allowedClients: [portal]";
+        let text = minimal(&home).replace("apiKeyRef: secret:file/api.key", oidc);
+        assert!(load_text(&home, &text).is_ok());
+        for extra in ["  apiKeyRef: null\n", "  oidc: null\n"] {
+            let base = if extra.contains("oidc") {
+                minimal(&home)
+            } else {
+                text.clone()
+            };
+            assert!(
+                load_text(&home, &base.replace("auth:\n", &format!("auth:\n{extra}"))).is_err(),
+                "explicit null: {extra}"
+            );
+        }
+        let relative = text.replace(
+            &format!("root: {}", home.join("secrets").display()),
+            "root: relative-secrets",
+        );
+        assert_ne!(
+            relative, text,
+            "fixture must replace the declared file root"
+        );
+        assert!(
+            load_text(&home, &relative).is_err(),
+            "unused declared provider is still validated"
+        );
     }
 
     #[test]

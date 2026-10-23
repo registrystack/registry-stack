@@ -40,9 +40,8 @@ v0.42.0.
 
 ``COORDINATOR_CLIENT_FIRST_RELEASE`` is the single place that decides which
 release first adds the Registry Coordinator namespace and native bindings to the
-unified Node and Python client packages. The facades carry no Coordinator
-namespace yet, so the client stays held until its process-instance client
-returns.
+unified Node and Python client packages, beginning in v0.44.0. Client readiness
+does not admit the runtime artifacts, which follow their own roster gates.
 
 ``COORDINATOR_FIRST_RELEASE`` is the single place that decides which release
 first ships the Registry Coordinator binaries, ``coordinator`` and
@@ -80,6 +79,8 @@ RSTACK_FIRST_RELEASE: tuple[int, int, int] | None = (0, 44, 0)
 
 COORDINATOR_CLIENT_FIRST_RELEASE: tuple[int, int, int] | None = (0, 44, 0)
 
+# Held until native facade and packaging checks pass; no image or binary inference.
+RENDER_CLIENT_FIRST_RELEASE: tuple[int, int, int] | None = None
 
 COORDINATOR_FIRST_RELEASE: tuple[int, int, int] | None = None
 
@@ -155,6 +156,11 @@ def rstack_in_release(version: tuple[int, int, int]) -> bool:
     """Return whether the release ships rstack and its component model."""
 
     first_release = RSTACK_FIRST_RELEASE
+    return first_release is not None and tuple(version) >= first_release
+
+
+def render_client_in_release(version: tuple[int, int, int]) -> bool:
+    first_release = RENDER_CLIENT_FIRST_RELEASE
     return first_release is not None and tuple(version) >= first_release
 
 

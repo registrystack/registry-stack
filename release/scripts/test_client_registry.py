@@ -872,7 +872,7 @@ class ClientReadmeInstallTest(unittest.TestCase):
         )
         # Seven products have Node and Python bindings, and both unified
         # facades remain present.
-        self.assertEqual(16, len(found), found)
+        self.assertEqual(18, len(found), found)
         return found
 
     def test_install_lines_name_only_the_unified_packages(self) -> None:

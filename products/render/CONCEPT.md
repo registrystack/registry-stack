@@ -10,7 +10,8 @@ cards — with the same discipline the rest of Registry Stack applies to
 APIs. It is a pure rendering function (bundle + validated data in,
 byte-stable PDF + hashes out), a governed template package as its
 content unit, and a value-free audit log as its issuance record.
-No database, no outbound calls, no engine changes in any other product.
+No database or rendering-path network calls, and no engine changes in any other
+product. Only the optional HTTP adapter uses OIDC discovery/JWKS networking.
 
 ## Document families
 
@@ -67,7 +68,7 @@ equality; the two-OS golden CI job keeps it proven.
 - **App Kit hosts**: an app-owned route through the existing host-route seam;
   author `bundle/`, package it into verified `package/`, and serve that output.
   See `integrations/app-kit/`.
-- **OpenFn jobs** — plain HTTP with API-key auth and a JSON response
+- **OpenFn jobs**: HTTP with resource-token or legacy API-key auth and a JSON response
   variant built for `util.request`; deterministic rendering makes
   at-least-once redelivery safe; see `integrations/openfn/`.
 - **Standalone CLI** — offline, zero-config; branches, print runs, CI.

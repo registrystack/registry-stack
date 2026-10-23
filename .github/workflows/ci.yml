@@ -2073,6 +2073,8 @@ jobs:
             --include-casework \
             --include-messaging \
             --include-scheduling \
+            --include-render \
+            --include-coordinator \
             --python-profile ci \
             --output-dir "${out_dir}" \
             --work-dir "${RUNNER_TEMP}/client-assembly" \
@@ -2789,6 +2791,7 @@ jobs:
             crates/registry-messaging-client-node/package-lock.json
             crates/registry-scheduling-client-node/package-lock.json
             crates/registry-coordinator-client-node/package-lock.json
+            crates/registry-render-client-node/package-lock.json
             crates/registry-stack-client-node/package-lock.json
 
       - name: Cache Cargo registry
@@ -2802,7 +2805,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for client in registry-discovery-client-node registry-evidence-client-node registry-breg-client-node registry-casework-client-node registry-messaging-client-node registry-scheduling-client-node registry-coordinator-client-node; do
+          for client in registry-discovery-client-node registry-evidence-client-node registry-breg-client-node registry-casework-client-node registry-messaging-client-node registry-scheduling-client-node registry-coordinator-client-node registry-render-client-node; do
             (
               cd "crates/${client}"
               npm ci
@@ -2824,7 +2827,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for client in registry-discovery-client-py registry-evidence-client-py registry-breg-client-py registry-casework-client-py registry-messaging-client-py registry-scheduling-client-py registry-coordinator-client-py; do
+          for client in registry-discovery-client-py registry-evidence-client-py registry-breg-client-py registry-casework-client-py registry-messaging-client-py registry-scheduling-client-py registry-coordinator-client-py registry-render-client-py; do
             cargo build --locked -p "${client}" --lib --features "${client}/extension-module"
             (
               cd "crates/${client}"
@@ -2894,6 +2897,7 @@ jobs:
             crates/registry-messaging-client-node/package-lock.json
             crates/registry-scheduling-client-node/package-lock.json
             crates/registry-coordinator-client-node/package-lock.json
+            crates/registry-render-client-node/package-lock.json
             crates/registry-stack-client-node/package-lock.json
 
       - name: Install pinned Linux client build tools
@@ -2910,7 +2914,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for client in discovery evidence breg casework messaging scheduling coordinator; do
+          for client in discovery evidence breg casework messaging scheduling coordinator render; do
             client_dir="${GITHUB_WORKSPACE}/crates/registry-${client}-client-node"
             (cd "${client_dir}" && npm ci)
             release/scripts/build-linux-node-client \
@@ -2918,7 +2922,7 @@ jobs:
               --target "${{ matrix.target }}" \
               --napi-platform "${{ matrix.napi_platform }}" \
               --zig-python "${RUNNER_TEMP}/maturin/bin/python"
-            if [[ "${client}" == breg || "${client}" == casework || "${client}" == messaging || "${client}" == scheduling || "${client}" == coordinator ]]; then
+            if [[ "${client}" == breg || "${client}" == casework || "${client}" == messaging || "${client}" == scheduling || "${client}" == coordinator || "${client}" == render ]]; then
               class_name=BaseRegistryClient
               base_url=https://registry.invalid
               if [[ "${client}" == casework ]]; then
@@ -2930,6 +2934,9 @@ jobs:
               elif [[ "${client}" == scheduling ]]; then
                 class_name=SchedulingClient
                 base_url=https://scheduling.invalid
+              elif [[ "${client}" == render ]]; then
+                class_name=RenderClient
+                base_url=https://render.invalid
               elif [[ "${client}" == coordinator ]]; then
                 class_name=CoordinatorClient
                 base_url=https://coordinator.invalid
@@ -2947,7 +2954,7 @@ jobs:
           done
           client_dir="${GITHUB_WORKSPACE}/crates/registry-stack-client-node"
           platform_dir="${client_dir}/npm/${{ matrix.napi_platform }}"
-          for client in discovery evidence breg casework messaging scheduling coordinator; do
+          for client in discovery evidence breg casework messaging scheduling coordinator render; do
             cp "${GITHUB_WORKSPACE}/crates/registry-${client}-client-node/${client}-client.${{ matrix.napi_platform }}.node" \
               "${platform_dir}/"
           done

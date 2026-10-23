@@ -13,7 +13,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "release" / "scripts" / "smoke-registry-client-package.py"
 VERSION = "0.0.0-smoke"
-# The namespaces the published wheel carries, with public classes exercised by
+# The namespaces released wheels and explicit local candidates may carry, exercised by
 # the offline smoke.
 NAMESPACES = {
     "breg": (
@@ -29,6 +29,7 @@ NAMESPACES = {
     "messaging": ("MessagingClient", "MessagingClientError"),
     "scheduling": ("SchedulingClient", "SchedulingClientError"),
     "coordinator": ("CoordinatorClient", "CoordinatorClientError"),
+    "render": ("RenderClient", "RenderClientError"),
 }
 
 
@@ -97,6 +98,17 @@ class SmokeRegistryClientPackageTest(unittest.TestCase):
             raise RuntimeError("the messaging extension module failed to load")
 
         self.package.messaging.MessagingClient.__init__ = refuse
+        with self.assertRaises(RuntimeError):
+            self.run_smoke()
+
+    def test_a_wheel_without_held_render_passes(self) -> None:
+        delattr(self.package, "render")
+        self.assertIn("smoke passed", self.run_smoke())
+
+    def test_a_render_extension_that_cannot_load_is_refused(self) -> None:
+        def refuse(self: object, *args: object, **kwargs: object) -> None:
+            raise RuntimeError("the render extension module failed to load")
+        self.package.render.RenderClient.__init__ = refuse
         with self.assertRaises(RuntimeError):
             self.run_smoke()
 

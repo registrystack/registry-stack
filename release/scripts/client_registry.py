@@ -139,6 +139,10 @@ def includes_scheduling(version: str, *, include_scheduling: bool = False) -> bo
     )
 
 
+def includes_render(version: str, *, include_render: bool = False) -> bool:
+    return include_render or release_roster.render_client_in_release(release_version(version))
+
+
 def includes_coordinator(version: str, *, include_coordinator: bool = False) -> bool:
     return include_coordinator or release_roster.coordinator_client_in_release(release_version(version))
 
@@ -163,6 +167,7 @@ def native_binary_stems(
     include_casework: bool = False,
     include_messaging: bool = False,
     include_scheduling: bool = False,
+    include_render: bool = False,
     include_coordinator: bool = False,
 ) -> tuple[str, ...]:
     definition = client_definition(client)
@@ -181,6 +186,8 @@ def native_binary_stems(
         version, include_scheduling=include_scheduling
     ):
         stems += ("scheduling-client",)
+    if client == "stack" and includes_render(version, include_render=include_render):
+        stems += ("render-client",)
     if client == "stack" and includes_coordinator(version, include_coordinator=include_coordinator):
         stems += ("coordinator-client",)
     return stems
@@ -192,6 +199,7 @@ def stack_python_namespaces(
     include_casework: bool = False,
     include_messaging: bool = False,
     include_scheduling: bool = False,
+    include_render: bool = False,
     include_coordinator: bool = False,
 ) -> tuple[str, ...]:
     namespaces = STACK_PYTHON_NAMESPACES
@@ -203,6 +211,8 @@ def stack_python_namespaces(
         namespaces += ("messaging",)
     if includes_scheduling(version, include_scheduling=include_scheduling):
         namespaces += ("scheduling",)
+    if includes_render(version, include_render=include_render):
+        namespaces += ("render",)
     if includes_coordinator(version, include_coordinator=include_coordinator):
         namespaces += ("coordinator",)
     return tuple(sorted(namespaces))
@@ -215,6 +225,7 @@ def npm_platforms(
     include_casework: bool = False,
     include_messaging: bool = False,
     include_scheduling: bool = False,
+    include_render: bool = False,
     include_coordinator: bool = False,
 ) -> tuple[tuple[str, tuple[str, ...]], ...]:
     return tuple(
@@ -228,6 +239,7 @@ def npm_platforms(
                     include_casework=include_casework,
                     include_messaging=include_messaging,
                     include_scheduling=include_scheduling,
+                    include_render=include_render,
                     include_coordinator=include_coordinator,
                 )
             ),
@@ -399,6 +411,7 @@ def validate_npm_packages(
     include_casework: bool = False,
     include_messaging: bool = False,
     include_scheduling: bool = False,
+    include_render: bool = False,
     include_coordinator: bool = False,
 ) -> list[Path]:
     require_supported_client(client, version)
@@ -415,6 +428,7 @@ def validate_npm_packages(
             include_casework=include_casework,
             include_messaging=include_messaging,
             include_scheduling=include_scheduling,
+            include_render=include_render,
             include_coordinator=include_coordinator,
         ):
             if path.name == f"{definition.npm_tarball_stem}-{platform}-{version}.tgz":
@@ -500,7 +514,7 @@ def validate_npm_packages(
                     raise ClientRegistryError(
                         f"root npm package {path.name} unexpectedly exposes the scheduling facade"
                     )
-                for product, expected in [("coordinator", includes_coordinator(version, include_coordinator=include_coordinator))]:
+                for product, expected in [("render", includes_render(version, include_render=include_render)), ("coordinator", includes_coordinator(version, include_coordinator=include_coordinator))]:
                     members = {f"package/{product}/{name}" for name in ("client.js", "client.d.ts", "index.js", "index.d.ts")}
                     exposed = any(name.startswith(f"package/{product}/") for name in names)
                     if expected and members - names:
@@ -528,6 +542,7 @@ def validate_wheels(
     include_casework: bool = False,
     include_messaging: bool = False,
     include_scheduling: bool = False,
+    include_render: bool = False,
     include_coordinator: bool = False,
 ) -> list[Path]:
     require_supported_client(client, version)
@@ -563,6 +578,7 @@ def validate_wheels(
                 include_casework=include_casework,
                 include_messaging=include_messaging,
                 include_scheduling=include_scheduling,
+                include_render=include_render,
                 include_coordinator=include_coordinator,
             )
             for namespace in expected_namespaces:
@@ -624,6 +640,7 @@ def validate_distribution(
     include_casework: bool = False,
     include_messaging: bool = False,
     include_scheduling: bool = False,
+    include_render: bool = False,
     include_coordinator: bool = False,
 ) -> None:
     require_supported_client(client, version)
@@ -634,6 +651,7 @@ def validate_distribution(
         include_casework=include_casework,
         include_messaging=include_messaging,
         include_scheduling=include_scheduling,
+        include_render=include_render,
         include_coordinator=include_coordinator,
     )
     validate_wheels(
@@ -643,6 +661,7 @@ def validate_distribution(
         include_casework=include_casework,
         include_messaging=include_messaging,
         include_scheduling=include_scheduling,
+        include_render=include_render,
         include_coordinator=include_coordinator,
     )
 
@@ -767,6 +786,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     validate.add_argument("--include-casework", action="store_true")
     validate.add_argument("--include-messaging", action="store_true")
     validate.add_argument("--include-scheduling", action="store_true")
+    validate.add_argument("--include-render", action="store_true")
     validate.add_argument("--include-coordinator", action="store_true")
     bind = subparsers.add_parser("bind-optional-deps")
     bind.add_argument("--package-json", type=Path, required=True)
@@ -781,6 +801,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     pypi.add_argument("--include-casework", action="store_true")
     pypi.add_argument("--include-messaging", action="store_true")
     pypi.add_argument("--include-scheduling", action="store_true")
+    pypi.add_argument("--include-render", action="store_true")
     pypi.add_argument("--include-coordinator", action="store_true")
     return parser.parse_args(argv)
 
@@ -796,6 +817,7 @@ def main(argv: list[str] | None = None) -> int:
                 include_casework=args.include_casework,
                 include_messaging=args.include_messaging,
                 include_scheduling=args.include_scheduling,
+                include_render=args.include_render,
                 include_coordinator=args.include_coordinator,
             )
             print("validated")
@@ -812,6 +834,7 @@ def main(argv: list[str] | None = None) -> int:
                 include_casework=args.include_casework,
                 include_messaging=args.include_messaging,
                 include_scheduling=args.include_scheduling,
+                include_render=args.include_render,
                 include_coordinator=args.include_coordinator,
             )
             print(

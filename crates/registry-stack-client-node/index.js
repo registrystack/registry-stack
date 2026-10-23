@@ -9,4 +9,5 @@ exports.breg = require('./breg/client');
 exports.casework = require('./casework/client');
 exports.messaging = require('./messaging/client');
 exports.scheduling = require('./scheduling/client');
+exports.render = require('./render/client');
 exports.coordinator = require('./coordinator/client');
