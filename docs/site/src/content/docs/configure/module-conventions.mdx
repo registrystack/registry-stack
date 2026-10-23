@@ -62,9 +62,10 @@ combines BReg, Casework, and Messaging over the released client interfaces, with
 token helper and a completion wake receiver. It is one example composition, not a required set of
 products. Its README owns installation, local configuration, and the runnable journey.
 
-## Describe a data service optionally
+## Describe the module optionally
 
-Use existing Manifest `data_services` for a real service that serves declared datasets.
-The [Manifest reference](../../products/registry-manifest/reference/) owns that metadata contract.
-A worker remains usable without an entry and needs no fictional dataset. Metadata inclusion does
-not certify availability, register a live service, or grant runtime authority.
+Use existing Manifest `data_services` for a real service that serves declared datasets. A worker
+can use the separate static `modules` description without a dataset. The
+[Manifest reference](../../products/registry-manifest/reference/#adopter-owned-modules) owns that
+metadata contract. Manifest performs no health check, authentication, dynamic registration, or
+capability enforcement for a described module.

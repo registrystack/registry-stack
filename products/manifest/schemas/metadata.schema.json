@@ -1054,6 +1054,29 @@
         }
       ]
     },
+    "ModuleManifest": {
+      "additionalProperties": false,
+      "description": "A portable description of an adopter-owned module, independent of datasets.",
+      "properties": {
+        "description": {
+          "$ref": "#/$defs/LocalizedText"
+        },
+        "documentation_url": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "title": {
+          "$ref": "#/$defs/LocalizedText"
+        }
+      },
+      "required": [
+        "id",
+        "title"
+      ],
+      "type": "object"
+    },
     "OdrlEnforcementProfile": {
       "additionalProperties": false,
       "properties": {
@@ -1480,6 +1503,13 @@
       "default": [],
       "items": {
         "$ref": "#/$defs/FormManifest"
+      },
+      "type": "array"
+    },
+    "modules": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/ModuleManifest"
       },
       "type": "array"
     },

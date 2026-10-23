@@ -161,6 +161,7 @@ fn project_manifest(
                 .collect(),
         },
         vocabularies: BTreeMap::new(),
+        modules: Vec::new(),
         profiles: Vec::new(),
         evaluation_profiles: Vec::new(),
         ecosystem_bindings: Vec::new(),
