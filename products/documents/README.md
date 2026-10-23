@@ -35,7 +35,7 @@ states every rule under "Access tokens".
 | `GET /v1/documents/{documentId}` | Read metadata and the actions the caller may take |
 | `GET /v1/documents/{documentId}/versions/{versionId}/content` | Download a releasable version, as its custodian or a grant holder |
 | `POST /v1/documents/{documentId}/grants` | Grant one named recipient one exact version until a fixed expiry; needs an `Idempotency-Key` |
-| `GET /v1/documents/{documentId}/grants` | List every grant on a document |
+| `GET /v1/documents/{documentId}/grants` | List every grant on a document, in any state; only the custodian may |
 | `GET /v1/document-grants` | List the active grants naming the caller |
 | `DELETE /v1/document-grants/{grantId}` | Revoke a grant |
 | `POST /v1/documents/{documentId}/erasure` | Remove a document from custody; only its custodian may. Takes no `Idempotency-Key`: a repeat moves nothing and answers the same view |
@@ -65,7 +65,8 @@ as custodian grants only if its profile is listed in the policy's
 the custodian never grants, even if its profile is listed. `grantingProfiles`
 is empty under citizen delivery: the citizen holds and shares the document,
 and the issuing institution sees its metadata and status but cannot grant on
-it or read its bytes. Under institutional custody the institution is the
+it, list its grants (so it never learns whom the citizen shared with), or read
+its bytes. Under institutional custody the institution is the
 custodian and lists its own profile there.
 
 A grant names its recipient by subject and actor kind, not by access

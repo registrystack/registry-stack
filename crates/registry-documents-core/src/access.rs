@@ -290,6 +290,14 @@ impl Standing {
     pub const fn sees(self) -> bool {
         self.custodian || self.owner
     }
+
+    /// Whether the caller may list the document's grants. Who the custodian
+    /// shared with is the custodian's alone; the reserving system, which
+    /// sees the document, does not learn it.
+    #[must_use]
+    pub const fn may_list_grants(self) -> bool {
+        self.custodian
+    }
 }
 
 /// Decide what `caller` is to a document held in `custody` under `policy`,
@@ -382,7 +390,7 @@ pub fn allowed_actions(
     granted: bool,
 ) -> Vec<DocumentAction> {
     if status.is_erasing() {
-        return if standing.sees() {
+        return if standing.may_list_grants() {
             vec![DocumentAction::ListShares]
         } else {
             Vec::new()
@@ -399,7 +407,7 @@ pub fn allowed_actions(
     if standing.may_grant {
         actions.push(DocumentAction::RevokeShare);
     }
-    if standing.sees() {
+    if standing.may_list_grants() {
         actions.push(DocumentAction::ListShares);
     }
     if may_request_erasure(standing) {
@@ -708,8 +716,9 @@ mod tests {
         assert!(owner.owner && owner.sees() && !owner.custodian && !owner.may_grant);
         assert_eq!(
             allowed_actions(owner, DocumentStatus::Ready, false),
-            vec![DocumentAction::ListShares]
+            Vec::<DocumentAction>::new()
         );
+        assert!(!owner.may_list_grants());
     }
 
     #[test]
@@ -816,12 +825,11 @@ mod tests {
         assert!(!allowed_actions(owner, DocumentStatus::Ready, false)
             .contains(&DocumentAction::RequestErasure));
         for status in [DocumentStatus::ErasurePending, DocumentStatus::Erased] {
-            for standing in [custodian, owner] {
-                assert_eq!(
-                    allowed_actions(standing, status, true),
-                    vec![DocumentAction::ListShares]
-                );
-            }
+            assert_eq!(
+                allowed_actions(custodian, status, true),
+                vec![DocumentAction::ListShares]
+            );
+            assert_eq!(allowed_actions(owner, status, true), Vec::new());
             assert_eq!(
                 allowed_actions(Standing::default(), status, true),
                 Vec::new()

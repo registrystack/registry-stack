@@ -123,8 +123,9 @@ fn issue_operation(document_id: Uuid) -> String {
 }
 
 impl DocumentService {
-    /// The document `caller` may manage the grants of. A caller that may
-    /// not see the document is answered as if it did not exist; one that
+    /// The document `caller` may manage (or, when not `managing`, list) the
+    /// grants of, which only the custodian may. A caller that may not see
+    /// the document is answered as if it did not exist; one that
     /// sees it without grant authority is `profile.not-authorized`.
     async fn grantable(
         &self,
@@ -143,7 +144,7 @@ impl DocumentService {
         let allowed = if managing {
             access.standing.may_grant
         } else {
-            access.standing.sees()
+            access.standing.may_list_grants()
         };
         if !allowed {
             return Err(ProblemCode::ProfileNotAuthorized);

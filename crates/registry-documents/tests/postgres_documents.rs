@@ -115,7 +115,7 @@ async fn an_uploaded_document_is_released_only_after_it_is_verified() {
     // already knows the document exists.
     let placed = api.read(APP, &document).await;
     assert_eq!(placed.status, 200);
-    assert_eq!(placed.json()["actions"], serde_json::json!(["list-shares"]));
+    assert_eq!(placed.json()["actions"], serde_json::json!([]));
     api.download(APP, &document, &version)
         .await
         .assert_problem(ProblemCode::ProfileNotAuthorized);
@@ -1959,8 +1959,7 @@ async fn a_version_approved_under_another_binding_is_released_to_nobody() {
         .assert_problem(ProblemCode::DocumentVersionNotReleasable);
 }
 
-/// Only the custodian issues or revokes grants (the owning system may
-/// still list them), and a probe of an unknown id is the answer a stranger
+/// Only the custodian issues, revokes, or lists grants, and a probe of an unknown id is the answer a stranger
 /// gets for a known one.
 #[tokio::test]
 async fn grant_authority_and_unknown_ids_answer_without_disclosing_a_document() {
@@ -1997,7 +1996,8 @@ async fn grant_authority_and_unknown_ids_answer_without_disclosing_a_document() 
             .await,
     );
     // A caller that does not see the document learns nothing of its grants;
-    // the grantee and the reserving system see it but manage no grant here.
+    // the grantee and the reserving system see it but manage no grant here,
+    // and the reserving system never learns whom the citizen shared with.
     api.revoke(STRANGER, &grant)
         .await
         .assert_problem(ProblemCode::ResourceNotFound);
@@ -2009,9 +2009,16 @@ async fn grant_authority_and_unknown_ids_answer_without_disclosing_a_document() 
             .await
             .assert_problem(ProblemCode::ProfileNotAuthorized);
     }
-    api.get(READER, &format!("/v1/documents/{document}/grants"))
-        .await
-        .assert_problem(ProblemCode::ProfileNotAuthorized);
+    for seeing in [READER, APP] {
+        api.get(seeing, &format!("/v1/documents/{document}/grants"))
+            .await
+            .assert_problem(ProblemCode::ProfileNotAuthorized);
+    }
+    let listed = api
+        .get(CITIZEN, &format!("/v1/documents/{document}/grants"))
+        .await;
+    assert_eq!(listed.status, 200);
+    assert_eq!(listed.json()["items"][0]["id"], grant.as_str());
     api.revoke(CITIZEN, &unknown)
         .await
         .assert_problem(ProblemCode::ResourceNotFound);
@@ -2152,7 +2159,7 @@ async fn grant_and_document_lists_page_in_a_stable_order() {
     api.revoke(CITIZEN, &issued[0]).await;
 
     let path = format!("/v1/documents/{document}/grants");
-    let first = api.get(APP, &format!("{path}?limit=2")).await;
+    let first = api.get(CITIZEN, &format!("{path}?limit=2")).await;
     assert_eq!(
         first.status,
         200,
@@ -2161,7 +2168,7 @@ async fn grant_and_document_lists_page_in_a_stable_order() {
     );
     let cursor = first.json()["nextCursor"].as_str().unwrap().to_owned();
     let second = api
-        .get(APP, &format!("{path}?limit=2&cursor={cursor}"))
+        .get(CITIZEN, &format!("{path}?limit=2&cursor={cursor}"))
         .await;
     assert_eq!(second.status, 200);
     assert!(second.json()["nextCursor"].is_null());
@@ -2176,9 +2183,11 @@ async fn grant_and_document_lists_page_in_a_stable_order() {
     let mut sorted = ids.clone();
     sorted.sort();
     assert_eq!(sorted, expected);
-    assert_eq!(api.get(APP, &path).await.json()["items"], json!(listed));
-    // The custodian lists the shares too.
-    assert_eq!(api.get(CITIZEN, &path).await.status, 200);
+    assert_eq!(api.get(CITIZEN, &path).await.json()["items"], json!(listed));
+    // The reserving system is refused the list, page or not.
+    api.get(APP, &path)
+        .await
+        .assert_problem(ProblemCode::ProfileNotAuthorized);
 
     // The recipient's own list shows its active grants only.
     let received = api.get(READER, "/v1/document-grants").await;
@@ -2966,7 +2975,7 @@ async fn a_custodian_erasure_request_stops_release_and_the_sweep_erases_the_byte
     assert_eq!(api.erase(CITIZEN, &document).await.json(), requested.json());
 
     let revoked = api
-        .get(APP, &format!("/v1/documents/{document}/grants"))
+        .get(CITIZEN, &format!("/v1/documents/{document}/grants"))
         .await;
     assert_eq!(revoked.json()["items"][0]["id"], grant.as_str());
     assert_eq!(revoked.json()["items"][0]["state"], "revoked");
@@ -3053,13 +3062,13 @@ async fn removing_a_rejected_document_revokes_its_grants() {
     restarted.verify_due().await;
     assert_eq!(status(&api.read(CITIZEN, &document).await), "rejected");
     let listed = api
-        .get(APP, &format!("/v1/documents/{document}/grants"))
+        .get(CITIZEN, &format!("/v1/documents/{document}/grants"))
         .await;
     assert_eq!(listed.json()["items"][0]["state"], "active");
 
     assert_eq!(api.erase(CITIZEN, &document).await.status, 200);
     let listed = api
-        .get(APP, &format!("/v1/documents/{document}/grants"))
+        .get(CITIZEN, &format!("/v1/documents/{document}/grants"))
         .await;
     assert_eq!(listed.json()["items"][0]["id"], grant.as_str());
     assert_eq!(listed.json()["items"][0]["state"], "revoked");

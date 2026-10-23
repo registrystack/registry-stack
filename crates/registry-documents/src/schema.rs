@@ -296,7 +296,7 @@ pub const OPERATIONS: &[Operation] = &[
         method: "get",
         path: DOCUMENT_GRANTS_PATH,
         operation_id: "listDocumentGrants",
-        summary: "List every grant on one document, in any state.",
+        summary: "List every grant on one document, in any state; only the custodian may.",
         description: None,
         authenticated: true,
         idempotent: false,

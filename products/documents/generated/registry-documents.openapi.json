@@ -2193,7 +2193,7 @@
             "bearer": []
           }
         ],
-        "summary": "List every grant on one document, in any state."
+        "summary": "List every grant on one document, in any state; only the custodian may."
       },
       "post": {
         "operationId": "issueDocumentGrant",

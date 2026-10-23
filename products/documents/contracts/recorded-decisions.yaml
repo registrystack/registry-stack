@@ -623,3 +623,23 @@ decisions:
       so accepting it adds no path for unverified bytes to reach a recipient.
     evidence:
       - {path: crates/registry-documents/src/config.rs, name: disabled_content_verification_requires_development_loopback}
+  - id: DOCUMENTS-DEC-35
+    subject: Only the custodian lists a document's grants
+    decision: >-
+      GET /v1/documents/{documentId}/grants answers the custodian alone. The
+      system that reserved the document for another custodian sees the
+      document, so its list answers 403 profile.not-authorized, and the
+      document's actions omit list-shares for it. Every caller without
+      standing still gets 404 resource.not-found.
+    reasoning: >-
+      Each grant names its grantee's subject and kind, so the list tells
+      whoever reads it whom the citizen shared with. Under citizen delivery
+      the issuing system keeps metadata and status visibility only
+      (DOCUMENTS-DEC-10); letting it list the grants would hand it the
+      citizen's sharing history that it has no authority over. It already
+      knows the document exists, so 403 states the reason where a 404 would
+      only misstate it.
+    evidence:
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: grant_authority_and_unknown_ids_answer_without_disclosing_a_document}
+      - {path: crates/registry-documents-core/src/access.rs, name: the_reserving_system_sees_a_delivered_document_but_may_neither_grant_nor_read_it}
+      - {path: crates/registry-documents/tests/postgres_journey.rs, name: a_rendered_document_reaches_a_named_recipient_and_outlives_its_share}
