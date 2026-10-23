@@ -92,7 +92,7 @@ class AssembleRegistryClientWheelTest(TestCase):
     def run_assembler(
         self, *, version: str | None = None, include_casework: bool = False,
         include_messaging: bool = False, include_scheduling: bool = False,
-        include_coordinator: bool = True
+        include_coordinator: bool = True, include_render: bool = True
     ) -> subprocess.CompletedProcess[str]:
         command = [
             "python3",
@@ -101,8 +101,9 @@ class AssembleRegistryClientWheelTest(TestCase):
             version or self.version,
             "--output-dir",
             str(self.directory / "dist"),
-            "--include-render",
         ]
+        if include_render:
+            command.append("--include-render")
         if include_coordinator:
             command.append("--include-coordinator")
         if include_casework:
@@ -112,6 +113,8 @@ class AssembleRegistryClientWheelTest(TestCase):
         if include_scheduling:
             command.append("--include-scheduling")
         for product, wheel in self.wheels.items():
+            if product == "render" and not include_render:
+                continue
             command.extend((f"--{product}-wheel", str(wheel)))
         module = load_module()
         module.FACADE = self.facade
@@ -128,6 +131,16 @@ class AssembleRegistryClientWheelTest(TestCase):
         return subprocess.CompletedProcess(
             command, returncode, stdout.getvalue(), stderr.getvalue()
         )
+
+    def test_default_wheel_excludes_held_render_without_requiring_its_component(self) -> None:
+        result = self.run_assembler(include_render=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        wheel = next((self.directory / "dist").glob("*.whl"))
+        with zipfile.ZipFile(wheel) as archive:
+            self.assertFalse(any(name.startswith("registry_client/render/") for name in archive.namelist()))
+            self.assertNotIn(b"registry_client.render", archive.read("registry_client/__init__.py"))
+            self.assertNotIn(b'"render"', archive.read("registry_client/__init__.py"))
+            self.assertNotIn(b"import render", archive.read("registry_client/__init__.pyi"))
 
     def test_current_release_includes_coordinator_without_a_local_override(self) -> None:
         previous = self.version

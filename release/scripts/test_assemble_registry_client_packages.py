@@ -42,10 +42,14 @@ class AssembleClientPackagesTest(unittest.TestCase):
     def candidate_plan(self, *args, **kwargs):
         return self.module.plan(*args, include_render=True, **kwargs)
 
-    def test_held_render_requires_explicit_candidate_selection_for_every_artifact_family(self) -> None:
+    def test_default_roster_omits_held_render_for_every_artifact_family(self) -> None:
         for artifacts in ("node", "python", "all"):
-            with self.subTest(artifacts=artifacts), self.assertRaisesRegex(ValueError, "Render client"):
-                self.module.plan(ROOT, "0.44.0", "darwin-arm64", artifacts, "maturin", Path("/work"), Path("/out"))
+            with self.subTest(artifacts=artifacts):
+                steps = self.module.plan(ROOT, "0.44.0", "darwin-arm64", artifacts, "maturin", Path("/work"), Path("/out"))
+                self.assertTrue(steps)
+                self.assertFalse(any("registry-render-client" in step.render() or "--render-wheel" in step.argv for step in steps))
+                self.assertFalse(any("--include-render" in step.argv for step in steps))
+
 
     def test_the_checked_in_manifest_is_never_bound_in_place(self) -> None:
         facade_manifest = str(
@@ -284,7 +288,8 @@ class AssembleClientPackagesTest(unittest.TestCase):
             Path("/work"), Path("/out"), zig_python="/maturin/python",
             python_profile="ci", include_messaging=True, include_scheduling=True,
         )
-        self.assertEqual(len(self.module.PRODUCTS), sum(step.argv[0].endswith("build-linux-python-client") for step in steps))
+        self.assertEqual(len(self.module.PRODUCTS) - 1, sum(step.argv[0].endswith("build-linux-python-client") for step in steps))
+        self.assertFalse(any("--coordinator-wheel" in step.argv for step in steps))
         self.assertIn("--include-messaging", steps[-1].argv)
 
     def test_source_integration_can_explicitly_include_unreleased_scheduling(self) -> None:
@@ -293,7 +298,8 @@ class AssembleClientPackagesTest(unittest.TestCase):
             Path("/work"), Path("/out"), zig_python="/maturin/python",
             python_profile="ci", include_scheduling=True,
         )
-        self.assertEqual(len(self.module.PRODUCTS), sum(step.argv[0].endswith("build-linux-python-client") for step in steps))
+        self.assertEqual(len(self.module.PRODUCTS) - 1, sum(step.argv[0].endswith("build-linux-python-client") for step in steps))
+        self.assertFalse(any("--coordinator-wheel" in step.argv for step in steps))
         self.assertIn("--include-scheduling", steps[-1].argv)
         self.assertNotIn("--include-messaging", steps[-1].argv)
 

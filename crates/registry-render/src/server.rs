@@ -268,10 +268,14 @@ async fn require_bearer(
         Ok(caller) => caller,
         Err(error) => {
             use crate::auth::AuthenticationError;
-            let kind = match error {
-                AuthenticationError::Refused => ProblemKind::Unauthorized,
-                AuthenticationError::Forbidden => ProblemKind::Forbidden,
-                AuthenticationError::Unavailable => ProblemKind::AuthenticationUnavailable,
+            let (kind, caller) = match error {
+                AuthenticationError::Refused => (ProblemKind::Unauthorized, "unknown".to_owned()),
+                AuthenticationError::Forbidden { caller_fingerprint } => {
+                    (ProblemKind::Forbidden, caller_fingerprint)
+                }
+                AuthenticationError::Unavailable => {
+                    (ProblemKind::AuthenticationUnavailable, "unknown".to_owned())
+                }
             };
             let problem = RenderProblem::new(kind, "Render access could not be authorized");
             let target = sanitize_route_target(request.uri().path());
@@ -280,7 +284,7 @@ async fn require_bearer(
             let event = RenderAuditEvent::refused(
                 &target,
                 &problem,
-                "unknown",
+                &caller,
                 correlation.as_deref(),
                 trace.as_deref(),
             );
@@ -439,7 +443,9 @@ fn problem_response(problem: &RenderProblem, trace: Option<&str>) -> Response {
     };
     let status = StatusCode::from_u16(body.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
     let mut value = serde_json::to_value(body).expect("fixed problem serializes");
-    // JSON pointers are bounded structural diagnostics, never request values.
+    // At most 32 pointers of 256 scalar values fit the client's 64 KiB problem
+    // budget, including six-byte JSON escapes. They are structural diagnostics,
+    // never request values.
     if !problem.pointers.is_empty() {
         value["pointers"] = serde_json::json!(problem
             .pointers
@@ -1239,6 +1245,67 @@ mod tests {
             }
         }
         keys_server.abort();
+    }
+
+    #[tokio::test]
+    async fn maximum_pointer_problem_fits_the_serving_client_budget() {
+        for character in ["😀", "\u{001f}"] {
+            let pointer = format!("/{}", character.repeat(512));
+            let problem = RenderProblem::new(ProblemKind::DataInvalid, "local diagnostic")
+                .with_pointers(vec![pointer; 64]);
+            let response = problem_response(&problem, None);
+            let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024)
+                .await
+                .unwrap();
+            assert!(bytes.len() > 16 * 1024);
+            let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            let pointers = body["pointers"].as_array().unwrap();
+            assert_eq!(pointers.len(), 32);
+            assert!(pointers
+                .iter()
+                .all(|pointer| pointer.as_str().unwrap().chars().count() == 256));
+        }
+    }
+
+    #[tokio::test]
+    async fn scope_refusals_keep_verified_credential_fingerprints() {
+        let lines = AuditLines::new(None);
+        let mut service = service(&lines, 1);
+        Arc::get_mut(&mut service).unwrap().oidc = Some(crate::auth::tests::test_verifier());
+        let credential = crate::auth::tests::token(serde_json::json!({"scope":"other"}));
+        for (token, status, caller) in [
+            (
+                credential.clone(),
+                StatusCode::FORBIDDEN,
+                registry_platform_authcommon::fingerprint_api_key(&credential),
+            ),
+            (
+                credential.clone(),
+                StatusCode::FORBIDDEN,
+                registry_platform_authcommon::fingerprint_api_key(&credential),
+            ),
+            (
+                crate::auth::tests::token(serde_json::json!({"aud":"urn:other"})),
+                StatusCode::UNAUTHORIZED,
+                "unknown".to_owned(),
+            ),
+        ] {
+            let response = router(Arc::clone(&service))
+                .oneshot(
+                    axum::http::Request::builder()
+                        .uri("/v1/documents")
+                        .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                        .body(axum::body::Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), status);
+            let records = lines.accepted.lock().unwrap();
+            let record = &records.last().expect("audited refusal")["record"];
+            assert_eq!(record["caller"], caller);
+            assert!(!record.to_string().contains(&token));
+        }
     }
 
     #[tokio::test]

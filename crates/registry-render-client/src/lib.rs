@@ -17,6 +17,10 @@ use url::Url;
 
 pub use registry_platform_httputil::client::{BearerToken, TransportKind};
 
+// The server permits 32 pointers of 256 Unicode scalar values. JSON escaping
+// uses at most six bytes per scalar, leaving room for the fixed problem fields.
+const MAXIMUM_PROBLEM_BYTES: u64 = 64 * 1024;
+
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RenderClientConfig {
@@ -266,7 +270,7 @@ impl RenderClient {
         let limit = if status.is_success() {
             self.maximum_response_bytes
         } else {
-            16 * 1024
+            MAXIMUM_PROBLEM_BYTES
         };
         let bytes = read_bounded(response, limit)
             .await

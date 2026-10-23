@@ -81,3 +81,15 @@ test('native transport failures expose whether an exchange may have completed', 
   } finally {await new Promise(resolve=>server.close(resolve));}
   await assert.rejects(new RenderClient({baseUrl:base}).render('canary-render-token','receipt',request),error=>error.kind==='transport' && error.transportKind==='connect' && error.outcomeUnknown===false);
 });
+
+test('arrays refuse holes and accessors before invoking them or acquiring tokens', async () => {
+  const caller = new RenderClient({baseUrl:'http://127.0.0.1:1'});
+  let tokens = 0; let getters = 0;
+  const provider = {bearerToken:async()=>{tokens++;throw new Error('provider must not be called');}};
+  const accessor = [0];
+  Object.defineProperty(accessor,'0',{enumerable:true,get(){getters++;return 1;}});
+  for (const data of [new Array(2),new Array(100_001),new Array(1_000_000_000),accessor]) {
+    await assert.rejects(caller.render(provider,'receipt',{issuedAt:'2026-10-23T00:00:00Z',data}),error=>error.kind==='invalid-request');
+  }
+  assert.equal(tokens,0);assert.equal(getters,0);
+});

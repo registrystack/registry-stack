@@ -64,10 +64,10 @@ pub(crate) async fn verifier(
     Ok(Some(TokenVerifier::new(profile, Arc::new(keys))))
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum AuthenticationError {
     Refused,
-    Forbidden,
+    Forbidden { caller_fingerprint: String },
     Unavailable,
 }
 
@@ -98,12 +98,13 @@ pub(crate) async fn authenticate(
     let verified = verifier.verify(token).await.map_err(verifier_failure)?;
     // The verifier owns resource membership and the configured client binding.
     // Unrelated task-grant claims confer no Render authority.
+    let caller_fingerprint = registry_platform_authcommon::fingerprint_api_key(token);
     if !verified.scopes.iter().any(|scope| scope == "render:render") {
-        return Err(AuthenticationError::Forbidden);
+        return Err(AuthenticationError::Forbidden { caller_fingerprint });
     }
     // Correlate the exact verified credential, as in legacy API-key mode.
     // Issuer, subject, and client claims are never written into the audit event.
-    Ok(registry_platform_authcommon::fingerprint_api_key(token))
+    Ok(caller_fingerprint)
 }
 
 #[cfg(test)]

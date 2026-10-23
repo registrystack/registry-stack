@@ -238,3 +238,26 @@ async fn incomplete_response_exposes_an_uncertain_exchange_without_retry() {
     );
     task.await.unwrap();
 }
+
+#[tokio::test]
+async fn server_pointer_budget_remains_a_typed_problem() {
+    // A 256-character pointer can occupy 1,021 UTF-8 bytes. The real server
+    // permits 32 such pointers, so a legitimate refusal exceeds 16 KiB.
+    let pointer = format!("/{}", "😀".repeat(255));
+    let body = json!({"type":"https://render.registrystack.org/problems/data-invalid","title":"data-invalid","status":400,"detail":"The render request was refused","code":"render.data-invalid","traceId":TRACE,"pointers":vec![pointer;32]});
+    assert!(serde_json::to_vec(&body).unwrap().len() > 16 * 1024);
+    let (client, task) = client(400, body).await;
+    let error = client
+        .render(
+            &BearerToken::new("canary-render-token").unwrap(),
+            "receipt",
+            &request(),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind, "problem");
+    assert_eq!(error.code.as_deref(), Some("render.data-invalid"));
+    assert_eq!(error.status, Some(400));
+    assert!(!error.outcome_unknown);
+    task.abort();
+}

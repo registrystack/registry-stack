@@ -155,6 +155,7 @@ def node_steps(
     work_dir: Path,
     output_dir: Path,
     macos_library_roots: tuple[Path, ...] = (),
+    products: tuple[str, ...] = NODE_PRODUCTS,
 ) -> list[Step]:
     facade = root / "crates" / "registry-stack-client-node"
     staging = work_dir / "node-root"
@@ -191,11 +192,12 @@ def node_steps(
                 version,
                 "--client",
                 "stack",
+                *(f"--include-{product}" for product in ("casework", "messaging", "scheduling", "render", "coordinator") if product in products),
             ),
             root,
         ),
     ]
-    for product in NODE_PRODUCTS:
+    for product in products:
         binding = root / "crates" / f"registry-{product}-client-node"
         steps.append(
             Step(
@@ -221,7 +223,7 @@ def node_steps(
             "--library-directory",
             str(platform_directory),
         ]
-        for product in NODE_PRODUCTS:
+        for product in products:
             bundle += [
                 "--consumer",
                 str(platform_directory / f"{product}-client.{napi_platform}.node"),
@@ -278,6 +280,10 @@ def python_steps(
     if python_profile not in ("release", "ci"):
         raise ValueError(f"unsupported Python build profile: {python_profile}")
     profile_flags = ("--release",) if python_profile == "release" else ("--profile", "ci")
+    products = tuple(product for product in PRODUCTS if product in client_registry.stack_python_namespaces(
+        version, include_casework=include_casework, include_messaging=include_messaging,
+        include_scheduling=include_scheduling, include_render=include_render,
+        include_coordinator=include_coordinator))
     built = work_dir / "product-wheels"
     wheel_tag = PLATFORMS[napi_platform]["wheel_tag"]
     steps = [
@@ -292,7 +298,7 @@ def python_steps(
             root,
         ),
     ]
-    for product in PRODUCTS:
+    for product in products:
         if napi_platform.startswith("linux-"):
             if zig_python is None:
                 raise ValueError("Linux Python builds require --zig-python")
@@ -342,7 +348,7 @@ def python_steps(
         assemble.append("--include-render")
     if include_coordinator:
         assemble.append("--include-coordinator")
-    for product in PRODUCTS:
+    for product in products:
         assemble += [
             f"--{product}-wheel",
             str(built / f"{WHEEL_STEMS[product]}-{version}-{wheel_tag}.whl"),
@@ -398,11 +404,10 @@ def plan(
             "this checkout contains the Scheduling client; versions before its "
             "first release require --include-scheduling for local integration; use the release tag for published bytes"
         )
-    if not client_registry.includes_render(version, include_render=include_render):
-        raise ValueError(
-            "this checkout contains the held Render client; use --include-render "
-            "for a local candidate or the release tag for published bytes"
-        )
+    products = tuple(product for product in PRODUCTS if product in client_registry.stack_python_namespaces(
+        version, include_casework=include_casework, include_messaging=include_messaging,
+        include_scheduling=include_scheduling, include_render=include_render,
+        include_coordinator=include_coordinator))
     steps: list[Step] = []
     if artifacts in ("all", "node"):
         steps += node_steps(
@@ -412,6 +417,7 @@ def plan(
             work_dir,
             output_dir,
             macos_library_roots,
+            products,
         )
     if artifacts in ("all", "python"):
         steps += python_steps(

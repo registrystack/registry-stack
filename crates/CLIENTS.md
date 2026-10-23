@@ -167,10 +167,10 @@ registry_prepare_cargo_runtime "$PWD" --locked -p "registry-${product}-client-no
 The unified Node.js and Python client roster contains BReg, Casework, Discovery,
 Evidence, Messaging, Scheduling, and Coordinator from v0.44.0. Messaging joined
 in v0.38.0 and Scheduling in v0.40.0; historical releases retain their own
-inventory. The Render source binding is held independently: package this
-checkout only with the explicit local-candidate `--include-render` option.
-That option does not enable publication or change the released seven-product
-roster. Historical source integration may also need `--include-messaging`,
+inventory. The Render source binding is held independently and omitted from
+default assembly. Add it only with the explicit local-candidate
+`--include-render` option. That option does not enable publication or change
+the released seven-product roster. Historical source integration may also need `--include-messaging`,
 `--include-scheduling`, or `--include-coordinator`; use a release tag to
 reproduce its published package.
 When changing that assembly,

@@ -92,8 +92,9 @@ version-matched internal native wheels with the facade and emits the only
 publishable Python distribution, using this file as the PyPI description.
 
 Coordinator joins the seven-product roster at v0.44.0. The source facade also
-contains held `registry_client.render`; building that local candidate requires
-`--include-render` and does not authorize publication.
+contains held `registry_client.render`. Default assembly omits Render;
+`--include-render` adds it to an explicit local candidate and does not authorize
+publication.
 Render accepts a resource-specific token or `registry_client.auth.PrivateKeyJwt`
 provider and returns the checked JSON PDF representation. Errors expose
 `outcome_unknown` and `transport_kind`; provider failures keep their own class.

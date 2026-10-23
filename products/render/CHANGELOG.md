@@ -12,8 +12,9 @@
   return a typed 404. Their new CLI categories use exits 23, 24 and 25.
 - Add bounded Rust, Node and Python serving clients with validation before token
   acquisition, canonical token-provider errors, and explicit transport outcome
-  uncertainty. Unified package assembly requires `--include-render` for local
-  candidates while Render's release-client hold remains in place.
+  uncertainty. Default unified packages retain the seven-product roster;
+  `--include-render` adds Render to explicit local candidates while its
+  release-client hold remains in place.
 - Document the observed v0.43.0 native and emulated worker results, their differing
   inputs and environment, and the unresolved cause of the emulator failure.
 - PDF responses expose `X-Registry-Warning-Count`, including zero, so callers
