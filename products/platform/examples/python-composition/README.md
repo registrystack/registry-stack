@@ -15,7 +15,10 @@ authority and never bypasses the native SDK's lifecycle link or ETag.
 
 ## Install and configure
 
-Use Python 3.11 or later and `uv sync --locked`. This installs the published
+Use an ordinary Registry Stack source archive or checkout, Python 3.11 or later,
+and `uv sync --locked` from this example directory. Retain the archive layout: the
+example reads BReg's maintained generated lifecycle schema at
+`products/breg/generated/event-schemas/proposal-lifecycle.schema.json`. This installs the published
 wheel; Rust is not required. Copy `config.example.json` to a private operator
 file and replace its service origins, profiles, and credential file paths.
 Each product gets a separate resource-bound provider. A `privateKeyJwt` object
@@ -37,11 +40,11 @@ The native `verify_webhook_delivery` helper verifies the method, path, headers,
 and raw bytes under the maintained BReg delivery contract. The receiver also
 checks the delivery time within five minutes and persists the event identity
 and body digest before returning an empty `204`. It validates the native Proposal
-payload against the bundled copy of BReg's generated lifecycle schema, checks the
+payload against BReg's maintained generated lifecycle schema in the source archive, checks the
 envelope against signed metadata and its Proposal subject, and stores only the
 Proposal id, submission version, effect digest, event identity, and body digest.
-The unit suite checks that bundled schema against its owning generated source. Run reconciliation on a timer
-as well: a missing hook must not prevent an authoritative source reread.
+The unit suite checks that the validator loads the owning schema. Run reconciliation
+on a timer as well: a missing hook must not prevent an authoritative source reread.
 
 ## Walk the application
 

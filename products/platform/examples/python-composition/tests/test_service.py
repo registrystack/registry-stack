@@ -1,15 +1,19 @@
-from datetime import datetime, timezone
+import json
+import tempfile
+import threading
+import unittest
+from datetime import UTC, datetime
 from http.client import HTTPConnection
 from http.server import ThreadingHTTPServer
-import threading
-import json
 from pathlib import Path
-import tempfile
 from types import SimpleNamespace
-import unittest
 from unittest.mock import patch
+
 from registry_client import breg, messaging
+
 from service import (
+    PROPOSAL_PAYLOAD,
+    PROPOSAL_SCHEMA_PATH,
     Composition,
     CompositionError,
     Inbox,
@@ -24,7 +28,7 @@ CANARY_KEY = b"webhook-delivery-signing-key-0123456789abcdef"
 BODY = b'{"entity":"case","values":{"label":"value"}}'
 SOURCE = "urn:registrystack:registry:example:instance:primary"
 SCHEMA = "urn:registrystack:registry:example:event:case-created-v1:schema:sha256:aaa"
-NOW = datetime(2026, 8, 30, 0, 0, 1, tzinfo=timezone.utc)
+NOW = datetime(2026, 8, 30, 0, 0, 1, tzinfo=UTC)
 
 
 def headers():
@@ -45,17 +49,17 @@ def headers():
 
 
 def accept(inbox, body=BODY, **overrides):
-    options = dict(
-        method="POST",
-        path="/hooks/registry",
-        headers=headers(),
-        body=body,
-        key=CANARY_KEY,
-        source=SOURCE,
-        event_type="case-created-v1",
-        schema=SCHEMA,
-        now=NOW,
-    )
+    options = {
+        "method": "POST",
+        "path": "/hooks/registry",
+        "headers": headers(),
+        "body": body,
+        "key": CANARY_KEY,
+        "source": SOURCE,
+        "event_type": "case-created-v1",
+        "schema": SCHEMA,
+        "now": NOW,
+    }
     options.update(overrides)
     return inbox.accept(**options)
 
@@ -162,11 +166,13 @@ class WakeReceiverTests(unittest.TestCase):
                 {"source": "urn:other"},
                 {"event_type": "proposal.applied"},
                 {"schema": "urn:other"},
-                {"now": datetime(2026, 10, 23, tzinfo=timezone.utc)},
+                {"now": datetime(2026, 10, 23, tzinfo=UTC)},
             ]:
-                with self.subTest(overrides=tuple(overrides)):
-                    with self.assertRaises(WakeRefused):
-                        accept(inbox, **overrides)
+                with (
+                    self.subTest(overrides=tuple(overrides)),
+                    self.assertRaises(WakeRefused),
+                ):
+                    accept(inbox, **overrides)
             self.assertEqual(inbox.pending(), 0)
 
 
@@ -319,7 +325,7 @@ class ReceiptRecoveryTests(unittest.TestCase):
                 with app.inbox.connect() as db:
                     db.execute("UPDATE jobs SET state='notice-uncertain'")
 
-                def refused(*_):
+                def refused(*_, code=code):
                     error = RuntimeError(code)
                     error.code = code
                     raise error
@@ -338,7 +344,7 @@ class ReceiverHttpTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             inbox = Inbox(Path(root) / "inbox.sqlite")
             verified = verified_proposal()
-            verified["delivery_time"] = datetime.now(timezone.utc).isoformat()
+            verified["delivery_time"] = datetime.now(UTC).isoformat()
             server = ThreadingHTTPServer(
                 ("127.0.0.1", 0),
                 receiver(
@@ -540,21 +546,18 @@ class ProposalHintTests(unittest.TestCase):
 
 
 class OwningSchemaTests(unittest.TestCase):
-    def test_bundled_proposal_schema_matches_the_owning_generated_contract(self):
+    def test_proposal_validator_uses_the_owning_contract_from_the_source_archive(self):
         root = Path(__file__).resolve().parents[5]
         self.assertEqual(
-            json.loads(
-                (
-                    Path(__file__).resolve().parents[1] / "proposal-event.schema.json"
-                ).read_text()
-            ),
-            json.loads(
-                (
-                    root
-                    / "products/breg/generated/event-schemas/proposal-lifecycle.schema.json"
-                ).read_text()
-            ),
+            PROPOSAL_SCHEMA_PATH,
+            root
+            / "products/breg/generated/event-schemas/proposal-lifecycle.schema.json",
         )
+        self.assertEqual(
+            PROPOSAL_PAYLOAD.schema,
+            json.loads(PROPOSAL_SCHEMA_PATH.read_text()),
+        )
+        self.assertEqual(PROPOSAL_PAYLOAD.schema["$id"], PROPOSAL_SCHEMA)
 
 
 class FairPollingTests(unittest.TestCase):

@@ -6,23 +6,28 @@ version/effects, and BReg's lifecycle guards decide whether Apply is possible.
 """
 
 from __future__ import annotations
+
 import argparse
-from contextlib import contextmanager
-from datetime import datetime, timezone
 import hashlib
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import logging
 import os
-from pathlib import Path
 import sqlite3
 import uuid
+from contextlib import contextmanager
+from datetime import UTC, datetime
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 
 from jsonschema import Draft202012Validator, FormatChecker, ValidationError
 
 PROPOSAL_SCHEMA = "https://id.registrystack.org/contracts/breg/proposal-event/v1"
+PROPOSAL_SCHEMA_PATH = (
+    Path(__file__).resolve().parents[3]
+    / "breg/generated/event-schemas/proposal-lifecycle.schema.json"
+)
 PROPOSAL_PAYLOAD = Draft202012Validator(
-    json.loads(Path(__file__).with_name("proposal-event.schema.json").read_text()),
+    json.loads(PROPOSAL_SCHEMA_PATH.read_text()),
     format_checker=FormatChecker(),
 )
 
@@ -152,10 +157,8 @@ class Inbox:
             verified = verify_webhook_delivery(
                 method=method, path=path, headers=headers, body=body, key=key
             )
-            delivered = datetime.fromisoformat(
-                verified["delivery_time"].replace("Z", "+00:00")
-            )
-            instant = datetime.now(timezone.utc) if now is None else now
+            delivered = datetime.fromisoformat(verified["delivery_time"])
+            instant = datetime.now(UTC) if now is None else now
             if abs((instant - delivered).total_seconds()) > 300:
                 raise WakeRefused("hook delivery time is outside the accepted window")
             if (verified["source"], verified["type"], verified["dataschema"]) != (

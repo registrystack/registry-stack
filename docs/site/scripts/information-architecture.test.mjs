@@ -811,15 +811,15 @@ test('keeps the BReg guide and references in one adoption path', () => {
 // Engine; a Transit proxy, an identity provider, and durable audit storage for
 // Registry Evidence. That is deployment planning, so it opens each product's
 // Deploy group. It is not a first encounter, so Start carries none of it: a
-// first visit meets the overview and the page that explains how the products
-// fit together, and reaches every product through its own overview. The two
-// retired Start seats redirect to the Deploy pages that replaced them.
+// first visit meets the overview, the adoption paths, and the page that explains
+// how the products fit together, and reaches every product through its own
+// overview. The two retired Start seats redirect to the Deploy pages that replaced them.
 test('keeps operating requirements in each product Deploy group, not in Start', () => {
   const start = topLevelSection(sidebarSource, 'Start');
   assert.ok(start, 'could not isolate Start');
   assert.deepEqual(
     [...start.matchAll(/slug: '([^']+)'/g)].map((match) => match[1]),
-    ['start/concepts'],
+    ['start/adopt', 'start/concepts'],
   );
 
   const evidence = topLevelSection(sidebarSource, 'Registry Evidence');
@@ -1096,7 +1096,12 @@ test('ends Reference with the glossary', () => {
   assert.equal(reference.items.at(-1).slug, 'reference/glossary');
   assert.equal([...sidebarSource.matchAll(/slug: 'reference\/glossary'/g)].length, 1);
   const start = section('Start');
-  assert.deepEqual(start.items.map((item) => item.slug ?? item.link), ['/', 'start/concepts']);
+  assert.deepEqual(start.items.map((item) => item.slug ?? item.link), ['/', 'start/adopt', 'start/concepts']);
+  assert.equal(
+    reference.items.filter((item) => item.slug === 'configure/module-conventions').length,
+    1,
+    'module conventions belongs in Reference',
+  );
 });
 
 test('does not publish the retired pre-1.0 cutover page', () => {
