@@ -1418,6 +1418,10 @@ def classify(
         complete
         or bool(affected & NATIVE_BINDING_PACKAGES)
         or unified_client_changed
+        or any(path.startswith((
+            "products/platform/examples/python-composition/",
+            "products/coordinator/examples/reviewed-notice/",
+        )) for path in changed_paths)
     )
 
     evidence_tutorial = integration and (

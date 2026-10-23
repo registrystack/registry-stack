@@ -430,6 +430,16 @@ class Journey:
         frozen_binaries.mkdir(mode=0o700)
         dylibs = sorted({str(p.parent) for p in (binaries / "build").glob("aws-lc-fips-sys-*/out/build/artifacts/*.dylib")})
         self.library_digests = {}
+        if sys.platform == "darwin" and not self.build_provenance:
+            # Release archives place their relocated FIPS libraries alongside
+            # each executable. Preserve that loader-relative layout on restart.
+            for library in sorted(binaries.glob("libaws_lc_fips_*.dylib")):
+                assert library.is_file() and not library.is_symlink(), "released runtime library must be a regular file"
+                destination = frozen_binaries / library.name
+                shutil.copy2(library, destination)
+                destination.chmod(0o500)
+                self.library_digests[library.name] = file_digest(library)
+                assert file_digest(destination) == self.library_digests[library.name]
         if sys.platform == "darwin" and self.build_provenance:
             library_dir = root / "native-libraries"
             library_dir.mkdir(mode=0o700)

@@ -91,7 +91,8 @@ class AssembleRegistryClientWheelTest(TestCase):
 
     def run_assembler(
         self, *, version: str | None = None, include_casework: bool = False,
-        include_messaging: bool = False, include_scheduling: bool = False
+        include_messaging: bool = False, include_scheduling: bool = False,
+        include_coordinator: bool = True
     ) -> subprocess.CompletedProcess[str]:
         command = [
             "python3",
@@ -100,8 +101,9 @@ class AssembleRegistryClientWheelTest(TestCase):
             version or self.version,
             "--output-dir",
             str(self.directory / "dist"),
-            "--include-coordinator",
         ]
+        if include_coordinator:
+            command.append("--include-coordinator")
         if include_casework:
             command.append("--include-casework")
         if include_messaging:
@@ -125,6 +127,23 @@ class AssembleRegistryClientWheelTest(TestCase):
         return subprocess.CompletedProcess(
             command, returncode, stdout.getvalue(), stderr.getvalue()
         )
+
+    def test_current_release_includes_coordinator_without_a_local_override(self) -> None:
+        previous = self.version
+        self.version = "0.44.0"
+        for relative in ("pyproject.toml", "python/registry_client/__init__.py"):
+            path = self.facade / relative
+            path.write_text(path.read_text().replace(previous, self.version))
+        for product, old in list(self.wheels.items()):
+            current = old.with_name(old.name.replace(previous, self.version))
+            with zipfile.ZipFile(old) as source, zipfile.ZipFile(current, "w") as target:
+                for name in source.namelist():
+                    target.writestr(name.replace(previous, self.version), source.read(name).replace(previous.encode(), self.version.encode()))
+            self.wheels[product] = current
+        result = self.run_assembler(include_coordinator=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        with zipfile.ZipFile(Path(result.stdout.strip())) as archive:
+            self.assertIn("registry_client/coordinator/native.abi3.so", archive.namelist())
 
     def test_assembles_one_installable_distribution_identity(self) -> None:
         result = self.run_assembler()

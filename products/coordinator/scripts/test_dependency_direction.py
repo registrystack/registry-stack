@@ -60,7 +60,7 @@ INTENDED = {
     "client": ["platform", "serde"],
     "client-node": ["client", "serde"],
     "client-py": ["client", "serde"],
-    "stack-client": ["breg-client", "messaging-client", "scheduling-client"],
+    "stack-client": ["breg-client", "messaging-client", "scheduling-client", "client"],
     "cli-docs": ["runtime", "breg", "bregctl", "messaging", "scheduling", "schedulingctl"],
     "breg": ["record", "platform"],
     "breg-client": ["record", "platform"],
@@ -277,19 +277,20 @@ class DependentTests(unittest.TestCase):
             found,
         )
 
-    def test_the_facade_reaching_a_coordinator_crate_is_refused(self):
-        for dependency, reached in (("client", "registry-coordinator-client"), ("runtime", "registry-coordinator")):
+    def test_the_facade_carries_only_the_public_coordinator_client(self):
+        self.assertEqual(failures(stack_client=["client"]), "")
+        for dependency in ("runtime", "client-node", "client-py"):
             with self.subTest(dependency=dependency):
                 self.assertIn(
                     "registry-stack-client depends on Coordinator package(s) it is not listed for: "
-                    + reached,
-                    failures(stack_client=[dependency]),
+                    + NAMES[dependency], failures(stack_client=[dependency]),
                 )
 
-    def test_the_only_allowed_dependent_is_the_cli_reference(self):
+    def test_allowed_dependents_are_the_cli_reference_and_client_facade(self):
         self.assertEqual(
             MODULE.ALLOWED_DEPENDENTS,
-            {"registry-cli-docs": frozenset({"registry-coordinator"})},
+            {"registry-cli-docs": frozenset({"registry-coordinator"}),
+             "registry-stack-client": frozenset({"registry-coordinator-client"})},
         )
 
     def test_casework_tooling_cannot_reach_coordinator_through_any_dependency_kind(self):

@@ -2833,9 +2833,18 @@ jobs:
             )
           done
 
-      - name: Test direct Python composition receiver
+      - name: Install uv
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          version: "0.11.16"
+
+      - name: Test direct Python composition
         working-directory: products/platform/examples/python-composition
-        run: python3 -m unittest discover -s tests -v
+        run: uv run --locked python -m unittest discover -s tests -v
+
+      - name: Test released-client Coordinator example
+        working-directory: products/coordinator/examples/reviewed-notice
+        run: uv run --locked python -m unittest discover -s tests -v
 
   release-linux-node-clients:
     name: Release Linux native clients (${{ matrix.asset }})
