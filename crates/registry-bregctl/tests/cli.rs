@@ -3436,6 +3436,26 @@ fn init_from_publicschema_starter_writes_a_derived_project_that_checks_immediate
 
     let check = bregctl(&["--format", "json", "check", path(&destination)]);
     assert!(check.status.success(), "{check:?}");
+    // Both warnings are fields the model classifies above their record type,
+    // which the operator profile reads whatever its scopes and purposes.
+    let check = bregctl(&[
+        "--format",
+        "json",
+        "check",
+        path(&destination),
+        "--deny-warnings",
+    ]);
+    assert_eq!(check.status.code(), Some(1), "{check:?}");
+    let denied_codes: Vec<String> = json_stdout(&check)["diagnostics"]
+        .as_array()
+        .expect("diagnostics")
+        .iter()
+        .map(|diagnostic| diagnostic["code"].as_str().expect("code").to_owned())
+        .collect();
+    assert_eq!(
+        denied_codes,
+        ["breg.access.profile-higher-classification"; 2]
+    );
     // The generated `.invalid` IRI runs through local development and schema
     // tests unchanged; asserting production readiness or building a package
     // for deployment refuses it until the adopter replaces it.

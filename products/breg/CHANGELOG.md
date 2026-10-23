@@ -31,8 +31,10 @@
   failures name the step, profile and unreadable field, or the Action and missing
   required input.
 - Warning findings now include a stable `rank` of `widens-access`, `performance`
-  or `hygiene`. Clean generated starters suppress broad-access warnings when
-  scope and purpose requirements already bound their callers. Optional stored
+  or `hygiene`. A profile that requires both scopes and purposes does not
+  report `breg.access.profile-unrestricted-collection` or
+  `breg.access.profile-unrestricted-rows`; `breg.access.profile-higher-classification`
+  is always reported. Optional stored
   fields that no supported Record grant or Action can fill report
   `breg.record-type.stored-field-unfillable`.
 - Add the closed `logLevel` runtime setting to BReg, `breg-mcp`, and
