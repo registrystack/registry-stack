@@ -356,7 +356,16 @@ fn random_suffix(length: usize, alphabet: &[u8]) -> Result<String, GeneratedIden
     let accepted_range = 256 - (256 % alphabet_len);
     let mut entropy = [0_u8; 64];
     while output.len() < length {
-        getrandom::fill(&mut entropy).map_err(|_| GeneratedIdentifierError::Unavailable)?;
+        getrandom::fill(&mut entropy).map_err(|error| {
+            // The operating system error carries no identifier values.
+            tracing::warn!(
+                target: "registry_breg::generated_identifiers",
+                operation = "random-suffix",
+                %error,
+                "operating system entropy is unavailable"
+            );
+            GeneratedIdentifierError::Unavailable
+        })?;
         for byte in entropy {
             let value = usize::from(byte);
             if value < accepted_range {
