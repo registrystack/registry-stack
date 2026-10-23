@@ -282,7 +282,7 @@ Each owning guide lists its own gates. The entry points:
 | Coordinator | `products/coordinator/scripts/check_dependency_direction.py`, `check-schemas.sh`, `test-postgres.sh` | `products/coordinator/AGENTS.md` |
 | Discovery | `products/discovery/scripts/check-contracts.sh`, `test-http.sh` | `products/discovery/AGENTS.md` |
 | Clients, bindings, unified packages | per-binding `npm test` and `unittest` runs, `release/scripts/sync-registry-client-node.py --check` | `crates/CLIENTS.md` |
-| Release | `release/scripts/registry-release validate`, `check-release-source-model.sh` | `CONTRIBUTING.md`, `release/VERIFY.md` |
+| Release | `release/scripts/registry-release validate release/manifests/<current>.yaml`, `check-release-source-model.sh` | `CONTRIBUTING.md`, `release/VERIFY.md` |
 | Docs site | `npm test` and `npm run check` in `docs/site/` | `docs/site/AGENTS.md` |
 
 Identifier references shared across products are checked by
