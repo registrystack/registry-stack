@@ -57,6 +57,7 @@ entries:
       - {path: crates/registry-documents/tests/postgres_startup.rs, name: a_prepared_runtime_serves_documents_only_to_a_verified_caller}
       - {path: crates/registry-documents/src/auth.rs, name: a_malformed_or_foreign_credential_is_refused}
       - {path: crates/registry-documents/src/auth.rs, name: a_token_outside_every_profile_is_a_profile_refusal}
+      - {path: crates/registry-documents-core/src/access.rs, name: a_principal_the_store_could_not_render_is_refused_as_claims}
       - {path: crates/registry-documents/src/auth.rs, name: an_exchanged_token_is_refused_where_no_assertion_authority_is_declared}
       - {path: crates/registry-documents/src/auth.rs, name: a_key_set_outage_is_not_a_credential_refusal}
       - {path: crates/registry-documents/src/http.rs, name: a_credential_refusal_carries_the_bearer_challenge}

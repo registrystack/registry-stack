@@ -160,16 +160,20 @@ invariants:
     enforcementPoint: >-
       Every document route verifies the bearer token through platform-oidc and
       resolves one access profile from its client, scopes, and actor kind
-      before it reads the body or the store. A document the caller holds no
-      standing on answers exactly as a document that does not exist, on read,
-      download, and every grant route.
+      before it reads the body or the store. The principal the profile's
+      claim names must be an external identifier (1 to 512 characters, no
+      control character), so nothing is stored under a principal the Store
+      could not render back. A document the caller holds no standing on
+      answers exactly as a document that does not exist, on read, download,
+      and every grant route.
     refusal: >-
       Answer 401 authentication.refused with a Bearer challenge without a
-      verified token, 403 profile.not-authorized for a token no profile
-      admits, 404 resource.not-found for every document the caller may not
-      see, and 403 profile.not-authorized to a caller who sees the document
-      but whose standing does not reach the action, the owning system's
-      download included.
+      verified token or with a principal outside that grammar, 403
+      profile.not-authorized for a token no profile admits, 404
+      resource.not-found for every document the caller may not see, and 403
+      profile.not-authorized to a caller who sees the document but whose
+      standing does not reach the action, the owning system's download
+      included.
     negativeTest:
       path: crates/registry-documents/tests/postgres_startup.rs
       name: a_prepared_runtime_serves_documents_only_to_a_verified_caller

@@ -256,7 +256,9 @@ DOCUMENTS-SEC-54:
   challenge; a key set the runtime cannot reach answers 503, never 401.
 - A caller's subject comes from its profile's `principalClaim`, and
   custody, ownership, and grants match a caller by issuer, subject, and
-  kind. Every profile accepts the deployment's one issuer, so project check
+  kind. A subject that is not an external identifier (1 to 512 characters,
+  no control character) is refused with 401 before anything is stored
+  under it, since a custodian is rendered back in that grammar. Every profile accepts the deployment's one issuer, so project check
   refuses two profiles of one actor kind that name different claims with
   `documents.project.mixed-principal-claim`: otherwise a token whose claim
   value equals another profile's subject would inherit that caller's
