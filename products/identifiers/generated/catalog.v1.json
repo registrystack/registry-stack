@@ -2227,10 +2227,10 @@
       "description": "The Discovery request is invalid.",
       "source": {
         "path": "crates/registry-discovery/src/problem.rs",
-        "sha256": "119d013635a62cb0d6cc38a81a7bc03d6a58371fa882180bbfd37847c65e6364"
+        "sha256": "63698866e8991794da106613a3bb826f44b9fba5840cd544fc67a1e35e5c9ded"
       },
       "problem": {
-        "code": "invalid-request",
+        "code": "request.invalid",
         "httpStatuses": [
           400
         ]
@@ -2246,10 +2246,10 @@
       "description": "The requested Discovery resource was not found.",
       "source": {
         "path": "crates/registry-discovery/src/problem.rs",
-        "sha256": "119d013635a62cb0d6cc38a81a7bc03d6a58371fa882180bbfd37847c65e6364"
+        "sha256": "63698866e8991794da106613a3bb826f44b9fba5840cd544fc67a1e35e5c9ded"
       },
       "problem": {
-        "code": "not-found",
+        "code": "request.not-found",
         "httpStatuses": [
           404
         ]
@@ -2265,10 +2265,10 @@
       "description": "The complete Discovery result exceeds its configured bound.",
       "source": {
         "path": "crates/registry-discovery/src/problem.rs",
-        "sha256": "119d013635a62cb0d6cc38a81a7bc03d6a58371fa882180bbfd37847c65e6364"
+        "sha256": "63698866e8991794da106613a3bb826f44b9fba5840cd544fc67a1e35e5c9ded"
       },
       "problem": {
-        "code": "result-bound-exceeded",
+        "code": "request.result-bound-exceeded",
         "httpStatuses": [
           422
         ]
@@ -2284,10 +2284,10 @@
       "description": "Registry Discovery is temporarily unavailable.",
       "source": {
         "path": "crates/registry-discovery/src/problem.rs",
-        "sha256": "119d013635a62cb0d6cc38a81a7bc03d6a58371fa882180bbfd37847c65e6364"
+        "sha256": "63698866e8991794da106613a3bb826f44b9fba5840cd544fc67a1e35e5c9ded"
       },
       "problem": {
-        "code": "unavailable",
+        "code": "service.unavailable",
         "httpStatuses": [
           503
         ]
