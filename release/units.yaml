@@ -1,13 +1,15 @@
 {
   "schema_version": "registry-stack.release-units.v1",
   "distribution": {
-    "members": ["docs", "editors/vscode", "editors/zed"],
+    "members": ["docs", "editors/vscode", "editors/zed", "rstack"],
     "artifact_patterns": [
       "THIRD_PARTY_NOTICES",
       "registry-docs-v*.tar.gz",
       "registry-stack-v*.sbom.spdx.json",
       "registry-stack-v*-security-evidence.tar.gz",
-      "registry-stack-v*-distribution.json"
+      "registry-stack-v*-distribution.json",
+      "rstack-v*-*",
+      "rstack-install.sh"
     ]
   },
   "units": {

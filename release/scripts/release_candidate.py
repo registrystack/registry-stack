@@ -109,7 +109,7 @@ V2_TOP_LEVEL_FIELDS = {
     "bundle",
 }
 DOCS_V2_TOP_LEVEL_FIELDS = V2_TOP_LEVEL_FIELDS | {"docs"}
-V3_DISTRIBUTION_TOP_LEVEL_FIELDS = DOCS_V2_TOP_LEVEL_FIELDS | {"components"}
+V3_DISTRIBUTION_TOP_LEVEL_FIELDS = DOCS_V2_TOP_LEVEL_FIELDS | {"distribution_components"}
 PAYLOAD_KINDS = {
     "binary",
     "client-package",
@@ -1387,7 +1387,7 @@ def validate_candidate_manifest(
         )
 
     components = (
-        validate_release_components(manifest["components"])
+        validate_release_components(manifest["distribution_components"])
         if is_distribution_candidate
         else None
     )
@@ -1714,7 +1714,7 @@ def validate_candidate_manifest(
             locked_components = validate_release_components(lock["components"])
             if locked_components != components:
                 raise CandidateError(
-                    "distribution lock components must exactly match candidate components"
+                    "distribution lock components must exactly match candidate distribution_components"
                 )
         validate_security_evidence_archive(
             bundle_root / expected_evidence_name,

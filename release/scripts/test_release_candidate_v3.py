@@ -243,6 +243,7 @@ class ReleaseCandidateV3Test(TestCase):
         release = schema["$defs"]["discoveryRelease"]
         self.assertIn("unit", release["required"])
         self.assertEqual("discovery", release["properties"]["unit"]["const"])
+        self.assertIn("distribution_components", schema["properties"])
         self.assertIn("components", schema["properties"])
         self.assertEqual(2, len(schema["oneOf"]))
 
@@ -350,12 +351,24 @@ class ReleaseCandidateV3Test(TestCase):
                 "size": 1,
                 "sha256": "4" * 64,
             },
-            "components": [component],
+            "distribution_components": [component],
         }
+        manifest["components"] = self.module.rstack_components.build_component_manifest(
+            version, manifest["payloads"]
+        )
         result = self.module.validate_candidate_manifest(manifest, now=self.now)
-        self.assertEqual([component], result["components"])
+        self.assertEqual([component], result["distribution_components"])
+        self.assertEqual(
+            "registry-stack.components.v1", result["components"]["schema_version"]
+        )
         schema = json.loads((SCRIPT.parent.parent / "schemas/release-candidate-v3.schema.json").read_text())
-        jsonschema.Draft202012Validator(schema).validate(manifest)
+        validator = jsonschema.Draft202012Validator(schema)
+        validator.validate(manifest)
+        without_rstack = copy.deepcopy(manifest)
+        without_rstack.pop("components")
+        self.assertFalse(validator.is_valid(without_rstack))
+        with self.assertRaisesRegex(self.module.CandidateError, "components"):
+            self.module.validate_candidate_manifest(without_rstack, now=self.now)
 
         embedded = copy.deepcopy(manifest)
         embedded["payloads"].append(

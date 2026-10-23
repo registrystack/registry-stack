@@ -136,8 +136,10 @@ class ReleaseUnitsTest(TestCase):
         self.assertEqual("clients", registry.artifact_owner("registrystack-client-0.45.0.tgz"))
         self.assertEqual("clients", registry.artifact_owner("registry_stack_client-0.45.0-cp311-abi3-manylinux.whl"))
         self.assertEqual("distribution", registry.artifact_owner("registry-docs-v0.45.0.tar.gz"))
+        self.assertEqual("distribution", registry.artifact_owner("rstack-v0.45.0-linux-amd64"))
+        self.assertEqual("distribution", registry.artifact_owner("rstack-install.sh"))
         self.assertEqual(
-            ("docs", "editors/vscode", "editors/zed"),
+            ("docs", "editors/vscode", "editors/zed", "rstack"),
             registry.distribution_members,
         )
 

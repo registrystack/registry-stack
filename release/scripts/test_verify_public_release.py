@@ -806,7 +806,13 @@ class PublicReleaseVerifierTest(TestCase):
                     "final_ref": "ghcr.io/registrystack/evidence:v0.45.0",
                 }
             ],
-            "components": [
+            "components": {
+                "schema_version": "registry-stack.components.v1",
+                "release": "v0.45.0",
+                "launcher": {},
+                "components": {"evidence": {}},
+            },
+            "distribution_components": [
                 {
                     "unit": "discovery",
                     "version": "1.2.3",
@@ -856,6 +862,80 @@ class PublicReleaseVerifierTest(TestCase):
                     "digest": discovery_digest,
                     "final_ref": "ghcr.io/registrystack/discovery:v1.2.3",
                 },
+            ],
+            images,
+        )
+
+    def test_stack_manifest_with_only_rstack_components_verifies_stack_images(self) -> None:
+        source = "a" * 40
+        payload_sha256 = "b" * 64
+        stack_digest = f"sha256:{'c' * 64}"
+        document = {
+            "schema_version": "registry-stack.release-candidate.v2",
+            "repository": "registrystack/registry-stack",
+            "release": {
+                "version": "0.44.0",
+                "release_id": "beta-44",
+                "tag": "v0.44.0",
+                "source_sha": source,
+            },
+            "workflow": {
+                "path": ".github/workflows/release-candidate.yml",
+                "revision": source,
+                "run_id": 123,
+                "run_attempt": 1,
+            },
+            "validity": {
+                "created_at": "2026-10-23T00:00:00Z",
+                "expires_at": "2026-10-24T00:00:00Z",
+            },
+            "payloads": [
+                {
+                    "name": "payload.bin",
+                    "kind": "binary",
+                    "size": 7,
+                    "sha256": payload_sha256,
+                }
+            ],
+            "images": [
+                {
+                    "name": "evidence",
+                    "candidate_ref": f"ghcr.io/registrystack/evidence-candidate@{stack_digest}",
+                    "digest": stack_digest,
+                    "final_ref": "ghcr.io/registrystack/evidence:v0.44.0",
+                }
+            ],
+            "components": {
+                "schema_version": "registry-stack.components.v1",
+                "release": "v0.44.0",
+                "launcher": {},
+                "components": {"evidence": {}},
+            },
+        }
+        checksums = {
+            "payload.bin": payload_sha256,
+            "registry-stack-v0.44.0-release-manifest.json": "1" * 64,
+        }
+        with mock.patch.object(
+            self.module.release_candidate,
+            "validate_candidate_manifest",
+            return_value=document,
+        ):
+            images = self.module.validate_release_manifest(
+                document,
+                repository="registrystack/registry-stack",
+                tag="v0.44.0",
+                source_sha=source,
+                checksums=checksums,
+                assets={"payload.bin": {"size": 7}},
+            )
+
+        self.assertEqual(
+            [
+                {
+                    "digest": stack_digest,
+                    "final_ref": "ghcr.io/registrystack/evidence:v0.44.0",
+                }
             ],
             images,
         )
