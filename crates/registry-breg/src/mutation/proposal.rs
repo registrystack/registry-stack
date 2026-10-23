@@ -3265,13 +3265,9 @@ async fn proposal_application_status(
         "submitted" => {}
         _ => return Err(MutationError::PreconditionFailed),
     }
-    if let Some(blocked_reason) = document.blocked_reason.as_deref().filter(|_| !automatic) {
+    if document.blocked_reason.is_some() && !automatic {
         value["state"] = json!("blocked");
-        value["reason"] = json!(if blocked_reason == "application-refused" {
-            "application-refused"
-        } else {
-            "contract-changed"
-        });
+        value["reason"] = json!(blocked_application_reason(document));
         value["recovery"] = json!("correct-input");
         return Ok(value);
     }
@@ -3356,7 +3352,11 @@ async fn proposal_application_status(
         value["automaticRetry"] = json!({"scheduled":false,"attempts":0,
             "maximumAttempts":frozen.application_policy().maximum_attempts()});
         if blocked {
-            value["reason"] = json!("contract-changed");
+            value["reason"] = json!(if document.blocked_reason.is_some() {
+                blocked_application_reason(document)
+            } else {
+                "contract-changed"
+            });
             value["recovery"] = json!("correct-input");
         }
         return Ok(value);
@@ -3388,7 +3388,11 @@ async fn proposal_application_status(
     // clears the package block. Its requester can still inspect, Rebase or Cancel.
     if document.blocked_reason.is_some() || state == "cancelled" {
         value["state"] = json!("blocked");
-        value["reason"] = json!("contract-changed");
+        value["reason"] = json!(if document.blocked_reason.is_some() {
+            blocked_application_reason(document)
+        } else {
+            "contract-changed"
+        });
         value["recovery"] = json!("correct-input");
         value["automaticRetry"]["scheduled"] = json!(false);
         return Ok(value);
@@ -3408,6 +3412,17 @@ async fn proposal_application_status(
         value["recovery"] = json!(recovery);
     }
     Ok(value)
+}
+
+/// The `applicationStatus` reason for a Proposal whose lifecycle row is
+/// blocked: a refused manual Apply is reported as such, any other block is a
+/// package change.
+fn blocked_application_reason(document: &ProposalDocument) -> &'static str {
+    if document.blocked_reason.as_deref() == Some("application-refused") {
+        "application-refused"
+    } else {
+        "contract-changed"
+    }
 }
 
 fn application_actor_disclosed(
