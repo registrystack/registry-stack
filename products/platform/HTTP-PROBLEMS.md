@@ -32,13 +32,13 @@ contract explicitly accepts them; sharing the core envelope does not widen it.
 Discovery preserves its problem type URIs and adds `request.invalid`,
 `request.not-found`, `request.result-bound-exceeded`, and `service.unavailable`
 codes, fixed `detail`, and `traceId`. Its indeterminate 503 carries no guessed
-retry interval. Its client also accepts the original `type`/`title`/`status`
-trio and genuinely additive members. When supplied, recognized members must be
-bounded and valid: a known type's `code` must agree, `detail` must be safe text,
-and `traceId` must match a valid response `traceparent`. Compatible guidance
-may change without exact-text matching. Unknown future Discovery problem types
-retain their bounded, status-only fallback. Render uses the same core with its
-own vocabulary and extensions.
+retry interval. Its client uses HTTP status and the original
+`type`/`title`/`status` trio for classification; a supplied `code` must agree
+for known problem types. Additive members, `detail`, `traceId`, and the response
+`traceparent` are opaque to classification. The entire problem body is bounded
+at 4 KiB. Unknown future Discovery problem types retain their bounded,
+status-only fallback.
+Render uses the same core with its own vocabulary and extensions.
 
 ## Deliberate response exceptions
 
@@ -60,9 +60,8 @@ not become public error details.
 
 Use a caller-owned key and keep the original body, headers and accepted binding
 when reconciling an uncertain mutation. Reusing a key with another request
-is 409 `idempotency.key-reused` from Casework, Coordinator, Messaging and
-Scheduling, and 409 `idempotency.conflict` from BReg. Classify a 409 by the
-product that returned it.
+is 409 `idempotency.key-reused` from BReg, Casework, Coordinator, Messaging and
+Scheduling. Classify a 409 by the product that returned it.
 
 128 bytes is portable key guidance, not a replacement for route limits.
 BReg and Coordinator preserve their existing 256-byte bounds; Casework,
