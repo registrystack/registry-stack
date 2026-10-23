@@ -104,6 +104,7 @@ entries:
   - id: DOCUMENTS-SEC-18
     tests:
       - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_verifier_binding_change_at_restart_suspends_and_verifies_again}
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_start_refused_at_its_listener_does_not_suspend_verified_versions}
       - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_worker_under_another_binding_leaves_the_job_pending_for_its_own}
       - {path: crates/registry-documents/tests/postgres_documents.rs, name: the_database_refuses_a_releasable_version_under_a_stale_or_mismatched_verdict}
   - id: DOCUMENTS-SEC-19
