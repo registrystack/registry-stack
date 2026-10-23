@@ -379,20 +379,16 @@ fn a_self_issued_actions_link_bound_targets_are_not_registry_wide_findings() {
             .map(|finding| finding.path.clone())
             .collect::<BTreeSet<_>>()
     };
-    let expected = [
-        // Direct read paths have their own disclosure finding. They remain
-        // visible even when the compiler proves the Action targets are bound
-        // through the caller's principal link.
-        "recordTypes[id=enrolment].accessProfiles[id=food-targeting].readPaths[path=households]",
-        "recordTypes[id=person].accessProfiles[id=food-targeting].readPaths[path=households]",
+    let steward = [
         "actions[id=record-consent].permissions[profile=steward].targets[recordType=consent-decision].rowBoundaries",
         "actions[id=record-consent].permissions[profile=steward].targets[recordType=person].rowBoundaries",
     ];
     // The compiler proved the subject is the caller's linked subject and the
-    // created row carries it, so neither target reaches every row.
+    // created row carries it, so neither target reaches every row. Read paths
+    // carry their own profile-related-disclosure finding and are not targets.
     assert_eq!(
         unrestricted(&self_issued_project()),
-        expected
+        steward
             .iter()
             .map(|path| path.to_string())
             .collect::<BTreeSet<_>>()
