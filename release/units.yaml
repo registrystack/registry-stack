@@ -29,7 +29,7 @@
       "tag_prefix": "breg-mcp/",
       "asset_prefix": "registry-breg-mcp",
       "members": ["breg-mcp"],
-      "artifact_patterns": ["breg-mcp-v*-*"],
+      "artifact_patterns": ["breg-mcp-v*-*", "breg-mcp-install.sh"],
       "dependencies": ["breg-casework-evidence"],
       "candidate": null
     },
@@ -39,7 +39,7 @@
       "tag_prefix": "breg-review/",
       "asset_prefix": "registry-breg-review",
       "members": ["breg-review"],
-      "artifact_patterns": ["breg-review-v*-*"],
+      "artifact_patterns": ["breg-review-v*-*", "breg-review-install.sh"],
       "dependencies": ["breg-casework-evidence"],
       "candidate": null
     },
@@ -59,7 +59,7 @@
       "tag_prefix": "coordinator/",
       "asset_prefix": "registry-coordinator",
       "members": ["coordinator", "coordinatorctl"],
-      "artifact_patterns": ["coordinator-v*-*", "coordinatorctl-v*-*"],
+      "artifact_patterns": ["coordinator-v*-*", "coordinator-install.sh", "coordinatorctl-v*-*"],
       "dependencies": [],
       "candidate": null
     },
@@ -69,7 +69,7 @@
       "tag_prefix": "discovery/",
       "asset_prefix": "registry-discovery",
       "members": ["discovery", "discoveryctl"],
-      "artifact_patterns": ["discovery-v*-linux-amd64", "discoveryctl-v*-linux-amd64", "discovery-v*-install.sh", "discovery-install.sh", "registry-discovery-v*.sbom.spdx.json", "registry-discovery-v*-security-evidence.tar.gz"],
+      "artifact_patterns": ["discovery-v*-*", "discoveryctl-v*-*", "discovery-v*-install.sh", "discovery-install.sh", "registry-discovery-v*.sbom.spdx.json", "registry-discovery-v*-security-evidence.tar.gz"],
       "dependencies": [],
       "candidate": {
         "payloads": [
@@ -100,7 +100,7 @@
       "tag_prefix": "manifest/",
       "asset_prefix": "registry-manifest",
       "members": ["registry-manifest"],
-      "artifact_patterns": ["registry-manifest-v*-*"],
+      "artifact_patterns": ["registry-manifest-v*-*", "registry-manifest-install.sh"],
       "dependencies": [],
       "candidate": null
     },
@@ -110,7 +110,7 @@
       "tag_prefix": "messaging/",
       "asset_prefix": "registry-messaging",
       "members": ["messaging", "messagingctl"],
-      "artifact_patterns": ["messaging-v*-*", "messagingctl-v*-*"],
+      "artifact_patterns": ["messaging-v*-*", "messaging-install.sh", "messagingctl-v*-*"],
       "dependencies": [],
       "candidate": null
     },
@@ -120,7 +120,7 @@
       "tag_prefix": "render/",
       "asset_prefix": "registry-render",
       "members": ["registry-render"],
-      "artifact_patterns": ["registry-render-v*-*"],
+      "artifact_patterns": ["registry-render-v*-*", "registry-render-install.sh"],
       "dependencies": [],
       "candidate": null
     },

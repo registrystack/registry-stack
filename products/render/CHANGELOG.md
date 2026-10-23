@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- PDF responses expose `X-Registry-Warning-Count`, including zero, so callers
+  can withhold a PDF with render warnings. The JSON response retains warning
+  details; headers contain only the count.
+- Add Linux arm64 and macOS arm64 release packaging and a transactional installer.
+  The macOS archive retains the FIPS library beside the executable.
 ## 0.43.0 - 2026-10-21
 
 - BREAKING: label values now use the shared display-text rules and refuse Unicode

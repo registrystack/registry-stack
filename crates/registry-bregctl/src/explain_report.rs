@@ -382,6 +382,15 @@ fn lifecycle(value: &Value, lines: &mut Lines) {
                 text(&transition["to"])
             ));
             lines.prose(2, text(&transition["guard"]));
+            if transition["recoveryReasons"]
+                .as_array()
+                .is_some_and(|reasons| !reasons.is_empty())
+            {
+                lines.pairs_at(
+                    2,
+                    &[("recovers", names(&transition["recoveryReasons"], ""))],
+                );
+            }
         }
         lines.heading("Enforcement:");
         for layer in items(&lifecycle["enforcement"]) {
@@ -410,6 +419,9 @@ mod tests {
             "turn official:",
             "turn nobody:",
             "Transitions:",
+            "recovers",
+            "dependency-outage",
+            "lease-expired",
             "Enforcement:",
         ] {
             assert!(

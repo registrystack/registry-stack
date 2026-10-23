@@ -157,12 +157,14 @@ fn project(issuer: &str) -> CaseworkProject {
         review_policies: vec![
             ReviewPolicy {
                 id: "registry-correction".to_owned(),
+                label: None,
                 version: "1".to_owned(),
                 purpose: ReviewPurpose::Approval,
                 context: ReviewContextPolicy::CurrentSource {provider:"registry".into(),contract:context_contract()},
                 routing:Vec::new(),
                 stages: vec![ReviewStagePolicy {
                     id: "review".to_owned(),
+                    label: None,
                     queue: "review".to_owned(),
                     deciding_profiles: vec!["staff".to_owned()],
                     required_approvals: 1,
@@ -193,12 +195,14 @@ fn project(issuer: &str) -> CaseworkProject {
             },
             ReviewPolicy {
                 id: "registry-answer".to_owned(),
+                label: None,
                 version: "1".to_owned(),
                 purpose: ReviewPurpose::Answer,
                 context: ReviewContextPolicy::Submitted,
                 routing:Vec::new(),
                 stages: vec![ReviewStagePolicy {
                     id: "answer".to_owned(),
+                    label: None,
                     queue: "review".to_owned(),
                     deciding_profiles: vec!["staff".to_owned()],
                     required_approvals: 1,

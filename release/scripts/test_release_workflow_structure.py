@@ -782,17 +782,25 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         )
         coordinator_gate = (
             'coordinator_in_release="$(python3 release/scripts/release_roster.py \\\n'
-            '  coordinator-in-release "${{ needs.validate.outputs.version }}")"\n'
+            '  coordinator-binaries-in-release "${{ needs.validate.outputs.version }}")"\n'
             'if [[ "${coordinator_in_release}" == true ]]; then\n'
         )
         self.assertIn(coordinator_gate, merge)
         coordinator_smoke = merge.split(coordinator_gate, 1)[1].split("\nfi\n", 1)[0]
+        image_gate = (
+            'if [[ "$(python3 release/scripts/release_roster.py coordinator-in-release '
+            '"${{ needs.validate.outputs.version }}")" == true ]]; then\n'
+        )
+        self.assertIn(image_gate, coordinator_smoke)
+        binary_smoke, image_smoke = coordinator_smoke.split(image_gate, 1)
+        image_smoke = image_smoke.split("\n  fi\n", 1)[0]
         for binary in ("coordinator", "coordinatorctl"):
             self.assertIn(
                 f'"dist/bin/{binary}-${{{{ needs.validate.outputs.tag }}}}-linux-amd64" --version',
-                coordinator_smoke,
+                binary_smoke,
             )
-            self.assertIn(f"dist/image-bin/{binary} --version", coordinator_smoke)
+            self.assertNotIn(f"dist/image-bin/{binary}", binary_smoke)
+            self.assertIn(f"dist/image-bin/{binary} --version", image_smoke)
             self.assertIn(
                 f'"{binary} ${{{{ needs.validate.outputs.version }}}}"',
                 coordinator_smoke,
@@ -872,6 +880,12 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
             schedulingctl,
         )
         self.assertIn("release/scripts/check-glibc-floor.sh", floor_check["run"])
+        self.assertIn(
+            'if [[ "${{ needs.validate.outputs.exclude_discovery }}" == true ]]; then',
+            native,
+        )
+        self.assertIn("component_args+=(--exclude-unit discovery)", native)
+        self.assertIn('"${component_args[@]}"', native)
         upload_index = next(
             index
             for index, step in enumerate(steps)
@@ -921,6 +935,8 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         self.assertIn('--group "${{ matrix.group }}"', build)
         self.assertIn("--purpose candidate_input", build)
         self.assertIn('--source-sha "${{ needs.validate.outputs.source_sha }}"', build)
+        self.assertIn("component_args+=(--exclude-unit discovery)", build)
+        self.assertIn('"${component_args[@]}"', build)
         upload = next(
             step for step in shards["steps"] if "upload-artifact@" in str(step)
         )
@@ -945,6 +961,8 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         self.assertIn('--bregctl "inputs/${prefix}-bregctl-${suffix}"', merge)
         self.assertIn('--casework "inputs/${prefix}-casework-${suffix}"', merge)
         self.assertIn('--scheduling "inputs/${prefix}-scheduling-${suffix}"', merge)
+        self.assertIn("component_args+=(--exclude-unit discovery)", merge)
+        self.assertIn('"${component_args[@]}"', merge)
         self.assertIn(
             'inputs/candidate-macos-arm64-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}',
             merge,
@@ -979,6 +997,13 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         self.assertIn(
             "chmod 0755 candidate/bundle-root/evidencectl-install.sh",
             assemble,
+        )
+        self.assertIn("component_args+=(--exclude-unit discovery)", assemble)
+        self.assertIn(
+            "release/scripts/additional_installers.py --package", assemble
+        )
+        self.assertIn(
+            "release/scripts/additional_installers.py --smoke", assemble
         )
 
     def test_candidate_checks_the_casework_package_sum_file_it_emits(self) -> None:
@@ -2738,7 +2763,8 @@ class SupportingWorkflowStructureTest(unittest.TestCase):
             ],
         }
         cases["v0.40.0"] = list(cases["v0.39.0"])
-        cases["v0.42.0"] = sorted([*cases["v0.39.0"], "coordinator"])
+        cases["v0.42.0"] = list(cases["v0.39.0"])
+        cases["v0.44.0"] = list(cases["v0.39.0"])
         cases["v1.0.0"] = list(cases["v0.42.0"])
         manifests = {}
         for tag, image_names in cases.items():
@@ -2842,17 +2868,16 @@ class SupportingWorkflowStructureTest(unittest.TestCase):
                 ),
             },
         ]
-        missing_coordinator = dict(manifests["v0.42.0"])
-        missing_coordinator["images"] = [
-            image
-            for image in missing_coordinator["images"]
-            if image["name"] != "coordinator"
-        ]
-        for tag, changed in (
-            ("v0.40.0", with_coordinator),
-            ("v0.42.0", missing_coordinator),
-        ):
+        for tag in ("v0.40.0", "v0.42.0", "v0.44.0", "v1.0.0"):
             with self.subTest(tag=tag, changed="coordinator"):
+                changed = dict(manifests[tag])
+                changed["images"] = [
+                    *changed["images"],
+                    {
+                        **with_coordinator["images"][-1],
+                        "final_ref": f"ghcr.io/registrystack/coordinator:{tag}",
+                    },
+                ]
                 rejected = subprocess.run(
                     ["jq", "-e", "--arg", "tag", tag, jq_filter],
                     input=json.dumps(changed),
@@ -2891,7 +2916,9 @@ class SupportingWorkflowStructureTest(unittest.TestCase):
             "breg|breg-mcp|breg-review|casework|coordinator|discovery|evidence|evidence-oid4vci|messaging|mint|registry-render|relay|scheduling)",
             verify,
         )
-        self.assertIn("Registry Coordinator runtime publication remains held", verify)
+        self.assertIn("Registry Coordinator binaries join", verify)
+        self.assertIn("`COORDINATOR_BINARY_FIRST_RELEASE`", verify)
+        self.assertIn("`COORDINATOR_CLIENT_FIRST_RELEASE`", verify)
         self.assertIn("`COORDINATOR_FIRST_RELEASE`", verify)
         self.assertIn("Registry Casework joins at `v0.30.0`", verify)
         self.assertIn("Registry Scheduling joins at `v0.33.0`", verify)

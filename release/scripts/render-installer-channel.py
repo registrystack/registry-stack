@@ -13,6 +13,7 @@ INSTALLERS = (
     "crates/registry-evidencectl/install.sh",
     "crates/registry-casework/install.sh",
     "crates/registry-scheduling/install.sh",
+    "release/scripts/discovery-install-template.sh",
 )
 BEGIN = "# BEGIN generated release channel resolver"
 END = "# END generated release channel resolver"
@@ -250,13 +251,121 @@ esac
 # END generated release channel resolver'''
 
 
-def render(source: str) -> str:
+def discovery_block() -> str:
+    """Add Discovery's explicit product version without changing Stack installers."""
+
+    block = BLOCK
+    replacements = (
+        (
+            'channel=""\nbuild=""\nwhile [ "$#" -gt 0 ]; do\n',
+            'channel=""\nbuild=""\nrequested_version=""\n'
+            'while [ "$#" -gt 0 ]; do\n',
+        ),
+        (
+            '\tcase "$1" in\n\t--channel)\n',
+            '''\tcase "$1" in
+\t--version)
+\t\t[ "$#" -ge 2 ] || {
+\t\t\techo "--version needs vMAJOR.MINOR.PATCH." >&2
+\t\t\texit 2
+\t\t}
+\t\t[ -z "$requested_version" ] || {
+\t\t\techo "--version may be supplied only once." >&2
+\t\t\texit 2
+\t\t}
+\t\trequested_version="$2"
+\t\tshift 2
+\t\t;;
+\t--channel)
+''',
+        ),
+        (
+            '''if [ -n "$channel" ] && [ -n "$build" ]; then
+\techo "--channel and --build are mutually exclusive." >&2
+\texit 2
+fi
+if [ -n "$default_version" ] && { [ -n "$channel" ] || [ -n "$build" ]; }; then
+\techo "This published installer is already pinned to $default_version; --channel and --build are not accepted." >&2
+\texit 2
+fi
+if [ -n "$version_override" ] && { [ -n "$channel" ] || [ -n "$build" ]; }; then
+\techo "$version_env_name cannot be combined with --channel or --build." >&2
+\texit 2
+fi
+''',
+            '''selection_count=0
+for selection in "$requested_version" "$channel" "$build"; do
+\tif [ -n "$selection" ]; then
+\t\tselection_count=$((selection_count + 1))
+\tfi
+done
+if [ "$selection_count" -gt 1 ]; then
+\techo "--version, --channel, and --build are mutually exclusive." >&2
+\texit 2
+fi
+if [ -n "$default_version" ] && { [ -n "$requested_version" ] || [ -n "$channel" ] || [ -n "$build" ]; }; then
+\tif [ -n "$requested_version" ]; then
+\t\techo "Refusing a version override that does not match the released installer asset." >&2
+\t\texit 1
+\tfi
+\techo "This published installer is already pinned to $default_version; --channel and --build are not accepted." >&2
+\texit 2
+fi
+if [ -n "$version_override" ] && { [ -n "$channel" ] || [ -n "$build" ]; }; then
+\techo "$version_env_name cannot be combined with --channel or --build." >&2
+\texit 2
+fi
+if [ -n "$requested_version" ] && [ -n "$version_override" ] && [ "$requested_version" != "$version_override" ]; then
+\techo "Refusing conflicting --version and $version_env_name selections." >&2
+\texit 1
+fi
+if [ -n "$requested_version" ]; then
+\tversion="$requested_version"
+fi
+''',
+        ),
+        (
+            '''\tif [ -z "$channel" ] && [ -z "$build" ]; then
+\t\tprintf 'Resolving the latest numbered %s release...\\n' "$product_name"
+\t\tif ! curl -fsSL "https://github.com/${repo}/releases/latest/download/${installer_name}-install.sh" \\
+\t\t\t-o "$bootstrap_tmp/installer" 2>/dev/null; then
+\t\t\techo "Could not download the latest numbered $product_name installer." >&2
+\t\t\texit 1
+\t\tfi
+\t\ttag="$(embedded_installer_version "$bootstrap_tmp/installer" || true)"
+\t\tif [[ ! "$tag" =~ ^v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$ ]]; then
+\t\t\techo "The latest numbered installer did not embed a canonical release tag." >&2
+\t\t\texit 1
+\t\tfi
+\t\tprintf 'Resolved latest numbered release to %s.\\n' "$tag"
+\t\tbash "$bootstrap_tmp/installer"
+\t\texit $?
+\tfi
+''',
+            '''\tif [ -z "$channel" ] && [ -z "$build" ]; then
+\t\techo "No $product_name version was selected. Pass --version vMAJOR.MINOR.PATCH or set $version_env_name." >&2
+\t\texit 2
+\tfi
+''',
+        ),
+    )
+    for old, new in replacements:
+        if block.count(old) != 1:
+            raise ValueError("shared installer channel block changed")
+        block = block.replace(old, new, 1)
+    return block
+
+
+DISCOVERY_BLOCK = discovery_block()
+
+
+def render(source: str, block: str = BLOCK) -> str:
     if BEGIN in source or END in source:
         if source.count(BEGIN) != 1 or source.count(END) != 1:
             raise ValueError("installer has an incomplete generated channel block")
         start = source.index(BEGIN)
         end = source.index(END, start) + len(END)
-        return source[:start] + BLOCK + source[end:]
+        return source[:start] + block + source[end:]
 
     # One-time migration from the duplicated implementation. The following
     # no-version diagnostic is deliberately outside the generated region.
@@ -268,7 +377,7 @@ def render(source: str) -> str:
         if source.startswith('\techo "No ', end + len(anchor)):
             break
         search = end + 1
-    return source[:start] + BLOCK + "\n" + source[end + 1 :]
+    return source[:start] + block + "\n" + source[end + 1 :]
 
 
 def main() -> int:
@@ -283,7 +392,8 @@ def main() -> int:
     for relative in INSTALLERS:
         path = arguments.root / relative
         source = path.read_text()
-        rendered = render(source)
+        block = DISCOVERY_BLOCK if "discovery-install-template" in relative else BLOCK
+        rendered = render(source, block)
         if rendered == source:
             continue
         if arguments.write:

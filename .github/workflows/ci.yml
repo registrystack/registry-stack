@@ -1288,7 +1288,7 @@ jobs:
       # of this feature set.
       - name: Base Registry Engine schema-gated tests
         if: matrix.lane == 'contracts'
-        run: cargo test --locked -p registry-breg --features runtime,tooling,schema --lib --test action_evidence_compiler
+        run: cargo test --locked -p registry-breg --features runtime,tooling,schema --lib --test action_evidence_compiler --test proposal_hooks
 
       - name: BReg client contract consistency
         if: matrix.lane == 'contracts'
@@ -1861,6 +1861,12 @@ jobs:
 
       - name: Test macOS bundle installers
         run: python3 -m unittest release/scripts/test_macos_installers.py
+
+      - name: Test generated product installers
+        run: python3 -m unittest release/scripts/test_additional_installers.py
+
+      - name: Test additional Linux ARM binary builds
+        run: python3 -m unittest release/scripts/test_additional_platform_binaries.py
 
       - name: Test nightly channel and immutable publication
         run: python3 -m unittest release/scripts/test_nightly_release.py

@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-10-17"
+last_reviewed: "2026-10-23"
 doc_type: how-to
 locale: en
 standards_referenced: []
@@ -31,14 +31,12 @@ bregctl check facility
 ```
 
 ```text test-excerpt
-warning[breg.access.profile-related-disclosure] <project-dir>/registry.yaml:237:15 /accessProfiles/1/permissions/records/1/readPaths/0
-  this permission discloses related records using the root profile, not target direct-access profiles; review its fields and the target/through record type accessRequirements
-  next: Review the finding, and change the source if the behavior it describes is not intended.
-0 errors, 1 warning in 3 files
+Authoring check passed; registry revision sha256:<digest>.
 ```
 
-The check passes with one warning. [Disclose related Records](#disclose-related-records) explains
-what it asks you to review.
+The starter check passes without warnings. It keeps operator access on direct, jurisdiction-bound
+routes. [Disclose related Records](#disclose-related-records) shows the warning you get when you
+add its optional related read.
 
 ## How a token reaches a profile
 
@@ -132,40 +130,62 @@ through the assignment that links them:
       - {id: operators, through: facility-assignment, to: operator, route: operators}
 ```
 
-A profile opts in by naming the path and the target fields it may read. This is the grant at line
-237 that the check warned about:
+The starter leaves that path ungranted. Its `facility-reader` profile grants operators directly,
+and the facility grant has no `readPaths` entry:
 
 ```yaml title="registry.yaml" test-excerpt="facility/registry.yaml"
         - recordType: facility
           operations: [get, list]
           readableFields: [facility-code, name, address-line, city, postal-code, status, jurisdiction]
-          readPaths:
-            - {path: operators, readableFields: [operator-code, status, jurisdiction]}
           rowBoundaries:
             - {field: jurisdiction, claim: jurisdiction, operator: equals}
 ```
 
-The warning means this: listing a facility's operators is authorized by `facility-reader`'s grant
+Direct operator reads apply the operator permission's jurisdiction boundary. A related read uses
+the facility permission's authority instead. Add the optional path grant to see that distinction:
+
+```diff lang="yaml" title="facility/registry.yaml" test-edit
+           operations: [get, list]
+           readableFields: [facility-code, name, address-line, city, postal-code, status, jurisdiction]
++          readPaths:
++            - {path: operators, readableFields: [operator-code, status, jurisdiction]}
+           rowBoundaries:
+             - {field: jurisdiction, claim: jurisdiction, operator: equals}
+```
+
+Check the edited project:
+
+```sh
+bregctl check facility
+```
+
+```text test-excerpt
+warning[breg.access.profile-related-disclosure] <project-dir>/registry.yaml:237:15 /accessProfiles/1/permissions/records/1/readPaths/0
+  profile `facility-reader` can read `operator` records linked to `facility` through `facility-assignment` on read path `operators`; it sees fields jurisdiction, operator-code, status under its own `facility` row boundaries, and access profiles declared for `operator` do not apply
+  next: Remove fields that these readers should not see from this read path's readableFields, or remove the read path; use a direct permission on the related record type when its own row boundaries should apply.
+0 errors, 1 warning in 3 files
+```
+
+Listing a facility's operators is authorized by `facility-reader`'s grant
 on the facility, the root of the path. The row boundaries of `facility-reader`'s own grant on
 `operator` do not apply to the operators that come back. A reader who may see a facility sees
 every operator assigned to it, with the path's readable fields, whatever that operator's
 jurisdiction.
 
-In the template that is the intended behavior. The `register-facility` Action only assigns an
-operator whose `jurisdiction` equals the facility's, and the path discloses the same three fields
-the reader may already read on operators directly. Ask the same two questions of your own paths:
-can a related Record sit outside the reader's rows, and do the path's fields disclose more than a
-direct grant would? If the answer to either is yes and that is not intended, narrow the path's
-`readableFields`, or drop the path and grant the target Record type directly. When a target, or
-the Record type a path passes through, must never be disclosed without its own row check, give
-that Record type `accessRequirements` with row boundaries: the compiler then refuses any read path
-grant that reaches it. The warning appears for every read path grant, so a project that keeps one
-cannot pass `bregctl check --deny-warnings`.
+The warning remains even though the direct operator grant names the same three fields, because its
+row boundary does not govern the related read. Ask the same two questions of your own paths: can a
+related Record sit outside the reader's rows, and do the path's fields disclose more than a direct
+grant would? If either answer exposes more than you intend, narrow the path's `readableFields`, or
+remove the path grant and use the direct target grant. The shipped starter takes that latter,
+narrower route. When a target, or the Record type a path passes through, must never be disclosed
+without its own row check, give that Record type `accessRequirements` with row boundaries: the
+compiler then refuses any read path grant that reaches it.
 
 {/* Evidence: crates/registry-breg/src/access.rs, breg.access.profile-related-disclosure and
     breg.access.requirements-read-path-row-boundary-unsupported; crates/registry-breg/src/api/mod.rs,
     authorize_read_path_route(); crates/registry-bregctl/src/lib.rs, --deny-warnings;
-    products/breg/examples/facility/registry.yaml, register-facility commitGuards. */}
+    crates/registry-bregctl/src/starters.rs, facility-registry replacements;
+    products/breg/examples/facility/registry.yaml. */}
 
 ## Require a current membership
 
@@ -253,9 +273,11 @@ bregctl explain access facility
       allowed purposes (any)  ["facility-administration"]
 ```
 
-The report lists every profile under each Record type with its fields, row restrictions, and
-related Records. Add `--scenario` with a file of synthetic claims to preview a decision without a
-token or a database. To prove the refusals against a running registry, write
+The report lists every profile under each Record type with its fields and row restrictions. Each
+read-path grant names its target Record type, through Record type, and route. `rowReach` also lists
+the target under a `read_path` surface with the root profile's row boundaries, so a review that
+starts from the disclosed Record type does not miss incoming paths. Add `--scenario` with a file of
+synthetic claims to preview a decision without a token or a database. To prove the refusals against a running registry, write
 [journeys](../breg-journeys/) that read as both readers.
 
 {/* Evidence: crates/registry-bregctl/src/lib.rs, explain access; crates/registry-breg/src/access_preview.rs. */}

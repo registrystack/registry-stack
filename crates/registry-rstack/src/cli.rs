@@ -56,7 +56,7 @@ enum RequestedReportFormat {
 #[derive(Parser)]
 #[command(
     name = "rstack",
-    version,
+    version = registry_platform_buildinfo::DISPLAY_VERSION,
     disable_help_subcommand = true,
     about = "Registry Stack command and component manager"
 )]

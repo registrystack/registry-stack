@@ -53,6 +53,9 @@ const RUN_SCHEMA_TEST: &str =
     "Run bregctl test against a disposable PostgreSQL database to verify the pattern.";
 const LOCK_MODULES: &str =
     "Run bregctl project lock against this project, then review the module lock change it records.";
+const ADD_READABLE_OR_REMOVE_PROCESSING: &str =
+    "Add this field to readableFields, or remove it from filterableFields or sortableFields.";
+const REVIEW_RELATED_DISCLOSURE: &str = "Remove fields that these readers should not see from this read path's readableFields, or remove the read path; use a direct permission on the related record type when its own row boundaries should apply.";
 const FIND_PROJECT: &str = "Point bregctl check at a readable project directory that holds registry.yaml, or create one with bregctl init.";
 const REBUILD_PACKAGE: &str = "Rebuild the package with bregctl package PROJECT --test-receipt RECEIPT --output BUILD; a package is checked as the build wrote it, unmodified.";
 
@@ -83,7 +86,60 @@ struct CheckReport<'a> {
     registry_revision: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     package_digest: Option<&'a str>,
-    diagnostics: &'a [Diagnostic],
+    diagnostics: Vec<RankedDiagnostic<'a>>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct RankedDiagnostic<'a> {
+    #[serde(flatten)]
+    diagnostic: &'a Diagnostic,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    rank: Option<FindingRank>,
+}
+
+#[derive(Clone, Copy, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub(super) enum FindingRank {
+    WidensAccess,
+    Performance,
+    Hygiene,
+}
+
+fn finding_rank(diagnostic: &Diagnostic) -> Option<FindingRank> {
+    (diagnostic.severity == Severity::Warning).then(|| finding_rank_for_code(&diagnostic.code))
+}
+
+pub(super) fn ranked_diagnostics(diagnostics: &[Diagnostic]) -> Vec<RankedDiagnostic<'_>> {
+    diagnostics
+        .iter()
+        .map(|diagnostic| RankedDiagnostic {
+            diagnostic,
+            rank: finding_rank(diagnostic),
+        })
+        .collect()
+}
+
+pub(super) fn finding_rank_for_code(code: &str) -> FindingRank {
+    if matches!(
+        code,
+        "breg.access.consent-ungated-client"
+            | "breg.access.profile-data-export"
+            | "breg.access.profile-related-disclosure"
+            | "breg.access.profile-revision-history"
+            | "breg.access.profile-snapshot-history"
+            | "breg.access.profile-subsumes-narrower"
+            | "breg.access.profile-unrestricted-collection"
+            | "breg.access.profile-unrestricted-rows"
+            | "breg.access.profile-writable-row-boundary"
+            | "breg.access.target-unrestricted-rows"
+    ) {
+        FindingRank::WidensAccess
+    } else if code.starts_with("breg.record-type.list-unindexed-") {
+        FindingRank::Performance
+    } else {
+        FindingRank::Hygiene
+    }
 }
 
 /// What one run found, before it is written.
@@ -143,6 +199,7 @@ pub(super) fn run(
     };
     let passed = exit == 0;
     let written = if format == OutputFormat::Json {
+        let diagnostics = ranked_diagnostics(outcome.report.diagnostics());
         let report = CheckReport {
             ok: passed,
             command: "check",
@@ -157,7 +214,7 @@ pub(super) fn run(
             revision: outcome.revision.as_deref().filter(|_| passed),
             registry_revision: outcome.revision.as_deref().filter(|_| passed),
             package_digest: outcome.package_digest.as_deref().filter(|_| passed),
-            diagnostics: outcome.report.diagnostics(),
+            diagnostics,
         };
         write_ctl_report(&mut *stdout, &report)
             .map_err(std::io::Error::other)
@@ -692,7 +749,16 @@ fn compile_project_with_documents(
         }
     };
     let documents = read_captured_documents(project, &source, outcome)?;
-    let mut diagnostics = Vec::new();
+    let captured_planner_asset_missing = source
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.code == "breg.source.planner-asset-missing");
+    let mut diagnostics = source
+        .diagnostics
+        .iter()
+        .cloned()
+        .map(|diagnostic| place(project, &documents, diagnostic, Severity::Error))
+        .collect::<Vec<_>>();
     // A production check asserts the project is ready to package for
     // deployment, so it also reports the identity a deployable package must
     // not carry.
@@ -718,6 +784,16 @@ fn compile_project_with_documents(
         }
         Err(failure) => {
             for diagnostic in failure.diagnostics().iter().cloned() {
+                if captured_planner_asset_missing
+                    && matches!(
+                        diagnostic.code.as_str(),
+                        "breg.action.handler-source-missing"
+                            | "breg.hook.handler-source-missing"
+                            | "breg.proposal.hook-handler-source-missing"
+                    )
+                {
+                    continue;
+                }
                 let diagnostic = remap_derived_diagnostic_path(diagnostic, &source);
                 let severity = severity_of(diagnostic.severity);
                 diagnostics.push(place(project, &documents, diagnostic, severity));
@@ -1534,6 +1610,27 @@ fn action_for(code: &str, severity: Severity) -> &'static str {
         | "breg.module.lock-source-missing"
         | "breg.source.modules-unlocked" => LOCK_MODULES,
         "breg.access.requirements-row-boundary-missing" => WRITE_REQUIRED_ROW_BOUNDARY,
+        "breg.access-profile.processing-wider-than-read"
+        | "breg.access-profile.read-path-processing-wider-than-read" => {
+            ADD_READABLE_OR_REMOVE_PROCESSING
+        }
+        "breg.access.profile-related-disclosure" => REVIEW_RELATED_DISCLOSURE,
+        "breg.access.profile-higher-classification" => "Remove the field from readableFields, or confirm that the profile scopes and purposes admit only callers cleared for this classification.",
+        "breg.access.profile-unrestricted-collection" | "breg.access.profile-unrestricted-rows" => "Add claim-bound or membership row boundaries, or restrict the profile scopes and purposes to callers authorized for registry-wide access.",
+        "breg.access.profile-create-required-field-not-writable" => "Add the required field to writableFields, or remove create and import from this permission.",
+        "breg.field.valid-time-start-required" => "Set required: true on the temporal start field, or remove its role and the temporal binding.",
+        "breg.query.temporal-field-not-readable" => "Add the temporal boundary fields to this profile's readableFields if these callers may see them; otherwise remove list and snapshot from its operations.",
+        "breg.record-type.api-name-invalid" => "Set apiName to a unique upper camel case name using only ASCII letters and digits.",
+        "breg.record-type.stored-field-unfillable" => "Add the field to a grant's writableFields, a fixed Action set, a function plan write, or an import permission, or remove the field.",
+        "breg.compile.later-checks-skipped" => "Correct the reported errors, then run bregctl check again to run the skipped checks.",
+        "breg.action.handler-source-missing" | "breg.hook.handler-source-missing" | "breg.source.planner-asset-missing" => "Add the referenced Rhai source file at the authored project-relative path, then check again.",
+        "breg.action.handler-parse" | "breg.hook.handler-parse" => "Correct the Rhai syntax at the reported line and column, then check again.",
+        "breg.action.handler-entrypoint" | "breg.hook.handler-entrypoint" => "Define the required entrypoint in the referenced Rhai source, then check again.",
+        "breg.manifest-projection.field-not-visible" => "Make the field readable under the projection's access profile, or remove it and any dependent identifier or vocabulary entry from manifestProjection.",
+        "breg.manifest-projection.identifier-duplicate" => "Keep one identifier entry for this field and remove the duplicate entries.",
+        "breg.manifest-projection.identifier-field-not-visible" => "Make the identifier field readable and representable under the selected access profile, or remove the identifier entry.",
+        "breg.manifest-projection.identifier-kind-missing" => "Set a non-empty identifier kind, or remove the identifier entry.",
+        "breg.manifest-projection.vocabulary-not-visible" => "Project a visible field that uses this vocabulary, or remove the vocabulary from manifestProjection.",
         _ if severity == Severity::Warning => REVIEW_FINDING,
         _ => CORRECT_SOURCE,
     }
@@ -1693,6 +1790,54 @@ fn names(item: &Node, key: Option<&str>, value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn temporal_and_record_api_name_errors_identify_the_setting_to_change() {
+        for (code, setting) in [
+            ("breg.field.valid-time-start-required", "required: true"),
+            ("breg.query.temporal-field-not-readable", "readableFields"),
+            ("breg.record-type.api-name-invalid", "apiName"),
+        ] {
+            let action = action_for(code, Severity::Error);
+            assert!(action.contains(setting), "{code}: {action}");
+        }
+    }
+
+    #[test]
+    fn finding_ranks_separate_access_performance_and_hygiene() {
+        let ranked = |code| {
+            let diagnostic = Diagnostic::warning(code, "", "message", "action");
+            serde_json::to_value(RankedDiagnostic {
+                diagnostic: &diagnostic,
+                rank: finding_rank(&diagnostic),
+            })
+            .unwrap()["rank"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        };
+        assert_eq!(
+            ranked("breg.access.profile-unrestricted-collection"),
+            "widens-access"
+        );
+        assert_eq!(
+            ranked("breg.access.profile-subsumes-narrower"),
+            "widens-access"
+        );
+        assert_eq!(
+            ranked("breg.access.profile-revision-history"),
+            "widens-access"
+        );
+        assert_eq!(
+            ranked("breg.record-type.list-unindexed-filter"),
+            "performance"
+        );
+        assert_eq!(
+            ranked("breg.access.profile-higher-classification"),
+            "hygiene"
+        );
+        assert_eq!(ranked("breg.access-profile.duplicate-label"), "hygiene");
+    }
 
     fn document(text: &str) -> Document {
         read_project_yaml("registry.yaml", text.as_bytes())

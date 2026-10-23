@@ -28,9 +28,10 @@ const ENVIRONMENT: &str = "production";
 const INSTANCE: &str = "rehearsal-instance";
 const DATABASE: &str = "rehearsal-database";
 const SOURCE_REVISION: &str = "rehearsal-source-revision";
-// Includes the runtime Evidence expiry function and both expires_at indexes.
+// Includes the runtime Evidence expiry function, both expires_at indexes, and
+// the Proposal blocked-reason constraint that admits a durable Apply refusal.
 const PORTABLE_SCHEMA_FINGERPRINT: &str =
-    "sha256:a1af7c639b023a4f67e3028be90d8cbf5fce028e25664f6561fc60d4ccf3e798";
+    "sha256:0d95c82566268d7e93a562982b943fb0b7f429b11505ab43493345574343421f";
 const FIXTURE_JOURNEYS: &[u8] = br#"apiVersion: id.registrystack.org/formats/breg/journeys/v1
 kind: BRegJourneys
 journeys: []

@@ -5,6 +5,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import re
 import stat
 import subprocess
 import sys
@@ -196,11 +197,12 @@ binaries = {
     "registry-schedulingctl": "schedulingctl",
 }
 for package in packages:
-    name = binaries[package]
+    name = args[args.index("--bin") + 1] if "--bin" in args else binaries[package]
+    suffix = " (typst " + os.environ["FAKE_TYPST_PIN"] + ")" if name == "registry-render" else ""
     body = f'''#!/usr/bin/env bash
 if [[ "${{1:-}}" == --version ]]; then
   printf '%s\\n' "{name}" >>"$FAKE_BINARY_SMOKE_LOG"
-  printf '%s\\n' "{name} {binary_version}"
+  printf '%s\\n' "{name} {binary_version}{suffix}"
 fi
 '''
     path = output / name
@@ -238,7 +240,11 @@ elif state.exists():
         f"\t{state.read_text().strip()} "
         "(compatibility version 0.0.0, current version 0.0.0)"
     )
-elif os.environ.get("FAKE_OTOOL_FIPS_SHARED") == "1":
+elif any(
+    path.name == binary or path.name.startswith(binary + "-v")
+    for binary in os.environ.get("FAKE_OTOOL_FIPS_BINARIES", "").split(",")
+    if binary
+):
     print(
         "\t@rpath/libaws_lc_fips_0_14_2_crypto.dylib "
         "(compatibility version 0.0.0, current version 0.0.0)"
@@ -315,8 +321,10 @@ os.execv({sys.executable!r}, [{sys.executable!r}, *args])
         binary_version: str | None = None,
         include_casework: bool = False,
         fips_shared: bool = False,
+        missing_fips_binary: str | None = None,
         nightly_tag: str | None = None,
         breg_services_first_release: tuple[int, int, int] | None = None,
+        exclude_discovery: bool = False,
     ) -> tuple[subprocess.CompletedProcess[str], Path, list[list[str]]]:
         stem = name or group
         output = self.root / stem
@@ -330,6 +338,7 @@ os.execv({sys.executable!r}, [{sys.executable!r}, *args])
                 "FAKE_CARGO_LOG": str(log),
                 "FAKE_BINARY_SMOKE_LOG": str(self.root / f"{stem}-smoke.log"),
                 "FAKE_VERSION": version,
+                "FAKE_TYPST_PIN": re.search(r'pub const TYPST_PIN: &str = "([^"]+)"', (ROOT / "crates/registry-render/src/lib.rs").read_text()).group(1),
                 "PATH": f"{self.root}{os.pathsep}{environment['PATH']}",
             }
         )
@@ -342,13 +351,39 @@ os.execv({sys.executable!r}, [{sys.executable!r}, *args])
             environment["PATH"] = f"{shim_dir}{os.pathsep}{environment['PATH']}"
         parsed = tuple(int(part) for part in version.split("."))
         if fips_shared or parsed >= (0, 33, 0):
-            environment["FAKE_OTOOL_FIPS_SHARED"] = "1"
+            fips_binaries = [
+                "evidence",
+                "evidencectl",
+                "evidence-oid4vci",
+                "breg",
+                "bregctl",
+                "breg-mcp",
+                "breg-review",
+                "casework",
+                "caseworkctl",
+                "scheduling",
+                "schedulingctl",
+                "messaging",
+                "messagingctl",
+                "discoveryctl",
+                "registry-render",
+                "coordinator",
+                "coordinatorctl",
+            ]
+            if missing_fips_binary is not None:
+                fips_binaries.remove(missing_fips_binary)
+            environment["FAKE_OTOOL_FIPS_BINARIES"] = ",".join(fips_binaries)
         result = subprocess.run(
             [
                 "bash",
                 str(BUILDER),
                 *(["--include-casework"] if include_casework else []),
                 *(["--nightly-tag", nightly_tag] if nightly_tag else []),
+                *(
+                    ["--exclude-unit", "discovery"]
+                    if exclude_discovery
+                    else []
+                ),
                 "--group",
                 group,
                 "--purpose",
@@ -393,6 +428,84 @@ os.execv({sys.executable!r}, [{sys.executable!r}, *args])
             "".join(f"{digest(core / 'platform' / name)}  {name}\n" for name in roster)
         )
         return relayctl
+
+    def test_v0_44_core_bundles_and_launches_every_additional_native_binary(self):
+        result, output, calls = self.build("core", version="0.44.0")
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn(
+            [
+                "build",
+                "--release",
+                "--locked",
+                "-p",
+                "registry-rstack",
+                "--bin",
+                "rstack",
+                "--target",
+                TARGET,
+            ],
+            calls,
+        )
+        for crate, binary in MODULE.release_roster.ADDITIONAL_PLATFORM_BUILDS:
+            if binary == "scheduling":
+                self.assertNotIn(["build", "--release", "--locked", "-p", crate, "--bin", binary, "--target", TARGET], calls)
+                continue
+            self.assertIn(["build", "--release", "--locked", "-p", crate, "--bin", binary, "--target", TARGET], calls)
+            suffix = "" if binary == "registry-manifest" else ".tar.gz"
+            archive = output / "platform" / f"{binary}-v0.44.0-macos-arm64{suffix}"
+            self.assertTrue(archive.is_file(), binary)
+        expected = MODULE.rosters("0.44.0")["core"]
+        self.assertEqual(
+            expected,
+            [
+                line.split("  ", 1)[1]
+                for line in (output / "SHA256SUMS").read_text().splitlines()
+            ],
+        )
+        validated = MODULE.validate_shard(
+            "core",
+            output,
+            expected,
+            purpose="review_only",
+            version="0.44.0",
+            source_sha=SOURCE_SHA,
+            nightly_tag=None,
+        )
+        self.assertEqual(expected, list(validated))
+        self.assertIn("rstack-v0.44.0-macos-arm64.tar.gz", validated)
+        self.assertFalse(
+            any(name.startswith("rstack-") for name in MODULE.rosters("0.43.0")["core"])
+        )
+        for binary in ("rstack", "discovery"):
+            archive = output / "platform" / f"{binary}-v0.44.0-macos-arm64.tar.gz"
+            with tarfile.open(archive, "r:gz") as package:
+                self.assertEqual(
+                    [
+                        f"{binary}-v0.44.0-macos-arm64",
+                        "THIRD_PARTY_NOTICES",
+                    ],
+                    package.getnames(),
+                )
+        with tarfile.open(
+            output / "platform/evidence-v0.44.0-macos-arm64.tar.gz", "r:gz"
+        ) as package:
+            self.assertEqual(
+                [
+                    "evidence-v0.44.0-macos-arm64",
+                    "libaws_lc_fips_0_14_2_crypto.dylib",
+                    "THIRD_PARTY_NOTICES",
+                ],
+                package.getnames(),
+            )
+
+    def test_v0_44_scheduling_shard_contains_both_installer_payloads(self):
+        result, output, calls = self.build("scheduling", version="0.44.0")
+        self.assertEqual(0, result.returncode, result.stderr)
+        for binary in ("scheduling", "schedulingctl"):
+            self.assertIn(["build", "--release", "--locked", "-p", f"registry-{binary}", "--bin", binary, "--target", TARGET], calls)
+        expected = {f"{binary}-v0.44.0-macos-arm64.tar.gz" for binary in ("scheduling", "schedulingctl")}
+        self.assertEqual(expected, set(MODULE.rosters("0.44.0")["scheduling"]))
+        self.assertEqual(expected, {path.name for path in (output / "platform").iterdir()})
 
     def test_nightly_groups_merge_with_full_identity_and_review_only_metadata(
         self,
@@ -462,6 +575,60 @@ os.execv({sys.executable!r}, [{sys.executable!r}, *args])
         self.assertNotEqual(0, result.returncode)
         self.assertIn("review_only", result.stderr)
         self.assertFalse(output.exists())
+
+    def test_stack_carry_forward_omits_discovery_from_merged_platform(self) -> None:
+        shards = {}
+        for group in ("core", "breg", "bregctl", "casework", "scheduling"):
+            result, shard, _ = self.build(
+                group,
+                version="0.44.0",
+                name=f"carry-forward-{group}",
+                exclude_discovery=True,
+            )
+            self.assertEqual(0, result.returncode, result.stderr)
+            shards[group] = shard
+        full_result, full_core, _ = self.build(
+            "core", version="0.44.0", name="carry-forward-unfiltered-core"
+        )
+        self.assertEqual(0, full_result.returncode, full_result.stderr)
+        refused = self.root / "carry-forward-refused"
+        with self.assertRaisesRegex(MODULE.ShardError, "inventory mismatch"):
+            MODULE.merge(
+                version="0.44.0",
+                source_sha=SOURCE_SHA,
+                purpose="review_only",
+                core=full_core,
+                breg=shards["breg"],
+                bregctl=shards["bregctl"],
+                casework=shards["casework"],
+                scheduling=shards["scheduling"],
+                output=refused,
+                exclude_discovery=True,
+            )
+        self.assertFalse(refused.exists())
+        output = self.root / "carry-forward-merged"
+        MODULE.merge(
+            version="0.44.0",
+            source_sha=SOURCE_SHA,
+            purpose="review_only",
+            core=shards["core"],
+            breg=shards["breg"],
+            bregctl=shards["bregctl"],
+            casework=shards["casework"],
+            scheduling=shards["scheduling"],
+            output=output,
+            exclude_discovery=True,
+        )
+        names = {path.name for path in (output / "platform").iterdir()}
+        self.assertFalse(any(name.startswith("discovery-") for name in names))
+        self.assertFalse(any(name.startswith("discoveryctl-") for name in names))
+        calls = [
+            json.loads(line)
+            for line in (self.root / "carry-forward-core.jsonl")
+            .read_text()
+            .splitlines()
+        ]
+        self.assertFalse(any("registry-discovery" in call for call in calls))
 
     def test_all_mode_preserves_the_exact_ordered_cargo_invocations(self) -> None:
         result, output, calls = self.build("all")
@@ -762,6 +929,18 @@ os.execv({sys.executable!r}, [{sys.executable!r}, *args])
         self.assertNotEqual(0, result.returncode)
         self.assertEqual([BREG_ARGS], calls)
         self.assertIn("unpackaged AWS-LC-FIPS dylib", result.stderr)
+        self.assertFalse(output.exists())
+
+    def test_current_crypto_binary_without_fips_load_exposes_no_shard(self) -> None:
+        result, output, calls = self.build(
+            "core",
+            version="0.44.0",
+            name="missing-evidence-fips",
+            missing_fips_binary="evidence",
+        )
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn(CORE_ARGS, calls)
+        self.assertIn("macOS consumer has no AWS-LC FIPS dylib", result.stderr)
         self.assertFalse(output.exists())
 
     def test_v0_33_packages_each_binary_with_its_fips_runtime(self) -> None:

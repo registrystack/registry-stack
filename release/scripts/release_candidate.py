@@ -528,11 +528,17 @@ def _release_payload_inventory(version: str) -> dict[str, str]:
         inventory["rstack-install.sh"] = "installer"
     if version_tuple >= THIRD_PARTY_NOTICES_MINIMUM_VERSION:
         inventory["THIRD_PARTY_NOTICES"] = "notice"
+    for _, binary in release_roster.additional_platform_builds(version_tuple):
+        for platform in ("linux-amd64", "linux-arm64", "macos-arm64"):
+            inventory[f"{binary}-{tag}-{platform}"] = "binary"
+    for installer in release_roster.additional_installers(version_tuple):
+        inventory[f"{installer}-{tag}-install.sh"] = "installer"
+        inventory[f"{installer}-install.sh"] = "installer"
     if version_tuple >= MACOS_FIPS_BUNDLE_MINIMUM_VERSION:
-        # macOS requires the shared FIPS module, so each native binary asset
-        # includes its adjacent runtime libraries in one authenticated archive.
+        # Native macOS commands use authenticated archives with notices and
+        # any required FIPS libraries. Manifest retains its flat asset format.
         for name, kind in list(inventory.items()):
-            if kind == "binary" and name.endswith("-macos-arm64"):
+            if kind == "binary" and name.endswith("-macos-arm64") and not name.startswith("registry-manifest-"):
                 del inventory[name]
                 inventory[f"{name}.tar.gz"] = kind
     return inventory
@@ -553,8 +559,12 @@ def stack_payload_inventory(
     inventory = _release_payload_inventory(version)
     component_units = {component["unit"] for component in validated}
     if "discovery" in component_units:
-        inventory.pop(f"discovery-v{version}-linux-amd64", None)
-        inventory.pop(f"discoveryctl-v{version}-linux-amd64", None)
+        registry = release_units.load_registry()
+        inventory = {
+            name: kind
+            for name, kind in inventory.items()
+            if registry.artifact_owner(name) != "discovery"
+        }
     inventory[distribution_lock_name(version)] = "distribution"
     return inventory
 

@@ -854,6 +854,11 @@ fn respond_rendered(
     insert_header(map, "X-Registry-Data-Sha256", &rendered.data_sha256);
     insert_header(
         map,
+        "X-Registry-Warning-Count",
+        &rendered.warnings.len().to_string(),
+    );
+    insert_header(
+        map,
         "X-Registry-Document-Version",
         &format!("{} v{}", rendered.document_id, rendered.document_version),
     );
@@ -905,6 +910,27 @@ pub fn healthcheck(runtime_path: &Path) -> Result<i32, RenderProblem> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pdf_responses_report_warning_count_without_warning_text() {
+        for warnings in [vec![], vec!["canary warning\r\nprivate detail".to_owned()]] {
+            let count = warnings.len().to_string();
+            let rendered = WorkerRendered {
+                document_id: "receipt".to_owned(),
+                pdf_base64: base64::engine::general_purpose::STANDARD.encode(b"%PDF-test"),
+                pdf_sha256: "a".repeat(64),
+                data_sha256: "b".repeat(64),
+                document_version: 1,
+                bundle_version: 1,
+                bundle_hash: "c".repeat(64),
+                deps: vec![],
+                warnings,
+            };
+            let response = respond_rendered(&HeaderMap::new(), rendered).unwrap();
+            assert_eq!(response.headers()["x-registry-warning-count"], count);
+            assert!(!format!("{:?}", response.headers()).contains("canary"));
+        }
+    }
 
     #[test]
     fn a_detail_at_the_cap_is_kept_verbatim() {

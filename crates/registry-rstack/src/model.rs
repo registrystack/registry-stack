@@ -4,6 +4,10 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
 const SCHEMA: &str = "registry-stack.components.v1";
+const RELEASE_SCHEMAS: [&str; 2] = [
+    "registry-stack.release-candidate.v2",
+    "registry-stack.release-candidate.v3",
+];
 const PLATFORMS: [&str; 3] = ["linux-amd64", "linux-arm64", "macos-arm64"];
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -39,6 +43,9 @@ pub struct Asset {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+// Release candidates carry sealed workflow and distribution provenance that
+// rstack does not interpret. Installation authority comes only from this
+// projection's exact Stack identity, published payloads, and components.
 pub struct ReleaseManifest {
     pub schema_version: String,
     pub repository: String,
@@ -224,7 +231,7 @@ impl ReleaseManifest {
             .map_err(|error| format!("cannot parse release manifest: {error}"))?;
         let manifest: Self = serde_json::from_value(value)
             .map_err(|error| format!("cannot parse release manifest: {error}"))?;
-        if manifest.schema_version != "registry-stack.release-candidate.v2" {
+        if !RELEASE_SCHEMAS.contains(&manifest.schema_version.as_str()) {
             return Err("unsupported release-manifest schema".into());
         }
         if manifest.repository != "registrystack/registry-stack" {
@@ -332,7 +339,7 @@ fn valid_component_name(name: &str) -> bool {
 }
 
 fn asset_name(binary: &str, release: &str, platform: &str) -> String {
-    let suffix = if platform == "macos-arm64" {
+    let suffix = if platform == "macos-arm64" && binary != "registry-manifest" {
         ".tar.gz"
     } else {
         ""

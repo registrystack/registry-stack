@@ -540,16 +540,18 @@ jobs:
               "messagingctl ${{ needs.validate.outputs.version }}"
           fi
           coordinator_in_release="$(python3 release/scripts/release_roster.py \
-            coordinator-in-release "${{ needs.validate.outputs.version }}")"
+            coordinator-binaries-in-release "${{ needs.validate.outputs.version }}")"
           if [[ "${coordinator_in_release}" == true ]]; then
             test "$("dist/bin/coordinator-${{ needs.validate.outputs.tag }}-linux-amd64" --version)" = \
               "coordinator ${{ needs.validate.outputs.version }}"
             test "$("dist/bin/coordinatorctl-${{ needs.validate.outputs.tag }}-linux-amd64" --version)" = \
               "coordinatorctl ${{ needs.validate.outputs.version }}"
-            test "$(dist/image-bin/coordinator --version)" = \
-              "coordinator ${{ needs.validate.outputs.version }}"
-            test "$(dist/image-bin/coordinatorctl --version)" = \
-              "coordinatorctl ${{ needs.validate.outputs.version }}"
+            if [[ "$(python3 release/scripts/release_roster.py coordinator-in-release "${{ needs.validate.outputs.version }}")" == true ]]; then
+              test "$(dist/image-bin/coordinator --version)" = \
+                "coordinator ${{ needs.validate.outputs.version }}"
+              test "$(dist/image-bin/coordinatorctl --version)" = \
+                "coordinatorctl ${{ needs.validate.outputs.version }}"
+            fi
             coordinatorctl_binary="${GITHUB_WORKSPACE}/dist/bin/coordinatorctl-${{ needs.validate.outputs.tag }}-linux-amd64"
             coordinator_project="${RUNNER_TEMP}/release-coordinator-project"
             "${coordinatorctl_binary}" init --directory "${coordinator_project}"
@@ -835,6 +837,13 @@ jobs:
             test "$("platform/${asset}" --version)" = \
               "schedulingctl ${{ needs.validate.outputs.version }}"
           fi
+          component_args=()
+          if [[ "${{ needs.validate.outputs.exclude_discovery }}" == true ]]; then
+            component_args+=(--exclude-unit discovery)
+          fi
+          bash release/scripts/build-additional-platform-binaries.sh \
+            "${{ needs.validate.outputs.version }}" "${{ needs.validate.outputs.tag }}" \
+            "${{ matrix.target }}" platform "${component_args[@]}"
           mkdir -p candidate-platform
           mv platform candidate-platform/platform
 
@@ -862,7 +871,7 @@ jobs:
     name: Build native macOS ${{ matrix.group }} payload once
     needs: validate
     runs-on: macos-26
-    timeout-minutes: 60
+    timeout-minutes: 90
     permissions:
       contents: read
     strategy:
@@ -890,12 +899,17 @@ jobs:
           set -euo pipefail
           rustup toolchain install 1.95.0 \
             --profile minimal --target aarch64-apple-darwin
+          component_args=()
+          if [[ "${{ needs.validate.outputs.exclude_discovery }}" == true ]]; then
+            component_args+=(--exclude-unit discovery)
+          fi
           release/scripts/build-release-native-platform.sh \
             --group "${{ matrix.group }}" \
             --purpose candidate_input \
             --source-sha "${{ needs.validate.outputs.source_sha }}" \
             --version "${{ needs.validate.outputs.version }}" \
-            --output candidate-native-shard
+            --output candidate-native-shard \
+            "${component_args[@]}"
           # These groups contain complete installer toolsets. Exercise the
           # relocated release bytes while the Cargo output is unavailable.
           if [[ "${{ matrix.group }}" == core || "${{ matrix.group }}" == casework ||
@@ -1581,6 +1595,10 @@ jobs:
           set -euo pipefail
           prefix="candidate-native-macos-arm64-${{ needs.validate.outputs.version }}"
           suffix="${{ needs.validate.outputs.source_sha }}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          component_args=()
+          if [[ "${{ needs.validate.outputs.exclude_discovery }}" == true ]]; then
+            component_args+=(--exclude-unit discovery)
+          fi
           release/scripts/merge-release-native-platform-shards.py \
             --version "${{ needs.validate.outputs.version }}" \
             --source-sha "${{ needs.validate.outputs.source_sha }}" \
@@ -1590,7 +1608,8 @@ jobs:
             --bregctl "inputs/${prefix}-bregctl-${suffix}" \
             --casework "inputs/${prefix}-casework-${suffix}" \
             --scheduling "inputs/${prefix}-scheduling-${suffix}" \
-            --output "inputs/candidate-macos-arm64-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+            --output "inputs/candidate-macos-arm64-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            "${component_args[@]}"
 
       - name: Install pinned candidate inspection tools
         env:
@@ -2003,6 +2022,17 @@ jobs:
                 --client "${client}"
             done
           fi
+          component_args=()
+          if [[ "${{ needs.validate.outputs.exclude_discovery }}" == true ]]; then
+            component_args+=(--exclude-unit discovery)
+          fi
+          python3 release/scripts/additional_installers.py --package candidate/bundle-root \
+            --version "${version}" --tag "${{ needs.validate.outputs.tag }}" \
+            "${component_args[@]}"
+          python3 release/scripts/additional_installers.py --smoke candidate/bundle-root \
+            --scratch-root "${RUNNER_TEMP}" \
+            --version "${version}" --tag "${{ needs.validate.outputs.tag }}" \
+            "${component_args[@]}"
           if (( client_major > 0 || client_minor >= 26 )); then
             breg_installer="breg-${{ needs.validate.outputs.tag }}-install.sh"
             awk -v version="${{ needs.validate.outputs.tag }}" '

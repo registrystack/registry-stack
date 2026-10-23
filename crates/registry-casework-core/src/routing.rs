@@ -21,6 +21,17 @@ pub struct RoutingRule {
     #[serde(deserialize_with = "crate::typed::local_id")]
     #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub id: String,
+    /// Optional presentation label. Stable references use `id`.
+    #[serde(
+        default,
+        deserialize_with = "registry_platform_yaml::optional_display_text",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Option<registry_platform_yaml::DisplayText>")
+    )]
+    pub label: Option<String>,
     #[serde(deserialize_with = "registry_platform_yaml::display_text")]
     #[cfg_attr(
         feature = "schema",
@@ -209,6 +220,7 @@ pub enum RoutingDiagnosticReason {
     InvalidSourceMetadata,
     InvalidIdentifier,
     DuplicateRuleId,
+    InvalidLabel,
     InvalidReason,
     UnknownQueue,
     UnknownStage,
@@ -235,6 +247,7 @@ impl RoutingDiagnosticReason {
             Self::InvalidSourceMetadata => "casework.routing.invalid-source-description",
             Self::InvalidIdentifier => "casework.routing.invalid-rule-id",
             Self::DuplicateRuleId => "casework.routing.duplicate-rule-id",
+            Self::InvalidLabel => "casework.routing.invalid-label",
             Self::InvalidReason => "casework.routing.invalid-because",
             Self::UnknownQueue => "casework.routing.unknown-queue",
             Self::UnknownStage => "casework.routing.unknown-stage",
@@ -265,6 +278,9 @@ impl RoutingDiagnosticReason {
                 "a rule id is 1 to 64 lowercase letters, digits, or hyphens, starting with a letter"
             }
             Self::DuplicateRuleId => "another rule of this request already uses this id",
+            Self::InvalidLabel => {
+                "a rule label is empty, longer than 160 bytes, or contains a control or unsafe display character"
+            }
             Self::InvalidReason => {
                 "`because` is empty, longer than 256 bytes, or contains a character that cannot be shown safely"
             }
@@ -299,6 +315,7 @@ impl RoutingDiagnosticReason {
             }
             Self::InvalidIdentifier => "Rename the rule with a valid id.",
             Self::DuplicateRuleId => "Give each rule of the request its own id.",
+            Self::InvalidLabel => "Write a short single-line display label without control or unsafe display characters.",
             Self::InvalidReason => "Write one display-safe sentence of at most 256 bytes saying why the rule routes here.",
             Self::UnknownQueue => "Declare the queue under `queues`, or route to a declared queue.",
             Self::UnknownStage => {
@@ -459,6 +476,16 @@ pub fn routing_policy_findings(
             findings.push(RoutingDiagnostic::new(
                 format!("{base}/id"),
                 RoutingDiagnosticReason::DuplicateRuleId,
+            ));
+        }
+        if rule
+            .label
+            .as_deref()
+            .is_some_and(|label| !crate::typed::valid_display_label(label, 160))
+        {
+            findings.push(RoutingDiagnostic::new(
+                format!("{base}/label"),
+                RoutingDiagnosticReason::InvalidLabel,
             ));
         }
         if rule.because.trim().is_empty()
@@ -726,6 +753,7 @@ mod tests {
     fn rule(id: &str, condition: RoutingCondition, queue: &str) -> RoutingRule {
         RoutingRule {
             id: id.to_owned(),
+            label: None,
             because: format!("Rule {id} matched."),
             when: condition,
             queue: queue.to_owned(),

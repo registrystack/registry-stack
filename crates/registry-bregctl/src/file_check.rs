@@ -412,7 +412,7 @@ fn journeys(input: &Input<'_>) -> Result<Vec<Diagnostic>, Failure> {
 /// Place a journey refusal at the journey or step it concerns. The messages
 /// name counts and identifiers the reader accepted, never a value.
 fn journey_refusal(document: &Document, error: fixtures::FixtureError) -> Diagnostic {
-    const ACTION: &str = "Correct the journeys as the message says, then check them again.";
+    let suggested_action = journey_suggested_action(&error);
     let (code, pointer, message) = match error {
         fixtures::FixtureError::JourneyRefused {
             journey_index,
@@ -439,7 +439,34 @@ fn journey_refusal(document: &Document, error: fixtures::FixtureError) -> Diagno
         ),
         error => ("breg.journeys.refused", String::new(), error.to_string()),
     };
-    diagnostic_near(document, code, &pointer, &message, ACTION)
+    diagnostic_near(document, code, &pointer, &message, suggested_action)
+}
+
+fn journey_suggested_action(error: &fixtures::FixtureError) -> &'static str {
+    const ACTION: &str = "Correct the journeys as the message says, then check them again.";
+    const READABLE_FIELD_ACTION: &str =
+        "Add the field to the access profile's readableFields, or remove it from the step's expected fields.";
+    const REQUIRED_INPUT_ACTION: &str =
+        "Add the input to the step's request, or make the Action input optional.";
+    match error {
+        fixtures::FixtureError::StepFailed { error, .. }
+            if matches!(
+                error.as_ref(),
+                fixtures::FixtureError::ExpectedFieldNotReadable { .. }
+            ) =>
+        {
+            READABLE_FIELD_ACTION
+        }
+        fixtures::FixtureError::StepFailed { error, .. }
+            if matches!(
+                error.as_ref(),
+                fixtures::FixtureError::RequiredActionInputMissing { .. }
+            ) =>
+        {
+            REQUIRED_INPUT_ACTION
+        }
+        _ => ACTION,
+    }
 }
 
 /// An error about the member at `pointer`, placed at the nearest member the
@@ -522,5 +549,34 @@ mod tests {
         kinds.sort_unstable();
         kinds.dedup();
         assert_eq!(kinds.len(), CHECKS.len());
+    }
+
+    #[test]
+    fn named_journey_failures_have_cause_specific_remedies() {
+        for (error, expected) in [
+            (
+                fixtures::FixtureError::ExpectedFieldNotReadable {
+                    step_id: "read-facility".to_owned(),
+                    field: "status".to_owned(),
+                    access_profile: "facility-reader".to_owned(),
+                },
+                "readableFields",
+            ),
+            (
+                fixtures::FixtureError::RequiredActionInputMissing {
+                    step_id: "register".to_owned(),
+                    input: "openingNote".to_owned(),
+                    action: "register-facility".to_owned(),
+                },
+                "step's request",
+            ),
+        ] {
+            let wrapped = fixtures::FixtureError::StepFailed {
+                journey_index: 0,
+                step_index: 0,
+                error: Box::new(error),
+            };
+            assert!(journey_suggested_action(&wrapped).contains(expected));
+        }
     }
 }

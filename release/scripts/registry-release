@@ -296,8 +296,14 @@ def artifact_inventory_errors(version: str, artifacts: dict[Any, Any]) -> list[s
             expected_inventory.update({"messaging", "messagingctl"})
         if release_roster.render_in_release(parsed_version):
             expected_inventory.add("registry-render")
-        if release_roster.coordinator_in_release(parsed_version):
+        if release_roster.coordinator_binaries_in_release(parsed_version):
             expected_inventory.update({"coordinator", "coordinatorctl"})
+        if release_roster.rstack_in_release(parsed_version):
+            expected_inventory.update({"rstack", "rstack-installer"})
+        expected_inventory.update(
+            f"{name}-installer"
+            for name in release_roster.additional_installers(parsed_version)
+        )
         missing = sorted(expected_inventory - artifact_names)
         unexpected = sorted(artifact_names - expected_inventory)
         if missing or unexpected:

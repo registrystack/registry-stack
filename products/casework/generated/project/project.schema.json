@@ -405,6 +405,10 @@
         "id": {
           "$ref": "#/$defs/LocalId"
         },
+        "label": {
+          "$ref": "#/$defs/DisplayText",
+          "description": "Optional presentation label. Stable references use `id`."
+        },
         "negativeDecisions": {
           "$ref": "#/$defs/ReviewNegativeDecisionMode",
           "default": "settle",
@@ -484,6 +488,10 @@
         },
         "id": {
           "$ref": "#/$defs/LocalId"
+        },
+        "label": {
+          "$ref": "#/$defs/DisplayText",
+          "description": "Optional presentation label. Stable references use `id`."
         },
         "queue": {
           "type": "string"
@@ -982,6 +990,10 @@
           },
           "displaySchema": {
             "x-registry-foreign": "json-schema-2020-12"
+          },
+          "label": {
+            "$ref": "#/$defs/DisplayText",
+            "description": "Optional presentation label. Stable references use `id`."
           },
           "outcomes": {
             "additionalProperties": {

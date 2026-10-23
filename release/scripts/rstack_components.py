@@ -79,6 +79,8 @@ def _binary_name(asset_name: str, tag: str) -> tuple[str, str]:
     for platform in PLATFORMS:
         suffix = f"-{tag}-{platform}"
         if platform == "macos-arm64":
+            if asset_name == f"registry-manifest{suffix}":
+                return "registry-manifest", platform
             suffix += ".tar.gz"
         if asset_name.endswith(suffix):
             binary = asset_name[: -len(suffix)]

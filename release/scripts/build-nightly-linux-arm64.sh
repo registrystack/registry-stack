@@ -39,9 +39,7 @@ export RUSTUP_TOOLCHAIN=1.95.0
 . release/scripts/zig-glibc-toolchain.sh
 install_zig_glibc_toolchain "${RUNNER_TEMP:?RUNNER_TEMP is required}/zig-glibc-toolchain"
 
-# Match the numbered-release arm64 recipe and feature isolation. Scheduling's
-# runtime and Messaging have no native arm64 release
-# asset; their container images use the canonical Linux amd64 binaries.
+# Match the numbered-release arm64 recipe and feature isolation.
 cargo build --release --locked -p registry-evidence \
   -p registry-evidencectl -p registry-evidence-oid4vci --target "${target}"
 cargo build --release --locked -p registry-breg --bin breg --features runtime --target "${target}"
@@ -49,15 +47,20 @@ cargo build --release --locked -p registry-bregctl --target "${target}"
 cargo build --release --locked -p registry-casework --bin casework --target "${target}"
 cargo build --release --locked -p registry-caseworkctl --target "${target}"
 cargo build --release --locked -p registry-schedulingctl --bin schedulingctl --target "${target}"
+if [[ "$(python3 release/scripts/release_roster.py rstack-in-release "${version}")" == true ]]; then
+  cargo build --release --locked -p registry-rstack --bin rstack --target "${target}"
+fi
 if [[ "$(python3 release/scripts/release_roster.py breg-services-in-release "${version}")" == true ]]; then
   cargo build --release --locked -p registry-breg-mcp --bin breg-mcp --target "${target}"
   cargo build --release --locked -p registry-breg-review --bin breg-review --target "${target}"
 fi
 mkdir platform
+bash release/scripts/build-additional-platform-binaries.sh "${version}" "${tag}" "${target}" platform
 python3 - "${version}" "${tag}" "${target}" <<'PY'
 import shutil
 import subprocess
 import sys
+import re
 from pathlib import Path
 sys.path.insert(0, str(Path('release/scripts').resolve()))
 from release_candidate import _release_payload_inventory
@@ -70,7 +73,13 @@ for asset, kind in _release_payload_inventory(version).items():
     shutil.copy2(Path('target') / target / 'release' / binary, destination)
     destination.chmod(0o755)
     observed = subprocess.check_output([str(destination), '--version'], text=True).strip()
-    if observed != f'{binary} {tag[1:]}':
+    expected = f'{binary} {tag[1:]}'
+    if binary == 'registry-render':
+        pin = re.search(r'pub const TYPST_PIN: &str = "([^"]+)"', Path('crates/registry-render/src/lib.rs').read_text())
+        if pin is None:
+            raise SystemExit('Registry Render Typst pin is missing')
+        expected += f' (typst {pin[1]})'
+    if observed != expected:
         raise SystemExit(f'wrong nightly identity for {binary}')
 PY
 release/scripts/check-glibc-floor.sh platform/*

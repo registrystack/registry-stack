@@ -628,8 +628,39 @@ class ExpectationTest(unittest.TestCase):
         variant = one(runner.mutate(EXAMPLE, None, demo_format()))
         expect = {"exit": 1, "diagnostics": [{"code": "yaml.too-large", "path": "", "at": "file"}]}
         resolved = runner.resolve_expected(expect, None, variant, "/w/p.yaml")
+        self.assertEqual(resolved[0]["file"], "/w/p.yaml")
         self.assertIsNone(resolved[0]["line"])
         self.assertIsNone(resolved[0]["column"])
+
+    def test_project_level_expectation_names_the_staged_project(self) -> None:
+        variant = one(runner.mutate(EXAMPLE, None, demo_format()))
+        expect = {"exit": 1, "diagnostics": [{"code": "demo.skipped", "path": "", "at": "project"}]}
+        resolved = runner.resolve_expected(expect, None, variant, "/w/p.yaml", project_file="/w")
+        self.assertEqual(resolved[0]["file"], "/w")
+        self.assertIsNone(resolved[0]["line"])
+        self.assertIsNone(resolved[0]["column"])
+
+    def test_format_specific_diagnostic_expectation_is_exactly_scoped(self) -> None:
+        variant = one(runner.mutate(EXAMPLE, None, demo_format()))
+        expect = {
+            "exit": 1,
+            "diagnostics": [
+                {
+                    "code": "demo.later-checks-skipped",
+                    "path": "",
+                    "at": "file",
+                    "formats": ["demo/project"],
+                }
+            ],
+        }
+        self.assertEqual(
+            len(runner.resolve_expected(expect, None, variant, "/w/p.yaml", "demo/project")),
+            1,
+        )
+        self.assertEqual(
+            runner.resolve_expected(expect, None, variant, "/w/p.yaml", "other/project"),
+            [],
+        )
 
     def test_expectation_naming_a_missing_anchor_is_a_harness_error(self) -> None:
         variant = one(runner.mutate(EXAMPLE, {"append": "a: 1\n"}, demo_format()))
@@ -680,6 +711,10 @@ class ReportTest(unittest.TestCase):
             runner.shape_problems(diagnostic(artifact="DemoProject", source={"file": "p.yaml"}), "DemoProject"),
             [],
         )
+        self.assertEqual(
+            runner.shape_problems(diagnostic(severity="warning", rank="widens-access"), "BRegProject"),
+            [],
+        )
 
     def test_cfg_diag_1_shape_problems(self) -> None:
         cases = [
@@ -692,6 +727,9 @@ class ReportTest(unittest.TestCase):
             (diagnostic(artifact="Other"), "artifact is not DemoProject"),
             (diagnostic(related=[]), "related is empty"),
             (diagnostic(related=[{"file": "p", "path": "/a"}]), "related[0] has no message"),
+            (diagnostic(severity="warning", rank="urgent"), "rank is not widens-access, performance, or hygiene"),
+            (diagnostic(severity="warning", rank=1), "rank is not widens-access, performance, or hygiene"),
+            (diagnostic(rank="hygiene"), "rank is present on an error"),
         ]
         for value, problem in cases:
             self.assertIn(problem, runner.shape_problems(value, "DemoProject"), value)
@@ -919,6 +957,36 @@ class PlanTest(unittest.TestCase):
                 {"id": "x", "rules": ["CFG-YAML-2"], "summary": "s", "expect": {"exit": 1}, "extra": 1},
                 "x",
             )
+
+    def test_diagnostic_format_selectors_are_non_empty_and_unique(self) -> None:
+        for formats in ([], ["demo/project", "demo/project"]):
+            with self.assertRaisesRegex(
+                runner.HarnessError,
+                "`formats` is not a non-empty list of unique format ids",
+            ):
+                self.case(
+                    expect={
+                        "exit": 1,
+                        "diagnostics": [
+                            {"code": "demo.problem", "path": "", "at": "file", "formats": formats}
+                        ],
+                    }
+                )
+
+    def test_diagnostic_format_selector_must_name_a_registered_format(self) -> None:
+        case = self.case(
+            expect={
+                "exit": 1,
+                "diagnostics": [
+                    {"code": "demo.problem", "path": "", "at": "file", "formats": ["demo/retired"]}
+                ],
+            }
+        )
+        with self.assertRaisesRegex(
+            runner.HarnessError,
+            "case demo-case names format demo/retired, which the registry does not",
+        ):
+            runner.validate_ids(runner.ExpectedFailures({}, {}, {}), [demo_format()], [case], {})
 
     def test_cfg_schema_7_an_init_case_runs_the_init_command_only(self) -> None:
         init = self.case(run="init", expect={"exit": 0, "report": False})
