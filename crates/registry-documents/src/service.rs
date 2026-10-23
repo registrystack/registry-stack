@@ -602,7 +602,7 @@ impl DocumentService {
 
     fn actor_reference(&self, caller: &Caller) -> Result<String, ProblemCode> {
         self.audit
-            .actor_reference(&caller.issuer, &caller.subject)
+            .actor_reference(&caller.issuer, &caller.subject, caller.kind)
             .map_err(|error| unavailable("audit actor reference", &error))
     }
 

@@ -2,9 +2,10 @@
 
 //! The Document Store audit journal: one request entry before an audited
 //! operation acts and one response entry with its outcome after, through
-//! `registry-platform-audit`. Callers are recorded only as keyed references,
-//! never by their identifiers.
+//! `registry-platform-audit`. Callers are recorded only as keyed references
+//! bound to their actor kind, never by their identifiers.
 
+use registry_documents_core::ActorKind;
 use registry_platform_audit::{
     AuditEntry, AuditKeyHasher, AuditReferenceHashError, AuditRequest, AuditUnavailable,
     AuditWriter,
@@ -118,15 +119,17 @@ impl DocumentsAudit {
             .await
     }
 
-    /// The keyed reference of a caller: the same issuer and subject always
-    /// give the same reference under one audit key, and the reference
-    /// reveals neither.
+    /// The keyed reference of a caller: the same issuer, subject, and actor
+    /// kind always give the same reference under one audit key, a human and
+    /// a service sharing an issuer and subject get different references, and
+    /// the reference reveals neither identifier.
     pub fn actor_reference(
         &self,
         issuer: &str,
         subject: &str,
+        kind: ActorKind,
     ) -> Result<String, ActorReferenceError> {
-        let canonical = canonicalize_json(&Value::from(vec![issuer, subject]))
+        let canonical = canonicalize_json(&Value::from(vec![issuer, subject, kind.as_str()]))
             .map_err(|_| ActorReferenceError::Canonical)?;
         let canonical =
             std::str::from_utf8(&canonical).map_err(|_| ActorReferenceError::Canonical)?;
@@ -170,11 +173,37 @@ mod tests {
     fn an_actor_reference_is_stable_and_reveals_no_identifier() {
         let audit = audit();
         let issuer = "https://identity.example.test";
-        let first = audit.actor_reference(issuer, "custodian-1").unwrap();
-        assert_eq!(first, audit.actor_reference(issuer, "custodian-1").unwrap());
-        assert_ne!(first, audit.actor_reference(issuer, "custodian-2").unwrap());
+        let first = audit
+            .actor_reference(issuer, "custodian-1", ActorKind::Service)
+            .unwrap();
+        assert_eq!(
+            first,
+            audit
+                .actor_reference(issuer, "custodian-1", ActorKind::Service)
+                .unwrap()
+        );
+        assert_ne!(
+            first,
+            audit
+                .actor_reference(issuer, "custodian-2", ActorKind::Service)
+                .unwrap()
+        );
         assert!(!first.contains("custodian-1"));
         assert!(!first.contains("identity.example.test"));
+    }
+
+    #[test]
+    fn an_actor_reference_tells_a_human_from_a_service_with_the_same_subject() {
+        let audit = audit();
+        let issuer = "https://identity.example.test";
+        assert_ne!(
+            audit
+                .actor_reference(issuer, "shared-subject", ActorKind::Human)
+                .unwrap(),
+            audit
+                .actor_reference(issuer, "shared-subject", ActorKind::Service)
+                .unwrap()
+        );
     }
 
     #[test]
