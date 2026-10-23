@@ -450,7 +450,6 @@ impl State {
             "webhookUrl":self.webhook_port.map(|port|format!("http://127.0.0.1:{port}/events")),
             "eventsFile":self.webhook_port.map(|_|self.root().join("events.jsonl")),
             "audience":self.audience(),"packageDigest":self.package_digest,"packageSequence":self.sequence,"activationPending":!self.activated,
-            "initialApplyEvidence": self.root().join("evidence/initial-apply.json").is_file().then(|| self.root().join("evidence/initial-apply.json")),
             "clients":clients.clients.iter().map(|client|json!({"id":client.id,"accessProfiles":client.access_profiles,"scopes":client.scopes,
                 "clientIdFile":self.root().join("credentials").join(&client.id).join("client-id"),
                 "assertionKeyFile":self.root().join("credentials").join(&client.id).join("assertion-key.jwk")})).collect::<Vec<_>>()}),
@@ -2309,18 +2308,7 @@ fn record_activation_preflight(root: &Path, success: bool, report: &[u8]) -> Res
     let evidence = root.join("evidence");
     private::directory(&evidence)?;
     private::replace(&evidence.join("doctor-before-apply.json"), report)?;
-    let activation = activation(success, report)?;
-    if activation == Activation::NotActivated {
-        private::replace(
-            &evidence.join("initial-apply.json"),
-            &serde_json::to_vec(&json!({
-                "phase":"initial-apply", "expected":true,
-                "message":"The development database needs its initial package application.",
-                "doctorReport":"doctor-before-apply.json"
-            }))?,
-        )?;
-    }
-    Ok(activation)
+    activation(success, report)
 }
 
 fn ctl(state: &State) -> Command {

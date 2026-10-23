@@ -779,9 +779,10 @@ the database cannot fix a missing destination binding or invalid secret.
 
 On an initial start, the pre-apply doctor may report
 `startup.database.unready`, `startup.database.uninitialized`, or
-`startup.package.not-active`. Dev classifies these expected not-yet-activated
-results as the `initial-apply` phase, preserves the raw doctor report under
-private `evidence`, and does not copy it into failure logs. A standalone doctor
+`startup.package.not-active`. Dev treats these expected not-yet-activated
+results as the cue for the initial package application, preserves the raw
+doctor report as private `evidence/doctor-before-apply.json`, and does not copy
+it into failure logs. A standalone doctor
 run and the post-apply doctor keep their ordinary success or failure behavior.
 
 The rehearsal, the package build, activation and verification all run inside

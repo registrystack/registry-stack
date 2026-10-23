@@ -11616,7 +11616,6 @@ fn write_dev_success(
                 ("runtime config", "runtimeConfig"),
                 ("webhook receiver", "webhookUrl"),
                 ("events file", "eventsFile"),
-                ("initial apply evidence", "initialApplyEvidence"),
             ]
             .into_iter()
             .filter_map(|(label, field)| {

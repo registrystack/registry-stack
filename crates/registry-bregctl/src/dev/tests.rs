@@ -2542,11 +2542,6 @@ fn pre_apply_doctor_evidence_is_preserved_outside_failure_logs() {
         .unwrap(),
         report
     );
-    let summary =
-        private::read(&state.root().join("evidence/initial-apply.json"), MAX_BYTES).unwrap();
-    let summary: Value = serde_json::from_slice(&summary).unwrap();
-    assert_eq!(summary["phase"], "initial-apply");
-    assert_eq!(summary["expected"], true);
 }
 
 #[test]

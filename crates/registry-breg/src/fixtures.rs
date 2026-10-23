@@ -2789,7 +2789,6 @@ fn validate_expectation(
     captures: bool,
     captures_results: bool,
 ) -> Result<(), FixtureError> {
-    validate_refusal_pair(expectation)?;
     let declared_refusal = expectation.problem_code.as_deref() == Some("action.refused");
     if declared_refusal != expectation.refusal_code.is_some()
         || (declared_refusal && (operation != Operation::Invoke || captures_results))
