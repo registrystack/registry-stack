@@ -85,10 +85,18 @@ class UnitPreparationTest(unittest.TestCase):
                 path.write_text(f'[package]\nname = "{name}"\nversion = "1.2.3"\n')
             notes = root / "release/notes/discovery/v1.2.3.md"
             notes.parent.mkdir(parents=True)
-            notes.write_text("# Discovery 1.2.3\n\nFix response handling.\n")
+            notes.write_text(
+                "# Registry Discovery v1.2.3\n\nRelease pilot fixes response handling.\n"
+            )
             result = pipeline.prepare_unit(root, "discovery", "1.2.3", "pilot")
             self.assertEqual(result["tag"], "discovery/v1.2.3")
             self.assertEqual(result["binary_groups"], ["discovery"])
+            notes.write_text("# Registry Discovery v1.2.2\n\nRelease pilot.\n")
+            with self.assertRaisesRegex(ValueError, "wrong title"):
+                pipeline.prepare_unit(root, "discovery", "1.2.3", "pilot")
+            notes.write_text("# Registry Discovery v1.2.3\n\nFix response handling.\n")
+            with self.assertRaisesRegex(ValueError, "do not name pilot"):
+                pipeline.prepare_unit(root, "discovery", "1.2.3", "pilot")
             path.write_text('[package]\nversion = "1.2.4"\n')
             with self.assertRaisesRegex(ValueError, "version"):
                 pipeline.prepare_unit(root, "discovery", "1.2.3", "pilot")

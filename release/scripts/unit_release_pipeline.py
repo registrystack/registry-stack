@@ -31,6 +31,11 @@ def prepare_unit(repo: Path, unit: str, version: str, release_id: str) -> dict:
     notes = repo / "release/notes" / f"{tag}.md"
     if notes.is_symlink() or not notes.is_file() or not notes.read_text().strip():
         raise ValueError(f"release notes must be a nonempty regular file: {notes}")
+    text = notes.read_text()
+    if not text.startswith(f"# Registry Discovery v{version}\n"):
+        raise ValueError(f"release notes {notes} have the wrong title")
+    if release_id not in text:
+        raise ValueError(f"release notes {notes} do not name {release_id}")
     return {"unit": unit, "version": version, "release_id": release_id,
             "tag": tag, "notes": notes.relative_to(repo).as_posix(),
             "binary_groups": [unit], "images": [unit]}
