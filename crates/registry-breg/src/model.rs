@@ -39,6 +39,8 @@ pub struct CompiledField {
     /// `physical_name` points at the envelope column.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub encryption: Option<CompiledFieldEncryption>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generate: Option<CompiledGeneratedIdentifier>,
     pub display: crate::contract::DisplaySource,
     pub relationship: Option<crate::contract::RelationshipSource>,
 }
@@ -60,6 +62,27 @@ pub struct CompiledBlindIndex {
     pub physical_name: String,
     pub normalization: Vec<NormalizationStep>,
     pub unique: bool,
+}
+
+/// Server-owned business identifier generation attached to one stored string
+/// field. This does not replace the canonical record UUID.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CompiledGeneratedIdentifier {
+    pub strategy: CompiledGeneratedIdentifierStrategy,
+    pub prefix: String,
+    pub scope: Vec<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase"
+)]
+pub enum CompiledGeneratedIdentifierStrategy {
+    Sequence { minimum_digits: u32 },
+    Random { length: u32, alphabet: String },
 }
 
 /// Binary slot policy, separate from scalar fields and physical SQL columns.

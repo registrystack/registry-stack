@@ -16,16 +16,17 @@ use crate::contract::{
     parsed_bbox, valid_decimal_bounds, valid_structured_schema, AccessProfileSource,
     ActionExecutionSource, ActionSource, Classification, ConstraintSource, DerivedExecutionSource,
     DerivedFieldSource, DisplaySource, EntityExtensionSource, EntitySource, EventConditionSource,
-    EventTrigger, FieldSource, FieldTypeSource, GeoJsonSource, HookAuthenticationProfile,
-    HookDeadLetterMode, HookHandlerSource, HookPhase, LookupValueOrigin,
+    EventTrigger, FieldGenerationSource, FieldSource, FieldTypeSource, GeoJsonSource,
+    HookAuthenticationProfile, HookDeadLetterMode, HookHandlerSource, HookPhase, LookupValueOrigin,
     ManifestProjectionTextSource, ModuleAssetSource, MutationMode, Operation, PresentationSource,
     ReadPathPermissionSource, RegistryModule, RegistryProject, SpatialBboxPermissionSource,
     SpatialQueryPermissionSource, UniqueWhenPredicate, ValidTimeRole, DECIMAL_BOUNDS_REQUIREMENTS,
-    MAX_ACCESS_LOG_EXEMPTIONS, MAX_ACCESS_LOG_EXEMPTION_REASON_BYTES,
-    MAX_ACCESS_LOG_RETENTION_DAYS, MAX_ACCESS_LOG_SUBJECT_CHARACTERS,
-    MAX_ACCESS_LOG_TRUSTED_INTERMEDIARIES, MAX_ENCRYPTED_FIELD_PLAINTEXT_BYTES,
-    MAX_ENCRYPTED_FIELD_STRING_CHARACTERS, MAX_FIELD_LOOKUP_NORMALIZATION_STEPS,
-    MAX_STRUCTURED_VALUE_BYTES,
+    DEFAULT_GENERATED_IDENTIFIER_ALPHABET, MAX_ACCESS_LOG_EXEMPTIONS,
+    MAX_ACCESS_LOG_EXEMPTION_REASON_BYTES, MAX_ACCESS_LOG_RETENTION_DAYS,
+    MAX_ACCESS_LOG_SUBJECT_CHARACTERS, MAX_ACCESS_LOG_TRUSTED_INTERMEDIARIES,
+    MAX_ENCRYPTED_FIELD_PLAINTEXT_BYTES, MAX_ENCRYPTED_FIELD_STRING_CHARACTERS,
+    MAX_FIELD_LOOKUP_NORMALIZATION_STEPS, MAX_GENERATED_IDENTIFIER_COMPONENT_LENGTH,
+    MAX_GENERATED_IDENTIFIER_SCOPE_FIELDS, MAX_STRUCTURED_VALUE_BYTES,
 };
 use crate::derived_sql::{derived_sql_dependencies, validate_derived_sql};
 use crate::diagnostics::{CompileFailure, Diagnostic};
@@ -43,7 +44,8 @@ use crate::model::{
     CompiledAccessEntry, CompiledAccessInventory, CompiledBboxQueryCapability, CompiledBlindIndex,
     CompiledChangeControl, CompiledDerivedField, CompiledDerivedRelation, CompiledEntity,
     CompiledEntityModuleOrigins, CompiledEventDelivery, CompiledEventDeliveryInventory,
-    CompiledField, CompiledFieldEncryption, CompiledGeoJsonBinding, CompiledHookDeliveryMode,
+    CompiledField, CompiledFieldEncryption, CompiledGeneratedIdentifier,
+    CompiledGeneratedIdentifierStrategy, CompiledGeoJsonBinding, CompiledHookDeliveryMode,
     CompiledHookHandler, CompiledHookHandlerKind, CompiledHookRetryProfile, CompiledLogicalField,
     CompiledManifestAuthority, CompiledManifestDataService, CompiledManifestDataset,
     CompiledManifestDistribution, CompiledManifestProjection, CompiledManifestPublicService,
@@ -3877,6 +3879,7 @@ fn validate_entity_fields(
                 ));
             }
         }
+        validate_generated_identifier(entity, field, errors);
         match &field.field_type {
             FieldTypeSource::String {
                 min_length,
@@ -4002,6 +4005,176 @@ fn validate_entity_fields(
                 "valid-time boundary fields must use the same type",
             ));
         }
+    }
+}
+
+fn validate_generated_identifier(
+    entity: &EntitySource,
+    field: &FieldSource,
+    errors: &mut Vec<Diagnostic>,
+) {
+    let Some(generate) = &field.generate else {
+        return;
+    };
+    let path = format!(
+        "recordTypes[id={}].fields[id={}].generate",
+        entity.id, field.id
+    );
+    let FieldTypeSource::String {
+        min_length,
+        max_length,
+    } = &field.field_type
+    else {
+        errors.push(Diagnostic::error(
+            "breg.field.generate-type-unsupported",
+            &path,
+            "generate is supported only on a persisted string field",
+        ));
+        return;
+    };
+    if field.encrypted
+        || field.lookup.is_some()
+        || field.pattern.is_some()
+        || field.valid_time_role.is_some()
+        || field.relationship.is_some()
+    {
+        errors.push(Diagnostic::error(
+            "breg.field.generate-options-incompatible",
+            &path,
+            "a generated identifier cannot be encrypted, looked up through a blind index, pattern-constrained, a valid-time boundary, or a relationship",
+        ));
+    }
+
+    let prefix = generate.prefix();
+    if prefix.len() > MAX_GENERATED_IDENTIFIER_COMPONENT_LENGTH as usize
+        || prefix.bytes().any(|byte| !(0x21..=0x7e).contains(&byte))
+    {
+        errors.push(Diagnostic::error(
+            "breg.field.generate-prefix-invalid",
+            format!("{path}.prefix"),
+            &format!(
+                "a generated identifier prefix must contain at most {MAX_GENERATED_IDENTIFIER_COMPONENT_LENGTH} printable ASCII characters and no whitespace"
+            ),
+        ));
+    }
+
+    let (minimum_output_length, maximum_output_length) = match generate {
+        FieldGenerationSource::Sequence { minimum_digits, .. } => {
+            let minimum = prefix.len().saturating_add(*minimum_digits as usize);
+            let maximum = prefix
+                .len()
+                .saturating_add((*minimum_digits as usize).max(19));
+            (minimum, maximum)
+        }
+        FieldGenerationSource::Random {
+            length, alphabet, ..
+        } => {
+            let alphabet = alphabet
+                .as_deref()
+                .unwrap_or(DEFAULT_GENERATED_IDENTIFIER_ALPHABET);
+            let mut characters = BTreeSet::new();
+            if !(2..=MAX_GENERATED_IDENTIFIER_COMPONENT_LENGTH as usize).contains(&alphabet.len())
+                || alphabet
+                    .bytes()
+                    .any(|byte| !(0x21..=0x7e).contains(&byte) || !characters.insert(byte))
+            {
+                errors.push(Diagnostic::error(
+                    "breg.field.generate-alphabet-invalid",
+                    format!("{path}.alphabet"),
+                    &format!(
+                        "a random identifier alphabet must contain 2 to {MAX_GENERATED_IDENTIFIER_COMPONENT_LENGTH} distinct printable ASCII characters and no whitespace"
+                    ),
+                ));
+            }
+            let exact = prefix.len().saturating_add(*length as usize);
+            (exact, exact)
+        }
+    };
+    if minimum_output_length < *min_length as usize || maximum_output_length > *max_length as usize
+    {
+        errors.push(Diagnostic::error(
+            "breg.field.generate-length-outside-field",
+            &path,
+            "every generated identifier must satisfy the string field minimumLength and maximumLength, including the longest i64 sequence value",
+        ));
+    }
+
+    if generate.scope().len() > MAX_GENERATED_IDENTIFIER_SCOPE_FIELDS {
+        errors.push(Diagnostic::error(
+            "breg.field.generate-scope-too-large",
+            format!("{path}.scope"),
+            &format!(
+                "a generated identifier may name at most {MAX_GENERATED_IDENTIFIER_SCOPE_FIELDS} scope fields"
+            ),
+        ));
+    }
+    // Both the reservation key and the Record's scoped unique constraint use
+    // B-tree indexes. Migration also retains existing identifier values, which
+    // can be longer and non-ASCII even when newly generated values are short.
+    // Budget every indexed field's worst-case UTF-8 size before PostgreSQL.
+    const MAX_INDEXED_BYTES: u64 = 1024;
+    let fields = stored_field_map(entity);
+    let mut maximum_indexed_bytes = u64::from(*max_length) * 4;
+    for scope_field_id in generate.scope() {
+        let scope_path = format!("{path}.scope[field={scope_field_id}]");
+        let Some(scope_field) = fields.get(scope_field_id.as_str()) else {
+            errors.push(Diagnostic::error(
+                "breg.field.generate-scope-field-unknown",
+                scope_path,
+                "a generated identifier scope refers to an unknown stored field",
+            ));
+            continue;
+        };
+        if !scope_field.required {
+            errors.push(Diagnostic::error(
+                "breg.field.generate-scope-field-optional",
+                &scope_path,
+                "a generated identifier scope field must be required",
+            ));
+        }
+        if scope_field.generate.is_some() || scope_field.encrypted {
+            errors.push(Diagnostic::error(
+                "breg.field.generate-scope-field-managed",
+                &scope_path,
+                "a generated identifier scope field cannot itself be generated or encrypted",
+            ));
+        }
+        match generated_identifier_scope_max_bytes(&scope_field.field_type) {
+            Some(bytes) => maximum_indexed_bytes = maximum_indexed_bytes.saturating_add(bytes),
+            None => errors.push(Diagnostic::error(
+                "breg.field.generate-scope-type-unsupported",
+                &scope_path,
+                "a generated identifier scope field must use a stored scalar type",
+            )),
+        }
+    }
+    if maximum_indexed_bytes > MAX_INDEXED_BYTES {
+        errors.push(Diagnostic::error(
+            "breg.field.generate-index-key-too-large",
+            &path,
+            "the generated field and its scope fields exceed the combined 1024-byte index budget; lower their maximumLength or use shorter scope fields",
+        ));
+    }
+}
+
+fn generated_identifier_scope_max_bytes(field_type: &FieldTypeSource) -> Option<u64> {
+    match field_type {
+        FieldTypeSource::String { max_length, .. } | FieldTypeSource::Text { max_length } => {
+            Some(u64::from(*max_length) * 4)
+        }
+        FieldTypeSource::VocabularyCode { values, .. } => Some(
+            values
+                .iter()
+                .map(|value| value.len() as u64)
+                .max()
+                .unwrap_or(0),
+        ),
+        FieldTypeSource::Boolean => Some(5),
+        FieldTypeSource::Int64 => Some(20),
+        FieldTypeSource::Decimal { .. } | FieldTypeSource::Timestamp => Some(64),
+        FieldTypeSource::Date => Some(10),
+        FieldTypeSource::Uuid | FieldTypeSource::Reference { .. } => Some(36),
+        FieldTypeSource::Crs84Point { .. } | FieldTypeSource::Structured { .. } => None,
     }
 }
 
@@ -4972,6 +5145,18 @@ fn validate_profiles(
                 ));
             }
         }
+        for field in &access.writable_fields {
+            if fields
+                .get(field.as_str())
+                .is_some_and(|field| field.generate.is_some())
+            {
+                errors.push(Diagnostic::error(
+                    "breg.access-profile.generated-field-writable",
+                    format!("{profile_path}.writableFields[field={field}]"),
+                    "a server-generated identifier must not be granted as a caller-writable field",
+                ));
+            }
+        }
         for (member, processed) in [
             ("filterableFields", &access.filterable_fields),
             ("sortableFields", &access.sortable_fields),
@@ -5115,7 +5300,9 @@ fn create_required_field_findings(entities: &BTreeMap<String, EntitySource>) -> 
             // Engine-managed record identity, revision, and lifecycle columns
             // are not authored EntitySource fields and are therefore excluded.
             for field in entity.fields.iter().filter(|field| {
-                field.required && !access.writable_fields.contains(field.id.as_str())
+                field.required
+                    && field.generate.is_none()
+                    && !access.writable_fields.contains(field.id.as_str())
             }) {
                 findings.push(Diagnostic::finding(
                     "breg.access.profile-create-required-field-not-writable",
@@ -6528,6 +6715,42 @@ fn member_origins_for_entity(
         .collect()
 }
 
+fn compile_generated_identifier(source: &FieldGenerationSource) -> CompiledGeneratedIdentifier {
+    let (strategy, prefix, scope) = match source {
+        FieldGenerationSource::Sequence {
+            prefix,
+            minimum_digits,
+            scope,
+        } => (
+            CompiledGeneratedIdentifierStrategy::Sequence {
+                minimum_digits: *minimum_digits,
+            },
+            prefix.clone(),
+            scope.iter().cloned().collect(),
+        ),
+        FieldGenerationSource::Random {
+            prefix,
+            length,
+            alphabet,
+            scope,
+        } => (
+            CompiledGeneratedIdentifierStrategy::Random {
+                length: *length,
+                alphabet: alphabet
+                    .clone()
+                    .unwrap_or_else(|| DEFAULT_GENERATED_IDENTIFIER_ALPHABET.to_owned()),
+            },
+            prefix.clone(),
+            scope.iter().cloned().collect(),
+        ),
+    };
+    CompiledGeneratedIdentifier {
+        strategy,
+        prefix,
+        scope,
+    }
+}
+
 fn compile_entities(
     sources: &BTreeMap<String, EntitySource>,
     origins: &CollectedOrigins,
@@ -6600,9 +6823,10 @@ fn compile_entities(
                 field.classification,
             );
             logical.encryption = encryption.clone();
+            let generate = field.generate.as_ref().map(compile_generated_identifier);
             stored_fields.push(CompiledStoredField {
                 logical: logical.clone(),
-                required: field.required,
+                required: field.required || generate.is_some(),
                 valid_time_role: field.valid_time_role,
                 physical_name: physical.clone(),
             });
@@ -6614,11 +6838,12 @@ fn compile_entities(
                     id: field.id,
                     field_type: field.field_type,
                     pattern: field.pattern,
-                    required: field.required,
+                    required: field.required || generate.is_some(),
                     classification: field.classification,
                     valid_time_role: field.valid_time_role,
                     physical_name: physical,
                     encryption,
+                    generate,
                 },
             );
         }
@@ -6747,6 +6972,40 @@ fn compile_entities(
                 .map_err(CompileFailure::from_one)?;
             constraint_names.insert(id.clone(), physical);
             constraints.insert(id, normalized_constraint(constraint));
+        }
+        for field in source
+            .fields
+            .iter()
+            .filter(|field| field.generate.is_some())
+        {
+            let id = format!("generated:{}", field.id);
+            let mut constraint_fields = field
+                .generate
+                .as_ref()
+                .expect("filtered generated field")
+                .scope()
+                .iter()
+                .cloned()
+                .collect::<Vec<_>>();
+            constraint_fields.push(field.id.clone());
+            constraint_names.insert(
+                id.clone(),
+                builder
+                    .derive(
+                        "c",
+                        &format!("{}.{}", source.id, id),
+                        "recordTypes[].fields[].generate",
+                    )
+                    .map_err(CompileFailure::from_one)?,
+            );
+            constraints.insert(
+                id.clone(),
+                ConstraintSource::Unique {
+                    id: Some(id),
+                    fields: constraint_fields,
+                    when: None,
+                },
+            );
         }
         for field in &source.fields {
             if field.pattern.is_some() {
@@ -8347,7 +8606,31 @@ fn record_definition_revision(
     source: &EntitySource,
     constraints: &BTreeMap<String, ConstraintSource>,
 ) -> String {
-    let fields=source.fields.iter().map(|field|(&field.id,serde_json::json!({"apiName":field.api_name,"type":field.field_type,"required":field.required,"pattern":field.pattern,"classification":field.classification,"encrypted":field.encrypted,"relationship":field.relationship}))).collect::<BTreeMap<_,_>>();
+    let fields = source
+        .fields
+        .iter()
+        .map(|field| {
+            let mut definition = serde_json::json!({
+                "apiName": field.api_name,
+                "type": field.field_type,
+                "required": field.required || field.generate.is_some(),
+                "pattern": field.pattern,
+                "classification": field.classification,
+                "encrypted": field.encrypted,
+                "relationship": field.relationship,
+            });
+            if let Some(generate) = &field.generate {
+                definition
+                    .as_object_mut()
+                    .expect("field definition is an object")
+                    .insert(
+                        "generate".to_owned(),
+                        serde_json::to_value(generate).expect("generation source serializes"),
+                    );
+            }
+            (&field.id, definition)
+        })
+        .collect::<BTreeMap<_, _>>();
     let payload = serde_json::json!({"id":source.id,"apiName":source.api_name.clone().unwrap_or_else(||type_api_name(&source.id)),"fields":fields,"mutationMode":source.mutation_mode,"mutationPolicy":source.mutation_policy,"constraints":constraints});
     let digest = Sha256::digest(
         registry_platform_canonical_json::canonicalize_json(&payload)

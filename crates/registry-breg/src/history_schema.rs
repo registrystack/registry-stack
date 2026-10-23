@@ -811,6 +811,7 @@ mod tests {
                         valid_time_role: field.valid_time_role,
                         physical_name: field.physical_name.clone(),
                         encryption: None,
+                        generate: None,
                     },
                 )
             })
@@ -916,6 +917,7 @@ mod tests {
                 valid_time_role: None,
                 physical_name: "f_note".to_owned(),
                 encryption: None,
+                generate: None,
             },
         );
         entity.stored_fields.push(note);
@@ -1014,6 +1016,7 @@ mod tests {
                 valid_time_role: None,
                 physical_name: "f_note".to_owned(),
                 encryption: None,
+                generate: None,
             },
         );
         active.stored_fields.push(extra);
@@ -1135,6 +1138,7 @@ mod tests {
                 valid_time_role: None,
                 physical_name: "f_status".to_owned(),
                 encryption: None,
+                generate: None,
             },
         );
         entity.stored_fields.push(status);
@@ -1157,6 +1161,7 @@ mod tests {
                 valid_time_role: None,
                 physical_name: "f_note".to_owned(),
                 encryption: None,
+                generate: None,
             },
         );
         entity.stored_fields.push(note);

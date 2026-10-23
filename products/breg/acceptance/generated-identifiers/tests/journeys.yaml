@@ -1,0 +1,88 @@
+apiVersion: id.registrystack.org/formats/breg/journeys/v1
+kind: BRegJourneys
+journeys:
+  - id: generated-application-numbers
+    steps:
+      - id: create-zone-a-first
+        recordType: application
+        accessProfile: application-clerk
+        claims:
+          principal: synthetic-clerk-a
+          scopes: [registry:applications:write]
+          purpose: application-administration
+          directClaims: {jurisdiction: zone-a}
+        request:
+          type: create
+          data: {jurisdiction: zone-a, applicant: First applicant}
+        expect:
+          outcome: success
+          status: 201
+          fields: {jurisdiction: zone-a, applicant: First applicant, number: APP-0001}
+        capture: first-application
+      - id: create-zone-a-second
+        recordType: application
+        accessProfile: application-clerk
+        claims:
+          principal: synthetic-clerk-a
+          scopes: [registry:applications:write]
+          purpose: application-administration
+          directClaims: {jurisdiction: zone-a}
+        request:
+          type: create
+          data: {jurisdiction: zone-a, applicant: Second applicant}
+        expect:
+          outcome: success
+          status: 201
+          fields: {jurisdiction: zone-a, applicant: Second applicant, number: APP-0002}
+      - id: create-zone-b
+        recordType: application
+        accessProfile: application-clerk
+        claims:
+          principal: synthetic-clerk-b
+          scopes: [registry:applications:write]
+          purpose: application-administration
+          directClaims: {jurisdiction: zone-b}
+        request:
+          type: create
+          data: {jurisdiction: zone-b, applicant: Third applicant}
+        expect:
+          outcome: success
+          status: 201
+          fields: {jurisdiction: zone-b, applicant: Third applicant, number: APP-0001}
+      - id: read-zone-a-first
+        recordType: application
+        accessProfile: application-clerk
+        claims:
+          principal: synthetic-clerk-a
+          scopes: [registry:applications:write]
+          purpose: application-administration
+          directClaims: {jurisdiction: zone-a}
+        request: {type: get, recordCapture: first-application}
+        expect:
+          outcome: success
+          status: 200
+          fields: {jurisdiction: zone-a, applicant: First applicant, number: APP-0001}
+      - id: start-proposal
+        action: register-application
+        accessProfile: application-clerk
+        claims:
+          principal: synthetic-clerk-a
+          scopes: [registry:applications:write]
+          purpose: application-administration
+          directClaims: {jurisdiction: zone-a}
+        request:
+          type: proposal
+          transition: start
+          input: {jurisdiction: zone-a, applicant: Proposed applicant}
+        expect: {outcome: success, status: 201, fields: {state: draft}}
+        capture: proposal-draft
+      - id: submit-proposal
+        action: register-application
+        accessProfile: application-clerk
+        claims:
+          principal: synthetic-clerk-a
+          scopes: [registry:applications:write]
+          purpose: application-administration
+          directClaims: {jurisdiction: zone-a}
+        request: {type: proposal, transition: submit, proposalCapture: proposal-draft, idempotencyKey: submit-application}
+        expect: {outcome: success, status: 200, fields: {state: submitted}}

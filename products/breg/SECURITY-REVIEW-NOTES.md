@@ -8,6 +8,35 @@ security-invariant matrix in `contracts/security-invariant-matrix.yaml` is the
 row-per-invariant baseline; this file is the narrative behind the decisions
 and the residuals the matrix rows do not state.
 
+## Generated business identifiers
+
+The public code is an immutable stored field, while the record UUID remains
+the engine identity. The threat is a caller choosing or reusing a code, moving
+it to a different uniqueness scope, or causing a Proposal retry or migration
+to issue a code twice. Compiler validation in `compiler.rs` requires a bounded
+string field and required stored scalar scope fields, excludes generated fields
+from caller-writable contracts, and rejects incompatible successor rules.
+Mutation admission in `mutation.rs`, `immediate_actions.rs`, and
+`proposal_prepare.rs` refuses caller or Action values for generated fields and
+later changes to either a generated field or its scope. Proposal Submit reserves
+codes once and freezes them in the reviewed effects; Apply and Retry use those
+effects without another allocation.
+
+`generated_identifiers.rs` allocates and reserves inside the owning PostgreSQL
+transaction. Sequence counters lock per scope; random codes use operating-system
+entropy and bounded collision retries. An append-only reservation ledger keeps
+issued values unavailable after tombstone or erasure. Migration-owned functions
+have a pinned search path; the runtime role has only EXECUTE, with no direct
+counter or reservation-table grants. `generated_ddl.rs` and
+`postgres/interlock.rs` seed reservations and sequence high-water marks after a
+reviewed backfill, then check the scoped unique constraint before activation.
+The focused PostgreSQL allocator, Action, Proposal, and migration tests cover
+role grants, rollback, scoped reuse, retained rows, replay, and recovery.
+
+Generated codes are institution-facing labels, not proof of authority. A
+holder still needs the ordinary Record or Action grant. A code space can fill;
+the bounded allocator returns a conflict instead of silently recycling values.
+
 ## Attachment storage and verification through the shared object store
 
 The S3 adapter and the attachment verifier transport moved from

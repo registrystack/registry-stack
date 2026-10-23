@@ -691,7 +691,7 @@ fn native_proposal_inputs_do_not_accept_persisted_record_encryption_members() {
                 && diagnostic.path == "project.actions[0].inputs[1]"
                 && diagnostic
                     .message
-                    .contains("without validTimeRole, pattern, encrypted, or lookup")),
+                    .contains("without validTimeRole, pattern, encrypted, lookup, or generate")),
         "{failure:?}"
     );
 }

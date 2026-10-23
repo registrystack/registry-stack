@@ -77,6 +77,8 @@ pub mod field_encryption_backfill;
 pub mod fixtures;
 pub mod generated_ddl;
 #[cfg(feature = "runtime")]
+pub(crate) mod generated_identifiers;
+#[cfg(feature = "runtime")]
 pub(crate) mod history_commit;
 #[cfg(feature = "runtime")]
 pub mod history_context;

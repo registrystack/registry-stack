@@ -238,6 +238,18 @@ const BREG_REFERENCES: &[N] = &[
     N::global("extendRecordTypes/*/recordType", "BReg record type"),
     N::global("recordTypes/*/fields/*/target", "BReg record type"),
     N::global("recordTypes/*/fields/*/vocabulary", "BReg vocabulary"),
+    N::scoped(
+        "recordTypes/*/fields/*/generate/scope/*",
+        "BReg field",
+        3,
+        "id",
+    ),
+    N::scoped(
+        "extendRecordTypes/*/fields/*/generate/scope/*",
+        "BReg field",
+        3,
+        "recordType",
+    ),
     N::global("extendRecordTypes/*/fields/*/target", "BReg record type"),
     N::global("extendRecordTypes/*/fields/*/vocabulary", "BReg vocabulary"),
     N {

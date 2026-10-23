@@ -1,0 +1,91 @@
+apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project:
+  id: generated-identifiers
+  canonicalBaseIri: https://identifiers.example.gov
+  version: 0.1.0
+  defaultLanguage: en
+  display: {label: Generated identifiers, description: Scoped sequential numbers and random public codes.}
+
+package:
+  sourceRevision: generated-identifiers-0.1.0
+
+datasets:
+  - id: applications
+    display: {label: Applications, description: Sample application records.}
+
+recordTypes:
+  - id: application
+    route: applications
+    primaryDataset: applications
+    mutationMode: mutable
+    display: {label: Application, description: An application with two public identifiers.}
+    fields:
+      - {id: jurisdiction, type: string, required: true, minimumLength: 1, maximumLength: 40, classification: internal}
+      - {id: applicant, type: string, required: true, minimumLength: 1, maximumLength: 120, classification: internal}
+      - id: number
+        type: string
+        required: true
+        minimumLength: 6
+        maximumLength: 32
+        classification: internal
+        generate: {type: sequence, prefix: "APP-", minimumDigits: 4, scope: [jurisdiction]}
+      - id: code
+        type: string
+        required: true
+        minimumLength: 12
+        maximumLength: 12
+        classification: internal
+        generate: {type: random, prefix: "REF-", length: 8}
+
+actions:
+  - id: register-application
+    display: {label: Register application, description: Create an application through a Proposal.}
+    execution:
+      mode: proposal
+      proposal:
+        review: {type: none}
+        retention: {mode: retain}
+    inputs:
+      - {id: jurisdiction, type: string, required: true, minimumLength: 1, maximumLength: 40, classification: internal}
+      - {id: applicant, type: string, required: true, minimumLength: 1, maximumLength: 120, classification: internal}
+    plan:
+      type: fixed
+      effects:
+        - id: application
+          target: {recordType: application}
+          operation: create
+          set:
+            jurisdiction: {fromInput: jurisdiction}
+            applicant: {fromInput: applicant}
+
+accessProfiles:
+  - id: application-clerk
+    default: true
+    principalClaim: registry_principal
+    requiredScopes: ["registry:applications:write"]
+    requiredPurposes: [application-administration]
+    permissions:
+      records:
+        - recordType: application
+          operations: [create, get, list, patch]
+          readableFields: [jurisdiction, applicant, number, code]
+          writableFields: [jurisdiction, applicant]
+          rowBoundaries:
+            - {field: jurisdiction, claim: jurisdiction, operator: equals}
+      actions:
+        - action: register-application
+          operations: [start]
+          targets:
+            - recordType: application
+              rowBoundaries:
+                - {field: jurisdiction, claim: jurisdiction, operator: equals}
+      proposals:
+        - action: register-application
+          operations: [get, list, edit, submit, cancel]
+          readableInputs: [jurisdiction, applicant]
+          ownership: caller
+          targets:
+            - recordType: application
+              rowBoundaries:
+                - {field: jurisdiction, claim: jurisdiction, operator: equals}

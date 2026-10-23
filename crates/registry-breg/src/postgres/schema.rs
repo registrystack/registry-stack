@@ -57,6 +57,11 @@ pub async fn install_compiled_schema(
     install_mutation_schema(migration, runtime_role)
         .await
         .map_err(|_| PostgresKernelError::Connection)?;
+    if crate::generated_identifiers::registry_uses_generated_identifiers(registry) {
+        crate::generated_identifiers::install(migration, runtime_role)
+            .await
+            .map_err(|_| PostgresKernelError::Connection)?;
+    }
     install_history_schema_store(migration, runtime_role)
         .await
         .map_err(|_| PostgresKernelError::Connection)?;

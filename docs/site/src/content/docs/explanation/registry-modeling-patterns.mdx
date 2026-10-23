@@ -74,13 +74,34 @@ Keep a scheme identifier, such as a business registration number, separate from 
 record ID. The issuing scheme decides what the number means and whether it can be reassigned. Use
 a `string` for values such as `0017`, since a number type loses the leading zeroes.
 
+For a number that Base Registry Engine (BReg) issues, put `generate` on a stored `string` field.
+Choose `type: sequence` with `minimumDigits` for a padded number, or `type: random` with `length`
+for a code. Both accept a literal `prefix`. For example, `generate: {type: sequence, prefix:
+"APP-", minimumDigits: 4, scope: [jurisdiction]}` issues `APP-0001` separately within each
+jurisdiction. Leave out `scope` for one namespace across the Record type. BReg adds the database
+uniqueness constraint, and the caller omits the generated field from writes. The Record's UUID
+still identifies it in routes and references.
+
+A scope field must be supplied on create and cannot change after issuance. BReg reserves values
+transactionally and never reuses an issued value, so sequences can have gaps. Proposal Submit
+freezes the value for review; Apply and Retry use that frozen value. If you enable generation on a
+field that already exists, a reviewed migration must backfill any missing values before BReg seeds
+its allocation state and checks retained values for uniqueness. The repository's
+`products/breg/acceptance/generated-identifiers/registry.yaml` shows both strategies and a
+Proposal Action.
+
 Use a separate identifier Record type when one holder can have several identifiers, or assignments
 have their own issuer, validity, or replacement history. Derive uniqueness from the scheme's rules: two authorities may both issue `0017`, while a
 shared namespace may forbid the duplicate. A `unique` constraint can span several fields, such as
 issuer and number, and can apply only when a condition holds. Normalization is not proof that two
 records describe the same real-world object.
 
-{/* Evidence: crates/registry-breg/src/contract.rs, ConstraintSource::Unique, UniqueWhenPredicate. */}
+{/* Evidence: crates/registry-breg/src/contract.rs, FieldGenerationSource and ConstraintSource::Unique;
+    crates/registry-breg/src/compiler.rs, validate_generated_identifier() and generated constraint compilation;
+    crates/registry-breg/src/generated_identifiers.rs, reserve_for_create();
+    crates/registry-breg/src/package.rs, FieldGenerationChanged and additive_migration_plan();
+    crates/registry-breg/tests/postgres_proposal_generated_identifiers.rs;
+    products/breg/acceptance/generated-identifiers/registry.yaml. */}
 
 ## References between Record types
 

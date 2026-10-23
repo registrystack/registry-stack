@@ -472,6 +472,26 @@ impl ExpectedManagedCatalog {
                 Some((false, false)),
             );
         }
+        if crate::generated_identifiers::registry_uses_generated_identifiers(registry) {
+            for (table, privileges) in crate::generated_identifiers::GENERATED_IDENTIFIER_TABLES {
+                catalog.table(
+                    &format!("registry_internal.{table}"),
+                    privileges.iter().copied(),
+                    std::iter::empty::<&str>(),
+                    Some((false, false)),
+                );
+            }
+            catalog.function(
+                crate::generated_identifiers::GENERATED_IDENTIFIER_SEQUENCE_FUNCTION,
+                Some("EXECUTE"),
+                None,
+            );
+            catalog.function(
+                crate::generated_identifiers::GENERATED_IDENTIFIER_RESERVATION_FUNCTION,
+                Some("EXECUTE"),
+                None,
+            );
+        }
         for (table, privileges) in crate::review_store::REVIEW_TABLES {
             catalog.table(
                 &format!("registry_internal.{table}"),
@@ -1382,6 +1402,22 @@ async fn verify_closed_ambient_catalog(client: &impl GenericClient) -> Result<()
                            OR (n.nspname = 'registry_internal'
                                AND p.proname = 'withdraw_statistical_release'
                                AND pg_catalog.pg_get_function_identity_arguments(p.oid) = 'text, text, bigint, text'
+                               AND p.prorettype = 'boolean'::regtype
+                               AND NOT p.proretset AND p.prosecdef
+                               AND p.provolatile = 'v'
+                               AND p.prolang = (SELECT oid FROM pg_catalog.pg_language WHERE lanname = 'sql')
+                               AND p.proconfig = ARRAY['search_path=pg_catalog, registry_internal'])
+                           OR (n.nspname = 'registry_internal'
+                               AND p.proname = 'allocate_generated_identifier_sequence'
+                               AND pg_catalog.pg_get_function_identity_arguments(p.oid) = 'text, text, jsonb'
+                               AND p.prorettype = 'bigint'::regtype
+                               AND NOT p.proretset AND p.prosecdef
+                               AND p.provolatile = 'v'
+                               AND p.prolang = (SELECT oid FROM pg_catalog.pg_language WHERE lanname = 'sql')
+                               AND p.proconfig = ARRAY['search_path=pg_catalog, registry_internal'])
+                           OR (n.nspname = 'registry_internal'
+                               AND p.proname = 'reserve_generated_identifier'
+                               AND pg_catalog.pg_get_function_identity_arguments(p.oid) = 'text, text, jsonb, text'
                                AND p.prorettype = 'boolean'::regtype
                                AND NOT p.proretset AND p.prosecdef
                                AND p.provolatile = 'v'

@@ -484,6 +484,82 @@ mod tests {
     }
 
     #[test]
+    fn authoring_schemas_state_the_empty_generated_identifier_prefix_default() {
+        for file in [REGISTRY_PROJECT_SCHEMA_FILE, REGISTRY_MODULE_SCHEMA_FILE] {
+            let document: Value =
+                serde_json::from_str(&documents().expect("the authoring schemas generate")[file])
+                    .expect("the schema is JSON");
+            let variants = document["$defs"]["FieldGenerationSource"]["oneOf"]
+                .as_array()
+                .expect("generated identifier strategies are a union");
+            assert_eq!(variants.len(), 2, "{file}");
+            for variant in variants {
+                let strategy = variant["properties"]["type"]["const"]
+                    .as_str()
+                    .expect("a generated identifier strategy has a type");
+                assert_eq!(
+                    variant["properties"]["prefix"]["default"],
+                    Value::String(String::new()),
+                    "{file}: {strategy}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn authoring_schemas_state_the_generated_identifier_alphabet_default() {
+        for file in [REGISTRY_PROJECT_SCHEMA_FILE, REGISTRY_MODULE_SCHEMA_FILE] {
+            let document: Value =
+                serde_json::from_str(&documents().expect("the authoring schemas generate")[file])
+                    .expect("the schema is JSON");
+            let random = document["$defs"]["FieldGenerationSource"]["oneOf"]
+                .as_array()
+                .expect("generated identifier strategies are a union")
+                .iter()
+                .find(|variant| variant["properties"]["type"]["const"] == "random")
+                .expect("random generation is described");
+            assert_eq!(
+                random["properties"]["alphabet"]["default"],
+                Value::String(crate::contract::DEFAULT_GENERATED_IDENTIFIER_ALPHABET.to_owned()),
+                "{file}"
+            );
+        }
+    }
+
+    #[test]
+    fn authoring_schemas_state_generated_identifier_string_constraints() {
+        for file in [REGISTRY_PROJECT_SCHEMA_FILE, REGISTRY_MODULE_SCHEMA_FILE] {
+            let document: Value =
+                serde_json::from_str(&documents().expect("the authoring schemas generate")[file])
+                    .expect("the schema is JSON");
+            let variants = document["$defs"]["FieldGenerationSource"]["oneOf"]
+                .as_array()
+                .expect("generated identifier strategies are a union");
+            assert_eq!(variants.len(), 2, "{file}");
+            for variant in variants {
+                let prefix = &variant["properties"]["prefix"];
+                assert_eq!(prefix["maxLength"], 128, "{file}: prefix");
+                assert_eq!(prefix["pattern"], "^[!-~]*$", "{file}: prefix");
+            }
+
+            let alphabet = variants
+                .iter()
+                .find(|variant| variant["properties"]["type"]["const"] == "random")
+                .map(|variant| &variant["properties"]["alphabet"])
+                .expect("random generation describes its alphabet");
+            assert_eq!(alphabet["minLength"], 2, "{file}: alphabet");
+            assert_eq!(alphabet["maxLength"], 128, "{file}: alphabet");
+            assert_eq!(alphabet["pattern"], "^[!-~]+$", "{file}: alphabet");
+            assert!(
+                alphabet["description"]
+                    .as_str()
+                    .is_some_and(|description| description.contains("distinct")),
+                "{file}: alphabet distinctness"
+            );
+        }
+    }
+
+    #[test]
     fn registry_project_schema_states_its_envelope_values() {
         let project: Value = serde_json::from_str(&schema_document()).expect("the schema is JSON");
         assert_eq!(

@@ -738,7 +738,12 @@ pub(crate) fn decode_slot_mutations(
             mutations.push(CompiledPlanMutation::Clear { field });
         }
     }
-    if mutations.is_empty() {
+    // The compiler emits an empty create ceiling only when the target has a
+    // server-generated field and no authored field is required from the handler.
+    let generated_only_create = operation == Operation::Create
+        && write.fields.is_empty()
+        && write.required_fields.is_empty();
+    if mutations.is_empty() && !generated_only_create {
         return Err(WriteMutationDiagnostic::new(
             PlanError::Result,
             "Return at least one set or clear mutation for the slot.",

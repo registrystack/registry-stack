@@ -1219,13 +1219,41 @@ impl MutationTransaction {
                                 &values,
                             )
                             .await?;
-                        let mut prepared = proposal_prepare::prepare(
+                        // The exact-command replay lookup ran before plan evaluation.
+                        // Reserve only for this fresh Submit, then include every
+                        // generated value in the frozen effects and digest. Apply
+                        // and Retry consume that frozen submission without calling
+                        // the allocator again.
+                        let mut create_fields = proposal_prepare::materialize_create_fields(
+                            registry, &values, &resolved,
+                        )?;
+                        for effect in resolved
+                            .effects
+                            .iter()
+                            .filter(|effect| effect.operation == Operation::Create)
+                        {
+                            let record_id = *resolved
+                                .effect_records
+                                .get(&effect.id)
+                                .ok_or(MutationError::InvalidRequest)?;
+                            let fields = create_fields
+                                .get_mut(&(effect.target.entity_id.clone(), record_id))
+                                .ok_or(MutationError::InvalidRequest)?;
+                            let entity = registry
+                                .entities()
+                                .get(&effect.target.entity_id)
+                                .ok_or(MutationError::InvalidRequest)?;
+                            crate::generated_identifiers::reserve_for_create(tx, entity, fields)
+                                .await?;
+                        }
+                        let mut prepared = proposal_prepare::prepare_with_reserved_create_fields(
                             registry,
                             action,
                             &values,
                             previous,
                             &self.expected.activation_id,
                             &resolved,
+                            create_fields,
                             bases,
                             guards,
                         )?;
