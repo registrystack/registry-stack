@@ -109,8 +109,7 @@ fn generated_identifiers_compile_storage_authority_and_scoped_uniqueness() {
     assert!(random.scope.is_empty());
     assert!(matches!(
         &random.strategy,
-        CompiledGeneratedIdentifierStrategy::Random { length: 8, alphabet }
-            if alphabet == "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"
+        CompiledGeneratedIdentifierStrategy::Random { length: 8 }
     ));
     assert!(entity.fields["public-token"].required);
 
@@ -182,18 +181,6 @@ fn generated_identifier_semantics_are_strictly_validated() {
             json!({
                 "id": "optional-scope", "type": "string", "maximumLength": 8,
                 "classification": "internal"
-            }),
-        ),
-        (
-            "breg.field.generate-alphabet-invalid",
-            json!({
-                "id": "code", "type": "string", "maximumLength": 32,
-                "classification": "internal",
-                "generate": {"type": "random", "length": 8, "alphabet": "AABC"}
-            }),
-            json!({
-                "id": "scope", "type": "string", "maximumLength": 8,
-                "required": true, "classification": "internal"
             }),
         ),
         (
@@ -285,6 +272,26 @@ fn generated_identifier_reader_refuses_unknown_and_duplicate_members() {
         .diagnostics()
         .iter()
         .any(|diagnostic| diagnostic.code == "config.duplicate-item"));
+}
+
+#[test]
+fn random_generation_takes_no_alphabet_or_scope() {
+    for (member, value) in [
+        ("alphabet", json!("ABCDEFGH")),
+        ("scope", json!(["jurisdiction"])),
+    ] {
+        let mut project = project_value();
+        project["recordTypes"][0]["fields"][2]["generate"][member] = value;
+        let failure = compile(&project).expect_err(member);
+        assert!(
+            failure
+                .diagnostics()
+                .iter()
+                .any(|diagnostic| diagnostic.code == "config.unknown-key"),
+            "{member}: {:?}",
+            failure.diagnostics()
+        );
+    }
 }
 
 #[test]

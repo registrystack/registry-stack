@@ -2045,11 +2045,10 @@ pub const MAX_FIELD_LOOKUP_NORMALIZATION_STEPS: usize = 8;
 
 /// Maximum authored characters in a generated identifier prefix or payload.
 pub const MAX_GENERATED_IDENTIFIER_COMPONENT_LENGTH: u32 = 128;
-/// Maximum stored fields that may scope one generated identifier sequence or
-/// random namespace.
+/// Maximum stored fields that may scope one generated identifier sequence.
 pub const MAX_GENERATED_IDENTIFIER_SCOPE_FIELDS: usize = 8;
-/// Default random alphabet avoids visually ambiguous characters while
-/// retaining five bits of entropy per generated character.
+/// The alphabet of every random identifier. It avoids visually ambiguous
+/// characters while retaining five bits of entropy per generated character.
 pub const DEFAULT_GENERATED_IDENTIFIER_ALPHABET: &str = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
 
 /// A normalization step applied to the canonical string form of an encrypted
@@ -2082,8 +2081,9 @@ pub struct FieldLookupSource {
 
 /// Server-side generation requested for a persisted business identifier.
 ///
-/// The canonical record UUID remains independent. `scope` names required,
-/// immutable stored fields whose values partition the generated namespace.
+/// The canonical record UUID remains independent. On a sequence, `scope`
+/// names required, immutable stored fields whose values partition the
+/// numbering. A random code has one namespace per field.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(
@@ -2139,23 +2139,6 @@ pub enum FieldGenerationSource {
             schemars(with = "BoundedU32<1, MAX_GENERATED_IDENTIFIER_COMPONENT_LENGTH>")
         )]
         length: u32,
-        /// Two to 128 distinct printable ASCII characters with no whitespace.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[cfg_attr(
-            feature = "schema",
-            schemars(
-                length(min = 2, max = MAX_GENERATED_IDENTIFIER_COMPONENT_LENGTH),
-                regex(pattern = "^[!-~]+$"),
-                extend("default" = DEFAULT_GENERATED_IDENTIFIER_ALPHABET)
-            )
-        )]
-        alphabet: Option<String>,
-        #[serde(default)]
-        #[cfg_attr(
-            feature = "schema",
-            schemars(length(max = MAX_GENERATED_IDENTIFIER_SCOPE_FIELDS))
-        )]
-        scope: UniqueSet<String>,
     },
 }
 registry_platform_yaml::tagged_union!(FieldGenerationSource);
@@ -2168,9 +2151,11 @@ impl FieldGenerationSource {
         }
     }
 
-    pub fn scope(&self) -> &UniqueSet<String> {
+    /// The fields that partition a sequence; a random code has none.
+    pub fn scope(&self) -> Option<&UniqueSet<String>> {
         match self {
-            Self::Sequence { scope, .. } | Self::Random { scope, .. } => scope,
+            Self::Sequence { scope, .. } => Some(scope),
+            Self::Random { .. } => None,
         }
     }
 }

@@ -2459,7 +2459,7 @@
       "type": "string"
     },
     "FieldGenerationSource": {
-      "description": "Server-side generation requested for a persisted business identifier.\n\nThe canonical record UUID remains independent. `scope` names required,\nimmutable stored fields whose values partition the generated namespace.",
+      "description": "Server-side generation requested for a persisted business identifier.\n\nThe canonical record UUID remains independent. On a sequence, `scope`\nnames required, immutable stored fields whose values partition the\nnumbering. A random code has one namespace per field.",
       "oneOf": [
         {
           "additionalProperties": false,
@@ -2499,14 +2499,6 @@
         {
           "additionalProperties": false,
           "properties": {
-            "alphabet": {
-              "default": "23456789ABCDEFGHJKLMNPQRSTUVWXYZ",
-              "description": "Two to 128 distinct printable ASCII characters with no whitespace.",
-              "maxLength": 128,
-              "minLength": 2,
-              "pattern": "^[!-~]+$",
-              "type": "string"
-            },
             "length": {
               "format": "uint32",
               "maximum": 128,
@@ -2518,15 +2510,6 @@
               "maxLength": 128,
               "pattern": "^[!-~]*$",
               "type": "string"
-            },
-            "scope": {
-              "default": [],
-              "items": {
-                "type": "string"
-              },
-              "maxItems": 8,
-              "type": "array",
-              "uniqueItems": true
             },
             "type": {
               "const": "random",

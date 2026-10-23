@@ -78,7 +78,8 @@ For a number that Base Registry Engine (BReg) issues, put `generate` on a stored
 Choose `type: sequence` with `minimumDigits` for a padded number, or `type: random` with `length`
 for a code. Both accept a literal `prefix`. For example, `generate: {type: sequence, prefix:
 "APP-", minimumDigits: 4, scope: [jurisdiction]}` issues `APP-0001` separately within each
-jurisdiction. Leave out `scope` for one namespace across the Record type. BReg adds the database
+jurisdiction. Only a sequence takes `scope`; leave it out for one namespace across the Record
+type. A random code uses a fixed alphabet without easily misread characters. BReg adds the database
 uniqueness constraint, and the caller omits the generated field from writes. The Record's UUID
 still identifies it in routes and references.
 

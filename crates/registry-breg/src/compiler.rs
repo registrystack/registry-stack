@@ -21,12 +21,12 @@ use crate::contract::{
     ManifestProjectionTextSource, ModuleAssetSource, MutationMode, Operation, PresentationSource,
     ReadPathPermissionSource, RegistryModule, RegistryProject, SpatialBboxPermissionSource,
     SpatialQueryPermissionSource, UniqueWhenPredicate, ValidTimeRole, DECIMAL_BOUNDS_REQUIREMENTS,
-    DEFAULT_GENERATED_IDENTIFIER_ALPHABET, MAX_ACCESS_LOG_EXEMPTIONS,
-    MAX_ACCESS_LOG_EXEMPTION_REASON_BYTES, MAX_ACCESS_LOG_RETENTION_DAYS,
-    MAX_ACCESS_LOG_SUBJECT_CHARACTERS, MAX_ACCESS_LOG_TRUSTED_INTERMEDIARIES,
-    MAX_ENCRYPTED_FIELD_PLAINTEXT_BYTES, MAX_ENCRYPTED_FIELD_STRING_CHARACTERS,
-    MAX_FIELD_LOOKUP_NORMALIZATION_STEPS, MAX_GENERATED_IDENTIFIER_COMPONENT_LENGTH,
-    MAX_GENERATED_IDENTIFIER_SCOPE_FIELDS, MAX_STRUCTURED_VALUE_BYTES,
+    MAX_ACCESS_LOG_EXEMPTIONS, MAX_ACCESS_LOG_EXEMPTION_REASON_BYTES,
+    MAX_ACCESS_LOG_RETENTION_DAYS, MAX_ACCESS_LOG_SUBJECT_CHARACTERS,
+    MAX_ACCESS_LOG_TRUSTED_INTERMEDIARIES, MAX_ENCRYPTED_FIELD_PLAINTEXT_BYTES,
+    MAX_ENCRYPTED_FIELD_STRING_CHARACTERS, MAX_FIELD_LOOKUP_NORMALIZATION_STEPS,
+    MAX_GENERATED_IDENTIFIER_COMPONENT_LENGTH, MAX_GENERATED_IDENTIFIER_SCOPE_FIELDS,
+    MAX_STRUCTURED_VALUE_BYTES,
 };
 use crate::derived_sql::{derived_sql_dependencies, validate_derived_sql};
 use crate::diagnostics::{CompileFailure, Diagnostic};
@@ -4066,26 +4066,7 @@ fn validate_generated_identifier(
                 .saturating_add((*minimum_digits as usize).max(19));
             (minimum, maximum)
         }
-        FieldGenerationSource::Random {
-            length, alphabet, ..
-        } => {
-            let alphabet = alphabet
-                .as_deref()
-                .unwrap_or(DEFAULT_GENERATED_IDENTIFIER_ALPHABET);
-            let mut characters = BTreeSet::new();
-            if !(2..=MAX_GENERATED_IDENTIFIER_COMPONENT_LENGTH as usize).contains(&alphabet.len())
-                || alphabet
-                    .bytes()
-                    .any(|byte| !(0x21..=0x7e).contains(&byte) || !characters.insert(byte))
-            {
-                errors.push(Diagnostic::error(
-                    "breg.field.generate-alphabet-invalid",
-                    format!("{path}.alphabet"),
-                    &format!(
-                        "a random identifier alphabet must contain 2 to {MAX_GENERATED_IDENTIFIER_COMPONENT_LENGTH} distinct printable ASCII characters and no whitespace"
-                    ),
-                ));
-            }
+        FieldGenerationSource::Random { length, .. } => {
             let exact = prefix.len().saturating_add(*length as usize);
             (exact, exact)
         }
@@ -4099,7 +4080,10 @@ fn validate_generated_identifier(
         ));
     }
 
-    if generate.scope().len() > MAX_GENERATED_IDENTIFIER_SCOPE_FIELDS {
+    if generate
+        .scope()
+        .is_some_and(|scope| scope.len() > MAX_GENERATED_IDENTIFIER_SCOPE_FIELDS)
+    {
         errors.push(Diagnostic::error(
             "breg.field.generate-scope-too-large",
             format!("{path}.scope"),
@@ -4115,7 +4099,7 @@ fn validate_generated_identifier(
     const MAX_INDEXED_BYTES: u64 = 1024;
     let fields = stored_field_map(entity);
     let mut maximum_indexed_bytes = u64::from(*max_length) * 4;
-    for scope_field_id in generate.scope() {
+    for scope_field_id in generate.scope().into_iter().flatten() {
         let scope_path = format!("{path}.scope[field={scope_field_id}]");
         let Some(scope_field) = fields.get(scope_field_id.as_str()) else {
             errors.push(Diagnostic::error(
@@ -6728,20 +6712,10 @@ fn compile_generated_identifier(source: &FieldGenerationSource) -> CompiledGener
             prefix.clone(),
             scope.iter().cloned().collect(),
         ),
-        FieldGenerationSource::Random {
-            prefix,
-            length,
-            alphabet,
-            scope,
-        } => (
-            CompiledGeneratedIdentifierStrategy::Random {
-                length: *length,
-                alphabet: alphabet
-                    .clone()
-                    .unwrap_or_else(|| DEFAULT_GENERATED_IDENTIFIER_ALPHABET.to_owned()),
-            },
+        FieldGenerationSource::Random { prefix, length } => (
+            CompiledGeneratedIdentifierStrategy::Random { length: *length },
             prefix.clone(),
-            scope.iter().cloned().collect(),
+            Vec::new(),
         ),
     };
     CompiledGeneratedIdentifier {
@@ -6984,7 +6958,8 @@ fn compile_entities(
                 .as_ref()
                 .expect("filtered generated field")
                 .scope()
-                .iter()
+                .into_iter()
+                .flatten()
                 .cloned()
                 .collect::<Vec<_>>();
             constraint_fields.push(field.id.clone());

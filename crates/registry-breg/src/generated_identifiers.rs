@@ -10,6 +10,7 @@ use serde_json::{Map, Value};
 use tokio_postgres::types::ToSql;
 use tokio_postgres::{GenericClient, Transaction};
 
+use crate::contract::DEFAULT_GENERATED_IDENTIFIER_ALPHABET;
 use crate::model::{
     CompiledEntity, CompiledGeneratedIdentifier, CompiledGeneratedIdentifierStrategy,
     CompiledRegistry,
@@ -201,7 +202,7 @@ pub(crate) async fn reserve_for_create(
                 )
                 .await?
             }
-            CompiledGeneratedIdentifierStrategy::Random { length, alphabet } => {
+            CompiledGeneratedIdentifierStrategy::Random { length } => {
                 reserve_random(
                     transaction,
                     &entity.id,
@@ -209,7 +210,6 @@ pub(crate) async fn reserve_for_create(
                     &scope_values,
                     &generation.prefix,
                     *length,
-                    alphabet,
                 )
                 .await?
             }
@@ -324,18 +324,13 @@ async fn reserve_random(
     scope_values: &Value,
     prefix: &str,
     length: u32,
-    alphabet: &str,
 ) -> Result<String, GeneratedIdentifierError> {
-    let alphabet = alphabet.as_bytes();
-    if alphabet.len() < 2 || alphabet.len() > 128 || !alphabet.is_ascii() {
-        return Err(GeneratedIdentifierError::InvalidInput);
-    }
     let length = usize::try_from(length).map_err(|_| GeneratedIdentifierError::InvalidInput)?;
     if length == 0 {
         return Err(GeneratedIdentifierError::InvalidInput);
     }
     for _ in 0..MAX_ALLOCATION_ATTEMPTS {
-        let suffix = random_suffix(length, alphabet)?;
+        let suffix = random_suffix(length, DEFAULT_GENERATED_IDENTIFIER_ALPHABET.as_bytes())?;
         let candidate = format!("{prefix}{suffix}");
         if reserve(transaction, entity_id, field_id, scope_values, &candidate).await? {
             return Ok(candidate);
@@ -386,7 +381,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn random_suffix_uses_only_the_declared_alphabet() {
+    fn random_suffix_uses_only_the_given_alphabet() {
         let suffix = random_suffix(512, b"ABC").expect("the test host supplies entropy");
         assert_eq!(suffix.len(), 512);
         assert!(suffix.bytes().all(|byte| b"ABC".contains(&byte)));

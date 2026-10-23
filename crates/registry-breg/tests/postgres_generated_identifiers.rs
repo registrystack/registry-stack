@@ -45,7 +45,7 @@ fn registry_with_limits(
               {"id":"daily-id","type":"string","minimumLength":1,"maximumLength":32,"required":true,"classification":"internal",
                "generate":{"type":"sequence","prefix":"D-","minimumDigits":4,"scope":["issued-at"]}},
               {"id":"receipt-code","type":"string","minimumLength":1,"maximumLength":32,"required":true,"classification":"internal",
-               "generate":{"type":"random","prefix":"R-","length":12,"alphabet":"23456789ABCDEFGHJKLMNPQRSTUVWXYZ"}}
+               "generate":{"type":"random","prefix":"R-","length":12}}
             ]
           }],
           "accessProfiles":[{

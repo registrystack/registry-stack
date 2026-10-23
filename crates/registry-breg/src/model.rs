@@ -71,6 +71,7 @@ pub struct CompiledBlindIndex {
 pub struct CompiledGeneratedIdentifier {
     pub strategy: CompiledGeneratedIdentifierStrategy,
     pub prefix: String,
+    /// The fields that partition a sequence; always empty for a random code.
     pub scope: Vec<String>,
 }
 
@@ -82,7 +83,7 @@ pub struct CompiledGeneratedIdentifier {
 )]
 pub enum CompiledGeneratedIdentifierStrategy {
     Sequence { minimum_digits: u32 },
-    Random { length: u32, alphabet: String },
+    Random { length: u32 },
 }
 
 /// Binary slot policy, separate from scalar fields and physical SQL columns.

@@ -950,8 +950,7 @@ fn generated_create_fields_count_toward_the_proposal_snapshot_ceiling() {
             "classification": "internal",
             "generate": {
                 "type": "random",
-                "length": 128,
-                "alphabet": "23456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+                "length": 128
             }
         }));
     }
