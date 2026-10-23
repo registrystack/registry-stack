@@ -126,6 +126,7 @@ entries:
       - {path: crates/registry-documents/tests/postgres_documents.rs, name: an_idempotency_key_replays_its_reservation_and_refuses_another_body}
       - {path: crates/registry-documents/tests/postgres_documents.rs, name: an_idempotent_grant_retry_after_revocation_releases_nothing}
       - {path: crates/registry-documents/src/http.rs, name: the_idempotency_key_is_present_bounded_and_graphical}
+      - {path: crates/registry-documents/src/service.rs, name: an_idempotency_key_is_scoped_to_the_principal_and_the_operation}
   - id: DOCUMENTS-SEC-24
     tests:
       - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_grant_releases_one_exact_version_to_its_named_recipient_until_expiry_or_revocation}
