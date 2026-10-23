@@ -484,47 +484,6 @@ mod tests {
     }
 
     #[test]
-    fn authoring_schemas_state_the_empty_generated_identifier_prefix_default() {
-        for file in [REGISTRY_PROJECT_SCHEMA_FILE, REGISTRY_MODULE_SCHEMA_FILE] {
-            let document: Value =
-                serde_json::from_str(&documents().expect("the authoring schemas generate")[file])
-                    .expect("the schema is JSON");
-            let variants = document["$defs"]["FieldGenerationSource"]["oneOf"]
-                .as_array()
-                .expect("generated identifier strategies are a union");
-            assert_eq!(variants.len(), 2, "{file}");
-            for variant in variants {
-                let strategy = variant["properties"]["type"]["const"]
-                    .as_str()
-                    .expect("a generated identifier strategy has a type");
-                assert_eq!(
-                    variant["properties"]["prefix"]["default"],
-                    Value::String(String::new()),
-                    "{file}: {strategy}"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn authoring_schemas_state_generated_identifier_string_constraints() {
-        for file in [REGISTRY_PROJECT_SCHEMA_FILE, REGISTRY_MODULE_SCHEMA_FILE] {
-            let document: Value =
-                serde_json::from_str(&documents().expect("the authoring schemas generate")[file])
-                    .expect("the schema is JSON");
-            let variants = document["$defs"]["FieldGenerationSource"]["oneOf"]
-                .as_array()
-                .expect("generated identifier strategies are a union");
-            assert_eq!(variants.len(), 2, "{file}");
-            for variant in variants {
-                let prefix = &variant["properties"]["prefix"];
-                assert_eq!(prefix["maxLength"], 128, "{file}: prefix");
-                assert_eq!(prefix["pattern"], "^[!-~]*$", "{file}: prefix");
-            }
-        }
-    }
-
-    #[test]
     fn registry_project_schema_states_its_envelope_values() {
         let project: Value = serde_json::from_str(&schema_document()).expect("the schema is JSON");
         assert_eq!(

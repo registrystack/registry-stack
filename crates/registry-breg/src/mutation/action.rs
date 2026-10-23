@@ -2487,13 +2487,7 @@ fn action_target_group_context(
             .entities()
             .get(&effect.target.entity_id)
             .ok_or(MutationError::InvalidRequest)?;
-        fields.extend(
-            entity
-                .fields
-                .values()
-                .filter(|field| field.generate.is_some())
-                .map(|field| field.id.clone()),
-        );
+        fields.extend(entity.generated_fields().map(|field| field.id.clone()));
     }
     ImmediateActionTargetContext::for_effect(
         registry,

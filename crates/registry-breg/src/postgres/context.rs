@@ -1104,13 +1104,7 @@ fn validate_action_effect_binding(
             .entities()
             .get(&binding.target_entity_id)
             .ok_or_else(invalid_context)?;
-        expected_fields.extend(
-            entity
-                .fields
-                .values()
-                .filter(|field| field.generate.is_some())
-                .map(|field| field.id.clone()),
-        );
+        expected_fields.extend(entity.generated_fields().map(|field| field.id.clone()));
     }
     if expected_fields != binding.fields {
         return Err(invalid_context());

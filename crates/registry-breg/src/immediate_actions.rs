@@ -577,10 +577,7 @@ fn compile_handler(
         let mut reference_sources = BTreeMap::new();
         let mut mutations = Vec::new();
         let generates_create_field = slot.operation == Operation::Create
-            && target_entity
-                .fields
-                .values()
-                .any(|field| field.generate.is_some());
+            && target_entity.generated_fields().next().is_some();
         if slot.fields.is_empty() && !generates_create_field {
             errors.push(Diagnostic::error(
                 "breg.action.handler-fields-empty",
@@ -614,7 +611,7 @@ fn compile_handler(
                 continue;
             }
             if slot.operation == Operation::Patch
-                && is_generated_identifier_scope_field(target_entity, field_id)
+                && target_entity.is_generated_identifier_immutable(field_id)
             {
                 errors.push(Diagnostic::error(
                     "breg.action.handler-field-generated-scope",
@@ -1286,10 +1283,7 @@ fn compile_effects(
             continue;
         };
         let generates_create_field = effect.operation == Operation::Create
-            && target_entity
-                .fields
-                .values()
-                .any(|field| field.generate.is_some());
+            && target_entity.generated_fields().next().is_some();
         if effect.set.is_empty() && effect.clear.is_empty() && !generates_create_field {
             errors.push(Diagnostic::error(
                 "breg.action.effect-empty",
@@ -1317,7 +1311,7 @@ fn compile_effects(
                 continue;
             }
             if effect.operation == Operation::Patch
-                && is_generated_identifier_scope_field(target_entity, field)
+                && target_entity.is_generated_identifier_immutable(field)
             {
                 errors.push(Diagnostic::error(
                     "breg.action.effect-field-generated-scope",
@@ -1373,7 +1367,7 @@ fn compile_effects(
                 continue;
             }
             if effect.operation == Operation::Patch
-                && is_generated_identifier_scope_field(target_entity, field)
+                && target_entity.is_generated_identifier_immutable(field)
             {
                 errors.push(Diagnostic::error(
                     "breg.action.effect-field-generated-scope",
@@ -1667,15 +1661,6 @@ fn compile_value(
     }
 }
 
-fn is_generated_identifier_scope_field(entity: &CompiledEntity, field_id: &str) -> bool {
-    entity.fields.values().any(|field| {
-        field
-            .generate
-            .as_ref()
-            .is_some_and(|generate| generate.scope.iter().any(|scope| scope == field_id))
-    })
-}
-
 fn validate_required_create_fields(
     entities: &BTreeMap<String, CompiledEntity>,
     effects: &[CompiledPlanEffect],
@@ -1856,13 +1841,7 @@ fn validate_plan_bounds(
             let generated_fields = if effect.operation == Operation::Create {
                 entities
                     .get(&effect.target.entity_id)
-                    .map(|entity| {
-                        entity
-                            .fields
-                            .values()
-                            .filter(|field| field.generate.is_some())
-                            .count()
-                    })
+                    .map(|entity| entity.generated_fields().count())
                     .unwrap_or_default()
             } else {
                 0
@@ -1927,11 +1906,7 @@ fn maximum_snapshot_bytes(
                 .checked_add(after)?;
         }
         if effect.operation == Operation::Create {
-            for generated in target
-                .fields
-                .values()
-                .filter(|field| field.generate.is_some())
-            {
+            for generated in target.generated_fields() {
                 let max = maximum_field_json_bytes(&generated.field_type)?;
                 total = total
                     .checked_add(generated.id.len() as u64 + 8)?
@@ -2990,13 +2965,9 @@ pub(crate) fn finalize_action_revisions(
         for ((entity_id, operation), target) in &mut targets {
             if *operation == Operation::Create {
                 if let Some(entity) = entities.get(entity_id) {
-                    target.fields.extend(
-                        entity
-                            .fields
-                            .values()
-                            .filter(|field| field.generate.is_some())
-                            .map(|field| field.id.clone()),
-                    );
+                    target
+                        .fields
+                        .extend(entity.generated_fields().map(|field| field.id.clone()));
                 }
             }
         }

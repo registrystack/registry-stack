@@ -300,13 +300,7 @@ fn add_application_policies(
             }
         }
         if operation == Operation::Create && targets_operation {
-            fields.extend(
-                entity
-                    .fields
-                    .values()
-                    .filter(|field| field.generate.is_some())
-                    .map(|field| field.id.clone()),
-            );
+            fields.extend(entity.generated_fields().map(|field| field.id.clone()));
         }
         if fields.is_empty() {
             continue;

@@ -53,7 +53,7 @@ pub(crate) fn registry_uses_generated_identifiers(registry: &CompiledRegistry) -
     registry
         .entities()
         .values()
-        .any(|entity| entity.fields.values().any(|field| field.generate.is_some()))
+        .any(|entity| entity.generated_fields().next().is_some())
 }
 
 /// Install the runtime-owned allocation state with the migration role.
@@ -175,9 +175,8 @@ pub(crate) async fn reserve_for_create(
     fields: &mut Map<String, Value>,
 ) -> Result<(), GeneratedIdentifierError> {
     if entity
-        .fields
-        .values()
-        .any(|field| field.generate.is_some() && fields.contains_key(&field.id))
+        .generated_fields()
+        .any(|field| fields.contains_key(&field.id))
     {
         return Err(GeneratedIdentifierError::InvalidInput);
     }
@@ -217,23 +216,6 @@ pub(crate) async fn reserve_for_create(
         fields.insert(field.id.clone(), Value::String(generated));
     }
     Ok(())
-}
-
-/// Generated values and every field that partitions their namespace are
-/// immutable after create. Proposal preparation, Action execution, and direct
-/// mutation admission share this predicate so work cannot freeze only to fail
-/// later at apply.
-pub(crate) fn is_immutable_field(entity: &CompiledEntity, field_id: &str) -> bool {
-    entity
-        .fields
-        .get(field_id)
-        .is_some_and(|field| field.generate.is_some())
-        || entity.fields.values().any(|field| {
-            field
-                .generate
-                .as_ref()
-                .is_some_and(|generation| generation.scope.iter().any(|scope| scope == field_id))
-        })
 }
 
 async fn canonical_scope_values(

@@ -84,7 +84,7 @@ pub(crate) fn resolve_targets(
                 field.encryption.is_some()
                     || field.generate.is_some()
                     || (effect.operation == Operation::Patch
-                        && crate::generated_identifiers::is_immutable_field(entity, &field.id))
+                        && entity.is_generated_identifier_immutable(&field.id))
             })
         }) {
             return Err(MutationError::InvalidRequest);
@@ -374,7 +374,7 @@ pub(crate) fn prepare_with_reserved_create_fields(
             if compiled.encryption.is_some()
                 || compiled.generate.is_some()
                 || (effect.operation == Operation::Patch
-                    && crate::generated_identifiers::is_immutable_field(entity, &compiled.id))
+                    && entity.is_generated_identifier_immutable(&compiled.id))
             {
                 return Err(MutationError::InvalidRequest);
             }
@@ -409,11 +409,7 @@ pub(crate) fn prepare_with_reserved_create_fields(
             let reserved = reserved_create_fields
                 .get(&key)
                 .ok_or(MutationError::InvalidRequest)?;
-            for generated in entity
-                .fields
-                .values()
-                .filter(|field| field.generate.is_some())
-            {
+            for generated in entity.generated_fields() {
                 let value = reserved
                     .get(&generated.id)
                     .cloned()

@@ -2566,7 +2566,7 @@ pub(super) async fn write_plan_row(
         || expected_revision.is_some()
             && fields
                 .keys()
-                .any(|field| crate::generated_identifiers::is_immutable_field(entity, field))
+                .any(|field| entity.is_generated_identifier_immutable(field))
     {
         return Err(MutationError::InvalidRequest);
     }
@@ -3029,7 +3029,7 @@ fn normalize_patch_operation(
     let normalized_path = |path: &str, write: bool| -> Result<String, MutationError> {
         let api_name = patch_field(path)?;
         let field_id = field_id_for_api_name(entity, &api_name)?;
-        if write && crate::generated_identifiers::is_immutable_field(entity, field_id) {
+        if write && entity.is_generated_identifier_immutable(field_id) {
             return Err(MutationError::InvalidRequest);
         }
         Ok(format!("/data/{}", encode_pointer_segment(field_id)))
