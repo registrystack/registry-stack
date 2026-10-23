@@ -42,11 +42,11 @@ Residual: the reservation ledger is append-only and no erasure path touches
 it, so each issued value and its sequence scope values stay in
 `registry_generated_identifier_reservations` after the Record is tombstoned or
 erased. That is the price of never reissuing a code. It is acceptable because
-the compiler limits scope fields to public or internal values that are not
-references, so the ledger holds a jurisdiction or category code beside an
-institution-issued number, never restricted data or a link to a person. Hashing
-the scope values would remove even that, and stays open if a register needs to
-scope by more sensitive data.
+the compiler limits generated fields and scope fields to public or internal
+values (scope fields also cannot be references), so the ledger holds a
+jurisdiction or category code beside an institution-issued number, never
+restricted data or a link to a person. Hashing the scope values would remove
+even that, and stays open if a register needs to scope by more sensitive data.
 
 ## Attachment storage and verification through the shared object store
 

@@ -358,6 +358,29 @@ fn sequence_scope_fields_cannot_hold_restricted_values_or_references() {
 }
 
 #[test]
+fn generated_fields_cannot_be_classified_above_internal() {
+    // The migration seed copies retained values into the reservation ledger,
+    // which keeps them after record erasure.
+    for (case, field) in [(0usize, "registration-code"), (1, "public-token")] {
+        let mut project = project_value();
+        project["recordTypes"][0]["fields"][case + 1]["classification"] = json!("restricted");
+        let failure = compile(&project).expect_err(field);
+        assert!(
+            failure
+                .diagnostics()
+                .iter()
+                .any(|diagnostic| diagnostic.code == "breg.field.generate-classification-sensitive"),
+            "{field}: {:?}",
+            failure.diagnostics()
+        );
+    }
+
+    let mut internal = project_value();
+    internal["recordTypes"][0]["fields"][1]["classification"] = json!("internal");
+    compile(&internal).expect("an internal generated field compiles");
+}
+
+#[test]
 fn generated_identifiers_cannot_be_caller_writable() {
     let mut project = project_value();
     project["accessProfiles"][0]["permissions"]["records"][0]["writableFields"] =
