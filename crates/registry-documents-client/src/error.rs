@@ -87,9 +87,8 @@ impl DocumentsClientError {
     ///
     /// A protocol failure counts as unknown conservatively, as an oversized
     /// answer does: the request may have been processed before the answer
-    /// went wrong. The client resends a keyed request after such an answer
-    /// only when it came with a 5xx status, and never after a 4xx status
-    /// line, even when the rest of that answer could not be read.
+    /// went wrong. The client itself never resends a request; recovering an
+    /// unknown outcome is the caller's decision.
     #[must_use]
     pub fn is_outcome_unknown(&self) -> bool {
         match self {
@@ -97,21 +96,6 @@ impl DocumentsClientError {
             Self::Transport { kind } => !matches!(kind, TransportKind::Connect),
             Self::Problem { status, .. } => *status >= 500,
             Self::Protocol { .. } => true,
-        }
-    }
-
-    /// Whether resending the identical keyed request under the same key may
-    /// settle an unknown outcome. An oversized or unparseable non-5xx answer
-    /// would be replayed unchanged, so it is not resent. A transport failure
-    /// carries no status, so the shared classifier, which sees the answer's
-    /// status line, still refuses to resend after a 4xx one.
-    pub(crate) fn resend_may_settle(&self) -> bool {
-        match self {
-            Self::Transport { kind } => {
-                matches!(kind, TransportKind::Timeout | TransportKind::Exchange)
-            }
-            Self::Problem { status, .. } | Self::Protocol { status, .. } => *status >= 500,
-            Self::Configuration { .. } | Self::InvalidRequest { .. } => false,
         }
     }
 }
@@ -168,29 +152,6 @@ mod tests {
         ];
         for error in &settled {
             assert!(!error.is_outcome_unknown(), "{error:?}");
-        }
-    }
-
-    #[test]
-    fn only_a_timeout_a_broken_exchange_or_a_5xx_is_resent() {
-        let resent = [
-            transport(TransportKind::Timeout),
-            transport(TransportKind::Exchange),
-            problem(503, ProblemCode::ServiceUnavailable),
-            protocol(500, DocumentsProtocolFailure::Status),
-        ];
-        for error in &resent {
-            assert!(error.resend_may_settle(), "{error:?}");
-        }
-        let kept = [
-            transport(TransportKind::Connect),
-            transport(TransportKind::ResponseTooLarge),
-            protocol(201, DocumentsProtocolFailure::Body),
-            problem(409, ProblemCode::IdempotencyKeyReused),
-            DocumentsClientError::invalid_request("fixture reason"),
-        ];
-        for error in &kept {
-            assert!(!error.resend_may_settle(), "{error:?}");
         }
     }
 }

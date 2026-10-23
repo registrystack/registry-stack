@@ -12,10 +12,9 @@ use registry_documents_core::{
 };
 use registry_platform_httpsec::{response_trace_id, ProblemDocument};
 use registry_platform_httputil::client::{
-    build_client, classify_keyed_attempt, read_failure_kind, retry_keyed_mutation,
-    send_failure_kind, BearerToken, KeyedMutationAttempt, OutboundOptions, RetryAfter,
-    ServiceBaseUrl, DEFAULT_CONNECT_TIMEOUT, DEFAULT_MUTATION_RETRIES, DEFAULT_REQUEST_TIMEOUT,
-    MAXIMUM_MUTATION_RETRIES, MAXIMUM_TRUSTED_ROOT_CERTIFICATE_BUNDLE_BYTES,
+    build_client, read_failure_kind, send_failure_kind, BearerToken, OutboundOptions,
+    ServiceBaseUrl, DEFAULT_CONNECT_TIMEOUT, DEFAULT_REQUEST_TIMEOUT,
+    MAXIMUM_TRUSTED_ROOT_CERTIFICATE_BUNDLE_BYTES,
 };
 use registry_platform_httputil::{
     read_bounded, url::append_path_segments, validate_response_headers, BoundedReadError,
@@ -54,7 +53,6 @@ pub struct DocumentsClientConfig {
     trusted_root_certificates: Option<Vec<u8>>,
     maximum_response_bytes: u64,
     maximum_download_bytes: u64,
-    maximum_mutation_retries: u8,
 }
 
 impl DocumentsClientConfig {
@@ -68,7 +66,6 @@ impl DocumentsClientConfig {
             trusted_root_certificates: None,
             maximum_response_bytes: DEFAULT_MAXIMUM_RESPONSE_BYTES,
             maximum_download_bytes: DEFAULT_MAXIMUM_DOWNLOAD_BYTES,
-            maximum_mutation_retries: DEFAULT_MUTATION_RETRIES,
         }
     }
 
@@ -113,15 +110,6 @@ impl DocumentsClientConfig {
         self
     }
 
-    /// How many times a reservation or a grant whose outcome is unknown is
-    /// resent under the same idempotency key: 2 by default and at most;
-    /// 0 disables the resend.
-    #[must_use]
-    pub fn with_maximum_mutation_retries(mut self, value: u8) -> Self {
-        self.maximum_mutation_retries = value;
-        self
-    }
-
     fn validate(&self) -> Result<ServiceBaseUrl, DocumentsClientError> {
         let base_url = ServiceBaseUrl::new(self.base_url.clone()).map_err(|_| {
             DocumentsClientError::configuration("the service base URL is not usable")
@@ -141,11 +129,6 @@ impl DocumentsClientConfig {
         {
             return Err(DocumentsClientError::configuration(
                 "the download byte bound must be between 1 byte and 64 MiB",
-            ));
-        }
-        if self.maximum_mutation_retries > MAXIMUM_MUTATION_RETRIES {
-            return Err(DocumentsClientError::configuration(
-                "the mutation retry count exceeds the accepted maximum",
             ));
         }
         if self
@@ -175,7 +158,6 @@ impl fmt::Debug for DocumentsClientConfig {
             )
             .field("maximum_response_bytes", &self.maximum_response_bytes)
             .field("maximum_download_bytes", &self.maximum_download_bytes)
-            .field("maximum_mutation_retries", &self.maximum_mutation_retries)
             .finish()
     }
 }
@@ -223,7 +205,6 @@ pub struct DocumentsClient {
     base_url: ServiceBaseUrl,
     maximum_response_bytes: u64,
     maximum_download_bytes: u64,
-    maximum_mutation_retries: u8,
 }
 
 impl fmt::Debug for DocumentsClient {
@@ -250,7 +231,6 @@ impl DocumentsClient {
             base_url,
             maximum_response_bytes: config.maximum_response_bytes,
             maximum_download_bytes: config.maximum_download_bytes,
-            maximum_mutation_retries: config.maximum_mutation_retries,
         })
     }
 
@@ -304,15 +284,13 @@ impl DocumentsClient {
     /// content to. The digest, length, and media type declared here are the
     /// ones the content must match.
     ///
-    /// The caller chooses the key; the client never invents one. When the
-    /// outcome is unknown, after a timeout or broken exchange or on a 5xx
-    /// answer, the client resends the identical request under the same key,
-    /// at most `DocumentsClientConfig::with_maximum_mutation_retries` times. An
-    /// error for which `DocumentsClientError::is_outcome_unknown` is true
-    /// may still have reserved the document: recover with the same key and
-    /// request, never a new key. A key that is empty, longer than 128 bytes,
-    /// or carries a byte outside visible ASCII is refused before a request
-    /// is sent.
+    /// The caller chooses the key; the client never invents one. Each call
+    /// is one exchange, and the client never resends it. An error for which
+    /// `DocumentsClientError::is_outcome_unknown` is true may still have
+    /// reserved the document: recover by sending the same request under the
+    /// same key, which the service replays, never under a new key. A key
+    /// that is empty, longer than 128 bytes, or carries a byte outside
+    /// visible ASCII is refused before a request is sent.
     pub async fn reserve_document(
         &self,
         token: &BearerToken,
@@ -328,7 +306,7 @@ impl DocumentsClient {
             .header(CONTENT_TYPE, JSON_MEDIA_TYPE)
             .header(IDEMPOTENCY_KEY_HEADER, idempotency_key)
             .body(body);
-        self.send_keyed_json(request, StatusCode::CREATED).await
+        self.json_answer(request, StatusCode::CREATED).await
     }
 
     /// One page of the documents the caller holds in custody or reserved,
@@ -471,9 +449,9 @@ impl DocumentsClient {
     /// subject and an actor kind; a caller of another kind with the same
     /// subject is not released anything. The service answers
     /// `201 Created` with the grant; a replay under the same key answers the
-    /// grant as it stands now. The key is checked and an unknown outcome is
-    /// resent exactly as `reserve_document` does; `document_id` is checked
-    /// as `document` checks it.
+    /// grant as it stands now. The key is checked, and an unknown outcome is
+    /// left to the caller to recover under the same key, exactly as for
+    /// `reserve_document`; `document_id` is checked as `document` checks it.
     pub async fn issue_grant(
         &self,
         token: &BearerToken,
@@ -497,7 +475,7 @@ impl DocumentsClient {
             .header(CONTENT_TYPE, JSON_MEDIA_TYPE)
             .header(IDEMPOTENCY_KEY_HEADER, idempotency_key)
             .body(body);
-        self.send_keyed_json(request, StatusCode::CREATED).await
+        self.json_answer(request, StatusCode::CREATED).await
     }
 
     /// One page of the grants issued on one document, oldest first.
@@ -669,36 +647,6 @@ impl DocumentsClient {
         self.json_response(response, expected).await
     }
 
-    /// Send one idempotency-keyed request, resending the identical request
-    /// under the same key while its outcome stays unknown, at most the
-    /// configured number of times.
-    async fn send_keyed_json<T: DeserializeOwned>(
-        &self,
-        request: reqwest::RequestBuilder,
-        expected: StatusCode,
-    ) -> Result<DocumentsComplete<T>, DocumentsClientError> {
-        let request = &request;
-        retry_keyed_mutation(self.maximum_mutation_retries, || async move {
-            let Some(attempt) = request.try_clone() else {
-                return KeyedMutationAttempt::Settled(Err(DocumentsClientError::invalid_request(
-                    "the request could not be prepared for sending",
-                )));
-            };
-            let response = match self.send(attempt).await {
-                Ok(response) => response,
-                Err(error) => return keyed_attempt(Err(error), None, RetryAfter::Absent),
-            };
-            let status = response.status();
-            let retry_after = RetryAfter::from_headers(response.headers());
-            keyed_attempt(
-                self.json_response(response, expected).await,
-                Some(status),
-                retry_after,
-            )
-        })
-        .await
-    }
-
     async fn json_response<T: DeserializeOwned>(
         &self,
         response: Response,
@@ -730,23 +678,6 @@ impl DocumentsClient {
         })?;
         Ok(DocumentsComplete { value, trace_id })
     }
-}
-
-/// Classify one attempt of an idempotency-keyed request for the same-key
-/// resend, with the shared rule. `status` and `retry_after` describe the
-/// answer, when one arrived.
-fn keyed_attempt<T>(
-    result: Result<T, DocumentsClientError>,
-    status: Option<StatusCode>,
-    retry_after: RetryAfter,
-) -> KeyedMutationAttempt<T, DocumentsClientError> {
-    classify_keyed_attempt(
-        result,
-        status,
-        retry_after,
-        DocumentsClientError::is_outcome_unknown,
-        DocumentsClientError::resend_may_settle,
-    )
 }
 
 /// Refuse, before any request, an idempotency key the service would refuse:
@@ -1004,8 +935,6 @@ mod tests {
             DocumentsClientConfig::new(url.clone()).with_maximum_download_bytes(0),
             DocumentsClientConfig::new(url.clone())
                 .with_maximum_download_bytes(MAXIMUM_DOWNLOAD_BYTES + 1),
-            DocumentsClientConfig::new(url.clone())
-                .with_maximum_mutation_retries(MAXIMUM_MUTATION_RETRIES + 1),
         ] {
             assert!(
                 matches!(
@@ -1014,12 +943,6 @@ mod tests {
                 ),
                 "{config:?}"
             );
-        }
-        for retries in 0..=MAXIMUM_MUTATION_RETRIES {
-            assert!(DocumentsClientConfig::new(url.clone())
-                .with_maximum_mutation_retries(retries)
-                .validate()
-                .is_ok());
         }
         assert!(DocumentsClientConfig::new(url.clone())
             .with_maximum_response_bytes(MAXIMUM_RESPONSE_BYTES)

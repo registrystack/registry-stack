@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! The bounded same-key resend of the two idempotency-keyed mutations,
-//! reserving a document and issuing a grant, and the routes that are never
-//! resent, against a stand-in that answers each request with the next
-//! scripted answer.
+//! Every call is one HTTP exchange: the client never resends a request, the
+//! two idempotency-keyed mutations, reserving a document and issuing a
+//! grant, included. A caller whose outcome is unknown recovers by sending
+//! the same request under the same key. Checked against a stand-in that
+//! answers each request with the next scripted answer.
 
 mod support;
 
@@ -53,39 +54,62 @@ fn unavailable() -> Answer {
     Answer::Problem(ProblemCode::ServiceUnavailable, None)
 }
 
-fn assert_identical_resends(observations: &[Captured]) {
-    let first = &observations[0];
-    assert_eq!(first.headers["idempotency-key"], IDEMPOTENCY_KEY);
-    for resend in &observations[1..] {
-        assert_eq!(resend.method, first.method);
-        assert_eq!(resend.uri, first.uri);
-        assert_eq!(resend.headers, first.headers);
-        assert_eq!(resend.body, first.body);
-    }
+fn assert_unavailable(error: &DocumentsClientError) {
+    assert!(
+        matches!(
+            error,
+            DocumentsClientError::Problem {
+                status: 503,
+                code: ProblemCode::ServiceUnavailable,
+                ..
+            }
+        ),
+        "{error:?}"
+    );
+    assert!(error.is_outcome_unknown(), "{error:?}");
 }
 
 #[tokio::test]
-async fn a_timed_out_reservation_is_resent_identically_under_the_same_key() {
+async fn a_timed_out_reservation_is_not_resent() {
     let (url, script, server) = serve(vec![
         Answer::Stall,
         Answer::json(StatusCode::CREATED, reservation_json().to_string()),
     ])
     .await;
-    let reserved = client(config(&url).with_attempt_timeout(Duration::from_millis(500)))
+    let error = client(config(&url).with_attempt_timeout(Duration::from_millis(500)))
         .reserve_document(&token(), IDEMPOTENCY_KEY, &reservation_request())
         .await
-        .expect("the resend settles the reservation");
-    assert_eq!(reserved.value.document.id, DOCUMENT_ID);
-    let observations = script.observations();
-    assert_eq!(observations.len(), 2);
-    assert_identical_resends(&observations);
+        .expect_err("the reservation timed out");
+    assert!(
+        matches!(
+            error,
+            DocumentsClientError::Transport {
+                kind: TransportKind::Timeout
+            }
+        ),
+        "{error:?}"
+    );
+    assert!(error.is_outcome_unknown());
+    assert_eq!(script.observations().len(), 1);
     server.abort();
 }
 
 #[tokio::test]
-async fn a_5xx_answer_to_a_grant_is_resent_and_the_later_grant_returned() {
+async fn a_5xx_answer_to_a_reservation_or_a_grant_is_not_resent() {
     let (url, script, server) = serve(vec![
         unavailable(),
+        Answer::json(StatusCode::CREATED, reservation_json().to_string()),
+    ])
+    .await;
+    let error = client(config(&url))
+        .reserve_document(&token(), IDEMPOTENCY_KEY, &reservation_request())
+        .await
+        .expect_err("the reservation was unavailable");
+    assert_unavailable(&error);
+    assert_eq!(script.observations().len(), 1);
+    server.abort();
+
+    let (url, script, server) = serve(vec![
         Answer::Raw(
             StatusCode::BAD_GATEWAY,
             "text/html",
@@ -94,14 +118,48 @@ async fn a_5xx_answer_to_a_grant_is_resent_and_the_later_grant_returned() {
         Answer::json(StatusCode::CREATED, grant_json().to_string()),
     ])
     .await;
-    let issued = client(config(&url))
+    let error = client(config(&url))
         .issue_grant(&token(), IDEMPOTENCY_KEY, DOCUMENT_ID, &grant_request())
         .await
-        .expect("the resend settles the grant");
+        .expect_err("the grant answer was a gateway failure");
+    assert!(
+        matches!(error, DocumentsClientError::Protocol { status: 502, .. }),
+        "{error:?}"
+    );
+    assert!(error.is_outcome_unknown());
+    assert_eq!(script.observations().len(), 1);
+    server.abort();
+}
+
+/// The recovery the client leaves to its caller: the same request under the
+/// same key, which the service replays. The client sends it exactly as the
+/// first.
+#[tokio::test]
+async fn the_caller_recovers_an_unknown_outcome_with_the_identical_request() {
+    let (url, script, server) = serve(vec![
+        unavailable(),
+        Answer::json(StatusCode::CREATED, grant_json().to_string()),
+    ])
+    .await;
+    let client = client(config(&url));
+    let error = client
+        .issue_grant(&token(), IDEMPOTENCY_KEY, DOCUMENT_ID, &grant_request())
+        .await
+        .expect_err("the grant was unavailable");
+    assert_unavailable(&error);
+    let issued = client
+        .issue_grant(&token(), IDEMPOTENCY_KEY, DOCUMENT_ID, &grant_request())
+        .await
+        .expect("the caller's resend settles the grant");
     assert_eq!(issued.value.id, GRANT_ID);
     let observations = script.observations();
-    assert_eq!(observations.len(), 3);
-    assert_identical_resends(&observations);
+    assert_eq!(observations.len(), 2);
+    let (first, resend) = (&observations[0], &observations[1]);
+    assert_eq!(first.headers["idempotency-key"], IDEMPOTENCY_KEY);
+    assert_eq!(resend.method, first.method);
+    assert_eq!(resend.uri, first.uri);
+    assert_eq!(resend.headers, first.headers);
+    assert_eq!(resend.body, first.body);
     server.abort();
 }
 
@@ -126,70 +184,6 @@ async fn a_deterministic_refusal_is_never_resent() {
         assert_eq!(script.observations().len(), 1, "{refusal:?}");
         server.abort();
     }
-}
-
-#[tokio::test]
-async fn the_retry_count_is_honored() {
-    for (retries, expected) in [(None, 3), (Some(2), 3), (Some(1), 2), (Some(0), 1)] {
-        let (url, script, server) = serve(vec![
-            unavailable(),
-            unavailable(),
-            unavailable(),
-            unavailable(),
-        ])
-        .await;
-        let config = match retries {
-            Some(value) => config(&url).with_maximum_mutation_retries(value),
-            None => config(&url),
-        };
-        let error = client(config)
-            .issue_grant(&token(), IDEMPOTENCY_KEY, DOCUMENT_ID, &grant_request())
-            .await
-            .expect_err("the service stays unavailable");
-        assert!(
-            matches!(
-                error,
-                DocumentsClientError::Problem {
-                    status: 503,
-                    code: ProblemCode::ServiceUnavailable,
-                    ..
-                }
-            ),
-            "{retries:?}: {error:?}"
-        );
-        assert!(error.is_outcome_unknown());
-        let observations = script.observations();
-        assert_eq!(observations.len(), expected, "{retries:?}");
-        assert_identical_resends(&observations);
-        server.abort();
-    }
-}
-
-#[tokio::test]
-async fn a_refusal_after_an_unknown_outcome_keeps_the_outcome_unknown() {
-    let (url, script, server) = serve(vec![
-        unavailable(),
-        Answer::Problem(ProblemCode::ProfileNotAuthorized, None),
-    ])
-    .await;
-    let error = client(config(&url))
-        .reserve_document(&token(), IDEMPOTENCY_KEY, &reservation_request())
-        .await
-        .expect_err("the resend was refused");
-    assert!(
-        matches!(
-            error,
-            DocumentsClientError::Problem {
-                status: 503,
-                code: ProblemCode::ServiceUnavailable,
-                ..
-            }
-        ),
-        "{error:?}"
-    );
-    assert!(error.is_outcome_unknown());
-    assert_eq!(script.observations().len(), 2);
-    server.abort();
 }
 
 #[tokio::test]
