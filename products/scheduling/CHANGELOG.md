@@ -57,18 +57,10 @@
   `scheduling.hook-delivery` event, the envelope, and the delivery refusals
   are unchanged.
 
-- Migrations 0201 through 0209 add operational reads, resource availability,
-  booking parties, source managers, atomic allocations, source busy facts,
-  window resource reservations, attendance, and the retained source busy
-  outcome. The runtime refuses to start until `schedulingctl plan` and
-  `schedulingctl apply` run them.
-- Migration, activation, and `schedulingctl operational-scopes rematerialize`
-  relabel legacy allocation rows with their claim's labels and pool or window
-  anchor, so held legacy exact-time capacity carries into the confirmed
-  booking. A live exact-time hold with no scoped allocation (its resource no
-  longer anchored) refuses confirmation with `service.unavailable` instead of
-  booking without counted capacity; release it, or restore the anchor and
-  rematerialize.
+- The version 200 baseline includes operational reads, resource
+  availability, booking parties, source managers, atomic allocations, source
+  busy facts, window resource reservations, attendance, and the retained
+  source busy outcome.
 - Reserve named resources for caller-selected intervals. An exact-time offering
   can opt into `partyCounts: optional`, so a room or equipment booking omits
   `party`, and availability and explain reads accept a hard `durationMinutes`

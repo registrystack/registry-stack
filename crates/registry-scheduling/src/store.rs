@@ -88,22 +88,10 @@ pub use resource_availability::{ResourceSupplyImpact, ResourceSupplyImpacts};
 pub use source_busy::{resource_interval_is_available, BusyStoreError};
 
 const SCHEDULING_MIGRATION: &str = include_str!("../migrations/0200_scheduling.sql");
-const OPERATIONAL_READS_MIGRATION: &str = include_str!("../migrations/0201_operational_reads.sql");
-const RESOURCE_AVAILABILITY_MIGRATION: &str =
-    include_str!("../migrations/0202_resource_availability.sql");
-const BOOKING_PARTY_MIGRATION: &str = include_str!("../migrations/0203_booking_party.sql");
-const SOURCE_MANAGER_MIGRATION: &str = include_str!("../migrations/0204_source_manager.sql");
-const ATOMIC_ALLOCATIONS_MIGRATION: &str =
-    include_str!("../migrations/0205_atomic_allocations.sql");
-const SOURCE_BUSY_MIGRATION: &str = include_str!("../migrations/0206_source_busy.sql");
-const WINDOW_RESOURCES_MIGRATION: &str = include_str!("../migrations/0207_window_resources.sql");
-const ATTENDANCE_MIGRATION: &str = include_str!("../migrations/0208_attendance.sql");
-const SOURCE_BUSY_OUTCOME_MIGRATION: &str =
-    include_str!("../migrations/0209_source_busy_outcome.sql");
 /// Every schema version, in the order it is applied. The baseline is
 /// version [`BASELINE_SCHEMA_VERSION`], above every version an earlier
 /// release applied; each later migration takes the next number.
-const SCHEMA_VERSIONS: [i64; 10] = [200, 201, 202, 203, 204, 205, 206, 207, 208, 209];
+const SCHEMA_VERSIONS: [i64; 1] = [200];
 /// The baseline schema version. A ledger holding any version below it was
 /// left by an earlier pre-1.0 release, which this release refuses by name:
 /// version 100 is the v0.42.0 and v0.43.0 baseline, whose outbox and hook

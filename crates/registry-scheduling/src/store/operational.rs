@@ -364,8 +364,7 @@ pub(super) async fn rematerialize_operational_scopes_in(
 
 /// Give each version-0 allocation row of a labeled claim the claim's labels
 /// and the anchor its resource has in current facts: the pool of an
-/// exact-time member, or the window itself. This is the scope the 0105
-/// backfill gives a claim that already carried labels. The capacity service
+/// exact-time member, or the window itself. The capacity service
 /// loads only scoped rows, so until this runs a legacy exact-time hold has
 /// none to carry into its booking. A row whose resource no current pool or
 /// window anchors stays version 0: it keeps consuming that resource, and the

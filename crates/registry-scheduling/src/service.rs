@@ -1199,7 +1199,7 @@ impl SchedulingService {
         let actor = caller.actor_pseudonym(&self.hasher, &self.scheduling_id)?;
         let confirmation_request = self.confirmation_request(&hold)?;
         // Every exact-time hold this runtime writes carries scoped allocation
-        // rows. One without any is a legacy hold whose backfilled allocation
+        // rows. One without any is a legacy hold whose version-0 allocation
         // has not recovered its labels and pool anchor: it still consumes its
         // resource, but the window path below writes a booking with no
         // allocation, and consuming the hold would release that capacity to a
