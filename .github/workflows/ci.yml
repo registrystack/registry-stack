@@ -785,11 +785,18 @@ jobs:
         run: node docs/site/scripts/run-tutorial.mjs --gate discovery
 
   casework-postgres:
-    name: Casework PostgreSQL transactions
+    name: Casework PostgreSQL transactions (${{ matrix.part }})
     needs: [changes, rust-policy]
     if: ${{ !cancelled() && needs.changes.result == 'success' && needs.changes.outputs.casework_postgres == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      # The offline adopter proof and the database runtime journeys are
+      # independent gates, so they run as parallel parts instead of one
+      # serial job; both keep their own build of the authoring tools.
+      matrix:
+        part: [offline, runtime]
     services:
       postgres:
         image: docker.io/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675
@@ -819,15 +826,18 @@ jobs:
       - name: Build the Casework authoring tool
         run: cargo build --locked -p registry-caseworkctl -p registry-bregctl
       - name: Verify Casework product contracts and offline authoring journeys
+        if: matrix.part == 'offline'
         env:
           CASEWORKCTL_BIN: ${{ github.workspace }}/target/debug/caseworkctl
           BREGCTL_BIN: ${{ github.workspace }}/target/debug/bregctl
         run: products/casework/scripts/check-checkpoint.sh
       - name: Casework logical backup and restore of a submitted review
+        if: matrix.part == 'runtime'
         # Drives the public dev/operator binaries against owned disposable
         # PostgreSQL, preserving the backup point and append-only audit journal.
         run: products/casework/scripts/test-backup-restore.sh
       - name: Verify the rewritten Evidence deployment loads through the Evidence loader
+        if: matrix.part == 'runtime'
         # The fixture machinery lives behind postgres-test, but this test needs
         # neither a database nor an issuer. An inexact name filter that selects
         # nothing still exits 0, so the step names the test exactly and fails
@@ -840,6 +850,7 @@ jobs:
             | tee "${RUNNER_TEMP}/casework-evidence-fixture.log"
           grep -q 'test result: ok\. 1 passed' "${RUNNER_TEMP}/casework-evidence-fixture.log" || { echo "::error::expected exactly one passing test for the_rewritten_evidence_deployment_loads_through_the_evidence_loader"; exit 1; }
       - name: Verify review transactions, staffing, retention, HTTP and producer boundaries
+        if: matrix.part == 'runtime'
         # Every maintained Casework target uses a unique schema. The service
         # database is disposable; no test resets public or shares task state.
         env:
@@ -860,6 +871,7 @@ jobs:
             --test breg_review_journey
           cargo test --locked -p registry-casework --features postgres-test --lib task_grants::
       - name: Verify operator refusal reports and split runtime database roles
+        if: matrix.part == 'runtime'
         # Exact filters and the pass count keep a renamed test from silently
         # dropping the schema-newer and retained-session security proofs.
         shell: bash
@@ -874,10 +886,12 @@ jobs:
             | tee "${RUNNER_TEMP}/caseworkctl-apply.log"
           grep -q 'test result: ok\. 2 passed' "${RUNNER_TEMP}/caseworkctl-apply.log"
       - name: Create isolated task approval database
+        if: matrix.part == 'runtime'
         env:
           POSTGRES_CONTAINER_ID: ${{ job.services.postgres.id }}
         run: docker exec "$POSTGRES_CONTAINER_ID" createdb -U casework casework_task_approval
       - name: Casework task approval through stock issuer to Evidence, BReg, and Scheduling
+        if: matrix.part == 'runtime'
         # An inexact name filter that selects nothing still exits 0, so the
         # step names each test exactly and fails unless it reports one pass.
         shell: bash
