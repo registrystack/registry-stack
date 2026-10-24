@@ -17,7 +17,7 @@ pub const OPENAPI_JSON: &str = r#"{
     },
     "/ready": {
       "get": {
-        "summary": "Readiness (audit destination included)",
+        "summary": "Readiness (issuer keys and audit destination included)",
         "responses": {
           "200": { "description": "ready" },
           "503": { "description": "not ready" }
@@ -78,11 +78,12 @@ pub const OPENAPI_JSON: &str = r#"{
             }
           },
           "400": { "description": "Invalid request, data, or assets (problem+json with JSON pointers)" },
-          "401": { "description": "Missing or wrong API key" },
+          "401": { "description": "Missing or invalid bearer credential; Bearer challenge" },
+          "403": { "description": "Verified credential lacks render:render scope" },
           "422": { "description": "Compile failure, strict warnings, or oversized output" },
           "413": { "description": "Request body over the configured limit (problem+json; audited, after authentication)" },
           "500": { "description": "Render panicked" },
-          "503": { "description": "Audit failure (fail closed) or not ready" },
+          "503": { "description": "Audit failure or credential verifier unavailable without usable cached keys" },
           "504": { "description": "Render timeout" }
         }
       }
@@ -90,7 +91,7 @@ pub const OPENAPI_JSON: &str = r#"{
   },
   "components": {
     "securitySchemes": {
-      "bearerAuth": { "type": "http", "scheme": "bearer" }
+      "bearerAuth": { "type": "http", "scheme": "bearer", "description": "Resource-bound OIDC access token with render:render scope, or the configured legacy API key" }
     }
   }
 }

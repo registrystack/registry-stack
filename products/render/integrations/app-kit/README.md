@@ -1,59 +1,56 @@
-# App Kit integration sketch (`registry-documents` skill)
+# App Kit integration
 
-The kit-side capability follows the kit's extension anatomy (brief rows →
-config → host route → page → walked journey). This file is the stack-side
-contract the kit skill implements; it lands in the App Kit repository when
-the capability is built there.
+Add document rendering through an app-owned host route. App Kit provides the
+`createAppHost(config, caseworkClient?, { routes })` seam, `HostRoute`, and
+`RouteContext` from `@registrystack/app-server`. Its maintained guide is
+`project/docs/customization.md`, “Add a host route”. Repository access is
+currently private and must be granted by Registry Stack maintainers.
 
-## Brief rows (agreed before any template is written)
+App Kit has no built-in public check page or documents configuration block.
+Keep Render destinations and credentials in app-owned server configuration;
+the closed host configuration schema does not accept arbitrary extensions.
 
-Paper is a disclosure surface: fields printed on a document leave every
-access profile behind, and the QR prints a public verify URL. The skill's
-brief must carry `agreed` rows for:
+## Decide the disclosure
 
-- which fields appear on each document type (the field list is the
-  decision, not a rendering detail);
-- the reliance/verification wording printed next to the QR;
-- where the QR points (the host's public origin, the
-  `registry-public-check` answer contract on the verify page);
-- who signs off each package version (`registry-render package` + review).
+Agree the fields printed on each document type, the wording beside its QR,
+the public check URL, and who reviews each template package version before
+writing the template. Paper remains readable after the caller's session ends.
 
-## Config (host, `taskDispatch` precedent)
+The app owns the public check route and the answer it discloses. Its server-side
+Evidence relying service obtains and verifies the minimum assertion needed for
+that answer under its own authority. A scanned URL or a Render hash grants no
+registry access. Render only prints the app-supplied URL and performs no work
+when the QR is scanned.
 
-```
-APP_DOCUMENTS_FILE=/path/to/documents.json
-```
+## Author and package
 
-`documents.json` maps document types to loopback destinations with
-credential files — exact loopback paths, no query or fragment, secrets read
-from files at load, mirroring the kit's task-dispatch configuration:
+Author templates, schemas, labels, and vendored assets under
+`project/deployment/render/bundle/`. Run `registry-render package` with that
+source and a separate output directory,
+`project/deployment/render/package/`. The latter is the verified runtime
+package carrying `SHA256SUMS` and optional `REVISION`; configure Render's
+`package.root` to that directory. Never serve the authored `bundle/` directly.
 
-```json
-{
-  "receipt": {
-    "url": "http://127.0.0.1:3200/v1/render/receipt",
-    "credentialFile": "/secrets/render-api-key"
-  }
-}
-```
+Supervise `registry-render serve` beside the app through the app's deployment
+configuration. Bind its listener to a private address behind the operator's TLS proxy. Keep the package
+read-only and the audit destination durable.
 
-The package lives under `project/deployment/render/package/` so the kit's
-writes-stay-in-`project/` boundary holds; `deployment/local.py` supervises
-`registry-render serve` beside breg and casework.
+## Render from the app
 
-## Host route (one block, the established pattern)
+A session-authorized POST host route, for example
+`/api/documents/{type}/render`, reads permitted BReg fields with the end user's
+authority and assembles the Render request. Preserve the host's session, CSRF,
+and Origin checks. Use the app-owned server credential for the selected Render deployment,
+call `POST /v1/render/{type}`, and stream the PDF to the browser, or attach it
+to the owning Record and retain `pdfSha256` and `dataSha256` alongside it.
 
-page → app-runtime hook → host `POST /api/documents/{type}/render` →
-session-authorized breg reads assemble `data` (the end user's token; no
-service account) → loopback call to `registry-render serve`
-(Accept: application/pdf) → stream the PDF to the browser, or upload as a
-breg attachment and store
-`pdfSha256`/`dataSha256` on the record. The verify URL (record-held
-unguessable token) is assembled by the host and passed as data; the QR is
-the template's job.
+Use the existing public GET/HEAD host-route option for an app-owned check page;
+its context intentionally excludes the authenticated session and host config.
+A signed POST receiver needs a separate authenticated server endpoint.
 
-## Journey to walk (DoD row)
+## Verify the complete journey
 
-A staff user prints a receipt from a record → the PDF attaches to breg with
-matching sha256 fields → scanning the QR resolves the verify page.
-`COMPLETED with 0 flags` per the kit gate.
+Exercise a staff print from an authorized Record, read back the attachment and
+stored hashes, then scan the QR and verify the app's bounded Evidence-backed
+answer. Test an unauthorized print and a check token that is unknown or expired.
+The host-route seam alone does not prove this app-owned journey has run.

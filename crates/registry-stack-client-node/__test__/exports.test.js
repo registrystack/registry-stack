@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { test } = require('node:test');
 
-const PRODUCTS = ['discovery', 'evidence', 'breg', 'casework', 'messaging', 'scheduling'];
+const PRODUCTS = ['discovery', 'evidence', 'breg', 'casework', 'messaging', 'scheduling', 'render', 'coordinator'];
 
 // Node synthesises the named exports an ESM consumer imports from this CommonJS
 // entry point by statically scanning it for individual `exports.<name> =`
@@ -29,4 +29,17 @@ test('product namespaces do not expose standalone loader diagnostics', () => {
 test('platform dependencies are bound only when the release package is packed', () => {
   const manifest = require('../package.json');
   assert.equal(manifest.optionalDependencies, undefined);
+});
+
+test('every platform package exports each public product addon', () => {
+  const vm = require('node:vm');
+  for (const platform of ['darwin-arm64', 'linux-arm64-gnu', 'linux-x64-gnu']) {
+    const source = fs.readFileSync(path.join(__dirname, '..', 'npm', platform, 'index.js'), 'utf8');
+    const module = { exports: {} };
+    vm.runInNewContext(source, { module, require: filename => filename });
+    assert.deepEqual(Object.keys(module.exports).sort(), [...PRODUCTS].sort());
+    for (const product of PRODUCTS) {
+      assert.equal(module.exports[product], `./${product}-client.${platform}.node`);
+    }
+  }
 });

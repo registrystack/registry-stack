@@ -28,7 +28,7 @@ def load_module():
 class AssembleClientPackagesTest(unittest.TestCase):
     def setUp(self) -> None:
         self.module = load_module()
-        self.steps = self.module.plan(
+        self.steps = self.candidate_plan(
             ROOT,
             "9.9.9",
             "darwin-arm64",
@@ -38,6 +38,18 @@ class AssembleClientPackagesTest(unittest.TestCase):
             Path("/out"),
         )
         self.rendered = [step.render() for step in self.steps]
+
+    def candidate_plan(self, *args, **kwargs):
+        return self.module.plan(*args, include_render=True, **kwargs)
+
+    def test_default_roster_omits_held_render_for_every_artifact_family(self) -> None:
+        for artifacts in ("node", "python", "all"):
+            with self.subTest(artifacts=artifacts):
+                steps = self.module.plan(ROOT, "0.44.0", "darwin-arm64", artifacts, "maturin", Path("/work"), Path("/out"))
+                self.assertTrue(steps)
+                self.assertFalse(any("registry-render-client" in step.render() or "--render-wheel" in step.argv for step in steps))
+                self.assertFalse(any("--include-render" in step.argv for step in steps))
+
 
     def test_the_checked_in_manifest_is_never_bound_in_place(self) -> None:
         facade_manifest = str(
@@ -139,7 +151,7 @@ class AssembleClientPackagesTest(unittest.TestCase):
         self.assertIn("*.dylib", manifest["files"])
 
     def test_linux_packages_do_not_run_the_macos_bundler(self) -> None:
-        steps = self.module.plan(
+        steps = self.candidate_plan(
             ROOT,
             "9.9.9",
             "linux-x64-gnu",
@@ -189,7 +201,7 @@ class AssembleClientPackagesTest(unittest.TestCase):
             for index, line in enumerate(self.rendered)
             if "maturin build --release --locked" in line
         ]
-        self.assertEqual(6, len(builds))
+        self.assertEqual(len(self.module.PRODUCTS), len(builds))
         assemble = next(
             index
             for index, line in enumerate(self.rendered)
@@ -231,15 +243,15 @@ class AssembleClientPackagesTest(unittest.TestCase):
         )
         self.assertIn(f"--macos-library-root {ROOT / 'target'}", assemble)
 
-    def test_ci_profile_only_changes_all_six_binding_build_profiles(self) -> None:
+    def test_ci_profile_only_changes_all_binding_build_profiles(self) -> None:
         for napi_platform in self.module.PLATFORMS:
             with self.subTest(platform=napi_platform):
                 args = (
                     ROOT, "9.9.9", napi_platform, "all", "maturin",
                     Path("/work"), Path("/out"), "/maturin/python",
                 )
-                release = self.module.plan(*args)
-                ci = self.module.plan(*args, python_profile="ci")
+                release = self.candidate_plan(*args)
+                ci = self.candidate_plan(*args, python_profile="ci")
                 self.assertEqual(len(release), len(ci))
                 products = []
                 for release_step, ci_step in zip(release, ci):
@@ -271,21 +283,23 @@ class AssembleClientPackagesTest(unittest.TestCase):
                 self.assertEqual(products, expected_products)
 
     def test_source_integration_can_explicitly_include_unreleased_messaging(self) -> None:
-        steps = self.module.plan(
+        steps = self.candidate_plan(
             ROOT, "0.36.0", "linux-x64-gnu", "python", "maturin",
             Path("/work"), Path("/out"), zig_python="/maturin/python",
             python_profile="ci", include_messaging=True, include_scheduling=True,
         )
-        self.assertEqual(6, sum(step.argv[0].endswith("build-linux-python-client") for step in steps))
+        self.assertEqual(len(self.module.PRODUCTS) - 1, sum(step.argv[0].endswith("build-linux-python-client") for step in steps))
+        self.assertFalse(any("--coordinator-wheel" in step.argv for step in steps))
         self.assertIn("--include-messaging", steps[-1].argv)
 
     def test_source_integration_can_explicitly_include_unreleased_scheduling(self) -> None:
-        steps = self.module.plan(
+        steps = self.candidate_plan(
             ROOT, "0.39.0", "linux-x64-gnu", "python", "maturin",
             Path("/work"), Path("/out"), zig_python="/maturin/python",
             python_profile="ci", include_scheduling=True,
         )
-        self.assertEqual(6, sum(step.argv[0].endswith("build-linux-python-client") for step in steps))
+        self.assertEqual(len(self.module.PRODUCTS) - 1, sum(step.argv[0].endswith("build-linux-python-client") for step in steps))
+        self.assertFalse(any("--coordinator-wheel" in step.argv for step in steps))
         self.assertIn("--include-scheduling", steps[-1].argv)
         self.assertNotIn("--include-messaging", steps[-1].argv)
 
@@ -294,14 +308,14 @@ class AssembleClientPackagesTest(unittest.TestCase):
             sys.executable, str(SCRIPT), "--output-dir", "/out",
             "--version", "0.42.0",
             "--napi-platform", "linux-x64-gnu", "--artifacts", "python", "--dry-run",
-            "--include-casework", "--zig-python", "/maturin/python",
+            "--include-casework", "--include-render", "--include-coordinator", "--zig-python", "/maturin/python",
             "--maturin", "/maturin/maturin",
         ]
         result = subprocess.run(
             [*command, "--python-profile", "ci"], capture_output=True, text=True, check=True
         )
-        self.assertEqual(result.stdout.count("build-linux-python-client"), 6)
-        self.assertEqual(result.stdout.count("--profile ci"), 6)
+        self.assertEqual(result.stdout.count("build-linux-python-client"), len(self.module.PRODUCTS))
+        self.assertEqual(result.stdout.count("--profile ci"), len(self.module.PRODUCTS))
         self.assertNotIn("--profile release", result.stdout)
         invalid = subprocess.run(
             [*command, "--python-profile", "dev"], capture_output=True, text=True
@@ -317,7 +331,7 @@ class AssembleClientPackagesTest(unittest.TestCase):
             self.module.resolve_executable("definitely-not-a-registry-build-tool")
 
     def test_linux_wheels_use_the_canonical_zig_compiler_helper(self) -> None:
-        steps = self.module.plan(
+        steps = self.candidate_plan(
             ROOT,
             "9.9.9",
             "linux-x64-gnu",
@@ -332,7 +346,7 @@ class AssembleClientPackagesTest(unittest.TestCase):
             for step in steps
             if step.argv[0].endswith("build-linux-python-client")
         ]
-        self.assertEqual(len(builds), 6)
+        self.assertEqual(len(builds), len(self.module.PRODUCTS))
         for product, step in zip(self.module.PRODUCTS, builds):
             self.assertEqual(step.cwd, ROOT)
             self.assertIn(("--client", product), tuple(zip(step.argv, step.argv[1:])))
@@ -342,7 +356,7 @@ class AssembleClientPackagesTest(unittest.TestCase):
             self.assertNotIn("--zig", step.argv)
 
         with self.assertRaisesRegex(ValueError, "require --zig-python"):
-            self.module.plan(
+            self.candidate_plan(
                 ROOT,
                 "9.9.9",
                 "linux-x64-gnu",
@@ -360,10 +374,10 @@ class AssembleClientPackagesTest(unittest.TestCase):
             self.assertIn(f"registry_wheel_tag: {entry['wheel_tag']}", candidate)
 
     def test_the_artifact_selection_splits_the_two_halves(self) -> None:
-        node_only = self.module.plan(
+        node_only = self.candidate_plan(
             ROOT, "9.9.9", "darwin-arm64", "node", "maturin", Path("/work"), Path("/out")
         )
-        python_only = self.module.plan(
+        python_only = self.candidate_plan(
             ROOT,
             "9.9.9",
             "darwin-arm64",
@@ -388,6 +402,8 @@ class AssembleClientPackagesTest(unittest.TestCase):
                 "--napi-platform",
                 "darwin-arm64",
                 "--include-casework",
+                "--include-render",
+                "--include-coordinator",
                 "--dry-run",
             ],
             capture_output=True,
@@ -409,17 +425,17 @@ class AssembleClientPackagesTest(unittest.TestCase):
             Path("/out"),
         )
         with self.assertRaisesRegex(ValueError, "explicit --include-casework"):
-            self.module.plan(*args)
+            self.candidate_plan(*args)
 
         with self.assertRaisesRegex(ValueError, "Messaging client"):
-            self.module.plan(*args, include_casework=True)
+            self.candidate_plan(*args, include_casework=True)
 
     def test_pre_0_38_versions_require_their_release_tag(self) -> None:
         for version in ("0.30.0", "0.37.99"):
             with self.subTest(version=version), self.assertRaisesRegex(
                 ValueError, "Messaging client"
             ):
-                self.module.plan(
+                self.candidate_plan(
                     ROOT,
                     version,
                     "darwin-arm64",
@@ -434,7 +450,7 @@ class AssembleClientPackagesTest(unittest.TestCase):
             with self.subTest(version=version), self.assertRaisesRegex(
                 ValueError, "Scheduling client"
             ):
-                self.module.plan(
+                self.candidate_plan(
                     ROOT,
                     version,
                     "darwin-arm64",

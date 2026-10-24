@@ -158,6 +158,11 @@ COORDINATOR_LICENCES = (
 
 
 class SyncRegistryClientNodeLicenceTest(unittest.TestCase):
+    def test_render_binding_licenses_are_owned_by_the_sync_generator(self) -> None:
+        generated = load_module().expected_files()
+        for language in ("node", "py"):
+            self.assertEqual(generated[ROOT / "crates" / f"registry-render-client-{language}" / "LICENSE"], (ROOT / "LICENSE").read_bytes())
+
     def setUp(self) -> None:
         self.module = load_module()
         self.files = self.module.expected_files()

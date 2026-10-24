@@ -536,7 +536,7 @@ export interface BRegActionReceipt {
 
 export type BRegActionAvailability =
   | { readonly available: true; readonly observedRevision: number }
-  | { readonly available: false; readonly observedRevision: number; readonly reason: 'guard-not-satisfied'; readonly recovery: 'none' }
+  | { readonly available: false; readonly observedRevision: number; readonly reason: 'guard-not-satisfied'; readonly guardReason?: string; readonly recovery: 'none' }
   | { readonly available: null; readonly observedRevision: number; readonly reason: 'input-required'; readonly recovery: 'correct-input'; readonly missingInputs: ReadonlyArray<string> }
   | { readonly available: null; readonly observedRevision: null; readonly reason: 'not-disclosed'; readonly recovery: 'none' }
 
@@ -815,6 +815,7 @@ export interface BaseRegistryClientFailure extends Error {
   readonly code?: string
   readonly refusalCode?: string
   readonly reasonCode?: string
+  readonly guardReason?: string
   readonly fieldPath?: string
   readonly constraint?: BRegConstraintViolation
   readonly status?: number
@@ -842,6 +843,7 @@ export declare class BaseRegistryClientError extends Error implements BaseRegist
   readonly code?: string
   readonly refusalCode?: string
   readonly reasonCode?: string
+  readonly guardReason?: string
   readonly fieldPath?: string
   readonly constraint?: BRegConstraintViolation
   readonly status?: number

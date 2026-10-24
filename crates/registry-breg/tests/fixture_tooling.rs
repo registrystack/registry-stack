@@ -2,7 +2,9 @@
 
 #![cfg(all(feature = "runtime", feature = "tooling"))]
 
-use registry_breg::compiler::{compile_project, module_digest, CompileProfile};
+use registry_breg::compiler::{
+    compile_project, compile_project_with_assets, module_digest, CompileProfile,
+};
 use registry_breg::contract::{parse_module_yaml, parse_project_json, parse_project_yaml};
 use registry_breg::fixtures::{validate_fixture_journeys, FixtureError, LogicalReferenceRefusal};
 
@@ -196,7 +198,11 @@ journeys:
             .expect_err("invalid or oversized claim values fail before execution");
         assert_eq!(
             underlying_fixture_error(&error),
-            &FixtureError::AuthorityWideningRefused
+            &FixtureError::AuthoringRule {
+                code: "fixture.claims.direct-claims-invalid",
+                key: "claims.directClaims",
+                message: "successful steps require exactly the selected access profile's non-reserved row-boundary claims, with bounded string or string-set values",
+            }
         );
     }
     for value in ["[zone-a, 7]", "[true]", "[{}]", "null", "7"] {
@@ -205,23 +211,31 @@ journeys:
             FixtureError::JourneyDocument(_)
         ));
     }
-    for changed in [
-        journey("[zone-a, zone-b]").replace(
-            "directClaims: {jurisdiction:",
-            "directClaims: {unknown_claim:",
-        ),
-        journey("[zone-a, zone-b]").replace(
-            "purpose: case-management",
-            "purpose: case-management\n          scopes: [registry:extra]",
-        ),
-    ] {
-        let error = validate_fixture_journeys(changed.as_bytes(), &registry)
-            .expect_err("sets do not permit undeclared names or scopes");
-        assert_eq!(
-            underlying_fixture_error(&error),
-            &FixtureError::AuthorityWideningRefused
-        );
-    }
+    let unknown_claim = journey("[zone-a, zone-b]").replace(
+        "directClaims: {jurisdiction:",
+        "directClaims: {unknown_claim:",
+    );
+    let error = validate_fixture_journeys(unknown_claim.as_bytes(), &registry)
+        .expect_err("sets do not permit undeclared claim names");
+    assert_eq!(
+        underlying_fixture_error(&error),
+        &FixtureError::AuthoringRule {
+            code: "fixture.claims.direct-claims-invalid",
+            key: "claims.directClaims",
+            message: "successful steps require exactly the selected access profile's non-reserved row-boundary claims, with bounded string or string-set values",
+        }
+    );
+
+    let unknown_scope = journey("[zone-a, zone-b]").replace(
+        "purpose: case-management",
+        "purpose: case-management\n          scopes: [registry:extra]",
+    );
+    let error = validate_fixture_journeys(unknown_scope.as_bytes(), &registry)
+        .expect_err("sets do not permit undeclared scopes");
+    assert_eq!(
+        underlying_fixture_error(&error),
+        &FixtureError::AuthorityWideningRefused
+    );
 }
 
 #[test]
@@ -475,6 +489,7 @@ journeys:
             matches!(
                 underlying_fixture_error(&error),
                 FixtureError::JourneyShapeRefused
+                    | FixtureError::AuthoringRule { .. }
                     | FixtureError::JourneyDocument(_)
                     | FixtureError::LogicalReferenceRefused
                     | FixtureError::AuthorityWideningRefused
@@ -881,6 +896,29 @@ fn compiled_action_fixture() -> registry_breg::CompiledRegistry {
     compile_project(&project, &[], CompileProfile::Authoring).expect("action fixture compiles")
 }
 
+fn compiled_proposal_fixture() -> registry_breg::CompiledRegistry {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../products/breg/examples/facility");
+    let project = parse_project_yaml(&std::fs::read(root.join("registry.yaml")).unwrap()).unwrap();
+    let assets = project
+        .functions
+        .iter()
+        .map(|function| registry_breg::contract::ModuleAssetSource {
+            module: None,
+            path: function.source.clone(),
+            bytes: std::fs::read(root.join(&function.source)).unwrap(),
+        })
+        .collect::<Vec<_>>();
+    compile_project_with_assets(&project, &[], &assets, CompileProfile::Authoring)
+        .expect("facility Proposal fixture compiles")
+}
+
+fn proposal_journey_source() -> String {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../products/breg/examples/facility");
+    std::fs::read_to_string(root.join("tests/journeys.yaml")).unwrap()
+}
+
 /// The shared reader's `(code, path)` pairs for a refused journeys document.
 fn document_diagnostics(error: &FixtureError) -> Vec<(&str, &str)> {
     let FixtureError::JourneyDocument(report) = error else {
@@ -1279,4 +1317,248 @@ fn fixture_tooling_handler_refusals_and_negative_inputs_use_the_compiled_contrac
     ] {
         assert!(validate_fixture_journeys(changed.as_bytes(), &registry).is_err());
     }
+}
+
+#[test]
+fn fixture_refusal_code_pair_names_a_missing_key_and_refuses_an_explicit_wrong_value() {
+    let registry = compiled_fixture();
+    let source = r#"apiVersion: id.registrystack.org/formats/breg/journeys/v1
+kind: BRegJourneys
+journeys:
+  - id: refusal-pair
+    steps:
+      - id: refused-create
+        recordType: widget
+        accessProfile: operator
+        claims: {principal: fixture-operator}
+        request: {type: create, data: {label: private-input-canary}}
+        expect:
+          outcome: refusal
+          status: 422
+          refusalCode: private-refusal-canary
+"#;
+    let missing = validate_fixture_journeys(source.as_bytes(), &registry).unwrap_err();
+    assert_eq!(
+        document_diagnostics(&missing),
+        [(
+            "config.missing-key",
+            "/journeys/0/steps/0/expect/problemCode"
+        )]
+    );
+    let FixtureError::JourneyDocument(report) = &missing else {
+        unreachable!();
+    };
+    assert_eq!(
+        report.diagnostics()[0].suggested_action,
+        "Set expect.problemCode to action.refused beside expect.refusalCode."
+    );
+    assert!(!format!("{missing:?}").contains("private"));
+
+    let wrong = source.replace(
+        "          refusalCode: private-refusal-canary",
+        "          problemCode: mutation.conflict\n          refusalCode: private-refusal-canary",
+    );
+    let wrong = validate_fixture_journeys(wrong.as_bytes(), &registry).unwrap_err();
+    assert_eq!(
+        document_diagnostics(&wrong),
+        [(
+            "config.invalid-value",
+            "/journeys/0/steps/0/expect/problemCode"
+        )]
+    );
+    assert!(!format!("{wrong:?}").contains("private"));
+
+    let missing_refusal = source.replace(
+        "          refusalCode: private-refusal-canary",
+        "          problemCode: action.refused",
+    );
+    let missing_refusal =
+        validate_fixture_journeys(missing_refusal.as_bytes(), &registry).unwrap_err();
+    assert_eq!(
+        document_diagnostics(&missing_refusal),
+        [(
+            "config.missing-key",
+            "/journeys/0/steps/0/expect/refusalCode"
+        )]
+    );
+    let FixtureError::JourneyDocument(report) = &missing_refusal else {
+        unreachable!();
+    };
+    assert_eq!(
+        report.diagnostics()[0].suggested_action,
+        "Set expect.refusalCode to a refusal declared by the selected Action plan."
+    );
+    assert!(!format!("{missing_refusal:?}").contains("private"));
+}
+
+#[test]
+fn fixture_proposal_planner_outcomes_are_submit_only() {
+    let registry = compiled_proposal_fixture();
+    let source =
+        proposal_journey_source().replace("action: deactivate-facility", "action: correct-address");
+    for expectation in [
+        "expect: {outcome: refusal, status: 422, problemCode: action.refused, refusalCode: invalid-postal-code}",
+        "expect: {outcome: refusal, status: 500, problemCode: action.handler_failed}",
+        "expect: {outcome: refusal, status: 503, problemCode: action.evidence_failed}",
+    ] {
+        let changed = source
+            .replacen(
+                "expect: {outcome: success, status: 200, fields: {state: submitted}}",
+                expectation,
+                1,
+            )
+            .replacen("        capture: deactivation-submitted\n", "", 1);
+        let (changed, _) = changed
+            .split_once("      - id: recover-deactivation-submit")
+            .expect("the maintained journey has a step after Submit");
+        validate_fixture_journeys(changed.as_bytes(), &registry)
+            .expect("Proposal Submit admits runtime planner outcomes");
+    }
+
+    for (transition, capture) in [
+        ("start", "        capture: deactivation-draft\n"),
+        ("edit", "        capture: deactivation-edited\n"),
+    ] {
+        let marker = if transition == "start" {
+            "expect: {outcome: success, status: 201, fields: {state: draft}}"
+        } else {
+            "expect: {outcome: success, status: 200, fields: {state: draft}}"
+        };
+        let changed = source
+            .replacen(
+                marker,
+                "expect: {outcome: refusal, status: 500, problemCode: action.handler_failed}",
+                1,
+            )
+            .replacen(capture, "", 1);
+        let error = validate_fixture_journeys(changed.as_bytes(), &registry).unwrap_err();
+        assert_eq!(
+            underlying_fixture_error(&error),
+            &FixtureError::AuthoringRule {
+                code: "fixture.expectation.phase-invalid",
+                key: "expect.problemCode",
+                message: "planner outcomes require immediate Invoke or Proposal Submit; Start and Edit do not run the plan",
+            }
+        );
+        assert!(!format!("{error:?}").contains("Example facility"));
+    }
+}
+
+#[test]
+fn fixture_proposal_start_accepts_success_and_concealed_not_found() {
+    let registry = compiled_proposal_fixture();
+    let source = proposal_journey_source();
+    validate_fixture_journeys(source.as_bytes(), &registry)
+        .expect("the maintained valid Proposal Start remains accepted");
+
+    let concealed = r#"      - id: concealed-start
+        action: deactivate-facility
+        accessProfile: facility-correction-author
+        claims:
+          principal: private-principal-canary
+          scopes: [registry:facility:correction:submit]
+          purpose: facility-administration
+          directClaims: {jurisdiction: zone-b}
+        request: {type: proposal, transition: start, input: {facilityId: {recordCapture: facility}}}
+        expect: {outcome: refusal, status: 404, problemCode: resource.not_found}
+"#;
+    let changed = source.replacen(
+        "      - id: start-deactivation\n",
+        &format!("{concealed}      - id: start-deactivation\n"),
+        1,
+    );
+    validate_fixture_journeys(changed.as_bytes(), &registry)
+        .expect("Proposal Start admits the disclosure-preserving 404 refusal");
+}
+
+#[test]
+fn fixture_authoring_rules_name_status_claim_and_refusal_keys_without_values() {
+    let proposal_registry = compiled_proposal_fixture();
+    let wrong_start_status = proposal_journey_source().replacen(
+        "expect: {outcome: success, status: 201, fields: {state: draft}}",
+        "expect: {outcome: success, status: 200, fields: {state: draft}}",
+        1,
+    );
+    let error =
+        validate_fixture_journeys(wrong_start_status.as_bytes(), &proposal_registry).unwrap_err();
+    assert_eq!(
+        underlying_fixture_error(&error),
+        &FixtureError::AuthoringRule {
+            code: "fixture.expectation.status-invalid",
+            key: "expect.status",
+            message: "Proposal Start success requires status: 201",
+        }
+    );
+
+    let registry = compiled_crud_alias_fixture();
+    let claims_journey = |direct_claims: &str| {
+        format!(
+            r#"apiVersion: id.registrystack.org/formats/breg/journeys/v1
+kind: BRegJourneys
+journeys:
+  - id: claims-rule
+    steps:
+      - id: list-people
+        recordType: person
+        accessProfile: registrar
+        claims:
+          principal: private-principal-canary
+          purpose: case-management
+          directClaims: {direct_claims}
+        request: {{type: list}}
+        expect: {{outcome: success, status: 200, count: 0}}
+"#
+        )
+    };
+    for direct_claims in ["{}", "{jurisdiction: zone-a, private-claim-canary: value}"] {
+        let error = validate_fixture_journeys(claims_journey(direct_claims).as_bytes(), &registry)
+            .unwrap_err();
+        assert_eq!(
+            underlying_fixture_error(&error),
+            &FixtureError::AuthoringRule {
+                code: "fixture.claims.direct-claims-invalid",
+                key: "claims.directClaims",
+                message: "successful steps require exactly the selected access profile's non-reserved row-boundary claims, with bounded string or string-set values",
+            }
+        );
+        assert!(!format!("{error:?}").contains("private"));
+    }
+
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../products/breg/acceptance/person-registration-rhai");
+    let mut project =
+        parse_project_yaml(&std::fs::read(root.join("registry.yaml")).unwrap()).unwrap();
+    project
+        .entities
+        .iter_mut()
+        .find(|entity| entity.id == "register")
+        .unwrap()
+        .fields
+        .iter_mut()
+        .find(|field| field.id == "register-code")
+        .unwrap()
+        .pattern = Some(".*".to_owned());
+    let assets = project
+        .functions
+        .iter()
+        .map(|function| registry_breg::contract::ModuleAssetSource {
+            module: None,
+            path: function.source.clone(),
+            bytes: std::fs::read(root.join(&function.source)).unwrap(),
+        })
+        .collect::<Vec<_>>();
+    let handler_registry =
+        compile_project_with_assets(&project, &[], &assets, CompileProfile::Authoring).unwrap();
+    let source = std::fs::read_to_string(root.join("tests/journeys.yaml")).unwrap();
+    let unknown = source.replacen("refusalCode: blank-name", "refusalCode: private-canary", 1);
+    let error = validate_fixture_journeys(unknown.as_bytes(), &handler_registry).unwrap_err();
+    assert_eq!(
+        underlying_fixture_error(&error),
+        &FixtureError::AuthoringRule {
+            code: "fixture.expectation.refusal-code-undeclared",
+            key: "expect.refusalCode",
+            message: "expect.refusalCode must name a refusal declared by the selected Action plan",
+        }
+    );
+    assert!(!format!("{error:?}").contains("private"));
 }

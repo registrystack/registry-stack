@@ -18,7 +18,7 @@ from unittest import TestCase, main, mock
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "release/scripts/assemble-registry-client-wheel.py"
-PRODUCTS = ("discovery", "evidence", "breg", "casework", "messaging", "scheduling")
+PRODUCTS = ("discovery", "evidence", "breg", "casework", "messaging", "scheduling", "render", "coordinator")
 TAG = "cp311-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64"
 COMPATIBILITY = ROOT / "crates/registry-stack-client/compatibility.json"
 
@@ -66,7 +66,7 @@ class AssembleRegistryClientWheelTest(TestCase):
             with zipfile.ZipFile(wheel, "w") as archive:
                 archive.writestr(
                     f"registry_{product}_client/__init__.py",
-                    f"PRODUCT = {product!r}\n",
+                    f"PRODUCT = {product!r}\n" + ("class PrivateKeyJwt: pass\n" if product == "breg" else ""),
                 )
                 archive.writestr(
                     f"registry_{product}_client/native.abi3.so",
@@ -91,7 +91,8 @@ class AssembleRegistryClientWheelTest(TestCase):
 
     def run_assembler(
         self, *, version: str | None = None, include_casework: bool = False,
-        include_messaging: bool = False, include_scheduling: bool = False
+        include_messaging: bool = False, include_scheduling: bool = False,
+        include_coordinator: bool = True, include_render: bool = True
     ) -> subprocess.CompletedProcess[str]:
         command = [
             "python3",
@@ -101,6 +102,10 @@ class AssembleRegistryClientWheelTest(TestCase):
             "--output-dir",
             str(self.directory / "dist"),
         ]
+        if include_render:
+            command.append("--include-render")
+        if include_coordinator:
+            command.append("--include-coordinator")
         if include_casework:
             command.append("--include-casework")
         if include_messaging:
@@ -108,6 +113,8 @@ class AssembleRegistryClientWheelTest(TestCase):
         if include_scheduling:
             command.append("--include-scheduling")
         for product, wheel in self.wheels.items():
+            if product == "render" and not include_render:
+                continue
             command.extend((f"--{product}-wheel", str(wheel)))
         module = load_module()
         module.FACADE = self.facade
@@ -124,6 +131,33 @@ class AssembleRegistryClientWheelTest(TestCase):
         return subprocess.CompletedProcess(
             command, returncode, stdout.getvalue(), stderr.getvalue()
         )
+
+    def test_default_wheel_excludes_held_render_without_requiring_its_component(self) -> None:
+        result = self.run_assembler(include_render=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        wheel = next((self.directory / "dist").glob("*.whl"))
+        with zipfile.ZipFile(wheel) as archive:
+            self.assertFalse(any(name.startswith("registry_client/render/") for name in archive.namelist()))
+            self.assertNotIn(b"registry_client.render", archive.read("registry_client/__init__.py"))
+            self.assertNotIn(b'"render"', archive.read("registry_client/__init__.py"))
+            self.assertNotIn(b"import render", archive.read("registry_client/__init__.pyi"))
+
+    def test_current_release_includes_coordinator_without_a_local_override(self) -> None:
+        previous = self.version
+        self.version = "0.44.0"
+        for relative in ("pyproject.toml", "python/registry_client/__init__.py"):
+            path = self.facade / relative
+            path.write_text(path.read_text().replace(previous, self.version))
+        for product, old in list(self.wheels.items()):
+            current = old.with_name(old.name.replace(previous, self.version))
+            with zipfile.ZipFile(old) as source, zipfile.ZipFile(current, "w") as target:
+                for name in source.namelist():
+                    target.writestr(name.replace(previous, self.version), source.read(name).replace(previous.encode(), self.version.encode()))
+            self.wheels[product] = current
+        result = self.run_assembler(include_coordinator=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        with zipfile.ZipFile(Path(result.stdout.strip())) as archive:
+            self.assertIn("registry_client/coordinator/native.abi3.so", archive.namelist())
 
     def test_assembles_one_installable_distribution_identity(self) -> None:
         result = self.run_assembler()
@@ -228,7 +262,8 @@ class AssembleRegistryClientWheelTest(TestCase):
         # build. Native extension loading remains covered by the package smoke.
         import_script = (
             "import sys; sys.path.insert(0, sys.argv[1]); "
-            "from registry_client import discovery, evidence, breg, casework, messaging, scheduling; "
+            "from registry_client import auth, discovery, evidence, breg, casework, messaging, scheduling; "
+            "assert auth.PrivateKeyJwt is breg.PrivateKeyJwt; "
             "print(discovery.PRODUCT, evidence.PRODUCT, breg.PRODUCT, casework.PRODUCT, "
             "messaging.PRODUCT, scheduling.PRODUCT)"
         )

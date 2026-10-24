@@ -233,7 +233,7 @@ async fn real_postgres_batch_is_bounded_authorized_atomic_and_exactly_replayable
     )
     .await;
     assert_eq!(conflict.status(), StatusCode::CONFLICT);
-    assert_eq!(body_json(conflict).await["code"], "idempotency.conflict");
+    assert_eq!(body_json(conflict).await["code"], "idempotency.key-reused");
 
     let changed_context = json!({
         "changeContext": {
@@ -251,7 +251,7 @@ async fn real_postgres_batch_is_bounded_authorized_atomic_and_exactly_replayable
     )
     .await;
     assert_eq!(conflict.status(), StatusCode::CONFLICT);
-    assert_eq!(body_json(conflict).await["code"], "idempotency.conflict");
+    assert_eq!(body_json(conflict).await["code"], "idempotency.key-reused");
 
     for (label, uri, changed_claims, changed_body) in [
         (
@@ -286,7 +286,7 @@ async fn real_postgres_batch_is_bounded_authorized_atomic_and_exactly_replayable
     ] {
         let response = send_json(&app, uri, Some(changed_claims), "batch-key", changed_body).await;
         assert_eq!(response.status(), StatusCode::CONFLICT, "{label}");
-        assert_eq!(body_json(response).await["code"], "idempotency.conflict");
+        assert_eq!(body_json(response).await["code"], "idempotency.key-reused");
     }
 
     // Keys are per caller: the same key from another principal is that

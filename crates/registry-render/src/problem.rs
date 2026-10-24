@@ -42,8 +42,14 @@ pub enum ProblemKind {
     RenderTimeout,
     /// The render worker panicked (recycled).
     RenderPanicked,
-    /// The caller's API key is missing or wrong (HTTP 401).
+    /// The bearer credential is missing or invalid (HTTP 401).
     Unauthorized,
+    /// The verified credential lacks Render operation scope (HTTP 403).
+    Forbidden,
+    /// The credential verifier cannot reach a verdict (HTTP 503).
+    AuthenticationUnavailable,
+    /// The HTTP route is not exposed by the adapter (HTTP 404).
+    NotFound,
     /// The request body exceeds the configured ceiling (HTTP 413).
     BodyTooLarge,
     /// The caller exceeded a limit (HTTP 429/413 semantics).
@@ -77,11 +83,44 @@ impl ProblemKind {
             Self::RenderTimeout => 15,
             Self::RenderPanicked => 16,
             Self::Unauthorized => 17,
+            Self::Forbidden => 23,
+            Self::AuthenticationUnavailable => 24,
+            Self::NotFound => 25,
             Self::BodyTooLarge => 22,
             Self::RateLimited => 18,
             Self::AuditFailed => 19,
             Self::RuntimeInvalid => 20,
             Self::Internal => 21,
+        }
+    }
+
+    /// Shared HTTP problem code; CLI exit codes and slugs remain product-owned.
+    pub fn http_code(&self) -> &'static str {
+        match self {
+            Self::InvalidArgument => "render.invalid-argument",
+            Self::ManifestInvalid => "render.manifest-invalid",
+            Self::BundleTampered => "render.bundle-tampered",
+            Self::BundleUnsealed => "render.bundle-unsealed",
+            Self::UnknownDocument => "render.unknown-document",
+            Self::LabelsInvalid => "render.labels-invalid",
+            Self::FontInvalid => "render.font-invalid",
+            Self::DataInvalid => "render.data-invalid",
+            Self::AssetInvalid => "render.asset-invalid",
+            Self::IssuedAtMissing => "render.issued-at-missing",
+            Self::CompileFailed => "render.compile-failed",
+            Self::StrictWarnings => "render.strict-warnings",
+            Self::OutputTooLarge => "render.output-too-large",
+            Self::RenderTimeout => "render.render-timeout",
+            Self::RenderPanicked => "render.render-panicked",
+            Self::Unauthorized => "render.unauthorized",
+            Self::Forbidden => "render.forbidden",
+            Self::AuthenticationUnavailable => "render.authentication-unavailable",
+            Self::NotFound => "render.not-found",
+            Self::BodyTooLarge => "render.body-too-large",
+            Self::RateLimited => "render.rate-limited",
+            Self::AuditFailed => "render.audit-failed",
+            Self::RuntimeInvalid => "render.runtime-invalid",
+            Self::Internal => "render.internal",
         }
     }
 
@@ -102,6 +141,9 @@ impl ProblemKind {
             Self::RenderTimeout => 504,
             Self::RenderPanicked | Self::Internal => 500,
             Self::Unauthorized => 401,
+            Self::Forbidden => 403,
+            Self::AuthenticationUnavailable => 503,
+            Self::NotFound => 404,
             Self::BodyTooLarge => 413,
             Self::RateLimited => 429,
             Self::AuditFailed | Self::RuntimeInvalid => 503,
@@ -128,6 +170,9 @@ impl ProblemKind {
             Self::RenderTimeout => "render-timeout",
             Self::RenderPanicked => "render-panicked",
             Self::Unauthorized => "unauthorized",
+            Self::Forbidden => "forbidden",
+            Self::AuthenticationUnavailable => "authentication-unavailable",
+            Self::NotFound => "not-found",
             Self::BodyTooLarge => "body-too-large",
             Self::RateLimited => "rate-limited",
             Self::AuditFailed => "audit-failed",
@@ -234,6 +279,9 @@ mod tests {
             ProblemKind::RenderTimeout,
             ProblemKind::RenderPanicked,
             ProblemKind::Unauthorized,
+            ProblemKind::Forbidden,
+            ProblemKind::AuthenticationUnavailable,
+            ProblemKind::NotFound,
             ProblemKind::BodyTooLarge,
             ProblemKind::RateLimited,
             ProblemKind::AuditFailed,

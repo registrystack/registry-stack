@@ -826,6 +826,205 @@ async fn settle_review_for_completion(fixture: &Fixture, subject: &str) -> Uuid 
     created.accepted.request_id
 }
 
+#[derive(Clone)]
+struct DurableCompletionReceiver {
+    database: Arc<tokio_postgres::Client>,
+    lose_ack: bool,
+    failing_request_id: Uuid,
+    observations: Arc<Mutex<Vec<(serde_json::Value, String, String)>>>,
+}
+
+async fn durable_completion_receiver(
+    State(state): State<DurableCompletionReceiver>,
+    headers: axum::http::HeaderMap,
+    axum::Json(event): axum::Json<ReviewCompletion>,
+) -> StatusCode {
+    if headers
+        .get("authorization")
+        .and_then(|value| value.to_str().ok())
+        != Some("Bearer canary-completion-secret")
+    {
+        return StatusCode::UNAUTHORIZED;
+    }
+    let key = headers
+        .get("idempotency-key")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_owned();
+    let recipient = headers
+        .get("registry-recipient-binding")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(key, event.event_id.to_string());
+    let payload = serde_json::to_value(&event).unwrap();
+    state
+        .observations
+        .lock()
+        .unwrap()
+        .push((payload.clone(), key, recipient));
+    if event.request_id == state.failing_request_id {
+        return StatusCode::SERVICE_UNAVAILABLE;
+    }
+    // Awaiting this autocommit statement durably accepts the wake before the
+    // acknowledgement. No product effect is authorized by the notification.
+    state.database.execute("INSERT INTO receiver_completion_inbox(event_id,payload) VALUES($1,$2) ON CONFLICT(event_id) DO NOTHING", &[&event.event_id,&payload]).await.unwrap();
+    let retained: serde_json::Value = state
+        .database
+        .query_one(
+            "SELECT payload FROM receiver_completion_inbox WHERE event_id=$1",
+            &[&event.event_id],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    if retained != payload {
+        return StatusCode::CONFLICT;
+    }
+    if state.lose_ack {
+        StatusCode::SERVICE_UNAVAILABLE
+    } else {
+        StatusCode::ACCEPTED
+    }
+}
+
+#[tokio::test]
+async fn at_least_once_completion_durably_deduplicates_after_lost_ack_and_exhausts_bounded_retries()
+{
+    let fixture = fixture().await;
+    let request_id =
+        settle_review_for_completion(&fixture, "canary-durable-receiver-subject").await;
+    let failing_request_id =
+        settle_review_for_completion(&fixture, "canary-terminal-receiver-subject").await;
+    fixture.database.batch_execute("CREATE TABLE receiver_completion_inbox(event_id uuid PRIMARY KEY,payload jsonb NOT NULL)").await.unwrap();
+    let store = fixture.store.clone();
+    let database = Arc::new(fixture.database);
+    let observations = Arc::new(Mutex::new(Vec::new()));
+    let logs = CapturedLogs::default();
+    let subscriber = tracing_subscriber::fmt()
+        .json()
+        .without_time()
+        .with_ansi(false)
+        .with_writer(logs.clone())
+        .finish();
+    let subscriber = tracing::Dispatch::new(subscriber);
+    for attempt in 1..=3 {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!(
+            "http://{}/canary-private-destination",
+            listener.local_addr().unwrap()
+        );
+        // Restarting the receiver replaces all volatile receiver state. Only
+        // its PostgreSQL inbox makes the repeated first wake harmless.
+        let state = DurableCompletionReceiver {
+            database: Arc::clone(&database),
+            lose_ack: attempt == 1,
+            failing_request_id,
+            observations: Arc::clone(&observations),
+        };
+        let app = Router::new()
+            .route(
+                "/canary-private-destination",
+                post(durable_completion_receiver),
+            )
+            .with_state(state);
+        let receiver = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        database.execute("UPDATE casework_review_completion_outbox SET next_attempt_at=now() WHERE request_id IN($1,$2) AND state='pending'", &[&request_id,&failing_request_id]).await.unwrap();
+        // Force the second wake to fail with a non-2xx on all attempts, while
+        // the first is durably accepted then loses its first acknowledgement.
+        dispatch_review_completions_once_for_test(
+            store.clone(),
+            "registry-completion",
+            url.clone(),
+            "canary-completion-secret",
+        )
+        .with_subscriber(subscriber.clone())
+        .await
+        .unwrap();
+        receiver.abort();
+    }
+    let state: String = database
+        .query_one(
+            "SELECT state FROM casework_review_completion_outbox WHERE request_id=$1",
+            &[&request_id],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(state, "delivered");
+    let row = database
+        .query_one("SELECT count(*) FROM receiver_completion_inbox", &[])
+        .await
+        .unwrap();
+    assert_eq!(row.get::<_, i64>(0), 1);
+    let all_observed = observations.lock().unwrap().clone();
+    let observed: Vec<_> = all_observed
+        .iter()
+        .filter(|(event, _, _)| event["requestId"] == request_id.to_string())
+        .collect();
+    assert_eq!(observed.len(), 2);
+    assert_eq!(
+        observed[0], observed[1],
+        "eventId, payload, key and recipient binding stay exact across retry"
+    );
+    let terminal: String = database
+        .query_one(
+            "SELECT state FROM casework_review_completion_outbox WHERE request_id=$1",
+            &[&failing_request_id],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(terminal, "dead-lettered");
+    assert_eq!(
+        database
+            .query_one(
+                "SELECT attempt FROM casework_review_completion_outbox WHERE request_id=$1",
+                &[&failing_request_id]
+            )
+            .await
+            .unwrap()
+            .get::<_, i16>(0),
+        3
+    );
+    let entries = logs.entries();
+    let terminal_diagnostics = entries
+        .iter()
+        .filter(|entry| entry.pointer("/fields/terminal_state").is_some())
+        .collect::<Vec<_>>();
+    assert_eq!(terminal_diagnostics.len(), 1);
+    assert_eq!(
+        terminal_diagnostics[0]["fields"]["terminal_state"],
+        "dead-lettered"
+    );
+    assert_eq!(terminal_diagnostics[0]["fields"]["attempt"], 3);
+    assert_eq!(
+        entries
+            .iter()
+            .filter(|entry| entry.pointer("/fields/failure_class").is_some())
+            .count(),
+        4
+    );
+    let rendered = serde_json::to_string(&entries).unwrap();
+    for canary in [
+        "canary-private-destination",
+        "canary-completion-secret",
+        "canary-durable-receiver-subject",
+        "canary-terminal-receiver-subject",
+        &request_id.to_string(),
+        observed[0].0["eventId"].as_str().unwrap(),
+    ] {
+        assert!(
+            !rendered.contains(canary),
+            "diagnostics must exclude receiver and subject values"
+        );
+    }
+}
+
 #[tokio::test]
 async fn completion_dispatcher_leases_one_at_a_time_and_fences_a_stale_owner() {
     let fixture = fixture().await;

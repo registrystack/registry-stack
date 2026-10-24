@@ -666,6 +666,32 @@ fn proposal_source(operations: &[&str], readable_inputs: &[&str]) -> Value {
     value
 }
 
+#[test]
+fn proposal_draft_schema_omits_required_presence_without_changing_non_null_fixed_inputs() {
+    let registry = compile(&proposal_source(
+        &["get", "edit", "submit"],
+        &["item", "label"],
+    ));
+    let action = &registry.actions().actions[0];
+    assert!(action.inputs.iter().all(|input| input.required));
+    let draft = crate::artifacts::openapi_action_input_schema(action);
+    assert_eq!(draft["properties"]["input"]["required"], json!([]));
+    let validator = jsonschema::JSONSchema::options()
+        .with_draft(jsonschema::Draft::Draft202012)
+        .compile(&draft)
+        .unwrap();
+    assert!(validator.is_valid(&json!({"input":{}})));
+    assert!(!validator.is_valid(&json!({"input":{"newLabel":null}})));
+    assert!(!validator.is_valid(&json!({"input":{"newLabel":42}})));
+    let immediate = compile(&source());
+    let schema = crate::artifacts::openapi_action_input_schema(&immediate.actions().actions[0]);
+    let validator = jsonschema::JSONSchema::options()
+        .with_draft(jsonschema::Draft::Draft202012)
+        .compile(&schema)
+        .unwrap();
+    assert!(!validator.is_valid(&json!({"input":{}})));
+}
+
 fn compile_diagnostics(value: &Value) -> String {
     let project = parse_project_json(&serde_json::to_vec(value).unwrap()).unwrap();
     format!(

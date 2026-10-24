@@ -11,8 +11,8 @@ use registry_platform_audit::{AuditProfile, AuditWriter};
 use registry_platform_config::SecretResolver;
 #[cfg(feature = "postgres-test")]
 use registry_platform_dispatch::postgres::DispatchOutcome;
-use registry_platform_dispatch::postgres::{DispatchWorker, WorkerConfig};
-use registry_platform_httputil::{read_bounded, BearerToken, OutboundClientBuilder};
+use registry_platform_dispatch::postgres::{DispatchWorker, Disposition, WorkerConfig};
+use registry_platform_httputil::{BearerToken, OutboundClientBuilder};
 use thiserror::Error;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -133,6 +133,26 @@ async fn review_completion_worker(
             idle_poll: Duration::from_secs(1),
         },
     ))
+}
+
+fn completion_failure_diagnostic(destination: &str, attempt: i32, disposition: Disposition) {
+    tracing::warn!(
+        destination,
+        attempt,
+        failure_class = "delivery_failed",
+        "Casework completion attempt failed"
+    );
+    if matches!(
+        disposition,
+        Disposition::DeadLettered | Disposition::Expired
+    ) {
+        tracing::warn!(
+            destination,
+            attempt,
+            terminal_state = disposition.as_str(),
+            "Casework completion delivery exhausted"
+        );
+    }
 }
 
 fn completion_bearer_token(bytes: &[u8]) -> Result<BearerToken, RuntimeError> {
@@ -345,15 +365,13 @@ async fn deliver_review_completion(
     else {
         return false;
     };
-    let status = response.status();
-    let body_is_empty = read_bounded(response, 0)
-        .await
-        .is_ok_and(|body| body.is_empty());
-    completion_acknowledged(status, body_is_empty)
+    // Acknowledgement is decided from the status line. Dropping the response
+    // avoids buffering a receiver body or waiting for it to finish streaming.
+    completion_acknowledged(response.status())
 }
 
-fn completion_acknowledged(status: reqwest::StatusCode, body_is_empty: bool) -> bool {
-    status == reqwest::StatusCode::NO_CONTENT && body_is_empty
+fn completion_acknowledged(status: reqwest::StatusCode) -> bool {
+    status.is_success()
 }
 
 #[must_use]
@@ -791,6 +809,59 @@ mod tests {
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     use super::*;
+
+    #[tokio::test]
+    async fn completion_acknowledgement_does_not_read_an_unfinished_body() {
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+        for status in [200, 202, 204] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut buffer = [0; 8192];
+                assert!(stream.read(&mut buffer).await.unwrap() > 0);
+                stream
+                    .write_all(
+                        format!("HTTP/1.1 {status} Accepted\r\nContent-Length: 99999999\r\n\r\n")
+                            .as_bytes(),
+                    )
+                    .await
+                    .unwrap();
+                std::future::pending::<()>().await;
+            });
+            let target = ReviewCompletionTarget {
+                url: format!("http://{address}/completion"),
+                credential: ReviewCompletionCredential::Bearer(
+                    BearerToken::new("canary-secret").unwrap(),
+                ),
+                timeout: Duration::from_secs(5),
+                maximum_attempts: 3,
+                retry: Duration::from_secs(1),
+            };
+            let delivery = crate::LeasedReviewCompletion {
+                event: registry_casework_core::ReviewCompletion {
+                    event_type: registry_casework_core::ReviewCompletionType::ReviewCompleted,
+                    event_id: Uuid::new_v4(),
+                    request_id: Uuid::new_v4(),
+                    result_id: Uuid::new_v4(),
+                    completed_at: Utc::now(),
+                },
+                destination_id: "receiver".to_owned(),
+                recipient_binding: "canary-subject".to_owned(),
+            };
+            let client = OutboundClientBuilder::new().try_build().unwrap();
+            let result = tokio::time::timeout(
+                Duration::from_secs(1),
+                deliver_review_completion(&client, &target, &delivery),
+            )
+            .await;
+            server.abort();
+            assert!(
+                result.unwrap(),
+                "status {status} must acknowledge without reading the body"
+            );
+        }
+    }
     #[tokio::test]
     async fn review_completion_delivery_is_minimal_authenticated_and_stable_after_lost_ack() {
         let server = MockServer::start().await;
@@ -871,14 +942,14 @@ mod tests {
             retry: Duration::from_secs(1),
         };
         assert!(
-            !deliver_review_completion(&client, &nonempty_success_target, &delivery).await,
-            "only an empty 204 acknowledges completion"
+            deliver_review_completion(&client, &nonempty_success_target, &delivery).await,
+            "any 2xx acknowledges completion regardless of its body"
         );
-        assert!(!completion_acknowledged(reqwest::StatusCode::OK, true));
-        assert!(!completion_acknowledged(
-            reqwest::StatusCode::NO_CONTENT,
-            false
-        ));
+        for status in [200, 202, 204, 299] {
+            assert!(completion_acknowledged(
+                reqwest::StatusCode::from_u16(status).unwrap()
+            ));
+        }
 
         Mock::given(method("POST"))
             .and(path("/redirect"))

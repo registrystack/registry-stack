@@ -961,7 +961,10 @@ impl PreviewRecord {
 async fn authenticate(state: &HttpState, headers: &HeaderMap) -> Result<Caller, HttpError> {
     let result = match bearer_token(headers) {
         Some(token) => state.authenticator.authenticate(token).await,
-        None => Err(AuthenticationError::Refused),
+        None => {
+            state.authenticator.record_header_refusal();
+            Err(AuthenticationError::Refused)
+        }
     };
     result.map_err(|error| {
         state.metrics.record_authentication_refusal(error);

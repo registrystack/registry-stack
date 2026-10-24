@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-08-19"
+last_reviewed: "2026-10-24"
 doc_type: how-to
 persona:
   - operator
@@ -40,7 +40,7 @@ The Compose file is `compose/docker-compose.yaml` in `evidence-compose/`. You ow
 `evidencectl package` does not write it. It reads five variables:
 
 ```sh test-skip="needs the reader's candidate, secrets, Transit proxy, and reviewed image"
-export EVIDENCE_CANDIDATE_DIR='<candidate>/bundle'
+export EVIDENCE_CANDIDATE_DIR='<candidate>'
 export EVIDENCE_RUNTIME_FILE='<container-runtime.yaml>'
 export EVIDENCE_SECRET_ROOT='<secret-root>'
 export EVIDENCE_TRANSIT_SOCKET_DIR='<transit-socket-directory>'
@@ -48,10 +48,11 @@ export EVIDENCE_IMAGE='<reviewed-evidence-image-by-digest>'
 docker compose -f compose/docker-compose.yaml config
 ```
 
-`EVIDENCE_CANDIDATE_DIR` is the candidate's `bundle/` directory, the one holding `SHA256SUMS`,
-not the whole candidate. The adapter mounts it read-only at `/etc/registry-evidence/bundle`, and
-the runtime's `package.root` must name that directory. The adapter mounts the container runtime
-file at `/etc/registry-evidence/runtime.yaml` and the secret root at
+`EVIDENCE_CANDIDATE_DIR` is the whole candidate directory, the one containing `bundle/` and
+`compiled-authority.yaml`. The adapter mounts its bundle read-only at
+`/etc/registry-evidence/bundle`, and the runtime's `package.root` must name that directory. The
+adapter mounts the container runtime file at `/etc/registry-evidence/runtime.yaml` and the secret
+root at
 `/run/secrets/registry-evidence`, both read-only, the Transit socket directory read-only at
 `/run/registry-evidence`, and the `evidence-audit` named volume at `/var/lib/registry-evidence`,
 its only writable mount.
@@ -116,15 +117,12 @@ restart, never by changing the mounted one.
 
 ## Activate the target authority
 
-Run the activation inside the container, so the authority store is created and owned by the service
-identity. Mount the candidate's `compiled-authority.yaml` for this run only:
+Run the one-shot activation service inside the container, so the authority store is created and
+owned by the service identity. The service mounts the candidate's `compiled-authority.yaml` and
+the authority volume writable for this operation:
 
 ```sh
-docker compose -f compose/docker-compose.yaml run --rm \
-  -v "<candidate>/compiled-authority.yaml:/etc/registry-evidence/compiled-authority.yaml:ro" \
-  evidence authority activate \
-  --runtime-config /etc/registry-evidence/runtime.yaml \
-  --document /etc/registry-evidence/compiled-authority.yaml
+docker compose -f compose/docker-compose.yaml run --rm authority-activate
 ```
 
 ```text test-expect
@@ -154,6 +152,8 @@ Evidence package <package-digest> passed check (<count> requirements)
 
 `--require-runtime-dependencies` validates the mounted secrets and signs a self-test message
 through the proxy, so a missing socket fails with `evidence.deployment.signing-unavailable`.
+It also checks the configured runtime dependencies and applicable extract freshness on this host.
+It does not query source data endpoints or guarantee that a source will remain available.
 `--require-audit-under` refuses an audit path that does not resolve inside the volume. See
 [`evidence check`](../../reference/cli/evidence/check/).
 
@@ -183,7 +183,18 @@ The image's default command is `serve --runtime-config /etc/registry-evidence/ru
 `up` needs no arguments. The log carries an `evidence service listening` record once every listener
 is bound; if it is missing, the log names the startup failure. The adapter publishes no port, so
 reach the listener from another service on the Compose network and put TLS termination ahead of it.
-To read the audit log, see [Operate the Registry Evidence audit log](../../operate/evidence-audit/).
+A passing `/ready` healthcheck establishes the runtime's readiness boundary, not upstream
+source-data availability. Run the target-host preflight above before deployment. A stale or
+unavailable source can refuse evaluations that need it while other sources remain serviceable.
+Keep the [operator contract](https://github.com/registrystack/registry-stack/blob/main/products/evidence/OPERATOR-CONTRACT.md)
+as the owning definition of readiness and dependency checks.
+
+Use the safe source diagnostic categories and
+[value-free audit outcomes](../../operate/evidence-audit/#read-what-an-entry-establishes) for alerts.
+Alert on sustained dependency failures and audit/readiness faults without exporting selectors,
+source responses, credentials, or raw transport errors. Follow the configured operator recovery
+and retry budget; an unavailable upstream does not establish a recovery time, so do not invent a
+`Retry-After` interval.
 
 {/* Evidence: release/docker/Dockerfile.evidence; crates/registry-evidence/src/server.rs */}
 

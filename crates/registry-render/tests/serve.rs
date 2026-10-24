@@ -518,9 +518,8 @@ fn problem_details_are_bounded() {
         &repo_root().join("products/render/bundles/receipt"),
     );
     let server = start_server(&runtime);
-    // Some refusals name the offending request field: an undeclared locale,
-    // a badly named asset. The caller controls the length of those values,
-    // so the detail must be capped rather than echoed in full.
+    // HTTP remediation is fixed and value-free even when the refused locale
+    // is large. Detailed diagnostics remain with local operator commands.
     let locale = "x".repeat(50_000);
     let data = std::fs::read_to_string(
         repo_root().join("products/render/bundles/receipt/fixtures/data.json"),
@@ -548,8 +547,8 @@ fn problem_details_are_bounded() {
         detail.chars().count()
     );
     assert!(
-        detail.ends_with("[truncated]"),
-        "a capped detail says so: {detail}"
+        !detail.contains(&locale[..64]) && !detail.contains("[truncated]"),
+        "fixed remediation carries no caller-controlled locale: {detail}"
     );
 }
 
@@ -1204,8 +1203,8 @@ fn bundle_drift_after_serve_starts_is_refused_per_render() {
         assert_eq!(symlinked.status, 400, "{body}");
         assert!(body.contains("bundle-tampered"), "{body}");
         assert!(
-            body.contains("escape") && body.contains("symbolic link"),
-            "the detail names the offending package entry: {body}"
+            !body.contains("escape") && !body.contains("symbolic link"),
+            "HTTP problems carry no package entry names: {body}"
         );
         for root in [
             home.to_string_lossy().into_owned(),
@@ -1275,7 +1274,11 @@ fn oversized_bodies_are_refused_after_auth_as_problems() {
     assert_eq!(refused.status, 413);
     let text = String::from_utf8_lossy(&refused.body);
     assert!(text.contains("body-too-large"), "{text}");
-    assert!(text.contains("1024"), "{text}");
+    assert!(text.contains("Reduce the request body"), "{text}");
+    assert!(
+        !text.contains("1024"),
+        "configured values stay with the operator: {text}"
+    );
     // The refusal is audited like every other.
     drop(server);
     let lines = audit_lines(&home);
@@ -1355,7 +1358,10 @@ fn wrong_method_on_render_is_a_problem_and_audited() {
         String::from_utf8_lossy(&reply.body)
     );
     let text = String::from_utf8_lossy(&reply.body);
-    assert!(text.contains("use POST"), "{text}");
+    assert!(
+        text.contains("render.invalid-argument") && text.contains("request method"),
+        "{text}"
+    );
     drop(server);
     let lines = audit_lines(&home);
     assert!(
@@ -1566,4 +1572,94 @@ fn shutdown_is_bounded_by_grace_even_with_renders_in_flight() {
         "SIGTERM exit took {elapsed:?}; the shutdown window is bounded (grace 1s here)"
     );
     let _ = home;
+}
+
+#[test]
+fn maintained_sdk_uses_the_real_oidc_adapter_for_render_and_typed_refusals() {
+    use base64::Engine as _;
+    use registry_platform_crypto::{generate_private_jwk, sign, GeneratedKeyAlgorithm};
+    use registry_render_client::{BearerToken, RenderClient, RenderClientConfig};
+    let key = generate_private_jwk(GeneratedKeyAlgorithm::Es256).unwrap();
+    let make_token = |scope: &str, audience: serde_json::Value| {
+        let now = chrono::Utc::now().timestamp();
+        let header = serde_json::json!({"alg":"ES256","kid":key.kid,"typ":"at+jwt"});
+        let claims = serde_json::json!({"iss":"https://issuer.example.test","sub":"canary-principal","client_id":"portal","aud":audience,"iat":now,"exp":now+300,"scope":scope,"registry_grant_id":"canary-unrelated"});
+        let encoded = |value: &serde_json::Value| {
+            base64::engine::general_purpose::URL_SAFE_NO_PAD
+                .encode(serde_json::to_vec(value).unwrap())
+        };
+        let input = format!("{}.{}", encoded(&header), encoded(&claims));
+        let signature = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(sign(input.as_bytes(), &key).unwrap());
+        BearerToken::new(format!("{input}.{signature}")).unwrap()
+    };
+    let (home, runtime_path, _) = deployment(
+        DEFAULT_LIMITS,
+        &repo_root().join("products/render/bundles/receipt"),
+    );
+    write_secret(
+        &home.join("jwks.json"),
+        &serde_json::json!({"keys":[key.public()]}).to_string(),
+    );
+    let runtime_text=std::fs::read_to_string(&runtime_path).unwrap().replace(
+        "  apiKeyRef: secret:file/api.key",
+        "  oidc:\n    issuer: https://issuer.example.test\n    audience: urn:render:test\n    allowedClients: [portal]\n    jwksSource:\n      type: static\n      documentRef: secret:file/jwks.json"
+    );
+    std::fs::write(&runtime_path, runtime_text).unwrap();
+    let server = start_server(&runtime_path);
+    let client = RenderClient::new(RenderClientConfig::new(format!(
+        "http://127.0.0.1:{}",
+        server.port
+    )))
+    .unwrap();
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let input: serde_json::Value = serde_json::from_str(&receipt_body()).unwrap();
+    let rendered = runtime
+        .block_on(client.render(
+            &make_token(
+                "render:render",
+                serde_json::json!(["urn:other", "urn:render:test"]),
+            ),
+            "receipt",
+            &input,
+        ))
+        .unwrap();
+    assert_eq!(rendered.pdf_sha256, golden_receipt_sha());
+    assert_eq!(rendered.document_version, "receipt v3");
+    for (scope, audience, status, code) in [
+        (
+            "other",
+            serde_json::json!("urn:render:test"),
+            403,
+            "render.forbidden",
+        ),
+        (
+            "render:render",
+            serde_json::json!("urn:other"),
+            401,
+            "render.unauthorized",
+        ),
+    ] {
+        let error = runtime
+            .block_on(client.render(&make_token(scope, audience), "receipt", &input))
+            .unwrap_err();
+        assert_eq!(error.kind, "problem");
+        assert_eq!(error.status, Some(status));
+        assert_eq!(error.code.as_deref(), Some(code));
+        assert!(error.trace_id.is_some());
+        assert!(!error.outcome_unknown);
+    }
+    drop(server);
+    let records = audit_lines(&home).join("\n");
+    for protected in [
+        "canary-principal",
+        "issuer.example.test",
+        "portal",
+        "canary-unrelated",
+    ] {
+        assert!(
+            !records.contains(protected),
+            "credential claims stay out of audit"
+        );
+    }
 }

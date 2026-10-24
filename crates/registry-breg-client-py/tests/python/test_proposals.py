@@ -154,6 +154,34 @@ class ProposalPageTests(unittest.TestCase):
         try:
             client = BaseRegistryClient(f'http://127.0.0.1:{server.server_port}/tenant/')
             collection = client.registry_contract('reader').select_proposals('reader')
+            pending_manual = dict(
+                PROPOSAL,
+                state='submitted',
+                effectDigest=REVISION,
+                applicationStatus={'state': 'pending', 'mode': 'manual'},
+            )
+            value = {'items': [pending_manual]}
+            selected = client.list_proposals(collection, {'pendingManualApplication': True})
+            self.assertEqual(selected.items[0].identifier, ID)
+            self.assertIn('pendingManualApplication=true', requests[-1])
+            value = {'items': [pending_manual]}
+            client.list_proposals(collection, {'pendingManualApplication': False})
+            self.assertNotIn('pendingManualApplication=', requests[-1])
+            for application_status in [
+                None,
+                {'state': 'pending', 'mode': 'automatic',
+                 'automaticRetry': {'scheduled': True, 'attempts': 0, 'maximumAttempts': 3}},
+                {'state': 'blocked', 'mode': 'manual', 'reason': 'dependency-outage', 'recovery': 'retry'},
+            ]:
+                candidate = dict(pending_manual)
+                if application_status is None:
+                    candidate.pop('applicationStatus')
+                else:
+                    candidate['applicationStatus'] = application_status
+                value = {'items': [candidate]}
+                with self.assertRaises(BaseRegistryClientError) as raised:
+                    client.list_proposals(collection, {'pendingManualApplication': True})
+                self.assertEqual(raised.exception.kind, 'invalid-request')
             for cursor in ['', ' ', 'cursor\nvalue', 'cursor\tvalue', 'é', 'x' * 513]:
                 value = {'items': [PROPOSAL], 'nextCursor': cursor}
                 count = len(requests)
@@ -182,11 +210,25 @@ class ProposalPageTests(unittest.TestCase):
 
 class ProposalStartTests(unittest.TestCase):
     def test_start_accepts_exact_draft_replay_but_refuses_valid_non_draft_responses(self):
-        value = dict(PROPOSAL, state='draft', submissionVersion=1)
+        value = dict(
+            PROPOSAL,
+            state='draft',
+            submissionVersion=1,
+            links={
+                **PROPOSAL['links'],
+                'edit': {'method': 'POST', 'path': f'/v1/proposals/{ID}/edit',
+                         'accessProfile': 'reader', 'operation': 'edit', 'ifMatch': '"condition"'},
+            },
+        )
         requests = []
         metadata = dict(METADATA, actions=[{
             'id': 'correct', 'apiName': 'correct', 'revision': REVISION, 'display': {}, 'execution': {'mode': 'proposal'},
-            'route': '/v1/actions/correct/proposals', 'inputMode': 'fixed', 'inputs': [], 'referenceInputs': [],
+            'route': '/v1/actions/correct/proposals', 'inputMode': 'fixed', 'inputs': [{
+                'id': 'address', 'apiName': 'address', 'required': True, 'nullable': False,
+                'classification': 'internal',
+                'schema': {'type': 'string', 'minLength': 1, 'maxLength': 100},
+                'fieldType': {'type': 'string', 'minimumLength': 1, 'maximumLength': 100},
+            }], 'referenceInputs': [],
             'requiredConditionKeys': [], 'resultEffects': [], 'access': {'selectedProfile': 'reader'},
             'routes': {'start': {'method': 'POST', 'path': '/v1/actions/correct/proposals', 'operationId': 'actions.correct.start',
                                  'requiresIdempotencyKey': True, 'inputSchema': 'action-correct-invoke-input', 'responseSchema': 'action-correct-invoke-response'}},
@@ -226,6 +268,23 @@ class ProposalStartTests(unittest.TestCase):
             repeated = client.start_proposal(start, {}, 'exact-draft-start')
             self.assertEqual(first.document, repeated.document)
             self.assertEqual(requests[-1], requests[-2])
+            self.assertIsNotNone(
+                client.prepare_proposal(first, 'edit', {'input': {}}, 'edit-empty')
+            )
+            client.start_proposal(start, {}, 'k' * 256)
+            self.assertEqual(requests[-1][2], 'k' * 256)
+            count = len(requests)
+            for invalid in [{'address': None}, {'address': 42}, {'address': ''}]:
+                with self.assertRaises(BaseRegistryClientError) as raised:
+                    client.start_proposal(start, invalid, 'invalid-start')
+                self.assertEqual(raised.exception.kind, 'invalid-request')
+            with self.assertRaises(BaseRegistryClientError) as raised:
+                client.start_proposal(start, {}, 'k' * 257)
+            self.assertEqual(raised.exception.kind, 'invalid-request')
+            self.assertEqual(
+                len(requests), count,
+                'invalid supplied Proposal inputs fail before credential acquisition or I/O',
+            )
             for state in ['submitted', 'applied', 'cancelled']:
                 value = dict(PROPOSAL, state=state, submissionVersion=1)
                 if state == 'submitted':

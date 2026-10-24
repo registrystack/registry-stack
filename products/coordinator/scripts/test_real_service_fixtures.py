@@ -6,6 +6,8 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
+from types import SimpleNamespace
 
 SCRIPTS = Path(__file__).resolve().parent
 spec = importlib.util.spec_from_file_location("coordinator_native_journey", SCRIPTS / "test-real-services.py")
@@ -74,3 +76,24 @@ class NativeFixtureContracts(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class OwnedCleanupTests(unittest.TestCase):
+    def test_an_auto_removed_owned_image_container_is_already_clean(self):
+        journey = native.Journey.__new__(native.Journey)
+        journey.proxies, journey.children, journey.sessions = [], [], []
+        journey.containers = ["coordinator-tutorial-messagingctl-owned"]
+        journey.env, journey.root = {}, Path("/synthetic/owned")
+        with patch.object(native.subprocess, "run", side_effect=[
+            SimpleNamespace(returncode=1), SimpleNamespace(returncode=0, stdout=b"unrelated-container\n"),
+        ]):
+            journey.cleanup(True)
+
+    def test_an_unavailable_container_listing_does_not_hide_cleanup_failure(self):
+        journey = native.Journey.__new__(native.Journey)
+        journey.proxies, journey.children, journey.sessions = [], [], []
+        journey.containers = ["coordinator-tutorial-messagingctl-owned"]
+        journey.env, journey.root = {}, Path("/synthetic/owned")
+        with patch.object(native.subprocess, "run", return_value=SimpleNamespace(returncode=1, stdout=b"")):
+            with self.assertRaisesRegex(AssertionError, "owned cleanup failed"):
+                journey.cleanup(True)

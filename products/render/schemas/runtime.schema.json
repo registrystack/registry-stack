@@ -84,15 +84,37 @@
     },
     "AuthRuntime": {
       "additionalProperties": false,
+      "oneOf": [
+        {
+          "not": {
+            "required": [
+              "apiKeyRef"
+            ]
+          },
+          "required": [
+            "oidc"
+          ]
+        },
+        {
+          "not": {
+            "required": [
+              "oidc"
+            ]
+          },
+          "required": [
+            "apiKeyRef"
+          ]
+        }
+      ],
       "properties": {
         "apiKeyRef": {
           "$ref": "#/$defs/SecretReference",
-          "description": "Secret reference to the caller API key, under a declared provider."
+          "description": "Secret reference to the caller API key, under a declared provider.\nOmit when OIDC authentication is configured."
+        },
+        "oidc": {
+          "$ref": "#/$defs/OidcRuntime"
         }
       },
-      "required": [
-        "apiKeyRef"
-      ],
       "type": "object"
     },
     "Digest": {
@@ -104,6 +126,13 @@
       "additionalProperties": false,
       "description": "The environment secret provider. It takes no settings.",
       "type": "object"
+    },
+    "ExternalId": {
+      "description": "An identifier another system issues, written exactly as its issuer gives it.",
+      "maxLength": 512,
+      "minLength": 1,
+      "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$",
+      "type": "string"
     },
     "FileSecretProviderConfig": {
       "additionalProperties": false,
@@ -119,6 +148,61 @@
         "root"
       ],
       "type": "object"
+    },
+    "JwksSource": {
+      "description": "Where a runtime obtains the OIDC issuer's signing keys.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Read `jwks_uri` from the issuer's OpenID Connect discovery document.",
+          "properties": {
+            "type": {
+              "const": "discovery",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Fetch the key set from this absolute `https` URI, skipping discovery.\nA plain `http` URI is accepted on loopback for supervised local\ndevelopment, and beyond loopback only when the issuer block sets\n`allowInsecureHttp`.",
+          "properties": {
+            "type": {
+              "const": "uri",
+              "type": "string"
+            },
+            "uri": {
+              "$ref": "#/$defs/Url"
+            }
+          },
+          "required": [
+            "type",
+            "uri"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Read the key set from a secret, for deployments without network access\nto the issuer.",
+          "properties": {
+            "documentRef": {
+              "$ref": "#/$defs/SecretReference"
+            },
+            "type": {
+              "const": "static",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "documentRef"
+          ],
+          "type": "object"
+        }
+      ]
     },
     "LimitsRuntime": {
       "additionalProperties": false,
@@ -163,6 +247,14 @@
       "minLength": 1,
       "type": "string"
     },
+    "ListenerNetworkExposure": {
+      "description": "The operator-declared private network placement of an HTTP listener.",
+      "enum": [
+        "private-address",
+        "container-private"
+      ],
+      "type": "string"
+    },
     "ListenerRuntime": {
       "additionalProperties": false,
       "properties": {
@@ -188,6 +280,10 @@
           ],
           "description": "Loopback, private, or link-local address to listen on. A public or\nall-interfaces bind is refused when the file is read. TLS is the\nproxy's job, not Render's."
         },
+        "networkExposure": {
+          "$ref": "#/$defs/ListenerNetworkExposure",
+          "default": "private-address"
+        },
         "shutdownGraceMilliseconds": {
           "default": 30000,
           "description": "Time allowed for renders in flight to finish at shutdown, in\nmilliseconds. Open connections get the same again.",
@@ -199,6 +295,84 @@
       },
       "required": [
         "bind"
+      ],
+      "type": "object"
+    },
+    "OidcAllowedClients": {
+      "anyOf": [
+        {
+          "const": "unrestricted",
+          "description": "Admit a token from every client the issuer verifies.",
+          "type": "string"
+        },
+        {
+          "description": "Admit a token only from a listed client.",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        }
+      ],
+      "description": "How `allowedClients` is written (CFG-EMPTY-2): the keyword `unrestricted`,\nor a list of at least one client. An empty list is refused, because it\nreads as both \"none\" and \"any\"."
+    },
+    "OidcRuntime": {
+      "additionalProperties": false,
+      "description": "Serving-adapter OIDC configuration. The pure rendering library never reads it.",
+      "properties": {
+        "allowInsecureHttp": {
+          "default": false,
+          "description": "Permit plain HTTP beyond loopback to the configured issuer and to a\nJWKS URI declared in configuration. TLS remains required unless the\noperator explicitly accepts this transport risk.",
+          "type": "boolean"
+        },
+        "allowedClients": {
+          "$ref": "#/$defs/OidcAllowedClients",
+          "description": "The OAuth clients whose access tokens are admitted: `unrestricted` to\nadmit a token from every client the issuer verifies, or a list of at\nleast one distinct client. A runtime decides whether `unrestricted`\nis acceptable in production."
+        },
+        "assertionIssuers": {
+          "additionalProperties": {
+            "items": {
+              "maxLength": 512,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 16,
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "description": "Assertion authorities each client may exchange a subject token from,\nkeyed by client identifier. Omitted, no assertion-issuer rule applies;\nwritten, it lists at least one client, each with at least one\nauthority. Once a client is listed, a token it exchanged is accepted\nonly for one of that client's declared authorities, and a client that\nis not listed may exchange from no authority.",
+          "maxProperties": 64,
+          "minProperties": 1,
+          "propertyNames": {
+            "$ref": "#/$defs/ExternalId",
+            "maxLength": 128
+          },
+          "type": "object"
+        },
+        "audience": {
+          "description": "The audience every accepted access token must carry in `aud`.",
+          "maxLength": 512,
+          "minLength": 1,
+          "type": "string"
+        },
+        "issuer": {
+          "$ref": "#/$defs/Url",
+          "description": "Exact issuer accepted in access-token `iss` claims, an absolute\n`https` URL, or a plain `http` URL when `allowInsecureHttp` is set."
+        },
+        "jwksSource": {
+          "$ref": "#/$defs/JwksSource",
+          "default": {
+            "type": "discovery"
+          },
+          "description": "Where the issuer's signing keys come from. Absent reads the issuer's\nOpenID Connect discovery document."
+        }
+      },
+      "required": [
+        "issuer",
+        "audience",
+        "allowedClients"
       ],
       "type": "object"
     },
@@ -263,6 +437,13 @@
       "pattern": "^(?:secret:env/[A-Z][A-Z0-9_]{0,127}|secret:file/[a-z][a-z0-9._-]{0,127})$",
       "type": "string"
     },
+    "Url": {
+      "description": "An absolute http or https URL with a host preserved as written, no user information, and no backslash, whitespace or control character. DNS case and equivalent IPv6 literals are permitted.",
+      "format": "uri",
+      "maxLength": 2048,
+      "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://[^/?#@\\u005C\\u0000-\\u0020\\u007F-\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]+([/?#][^\\u005C\\u0000-\\u0020\\u007F-\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*)?$",
+      "type": "string"
+    },
     "ipv4SocketHost": {
       "description": "Four canonical decimal IPv4 octets followed by a decimal port.",
       "pattern": "^(?:(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]?|0)\\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]?|0):[0-9]+$"
@@ -320,7 +501,8 @@
       "description": "The verified bundle package Render serves."
     },
     "secretProviders": {
-      "$ref": "#/$defs/SecretProvidersConfig"
+      "$ref": "#/$defs/SecretProvidersConfig",
+      "description": "Providers for secret references. Omit when the authentication mode uses\nno secret references."
     }
   },
   "required": [
@@ -328,7 +510,6 @@
     "kind",
     "listener",
     "package",
-    "secretProviders",
     "auth",
     "audit"
   ],

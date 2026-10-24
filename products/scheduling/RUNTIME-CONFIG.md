@@ -168,8 +168,9 @@ realm that has nothing to do with booking, is a startup refusal in every mode
 (`scheduling.runtime.allowed-clients-required`), because a development file
 is copied toward production.
 A read or explain request whose token lacks the required scope is refused
-with `profile.not-authorized`, and the runtime logs, at `info`, the claim it
-read, the scope it expected, and the two keys that select them.
+with `profile.not-authorized`. A rate-limited `info` diagnostic names the fixed
+`scope` stage and the `authentication.oidc.scopeClaim`, `readsScope` and
+`explainScope` remediation keys, without claim or scope values.
 
 `assertionIssuers` maps a client id to the assertion authorities that client may
 exchange a subject token from. A deployment that performs no token exchange
@@ -383,3 +384,9 @@ cargo run --locked -p registry-scheduling --features schema \
 cargo test --locked -p registry-scheduling --features schema \
   schema::tests::committed_runtime_schema_matches_generated_bytes
 ```
+
+## Shared access-token profile
+
+See the maintained [per-resource access-token reference](../platform/ACCESS-TOKENS.md)
+for algorithms, token type, audience, scope and actor separation, issuer-network
+policy, lifetime and safe diagnostics.

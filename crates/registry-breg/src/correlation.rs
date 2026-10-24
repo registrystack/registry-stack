@@ -74,6 +74,7 @@ pub(crate) struct PublicProblem {
     code: &'static str,
     field_path: Option<String>,
     declared_refusal: Option<(String, String)>,
+    guard_reason: Option<String>,
     declared_field: Option<(String, String)>,
     declared_constraint: Option<Box<crate::mutation::RowLocalConstraintViolation>>,
     statistical_detail: Option<(&'static str, &'static str)>,
@@ -99,6 +100,7 @@ pub(crate) fn problem_response(
         code,
         field_path: None,
         declared_refusal: None,
+        guard_reason: None,
         declared_field: None,
         declared_constraint: None,
         statistical_detail: None,
@@ -132,6 +134,7 @@ pub(crate) fn problem_response_with_field_path(
         code,
         field_path: Some(field_path.clone()),
         declared_refusal: None,
+        guard_reason: None,
         declared_field: None,
         declared_constraint: None,
         statistical_detail: None,
@@ -181,6 +184,23 @@ pub(crate) fn action_refusal_response(
         .field
         .map(|field| format!("/input/{}", field.replace('~', "~0").replace('/', "~1")));
     problem.declared_refusal = Some((refusal.code, refusal.label));
+    response
+}
+
+/// Called only after the ordinary guard and boundary disclosure recheck.
+pub(crate) fn action_guard_failure_response(reason: Option<String>) -> Response {
+    let code = crate::problem::ProblemCode::ActionGuardFailed;
+    let mut response = problem_response(
+        StatusCode::PRECONDITION_FAILED,
+        code.title(),
+        code.description(),
+        code.code(),
+    );
+    response
+        .extensions_mut()
+        .get_mut::<PublicProblem>()
+        .expect("problem metadata")
+        .guard_reason = reason;
     response
 }
 
@@ -290,6 +310,9 @@ pub(crate) fn finish_response(
         if let Some((code, label)) = &problem.declared_refusal {
             object.insert("refusalCode".to_owned(), Value::String(code.clone()));
             object.insert("detail".to_owned(), Value::String(label.clone()));
+        }
+        if let Some(reason) = &problem.guard_reason {
+            object.insert("guardReason".to_owned(), Value::String(reason.clone()));
         }
         if let Some((name, value)) = problem.statistical_detail {
             object.insert(name.to_owned(), Value::String(value.to_owned()));

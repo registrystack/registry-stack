@@ -445,6 +445,7 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
         }
         Command::BundleCheck {
             bundle,
+            runtime_config,
             authority_document,
             json,
         } => {
@@ -473,6 +474,34 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
             };
             if let Some(path) = authority_document {
                 read_bundle_authority(&path, &bundle.config)?;
+            }
+            if let Some(path) = runtime_config {
+                let checked = registry_evidence::check::check_runtime_bindings_file(&path, &bundle);
+                if checked.has_errors() {
+                    let report = checked.report();
+                    if json {
+                        let document = CheckReport {
+                            ok: false,
+                            command: "bundle-check",
+                            status: "domain-refusal",
+                            api_version: CHECK_REPORT_API_VERSION,
+                            kind: CHECK_REPORT_KIND,
+                            package_digest: None,
+                            requirements: None,
+                            files_checked: report.files_checked().unwrap_or(1),
+                            diagnostics: report.to_json_value(),
+                        };
+                        println!(
+                            "{}",
+                            serde_json::to_string(&document).map_err(|_| {
+                                CliError("bundle check report could not be written")
+                            })?
+                        );
+                    } else {
+                        eprint!("{}", report.render_human());
+                    }
+                    return Ok(ExitCode::FAILURE);
+                }
             }
             OfflineKernel::compile(Arc::clone(&bundle))
                 .map_err(|error| kernel_compile_error("bundle compilation failed", error))?;
@@ -6030,6 +6059,8 @@ mod tests {
             "bundle-check",
             "--bundle",
             "/tmp/bundle",
+            "--runtime-config",
+            "/tmp/runtime.yaml",
             "--json"
         ])
         .is_ok());

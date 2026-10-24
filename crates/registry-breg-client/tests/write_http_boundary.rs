@@ -12,9 +12,9 @@ use axum::routing::any;
 use axum::Router;
 use registry_breg_client::{
     ingestion_chunk_digest, ingestion_prefix_digest, BRegActionAvailabilityRequest,
-    BRegActionInvocationRequest, BRegBatchBuilder, BRegBatchError, BRegBatchOperation,
-    BRegCreateRequest, BRegDirectWrite, BRegEtag, BRegIdempotencyKey, BRegIngestionChunk,
-    BRegIngestionRunListQuery, BRegIngestionRunRequest, BRegIngestionRunStatus,
+    BRegActionError, BRegActionInvocationRequest, BRegBatchBuilder, BRegBatchError,
+    BRegBatchOperation, BRegCreateRequest, BRegDirectWrite, BRegEtag, BRegIdempotencyKey,
+    BRegIngestionChunk, BRegIngestionRunListQuery, BRegIngestionRunRequest, BRegIngestionRunStatus,
     BRegMetadataErrorKind, BRegMetadataSelectionErrorKind, BRegPatchRequest, BRegProblemCode,
     BRegProblemFieldPath, BRegProtocolFailure, BRegRecordFormat, BRegRefusalCode,
     BaseRegistryClient, BaseRegistryClientConfig, BaseRegistryClientError,
@@ -2285,16 +2285,41 @@ async fn action_availability_is_metadata_bound_validated_and_sent_once() {
         },
         "bounds": {"maximumTargets":4,"maximumFieldMutations":8,"maximumSnapshotBytes":1024}
     }]);
-    let fixture = test_client(vec![
-        MockResponse::json(StatusCode::OK, metadata),
-        MockResponse::json(
+    let malformed = [
+        json!({"availability":{"available":false,"observedRevision":7,
+            "reason":"guard-not-satisfied","guardReason":"","recovery":"none"}}),
+        json!({"availability":{"available":false,"observedRevision":7,
+            "reason":"guard-not-satisfied","guardReason":"Uppercase","recovery":"none"}}),
+        json!({"availability":{"available":false,"observedRevision":7,
+            "reason":"guard-not-satisfied","guardReason":"has.dot","recovery":"none"}}),
+        json!({"availability":{"available":false,"observedRevision":7,
+            "reason":"guard-not-satisfied","guardReason":format!("a{}", "b".repeat(64)),"recovery":"none"}}),
+        json!({"availability":{"available":true,"observedRevision":7,"guardReason":"misplaced"}}),
+        json!({"availability":{"available":null,"observedRevision":7,
+            "reason":"input-required","guardReason":"misplaced","recovery":"correct-input",
+            "missingInputs":["legalName"]}}),
+    ];
+    let fixture = test_client(
+        std::iter::once(MockResponse::json(StatusCode::OK, metadata))
+        .chain(std::iter::once(MockResponse::json(
             StatusCode::OK,
             json!({"availability":{"available":null,"observedRevision":7,
                 "reason":"input-required","recovery":"correct-input","missingInputs":["legalName"]}}),
         )
         .with_header("cache-control", "no-store")
-        .with_header("vary", "authorization, accept"),
-    ])
+        .with_header("vary", "authorization, accept")))
+        .chain(std::iter::once(MockResponse::json(
+            StatusCode::OK,
+            json!({"availability":{"available":false,"observedRevision":8,
+                "reason":"guard-not-satisfied","guardReason":"legal_name_unchanged","recovery":"none"}}),
+        )
+        .with_header("cache-control", "no-store")
+        .with_header("vary", "authorization, accept")))
+        .chain(malformed.into_iter().map(|body| MockResponse::json(StatusCode::OK, body)
+            .with_header("cache-control", "no-store")
+            .with_header("vary", "authorization, accept")))
+        .collect(),
+    )
     .await;
     let metadata = fixture
         .client
@@ -2318,19 +2343,107 @@ async fn action_availability_is_metadata_bound_validated_and_sent_once() {
         .unwrap();
     assert_eq!(result.value.available(), None);
     assert_eq!(result.value.observed_revision(), Some(7));
+    assert_eq!(result.value.guard_reason(), None);
     assert_eq!(result.value.missing_inputs().unwrap(), ["legalName"]);
-    let requests = fixture.requests.lock().unwrap();
-    assert_eq!(requests.len(), 2);
-    assert_eq!(requests[1].method, "POST");
+    {
+        let requests = fixture.requests.lock().unwrap();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[1].method, "POST");
+        assert_eq!(
+            requests[1].uri,
+            "/tenant/base/v1/actions/rename-company/availability?accessProfile=company-writer"
+        );
+        assert!(requests[1].idempotency_key.is_none());
+        assert_eq!(
+            serde_json::from_slice::<Value>(&requests[1].body).unwrap(),
+            json!({"targetInput":"targetId","input":{"targetId":RECORD_ID}})
+        );
+    }
+    let unavailable = fixture
+        .client
+        .action_availability(&action, &request)
+        .await
+        .unwrap()
+        .value;
+    assert_eq!(unavailable.available(), Some(false));
+    assert_eq!(unavailable.observed_revision(), Some(8));
+    assert_eq!(unavailable.guard_reason(), Some("legal_name_unchanged"));
+    for _ in 0..6 {
+        let error = fixture
+            .client
+            .action_availability(&action, &request)
+            .await
+            .expect_err("malformed or misplaced guardReason is refused");
+        assert!(matches!(
+            error,
+            BaseRegistryClientError::Protocol {
+                failure: BRegProtocolFailure::Body,
+                ..
+            }
+        ));
+    }
+}
+
+#[tokio::test]
+async fn proposal_action_drafts_may_omit_required_inputs_but_supplied_values_stay_typed() {
+    let mut metadata = metadata_fixture();
+    let input = json!({"id":"legal-name","apiName":"legalName",
+        "schema":{"type":"string","minLength":1,"maxLength":100},
+        "fieldType":{"type":"string","minimumLength":1,"maximumLength":100},
+        "required":true,"nullable":false,"classification":"internal"});
+    metadata["proposals"] = json!({"method":"GET","path":"/v1/proposals",
+        "accessProfiles":["company-writer"],"actions":[]});
+    metadata["actions"] = json!([
+        {"id":"rename-now","route":"/v1/actions/rename-now","apiName":"renameNow",
+            "revision":REVISION,"display":{},"execution":{"mode":"immediate"},"inputMode":"fixed",
+            "inputs":[input.clone()],"referenceInputs":[],"requiredConditionKeys":[],"resultEffects":[],
+            "access":{"selectedProfile":"company-writer"},
+            "routes":{"invoke":{"method":"POST","path":"/v1/actions/rename-now",
+                "operationId":"actions.rename-now.invoke","requiresIdempotencyKey":true,
+                "inputSchema":"action-rename-now-invoke-input","responseSchema":"action-rename-now-invoke-response"},
+                "targetConditions":null},
+            "bounds":{"maximumTargets":4,"maximumFieldMutations":8,"maximumSnapshotBytes":1024}},
+        {"id":"rename-draft","route":"/v1/actions/rename-draft/proposals","apiName":"renameDraft",
+            "revision":REVISION,"display":{},"execution":{"mode":"proposal"},"inputMode":"fixed",
+            "inputs":[input],"referenceInputs":[],"requiredConditionKeys":[],"resultEffects":[],
+            "access":{"selectedProfile":"company-writer"},
+            "routes":{"start":{"method":"POST","path":"/v1/actions/rename-draft/proposals",
+                "operationId":"actions.rename-draft.start","requiresIdempotencyKey":true,
+                "inputSchema":"action-rename-draft-invoke-input","responseSchema":"action-rename-draft-invoke-response"}},
+            "bounds":{"maximumTargets":4,"maximumFieldMutations":8,"maximumSnapshotBytes":1024}}
+    ]);
+    let fixture = test_client(vec![MockResponse::json(StatusCode::OK, metadata)]).await;
+    let metadata = fixture
+        .client
+        .registry_contract(Some("company-writer"))
+        .await
+        .unwrap()
+        .value;
+    let immediate = metadata
+        .select_action("rename-now", "company-writer")
+        .unwrap();
+    let proposal = metadata
+        .select_action("rename-draft", "company-writer")
+        .unwrap();
     assert_eq!(
-        requests[1].uri,
-        "/tenant/base/v1/actions/rename-company/availability?accessProfile=company-writer"
+        BRegActionInvocationRequest::new(&immediate, Map::new(), None).unwrap_err(),
+        BRegActionError::MissingInput
     );
-    assert!(requests[1].idempotency_key.is_none());
-    assert_eq!(
-        serde_json::from_slice::<Value>(&requests[1].body).unwrap(),
-        json!({"targetInput":"targetId","input":{"targetId":RECORD_ID}})
-    );
+    BRegActionInvocationRequest::new(&proposal, Map::new(), None)
+        .expect("a Proposal draft may omit a required input until Submit");
+    for invalid in [Value::Null, json!(42), json!("")] {
+        assert_eq!(
+            BRegActionInvocationRequest::new(
+                &proposal,
+                Map::from_iter([("legalName".to_owned(), invalid)]),
+                None,
+            )
+            .unwrap_err(),
+            BRegActionError::InvalidInput
+        );
+    }
+    assert_eq!(fixture.requests.lock().unwrap().len(), 1);
+    assert_eq!(fixture.token.0.load(Ordering::SeqCst), 1);
 }
 
 #[tokio::test]
@@ -3197,4 +3310,163 @@ async fn immediate_action_refusals_carry_their_declared_reason_and_stay_bounded(
         assert!(!format!("{error:?}: {error}").contains("canary"));
     }
     assert_eq!(fixture.requests.lock().unwrap().len(), 1 + total);
+}
+
+#[tokio::test]
+async fn guard_failures_expose_only_bounded_authored_copy_keys() {
+    let base = problem_response(BRegProblemCode::ActionGuardFailed);
+    let document: Value = serde_json::from_slice(&base.body).unwrap();
+    let response_for = |mut value: Value, guard_reason: Value| {
+        value["guardReason"] = guard_reason;
+        let mut response = base.clone();
+        response.body = serde_json::to_vec(&value).unwrap();
+        response
+    };
+    let accepted = [
+        "a".to_owned(),
+        "legal_name_unchanged".to_owned(),
+        format!("a{}", "b".repeat(63)),
+    ];
+    let mut refused = [
+        json!(""),
+        json!("Uppercase"),
+        json!("has.dot"),
+        json!(format!("a{}", "b".repeat(64))),
+        Value::Null,
+    ]
+    .into_iter()
+    .map(|reason| response_for(document.clone(), reason))
+    .collect::<Vec<_>>();
+    for (code, member, value) in [
+        (
+            BRegProblemCode::ActionRefused,
+            "guardReason",
+            json!("misplaced"),
+        ),
+        (
+            BRegProblemCode::ActionGuardFailed,
+            "refusalCode",
+            json!(REFUSAL_CODE),
+        ),
+        (
+            BRegProblemCode::ActionGuardFailed,
+            "reasonCode",
+            json!("source-data-error"),
+        ),
+    ] {
+        let mut response = problem_response(code);
+        let mut body: Value = serde_json::from_slice(&response.body).unwrap();
+        body[member] = value;
+        response.body = serde_json::to_vec(&body).unwrap();
+        refused.push(response);
+    }
+    let fixture = single_attempt_client(
+        std::iter::once(metadata_response())
+            .chain(
+                accepted
+                    .iter()
+                    .map(|reason| response_for(document.clone(), json!(reason))),
+            )
+            .chain(refused)
+            .collect(),
+    )
+    .await;
+    let metadata = fixture
+        .client
+        .registry_contract(Some("company-writer"))
+        .await
+        .unwrap()
+        .value;
+    let binding = create_binding(&metadata);
+    for expected in &accepted {
+        let error = fixture
+            .client
+            .create_record(
+                &binding,
+                &create_request(),
+                &key("guard-failure"),
+                BRegRecordFormat::Json,
+            )
+            .await
+            .expect_err("guard failure is returned");
+        assert_eq!(
+            error.problem_code(),
+            Some(BRegProblemCode::ActionGuardFailed)
+        );
+        assert_eq!(error.guard_reason(), Some(expected.as_str()));
+        assert_eq!(error.refusal_code(), None);
+        assert_eq!(error.reason_code(), None);
+        let rendered = format!("{error:?}: {error}");
+        assert!(rendered.contains("BRegRefusalCode(<undisclosed>)"));
+        if expected.len() > 1 {
+            assert!(!rendered.contains(expected));
+        }
+    }
+    for _ in 0..8 {
+        let error = fixture
+            .client
+            .create_record(
+                &binding,
+                &create_request(),
+                &key("malformed-guard-failure"),
+                BRegRecordFormat::Json,
+            )
+            .await
+            .expect_err("malformed or misplaced guard reason is refused");
+        assert!(matches!(
+            error,
+            BaseRegistryClientError::Protocol {
+                failure: BRegProtocolFailure::Problem,
+                ..
+            }
+        ));
+        assert_eq!(error.guard_reason(), None);
+    }
+}
+
+#[tokio::test]
+async fn idempotency_key_reuse_uses_the_current_wire_code() {
+    let current = problem_response(BRegProblemCode::IdempotencyConflict);
+    let mut retired = current.clone();
+    let mut retired_body: Value = serde_json::from_slice(&retired.body).unwrap();
+    retired_body["type"] =
+        json!("https://id.registrystack.org/problems/registry-breg/idempotency/conflict");
+    retired_body["code"] = json!("idempotency.conflict");
+    retired.body = serde_json::to_vec(&retired_body).unwrap();
+    let fixture = single_attempt_client(vec![metadata_response(), current, retired]).await;
+    let metadata = fixture
+        .client
+        .registry_contract(Some("company-writer"))
+        .await
+        .unwrap()
+        .value;
+    let binding = create_binding(&metadata);
+    let current = fixture
+        .client
+        .create_record(
+            &binding,
+            &create_request(),
+            &key("current-idempotency-code"),
+            BRegRecordFormat::Json,
+        )
+        .await
+        .expect_err("key reuse is refused");
+    assert_eq!(
+        current.problem_code().map(BRegProblemCode::code),
+        Some("idempotency.key-reused")
+    );
+    assert!(!current.is_outcome_unknown());
+
+    let retired = fixture
+        .client
+        .create_record(
+            &binding,
+            &create_request(),
+            &key("retired-idempotency-code"),
+            BRegRecordFormat::Json,
+        )
+        .await
+        .expect_err("the retired code is not treated as the typed refusal");
+    assert_eq!(retired.problem_code(), None);
+    assert!(!retired.is_outcome_unknown());
 }

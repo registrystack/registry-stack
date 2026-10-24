@@ -28,7 +28,7 @@ from macos_fips_packaging import bundle_macos_fips
 ROOT = Path(__file__).resolve().parents[2]
 FACADE = ROOT / "crates" / "registry-stack-client-py"
 COMPATIBILITY = ROOT / "crates" / "registry-stack-client" / "compatibility.json"
-PRODUCTS = ("discovery", "evidence", "breg", "casework", "messaging", "scheduling")
+PRODUCTS = ("discovery", "evidence", "breg", "casework", "messaging", "scheduling", "render", "coordinator")
 WHEEL_PATTERN = re.compile(r"^[^-]+-(?P<version>[^-]+)-(?P<tag>.+)\.whl$")
 MACOS_SHARED_FIPS_MINIMUM_VERSION = (0, 33, 0)
 
@@ -140,8 +140,10 @@ def main() -> int:
         action="store_true",
         help="include Scheduling in an explicit local integration before its first release",
     )
+    parser.add_argument("--include-render", action="store_true")
+    parser.add_argument("--include-coordinator", action="store_true")
     for product in PRODUCTS:
-        parser.add_argument(f"--{product}-wheel", type=Path, required=True)
+        parser.add_argument(f"--{product}-wheel", type=Path, required=product != "render")
     args = parser.parse_args()
 
     try:
@@ -169,6 +171,11 @@ def main() -> int:
             "its first release require --include-scheduling for local integration; use the release tag for published bytes"
         )
 
+    for product in ("coordinator",):
+        include = getattr(args, f"include_{product}")
+        if not getattr(client_registry, f"includes_{product}")(args.version, **{f"include_{product}": include}):
+            parser.error(f"this checkout contains the {product} facade; readiness hold requires --include-{product} for local integration")
+
     configured_version = None
     try:
         configured_version = tomllib.loads(
@@ -182,7 +189,13 @@ def main() -> int:
             f"{args.version}: {configured_version}"
         )
 
-    inputs = {product: getattr(args, f"{product}_wheel") for product in PRODUCTS}
+    products = client_registry.stack_python_namespaces(args.version,
+        include_casework=args.include_casework, include_messaging=args.include_messaging,
+        include_scheduling=args.include_scheduling, include_render=args.include_render,
+        include_coordinator=args.include_coordinator)
+    inputs = {product: getattr(args, f"{product}_wheel") for product in products}
+    if any(wheel is None for wheel in inputs.values()):
+        parser.error("every selected product requires its component wheel; --include-render requires --render-wheel")
     tags = set()
     files: dict[str, bytes] = {}
     for product, wheel in inputs.items():
@@ -229,7 +242,12 @@ def main() -> int:
     facade_root = FACADE / "python" / "registry_client"
     for path in sorted(facade_root.iterdir()):
         if path.is_file():
-            files[f"registry_client/{path.name}"] = path.read_bytes()
+            data = path.read_bytes()
+            if "render" not in products and path.name in ("__init__.py", "__init__.pyi"):
+                data = data.replace(b"import registry_client.render as render\n", b"")
+                data = data.replace(b"from . import render as render\n", b"")
+                data = data.replace(b'"render", ', b"")
+            files[f"registry_client/{path.name}"] = data
     try:
         files["registry_client/compatibility.json"] = compatibility_metadata(
             args.version

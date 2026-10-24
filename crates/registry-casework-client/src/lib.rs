@@ -13,7 +13,9 @@
 
 #![deny(unsafe_code)]
 
+mod accepted;
 mod client;
+pub use accepted::{accepted_binding, AcceptedBindingValidation};
 mod config;
 mod error;
 mod model;

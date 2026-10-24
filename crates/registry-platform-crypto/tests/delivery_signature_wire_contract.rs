@@ -55,3 +55,59 @@ fn verifying_accepts_the_pinned_version_one_signature() {
     )
     .expect("verifies");
 }
+
+#[test]
+fn shared_language_vectors_preserve_raw_timestamp_bytes_and_freshness() {
+    use registry_platform_crypto::delivery_signature::VerificationError;
+    let vectors: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/delivery-signatures.json")).unwrap();
+    for vector in vectors.as_array().unwrap() {
+        let exact = SignatureFields {
+            delivery_time: vector["deliveryTime"].as_str().unwrap(),
+            ..fields()
+        };
+        let signature = vector["signature"].as_str().unwrap();
+        assert_eq!(sign_v1(KEY, exact).unwrap(), signature);
+        let expected = if vector["valid"].as_bool().unwrap() {
+            Ok(())
+        } else {
+            Err(VerificationError::InvalidDeliveryTime)
+        };
+        assert_eq!(
+            verify_v1(
+                KEY,
+                exact,
+                signature,
+                delivery_time(),
+                Duration::from_secs(1)
+            ),
+            expected
+        );
+        if expected.is_ok() {
+            assert_eq!(
+                verify_v1(
+                    KEY,
+                    exact,
+                    signature,
+                    delivery_time() + Duration::from_secs(5),
+                    Duration::from_secs(1)
+                ),
+                Err(VerificationError::DeliveryTimeSkew)
+            );
+        }
+        let altered = SignatureFields {
+            delivery_time: "2026-08-30T00:00:01.0000Z",
+            ..exact
+        };
+        assert_eq!(
+            verify_v1(
+                KEY,
+                altered,
+                signature,
+                delivery_time(),
+                Duration::from_secs(1)
+            ),
+            Err(VerificationError::InvalidSignature)
+        );
+    }
+}

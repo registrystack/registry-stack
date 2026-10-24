@@ -55,3 +55,10 @@ the recommended Stack distribution.
 The client accepts additive HTTP response members while rejecting duplicate
 members, invalid known values, and unsupported service kinds. Persisted
 selections, provider descriptions, and server configuration remain strict.
+
+## HTTP problems
+
+Discovery uses the [shared problem contract](../platform/HTTP-PROBLEMS.md),
+including fixed safe `detail`, `family.reason` `code`, and a `traceId` matching
+`traceparent`. Existing problem type URIs remain stable. An indeterminate
+503 has no synthetic Retry-After interval.

@@ -98,6 +98,23 @@ fn production_candidate_handoff_reaches_verified_assertion_and_audit() {
     assert!(fixture.candidate.join("compiled-authority.yaml").is_file());
     fixture.activate_candidate_bundle();
     fixture.provision_target_secrets();
+    let absent_authority = Command::new(evidence)
+        .arg("check")
+        .arg("--runtime-config")
+        .arg(&fixture.target_runtime)
+        .output()
+        .expect("pre-activation check starts");
+    assert_eq!(
+        absent_authority.status.code(),
+        Some(1),
+        "a package without activated target authority must be refused"
+    );
+    assert!(
+        String::from_utf8_lossy(&absent_authority.stderr)
+            .contains("target authority is unavailable"),
+        "the refusal must name authority activation as the missing step: {}",
+        String::from_utf8_lossy(&absent_authority.stderr)
+    );
     fixture.activate_target_authority(evidence);
 
     let mut https = fixture.start_https();

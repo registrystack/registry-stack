@@ -500,3 +500,9 @@ applies that plan in one locked transaction. `messagingctl status
 the active row and the runtime role still has the recorded authority. A
 package change takes effect on restart after `apply`, and an edited file never
 changes what a running deployment sends.
+
+## Shared access-token profile
+
+See the maintained [per-resource access-token reference](../platform/ACCESS-TOKENS.md)
+for algorithms, token type, audience, scope and actor separation, issuer-network
+policy, lifetime and safe diagnostics.

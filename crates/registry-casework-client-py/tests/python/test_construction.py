@@ -63,6 +63,20 @@ class ConstructionTests(unittest.TestCase):
         self.assertNotIn(secret, str(raised.exception))
         self.assertNotIn(secret, repr(raised.exception))
 
+    def test_accepted_binding_has_safe_field_guidance_before_token_or_io(self):
+        client = CaseworkClient("https://casework.example.invalid/")
+        valid = {"requestId":"00000000-0000-4000-8000-000000000001", "policy":{"id":"review","version":"1","digest":"sha256:"+"a"*64}, "subject":{"source":"registry","type":"case","id":"one","version":"1","digest":"sha256:"+"b"*64}, "submissionDigest":"sha256:"+"c"*64}
+        for key in valid:
+            with self.subTest(key=key), self.assertRaises(CaseworkClientError) as raised:
+                client.review_result("bad token canary", "requester", {**valid,key:"canary-private-binding"})
+            error = raised.exception
+            self.assertEqual(error.kind,"invalid-request")
+            self.assertEqual(error.validation,{"path":"$."+key,"reason":"binding-invalid","allowed":[]})
+            self.assertNotIn("canary",str(error))
+        with self.assertRaises(CaseworkClientError) as raised:
+            client.review_result("bad token canary", "requester", {**valid,"requestId":"00000000-0000-0000-0000-000000000000"})
+        self.assertEqual(raised.exception.validation,{"path":"$.requestId","reason":"binding-invalid","allowed":[]})
+
     def test_cyclic_request_is_rejected_before_io(self) -> None:
         display: dict[str, object] = {}
         display["cycle"] = display

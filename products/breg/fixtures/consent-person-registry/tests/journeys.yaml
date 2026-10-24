@@ -159,7 +159,7 @@ journeys:
             decision: given
             channel: self-service
             effectiveAt: "2026-09-01T01:00:00Z"
-        expect: {outcome: refusal, status: 409, problemCode: idempotency.conflict}
+        expect: {outcome: refusal, status: 409, problemCode: idempotency.key-reused}
       - id: food-agency-reads-after-consent
         recordType: person
         accessProfile: food-targeting

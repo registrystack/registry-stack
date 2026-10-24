@@ -80,6 +80,13 @@ pub enum MigrationError {
     /// package. The bounded inventory contains compiled identifiers only.
     #[error("retained local hook deliveries prevent activation")]
     RetainedLocalHooks(crate::postgres::RetainedLocalHookDeliveries),
+    /// Refused before maintenance: legacy data contains more than one run
+    /// which still occupies an import authority. Each creator can recover it
+    /// through the authenticated run routes of the still-serving runtime.
+    #[error(
+        "multiple non-terminal import runs share one live import authority; use `bregctl data runs list --record-route <API_ROUTE>` and `bregctl data runs cancel --record-route <API_ROUTE>` as each run creator, then retry plan or apply"
+    )]
+    ConflictingImportRuns,
     /// Refused before maintenance began: the migration database could not be
     /// reached. Nothing was changed, so the same apply may simply be retried.
     #[error("the migration database was unavailable before maintenance began")]
@@ -1072,6 +1079,7 @@ impl PlannedActivation {
                 "proposals",
                 "history-coverage",
                 "hook-bindings",
+                "import-runs",
                 "active-state",
             ],
             Self::RoleChange => &[
@@ -1082,6 +1090,7 @@ impl PlannedActivation {
                 "active-roles",
                 "history-coverage",
                 "hook-bindings",
+                "import-runs",
                 "active-state",
             ],
             Self::AlreadyActive => &[
@@ -1539,10 +1548,16 @@ async fn activate(request: ApplyVerifiedPackageRequest<'_>, mode: ApplyMode) -> 
             crate::postgres::PostgresKernelError::RetainedLocalHooks(retained) => {
                 MigrationError::RetainedLocalHooks(retained)
             }
+            crate::postgres::PostgresKernelError::ConflictingImportRuns => {
+                MigrationError::ConflictingImportRuns
+            }
             error => named_refusal(error).unwrap_or(MigrationError::ApplyFailed),
         };
-        if matches!(&refused, MigrationError::RetainedLocalHooks(_)) {
-            // This guard read only and rolled its transaction back. No
+        if matches!(
+            &refused,
+            MigrationError::RetainedLocalHooks(_) | MigrationError::ConflictingImportRuns
+        ) {
+            // This guard is read-only and rolled its transaction back. No
             // maintenance target or ledger entry was written.
             let answered = attempt.respond("refused").await;
             let _ = connection.release().await;
@@ -1849,6 +1864,9 @@ async fn rehearse_begin(
             }
             crate::postgres::PostgresKernelError::RetainedLocalHooks(retained) => {
                 MigrationError::RetainedLocalHooks(retained)
+            }
+            crate::postgres::PostgresKernelError::ConflictingImportRuns => {
+                MigrationError::ConflictingImportRuns
             }
             error => named_refusal(error).unwrap_or(MigrationError::ApplyFailed),
         })

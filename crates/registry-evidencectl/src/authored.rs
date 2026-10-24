@@ -431,6 +431,56 @@ pub(crate) fn runtime_bundle_refusal(
     )
 }
 
+/// Rebase diagnostics about a generated runtime document to the target the
+/// adopter authored. The generated `sourceExtracts` key is the target's
+/// `extracts` key; every other runtime member keeps the same pointer.
+pub(crate) fn runtime_target_refusal(
+    report: Report,
+    runtime: &Path,
+    target: Option<&Path>,
+) -> Report {
+    let Some(target) = target else {
+        return report;
+    };
+    let tree = scanned(
+        target.parent().unwrap_or_else(|| Path::new(".")),
+        target
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or(""),
+    );
+    Report::new(
+        report
+            .into_diagnostics()
+            .into_iter()
+            .map(|mut diagnostic| {
+                let generated = diagnostic
+                    .source
+                    .as_ref()
+                    .is_some_and(|source| Path::new(&source.file) == runtime);
+                if !generated {
+                    return diagnostic;
+                }
+                if diagnostic.path == "/sourceExtracts"
+                    || diagnostic.path.starts_with("/sourceExtracts/")
+                {
+                    diagnostic.path = diagnostic.path.replacen("/sourceExtracts", "/extracts", 1);
+                }
+                diagnostic.source = Some(Source {
+                    file: target.display().to_string(),
+                    line: None,
+                    column: None,
+                });
+                if let Some(tree) = &tree {
+                    placed(diagnostic, tree)
+                } else {
+                    diagnostic
+                }
+            })
+            .collect(),
+    )
+}
+
 /// Render a value as block YAML with every sequence indented beneath its key,
 /// the form the convention's examples use. `serde_norway` writes a sequence
 /// at its key's column, so each such block is shifted two columns right,

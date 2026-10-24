@@ -35,6 +35,7 @@ const metadata = {
 
 test('metadata-selected immediate action conditions and invocations use exact caller input', async () => {
   const requests = [];
+  let availabilityDocument = {available: false, observedRevision: 3, reason: 'guard-not-satisfied', guardReason: 'legal_name_unchanged', recovery: 'none'};
   const server = http.createServer(async (request, response) => {
     let body = ''; for await (const chunk of request) body += chunk;
     requests.push({ url: request.url, body, headers: request.headers });
@@ -44,7 +45,7 @@ test('metadata-selected immediate action conditions and invocations use exact ca
     response.setHeader('vary', 'authorization, accept');
     if (request.url.startsWith('/v1/registry')) return response.end(JSON.stringify(metadata));
     if (request.url.includes('/target-conditions')) return response.end(`{"preconditions":{"targetId":{"ifMatch":"\\"opaque-condition\\""}}}`);
-    if (request.url.includes('/availability')) return response.end('{"availability":{"available":false,"observedRevision":3,"reason":"guard-not-satisfied","recovery":"none"}}');
+    if (request.url.includes('/availability')) return response.end(JSON.stringify({availability: availabilityDocument}));
     return response.end(`{"action":"update-item","applicationId":"${applicationId}","results":{"item":{"recordType":"item","recordId":"${targetId}","revision":9007199254740992}}}`);
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -58,10 +59,26 @@ test('metadata-selected immediate action conditions and invocations use exact ca
     assert.match(contract.actionsJson, /"update-item"/);
     const binding = contract.selectAction('update-item', 'writer');
     const availability = await client.actionAvailability(binding, 'targetId', { targetId });
-    assert.deepEqual(availability.value, { available: false, observedRevision: 3, reason: 'guard-not-satisfied', recovery: 'none' });
+    assert.deepEqual(availability.value, { available: false, observedRevision: 3, reason: 'guard-not-satisfied', guardReason: 'legal_name_unchanged', recovery: 'none' });
     assert.deepEqual(JSON.parse(requests.at(-1).body), { targetInput: 'targetId', input: { targetId } });
     const availabilityJson = await client.actionAvailabilityJson(binding, 'targetId', `{"targetId":"${targetId}"}`);
     assert.match(availabilityJson.valueJson, /"guard-not-satisfied"/);
+    assert.match(availabilityJson.valueJson, /"guardReason":"legal_name_unchanged"/);
+    for (const malformed of [
+      {...availabilityDocument, guardReason: ''},
+      {...availabilityDocument, guardReason: 'Uppercase'},
+      {...availabilityDocument, guardReason: 'has.dot'},
+      {...availabilityDocument, guardReason: `a${'b'.repeat(64)}`},
+      {available: true, observedRevision: 3, guardReason: 'misplaced'},
+      {available: null, observedRevision: 3, reason: 'input-required', guardReason: 'misplaced', recovery: 'correct-input', missingInputs: ['label']},
+    ]) {
+      availabilityDocument = malformed;
+      await assert.rejects(
+        client.actionAvailability(binding, 'targetId', {targetId}),
+        error => error.kind === 'protocol',
+      );
+    }
+    availabilityDocument = {available: false, observedRevision: 3, reason: 'guard-not-satisfied', guardReason: 'legal_name_unchanged', recovery: 'none'};
     const conditions = await client.actionTargetConditions(binding, { targetId });
     assert.deepEqual(conditions.preconditionKeys, ['targetId']);
     assert.equal(conditions.valueJson, '{"preconditions":{"targetId":{"ifMatch":"\\"opaque-condition\\""}}}');

@@ -45,6 +45,17 @@ def main() -> None:
             ("scheduling", registry_client.scheduling.SchedulingClient),
             ("scheduling", registry_client.scheduling.SchedulingClientError),
         )
+    if hasattr(registry_client, "coordinator"):
+        public_types += (
+            ("coordinator", registry_client.coordinator.CoordinatorClient),
+            ("coordinator", registry_client.coordinator.CoordinatorClientError),
+        )
+    # Held Render is exercised when explicitly assembled into a local candidate.
+    if hasattr(registry_client, "render"):
+        public_types += (
+            ("render", registry_client.render.RenderClient),
+            ("render", registry_client.render.RenderClientError),
+        )
     for product, value in public_types:
         expected_module = f"registry_client.{product}"
         if value.__module__ != expected_module:
@@ -83,6 +94,14 @@ def main() -> None:
         )
         if scheduling_client is None:
             raise SystemExit("Scheduling client construction returned no client")
+    if hasattr(registry_client, "coordinator"):
+        coordinator_client = registry_client.coordinator.CoordinatorClient(base_url="https://coordinator.invalid")
+        if coordinator_client is None:
+            raise SystemExit("Coordinator client construction returned no client")
+    if hasattr(registry_client, "render"):
+        render_client = registry_client.render.RenderClient({"baseUrl": "https://render.invalid"})
+        if render_client is None:
+            raise SystemExit("Render client construction returned no client")
     print("Unified Python Registry client package smoke passed")
 
 

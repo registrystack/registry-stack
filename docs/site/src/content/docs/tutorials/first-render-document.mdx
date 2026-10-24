@@ -220,10 +220,11 @@ curl -s -X POST http://127.0.0.1:64123/v1/render/letter \
 
 ```text test-expect
 401
-{"type":"https://render.registrystack.org/problems/issued-at-missing","title":"issued-at-missing","status":400,"detail":"issuedAt is required; it is the document's issuance claim and the render clock","locations":[],"pointers":[]}
+{"code":"render.issued-at-missing","detail":"The render request was refused; use the problem code and the operator diagnostics to correct it.","status":400,"title":"issued-at-missing","traceId":"<trace-id>","type":"https://render.registrystack.org/problems/issued-at-missing"}
 ```
 
-Render never supplies the issuance time for you.
+Render never supplies the issuance time for you. Use `traceId` to find the refusal in the
+service logs.
 
 {/* Evidence: crates/registry-render/src/problem.rs, ProblemKind;
     crates/registry-render/tests/serve.rs, unauthorized_requests_are_refused_and_audited. */}

@@ -237,6 +237,17 @@ impl ReviewClient {
         expected: &ReviewRequestAccepted,
         retry_after: &mut registry_platform_httputil::client::RetryAfter,
     ) -> Result<ReviewResultResponse, ReviewClientError> {
+        if expected.request_id.is_nil() {
+            return Err(ReviewClientError::invalid_request(
+                "the accepted review request identifier is invalid",
+            ));
+        }
+        expected.subject.check().map_err(|_| {
+            ReviewClientError::invalid_request("the accepted review subject binding is invalid")
+        })?;
+        expected.policy.check().map_err(|_| {
+            ReviewClientError::invalid_request("the accepted review policy binding is invalid")
+        })?;
         let request_id = expected.request_id;
         let url = self.url_from_constant(&review_result_path(request_id))?;
         let response = self

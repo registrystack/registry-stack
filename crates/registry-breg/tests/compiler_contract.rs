@@ -15,10 +15,10 @@ use registry_breg::compiler::{
 };
 use registry_breg::contract::{
     parse_module_json, parse_module_yaml, parse_project_json, parse_project_yaml,
-    ActionExecutionSource, ActionSource, Classification, ComparisonOperator, ConstraintSource,
-    DerivedFieldSource, DerivedSource, DisplaySource, FieldTypeSource, ModuleAssetSource,
-    ModuleLockSource, Operation, PackageIdentitySource, ReferenceDelete, RegistryModule,
-    ReviewAuthoritySource, UniqueWhenPredicate, MODULE_API_VERSION, MODULE_KIND,
+    ActionExecutionSource, ActionSource, BatchSource, Classification, ComparisonOperator,
+    ConstraintSource, DerivedFieldSource, DerivedSource, DisplaySource, FieldTypeSource,
+    ModuleAssetSource, ModuleLockSource, Operation, PackageIdentitySource, ReferenceDelete,
+    RegistryModule, ReviewAuthoritySource, UniqueWhenPredicate, MODULE_API_VERSION, MODULE_KIND,
 };
 use registry_breg::diagnostics::{CompileFailure, DiagnosticSeverity};
 use registry_breg::generated_ddl::DdlStatementKind;
@@ -1445,10 +1445,14 @@ fn batch_route_requires_explicit_bounds_and_compiles_bounded_openapi() {
 
     let missing = compile_json(source("", r#"["create","batch"]"#).as_bytes())
         .expect_err("Batch grants require explicit entity-local bounds");
-    assert!(missing
+    let missing = missing
         .diagnostics()
         .iter()
-        .any(|diagnostic| diagnostic.code == "breg.record-type.batch-required"));
+        .find(|diagnostic| diagnostic.code == "breg.record-type.batch-required")
+        .expect("the missing Batch declaration has its own diagnostic");
+    assert_eq!(missing.path, "recordTypes[id=record].batch");
+    assert!(missing.message.contains("maximumItems from 1 to 100"));
+    assert!(missing.message.contains("maximumBytes from 1 to 2097152"));
 
     for batch in [
         r#", "batch":{"maximumItems":0,"maximumBytes":1}"#,
@@ -1463,6 +1467,31 @@ fn batch_route_requires_explicit_bounds_and_compiles_bounded_openapi() {
             .iter()
             .any(|diagnostic| diagnostic.code == "config.out-of-range"));
     }
+
+    let mut invalid = parse_project_json(
+        source(
+            r#", "batch":{"maximumItems":1,"maximumBytes":1}"#,
+            r#"["create","batch"]"#,
+        )
+        .as_bytes(),
+    )
+    .expect("bounded Batch source parses");
+    invalid.entities[0].batch = Some(BatchSource {
+        maximum_items: 101,
+        maximum_bytes: 2_097_153,
+    });
+    let invalid = compile_project(&invalid, &[], CompileProfile::Authoring)
+        .expect_err("directly constructed Batch bounds are refused by the compiler");
+    let invalid = invalid
+        .diagnostics()
+        .iter()
+        .find(|diagnostic| diagnostic.code == "breg.record-type.batch-bounds-invalid")
+        .expect("the invalid Batch bounds have their own diagnostic");
+    assert_eq!(invalid.path, "recordTypes[id=record].batch");
+    assert!(invalid
+        .message
+        .contains("maximumItems must be from 1 to 100"));
+    assert!(invalid.message.contains("maximumBytes from 1 to 2097152"));
 
     let configured = compile_json(
         source(
@@ -4048,21 +4077,144 @@ fn generic_decimal_crs84_point_and_structured_fields_compile_to_deterministic_dd
     );
 }
 
+const FIELD_OPTION_CANARY: &str = "private-field-value-8472";
+
+fn assert_field_option_diagnostics(failure: &CompileFailure, expected: &[(&str, &str, &str)]) {
+    assert_eq!(failure.diagnostics().len(), expected.len());
+    for (path, option, field_type) in expected {
+        let diagnostic = failure
+            .diagnostics()
+            .iter()
+            .find(|diagnostic| diagnostic.path == *path)
+            .unwrap_or_else(|| panic!("missing field-option diagnostic at {path}"));
+        assert_eq!(diagnostic.code, "config.invalid-value");
+        assert!(diagnostic.message.contains(&format!(
+            "option `{option}` is incompatible with field type `{field_type}`"
+        )));
+        assert!(diagnostic.message.contains(&format!(
+            "Remove `{option}` or choose a field type that accepts it."
+        )));
+        assert!(!diagnostic.message.contains(FIELD_OPTION_CANARY));
+    }
+}
+
 #[test]
-fn scalar_field_sources_reject_incompatible_type_options_during_strict_parse() {
-    let failure = parse_project_json(
-        br#"{"datasets":[{"id": "test-dataset"}],
+fn project_field_option_diagnostics_agree_for_json_and_yaml_without_values() {
+    let json = format!(
+        r#"{{
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
           "kind":"BRegProject",
-          "project":{"id":"generic-scalars","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
-          "recordTypes":[{
+          "project":{{"id":"field-options","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"}},
+          "recordTypes":[{{
             "id":"reading","primaryDataset":"test-dataset","route":"readings","mutationMode":"mutable",
-            "fields":[{"id":"flag","type":"boolean","precision":2,"classification":"internal"}]
-          }]
-        }"#,
-    )
-    .expect_err("type-incompatible option is refused during parse");
-    assert_eq!(failure.diagnostics()[0].code, "config.invalid-value");
+            "fields":[{{"id":"flag","type":"boolean","precision":"{FIELD_OPTION_CANARY}","classification":"internal"}}]
+          }}],
+          "actions":[{{
+            "id":"inspect","execution":{{"mode":"immediate"}},
+            "inputs":[{{"id":"identifier","type":"uuid","maximumLength":"{FIELD_OPTION_CANARY}","classification":"internal"}}],
+            "plan":{{"type":"fixed","effects":[]}}
+          }}],
+          "valueTypes":{{"bounded-text":{{"type":"text","target":"{FIELD_OPTION_CANARY}"}}}}
+        }}"#
+    );
+    let yaml = format!(
+        r#"apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project:
+  id: field-options
+  version: "1"
+  defaultLanguage: en
+  canonicalBaseIri: https://authoring.example.test
+recordTypes:
+  - id: reading
+    primaryDataset: test-dataset
+    route: readings
+    mutationMode: mutable
+    fields:
+      - id: flag
+        type: boolean
+        precision: {FIELD_OPTION_CANARY}
+        classification: internal
+actions:
+  - id: inspect
+    execution:
+      mode: immediate
+    inputs:
+      - id: identifier
+        type: uuid
+        maximumLength: {FIELD_OPTION_CANARY}
+        classification: internal
+    plan:
+      type: fixed
+      effects: []
+valueTypes:
+  bounded-text:
+    type: text
+    target: {FIELD_OPTION_CANARY}
+"#
+    );
+    let expected = [
+        (
+            "project.recordTypes[0].fields[0].precision",
+            "precision",
+            "boolean",
+        ),
+        (
+            "project.actions[0].inputs[0].maximumLength",
+            "maximumLength",
+            "uuid",
+        ),
+        ("project.valueTypes.bounded-text.target", "target", "text"),
+    ];
+
+    let json_failure = parse_project_json(json.as_bytes())
+        .expect_err("JSON type-incompatible options are refused during parse");
+    let yaml_failure = parse_project_yaml(yaml.as_bytes())
+        .expect_err("YAML type-incompatible options are refused during parse");
+    assert_field_option_diagnostics(&json_failure, &expected);
+    assert_field_option_diagnostics(&yaml_failure, &expected);
+}
+
+#[test]
+fn module_extension_field_option_diagnostics_agree_for_json_and_yaml_without_values() {
+    let json = format!(
+        r#"{{
+          "apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1",
+          "kind":"BRegModule",
+          "id":"extension-options",
+          "version":"1",
+          "extendRecordTypes":[{{
+            "recordType":"reading",
+            "fields":[{{"id":"observed-on","type":"date","schema":"{FIELD_OPTION_CANARY}","classification":"internal"}}]
+          }}]
+        }}"#
+    );
+    let yaml = format!(
+        r#"apiVersion: id.registrystack.org/formats/breg/module/v1alpha1
+kind: BRegModule
+id: extension-options
+version: "1"
+extendRecordTypes:
+  - recordType: reading
+    fields:
+      - id: observed-on
+        type: date
+        schema: {FIELD_OPTION_CANARY}
+        classification: internal
+"#
+    );
+    let expected = [(
+        "module.extendRecordTypes[0].fields[0].schema",
+        "schema",
+        "date",
+    )];
+
+    let json_failure = parse_module_json(json.as_bytes())
+        .expect_err("JSON module extension options are refused during parse");
+    let yaml_failure = parse_module_yaml(yaml.as_bytes())
+        .expect_err("YAML module extension options are refused during parse");
+    assert_field_option_diagnostics(&json_failure, &expected);
+    assert_field_option_diagnostics(&yaml_failure, &expected);
 }
 
 #[test]
@@ -5569,8 +5721,8 @@ fn generated_openapi_routes_and_physical_names_share_one_compiled_inventory() {
             "action.handler_failed",
             "action.refused",
             "authentication.refused",
-            "idempotency.conflict",
             "idempotency.expired",
+            "idempotency.key-reused",
             "ingestion.chunk_mismatch",
             "ingestion.profile_mismatch",
             "ingestion.receipt_erased",

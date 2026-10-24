@@ -235,6 +235,7 @@ updates:
       - "/crates/registry-messaging-client-node"
       - "/crates/registry-scheduling-client-node"
       - "/crates/registry-coordinator-client-node"
+      - "/crates/registry-render-client-node"
       - "/crates/registry-stack-client-node"
     schedule:
       interval: monthly

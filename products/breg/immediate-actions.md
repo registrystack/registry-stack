@@ -53,6 +53,27 @@ and a bounded effects or refusal result. The
 shows normalization, coordinated creates, and omitted effect slots.
 [WASM handlers](wasm-action-handlers.md) have their own admitted backend contract.
 
+An omitted optional Rhai input is the unit value `()`. Omit the corresponding
+field from an effect's `set` map. Copying `()` or `null` into a required,
+non-null field is a handler result failure; it does not clear the field.
+
+The Action ABI supplies no trusted calendar date in `ctx`. When a command needs
+a caller-selected business date, declare a typed input such as `asOfDate`; treat
+it as caller data, not current server time. Plan logic runs only when that
+Action is invoked and is not a Record field-validation boundary. If a rule must
+not be bypassed, withhold the ordinary Create profile that could write the same
+state without the Action.
+
+`bregctl check` performs one narrow source check for literal catalogue mistakes:
+it validates the string literal in a returned root map whose only key has the
+shape `#{refusal: #{code: "..."}}`, and each string-literal `id` in a returned
+root map whose only key has the shape
+`#{effects: [#{id: "...", ...}]}` with a literal effects array. The walker checks
+explicit `return` statements anywhere inside the one-argument entrypoint and its
+final root-level map expression. It does not inspect an implicit map result
+inside a nested `if` branch. Helper-returned, computed, or dynamically assembled
+outcomes remain runtime behavior and need executable branch tests.
+
 ## Authorize and guard
 
 An Action grant uses `permissions.actions`, the Action ID, `operations: [invoke]`,
@@ -96,16 +117,19 @@ available to the application:
 The check evaluates field-based `commitGuards` for that one target under the
 selected Action profile and its ordinary Get disclosure. It returns the
 observed target revision with `available: true` or with `available: false` and
-the reason `guard-not-satisfied`. If a declared input needed by a guard is
-absent, `available` is `null`, the reason is `input-required`, and
-`missingInputs` names only declared API input names. If the guard or row
-boundary depends on a field the caller cannot read, or the profile lacks Get
-authority for the target Record type, the answer is `available: null` with
-`observedRevision: null`, `not-disclosed`, and no missing-input names. A target
-denied by the ordinary Get boundary and a missing target both use the concealed
-404. Query reference inputs separately when an Action has several targets. A
-known failed guard takes precedence over missing guard input; correcting that
-guard may expose an `input-required` result on the next check.
+the reason `guard-not-satisfied`. A guard may declare an optional, stable LocalId
+`reason` of at most 64 characters. The response exposes it as `guardReason` only
+when every guard fact and every row-boundary fact for the selected target is
+readable. The generic `reason` remains `guard-not-satisfied`. If a declared input
+needed by a guard is absent, `available` is `null`, the reason is
+`input-required`, and `missingInputs` names only declared API input names. If a
+guard or row boundary depends on a fact the caller cannot read, or the profile
+lacks Get authority for the target Record type, the answer is `available: null`
+with `observedRevision: null`, `not-disclosed`, and no `guardReason` or
+`missingInputs`. A target denied by the ordinary Get boundary and a missing target both
+use the concealed 404. Query reference inputs separately when an Action has
+several targets. A known failed guard takes precedence over missing guard input;
+correcting that guard may expose an `input-required` result on the next check.
 No availability response names a guard ID or a Record value.
 
 ```json
@@ -130,7 +154,9 @@ guards. A safely disclosed field guard that fails at commit answers
 confirms that blocker; effect application, proposed-value authorization, and database
 constraints run only after guards pass. An earlier refusal retains its normal
 response. Stale conditions and guard failures that cannot be disclosed remain
-`412 precondition.failed`.
+`412 precondition.failed`. Invoke rechecks the guard during commit. If it fails,
+BReg rolls back and re-observes disclosure before returning `guardReason`;
+advisory `guardReason` is neither authority nor a reservation.
 
 ## Inspect and test the function
 
@@ -142,8 +168,14 @@ bregctl project action-test ./registry --action <action-id> --input /path/to/inp
 
 `action-test` runs a named plan function over bounded synthetic JSON using logical
 input IDs, without a wire envelope. Add `--expect /path/to/expected.json` to check
-exact effects or a declared refusal. This offline check reads no live targets and
-does not prove runtime authority or commit guards.
+exact effects, a declared refusal, or a handler failure. The public
+[`action-plan-branches` fixture](fixtures/action-plan-branches/README.md) carries
+all three examples. A handler result error is asserted as
+`{"failure":{"code":"action.handler.result"}}`; malformed supplied input remains
+an input error. Runtime handler failures return the bounded value-free 500
+problem and log the Action, plan, phase, slot, field, and failure identity, never
+an input value. This offline check reads no live targets and does not prove
+runtime authority or commit guards.
 
 ## Invoke and recover
 
@@ -153,6 +185,12 @@ required target conditions through the selected binding, use advisory
 availability to guide the form when the Action advertises it, retain the user's
 input and conditions, and prepare one invocation with a caller-owned idempotency key.
 The server rechecks package identity, current authority, guards, and concurrency.
+
+An omitted `accessProfile` when the Action route has no default, an unknown
+profile, and a profile the caller cannot use all return the same concealed 404.
+The response does not list usable profiles. Select the profile and Action from
+caller-filtered metadata, then prepare the invocation from that client binding
+instead of probing Action URLs.
 
 Recover a lost response using the same prepared request and key. A replay returns
 the retained receipt without replanning or reacquiring Evidence. A changed input

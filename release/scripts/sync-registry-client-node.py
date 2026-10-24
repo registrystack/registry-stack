@@ -20,6 +20,8 @@ PRODUCTS = {
     "casework": ROOT / "crates" / "registry-casework-client-node",
     "messaging": ROOT / "crates" / "registry-messaging-client-node",
     "scheduling": ROOT / "crates" / "registry-scheduling-client-node",
+    "render": ROOT / "crates" / "registry-render-client-node",
+    "coordinator": ROOT / "crates" / "registry-coordinator-client-node",
 }
 # napi-rs platform package name to the Rust target triple it carries, following the
 # convention swc, rolldown, and oxc use for their own platform package READMEs.
@@ -84,11 +86,13 @@ def expected_files() -> dict[Path, bytes]:
         ROOT / "crates" / "registry-messaging-client-node",
         ROOT / "crates" / "registry-scheduling-client-node",
         ROOT / "crates" / "registry-coordinator-client-node",
+        ROOT / "crates" / "registry-render-client-node",
         ROOT / "crates" / "registry-breg-client-py",
         ROOT / "crates" / "registry-casework-client-py",
         ROOT / "crates" / "registry-messaging-client-py",
         ROOT / "crates" / "registry-scheduling-client-py",
         ROOT / "crates" / "registry-coordinator-client-py",
+        ROOT / "crates" / "registry-render-client-py",
         ROOT / "crates" / "registry-stack-client-py",
     ):
         files[destination / "LICENSE"] = license_text

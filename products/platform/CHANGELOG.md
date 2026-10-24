@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Discovery problems add `code`, fixed `detail` and `traceId` (previously only
+  `type`, `title`, `status`), plus a matching `traceparent` header (previously
+  absent). Codes are `request.invalid`, `request.not-found`,
+  `request.result-bound-exceeded`, `service.unavailable`; existing type URIs stay.
+- Casework completion acknowledges any 2xx status (previously only an empty 204).
+  No response body is buffered. This changes no Retry-After header; no
+  synthetic header is introduced for indeterminate failures.
+- Delivery-signature freshness accepts valid trailing-zero RFC 3339 fractions;
+  the signature continues to cover exact raw timestamp bytes.
+
 - CFG-SCHEMA-5 clarifies that the shared URL hook block owns fixed-policy
   delivery. BReg's explicit private-network, TLS-identity and classification
   controls remain product-owned while using the shared delivery primitives;
@@ -977,7 +987,7 @@
   `DEFAULT_AUDIT_ACK_MAX_AGE` (900s); a cursor whose `acked_at` is more than
   300s ahead of `now` is treated as `invalid` rather than perpetually fresh.
   An unreadable file, malformed JSON, a contract violation, or a
-  non-RFC3339 `acked_at` all fail closed to `invalid` with a `detail` message,
+  non-RFC 3339 `acked_at` all fail closed to `invalid` with a `detail` message,
   never silently to `ok`. Reads are capped at 16 KiB and reject non-regular
   files and symlinks, which prevents FIFO reads and allocation from an unbounded
   file. Relay and Notary add a 500 ms bounded worker around this synchronous
@@ -1033,7 +1043,7 @@
 - BREAKING: `registry-platform-ops`'s `registry.ops.posture.v1` schema:
   `posture.audit` gains two more required, nullable fields, `shipping_health`
   (one of `ok`, `stale`, `missing`, `invalid`, `unverified`, or `null`) and
-  `shipping_observed_at` (an RFC3339 timestamp, or `null`), reporting the
+  `shipping_observed_at` (an RFC 3339 timestamp, or `null`), reporting the
   observed freshness of off-host audit shipping from the ack cursor described
   above under Added. `shipping_health` is `null` iff
   `shipping_target_configured` is `false`; `shipping_observed_at` is `null`

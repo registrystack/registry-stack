@@ -1308,8 +1308,8 @@ async fn task_client(
     let raw = headers
         .get(AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
-        .ok_or(HttpError::AuthenticationRefused)?;
-    let token = parse_bearer_token(raw).map_err(|_| HttpError::AuthenticationRefused)?;
+        .ok_or_else(|| header_authentication_refused(state))?;
+    let token = parse_bearer_token(raw).map_err(|_| header_authentication_refused(state))?;
     state
         .authenticator
         .authenticate_task_client(token, scope, kind)
@@ -1356,8 +1356,9 @@ async fn authenticate<'a>(
     let authorization = headers
         .get(AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
-        .ok_or(HttpError::AuthenticationRefused)?;
-    let token = parse_bearer_token(authorization).map_err(|_| HttpError::AuthenticationRefused)?;
+        .ok_or_else(|| header_authentication_refused(state))?;
+    let token =
+        parse_bearer_token(authorization).map_err(|_| header_authentication_refused(state))?;
     let profile = profile_header(headers, HttpContract::current().profile_header())?;
     let actor = state
         .authenticator
@@ -1370,6 +1371,11 @@ async fn authenticate<'a>(
             AuthenticationError::Claims => HttpError::AuthenticationRefused,
         })?;
     Ok((actor, token))
+}
+
+fn header_authentication_refused(state: &HttpState) -> HttpError {
+    state.authenticator.record_header_refusal();
+    HttpError::AuthenticationRefused
 }
 
 fn source_profile(headers: &HeaderMap) -> Result<&str, HttpError> {

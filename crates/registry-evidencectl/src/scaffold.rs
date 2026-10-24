@@ -703,7 +703,7 @@ privacyExpectation:
         )?;
     }
 
-    let target = json!({
+    let mut target = json!({
         "apiVersion": registry_evidence_authoring::target::TARGET_API_VERSION,
         "kind": registry_evidence_authoring::target::TARGET_KIND,
         "id":"local", "project":"local-evidence", "package":{"root":".generated/package"},
@@ -719,6 +719,12 @@ privacyExpectation:
         "rateLimits":{"requestsPerPrincipalPerMinute":60,"burstPerPrincipal":16,"failedSelectorAttemptsPerPrincipalAuthorityPerMinute":10},
         "outboundTls":{"systemRoots":true,"trustProfiles":{}}
     });
+    if sqlite {
+        // A target must bind every extract profile its Sources use. The path
+        // is a placeholder (relative to the target) for the published extract
+        // file; no file is generated.
+        target["extracts"] = json!({"record-status":{"path":"extracts/record-status.sqlite"}});
+    }
     let target_yaml = authored::to_indented_yaml(&target)?;
     registry_evidence_authoring::target::read_target("local-target.yaml", target_yaml.as_bytes())
         .context("validating the generated local EvidenceTarget")?;
@@ -807,5 +813,9 @@ mod tests {
         assert!(target.contains("kind: EvidenceTarget"));
         assert!(authority.contains("kind: EvidenceTargetAuthority"));
         assert!(!project.contains("EvidenceQuestion"));
+        assert!(
+            target.contains("extracts:\n  record-status:\n    path: "),
+            "the target must bind the extract profile its Source uses:\n{target}"
+        );
     }
 }

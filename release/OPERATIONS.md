@@ -143,9 +143,9 @@ Complete new-image onboarding outside the release clock, in this order:
    token on the command line:
 
 ```sh
-package="${PACKAGE:?set PACKAGE to evidence, discovery, breg, breg-mcp, breg-review, casework, scheduling, messaging, registry-render, or evidence-oid4vci}"
+package="${PACKAGE:?set PACKAGE to evidence, discovery, breg, breg-mcp, breg-review, casework, scheduling, messaging, registry-render, evidence-oid4vci, or coordinator}"
 case "${package}" in
-  evidence|discovery|breg|breg-mcp|breg-review|casework|scheduling|messaging|registry-render|evidence-oid4vci) ;;
+  evidence|discovery|breg|breg-mcp|breg-review|casework|scheduling|messaging|registry-render|evidence-oid4vci|coordinator) ;;
   *) echo "unsupported release image package: ${package}" >&2; exit 1 ;;
 esac
 
@@ -341,6 +341,39 @@ version stays in the package and every applied run reports it again. GitHub
 documents one route for this limit, a GitHub Support request, so removing
 the version is a decision to file one, not a tooling change.
 
+### Coordinator onboarding
+
+Coordinator's unified client roster is independent of its runtime image hold.
+`COORDINATOR_CLIENT_FIRST_RELEASE` selects client packaging; it does not prove
+that the binary pair or image has been published. Keep the runtime image hold
+until its own onboarding and advisory checks pass, and use the release manifest
+to identify assets actually shipped.
+
+For a first Coordinator image, complete steps 3 and 4 above for `coordinator`
+and `coordinator-candidate`. The final package must be public, its candidate
+package private, and repository Actions must have the required package access.
+Only after the private identity exists may `coordinator-candidate` join
+`CANDIDATE_PACKAGES` and its test. Keep `coordinator` in `PUBLIC_PACKAGES`.
+A missing-baseline rehearsal does not relax these ownership prerequisites.
+
+Then use one clean, committed baseline-bootstrap branch with the intended
+Coordinator runtime image roster and the existing `release-rehearsal.yml`
+workflow. Supply `unit=stack`, the prepared `version` and `release_id`, an
+explicit `coordinator-baseline-bootstrap-...` request ID, and
+`advisory_evidence=true`. This dispatch has no publication permission. The
+canonical Linux evidence job must succeed; the ordinary strict rehearsal is
+expected to fail while `release/security/coordinator-advisory-baseline.json`
+is missing. Do not substitute a macOS binary, another service's fingerprint,
+or an unreviewed placeholder baseline.
+
+Review that job's exact source, OCI config and digest, native Syft and Grype
+reports, exported rootfs, and exposure reports for both
+`/usr/local/bin/coordinator` and `/usr/local/bin/coordinatorctl`. Author the
+first baseline and update its existing live-pin tests through the reviewed
+procedure below. Keep advisory acceptance and package visibility decisions
+with the release owner. Once the baseline is reviewed, rerun strict onboarding
+and the read-only rehearsal on that prepared branch before removing the image hold.
+
 ### Mirror the pinned BuildKit image
 
 CI builders and release image recipes pin the BuildKit executor image by
@@ -403,7 +436,10 @@ supported release history. Starting with v0.26.1, a release promotes only the
 unified user-facing clients: `@registrystack/client` on npm and
 `registry-stack-client` on PyPI. Their product namespaces carry the
 version-selected APIs: `discovery`, `evidence`, and `breg` from v0.26.1,
-`casework` from v0.30.0, and `messaging` from v0.38.0. Releases through
+`casework` from v0.30.0, `messaging` from v0.38.0, and `scheduling` from
+v0.40.0. The client roster selects `coordinator` from v0.44.0; this is
+independent of the Coordinator runtime image hold and is not proof of
+publication. Check that version's actual release manifest and package assets. Releases through
 v0.38.0 also carry a `relay` namespace; v0.39.0 removes it. The
 product-specific native bindings are build inputs, not additional public
 projects.

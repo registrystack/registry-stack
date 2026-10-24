@@ -83,6 +83,7 @@ mod tests {
     fn guard() -> CompiledCommitGuard {
         CompiledCommitGuard {
             input: "record".into(),
+            reason: None,
             entity_id: "record".into(),
             field: "value".into(),
             equals: None,

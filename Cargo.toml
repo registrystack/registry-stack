@@ -55,6 +55,9 @@ members = [
     "crates/registry-rstack",
     "crates/registry-record",
     "crates/registry-render",
+    "crates/registry-render-client",
+    "crates/registry-render-client-node",
+    "crates/registry-render-client-py",
     "crates/registry-breg-client",
     "crates/registry-breg-mcp",
     "crates/registry-breg-review",
@@ -128,6 +131,7 @@ registry-manifest-cli = { path = "crates/registry-manifest-cli", version = "0.44
 registry-rstack = { path = "crates/registry-rstack", version = "0.44.0" }
 registry-record = { path = "crates/registry-record", version = "0.44.0" }
 registry-render = { path = "crates/registry-render", version = "0.44.0" }
+registry-render-client = { path = "crates/registry-render-client", version = "0.44.0" }
 registry-breg-client = { path = "crates/registry-breg-client", version = "0.44.0" }
 registry-breg-mcp = { path = "crates/registry-breg-mcp", version = "0.44.0" }
 registry-breg-review = { path = "crates/registry-breg-review", version = "0.44.0" }

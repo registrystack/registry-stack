@@ -261,7 +261,7 @@ An exhausted deadline remains `503 service.unavailable`.
 Repeat the identical committed request with the same idempotency key after a
 lost response. Compatible replay returns the existing receipt under current
 authority without reevaluating the handler or creating a second event. Reusing
-a consumed key with changed input is `409 idempotency.conflict`; a separate key
+a consumed key with changed input is `409 idempotency.key-reused`; a separate key
 with the same identifier is `409 mutation.conflict` because of uniqueness.
 
 ## Coordinated effects and omission

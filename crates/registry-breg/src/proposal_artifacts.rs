@@ -150,9 +150,17 @@ pub(crate) fn append_proposal_openapi(
         if operation == ProposalOperation::List {
             let parameters = document["parameters"].as_array_mut().unwrap();
             for name in [
-                "action", "owner", "target", "state", "turn", "cursor", "limit",
+                "action",
+                "owner",
+                "target",
+                "state",
+                "turn",
+                "cursor",
+                "limit",
+                "pendingManualApplication",
             ] {
                 let schema = match name {
+                    "pendingManualApplication" => json!({"type":"boolean","default":false}),
                     "limit" => json!({"type":"integer","minimum":1,"maximum":100,"default":50}),
                     "owner" => json!({"const":"caller"}),
                     "target" => json!({"type":"string","format":"uuid"}),

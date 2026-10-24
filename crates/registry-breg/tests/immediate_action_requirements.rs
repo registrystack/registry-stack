@@ -31,6 +31,39 @@ fn action_requirements_compile_processing_without_read_or_condition_grants() {
 }
 
 #[test]
+fn authored_guard_copy_keys_are_bounded_and_only_apply_to_field_guards() {
+    let mut source = support::project();
+    source["actions"][0]["commitGuards"]["targets"][0]["reason"] = json!("parent-inactive");
+    assert_eq!(
+        compile(source.clone()).unwrap().actions().actions[0].requires[0]
+            .reason
+            .as_deref(),
+        Some("parent-inactive")
+    );
+    let mut direct = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
+    direct.actions[0].commit_guards.targets[0].reason =
+        Some("private-invalid-reason-canary\n".into());
+    let failure = compile_project(&direct, &[], CompileProfile::Authoring).unwrap_err();
+    assert!(failure
+        .diagnostics()
+        .iter()
+        .any(|diagnostic| diagnostic.code == "breg.identifier.invalid"
+            && diagnostic.path.ends_with(".reason")));
+    assert!(!format!("{failure:?}").contains("private-invalid-reason-canary"));
+    source["actions"][0]["commitGuards"]["targets"][0] =
+        json!({"input":"parent","revision":"unchanged","reason":"parent-inactive"});
+    assert!(compile(source.clone())
+        .unwrap_err()
+        .diagnostics()
+        .iter()
+        .any(|diagnostic| diagnostic.code == "breg.action.guard-revision-invalid"));
+    for invalid in ["Uppercase".to_owned(), "a".repeat(65), "has.dot".to_owned()] {
+        source["actions"][0]["commitGuards"]["targets"][0]["reason"] = json!(invalid);
+        assert!(parse_project_json(&serde_json::to_vec(&source).unwrap()).is_err());
+    }
+}
+
+#[test]
 fn action_requirements_can_compare_a_target_field_to_a_typed_action_input() {
     let mut source = support::project();
     source["actions"][0]["inputs"]

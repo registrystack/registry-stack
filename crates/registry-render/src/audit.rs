@@ -47,7 +47,7 @@ pub struct RenderAuditEvent {
     pub pdf_sha256: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub data_sha256: Option<String>,
-    /// API-key fingerprint (never the key).
+    /// Verified credential fingerprint (never the token or principal claims).
     pub caller: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub correlation_id: Option<String>,

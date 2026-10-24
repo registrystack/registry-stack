@@ -344,7 +344,11 @@ never accepted by a running server.
 | `scope` | The one claim named by `scopeClaim` covers every required permission: a string split on `scopeSeparator`, or an array of strings. Permissions from several claims are not merged. |
 | principal claim | The claim named by `authorityClaims.principal` carries the identity recorded in audit and workflow decisions. It must match each profile's `principalClaim`. |
 | purpose claim | The claim named by `authorityClaims.purpose` is required when the profile lists `requiredPurposes`. |
+| `registry_actor_kind` | A direct token must carry the configured actor-kind claim as `human`, `agent`, or `service`. A profile that declares `actorKind` requires an exact match; one that omits it accepts any verified direct kind. A verified trusted-actor exchange is always treated as `agent` and requires `actorKind: agent`, regardless of the copied subject claim. |
 | assignment claims | Each row boundary or claim-backed lookup names its own claim. An `equals` boundary needs a scalar; an `in` boundary needs an array. |
+
+Use the [Registry Stack access-token contract](https://github.com/registrystack/registry-stack/blob/main/products/platform/ACCESS-TOKENS.md)
+for the canonical token profile and issuer integration rules.
 
 Use a resource audience dedicated to this registry API, distinct from your application's login
 client. An ID token issued to the login client is not an API credential. A longer token lifetime
