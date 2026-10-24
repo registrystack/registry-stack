@@ -13,14 +13,15 @@ const generation = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
 const accepted = { choice: 'accepted', generation, expiresAt: Date.now() + 60_000, revision: 10 };
 const rejected = { choice: 'rejected', generation: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd', expiresAt: Date.now() + 60_000, revision: 11 };
 const envelope = { protocol: 'registrystack-tracking', version: 2 };
+const localRefusalKey = 'registrystack.tracking-local-refusal.v2';
 
 function fixture(options = {}) {
-  const { factory = createSharedTrackingClient, ...clientOptions } = options;
+  const { factory = createSharedTrackingClient, initialValues = [], ...clientOptions } = options;
   const listeners = new Map();
   const documentListeners = new Map();
   const sent = [];
   const frames = [];
-  const values = new Map();
+  const values = new Map(initialValues);
   const storage = {
     getItem: key => values.get(key) ?? null,
     setItem: (key, value) => values.set(key, value),
@@ -455,6 +456,115 @@ test('a same-origin outage refusal gates an already-open tab and is relayed to t
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(f.client.state.choice, 'rejected');
   f.client.close();
+});
+
+test('a retained local refusal reads the shared revision before replaying rejection', async (t) => {
+  const f = fixture({ initialValues: [[localRefusalKey, 'rejected']] });
+  t.after(() => f.client.close());
+  const recovery = f.client.read();
+  const outcome = recovery.then(value => ({ value }), error => ({ error }));
+  await new Promise(resolve => setImmediate(resolve));
+
+  const readRequest = f.sent[0].data;
+  assert.equal(readRequest.type, 'read');
+  f.message({ ...envelope, id: readRequest.id, ok: true, state: accepted });
+  await new Promise(resolve => setImmediate(resolve));
+
+  assert.equal(f.client.state.choice, 'rejected');
+  await assert.rejects(f.client.pageview({
+    page_url: 'https://docs.registrystack.org/', page_title: 'Docs', page_referrer: '',
+  }), /tracking/i);
+  assert.equal(f.sent.some(({ data }) => data.type === 'pageview'), false);
+  const replay = f.sent[1].data;
+  assert.equal(replay.type, 'choose');
+  assert.equal(replay.choice, 'rejected');
+  assert.equal(replay.expectedRevision, accepted.revision);
+  f.message({ ...envelope, id: replay.id, ok: true, state: rejected });
+
+  assert.deepEqual(await outcome, { value: rejected });
+  assert.equal(f.values.has(localRefusalKey), false);
+  assert.equal(f.failures.length, 0);
+});
+
+test('an explicit acceptance supersedes a delayed startup refusal replay', async (t) => {
+  const f = fixture({ initialValues: [[localRefusalKey, 'rejected']] });
+  t.after(() => f.client.close());
+  const startup = f.client.read();
+  const startupOutcome = startup.then(value => ({ value }), error => ({ error }));
+  await new Promise(resolve => setImmediate(resolve));
+  const readRequest = f.sent[0].data;
+  assert.equal(readRequest.type, 'read');
+
+  const explicit = await nextRequest(() => f.client.choose('accepted'));
+  const acceptRequest = f.sent[1].data;
+  assert.equal(acceptRequest.type, 'choose');
+  assert.equal(acceptRequest.choice, 'accepted');
+  f.message({ ...envelope, id: acceptRequest.id, ok: true, state: accepted });
+  assert.deepEqual(await explicit.promise, accepted);
+
+  f.message({ ...envelope, id: readRequest.id, ok: true, state: accepted });
+  assert.deepEqual(await startupOutcome, { value: accepted });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(
+    f.sent.filter(({ data }) => data.type === 'choose' && data.choice === 'rejected').length,
+    0,
+  );
+  assert.equal(f.values.has(localRefusalKey), false);
+  assert.equal(f.failures.length, 0);
+});
+
+test('an explicit acceptance reconciles a stale revision while a retained refusal masks startup', async (t) => {
+  const f = fixture({ initialValues: [[localRefusalKey, 'rejected']] });
+  t.after(() => f.client.close());
+  const startup = f.client.read();
+  const startupOutcome = startup.then(value => ({ value }), error => ({ error }));
+  await new Promise(resolve => setImmediate(resolve));
+  const startupRead = f.sent[0].data;
+
+  const explicit = await nextRequest(() => f.client.choose('accepted'));
+  const explicitOutcome = explicit.promise.then(value => ({ value }), error => ({ error }));
+  const acceptRequest = f.sent[1].data;
+  assert.equal(acceptRequest.expectedRevision, 0);
+  f.message({ ...envelope, id: acceptRequest.id, ok: false, error: 'unavailable' });
+  await new Promise(resolve => setImmediate(resolve));
+  const recoveryRead = f.sent[2].data;
+  assert.equal(recoveryRead.type, 'read');
+  assert.equal(f.client.state.choice, 'rejected');
+  f.message({ ...envelope, id: recoveryRead.id, ok: true, state: accepted });
+
+  assert.deepEqual(await explicitOutcome, { value: accepted });
+  f.message({ ...envelope, id: startupRead.id, ok: true, state: accepted });
+  assert.deepEqual(await startupOutcome, { value: accepted });
+  assert.equal(f.sent.filter(({ data }) => data.type === 'choose').length, 1);
+  assert.equal(f.values.has(localRefusalKey), false);
+  assert.equal(f.failures.length, 0);
+});
+
+test('a later refusal survives an older acceptance reconciliation and a failed rejection request', async (t) => {
+  const f = fixture({ initialValues: [[localRefusalKey, 'rejected']] });
+  t.after(() => f.client.close());
+  const acceptance = await nextRequest(() => f.client.choose('accepted'));
+  const acceptanceOutcome = acceptance.promise.then(value => ({ value }), error => ({ error }));
+  f.message({ ...envelope, id: f.sent[0].data.id, ok: false, error: 'unavailable' });
+  await new Promise(resolve => setImmediate(resolve));
+  const recoveryRead = f.sent[1].data;
+  assert.equal(recoveryRead.type, 'read');
+
+  const refusal = await nextRequest(() => f.client.choose('rejected'));
+  const refusalOutcome = refusal.promise.then(value => ({ value }), error => ({ error }));
+  const rejectionRequest = f.sent[2].data;
+  f.message({ ...envelope, id: recoveryRead.id, ok: true, state: accepted });
+  assert.equal((await acceptanceOutcome).value?.choice, 'rejected');
+  assert.equal(f.values.get(localRefusalKey), 'rejected');
+
+  f.message({ ...envelope, id: rejectionRequest.id, ok: false, error: 'unavailable' });
+  assert.match((await refusalOutcome).error?.message, /tracking/i);
+  assert.equal(f.client.state.choice, 'rejected');
+  assert.equal(f.values.get(localRefusalKey), 'rejected');
+  await assert.rejects(f.client.pageview({
+    page_url: 'https://docs.registrystack.org/', page_title: 'Docs', page_referrer: '',
+  }), /tracking/i);
+  assert.equal(f.sent.some(({ data }) => data.type === 'pageview'), false);
 });
 
 test('page data preserves external acquisition and removes identity, search, and internal handoff parameters', () => {
