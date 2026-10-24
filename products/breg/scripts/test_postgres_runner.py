@@ -251,8 +251,8 @@ class PostgresRunnerTests(unittest.TestCase):
     def test_ci_keeps_all_lanes_and_tls_adopter_order(self):
         workflow = yaml.safe_load((SCRIPT_DIR.parents[2] / ".github/workflows/ci.yml").read_text())
         job = workflow["jobs"]["breg-contracts"]
-        # The change classifier owns the lane list: review runs only the first
-        # lane, and the merge queue and nightly sweep run all of them.
+        # The change classifier owns the lane list: review runs the first two
+        # lanes, and the merge queue and nightly sweep run all of them.
         self.assertEqual("${{ fromJSON(needs.changes.outputs.breg_contracts_lanes) }}", job["strategy"]["matrix"]["lane"])
         ci_changes = self.load_ci_changes()
         # The PostgreSQL lane runs as parallel shard lanes; the shard count is
@@ -315,8 +315,21 @@ class PostgresRunnerTests(unittest.TestCase):
         uv = next(step for step in job["steps"] if step.get("name") == "Install uv")
         self.assertEqual("matrix.lane != 'immediate-actions'", uv["if"])
         postgres = runs['products/breg/scripts/test-postgres.sh --lane "$BREG_POSTGRES_LANE"']
-        self.assertEqual("matrix.lane != 'contracts'", postgres["if"])
+        self.assertEqual(
+            "startsWith(matrix.lane, 'postgres:') || matrix.lane == 'immediate-actions'", postgres["if"]
+        )
         self.assertEqual("${{ matrix.lane }}", postgres["env"]["BREG_POSTGRES_LANE"])
+        # The step hands the runner exactly the lanes it accepts; a lane added
+        # to the classifier cannot reach the runner by matching a negation.
+        selected = {
+            lane for lane in ci_changes.BREG_CONTRACTS_LANES
+            if lane.startswith("postgres:") or lane == "immediate-actions"
+        }
+        accepted = {
+            lane for lane in ci_changes.BREG_CONTRACTS_LANES
+            if self.run_lane("--lane", lane)[0].returncode == 0
+        }
+        self.assertEqual(selected, accepted)
 
     def test_ci_has_a_focused_postgresql_18_portability_lane(self):
         workflow = yaml.safe_load((SCRIPT_DIR.parents[2] / ".github/workflows/ci.yml").read_text())

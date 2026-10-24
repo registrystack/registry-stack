@@ -1333,7 +1333,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.breg_contracts == 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: ${{ matrix.lane == 'postgres' && 45 || 30 }}
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -1416,7 +1416,7 @@ jobs:
         run: products/breg/scripts/check-service-dependencies.sh
 
       - name: Base Registry Engine PostgreSQL journeys
-        if: matrix.lane != 'contracts'
+        if: startsWith(matrix.lane, 'postgres:') || matrix.lane == 'immediate-actions'
         env:
           BREG_POSTGRES_LANE: ${{ matrix.lane }}
         run: products/breg/scripts/test-postgres.sh --lane "$BREG_POSTGRES_LANE"
