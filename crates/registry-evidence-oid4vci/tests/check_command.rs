@@ -120,7 +120,7 @@ fn a_refused_file_exits_one_with_positioned_diagnostics_that_repeat_no_value() {
         .find(|diagnostic| diagnostic["code"] == "config.removed-key")
         .unwrap();
     assert_eq!(removed["path"], "/tokenClient/privateKeyFile");
-    assert_eq!(removed["source"]["line"], 20);
+    assert_eq!(removed["source"]["line"], 24);
     assert_eq!(removed["source"]["column"], 3);
     assert!(removed["suggestedAction"]
         .as_str()

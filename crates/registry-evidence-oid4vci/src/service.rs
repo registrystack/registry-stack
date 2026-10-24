@@ -62,6 +62,9 @@ use tokio::sync::watch;
 use zeroize::Zeroizing;
 
 use crate::{
+    audit::{
+        CredentialDeliveryAudit, CredentialDeliveryOutcome, DeliveryAudit, DeliveryAuditError,
+    },
     authorizer::{AuthorizationError, MintResourceServer, OfferAuthorizer},
     config::DeliveryConfig,
     issuer::{CredentialIssuer, EvidenceIssuer, IssuanceError},
@@ -145,6 +148,12 @@ pub enum ServiceError {
     /// key material.
     #[error("the token client key cannot be used: {0}")]
     ClientKey(String),
+    #[error("the audit hash key cannot be used: {0}")]
+    AuditKey(String),
+    #[error("the audit destination cannot be used")]
+    Audit(#[from] DeliveryAuditError),
+    #[error("the audit destination configuration cannot be used: {0}")]
+    AuditDestination(String),
     #[error("the outbound credential client cannot be built: {0}")]
     Issuer(#[from] IssuanceError),
 }
@@ -161,6 +170,7 @@ pub struct DeliveryService {
     nonces: NonceMinter,
     authorizer: Arc<dyn OfferAuthorizer>,
     issuer: Arc<dyn CredentialIssuer>,
+    audit: Arc<DeliveryAudit>,
     metrics: Arc<Metrics>,
     /// Where every deadline in this process is read against.
     clock: Clock,
@@ -184,14 +194,19 @@ impl DeliveryService {
     /// The key is read here, handed to the outbound client that authenticates
     /// with it, and dropped. Nothing else in the process keeps a copy, and the
     /// offer boundary is built from its own document without seeing it.
-    pub fn load(config: DeliveryConfig) -> Result<Self, ServiceError> {
-        let client_key = resolve_client_key(&config)?;
+    pub async fn load(config: DeliveryConfig) -> Result<Self, ServiceError> {
+        let issuer = Arc::new(evidence_issuer(&config)?);
+        let audit_key = resolve_audit_key(&config)?;
+        let destination = config
+            .audit
+            .destination()
+            .map_err(|error| ServiceError::AuditDestination(error.to_string()))?;
+        let audit = Arc::new(DeliveryAudit::initialize(destination, audit_key).await?);
         let authorizer = Arc::new(MintResourceServer::from_config(
             &config.offers,
             config.validation_mode,
         ));
-        let issuer = Arc::new(EvidenceIssuer::new(&config, &client_key)?);
-        Ok(Self::with_halves(config, authorizer, issuer))
+        Ok(Self::with_halves(config, authorizer, issuer, audit))
     }
 
     /// Assemble a service over an already built resource server and issuer.
@@ -200,6 +215,7 @@ impl DeliveryService {
         config: DeliveryConfig,
         authorizer: Arc<dyn OfferAuthorizer>,
         issuer: Arc<dyn CredentialIssuer>,
+        audit: Arc<DeliveryAudit>,
     ) -> Self {
         let store = OfferStore::new(&config.store);
         let nonces = NonceMinter::new(config.store.nonce_lifetime_seconds);
@@ -210,6 +226,7 @@ impl DeliveryService {
             nonces,
             authorizer,
             issuer,
+            audit,
             metrics,
             clock: Arc::new(now),
         }
@@ -245,18 +262,42 @@ impl DeliveryService {
     /// The command that calls this writes the requested document to stdout.
     /// Operational logs never copy these raw deployment identifiers.
     pub async fn inspect(&self) -> Result<Value, IssuanceError> {
-        let catalog = self.issuer.catalog().await?;
-        Ok(json!({
-            "profile": "registry.evidence.oid4vci-profile/v1",
-            "credentialIssuerMetadata": catalog.issuer_metadata(&self.config),
-            "authorizationServerMetadata": authorization_server_metadata(&self.config),
-            "deployment": {
-                "replicas": 1,
-                "restartInvalidatesOutstandingExchanges": true,
-                "metricsEnabled": self.config.metrics_listener.is_some(),
-            }
-        }))
+        inspect_with(&self.config, self.issuer.as_ref()).await
     }
+}
+
+/// Inspect derived metadata without opening serving state or its audit writer.
+///
+/// Catalog discovery still uses the configured outbound client identity, but
+/// inspection does not resolve the audit secret or create, lock, or append to
+/// the configured audit destination.
+pub async fn inspect(config: &DeliveryConfig) -> Result<Value, ServiceError> {
+    let issuer = evidence_issuer(config)?;
+    inspect_with(config, &issuer)
+        .await
+        .map_err(ServiceError::Issuer)
+}
+
+async fn inspect_with(
+    config: &DeliveryConfig,
+    issuer: &dyn CredentialIssuer,
+) -> Result<Value, IssuanceError> {
+    let catalog = issuer.catalog().await?;
+    Ok(json!({
+        "profile": "registry.evidence.oid4vci-profile/v1",
+        "credentialIssuerMetadata": catalog.issuer_metadata(config),
+        "authorizationServerMetadata": authorization_server_metadata(config),
+        "deployment": {
+            "replicas": 1,
+            "restartInvalidatesOutstandingExchanges": true,
+            "metricsEnabled": config.metrics_listener.is_some(),
+        }
+    }))
+}
+
+fn evidence_issuer(config: &DeliveryConfig) -> Result<EvidenceIssuer, ServiceError> {
+    let client_key = resolve_client_key(config)?;
+    Ok(EvidenceIssuer::new(config, &client_key)?)
 }
 
 /// Resolve the client key through the configured secret providers.
@@ -280,6 +321,21 @@ fn resolve_client_key(config: &DeliveryConfig) -> Result<Zeroizing<String>, Serv
         ))
     })?;
     Ok(Zeroizing::new(text.to_owned()))
+}
+
+/// Resolve the audit pseudonym key without ever rendering its bytes.
+fn resolve_audit_key(config: &DeliveryConfig) -> Result<Zeroizing<Vec<u8>>, ServiceError> {
+    const FIELD: &str = "audit.hashKeyRef";
+    let reference = &config.audit.key.hash_key_ref;
+    let refused =
+        |error| ServiceError::AuditKey(describe_secret_failure(FIELD, reference.as_str(), &error));
+    let secret = config
+        .secret_providers
+        .resolver()
+        .map_err(refused)?
+        .resolve_binary_reference(reference)
+        .map_err(refused)?;
+    Ok(Zeroizing::new(secret.expose_secret().to_vec()))
 }
 
 /// Build the router over an already loaded service.
@@ -451,12 +507,18 @@ async fn health() -> Response {
     json_response(StatusCode::OK, br#"{"status":"ok"}"#.to_vec())
 }
 
-/// Readiness tracks what the process holds. What the two outbound sources are
-/// doing is not part of it: a delivery front end that reported itself unready
-/// because a remote deployment was slow would take itself out of service for a
-/// fault it does not have.
-async fn ready() -> Response {
-    json_response(StatusCode::OK, br#"{"status":"ready"}"#.to_vec())
+/// Readiness tracks required local state. Remote Evidence availability is not
+/// part of it, while a stopped or stalled audit destination makes every
+/// releasable operation unavailable and therefore makes this process unready.
+async fn ready(State(service): State<Arc<DeliveryService>>) -> Response {
+    if service.audit.ready().await {
+        json_response(StatusCode::OK, br#"{"status":"ready"}"#.to_vec())
+    } else {
+        json_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            br#"{"status":"not_ready"}"#.to_vec(),
+        )
+    }
 }
 
 /// The published issuer metadata.
@@ -501,7 +563,7 @@ async fn create_offer(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    let _authorized = match authorize_offer(&service, &headers).await {
+    let authorized = match authorize_offer(&service, &headers).await {
         Ok(authorized) => authorized,
         Err(response) => {
             service
@@ -572,20 +634,36 @@ async fn create_offer(
     };
     let body = Zeroizing::new(body);
 
+    let exchange_id = generate_secret();
     let code = generate_secret();
     let transaction_code = request.transaction_code.then(generate_transaction_code);
     let prepared = PreparedRequest::new(
+        &exchange_id,
         &request.credential_configuration_id,
         &body,
         catalog.maximum_holder_keys(),
     );
+    let offer_audit = match service
+        .audit
+        .begin_offer_creation(&exchange_id, &authorized)
+        .await
+    {
+        Ok(audit) => audit,
+        Err(_) => return offer_audit_unavailable_response(),
+    };
     if let Err(error) = service.store.remember_offer(
         &code,
         transaction_code.as_ref().map(|code| code.as_str()),
         prepared,
         service.now(),
     ) {
+        if offer_audit.refused().await.is_err() {
+            return offer_audit_unavailable_response();
+        }
         return store_response(&service, &error, Outcome::StoreSaturated);
+    }
+    if offer_audit.created().await.is_err() {
+        return offer_audit_unavailable_response();
     }
     service.metrics.record_outcome(Outcome::OfferCreated);
     service
@@ -755,40 +833,69 @@ async fn credential(
         .metrics
         .record_store_entries(service.store.maximum_keyspace_len());
 
+    let delivery_audit = match service
+        .audit
+        .begin_credential_delivery(prepared.exchange_id())
+        .await
+    {
+        Ok(audit) => audit,
+        Err(_) => return credential_audit_unavailable_response(),
+    };
+
     let Ok(body) = std::str::from_utf8(&body) else {
         service.metrics.record_outcome(Outcome::ProofRefused);
-        return problem(
-            StatusCode::BAD_REQUEST,
-            "invalid_credential_request",
-            "the credential request is not a document this service accepts",
-        );
+        return audited_credential_response(
+            delivery_audit,
+            CredentialDeliveryOutcome::ProofRefused,
+            problem(
+                StatusCode::BAD_REQUEST,
+                "invalid_credential_request",
+                "the credential request is not a document this service accepts",
+            ),
+        )
+        .await;
     };
     let Ok(request) = serde_json::from_str::<CredentialRequest>(body) else {
         service.metrics.record_outcome(Outcome::ProofRefused);
-        return problem(
-            StatusCode::BAD_REQUEST,
-            "invalid_credential_request",
-            "the credential request is not a document this service accepts",
-        );
+        return audited_credential_response(
+            delivery_audit,
+            CredentialDeliveryOutcome::ProofRefused,
+            problem(
+                StatusCode::BAD_REQUEST,
+                "invalid_credential_request",
+                "the credential request is not a document this service accepts",
+            ),
+        )
+        .await;
     };
     if request.credential_configuration_id != prepared.kind() {
         service.metrics.record_outcome(Outcome::ProofRefused);
-        return problem(
-            StatusCode::BAD_REQUEST,
-            "invalid_credential_request",
-            "the credential configuration is not the one this token was issued for",
-        );
+        return audited_credential_response(
+            delivery_audit,
+            CredentialDeliveryOutcome::ProofRefused,
+            problem(
+                StatusCode::BAD_REQUEST,
+                "invalid_credential_request",
+                "the credential configuration is not the one this token was issued for",
+            ),
+        )
+        .await;
     }
     if request.proofs.jwt.is_empty()
         || request.proofs.jwt.len() > prepared.maximum_holder_keys()
         || request.proofs.jwt.len() > MAXIMUM_HOLDER_KEYS
     {
         service.metrics.record_outcome(Outcome::ProofRefused);
-        return problem(
-            StatusCode::BAD_REQUEST,
-            "invalid_proof",
-            "the proof set is empty or exceeds this deployment's batch ceiling",
-        );
+        return audited_credential_response(
+            delivery_audit,
+            CredentialDeliveryOutcome::ProofRefused,
+            problem(
+                StatusCode::BAD_REQUEST,
+                "invalid_proof",
+                "the proof set is empty or exceeds this deployment's batch ceiling",
+            ),
+        )
+        .await;
     }
 
     let mut holder_keys = Vec::with_capacity(request.proofs.jwt.len());
@@ -798,19 +905,29 @@ async fn credential(
             Ok(key) => {
                 let Ok(thumbprint) = holder_thumbprint(&key) else {
                     service.metrics.record_outcome(Outcome::ProofRefused);
-                    return problem(
-                        StatusCode::BAD_REQUEST,
-                        "invalid_proof",
-                        "the proof presented a key this service cannot forward",
-                    );
+                    return audited_credential_response(
+                        delivery_audit,
+                        CredentialDeliveryOutcome::ProofRefused,
+                        problem(
+                            StatusCode::BAD_REQUEST,
+                            "invalid_proof",
+                            "the proof presented a key this service cannot forward",
+                        ),
+                    )
+                    .await;
                 };
                 if !thumbprints.insert(thumbprint) {
                     service.metrics.record_outcome(Outcome::ProofRefused);
-                    return problem(
-                        StatusCode::BAD_REQUEST,
-                        "invalid_proof",
-                        "every proof must present a distinct holder key",
-                    );
+                    return audited_credential_response(
+                        delivery_audit,
+                        CredentialDeliveryOutcome::ProofRefused,
+                        problem(
+                            StatusCode::BAD_REQUEST,
+                            "invalid_proof",
+                            "every proof must present a distinct holder key",
+                        ),
+                    )
+                    .await;
                 }
                 holder_keys.push(key);
             }
@@ -819,26 +936,52 @@ async fn credential(
                     Some(outcome) => outcome,
                     None => Outcome::ProofRefused,
                 });
-                return problem(StatusCode::BAD_REQUEST, refusal.error, refusal.description);
+                return audited_credential_response(
+                    delivery_audit,
+                    CredentialDeliveryOutcome::ProofRefused,
+                    problem(StatusCode::BAD_REQUEST, refusal.error, refusal.description),
+                )
+                .await;
             }
         }
     }
 
     let Ok(offered) = serde_json::from_str::<OfferedRequest>(prepared.body()) else {
-        return problem(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "server_error",
-            "the recorded offer could not be read",
-        );
+        return audited_credential_response(
+            delivery_audit,
+            CredentialDeliveryOutcome::InternalError,
+            problem(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "server_error",
+                "the recorded offer could not be read",
+            ),
+        )
+        .await;
     };
     // One request, carrying every key that was proved together: one
     // authorization decision and one source acquisition behind however many
     // credentials the wallet asked for.
     let credentials = match service.issuer.issue(offered.into_spec(holder_keys)).await {
         Ok(credentials) => credentials,
-        Err(error) => return credential_issuance_response(&service, &error),
+        Err(error) => {
+            let outcome = credential_issuance_audit_outcome(&error);
+            return audited_credential_response(
+                delivery_audit,
+                outcome,
+                credential_issuance_response(&service, &error),
+            )
+            .await;
+        }
     };
     service.metrics.record_outcome(Outcome::CredentialIssued);
+
+    if delivery_audit
+        .finish(CredentialDeliveryOutcome::Released)
+        .await
+        .is_err()
+    {
+        return credential_audit_unavailable_response();
+    }
 
     // Always plural, and always what Evidence signed: this service reads no
     // credential it passes on and rewrites none of them.
@@ -851,6 +994,29 @@ async fn credential(
                 .collect::<Vec<_>>(),
         }),
     )
+}
+
+async fn audited_credential_response(
+    audit: CredentialDeliveryAudit,
+    outcome: CredentialDeliveryOutcome,
+    response: Response,
+) -> Response {
+    if audit.finish(outcome).await.is_err() {
+        credential_audit_unavailable_response()
+    } else {
+        response
+    }
+}
+
+fn credential_issuance_audit_outcome(error: &IssuanceError) -> CredentialDeliveryOutcome {
+    match error {
+        IssuanceError::Refused | IssuanceError::NotAvailable => {
+            CredentialDeliveryOutcome::EvidenceRefused
+        }
+        IssuanceError::Unavailable | IssuanceError::Malformed | IssuanceError::Configuration(_) => {
+            CredentialDeliveryOutcome::EvidenceUnavailable
+        }
+    }
 }
 
 /// Why a proof was not accepted.
@@ -1112,6 +1278,27 @@ fn terminal_credential_response() -> Response {
     )
 }
 
+fn warn_audit_unavailable() {
+    tracing::warn!(
+        target: "registry_evidence_oid4vci::service",
+        "the audit destination did not accept the required entry"
+    );
+}
+
+fn offer_audit_unavailable_response() -> Response {
+    warn_audit_unavailable();
+    problem(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "temporarily_unavailable",
+        "this request cannot be completed at the moment",
+    )
+}
+
+fn credential_audit_unavailable_response() -> Response {
+    warn_audit_unavailable();
+    terminal_credential_response()
+}
+
 async fn unknown_route() -> Response {
     problem(StatusCode::NOT_FOUND, "invalid_request", "no such route")
 }
@@ -1209,6 +1396,7 @@ mod tests {
     use async_trait::async_trait;
     use axum_test::TestServer;
     use registry_evidence_client::HolderBoundRequestSpec;
+    use registry_platform_audit::AuditWriter;
 
     use crate::{
         authorizer::AuthorizedOffer,
@@ -1221,7 +1409,22 @@ mod tests {
     };
 
     const OFFER_TOKEN: &str = "offer-token";
+    const OFFER_SUBJECT: &str = "institutional-offer-operator";
     const CONFIGURATION_ID: &str = "urn:example:requirement:holder-bound";
+
+    fn test_audit() -> Arc<DeliveryAudit> {
+        test_audit_with(Box::new(io::sink()))
+    }
+
+    fn test_audit_with(sink: Box<dyn Write + Send>) -> Arc<DeliveryAudit> {
+        Arc::new(
+            DeliveryAudit::with_writer(
+                AuditWriter::from_line_sink(sink),
+                b"0123456789abcdef0123456789abcdef".to_vec(),
+            )
+            .expect("the test audit profile is valid"),
+        )
+    }
 
     #[derive(Clone, Default)]
     struct TestLogBuffer(Arc<Mutex<Vec<u8>>>);
@@ -1248,6 +1451,47 @@ mod tests {
         }
     }
 
+    impl TestLogBuffer {
+        fn audit_entries(&self) -> Vec<Value> {
+            let bytes = self.0.lock().expect("audit buffer lock").clone();
+            String::from_utf8(bytes)
+                .expect("audit is UTF-8 JSON Lines")
+                .lines()
+                .map(|line| serde_json::from_str(line).expect("audit entry is JSON"))
+                .collect()
+        }
+    }
+
+    #[derive(Clone)]
+    struct FailAfterWrites {
+        accepted: usize,
+        writes: Arc<Mutex<usize>>,
+    }
+
+    impl FailAfterWrites {
+        fn new(accepted: usize) -> Self {
+            Self {
+                accepted,
+                writes: Arc::new(Mutex::new(0)),
+            }
+        }
+    }
+
+    impl Write for FailAfterWrites {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            let mut writes = self.writes.lock().expect("failure counter lock");
+            if *writes >= self.accepted {
+                return Err(io::Error::other("test audit refusal"));
+            }
+            *writes += 1;
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
     /// Authorizes exactly one credential, and nothing else.
     ///
     /// It reads no key and no configuration, which is the point: the offer
@@ -1267,7 +1511,7 @@ mod tests {
             }
             Ok(AuthorizedOffer {
                 client: Some("adopter-front-end".to_owned()),
-                subject: None,
+                subject: Some(OFFER_SUBJECT.to_owned()),
             })
         }
     }
@@ -1327,6 +1571,11 @@ mod tests {
             .expect("write the client key file");
         fs::set_permissions(&key_path, fs::Permissions::from_mode(key_mode))
             .expect("set the client key mode");
+        let audit_key_path = directory.join("audit-hash-key");
+        fs::write(&audit_key_path, b"0123456789abcdef0123456789abcdef")
+            .expect("write the audit hash key");
+        fs::set_permissions(&audit_key_path, fs::Permissions::from_mode(0o600))
+            .expect("set the audit hash key mode");
 
         let path = directory.join("oid4vci.yaml");
         let text = format!(
@@ -1335,6 +1584,7 @@ mod tests {
              credentialIssuer: https://wallet.example.org\n\
              listener:\n  bind: 127.0.0.1:{port}\n\
              secretProviders:\n  file:\n    root: {root}\n\
+             audit:\n  destination: file\n  path: {root}/audit.jsonl\n  hashKeyRef: secret:file/audit-hash-key\n\
              evidence:\n  baseUrl: https://evidence.example.org\n\
              tokenClient:\n  tokenEndpoint: https://mint.example.org/token\n  clientId: evidence-oid4vci\n  privateKeyRef: secret:file/delivery-client.jwk.json\n\
              offers:\n  issuer: https://mint.example.org\n  jwksUri: https://mint.example.org/.well-known/jwks.json\n  audiences: [\"https://wallet.example.org\"]\n  authorizedClients: unrestricted\n  requiredScopes: unrestricted\n",
@@ -1357,6 +1607,13 @@ mod tests {
 
     /// The same two stubs, over a configuration a test wrote itself.
     fn wired_service_over(config: DeliveryConfig) -> (Arc<DeliveryService>, Arc<RecordingIssuer>) {
+        wired_service_over_with_audit(config, test_audit())
+    }
+
+    fn wired_service_over_with_audit(
+        config: DeliveryConfig,
+        audit: Arc<DeliveryAudit>,
+    ) -> (Arc<DeliveryService>, Arc<RecordingIssuer>) {
         let issuer = Arc::new(RecordingIssuer::new());
         let service = Arc::new(DeliveryService::with_halves(
             config,
@@ -1364,6 +1621,7 @@ mod tests {
                 accepted: OFFER_TOKEN.to_owned(),
             }),
             Arc::clone(&issuer) as Arc<dyn CredentialIssuer>,
+            audit,
         ));
         (service, issuer)
     }
@@ -1437,8 +1695,271 @@ mod tests {
             .to_owned()
     }
 
-    #[test]
-    fn loading_a_deployment_binds_nothing() {
+    #[tokio::test]
+    async fn offer_audit_failure_releases_no_offer() {
+        let directory = canonical_tempdir();
+        let (service, issuer) = wired_service_over_with_audit(
+            load_deployment(directory.path()),
+            test_audit_with(Box::new(FailAfterWrites::new(0))),
+        );
+        let server = TestServer::new(build_app(Arc::clone(&service)));
+
+        let response = server
+            .post(OFFERS_PATH)
+            .add_header("authorization", format!("Bearer {OFFER_TOKEN}"))
+            .json(&offer_body(false))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(service.store.len(), 0);
+        assert!(issuer.requests().is_empty());
+        let body = response.as_bytes();
+        assert!(!body
+            .windows(SELECTOR_VALUE.len())
+            .any(|window| window == SELECTOR_VALUE.as_bytes()));
+    }
+
+    #[tokio::test]
+    async fn a_failed_required_audit_destination_makes_the_process_unready() {
+        let directory = canonical_tempdir();
+        let (service, _) = wired_service_over_with_audit(
+            load_deployment(directory.path()),
+            test_audit_with(Box::new(FailAfterWrites::new(0))),
+        );
+        let server = TestServer::new(build_app(service));
+
+        server
+            .post(OFFERS_PATH)
+            .add_header("authorization", format!("Bearer {OFFER_TOKEN}"))
+            .json(&offer_body(false))
+            .await
+            .assert_status_service_unavailable();
+
+        server.get(HEALTH_PATH).await.assert_status_ok();
+        let readiness = server.get(READY_PATH).await;
+        assert_eq!(readiness.status_code(), StatusCode::SERVICE_UNAVAILABLE);
+        let body = readiness.json::<Value>();
+        assert_eq!(body, json!({"status":"not_ready"}));
+
+        let contract = crate::contracts::openapi_document();
+        let response_schema = &contract["paths"][READY_PATH]["get"]["responses"]["503"]["content"]
+            ["application/json"]["schema"];
+        assert_eq!(
+            response_schema["$ref"],
+            "#/components/schemas/ReadinessResponse"
+        );
+        let documented = &contract["components"]["schemas"]["ReadinessResponse"];
+        assert!(documented["properties"]["status"]["enum"]
+            .as_array()
+            .expect("readiness statuses are an array")
+            .contains(&body["status"]));
+        assert_eq!(documented["additionalProperties"], false);
+        assert!(documented["required"]
+            .as_array()
+            .expect("required readiness members are an array")
+            .iter()
+            .any(|member| member == "status"));
+    }
+
+    #[tokio::test]
+    async fn credential_audit_request_failure_precedes_proof_and_evidence_io() {
+        let directory = canonical_tempdir();
+        let (service, issuer) = wired_service_over_with_audit(
+            load_deployment(directory.path()),
+            test_audit_with(Box::new(FailAfterWrites::new(2))),
+        );
+        let server = TestServer::new(build_app(service));
+        let token = access_token(&server).await;
+        let nonce = minted_nonce(&server).await;
+        let key = private_jwk("audit-request-failure");
+        let request = json!({
+            "credential_configuration_id": CONFIGURATION_ID,
+            "proofs": {"jwt": [proof_jwt(&key, "https://wallet.example.org", &nonce, now())]},
+        });
+
+        let response = server
+            .post(CREDENTIAL_PATH)
+            .add_header("authorization", format!("Bearer {token}"))
+            .json(&request)
+            .await;
+        assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            response.json::<Value>()["error"],
+            "credential_request_denied"
+        );
+        assert!(issuer.requests().is_empty());
+
+        let retry = server
+            .post(CREDENTIAL_PATH)
+            .add_header("authorization", format!("Bearer {token}"))
+            .json(&request)
+            .await;
+        assert_eq!(retry.status_code(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn credential_audit_response_failure_releases_no_credential() {
+        let directory = canonical_tempdir();
+        let (service, issuer) = wired_service_over_with_audit(
+            load_deployment(directory.path()),
+            test_audit_with(Box::new(FailAfterWrites::new(3))),
+        );
+        let server = TestServer::new(build_app(service));
+        let token = access_token(&server).await;
+        let nonce = minted_nonce(&server).await;
+        let key = private_jwk("audit-response-failure");
+        let request = json!({
+            "credential_configuration_id": CONFIGURATION_ID,
+            "proofs": {"jwt": [proof_jwt(&key, "https://wallet.example.org", &nonce, now())]},
+        });
+
+        let response = server
+            .post(CREDENTIAL_PATH)
+            .add_header("authorization", format!("Bearer {token}"))
+            .json(&request)
+            .await;
+        assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            response.json::<Value>()["error"],
+            "credential_request_denied"
+        );
+        assert_eq!(issuer.requests().len(), 1);
+        assert!(!String::from_utf8_lossy(response.as_bytes()).contains("signed.credential"));
+
+        let retry = server
+            .post(CREDENTIAL_PATH)
+            .add_header("authorization", format!("Bearer {token}"))
+            .json(&request)
+            .await;
+        assert_eq!(retry.status_code(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn proof_refusal_audit_failure_is_terminal_and_releases_nothing() {
+        let directory = canonical_tempdir();
+        let (service, issuer) = wired_service_over_with_audit(
+            load_deployment(directory.path()),
+            test_audit_with(Box::new(FailAfterWrites::new(3))),
+        );
+        let server = TestServer::new(build_app(service));
+        let token = access_token(&server).await;
+        let request = json!({
+            "credential_configuration_id": CONFIGURATION_ID,
+            "proofs": {"jwt": ["not-a-proof"]},
+        });
+
+        let response = server
+            .post(CREDENTIAL_PATH)
+            .add_header("authorization", format!("Bearer {token}"))
+            .json(&request)
+            .await;
+        assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            response.json::<Value>()["error"],
+            "credential_request_denied"
+        );
+        assert!(issuer.requests().is_empty());
+
+        let retry = server
+            .post(CREDENTIAL_PATH)
+            .add_header("authorization", format!("Bearer {token}"))
+            .json(&request)
+            .await;
+        assert_eq!(retry.status_code(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn a_real_wallet_flow_links_offer_attribution_to_delivery() {
+        let directory = canonical_tempdir();
+        let captured = TestLogBuffer::default();
+        let (service, issuer) = wired_service_over_with_audit(
+            load_deployment(directory.path()),
+            test_audit_with(Box::new(captured.clone())),
+        );
+        let server = TestServer::new(build_app(service));
+        let created = server
+            .post(OFFERS_PATH)
+            .add_header("authorization", format!("Bearer {OFFER_TOKEN}"))
+            .json(&offer_body(false))
+            .await;
+        assert_eq!(created.status_code(), StatusCode::CREATED);
+        let code = offered_code(&created.json());
+        let granted = server.post(TOKEN_PATH).form(&token_form(&code, None)).await;
+        assert_eq!(granted.status_code(), StatusCode::OK);
+        let token = granted.json::<Value>()["access_token"]
+            .as_str()
+            .expect("the token response carries an access token")
+            .to_owned();
+        let nonce = minted_nonce(&server).await;
+        let key = private_jwk("correlated-delivery");
+        let proof = proof_jwt(&key, "https://wallet.example.org", &nonce, now());
+        let request = json!({
+            "credential_configuration_id": CONFIGURATION_ID,
+            "proofs": {"jwt": [&proof]},
+        });
+
+        let response = server
+            .post(CREDENTIAL_PATH)
+            .add_header("authorization", format!("Bearer {token}"))
+            .json(&request)
+            .await;
+        assert_eq!(response.status_code(), StatusCode::OK);
+        assert_eq!(issuer.requests().len(), 1);
+
+        let entries = captured.audit_entries();
+        assert_eq!(entries.len(), 4);
+        let correlation = entries[0]["correlation"]
+            .as_str()
+            .expect("the offer carries a correlation");
+        assert!(entries
+            .iter()
+            .all(|entry| entry["correlation"] == correlation));
+        assert_eq!(entries[1]["record"]["outcome"], "created");
+        assert_eq!(entries[3]["record"]["outcome"], "released");
+        let rendered = serde_json::to_string(&entries).expect("audit renders");
+        for forbidden in [
+            "adopter-front-end",
+            OFFER_SUBJECT,
+            SELECTOR_VALUE,
+            CONFIGURATION_ID,
+            &code,
+            &token,
+            &nonce,
+            &proof,
+            "signed.credential",
+        ] {
+            assert!(!rendered.contains(forbidden), "audit exposed {forbidden}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_post_claim_proof_refusal_is_a_terminal_audit_outcome() {
+        let directory = canonical_tempdir();
+        let captured = TestLogBuffer::default();
+        let (service, issuer) = wired_service_over_with_audit(
+            load_deployment(directory.path()),
+            test_audit_with(Box::new(captured.clone())),
+        );
+        let server = TestServer::new(build_app(service));
+        let token = access_token(&server).await;
+        let request = json!({
+            "credential_configuration_id": CONFIGURATION_ID,
+            "proofs": {"jwt": ["not-a-proof"]},
+        });
+
+        let response = server
+            .post(CREDENTIAL_PATH)
+            .add_header("authorization", format!("Bearer {token}"))
+            .json(&request)
+            .await;
+        assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
+        assert!(issuer.requests().is_empty());
+        let entries = captured.audit_entries();
+        assert_eq!(entries[3]["record"]["outcome"], "proof_refused");
+    }
+
+    #[tokio::test]
+    async fn loading_a_deployment_binds_nothing() {
         let directory = canonical_tempdir();
         // Hold the configured port while the service loads. A load that bound
         // anything would fail here: sockets are opened by `serve` alone.
@@ -1447,17 +1968,20 @@ mod tests {
         let path = write_deployment(directory.path(), port, 0o600);
         let config = DeliveryConfig::load(&path).expect("the configuration loads");
 
-        DeliveryService::load(config).expect("the service loads against an occupied port");
+        DeliveryService::load(config)
+            .await
+            .expect("the service loads against an occupied port");
     }
 
-    #[test]
-    fn loading_refuses_a_client_key_that_is_readable_by_anyone_else() {
+    #[tokio::test]
+    async fn loading_refuses_a_client_key_that_is_readable_by_anyone_else() {
         for mode in [0o640, 0o604, 0o644, 0o660] {
             let directory = canonical_tempdir();
             let path = write_deployment(directory.path(), 8090, mode);
             let config = DeliveryConfig::load(&path).expect("the configuration loads");
 
             let error = DeliveryService::load(config)
+                .await
                 .expect_err("a group or world readable client key must be refused");
             assert!(
                 matches!(error, ServiceError::ClientKey(_)),
@@ -1466,15 +1990,17 @@ mod tests {
         }
     }
 
-    #[test]
-    fn loading_refuses_a_client_key_that_is_not_there() {
+    #[tokio::test]
+    async fn loading_refuses_a_client_key_that_is_not_there() {
         let directory = canonical_tempdir();
         let path = write_deployment(directory.path(), 8090, 0o600);
         let config = DeliveryConfig::load(&path).expect("the configuration loads");
         fs::remove_file(directory.path().join("delivery-client.jwk.json"))
             .expect("remove the client key file");
 
-        let error = DeliveryService::load(config).expect_err("a missing key is refused");
+        let error = DeliveryService::load(config)
+            .await
+            .expect_err("a missing key is refused");
         let ServiceError::ClientKey(sentence) = &error else {
             panic!("a missing key must be refused as a key fault, got {error:?}");
         };
@@ -1486,10 +2012,47 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn loading_accepts_an_owner_only_binary_audit_key_with_a_zero_byte() {
+        let directory = canonical_tempdir();
+        let path = write_deployment(directory.path(), 8090, 0o600);
+        let mut audit_key = b"binary-audit-key-material-32-byte".to_vec();
+        audit_key[6] = 0;
+        assert!(audit_key.len() >= 32);
+        let audit_key_path = directory.path().join("audit-hash-key");
+        fs::write(&audit_key_path, audit_key).expect("write the binary audit key");
+        fs::set_permissions(&audit_key_path, fs::Permissions::from_mode(0o600))
+            .expect("keep the audit key owner-only");
+        let config = DeliveryConfig::load(&path).expect("the configuration loads");
+
+        DeliveryService::load(config)
+            .await
+            .expect("the binary audit key starts the service");
+    }
+
+    #[tokio::test]
+    async fn loading_refuses_a_weak_audit_key_without_rendering_it() {
+        const WEAK_KEY: &str = "weak-audit-key-canary";
+        let directory = canonical_tempdir();
+        let path = write_deployment(directory.path(), 8090, 0o600);
+        let audit_key_path = directory.path().join("audit-hash-key");
+        fs::write(&audit_key_path, WEAK_KEY.as_bytes()).expect("write the weak audit key");
+        fs::set_permissions(&audit_key_path, fs::Permissions::from_mode(0o600))
+            .expect("keep the audit key owner-only");
+        let config = DeliveryConfig::load(&path).expect("the configuration loads");
+
+        let error = DeliveryService::load(config)
+            .await
+            .expect_err("a weak audit key is refused");
+        assert!(matches!(error, ServiceError::Audit(_)), "{error:?}");
+        assert!(!error.to_string().contains(WEAK_KEY), "{error}");
+        assert!(!format!("{error:?}").contains(WEAK_KEY), "{error:?}");
+    }
+
     /// A key that is not text is refused before it is parsed, and the refusal
     /// carries no byte of it.
-    #[test]
-    fn loading_refuses_a_client_key_that_is_not_text() {
+    #[tokio::test]
+    async fn loading_refuses_a_client_key_that_is_not_text() {
         let directory = canonical_tempdir();
         let path = write_deployment(directory.path(), 8090, 0o600);
         let key_path = directory.path().join("delivery-client.jwk.json");
@@ -1498,16 +2061,20 @@ mod tests {
             .expect("set the client key mode");
         let config = DeliveryConfig::load(&path).expect("the configuration loads");
 
-        let error = DeliveryService::load(config).expect_err("a binary key is refused");
+        let error = DeliveryService::load(config)
+            .await
+            .expect_err("a binary key is refused");
         assert!(matches!(error, ServiceError::ClientKey(_)), "{error:?}");
         assert!(!error.to_string().contains("KEYMATERIAL"), "{error}");
     }
 
-    #[test]
-    fn the_loaded_client_key_never_reaches_debug_output() {
+    #[tokio::test]
+    async fn the_loaded_client_key_never_reaches_debug_output() {
         let directory = canonical_tempdir();
         let config = load_deployment(directory.path());
-        let service = DeliveryService::load(config).expect("the service loads");
+        let service = DeliveryService::load(config)
+            .await
+            .expect("the service loads");
 
         let rendered = format!("{service:?}");
         for member in [
@@ -1829,6 +2396,7 @@ mod tests {
                 config,
                 Arc::new(authorizer),
                 issuer.clone(),
+                test_audit(),
             ))));
             for state in [
                 "ordinary",
@@ -1899,7 +2467,10 @@ mod tests {
         .expect("set the client key mode");
         let config = DeliveryConfig::load(&path).expect("the configuration loads");
         assert!(
-            matches!(DeliveryService::load(config), Err(ServiceError::Issuer(_))),
+            matches!(
+                DeliveryService::load(config).await,
+                Err(ServiceError::Issuer(_))
+            ),
             "an unusable client key must fail the client half"
         );
 
@@ -3020,7 +3591,11 @@ mod tests {
         .expect("write the configuration document");
         let config = DeliveryConfig::load(&path).expect("the configuration loads");
         assert_eq!(config.listener.request_timeout_milliseconds, 200);
-        let service = Arc::new(DeliveryService::load(config).expect("the service loads"));
+        let service = Arc::new(
+            DeliveryService::load(config)
+                .await
+                .expect("the service loads"),
+        );
 
         let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
         let serving = tokio::spawn(serve(service, async move {
@@ -3069,7 +3644,11 @@ mod tests {
         };
         let path = write_deployment(directory.path(), port, 0o600);
         let config = DeliveryConfig::load(&path).expect("the configuration loads");
-        let service = Arc::new(DeliveryService::load(config).expect("the service loads"));
+        let service = Arc::new(
+            DeliveryService::load(config)
+                .await
+                .expect("the service loads"),
+        );
 
         let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
         let serving = tokio::spawn(serve(service, async move {
@@ -3117,7 +3696,7 @@ mod tests {
             .remember_offer(
                 "expired-before-serving",
                 None,
-                PreparedRequest::new("urn:example:kind", "{}", 1),
+                PreparedRequest::new("exchange-1", "urn:example:kind", "{}", 1),
                 expired_at,
             )
             .expect("seed an expired offer");
@@ -3172,7 +3751,11 @@ mod tests {
         )
         .expect("configure metrics");
         let config = DeliveryConfig::load(&path).expect("the configuration loads");
-        let service = Arc::new(DeliveryService::load(config).expect("the service loads"));
+        let service = Arc::new(
+            DeliveryService::load(config)
+                .await
+                .expect("the service loads"),
+        );
         let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
         drop((public_probe, metrics_probe));
         let serving = tokio::spawn(serve(service, async move {

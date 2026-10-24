@@ -12,16 +12,22 @@
 //! [`registry_evidence_oid4vci::authorizer`] exists to keep.
 
 use std::{
-    collections::BTreeMap, net::TcpListener, os::unix::fs::PermissionsExt as _, path::PathBuf,
-    sync::Arc,
+    collections::BTreeMap,
+    io::{self, Write},
+    net::TcpListener,
+    os::unix::fs::PermissionsExt as _,
+    path::PathBuf,
+    sync::{Arc, Mutex},
 };
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use registry_evidence_client::{PrivateKeyJwt, PrivateKeyJwtConfig, TokenProvider};
 use registry_evidence_oid4vci::{
+    audit::DeliveryAudit,
     authorizer::{verifier_profile, AuthorizationError, MintResourceServer, OfferAuthorizer},
     config::{AccessTokenAlgorithm, OfferAuthorizationConfig, Restriction},
 };
+use registry_platform_audit::AuditWriter;
 use registry_platform_crypto::{sign, PrivateJwk, PublicJwk};
 use registry_platform_oidc::{JwksFetcher, JwksFetcherConfig, TokenVerifier};
 use registry_thunderid_tooling::{
@@ -37,6 +43,33 @@ const FIXTURE_ISSUER: &str = "https://issuer.example.org";
 const OFFER_AUDIENCE: &str = "https://delivery.example.org";
 const CLIENT_ID: &str = "offer-caller";
 const PRINCIPAL: &str = "urn:example:offer-caller";
+
+#[derive(Clone, Default)]
+struct AuditCapture(Arc<Mutex<Vec<u8>>>);
+
+impl Write for AuditCapture {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.0
+            .lock()
+            .expect("audit capture lock")
+            .extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+impl AuditCapture {
+    fn entries(&self) -> Vec<Value> {
+        String::from_utf8(self.0.lock().expect("audit capture lock").clone())
+            .expect("audit is UTF-8 JSON Lines")
+            .lines()
+            .map(|line| serde_json::from_str(line).expect("audit entry is JSON"))
+            .collect()
+    }
+}
 
 /// Deterministic P-256 material for the token signing key, so the access token
 /// this test verifies is ES256 signed exactly as a deployment's would be.
@@ -164,6 +197,107 @@ fn signed_offer_fixture(extra: Value) -> (String, Value) {
         format!("{signing_input}.{}", URL_SAFE_NO_PAD.encode(signature)),
         json!({"keys": [signing_public]}),
     )
+}
+
+#[tokio::test]
+async fn restricted_and_unrestricted_clients_audit_the_same_canonical_azp() {
+    const AZP: &str = "canonical-offer-client";
+    const CLIENT_ID: &str = "non-authoritative-client-id";
+    let (token, keys) = signed_offer_fixture(json!({"azp":AZP,"client_id":CLIENT_ID}));
+    let unrestricted = offer_config(FIXTURE_ISSUER, OFFER_AUDIENCE, AccessTokenAlgorithm::ES256);
+    let mut restricted = offer_config(FIXTURE_ISSUER, OFFER_AUDIENCE, AccessTokenAlgorithm::ES256);
+    restricted.authorized_clients = Restriction::Listed(vec![AZP.to_owned()]);
+
+    let unrestricted_actor = resource_server(&unrestricted, &keys)
+        .authorize(&token)
+        .await
+        .expect("the unrestricted boundary accepts the signed token");
+    let restricted_actor = resource_server(&restricted, &keys)
+        .authorize(&token)
+        .await
+        .expect("the restricted boundary accepts the signed token through azp");
+    assert_eq!(unrestricted_actor.client.as_deref(), Some(AZP));
+    assert_eq!(restricted_actor.client.as_deref(), Some(AZP));
+
+    let captured = AuditCapture::default();
+    let audit = DeliveryAudit::with_writer(
+        AuditWriter::from_line_sink(Box::new(captured.clone())),
+        b"0123456789abcdef0123456789abcdef".to_vec(),
+    )
+    .expect("the audit profile loads");
+    audit
+        .begin_offer_creation("unrestricted-exchange", &unrestricted_actor)
+        .await
+        .expect("the unrestricted audit begins")
+        .created()
+        .await
+        .expect("the unrestricted audit completes");
+    audit
+        .begin_offer_creation("restricted-exchange", &restricted_actor)
+        .await
+        .expect("the restricted audit begins")
+        .created()
+        .await
+        .expect("the restricted audit completes");
+
+    let entries = captured.entries();
+    assert_eq!(
+        entries[0]["record"]["clientPseudonym"],
+        entries[2]["record"]["clientPseudonym"]
+    );
+    let rendered = serde_json::to_string(&entries).expect("audit renders");
+    assert!(!rendered.contains(AZP));
+    assert!(!rendered.contains(CLIENT_ID));
+}
+
+#[tokio::test]
+async fn a_sub_only_offer_token_is_accepted_and_audited_without_inventing_a_client() {
+    let (token, keys) = signed_offer_fixture(json!({}));
+    let config = offer_config(FIXTURE_ISSUER, OFFER_AUDIENCE, AccessTokenAlgorithm::ES256);
+    let actor = resource_server(&config, &keys)
+        .authorize(&token)
+        .await
+        .expect("the existing sub-only offer token remains supported");
+    assert_eq!(actor.client, None);
+    assert_eq!(actor.subject.as_deref(), Some(PRINCIPAL));
+
+    let captured = AuditCapture::default();
+    let audit = DeliveryAudit::with_writer(
+        AuditWriter::from_line_sink(Box::new(captured.clone())),
+        b"0123456789abcdef0123456789abcdef".to_vec(),
+    )
+    .expect("the audit profile loads");
+    audit
+        .begin_offer_creation("sub-only-exchange", &actor)
+        .await
+        .expect("the subject audit begins")
+        .created()
+        .await
+        .expect("the subject audit completes");
+
+    let entries = captured.entries();
+    assert!(entries[0]["record"]["clientPseudonym"].is_null());
+    assert!(entries[0]["record"]["subjectPseudonym"]
+        .as_str()
+        .is_some_and(|value| value.starts_with("hmac-sha256:")));
+    assert!(!serde_json::to_string(&entries)
+        .expect("audit renders")
+        .contains(PRINCIPAL));
+}
+
+#[tokio::test]
+async fn an_offer_token_without_a_nonempty_client_or_subject_is_refused() {
+    let config = offer_config(FIXTURE_ISSUER, OFFER_AUDIENCE, AccessTokenAlgorithm::ES256);
+    for identities in [
+        json!({"sub":null}),
+        json!({"sub":"","azp":"","client_id":""}),
+    ] {
+        let (token, keys) = signed_offer_fixture(identities);
+        assert_eq!(
+            resource_server(&config, &keys).authorize(&token).await,
+            Err(AuthorizationError::Refused)
+        );
+    }
 }
 
 #[tokio::test]

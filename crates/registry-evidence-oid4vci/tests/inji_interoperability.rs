@@ -8,7 +8,7 @@
 
 use std::{
     collections::{BTreeMap, HashMap},
-    fs,
+    fs, io,
     os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
@@ -37,6 +37,7 @@ use registry_evidence_client::{
     EVIDENCE_SD_JWT_VC_BATCH_MEDIA_TYPE, SD_JWT_VC_BATCH_SCHEMA_V1,
 };
 use registry_evidence_oid4vci::{
+    audit::DeliveryAudit,
     authorizer::{AuthorizationError, AuthorizedOffer, OfferAuthorizer},
     config::DeliveryConfig,
     issuer::{CredentialIssuer, IssuanceError},
@@ -60,6 +61,7 @@ use registry_evidence_verifier::{
     },
     EVIDENCE_SCHEMA_V1,
 };
+use registry_platform_audit::AuditWriter;
 use registry_platform_crypto::{hmac_sha256_base64url_no_pad, sign, PrivateJwk, PublicJwk};
 use registry_platform_sdjwt::{presentation_disclosure_hash, SdJwtIssuer};
 use serde_json::{json, Value};
@@ -79,6 +81,8 @@ const ADOPTER_ORIGIN: &str = "http://127.0.0.1:18440";
 const ADOPTER_METRICS_ORIGIN: &str = "http://127.0.0.1:18441";
 const SUPPORT_ORIGIN: &str = "http://127.0.0.1:18442";
 const CLIENT_KEY_VARIABLE: &str = "EVIDENCE_OID4VCI_CLIENT_JWK";
+const AUDIT_KEY_VARIABLE: &str = "EVIDENCE_OID4VCI_AUDIT_HASH_KEY";
+const AUDIT_KEY: &str = "0123456789abcdef0123456789abcdef";
 const SUPPORT_TRACEPARENT: &str = "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01";
 
 const DEFINITIONS: &str = r#"{
@@ -319,6 +323,9 @@ listener:
 secretProviders:
   file:
     root: /run/secrets/evidence-oid4vci
+audit:
+  destination: stdout
+  hashKeyRef: secret:file/unused-audit-hash-key
 evidence:
   baseUrl: https://evidence.example.org
 tokenClient:
@@ -353,6 +360,13 @@ fn deployment() -> (tempfile::TempDir, Arc<FixtureIssuer>, TestServer) {
         write_config(directory.path()),
         Arc::new(FixtureAuthorizer),
         Arc::clone(&issuer) as Arc<dyn CredentialIssuer>,
+        Arc::new(
+            DeliveryAudit::with_writer(
+                AuditWriter::from_line_sink(Box::new(io::sink())),
+                b"0123456789abcdef0123456789abcdef".to_vec(),
+            )
+            .expect("the test audit profile is valid"),
+        ),
     ));
     let server = TestServer::new(build_app(service));
     (directory, issuer, server)
@@ -691,6 +705,9 @@ metricsListener:
   bind: 127.0.0.1:18441
 secretProviders:
   environment: {{}}
+audit:
+  destination: stdout
+  hashKeyRef: secret:env/EVIDENCE_OID4VCI_AUDIT_HASH_KEY
 evidence:
   baseUrl: {SUPPORT_ORIGIN}
 tokenClient:
@@ -878,6 +895,7 @@ async fn copied_config_checks_starts_and_completes_the_real_binary_journey() {
     let inspect = Command::new(&binary)
         .env("RUST_LOG", "off")
         .env(CLIENT_KEY_VARIABLE, &client_identity.private)
+        .env(AUDIT_KEY_VARIABLE, AUDIT_KEY)
         .args(["inspect", "--runtime-config"])
         .arg(&config_path)
         .output()
@@ -895,12 +913,26 @@ async fn copied_config_checks_starts_and_completes_the_real_binary_journey() {
     );
     println!("METADATA INSPECTED: derived holder-bound batch ceiling is 4");
 
+    let audit_path = root.join("audit.jsonl");
+    let quoted_audit_path = serde_json::to_string(&audit_path.to_string_lossy())
+        .expect("the audit path is representable");
+    let live_config_path = root.join("oid4vci-live.yaml");
+    fs::write(
+        &live_config_path,
+        adopter_config().replace(
+            "  destination: stdout",
+            &format!("  destination: file\n  path: {quoted_audit_path}"),
+        ),
+    )
+    .expect("write the file-audit live configuration");
+
     let mut service = ChildGuard(
         Command::new(&binary)
             .env("RUST_LOG", "off")
             .env(CLIENT_KEY_VARIABLE, &client_identity.private)
+            .env(AUDIT_KEY_VARIABLE, AUDIT_KEY)
             .args(["serve", "--runtime-config"])
-            .arg(&config_path)
+            .arg(&live_config_path)
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()
@@ -921,6 +953,47 @@ async fn copied_config_checks_starts_and_completes_the_real_binary_journey() {
         reqwest::StatusCode::OK
     );
     println!("SERVICE READY: health and readiness are available on the delivery listener");
+
+    let locked_inspect = Command::new(&binary)
+        .env("RUST_LOG", "off")
+        .env(CLIENT_KEY_VARIABLE, &client_identity.private)
+        .env(AUDIT_KEY_VARIABLE, AUDIT_KEY)
+        .args(["inspect", "--runtime-config"])
+        .arg(&live_config_path)
+        .output()
+        .expect("inspect while the service holds the audit-file lock");
+    assert!(
+        locked_inspect.status.success(),
+        "audit-file-locked inspect failed: {}",
+        String::from_utf8_lossy(&locked_inspect.stderr)
+    );
+    let locked_metadata: Value = serde_json::from_slice(&locked_inspect.stdout)
+        .expect("audit-file-locked inspect prints one metadata document");
+    assert_eq!(
+        locked_metadata["credentialIssuerMetadata"]["batch_credential_issuance"]["batch_size"],
+        json!(4)
+    );
+
+    let live_inspect = Command::new(&binary)
+        .env("RUST_LOG", "off")
+        .env(CLIENT_KEY_VARIABLE, &client_identity.private)
+        .env_remove(AUDIT_KEY_VARIABLE)
+        .args(["inspect", "--runtime-config"])
+        .arg(&live_config_path)
+        .output()
+        .expect("inspect the live service with no audit secret");
+    assert!(
+        live_inspect.status.success(),
+        "live inspect failed: {}",
+        String::from_utf8_lossy(&live_inspect.stderr)
+    );
+    let live_metadata: Value = serde_json::from_slice(&live_inspect.stdout)
+        .expect("live inspect prints one metadata document");
+    assert_eq!(
+        live_metadata["credentialIssuerMetadata"]["batch_credential_issuance"]["batch_size"],
+        json!(4)
+    );
+    println!("LIVE METADATA INSPECTED: inspect needs no audit writer or audit secret");
 
     let metrics = client
         .get(format!("{ADOPTER_METRICS_ORIGIN}/metrics"))

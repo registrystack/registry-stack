@@ -143,6 +143,11 @@ mod tests {
             "credentialIssuer": "https://wallet.example.org",
             "listener": {"bind": "127.0.0.1:8090"},
             "secretProviders": {"file": {"root": "/run/secrets/evidence-oid4vci"}},
+            "audit": {
+                "destination": "file",
+                "path": "/var/lib/registry-evidence-oid4vci/audit.jsonl",
+                "hashKeyRef": "secret:file/audit-hash-key"
+            },
             "evidence": {"baseUrl": "https://evidence.example.org"},
             "tokenClient": {
                 "tokenEndpoint": "https://mint.example.org/token",
