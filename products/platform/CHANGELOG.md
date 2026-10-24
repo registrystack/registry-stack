@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Upgrade the P-256 dependency stack to use `crypto-bigint` 0.7.6, addressing
+  RUSTSEC-2026-0387. Key generation retains operating-system randomness and
+  existing SEC1 and JWK formats; signing algorithms and providers are unchanged.
+
 - Discovery problems add `code`, fixed `detail` and `traceId` (previously only
   `type`, `title`, `status`), plus a matching `traceparent` header (previously
   absent). Codes are `request.invalid`, `request.not-found`,

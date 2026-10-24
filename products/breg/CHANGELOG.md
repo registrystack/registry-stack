@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- Revalidate a submitted Proposal's retained task authority on every new
+  application attempt, including automatic application and separately authorized
+  manual Apply. Preserve completed receipt recovery and owner cancellation.
+- Before a successor package activates, require a usable cancellation path for
+  pending Proposals: one profile must provide Cancel with Get or List.
+- Human-readable access explanations include actor, client and task gates,
+  Action and Proposal targets, inputs, attachments, ownership and row reach.
+  Omitted ownership and writable-input defaults are explicit.
+- Keep related-record disclosure warnings separate from Action target warnings,
+  and report unrestricted Proposal targets even when Proposal ownership is
+  restricted to the caller.
+- Preserve bounded authentication-refusal warnings after a poisoned timestamp
+  lock, while retaining their rate limit.
 - Serialize import-run admission so one authority has at most one open or
   blocked run. Successor plan and apply refuse legacy duplicates under a live
   current authority before maintenance while the existing runtime remains

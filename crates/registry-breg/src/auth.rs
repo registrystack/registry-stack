@@ -373,9 +373,11 @@ impl RegistryAuthenticator {
 fn admit_refusal_warning(last_warning: &Mutex<Option<Instant>>, now: Instant) -> bool {
     // One timestamp per authenticator bounds both memory and warning volume,
     // including concurrent requests with distinct caller-controlled key IDs.
-    let Ok(mut last) = last_warning.lock() else {
-        return false;
-    };
+    // A timestamp contains no partial authorization state. Recover it after a
+    // panic so poisoning cannot permanently silence refusal diagnostics.
+    let mut last = last_warning
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     if last
         .is_some_and(|previous| now.saturating_duration_since(previous) < REFUSAL_WARNING_INTERVAL)
     {
@@ -869,6 +871,29 @@ pub(crate) fn authentication_refused() -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn refusal_warnings_recover_poisoned_timestamps_and_preserve_rate_limits() {
+        let last_warning = Mutex::new(None);
+        let now = Instant::now();
+        std::thread::scope(|scope| {
+            let poisoned = scope.spawn(|| {
+                let _guard = last_warning.lock().expect("initial warning state");
+                panic!("canary warning-state poison");
+            });
+            assert!(poisoned.join().is_err());
+        });
+        assert!(last_warning.is_poisoned());
+        assert!(admit_refusal_warning(&last_warning, now));
+        assert!(!admit_refusal_warning(
+            &last_warning,
+            now + REFUSAL_WARNING_INTERVAL - Duration::from_nanos(1)
+        ));
+        assert!(admit_refusal_warning(
+            &last_warning,
+            now + REFUSAL_WARNING_INTERVAL
+        ));
+    }
 
     #[test]
     fn key_refusal_warnings_are_bounded_across_concurrent_misses_and_resume_after_interval() {

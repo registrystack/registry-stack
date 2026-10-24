@@ -27,6 +27,7 @@ use crate::proposal_workflow::{
 pub(crate) enum ProposalApplyPreflight {
     Receipt(MutationOutcome),
     Continue {
+        task_authority: Option<crate::task_grant::TaskGrantBinding>,
         review: Option<(
             String,
             registry_review_client::ReviewRequestAccepted,
@@ -37,6 +38,42 @@ pub(crate) enum ProposalApplyPreflight {
             crate::action_evidence_client::EvidenceSubjects,
         )>,
     },
+}
+
+/// The retained submission authority observed outside the effect transaction.
+///
+/// Apply reloads this exact binding under PostgreSQL before releasing effects.
+/// The remote authority cannot share that transaction, so the local deadline
+/// is also checked at effect admission and again immediately before commit.
+pub(crate) struct CheckedProposalTaskAuthority {
+    retained: Option<crate::task_grant::TaskGrantBinding>,
+}
+
+impl CheckedProposalTaskAuthority {
+    pub(crate) fn new(retained: Option<crate::task_grant::TaskGrantBinding>) -> Self {
+        Self { retained }
+    }
+
+    fn verify_binding(
+        &self,
+        retained: Option<&crate::task_grant::TaskGrantBinding>,
+    ) -> Result<(), MutationError> {
+        if retained != self.retained.as_ref() {
+            return Err(MutationError::PreconditionFailed);
+        }
+        self.verify_current()
+    }
+
+    pub(crate) fn verify_current(&self) -> Result<(), MutationError> {
+        if self
+            .retained
+            .as_ref()
+            .is_some_and(|binding| !binding.is_current())
+        {
+            return Err(MutationError::PreconditionFailed);
+        }
+        Ok(())
+    }
 }
 
 fn check_current_proposal_grant(authority: &ProposalAuthority) -> Result<(), MutationError> {
@@ -937,6 +974,13 @@ impl MutationTransaction {
             return Err(MutationError::PreconditionFailed);
         }
         verify_apply_binding(input, proposal)?;
+        let task_authority = proposal_store::load_task_authority(
+            tx,
+            &document.action_id,
+            id,
+            document.header.submission_version,
+        )
+        .await?;
         if !input.authority.is_system()
             && !crate::api::proposals::external_recovery_actor_allowed(
                 proposal.application_policy(),
@@ -996,6 +1040,7 @@ impl MutationTransaction {
             vec![]
         };
         Ok(ProposalApplyPreflight::Continue {
+            task_authority,
             review: accepted,
             evidence,
         })
@@ -1009,6 +1054,7 @@ impl MutationTransaction {
         input: ProposalMutationInput<'_>,
         review_evidence: Option<&crate::review_integration::AcceptedReviewEvidence>,
         commit_evidence: &[crate::action_evidence_client::VerifiedAcquisition],
+        checked_task_authority: Option<&CheckedProposalTaskAuthority>,
         deadline: tokio::time::Instant,
     ) -> Result<MutationOutcome, MutationError> {
         let action = proposal_action(registry, input.action_id)?;
@@ -1573,6 +1619,16 @@ impl MutationTransaction {
                             .current_proposal()
                             .ok_or(MutationError::PreconditionFailed)?;
                         verify_apply_binding(&input, frozen)?;
+                        let checked_task_authority =
+                            checked_task_authority.ok_or(MutationError::Unavailable)?;
+                        let retained_task_authority = proposal_store::load_task_authority(
+                            tx,
+                            &action.id,
+                            id,
+                            document.header.submission_version,
+                        )
+                        .await?;
+                        checked_task_authority.verify_binding(retained_task_authority.as_ref())?;
                         if !input.authority.is_system()
                             && !crate::api::proposals::external_recovery_actor_allowed(
                                 frozen.application_policy(),
@@ -1734,6 +1790,11 @@ impl MutationTransaction {
                 return Err(MutationError::Unavailable);
             }
             check_current_proposal_grant(input.authority)?;
+            if input.operation == ProposalAuthorityOperation::Lifecycle(ProposalOperation::Apply) {
+                checked_task_authority
+                    .ok_or(MutationError::Unavailable)?
+                    .verify_current()?;
+            }
             guarded
                 .commit()
                 .await
@@ -1840,7 +1901,6 @@ impl MutationTransaction {
         if tokio::time::Instant::now() >= deadline {
             return Err(MutationError::Unavailable);
         }
-        check_current_proposal_grant(input.authority)?;
         if input.operation == ProposalAuthorityOperation::Lifecycle(ProposalOperation::Apply) {
             let frozen = workflow
                 .current_proposal()
@@ -1884,6 +1944,12 @@ impl MutationTransaction {
         }
         if tokio::time::Instant::now() >= deadline {
             return Err(MutationError::Unavailable);
+        }
+        check_current_proposal_grant(input.authority)?;
+        if input.operation == ProposalAuthorityOperation::Lifecycle(ProposalOperation::Apply) {
+            checked_task_authority
+                .ok_or(MutationError::Unavailable)?
+                .verify_current()?;
         }
         guarded
             .commit()

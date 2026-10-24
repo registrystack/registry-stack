@@ -401,6 +401,16 @@ path = "tests/postgres_proposal.rs"
 required-features = ["postgres-test"]
 
 [[test]]
+name = "postgres_proposal_task_authority"
+path = "tests/postgres_proposal_task_authority.rs"
+required-features = ["postgres-test"]
+
+[[test]]
+name = "postgres_proposal_recovery_permissions"
+path = "tests/postgres_proposal_recovery_permissions.rs"
+required-features = ["postgres-test", "tooling"]
+
+[[test]]
 name = "postgres_proposal_human_recovery"
 path = "tests/postgres_proposal_human_recovery.rs"
 required-features = ["postgres-test"]
