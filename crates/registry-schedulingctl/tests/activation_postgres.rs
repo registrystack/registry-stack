@@ -1748,10 +1748,13 @@ async fn holds(deployment: &Deployment, role: &str, table: &str, privilege: &str
 }
 
 #[tokio::test]
-async fn a_runtime_role_owning_a_scheduling_table_is_refused_in_split_mode_naming_reassign_owned() {
+async fn a_runtime_role_owning_a_scheduling_table_is_refused_with_an_exact_owner_fix() {
     let deployment = Deployment::split("activation_owner").await;
     let (runtime_role, migration_role) = (deployment.roles[0].clone(), deployment.roles[1].clone());
-    let fix = format!("REASSIGN OWNED BY {runtime_role} TO {migration_role}");
+    let fix = format!(
+        "ALTER TABLE {}.scheduling_supply OWNER TO {migration_role}",
+        deployment.schema
+    );
     let package = deployment.package("package", POLICY);
     let config = deployment.config("runtime.yaml", &package, ConfigOptions::default());
     assert_eq!(
@@ -1795,15 +1798,9 @@ async fn a_runtime_role_owning_a_scheduling_table_is_refused_in_split_mode_namin
         "a weakened split was recorded"
     );
 
-    // Reassigning the table leaves the trigger the runtime role attached,
+    // Moving the table leaves the trigger the runtime role attached,
     // and apply still refuses, naming it.
-    deployment
-        .admin
-        .batch_execute(&format!(
-            "REASSIGN OWNED BY {runtime_role} TO {migration_role}"
-        ))
-        .await
-        .unwrap();
+    deployment.admin.batch_execute(&fix).await.unwrap();
     let drop_trigger = format!("DROP TRIGGER planted ON {schema}.scheduling_supply");
     let error = refusal(apply(&config));
     assert!(names_fix(&error, &drop_trigger, THEN_RERUN), "{error}");
@@ -1825,7 +1822,7 @@ async fn a_runtime_role_owning_a_scheduling_table_is_refused_in_split_mode_namin
     assert!(
         names_fix(
             &error,
-            &format!("REASSIGN OWNED BY {owner} TO {migration_role}"),
+            &format!("ALTER TABLE {schema}.scheduling_meta OWNER TO {migration_role}"),
             THEN_APPLY
         ),
         "{error}"
@@ -1835,7 +1832,7 @@ async fn a_runtime_role_owning_a_scheduling_table_is_refused_in_split_mode_namin
     deployment
         .admin
         .batch_execute(&format!(
-            "REASSIGN OWNED BY {owner} TO {migration_role}; DROP ROLE {owner}"
+            "ALTER TABLE {schema}.scheduling_meta OWNER TO {migration_role}; DROP ROLE {owner}"
         ))
         .await
         .unwrap();

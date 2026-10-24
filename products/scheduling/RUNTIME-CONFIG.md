@@ -126,13 +126,14 @@ reissues the grants after the runtime role is rotated or the deployment moves
 to split mode, and `scheduling serve` refuses a ledger that recorded `split`
 for a credential that can now write it. A runtime role that owns, or is a
 member of an owner of, the Scheduling schema or any `scheduling_*` table,
-sequence, view, or function, that holds TRIGGER on a `scheduling_*` table or
+sequence, view, or routine, that holds TRIGGER on a `scheduling_*` table or
 view, or that holds CREATE on the schema, can write the ledger indirectly,
 and so can a trigger already attached to a `scheduling_*` table, since no
 Scheduling migration creates one. With two roles, `plan`, `apply`, and
-`serve` refuse them. After `REASSIGN OWNED BY <owner> TO <migrator>` the
-refusal names `schedulingctl apply --runtime-config FILE`, which reissues
-the grants the moved objects lost, and `serve` refuses until it has; after
+`serve` refuse them. For ownership, the refusal names an exact `ALTER ...
+OWNER TO <migrator>` for each affected Scheduling schema object, followed by
+`schedulingctl apply --runtime-config FILE`, which reissues the grants the
+moved objects lost; `serve` refuses until it has. After
 `REVOKE TRIGGER ON <table> FROM <grantee>`, `REVOKE CREATE ON SCHEMA
 <schema> FROM <grantee>` (the grantee being the runtime role, PUBLIC, or a
 role it is a member of), or `DROP TRIGGER <name> ON <schema>.<table>` it

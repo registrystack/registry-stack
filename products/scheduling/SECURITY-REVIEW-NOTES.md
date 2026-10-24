@@ -531,11 +531,12 @@ the effective mode as `single` with the refusal
 any schema, publication, or ledger statement (and again after the grants on
 a first apply), and startup refuses it in place of the drift refusal. Single
 role mode does not refuse them, since that runtime role holds the migration
-role's authority already. Each refusal names the statement that separates
-the roles, run as a database administrator. After `REASSIGN OWNED BY
-<owner> TO <migrator>` it names `schedulingctl apply --runtime-config FILE`,
-because moving ownership takes the runtime role's grants on those objects
-with it and apply reissues them. After `REVOKE TRIGGER ON <table> FROM
+role's authority already. Each refusal names the statements that separate
+the roles, run as a database administrator. For ownership, it names an exact
+`ALTER ... OWNER TO <migrator>` for each affected Scheduling schema object,
+then `schedulingctl apply --runtime-config FILE`, because moving ownership
+takes the runtime role's grants on those objects with it and apply reissues
+them. After `REVOKE TRIGGER ON <table> FROM
 <grantee>`, `REVOKE CREATE ON SCHEMA <schema> FROM <grantee>`, or `DROP
 TRIGGER <name> ON <schema>.<table>` for each attached trigger, which leave
 the grants in place, it names rerunning the command that refused, or
