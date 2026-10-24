@@ -1,0 +1,11 @@
+{
+  "ok": true,
+  "command": "connection check",
+  "status": "complete",
+  "apiVersion": "id.registrystack.org/formats/platform/cli-connection-check-report/v1alpha1",
+  "kind": "PlatformCliConnectionCheckReport",
+  "filesChecked": 1,
+  "errors": 0,
+  "warnings": 0,
+  "diagnostics": []
+}

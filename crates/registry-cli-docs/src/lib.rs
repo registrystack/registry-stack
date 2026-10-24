@@ -29,11 +29,7 @@ pub fn catalog() -> Catalog {
         command_reference(registry_breg::command(), None, None),
         command_reference(registry_breg_mcp::command(), None, None),
         command_reference(registry_breg_review::command(), None, None),
-        command_reference(
-            registry_bregctl::command(),
-            None,
-            Some(SYMBOLIC_LINK_REFUSAL),
-        ),
+        breg_reference(),
         command_reference(registry_render::command(), None, None),
     ];
     binaries.sort_by(|left, right| left.name.cmp(&right.name));
@@ -42,6 +38,22 @@ pub fn catalog() -> Catalog {
         source_version: env!("CARGO_PKG_VERSION"),
         binaries,
     }
+}
+
+/// BReg authoring paths use descriptor-relative resolution; shared API and
+/// connection commands retain the same file semantics as the other products.
+fn breg_reference() -> CommandReference {
+    let command = registry_bregctl::command();
+    let mut reference = command_reference(command.clone(), None, Some(SYMBOLIC_LINK_REFUSAL));
+    for subcommand in &mut reference.subcommands {
+        if matches!(subcommand.name.as_str(), "api" | "connection") {
+            let source = command
+                .find_subcommand(&subcommand.name)
+                .expect("the reference came from this command tree");
+            *subcommand = command_reference(source.clone(), Some(&reference.invocation), None);
+        }
+    }
+    reference
 }
 
 /// Build the launcher reference with its product-owned offline help command.
@@ -429,6 +441,14 @@ mod tests {
         }
 
         fn check(command: &CommandReference, counted: &mut usize) {
+            if matches!(
+                command.invocation.as_str(),
+                "bregctl api" | "bregctl connection"
+            ) {
+                let rendered = serde_json::to_string(command).expect("render shared command");
+                assert!(!rendered.contains(SYMBOLIC_LINK_REFUSAL));
+                return;
+            }
             for argument in command.arguments.iter().chain(&command.options) {
                 let stated = argument.description.matches(SYMBOLIC_LINK_REFUSAL).count();
                 if is_path_display(&argument.display) {

@@ -619,6 +619,15 @@ fn product_help_request(
             path.push(value.to_owned());
         }
     }
+    if help
+        && arguments
+            .first()
+            .is_some_and(|product| product == "evidence")
+        && path.first().is_some_and(|command| command == "runtime")
+        && path.len() > 1
+    {
+        return Ok(None);
+    }
     Ok(help.then_some((format, path)))
 }
 
@@ -1054,6 +1063,24 @@ fn dispatch_product(
                 .is_some_and(|value| value.starts_with("--format="))
     });
     let format = cli.format.first().copied().unwrap_or(ReportFormat::Human);
+    let inherited_format = (format_supplied && !product_has_format).then_some(match format {
+        ReportFormat::Human => "human",
+        ReportFormat::Json => "json",
+    });
+    let normalized_runtime_arguments = (product == "evidence")
+        .then(|| normalize_evidence_runtime_format(arguments, inherited_format))
+        .flatten();
+    let arguments = normalized_runtime_arguments.as_deref().unwrap_or(arguments);
+    let delimiter = arguments
+        .iter()
+        .position(|argument| argument == "--")
+        .unwrap_or(arguments.len());
+    let product_has_format = arguments.iter().take(delimiter).any(|argument| {
+        argument == "--format"
+            || argument
+                .to_str()
+                .is_some_and(|value| value.starts_with("--format="))
+    });
     if evidence_junit {
         debug_assert_eq!(product, "evidence");
         command.args(&arguments[..delimiter]);
@@ -1081,6 +1108,66 @@ fn dispatch_product(
         "cannot launch {product}: {}",
         command.exec()
     )))
+}
+
+/// Put a launcher report format before the first native Evidence runtime token
+/// immediately after that token. Arguments after the native token, including a
+/// delimiter and runtime-owned flags, retain their order and spelling.
+fn normalize_evidence_runtime_format(
+    arguments: &[OsString],
+    inherited_format: Option<&str>,
+) -> Option<Vec<OsString>> {
+    let delimiter = arguments
+        .iter()
+        .position(|argument| argument == "--")
+        .unwrap_or(arguments.len());
+    let mut index = 0;
+    let mut format = take_report_format(arguments, &mut index, delimiter);
+    if arguments
+        .get(index)
+        .is_none_or(|argument| argument != "runtime")
+    {
+        return None;
+    }
+    let runtime = arguments[index].clone();
+    index += 1;
+    if format.is_none() {
+        format = take_report_format(arguments, &mut index, delimiter);
+    }
+    if index >= delimiter {
+        return None;
+    }
+    let native_command = arguments[index].clone();
+    index += 1;
+    let format = format.or_else(|| inherited_format.map(OsString::from))?;
+
+    let mut normalized = Vec::with_capacity(arguments.len() + 2);
+    normalized.push(runtime);
+    normalized.push(native_command);
+    normalized.push(OsString::from("--format"));
+    normalized.push(format);
+    normalized.extend_from_slice(&arguments[index..]);
+    Some(normalized)
+}
+
+fn take_report_format(
+    arguments: &[OsString],
+    index: &mut usize,
+    delimiter: usize,
+) -> Option<OsString> {
+    let argument = arguments.get(*index)?;
+    if argument == "--format" {
+        let value = arguments
+            .get(*index + 1)
+            .filter(|_| *index + 1 < delimiter)?;
+        *index += 2;
+        return Some(value.clone());
+    }
+    let value = argument
+        .to_str()
+        .and_then(|argument| argument.strip_prefix("--format="))?;
+    *index += 1;
+    Some(OsString::from(value))
 }
 
 fn set_selected_generation_environment(

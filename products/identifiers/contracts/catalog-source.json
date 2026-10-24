@@ -207,6 +207,14 @@
   ],
   "schemaSources": [
     {
+      "glob": "crates/registry-cli-api/schema/*.schema.json",
+      "sourcePath": "crates/registry-cli-api/src/schema.rs",
+      "owner": "platform",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "description": "Product-scoped CLI API connections and project selections."
+    },
+    {
       "glob": "products/coordinator/generated/project/*.schema.json",
       "sourcePath": "crates/registry-coordinator/src/authoring.rs",
       "owner": "coordinator",

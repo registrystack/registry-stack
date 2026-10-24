@@ -48,11 +48,11 @@ python3 serve-source.py \
 
 The deployment's operator registers your application as a client under an
 [access profile](../../reference/glossary/#access-profile). Here you play the operator, from the
-project directory. Registry Evidence reads its clients only as it starts, and `evidencectl` refuses
-a client change while it runs, so stop it first:
+project directory. Registry Evidence reads its clients only as it starts, and
+`rstack evidence` refuses a client change while it runs, so stop it first:
 
 ```sh test-cwd="first-evidence-assertion/adult-status"
-evidencectl dev stop .
+rstack evidence dev stop .
 ```
 
 ```text test-expect
@@ -62,7 +62,7 @@ Local Evidence stopped
 Register the application:
 
 ```sh
-evidencectl access client add age-check-app \
+rstack evidence access client add age-check-app \
   --access-profile standalone-service \
   --generate-local-key
 ```
@@ -75,7 +75,7 @@ The client's private key stays owner-only at `.evidence/clients/age-check-app/pr
 Start Registry Evidence again with the same ports, so it loads the client:
 
 ```sh
-evidencectl dev start . \
+rstack evidence dev start . \
   --target local-target.yaml \
   --evidence-port 18080 \
   --issuer-port 8082
@@ -94,7 +94,7 @@ Issuer ready at http://127.0.0.1:8082
 A client profile holds everything your code would otherwise hard-code about the deployment:
 
 ```sh
-evidencectl client profile create \
+rstack evidence client profile create \
   --base-url http://127.0.0.1:18080 \
   --client-id age-check-app \
   --private-key-file .evidence/clients/age-check-app/private.jwk \
@@ -122,7 +122,7 @@ gives you each value; `--local-loopback-discovery` is for loopback only.
 
 ## Request and decide in Python
 
-Install `registry-stack-client` at the version `evidencectl --version` prints:
+Install `registry-stack-client` at the version `rstack evidence --version` prints:
 
 ```sh test-skip="the gate installs the matching client wheel before replaying this page"
 python3 -m venv .venv
@@ -217,8 +217,8 @@ node request_adult_status.js
 The audit view reads a stopped session, so stop Registry Evidence first:
 
 ```sh
-evidencectl dev stop .
-evidencectl audit show --last-operation
+rstack evidence dev stop .
+rstack evidence audit show --last-operation
 ```
 
 ```text test-excerpt

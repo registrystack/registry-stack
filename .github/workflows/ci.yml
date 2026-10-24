@@ -661,6 +661,10 @@ jobs:
         if: matrix.name == 'developer-tools' && contains(matrix.packages, 'registry-thunderid-tooling')
         run: cargo test --locked -p registry-thunderid-tooling --features schema --lib schema::tests
 
+      - name: Reproduce the saved API connections schema
+        if: matrix.name == 'developer-tools' && contains(matrix.packages, 'registry-cli-api')
+        run: cargo test --locked -p registry-cli-api --features schema --lib schema::tests
+
       - name: Report disk usage
         if: always()
         run: |
@@ -2151,7 +2155,7 @@ jobs:
           set -euo pipefail
           cargo build --locked \
             -p registry-evidence -p registry-evidencectl \
-            -p registry-evidence-oid4vci
+            -p registry-evidence-oid4vci -p registry-rstack --bins
           cargo test --locked \
             -p registry-evidence-oid4vci --test inji_interoperability --no-run
           test_binary=$(find target/debug/deps \
@@ -2235,6 +2239,7 @@ jobs:
       - name: Execute the Evidence tutorials with the stock issuer
         shell: bash
         env:
+          RSTACK_BIN: ${{ github.workspace }}/target/debug/rstack
           EVIDENCE_BIN: ${{ github.workspace }}/target/debug/evidence
           EVIDENCECTL_BIN: ${{ github.workspace }}/target/debug/evidencectl
           EVIDENCE_OID4VCI_BIN: ${{ github.workspace }}/target/debug/evidence-oid4vci
@@ -2304,7 +2309,7 @@ jobs:
           printf 'REGISTRY_RELEASE_TAG=%s\n' "${tag}" >> "${GITHUB_ENV}"
           REGISTRY_RELEASE_TAG="${tag}" cargo build --locked \
             -p registry-breg --features registry-breg/runtime \
-            -p registry-bregctl --bins
+            -p registry-bregctl -p registry-rstack --bins
 
       - name: Verify native retained development lifecycle
         shell: bash
@@ -2333,6 +2338,7 @@ jobs:
       - name: Execute the Base Registry Engine tutorials from a reader directory
         shell: bash
         env:
+          RSTACK_BIN: ${{ github.workspace }}/target/debug/rstack
           BREG_BIN: ${{ github.workspace }}/target/debug/breg
           BREGCTL_BIN: ${{ github.workspace }}/target/debug/bregctl
         run: |
@@ -2398,11 +2404,12 @@ jobs:
           cargo build --locked \
             -p registry-casework -p registry-caseworkctl \
             -p registry-breg --features registry-breg/runtime \
-            -p registry-bregctl --bins
+            -p registry-bregctl -p registry-rstack --bins
 
       - name: Execute the Registry Casework tutorials from a reader directory
         shell: bash
         env:
+          RSTACK_BIN: ${{ github.workspace }}/target/debug/rstack
           CASEWORK_BIN: ${{ github.workspace }}/target/debug/casework
           CASEWORKCTL_BIN: ${{ github.workspace }}/target/debug/caseworkctl
           BREG_BIN: ${{ github.workspace }}/target/debug/breg
@@ -2452,15 +2459,17 @@ jobs:
         working-directory: docs/site
         run: npm run check:tutorial:messaging:dry-run
 
-      - name: Build messagingctl under test
+      - name: Build the Registry Messaging toolset under test
         shell: bash
         run: |
           set -euo pipefail
-          cargo build --locked -p registry-messagingctl
+          cargo build --locked -p registry-messagingctl -p registry-messaging -p registry-rstack --bins
 
       - name: Execute the Registry Messaging tutorial from a reader directory
         shell: bash
         env:
+          RSTACK_BIN: ${{ github.workspace }}/target/debug/rstack
+          MESSAGING_BIN: ${{ github.workspace }}/target/debug/messaging
           MESSAGINGCTL_BIN: ${{ github.workspace }}/target/debug/messagingctl
         run: |
           set -euo pipefail

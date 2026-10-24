@@ -312,6 +312,692 @@
       "constraints": [],
       "subcommands": [
         {
+          "name": "api",
+          "invocation": "bregctl api",
+          "about": "Send one raw HTTP request to a configured or ready local Base Registry Engine",
+          "long_about": null,
+          "usage": "bregctl api [OPTIONS] <PATH>",
+          "arguments": [
+            {
+              "display": "<PATH>",
+              "description": "Relative API path. A leading slash is accepted without discarding a deployment prefix",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "options": [
+            {
+              "display": "--project <PROJECT>",
+              "description": "Project directory, or a descendant from which the exact product root is found",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--client <CLIENT>",
+              "description": "Named local development client resolved by the product adapter",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--connection <CONNECTION>",
+              "description": "Named saved remote connection",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--url <URL>",
+              "description": "Explicit service base URL for an advanced one-off request",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--token-file <TOKEN_FILE>",
+              "description": "Bearer credential file used only with `--url`",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--ca-file <CA_FILE>",
+              "description": "PEM certificate authority bundle for an explicit private-institution endpoint",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--method <METHOD>",
+              "description": "HTTP method. Defaults to GET, or POST when `--input` is present",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--input <INPUT>",
+              "description": "Request body file, or `-` for standard input",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--header <HEADER>",
+              "description": "Request header as `NAME: VALUE`; use `NAME: @FILE` for a value or `@FILE` for complete lines",
+              "always_required": false,
+              "repeatable": true,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--accept <ACCEPT>",
+              "description": "Value of the HTTP Accept header",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--output <OUTPUT>",
+              "description": "Write response bytes to this file instead of standard output",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--include",
+              "description": "Include the HTTP status and response headers before the response body",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--idempotency-key <IDEMPOTENCY_KEY>",
+              "description": "Value of the Idempotency-Key header",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--if-match <IF_MATCH>",
+              "description": "Literal HTTP If-Match value, including quotes when the endpoint requires them",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--format <FORMAT>",
+              "description": "Emit the selected command's report in this format",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [
+            {
+              "kind": "requires-all",
+              "when": "--token-file <TOKEN_FILE>",
+              "arguments": [
+                "--url <URL>"
+              ]
+            },
+            {
+              "kind": "requires-all",
+              "when": "--ca-file <CA_FILE>",
+              "arguments": [
+                "--url <URL>"
+              ]
+            },
+            {
+              "kind": "mutually-exclusive",
+              "when": null,
+              "arguments": [
+                "--client <CLIENT>",
+                "--connection <CONNECTION>"
+              ]
+            },
+            {
+              "kind": "mutually-exclusive",
+              "when": null,
+              "arguments": [
+                "--client <CLIENT>",
+                "--url <URL>"
+              ]
+            },
+            {
+              "kind": "mutually-exclusive",
+              "when": null,
+              "arguments": [
+                "--connection <CONNECTION>",
+                "--url <URL>"
+              ]
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "name": "connection",
+          "invocation": "bregctl connection",
+          "about": "Manage named Base Registry Engine API connections",
+          "long_about": null,
+          "usage": "bregctl connection [OPTIONS] <COMMAND>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--format <FORMAT>",
+              "description": "Emit the selected command's report in this format",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": [
+            {
+              "name": "add",
+              "invocation": "bregctl connection add",
+              "about": "Save one product-scoped remote connection",
+              "long_about": null,
+              "usage": "bregctl connection add [OPTIONS] <NAME>",
+              "arguments": [
+                {
+                  "display": "<NAME>",
+                  "description": "Local connection name used by `--connection` and project selections",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "options": [
+                {
+                  "display": "--url <URL>",
+                  "description": "API service base URL. Prompted when omitted in an interactive terminal",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--ca-file <CA_FILE>",
+                  "description": "PEM certificate authority bundle for a private-institution endpoint",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--access-profile <ACCESS_PROFILE>",
+                  "description": "Casework only: stable caller access profile applied to its profile headers",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--anonymous",
+                  "description": "Save a connection that sends no Authorization header",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--token-file <TOKEN_FILE>",
+                  "description": "File holding a bearer token. The configuration stores only a secret reference",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--token-env <TOKEN_ENV>",
+                  "description": "Environment variable holding a bearer token. The configuration stores only a secret reference",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--private-key-jwt",
+                  "description": "Acquire renewable bearer tokens with OAuth private_key_jwt",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--token-endpoint <TOKEN_ENDPOINT>",
+                  "description": "OAuth token endpoint used for private_key_jwt authentication",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--client-id <CLIENT_ID>",
+                  "description": "OAuth client identifier registered at the token endpoint",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--private-key-file <PRIVATE_KEY_FILE>",
+                  "description": "Owner-only file containing the private client JWK",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--scope <SCOPE>",
+                  "description": "OAuth scope to request; repeat the option for multiple scopes",
+                  "always_required": false,
+                  "repeatable": true,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--resource <RESOURCE>",
+                  "description": "Optional RFC 8707 resource indicator for the requested token",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--assertion-audience <ASSERTION_AUDIENCE>",
+                  "description": "Optional assertion audience; defaults to the token endpoint",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Emit the selected command's report in this format",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [
+                {
+                  "kind": "requires-all",
+                  "when": "--token-endpoint <TOKEN_ENDPOINT>",
+                  "arguments": [
+                    "--private-key-jwt"
+                  ]
+                },
+                {
+                  "kind": "requires-all",
+                  "when": "--client-id <CLIENT_ID>",
+                  "arguments": [
+                    "--private-key-jwt"
+                  ]
+                },
+                {
+                  "kind": "requires-all",
+                  "when": "--private-key-file <PRIVATE_KEY_FILE>",
+                  "arguments": [
+                    "--private-key-jwt"
+                  ]
+                },
+                {
+                  "kind": "requires-all",
+                  "when": "--scope <SCOPE>",
+                  "arguments": [
+                    "--private-key-jwt"
+                  ]
+                },
+                {
+                  "kind": "requires-all",
+                  "when": "--resource <RESOURCE>",
+                  "arguments": [
+                    "--private-key-jwt"
+                  ]
+                },
+                {
+                  "kind": "requires-all",
+                  "when": "--assertion-audience <ASSERTION_AUDIENCE>",
+                  "arguments": [
+                    "--private-key-jwt"
+                  ]
+                },
+                {
+                  "kind": "mutually-exclusive",
+                  "when": null,
+                  "arguments": [
+                    "--anonymous",
+                    "--private-key-jwt"
+                  ]
+                },
+                {
+                  "kind": "mutually-exclusive",
+                  "when": null,
+                  "arguments": [
+                    "--anonymous",
+                    "--token-env <TOKEN_ENV>"
+                  ]
+                },
+                {
+                  "kind": "mutually-exclusive",
+                  "when": null,
+                  "arguments": [
+                    "--anonymous",
+                    "--token-file <TOKEN_FILE>"
+                  ]
+                },
+                {
+                  "kind": "mutually-exclusive",
+                  "when": null,
+                  "arguments": [
+                    "--private-key-jwt",
+                    "--token-env <TOKEN_ENV>"
+                  ]
+                },
+                {
+                  "kind": "mutually-exclusive",
+                  "when": null,
+                  "arguments": [
+                    "--private-key-jwt",
+                    "--token-file <TOKEN_FILE>"
+                  ]
+                },
+                {
+                  "kind": "mutually-exclusive",
+                  "when": null,
+                  "arguments": [
+                    "--token-env <TOKEN_ENV>",
+                    "--token-file <TOKEN_FILE>"
+                  ]
+                }
+              ],
+              "subcommands": []
+            },
+            {
+              "name": "list",
+              "invocation": "bregctl connection list",
+              "about": "List saved connections for this product",
+              "long_about": null,
+              "usage": "bregctl connection list [OPTIONS]",
+              "arguments": [],
+              "options": [
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Emit the selected command's report in this format",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            },
+            {
+              "name": "show",
+              "invocation": "bregctl connection show",
+              "about": "Show one saved connection without resolving its credential",
+              "long_about": null,
+              "usage": "bregctl connection show [OPTIONS] <NAME>",
+              "arguments": [
+                {
+                  "display": "<NAME>",
+                  "description": "Local name of the connection to show",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "options": [
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Emit the selected command's report in this format",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            },
+            {
+              "name": "use",
+              "invocation": "bregctl connection use",
+              "about": "Select a saved connection for one exact product project",
+              "long_about": null,
+              "usage": "bregctl connection use [OPTIONS] <NAME>",
+              "arguments": [
+                {
+                  "display": "<NAME>",
+                  "description": "Local name of the connection to select for the project",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "options": [
+                {
+                  "display": "--project <PROJECT>",
+                  "description": "Project directory, or a descendant from which the exact product root is found",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Emit the selected command's report in this format",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            },
+            {
+              "name": "check",
+              "invocation": "bregctl connection check",
+              "about": "Check one saved-connections file without resolving credentials or contacting endpoints",
+              "long_about": null,
+              "usage": "bregctl connection check [OPTIONS] --file <FILE>",
+              "arguments": [],
+              "options": [
+                {
+                  "display": "--file <FILE>",
+                  "description": "Saved-connections YAML file to validate offline",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--deny-warnings",
+                  "description": "Exit 1 when the check reports a warning",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Emit the selected command's report in this format",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            }
+          ]
+        },
+        {
           "name": "serve",
           "invocation": "bregctl serve",
           "about": "Run the production Base Registry Engine service with the selected runtime",
@@ -7248,6 +7934,692 @@
               "subcommands": []
             }
           ]
+        },
+        {
+          "name": "api",
+          "invocation": "caseworkctl api",
+          "about": "Call the Casework HTTP API with a saved connection or retained local client",
+          "long_about": null,
+          "usage": "caseworkctl api [OPTIONS] <PATH>",
+          "arguments": [
+            {
+              "display": "<PATH>",
+              "description": "Relative API path. A leading slash is accepted without discarding a deployment prefix",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "options": [
+            {
+              "display": "--project <PROJECT>",
+              "description": "Project directory, or a descendant from which the exact product root is found",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--client <CLIENT>",
+              "description": "Named local development client resolved by the product adapter",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--connection <CONNECTION>",
+              "description": "Named saved remote connection",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--url <URL>",
+              "description": "Explicit service base URL for an advanced one-off request",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--token-file <TOKEN_FILE>",
+              "description": "Bearer credential file used only with `--url`",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--ca-file <CA_FILE>",
+              "description": "PEM certificate authority bundle for an explicit private-institution endpoint",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--method <METHOD>",
+              "description": "HTTP method. Defaults to GET, or POST when `--input` is present",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--input <INPUT>",
+              "description": "Request body file, or `-` for standard input",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--header <HEADER>",
+              "description": "Request header as `NAME: VALUE`; use `NAME: @FILE` for a value or `@FILE` for complete lines",
+              "always_required": false,
+              "repeatable": true,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--accept <ACCEPT>",
+              "description": "Value of the HTTP Accept header",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--output <OUTPUT>",
+              "description": "Write response bytes to this file instead of standard output",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--include",
+              "description": "Include the HTTP status and response headers before the response body",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--idempotency-key <IDEMPOTENCY_KEY>",
+              "description": "Value of the Idempotency-Key header",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--if-match <IF_MATCH>",
+              "description": "Literal HTTP If-Match value, including quotes when the endpoint requires them",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--format <FORMAT>",
+              "description": "Write human diagnostics and reports, or one typed JSON report",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [
+            {
+              "kind": "requires-all",
+              "when": "--token-file <TOKEN_FILE>",
+              "arguments": [
+                "--url <URL>"
+              ]
+            },
+            {
+              "kind": "requires-all",
+              "when": "--ca-file <CA_FILE>",
+              "arguments": [
+                "--url <URL>"
+              ]
+            },
+            {
+              "kind": "mutually-exclusive",
+              "when": null,
+              "arguments": [
+                "--client <CLIENT>",
+                "--connection <CONNECTION>"
+              ]
+            },
+            {
+              "kind": "mutually-exclusive",
+              "when": null,
+              "arguments": [
+                "--client <CLIENT>",
+                "--url <URL>"
+              ]
+            },
+            {
+              "kind": "mutually-exclusive",
+              "when": null,
+              "arguments": [
+                "--connection <CONNECTION>",
+                "--url <URL>"
+              ]
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "name": "connection",
+          "invocation": "caseworkctl connection",
+          "about": "Manage saved Casework API connections",
+          "long_about": null,
+          "usage": "caseworkctl connection [OPTIONS] <COMMAND>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--format <FORMAT>",
+              "description": "Write human diagnostics and reports, or one typed JSON report",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": [
+            {
+              "name": "add",
+              "invocation": "caseworkctl connection add",
+              "about": "Save one product-scoped remote connection",
+              "long_about": null,
+              "usage": "caseworkctl connection add [OPTIONS] <NAME>",
+              "arguments": [
+                {
+                  "display": "<NAME>",
+                  "description": "Local connection name used by `--connection` and project selections",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "options": [
+                {
+                  "display": "--url <URL>",
+                  "description": "API service base URL. Prompted when omitted in an interactive terminal",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--ca-file <CA_FILE>",
+                  "description": "PEM certificate authority bundle for a private-institution endpoint",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--access-profile <ACCESS_PROFILE>",
+                  "description": "Casework only: stable caller access profile applied to its profile headers",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--anonymous",
+                  "description": "Save a connection that sends no Authorization header",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--token-file <TOKEN_FILE>",
+                  "description": "File holding a bearer token. The configuration stores only a secret reference",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--token-env <TOKEN_ENV>",
+                  "description": "Environment variable holding a bearer token. The configuration stores only a secret reference",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--private-key-jwt",
+                  "description": "Acquire renewable bearer tokens with OAuth private_key_jwt",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--token-endpoint <TOKEN_ENDPOINT>",
+                  "description": "OAuth token endpoint used for private_key_jwt authentication",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--client-id <CLIENT_ID>",
+                  "description": "OAuth client identifier registered at the token endpoint",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--private-key-file <PRIVATE_KEY_FILE>",
+                  "description": "Owner-only file containing the private client JWK",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--scope <SCOPE>",
+                  "description": "OAuth scope to request; repeat the option for multiple scopes",
+                  "always_required": false,
+                  "repeatable": true,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--resource <RESOURCE>",
+                  "description": "Optional RFC 8707 resource indicator for the requested token",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--assertion-audience <ASSERTION_AUDIENCE>",
+                  "description": "Optional assertion audience; defaults to the token endpoint",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Write human diagnostics and reports, or one typed JSON report",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [
+                {
+                  "kind": "requires-all",
+                  "when": "--token-endpoint <TOKEN_ENDPOINT>",
+                  "arguments": [
+                    "--private-key-jwt"
+                  ]
+                },
+                {
+                  "kind": "requires-all",
+                  "when": "--client-id <CLIENT_ID>",
+                  "arguments": [
+                    "--private-key-jwt"
+                  ]
+                },
+                {
+                  "kind": "requires-all",
+                  "when": "--private-key-file <PRIVATE_KEY_FILE>",
+                  "arguments": [
+                    "--private-key-jwt"
+                  ]
+                },
+                {
+                  "kind": "requires-all",
+                  "when": "--scope <SCOPE>",
+                  "arguments": [
+                    "--private-key-jwt"
+                  ]
+                },
+                {
+                  "kind": "requires-all",
+                  "when": "--resource <RESOURCE>",
+                  "arguments": [
+                    "--private-key-jwt"
+                  ]
+                },
+                {
+                  "kind": "requires-all",
+                  "when": "--assertion-audience <ASSERTION_AUDIENCE>",
+                  "arguments": [
+                    "--private-key-jwt"
+                  ]
+                },
+                {
+                  "kind": "mutually-exclusive",
+                  "when": null,
+                  "arguments": [
+                    "--anonymous",
+                    "--private-key-jwt"
+                  ]
+                },
+                {
+                  "kind": "mutually-exclusive",
+                  "when": null,
+                  "arguments": [
+                    "--anonymous",
+                    "--token-env <TOKEN_ENV>"
+                  ]
+                },
+                {
+                  "kind": "mutually-exclusive",
+                  "when": null,
+                  "arguments": [
+                    "--anonymous",
+                    "--token-file <TOKEN_FILE>"
+                  ]
+                },
+                {
+                  "kind": "mutually-exclusive",
+                  "when": null,
+                  "arguments": [
+                    "--private-key-jwt",
+                    "--token-env <TOKEN_ENV>"
+                  ]
+                },
+                {
+                  "kind": "mutually-exclusive",
+                  "when": null,
+                  "arguments": [
+                    "--private-key-jwt",
+                    "--token-file <TOKEN_FILE>"
+                  ]
+                },
+                {
+                  "kind": "mutually-exclusive",
+                  "when": null,
+                  "arguments": [
+                    "--token-env <TOKEN_ENV>",
+                    "--token-file <TOKEN_FILE>"
+                  ]
+                }
+              ],
+              "subcommands": []
+            },
+            {
+              "name": "list",
+              "invocation": "caseworkctl connection list",
+              "about": "List saved connections for this product",
+              "long_about": null,
+              "usage": "caseworkctl connection list [OPTIONS]",
+              "arguments": [],
+              "options": [
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Write human diagnostics and reports, or one typed JSON report",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            },
+            {
+              "name": "show",
+              "invocation": "caseworkctl connection show",
+              "about": "Show one saved connection without resolving its credential",
+              "long_about": null,
+              "usage": "caseworkctl connection show [OPTIONS] <NAME>",
+              "arguments": [
+                {
+                  "display": "<NAME>",
+                  "description": "Local name of the connection to show",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "options": [
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Write human diagnostics and reports, or one typed JSON report",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            },
+            {
+              "name": "use",
+              "invocation": "caseworkctl connection use",
+              "about": "Select a saved connection for one exact product project",
+              "long_about": null,
+              "usage": "caseworkctl connection use [OPTIONS] <NAME>",
+              "arguments": [
+                {
+                  "display": "<NAME>",
+                  "description": "Local name of the connection to select for the project",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "options": [
+                {
+                  "display": "--project <PROJECT>",
+                  "description": "Project directory, or a descendant from which the exact product root is found",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Write human diagnostics and reports, or one typed JSON report",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            },
+            {
+              "name": "check",
+              "invocation": "caseworkctl connection check",
+              "about": "Check one saved-connections file without resolving credentials or contacting endpoints",
+              "long_about": null,
+              "usage": "caseworkctl connection check [OPTIONS] --file <FILE>",
+              "arguments": [],
+              "options": [
+                {
+                  "display": "--file <FILE>",
+                  "description": "Saved-connections YAML file to validate offline",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--deny-warnings",
+                  "description": "Exit 1 when the check reports a warning",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Write human diagnostics and reports, or one typed JSON report",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            }
+          ]
         }
       ]
     },
@@ -7362,6 +8734,755 @@
       ],
       "constraints": [],
       "subcommands": [
+        {
+          "name": "api",
+          "invocation": "coordinatorctl api",
+          "about": "Send one raw HTTP request using a saved Coordinator connection",
+          "long_about": null,
+          "usage": "coordinatorctl api [OPTIONS] <PATH>",
+          "arguments": [
+            {
+              "display": "<PATH>",
+              "description": "Relative API path. A leading slash is accepted without discarding a deployment prefix",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "options": [
+            {
+              "display": "--project <PROJECT>",
+              "description": "Project directory, or a descendant from which the exact product root is found",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--client <CLIENT>",
+              "description": "Named local development client resolved by the product adapter",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--connection <CONNECTION>",
+              "description": "Named saved remote connection",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--url <URL>",
+              "description": "Explicit service base URL for an advanced one-off request",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--token-file <TOKEN_FILE>",
+              "description": "Bearer credential file used only with `--url`",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--ca-file <CA_FILE>",
+              "description": "PEM certificate authority bundle for an explicit private-institution endpoint",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--method <METHOD>",
+              "description": "HTTP method. Defaults to GET, or POST when `--input` is present",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--input <INPUT>",
+              "description": "Request body file, or `-` for standard input",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--header <HEADER>",
+              "description": "Request header as `NAME: VALUE`; use `NAME: @FILE` for a value or `@FILE` for complete lines",
+              "always_required": false,
+              "repeatable": true,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--accept <ACCEPT>",
+              "description": "Value of the HTTP Accept header",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--output <OUTPUT>",
+              "description": "Write response bytes to this file instead of standard output",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--include",
+              "description": "Include the HTTP status and response headers before the response body",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--idempotency-key <IDEMPOTENCY_KEY>",
+              "description": "Value of the Idempotency-Key header",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--if-match <IF_MATCH>",
+              "description": "Literal HTTP If-Match value, including quotes when the endpoint requires them",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--format <FORMAT>",
+              "description": "Output format for local reports and authenticated API responses: readable text, or one JSON report",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "--runtime-config <FILE>",
+              "description": "Runtime configuration file",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [
+            {
+              "kind": "requires-all",
+              "when": "--token-file <TOKEN_FILE>",
+              "arguments": [
+                "--url <URL>"
+              ]
+            },
+            {
+              "kind": "requires-all",
+              "when": "--ca-file <CA_FILE>",
+              "arguments": [
+                "--url <URL>"
+              ]
+            },
+            {
+              "kind": "mutually-exclusive",
+              "when": null,
+              "arguments": [
+                "--client <CLIENT>",
+                "--connection <CONNECTION>"
+              ]
+            },
+            {
+              "kind": "mutually-exclusive",
+              "when": null,
+              "arguments": [
+                "--client <CLIENT>",
+                "--url <URL>"
+              ]
+            },
+            {
+              "kind": "mutually-exclusive",
+              "when": null,
+              "arguments": [
+                "--connection <CONNECTION>",
+                "--url <URL>"
+              ]
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "name": "connection",
+          "invocation": "coordinatorctl connection",
+          "about": "Manage named Coordinator API connections",
+          "long_about": null,
+          "usage": "coordinatorctl connection [OPTIONS] <COMMAND>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--format <FORMAT>",
+              "description": "Output format for local reports and authenticated API responses: readable text, or one JSON report",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "--runtime-config <FILE>",
+              "description": "Runtime configuration file",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": [
+            {
+              "name": "add",
+              "invocation": "coordinatorctl connection add",
+              "about": "Save one product-scoped remote connection",
+              "long_about": null,
+              "usage": "coordinatorctl connection add [OPTIONS] <NAME>",
+              "arguments": [
+                {
+                  "display": "<NAME>",
+                  "description": "Local connection name used by `--connection` and project selections",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "options": [
+                {
+                  "display": "--url <URL>",
+                  "description": "API service base URL. Prompted when omitted in an interactive terminal",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--ca-file <CA_FILE>",
+                  "description": "PEM certificate authority bundle for a private-institution endpoint",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--access-profile <ACCESS_PROFILE>",
+                  "description": "Casework only: stable caller access profile applied to its profile headers",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--anonymous",
+                  "description": "Save a connection that sends no Authorization header",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--token-file <TOKEN_FILE>",
+                  "description": "File holding a bearer token. The configuration stores only a secret reference",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--token-env <TOKEN_ENV>",
+                  "description": "Environment variable holding a bearer token. The configuration stores only a secret reference",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--private-key-jwt",
+                  "description": "Acquire renewable bearer tokens with OAuth private_key_jwt",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--token-endpoint <TOKEN_ENDPOINT>",
+                  "description": "OAuth token endpoint used for private_key_jwt authentication",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--client-id <CLIENT_ID>",
+                  "description": "OAuth client identifier registered at the token endpoint",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--private-key-file <PRIVATE_KEY_FILE>",
+                  "description": "Owner-only file containing the private client JWK",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--scope <SCOPE>",
+                  "description": "OAuth scope to request; repeat the option for multiple scopes",
+                  "always_required": false,
+                  "repeatable": true,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--resource <RESOURCE>",
+                  "description": "Optional RFC 8707 resource indicator for the requested token",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--assertion-audience <ASSERTION_AUDIENCE>",
+                  "description": "Optional assertion audience; defaults to the token endpoint",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Output format for local reports and authenticated API responses: readable text, or one JSON report",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "--runtime-config <FILE>",
+                  "description": "Runtime configuration file",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [
+                {
+                  "kind": "requires-all",
+                  "when": "--token-endpoint <TOKEN_ENDPOINT>",
+                  "arguments": [
+                    "--private-key-jwt"
+                  ]
+                },
+                {
+                  "kind": "requires-all",
+                  "when": "--client-id <CLIENT_ID>",
+                  "arguments": [
+                    "--private-key-jwt"
+                  ]
+                },
+                {
+                  "kind": "requires-all",
+                  "when": "--private-key-file <PRIVATE_KEY_FILE>",
+                  "arguments": [
+                    "--private-key-jwt"
+                  ]
+                },
+                {
+                  "kind": "requires-all",
+                  "when": "--scope <SCOPE>",
+                  "arguments": [
+                    "--private-key-jwt"
+                  ]
+                },
+                {
+                  "kind": "requires-all",
+                  "when": "--resource <RESOURCE>",
+                  "arguments": [
+                    "--private-key-jwt"
+                  ]
+                },
+                {
+                  "kind": "requires-all",
+                  "when": "--assertion-audience <ASSERTION_AUDIENCE>",
+                  "arguments": [
+                    "--private-key-jwt"
+                  ]
+                },
+                {
+                  "kind": "mutually-exclusive",
+                  "when": null,
+                  "arguments": [
+                    "--anonymous",
+                    "--private-key-jwt"
+                  ]
+                },
+                {
+                  "kind": "mutually-exclusive",
+                  "when": null,
+                  "arguments": [
+                    "--anonymous",
+                    "--token-env <TOKEN_ENV>"
+                  ]
+                },
+                {
+                  "kind": "mutually-exclusive",
+                  "when": null,
+                  "arguments": [
+                    "--anonymous",
+                    "--token-file <TOKEN_FILE>"
+                  ]
+                },
+                {
+                  "kind": "mutually-exclusive",
+                  "when": null,
+                  "arguments": [
+                    "--private-key-jwt",
+                    "--token-env <TOKEN_ENV>"
+                  ]
+                },
+                {
+                  "kind": "mutually-exclusive",
+                  "when": null,
+                  "arguments": [
+                    "--private-key-jwt",
+                    "--token-file <TOKEN_FILE>"
+                  ]
+                },
+                {
+                  "kind": "mutually-exclusive",
+                  "when": null,
+                  "arguments": [
+                    "--token-env <TOKEN_ENV>",
+                    "--token-file <TOKEN_FILE>"
+                  ]
+                }
+              ],
+              "subcommands": []
+            },
+            {
+              "name": "list",
+              "invocation": "coordinatorctl connection list",
+              "about": "List saved connections for this product",
+              "long_about": null,
+              "usage": "coordinatorctl connection list [OPTIONS]",
+              "arguments": [],
+              "options": [
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Output format for local reports and authenticated API responses: readable text, or one JSON report",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "--runtime-config <FILE>",
+                  "description": "Runtime configuration file",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            },
+            {
+              "name": "show",
+              "invocation": "coordinatorctl connection show",
+              "about": "Show one saved connection without resolving its credential",
+              "long_about": null,
+              "usage": "coordinatorctl connection show [OPTIONS] <NAME>",
+              "arguments": [
+                {
+                  "display": "<NAME>",
+                  "description": "Local name of the connection to show",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "options": [
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Output format for local reports and authenticated API responses: readable text, or one JSON report",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "--runtime-config <FILE>",
+                  "description": "Runtime configuration file",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            },
+            {
+              "name": "use",
+              "invocation": "coordinatorctl connection use",
+              "about": "Select a saved connection for one exact product project",
+              "long_about": null,
+              "usage": "coordinatorctl connection use [OPTIONS] <NAME>",
+              "arguments": [
+                {
+                  "display": "<NAME>",
+                  "description": "Local name of the connection to select for the project",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "options": [
+                {
+                  "display": "--project <PROJECT>",
+                  "description": "Project directory, or a descendant from which the exact product root is found",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Output format for local reports and authenticated API responses: readable text, or one JSON report",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "--runtime-config <FILE>",
+                  "description": "Runtime configuration file",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            },
+            {
+              "name": "check",
+              "invocation": "coordinatorctl connection check",
+              "about": "Check one saved-connections file without resolving credentials or contacting endpoints",
+              "long_about": null,
+              "usage": "coordinatorctl connection check [OPTIONS] --file <FILE>",
+              "arguments": [],
+              "options": [
+                {
+                  "display": "--file <FILE>",
+                  "description": "Saved-connections YAML file to validate offline",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--deny-warnings",
+                  "description": "Exit 1 when the check reports a warning",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Output format for local reports and authenticated API responses: readable text, or one JSON report",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "--runtime-config <FILE>",
+                  "description": "Runtime configuration file",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            }
+          ]
+        },
         {
           "name": "serve",
           "invocation": "coordinatorctl serve",
@@ -10729,6 +12850,217 @@
       "constraints": [],
       "subcommands": [
         {
+          "name": "api",
+          "invocation": "evidencectl api",
+          "about": "Send one raw HTTP request to a configured or ready local Evidence service",
+          "long_about": null,
+          "usage": "evidencectl api [OPTIONS] <PATH>",
+          "arguments": [
+            {
+              "display": "<PATH>",
+              "description": "Relative API path. A leading slash is accepted without discarding a deployment prefix",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "options": [
+            {
+              "display": "--project <PROJECT>",
+              "description": "Project directory, or a descendant from which the exact product root is found",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--client <CLIENT>",
+              "description": "Named local development client resolved by the product adapter",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--connection <CONNECTION>",
+              "description": "Named saved remote connection",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--url <URL>",
+              "description": "Explicit service base URL for an advanced one-off request",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--token-file <TOKEN_FILE>",
+              "description": "Bearer credential file used only with `--url`",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--ca-file <CA_FILE>",
+              "description": "PEM certificate authority bundle for an explicit private-institution endpoint",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--method <METHOD>",
+              "description": "HTTP method. Defaults to GET, or POST when `--input` is present",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--input <INPUT>",
+              "description": "Request body file, or `-` for standard input",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--header <HEADER>",
+              "description": "Request header as `NAME: VALUE`; use `NAME: @FILE` for a value or `@FILE` for complete lines",
+              "always_required": false,
+              "repeatable": true,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--accept <ACCEPT>",
+              "description": "Value of the HTTP Accept header",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--output <OUTPUT>",
+              "description": "Write response bytes to this file instead of standard output",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--include",
+              "description": "Include the HTTP status and response headers before the response body",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--idempotency-key <IDEMPOTENCY_KEY>",
+              "description": "Value of the Idempotency-Key header",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--if-match <IF_MATCH>",
+              "description": "Literal HTTP If-Match value, including quotes when the endpoint requires them",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--format <FORMAT>",
+              "description": "Emit the selected command's report in this format. `junit` is accepted only by `test` and `fixtures run`",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json",
+                "junit"
+              ],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [
+            {
+              "kind": "requires-all",
+              "when": "--token-file <TOKEN_FILE>",
+              "arguments": [
+                "--url <URL>"
+              ]
+            },
+            {
+              "kind": "requires-all",
+              "when": "--ca-file <CA_FILE>",
+              "arguments": [
+                "--url <URL>"
+              ]
+            },
+            {
+              "kind": "mutually-exclusive",
+              "when": null,
+              "arguments": [
+                "--client <CLIENT>",
+                "--connection <CONNECTION>"
+              ]
+            },
+            {
+              "kind": "mutually-exclusive",
+              "when": null,
+              "arguments": [
+                "--client <CLIENT>",
+                "--url <URL>"
+              ]
+            },
+            {
+              "kind": "mutually-exclusive",
+              "when": null,
+              "arguments": [
+                "--connection <CONNECTION>",
+                "--url <URL>"
+              ]
+            }
+          ],
+          "subcommands": []
+        },
+        {
           "name": "init",
           "invocation": "evidencectl init",
           "about": "Create a new editable Evidence project",
@@ -13550,6 +15882,480 @@
           ]
         },
         {
+          "name": "connection",
+          "invocation": "evidencectl connection",
+          "about": "Manage named Evidence API connections",
+          "long_about": null,
+          "usage": "evidencectl connection [OPTIONS] <COMMAND>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--format <FORMAT>",
+              "description": "Emit the selected command's report in this format. `junit` is accepted only by `test` and `fixtures run`",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json",
+                "junit"
+              ],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": [
+            {
+              "name": "check",
+              "invocation": "evidencectl connection check",
+              "about": "Check one saved-connections file without resolving credentials or contacting endpoints",
+              "long_about": null,
+              "usage": "evidencectl connection check [OPTIONS] --file <FILE>",
+              "arguments": [],
+              "options": [
+                {
+                  "display": "--file <FILE>",
+                  "description": "Saved-connections YAML file to validate offline",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--deny-warnings",
+                  "description": "Exit 1 when the check reports a warning",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Emit the selected command's report in this format. `junit` is accepted only by `test` and `fixtures run`",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json",
+                    "junit"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            },
+            {
+              "name": "add",
+              "invocation": "evidencectl connection add",
+              "about": "Save one product-scoped remote connection",
+              "long_about": null,
+              "usage": "evidencectl connection add [OPTIONS] <NAME>",
+              "arguments": [
+                {
+                  "display": "<NAME>",
+                  "description": "Local connection name used by `--connection` and project selections",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "options": [
+                {
+                  "display": "--url <URL>",
+                  "description": "API service base URL. Prompted when omitted in an interactive terminal",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--ca-file <CA_FILE>",
+                  "description": "PEM certificate authority bundle for a private-institution endpoint",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--access-profile <ACCESS_PROFILE>",
+                  "description": "Casework only: stable caller access profile applied to its profile headers",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--anonymous",
+                  "description": "Save a connection that sends no Authorization header",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--token-file <TOKEN_FILE>",
+                  "description": "File holding a bearer token. The configuration stores only a secret reference",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--token-env <TOKEN_ENV>",
+                  "description": "Environment variable holding a bearer token. The configuration stores only a secret reference",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--private-key-jwt",
+                  "description": "Acquire renewable bearer tokens with OAuth private_key_jwt",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--token-endpoint <TOKEN_ENDPOINT>",
+                  "description": "OAuth token endpoint used for private_key_jwt authentication",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--client-id <CLIENT_ID>",
+                  "description": "OAuth client identifier registered at the token endpoint",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--private-key-file <PRIVATE_KEY_FILE>",
+                  "description": "Owner-only file containing the private client JWK",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--scope <SCOPE>",
+                  "description": "OAuth scope to request; repeat the option for multiple scopes",
+                  "always_required": false,
+                  "repeatable": true,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--resource <RESOURCE>",
+                  "description": "Optional RFC 8707 resource indicator for the requested token",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--assertion-audience <ASSERTION_AUDIENCE>",
+                  "description": "Optional assertion audience; defaults to the token endpoint",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Select human-readable output; this command provides no JSON report",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [
+                {
+                  "kind": "requires-all",
+                  "when": "--token-endpoint <TOKEN_ENDPOINT>",
+                  "arguments": [
+                    "--private-key-jwt"
+                  ]
+                },
+                {
+                  "kind": "requires-all",
+                  "when": "--client-id <CLIENT_ID>",
+                  "arguments": [
+                    "--private-key-jwt"
+                  ]
+                },
+                {
+                  "kind": "requires-all",
+                  "when": "--private-key-file <PRIVATE_KEY_FILE>",
+                  "arguments": [
+                    "--private-key-jwt"
+                  ]
+                },
+                {
+                  "kind": "requires-all",
+                  "when": "--scope <SCOPE>",
+                  "arguments": [
+                    "--private-key-jwt"
+                  ]
+                },
+                {
+                  "kind": "requires-all",
+                  "when": "--resource <RESOURCE>",
+                  "arguments": [
+                    "--private-key-jwt"
+                  ]
+                },
+                {
+                  "kind": "requires-all",
+                  "when": "--assertion-audience <ASSERTION_AUDIENCE>",
+                  "arguments": [
+                    "--private-key-jwt"
+                  ]
+                },
+                {
+                  "kind": "mutually-exclusive",
+                  "when": null,
+                  "arguments": [
+                    "--anonymous",
+                    "--private-key-jwt"
+                  ]
+                },
+                {
+                  "kind": "mutually-exclusive",
+                  "when": null,
+                  "arguments": [
+                    "--anonymous",
+                    "--token-env <TOKEN_ENV>"
+                  ]
+                },
+                {
+                  "kind": "mutually-exclusive",
+                  "when": null,
+                  "arguments": [
+                    "--anonymous",
+                    "--token-file <TOKEN_FILE>"
+                  ]
+                },
+                {
+                  "kind": "mutually-exclusive",
+                  "when": null,
+                  "arguments": [
+                    "--private-key-jwt",
+                    "--token-env <TOKEN_ENV>"
+                  ]
+                },
+                {
+                  "kind": "mutually-exclusive",
+                  "when": null,
+                  "arguments": [
+                    "--private-key-jwt",
+                    "--token-file <TOKEN_FILE>"
+                  ]
+                },
+                {
+                  "kind": "mutually-exclusive",
+                  "when": null,
+                  "arguments": [
+                    "--token-env <TOKEN_ENV>",
+                    "--token-file <TOKEN_FILE>"
+                  ]
+                }
+              ],
+              "subcommands": []
+            },
+            {
+              "name": "list",
+              "invocation": "evidencectl connection list",
+              "about": "List saved connections for this product",
+              "long_about": null,
+              "usage": "evidencectl connection list [OPTIONS]",
+              "arguments": [],
+              "options": [
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Select human-readable output; this command provides no JSON report",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            },
+            {
+              "name": "show",
+              "invocation": "evidencectl connection show",
+              "about": "Show one saved connection without resolving its credential",
+              "long_about": null,
+              "usage": "evidencectl connection show [OPTIONS] <NAME>",
+              "arguments": [
+                {
+                  "display": "<NAME>",
+                  "description": "Local name of the connection to show",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "options": [
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Select human-readable output; this command provides no JSON report",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            },
+            {
+              "name": "use",
+              "invocation": "evidencectl connection use",
+              "about": "Select a saved connection for one exact product project",
+              "long_about": null,
+              "usage": "evidencectl connection use [OPTIONS] <NAME>",
+              "arguments": [
+                {
+                  "display": "<NAME>",
+                  "description": "Local name of the connection to select for the project",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "options": [
+                {
+                  "display": "--project <PROJECT>",
+                  "description": "Project directory, or a descendant from which the exact product root is found",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Select human-readable output; this command provides no JSON report",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            }
+          ]
+        },
+        {
           "name": "client",
           "invocation": "evidencectl client",
           "about": "Configure progressive relying-party clients and fetch contract candidates",
@@ -15647,6 +18453,37 @@
               "subcommands": []
             }
           ]
+        },
+        {
+          "name": "runtime",
+          "invocation": "evidencectl runtime",
+          "about": "Run the matching Evidence runtime with unchanged arguments and streams; use `runtime -- --help` for its native command tree",
+          "long_about": null,
+          "usage": "evidencectl runtime <RUNTIME_ARGUMENT>...",
+          "arguments": [
+            {
+              "display": "<RUNTIME_ARGUMENT>",
+              "description": "Evidence runtime command and arguments, passed directly to `evidence`",
+              "always_required": true,
+              "repeatable": true,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "options": [
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
         }
       ]
     },
@@ -17257,6 +20094,692 @@
               "subcommands": []
             }
           ]
+        },
+        {
+          "name": "api",
+          "invocation": "messagingctl api",
+          "about": "Call the Messaging HTTP API with a saved connection or retained local client",
+          "long_about": null,
+          "usage": "messagingctl api [OPTIONS] <PATH>",
+          "arguments": [
+            {
+              "display": "<PATH>",
+              "description": "Relative API path. A leading slash is accepted without discarding a deployment prefix",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "options": [
+            {
+              "display": "--project <PROJECT>",
+              "description": "Project directory, or a descendant from which the exact product root is found",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--client <CLIENT>",
+              "description": "Named local development client resolved by the product adapter",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--connection <CONNECTION>",
+              "description": "Named saved remote connection",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--url <URL>",
+              "description": "Explicit service base URL for an advanced one-off request",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--token-file <TOKEN_FILE>",
+              "description": "Bearer credential file used only with `--url`",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--ca-file <CA_FILE>",
+              "description": "PEM certificate authority bundle for an explicit private-institution endpoint",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--method <METHOD>",
+              "description": "HTTP method. Defaults to GET, or POST when `--input` is present",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--input <INPUT>",
+              "description": "Request body file, or `-` for standard input",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--header <HEADER>",
+              "description": "Request header as `NAME: VALUE`; use `NAME: @FILE` for a value or `@FILE` for complete lines",
+              "always_required": false,
+              "repeatable": true,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--accept <ACCEPT>",
+              "description": "Value of the HTTP Accept header",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--output <OUTPUT>",
+              "description": "Write response bytes to this file instead of standard output",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--include",
+              "description": "Include the HTTP status and response headers before the response body",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--idempotency-key <IDEMPOTENCY_KEY>",
+              "description": "Value of the Idempotency-Key header",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--if-match <IF_MATCH>",
+              "description": "Literal HTTP If-Match value, including quotes when the endpoint requires them",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--format <FORMAT>",
+              "description": "Emit the selected command's report in this format",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [
+            {
+              "kind": "requires-all",
+              "when": "--token-file <TOKEN_FILE>",
+              "arguments": [
+                "--url <URL>"
+              ]
+            },
+            {
+              "kind": "requires-all",
+              "when": "--ca-file <CA_FILE>",
+              "arguments": [
+                "--url <URL>"
+              ]
+            },
+            {
+              "kind": "mutually-exclusive",
+              "when": null,
+              "arguments": [
+                "--client <CLIENT>",
+                "--connection <CONNECTION>"
+              ]
+            },
+            {
+              "kind": "mutually-exclusive",
+              "when": null,
+              "arguments": [
+                "--client <CLIENT>",
+                "--url <URL>"
+              ]
+            },
+            {
+              "kind": "mutually-exclusive",
+              "when": null,
+              "arguments": [
+                "--connection <CONNECTION>",
+                "--url <URL>"
+              ]
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "name": "connection",
+          "invocation": "messagingctl connection",
+          "about": "Manage saved Messaging API connections",
+          "long_about": null,
+          "usage": "messagingctl connection [OPTIONS] <COMMAND>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--format <FORMAT>",
+              "description": "Emit the selected command's report in this format",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": [
+            {
+              "name": "add",
+              "invocation": "messagingctl connection add",
+              "about": "Save one product-scoped remote connection",
+              "long_about": null,
+              "usage": "messagingctl connection add [OPTIONS] <NAME>",
+              "arguments": [
+                {
+                  "display": "<NAME>",
+                  "description": "Local connection name used by `--connection` and project selections",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "options": [
+                {
+                  "display": "--url <URL>",
+                  "description": "API service base URL. Prompted when omitted in an interactive terminal",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--ca-file <CA_FILE>",
+                  "description": "PEM certificate authority bundle for a private-institution endpoint",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--access-profile <ACCESS_PROFILE>",
+                  "description": "Casework only: stable caller access profile applied to its profile headers",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--anonymous",
+                  "description": "Save a connection that sends no Authorization header",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--token-file <TOKEN_FILE>",
+                  "description": "File holding a bearer token. The configuration stores only a secret reference",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--token-env <TOKEN_ENV>",
+                  "description": "Environment variable holding a bearer token. The configuration stores only a secret reference",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--private-key-jwt",
+                  "description": "Acquire renewable bearer tokens with OAuth private_key_jwt",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--token-endpoint <TOKEN_ENDPOINT>",
+                  "description": "OAuth token endpoint used for private_key_jwt authentication",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--client-id <CLIENT_ID>",
+                  "description": "OAuth client identifier registered at the token endpoint",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--private-key-file <PRIVATE_KEY_FILE>",
+                  "description": "Owner-only file containing the private client JWK",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--scope <SCOPE>",
+                  "description": "OAuth scope to request; repeat the option for multiple scopes",
+                  "always_required": false,
+                  "repeatable": true,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--resource <RESOURCE>",
+                  "description": "Optional RFC 8707 resource indicator for the requested token",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--assertion-audience <ASSERTION_AUDIENCE>",
+                  "description": "Optional assertion audience; defaults to the token endpoint",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Emit the selected command's report in this format",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [
+                {
+                  "kind": "requires-all",
+                  "when": "--token-endpoint <TOKEN_ENDPOINT>",
+                  "arguments": [
+                    "--private-key-jwt"
+                  ]
+                },
+                {
+                  "kind": "requires-all",
+                  "when": "--client-id <CLIENT_ID>",
+                  "arguments": [
+                    "--private-key-jwt"
+                  ]
+                },
+                {
+                  "kind": "requires-all",
+                  "when": "--private-key-file <PRIVATE_KEY_FILE>",
+                  "arguments": [
+                    "--private-key-jwt"
+                  ]
+                },
+                {
+                  "kind": "requires-all",
+                  "when": "--scope <SCOPE>",
+                  "arguments": [
+                    "--private-key-jwt"
+                  ]
+                },
+                {
+                  "kind": "requires-all",
+                  "when": "--resource <RESOURCE>",
+                  "arguments": [
+                    "--private-key-jwt"
+                  ]
+                },
+                {
+                  "kind": "requires-all",
+                  "when": "--assertion-audience <ASSERTION_AUDIENCE>",
+                  "arguments": [
+                    "--private-key-jwt"
+                  ]
+                },
+                {
+                  "kind": "mutually-exclusive",
+                  "when": null,
+                  "arguments": [
+                    "--anonymous",
+                    "--private-key-jwt"
+                  ]
+                },
+                {
+                  "kind": "mutually-exclusive",
+                  "when": null,
+                  "arguments": [
+                    "--anonymous",
+                    "--token-env <TOKEN_ENV>"
+                  ]
+                },
+                {
+                  "kind": "mutually-exclusive",
+                  "when": null,
+                  "arguments": [
+                    "--anonymous",
+                    "--token-file <TOKEN_FILE>"
+                  ]
+                },
+                {
+                  "kind": "mutually-exclusive",
+                  "when": null,
+                  "arguments": [
+                    "--private-key-jwt",
+                    "--token-env <TOKEN_ENV>"
+                  ]
+                },
+                {
+                  "kind": "mutually-exclusive",
+                  "when": null,
+                  "arguments": [
+                    "--private-key-jwt",
+                    "--token-file <TOKEN_FILE>"
+                  ]
+                },
+                {
+                  "kind": "mutually-exclusive",
+                  "when": null,
+                  "arguments": [
+                    "--token-env <TOKEN_ENV>",
+                    "--token-file <TOKEN_FILE>"
+                  ]
+                }
+              ],
+              "subcommands": []
+            },
+            {
+              "name": "list",
+              "invocation": "messagingctl connection list",
+              "about": "List saved connections for this product",
+              "long_about": null,
+              "usage": "messagingctl connection list [OPTIONS]",
+              "arguments": [],
+              "options": [
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Emit the selected command's report in this format",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            },
+            {
+              "name": "show",
+              "invocation": "messagingctl connection show",
+              "about": "Show one saved connection without resolving its credential",
+              "long_about": null,
+              "usage": "messagingctl connection show [OPTIONS] <NAME>",
+              "arguments": [
+                {
+                  "display": "<NAME>",
+                  "description": "Local name of the connection to show",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "options": [
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Emit the selected command's report in this format",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            },
+            {
+              "name": "use",
+              "invocation": "messagingctl connection use",
+              "about": "Select a saved connection for one exact product project",
+              "long_about": null,
+              "usage": "messagingctl connection use [OPTIONS] <NAME>",
+              "arguments": [
+                {
+                  "display": "<NAME>",
+                  "description": "Local name of the connection to select for the project",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "options": [
+                {
+                  "display": "--project <PROJECT>",
+                  "description": "Project directory, or a descendant from which the exact product root is found",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Emit the selected command's report in this format",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            },
+            {
+              "name": "check",
+              "invocation": "messagingctl connection check",
+              "about": "Check one saved-connections file without resolving credentials or contacting endpoints",
+              "long_about": null,
+              "usage": "messagingctl connection check [OPTIONS] --file <FILE>",
+              "arguments": [],
+              "options": [
+                {
+                  "display": "--file <FILE>",
+                  "description": "Saved-connections YAML file to validate offline",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--deny-warnings",
+                  "description": "Exit 1 when the check reports a warning",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Emit the selected command's report in this format",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            }
+          ]
         }
       ]
     },
@@ -18535,6 +22058,692 @@
       ],
       "constraints": [],
       "subcommands": [
+        {
+          "name": "api",
+          "invocation": "schedulingctl api",
+          "about": "Send one raw HTTP request using a saved Scheduling connection",
+          "long_about": null,
+          "usage": "schedulingctl api [OPTIONS] <PATH>",
+          "arguments": [
+            {
+              "display": "<PATH>",
+              "description": "Relative API path. A leading slash is accepted without discarding a deployment prefix",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "options": [
+            {
+              "display": "--project <PROJECT>",
+              "description": "Project directory, or a descendant from which the exact product root is found",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--client <CLIENT>",
+              "description": "Named local development client resolved by the product adapter",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--connection <CONNECTION>",
+              "description": "Named saved remote connection",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--url <URL>",
+              "description": "Explicit service base URL for an advanced one-off request",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--token-file <TOKEN_FILE>",
+              "description": "Bearer credential file used only with `--url`",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--ca-file <CA_FILE>",
+              "description": "PEM certificate authority bundle for an explicit private-institution endpoint",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--method <METHOD>",
+              "description": "HTTP method. Defaults to GET, or POST when `--input` is present",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--input <INPUT>",
+              "description": "Request body file, or `-` for standard input",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--header <HEADER>",
+              "description": "Request header as `NAME: VALUE`; use `NAME: @FILE` for a value or `@FILE` for complete lines",
+              "always_required": false,
+              "repeatable": true,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--accept <ACCEPT>",
+              "description": "Value of the HTTP Accept header",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--output <OUTPUT>",
+              "description": "Write response bytes to this file instead of standard output",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--include",
+              "description": "Include the HTTP status and response headers before the response body",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--idempotency-key <IDEMPOTENCY_KEY>",
+              "description": "Value of the Idempotency-Key header",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--if-match <IF_MATCH>",
+              "description": "Literal HTTP If-Match value, including quotes when the endpoint requires them",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--format <FORMAT>",
+              "description": "Emit the selected command's report in this format",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [
+            {
+              "kind": "requires-all",
+              "when": "--token-file <TOKEN_FILE>",
+              "arguments": [
+                "--url <URL>"
+              ]
+            },
+            {
+              "kind": "requires-all",
+              "when": "--ca-file <CA_FILE>",
+              "arguments": [
+                "--url <URL>"
+              ]
+            },
+            {
+              "kind": "mutually-exclusive",
+              "when": null,
+              "arguments": [
+                "--client <CLIENT>",
+                "--connection <CONNECTION>"
+              ]
+            },
+            {
+              "kind": "mutually-exclusive",
+              "when": null,
+              "arguments": [
+                "--client <CLIENT>",
+                "--url <URL>"
+              ]
+            },
+            {
+              "kind": "mutually-exclusive",
+              "when": null,
+              "arguments": [
+                "--connection <CONNECTION>",
+                "--url <URL>"
+              ]
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "name": "connection",
+          "invocation": "schedulingctl connection",
+          "about": "Manage named Scheduling API connections",
+          "long_about": null,
+          "usage": "schedulingctl connection [OPTIONS] <COMMAND>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--format <FORMAT>",
+              "description": "Emit the selected command's report in this format",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": [
+            {
+              "name": "add",
+              "invocation": "schedulingctl connection add",
+              "about": "Save one product-scoped remote connection",
+              "long_about": null,
+              "usage": "schedulingctl connection add [OPTIONS] <NAME>",
+              "arguments": [
+                {
+                  "display": "<NAME>",
+                  "description": "Local connection name used by `--connection` and project selections",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "options": [
+                {
+                  "display": "--url <URL>",
+                  "description": "API service base URL. Prompted when omitted in an interactive terminal",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--ca-file <CA_FILE>",
+                  "description": "PEM certificate authority bundle for a private-institution endpoint",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--access-profile <ACCESS_PROFILE>",
+                  "description": "Casework only: stable caller access profile applied to its profile headers",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--anonymous",
+                  "description": "Save a connection that sends no Authorization header",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--token-file <TOKEN_FILE>",
+                  "description": "File holding a bearer token. The configuration stores only a secret reference",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--token-env <TOKEN_ENV>",
+                  "description": "Environment variable holding a bearer token. The configuration stores only a secret reference",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--private-key-jwt",
+                  "description": "Acquire renewable bearer tokens with OAuth private_key_jwt",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--token-endpoint <TOKEN_ENDPOINT>",
+                  "description": "OAuth token endpoint used for private_key_jwt authentication",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--client-id <CLIENT_ID>",
+                  "description": "OAuth client identifier registered at the token endpoint",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--private-key-file <PRIVATE_KEY_FILE>",
+                  "description": "Owner-only file containing the private client JWK",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--scope <SCOPE>",
+                  "description": "OAuth scope to request; repeat the option for multiple scopes",
+                  "always_required": false,
+                  "repeatable": true,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--resource <RESOURCE>",
+                  "description": "Optional RFC 8707 resource indicator for the requested token",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--assertion-audience <ASSERTION_AUDIENCE>",
+                  "description": "Optional assertion audience; defaults to the token endpoint",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Emit the selected command's report in this format",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [
+                {
+                  "kind": "requires-all",
+                  "when": "--token-endpoint <TOKEN_ENDPOINT>",
+                  "arguments": [
+                    "--private-key-jwt"
+                  ]
+                },
+                {
+                  "kind": "requires-all",
+                  "when": "--client-id <CLIENT_ID>",
+                  "arguments": [
+                    "--private-key-jwt"
+                  ]
+                },
+                {
+                  "kind": "requires-all",
+                  "when": "--private-key-file <PRIVATE_KEY_FILE>",
+                  "arguments": [
+                    "--private-key-jwt"
+                  ]
+                },
+                {
+                  "kind": "requires-all",
+                  "when": "--scope <SCOPE>",
+                  "arguments": [
+                    "--private-key-jwt"
+                  ]
+                },
+                {
+                  "kind": "requires-all",
+                  "when": "--resource <RESOURCE>",
+                  "arguments": [
+                    "--private-key-jwt"
+                  ]
+                },
+                {
+                  "kind": "requires-all",
+                  "when": "--assertion-audience <ASSERTION_AUDIENCE>",
+                  "arguments": [
+                    "--private-key-jwt"
+                  ]
+                },
+                {
+                  "kind": "mutually-exclusive",
+                  "when": null,
+                  "arguments": [
+                    "--anonymous",
+                    "--private-key-jwt"
+                  ]
+                },
+                {
+                  "kind": "mutually-exclusive",
+                  "when": null,
+                  "arguments": [
+                    "--anonymous",
+                    "--token-env <TOKEN_ENV>"
+                  ]
+                },
+                {
+                  "kind": "mutually-exclusive",
+                  "when": null,
+                  "arguments": [
+                    "--anonymous",
+                    "--token-file <TOKEN_FILE>"
+                  ]
+                },
+                {
+                  "kind": "mutually-exclusive",
+                  "when": null,
+                  "arguments": [
+                    "--private-key-jwt",
+                    "--token-env <TOKEN_ENV>"
+                  ]
+                },
+                {
+                  "kind": "mutually-exclusive",
+                  "when": null,
+                  "arguments": [
+                    "--private-key-jwt",
+                    "--token-file <TOKEN_FILE>"
+                  ]
+                },
+                {
+                  "kind": "mutually-exclusive",
+                  "when": null,
+                  "arguments": [
+                    "--token-env <TOKEN_ENV>",
+                    "--token-file <TOKEN_FILE>"
+                  ]
+                }
+              ],
+              "subcommands": []
+            },
+            {
+              "name": "list",
+              "invocation": "schedulingctl connection list",
+              "about": "List saved connections for this product",
+              "long_about": null,
+              "usage": "schedulingctl connection list [OPTIONS]",
+              "arguments": [],
+              "options": [
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Emit the selected command's report in this format",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            },
+            {
+              "name": "show",
+              "invocation": "schedulingctl connection show",
+              "about": "Show one saved connection without resolving its credential",
+              "long_about": null,
+              "usage": "schedulingctl connection show [OPTIONS] <NAME>",
+              "arguments": [
+                {
+                  "display": "<NAME>",
+                  "description": "Local name of the connection to show",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "options": [
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Emit the selected command's report in this format",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            },
+            {
+              "name": "use",
+              "invocation": "schedulingctl connection use",
+              "about": "Select a saved connection for one exact product project",
+              "long_about": null,
+              "usage": "schedulingctl connection use [OPTIONS] <NAME>",
+              "arguments": [
+                {
+                  "display": "<NAME>",
+                  "description": "Local name of the connection to select for the project",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "options": [
+                {
+                  "display": "--project <PROJECT>",
+                  "description": "Project directory, or a descendant from which the exact product root is found",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Emit the selected command's report in this format",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            },
+            {
+              "name": "check",
+              "invocation": "schedulingctl connection check",
+              "about": "Check one saved-connections file without resolving credentials or contacting endpoints",
+              "long_about": null,
+              "usage": "schedulingctl connection check [OPTIONS] --file <FILE>",
+              "arguments": [],
+              "options": [
+                {
+                  "display": "--file <FILE>",
+                  "description": "Saved-connections YAML file to validate offline",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--deny-warnings",
+                  "description": "Exit 1 when the check reports a warning",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Emit the selected command's report in this format",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            }
+          ]
+        },
         {
           "name": "serve",
           "invocation": "schedulingctl serve",

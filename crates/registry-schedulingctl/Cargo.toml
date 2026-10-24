@@ -21,6 +21,7 @@ workspace = true
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true
+registry-cli-api.workspace = true
 registry-platform-audit.workspace = true
 registry-platform-buildinfo.workspace = true
 registry-platform-config.workspace = true

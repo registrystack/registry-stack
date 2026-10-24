@@ -85,7 +85,7 @@ Who may read a contact is unchanged.
 ## Pin the module and check
 
 ```sh
-bregctl project lock .
+rstack breg project lock .
 ```
 
 ```text test-expect
@@ -111,7 +111,7 @@ The lock writes the digest of the module's exact bytes into `registry.yaml`. If 
 changes later, the check fails until you lock again.
 
 ```sh
-bregctl check . --production
+rstack breg check . --production
 ```
 
 ```text test-expect
@@ -122,7 +122,7 @@ Production check passed; registry revision sha256:<digest>.
 ## Generate the contact schema
 
 ```sh
-bregctl generate schemas . --output ../contact-schemas
+rstack breg generate schemas . --output ../contact-schemas
 ```
 
 ```text test-expect
@@ -166,7 +166,7 @@ The running registry was built from the project as it was, and its test data was
 version. Stop it and discard that data:
 
 ```sh
-bregctl dev stop --remove
+rstack breg dev stop --remove
 ```
 
 ```text test-excerpt
@@ -174,7 +174,7 @@ bregctl dev succeeded.
   status          stopped
 ```
 
-Keep the project: the next `bregctl dev start` in this directory runs it with the note.
+Keep the project: the next `rstack breg dev start` in this directory runs it with the note.
 
 {/* Evidence: crates/registry-breg/src/contract.rs, RegistryModule;
     crates/registry-bregctl/src/lib.rs, ProjectLockArgs;

@@ -25,6 +25,7 @@ schema = [
 
 [dependencies]
 clap.workspace = true
+registry-cli-api.workspace = true
 hex.workspace = true
 registry-discovery = { workspace = true, features = ["runtime-config"] }
 registry-discovery-profile.workspace = true

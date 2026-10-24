@@ -16,6 +16,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 
 import { packageExamples } from '../generate-evidence-examples.mjs';
+import { prepareManagedRstack } from '../managed-rstack.mjs';
 import { stopGroup } from './background.mjs';
 
 export class ToolsetError extends Error {}
@@ -122,25 +123,27 @@ function productToolset({
   profileVariable,
   targetName,
   sessions,
+  managedComponents,
   stopArgs = (project) => ['dev', 'stop', project, '--remove'],
   buildEnv = () => ({}),
   ...rest
 }) {
-  const variables = binaries.map(([, variable]) => variable);
+  const candidates = managedComponents === undefined ? binaries : [...binaries, ['rstack', 'RSTACK_BIN']];
+  const variables = candidates.map(([, variable]) => variable);
   return {
     ...rest,
     buildEnv,
 
     // Returns the variables the journey's environment adds, if any.
-    async prepare({ repoRoot, binDir }) {
-      const given = binaries.map(([, variable]) => process.env[variable] || undefined);
+    async prepare({ repoRoot, binDir, workRoot }) {
+      const given = candidates.map(([, variable]) => process.env[variable] || undefined);
       if (given.some(Boolean) && !given.every(Boolean)) {
         const names = variables.length > 2 ? `${variables.slice(0, -1).join(', ')}, and ${variables.at(-1)}` : variables.join(' and ');
         const neither = variables.length > 2 ? 'none of them' : 'neither';
         throw new ToolsetError(`set ${names}, or ${neither} to build from source`);
       }
       let paths = given;
-      let libraryDir;
+      let libraryDir = process.env.REGISTRY_CARGO_RUNTIME_LIBRARY_PATH || undefined;
       if (!given[0]) {
         const profile = process.env[profileVariable] ?? 'ci';
         if (!['ci', 'release'].includes(profile)) {
@@ -157,10 +160,25 @@ function productToolset({
           if (error instanceof ToolsetError) throw new ToolsetError(`building ${label} failed: ${error.message}`);
           throw error;
         }
-        paths = binaries.map(([name, , output = name]) => join(targetDir, profile, output));
+        paths = candidates.map(([name, , output = name]) => join(targetDir, profile, output));
+      } else if (libraryDir !== undefined && (!isAbsolute(libraryDir) || !statSync(libraryDir).isDirectory())) {
+        throw new ToolsetError(`REGISTRY_CARGO_RUNTIME_LIBRARY_PATH must name an absolute directory: ${libraryDir}`);
       }
-      binaries.forEach(([, variable], i) => checkBinary(variable, paths[i]));
+      candidates.forEach(([, variable], i) => checkBinary(variable, paths[i]));
       await serveBinaries(binDir, binaries.map(([name], i) => [name, paths[i]]), libraryDir);
+      if (managedComponents !== undefined) {
+        const exact = Object.fromEntries(candidates.map(([name], i) => [name, paths[i]]));
+        const components = Object.fromEntries(
+          Object.entries(managedComponents).map(([name, spec]) => [
+            name,
+            {
+              entrypoint: spec.entrypoint,
+              binaries: Object.fromEntries(spec.binaries.map((binary) => [binary, exact[binary]])),
+            },
+          ]),
+        );
+        await prepareManagedRstack({ repoRoot, workRoot, binDir, rstackBin: exact.rstack, components, libraryDir });
+      }
       return {};
     },
 
@@ -393,15 +411,16 @@ const bregProduct = productToolset({
   // cover it (tutorial-runner/gate.mjs). A path such as .breg/dev or
   // tutorial-work/breg names no command, and neither does a value such as
   // serviceKind=breg.
-  commands: /(^|[^\w./=-])(bregctl|breg)([^\w./-]|$)/mu,
+  commands: /(^|[^\w./=-])(bregctl|breg)([^\w./-]|$)|(^|\s)rstack\s+breg(?:\s|$)/mu,
   binaries: [
     ['breg', 'BREG_BIN'],
     ['bregctl', 'BREGCTL_BIN'],
   ],
-  cargoArgs: ['-p', 'registry-breg', '--features', 'registry-breg/runtime', '-p', 'registry-bregctl'],
+  cargoArgs: ['-p', 'registry-breg', '--features', 'registry-breg/runtime', '-p', 'registry-bregctl', '-p', 'registry-rstack'],
   profileVariable: 'BREG_TUTORIAL_CARGO_PROFILE',
   targetName: 'breg-tutorial-source',
   sessions: [['bregctl', '.breg/dev/state.json']],
+  managedComponents: { breg: { entrypoint: 'bregctl', binaries: ['bregctl', 'breg'] } },
   // A reader installs the client packages at the version `breg --version`
   // reports, and the journey's packages are assembled at the workspace
   // version, so the binaries report it as a release of it would.
@@ -436,7 +455,7 @@ const breg = {
 // so they no longer reconcile against a registry that is stopping.
 const casework = productToolset({
   label: 'casework, caseworkctl, breg, and bregctl',
-  commands: /(^|[^\w./=-])(caseworkctl|casework)([^\w./-]|$)/mu,
+  commands: /(^|[^\w./=-])(caseworkctl|casework)([^\w./-]|$)|(^|\s)rstack\s+casework(?:\s|$)/mu,
   includes: ['breg'],
   binaries: [
     ['casework', 'CASEWORK_BIN'],
@@ -444,9 +463,13 @@ const casework = productToolset({
     ['breg', 'BREG_BIN'],
     ['bregctl', 'BREGCTL_BIN'],
   ],
-  cargoArgs: ['-p', 'registry-casework', '-p', 'registry-caseworkctl', '-p', 'registry-breg', '--features', 'registry-breg/runtime', '-p', 'registry-bregctl'],
+  cargoArgs: ['-p', 'registry-casework', '-p', 'registry-caseworkctl', '-p', 'registry-breg', '--features', 'registry-breg/runtime', '-p', 'registry-bregctl', '-p', 'registry-rstack'],
   profileVariable: 'CASEWORK_TUTORIAL_CARGO_PROFILE',
   targetName: 'casework-tutorial-source',
+  managedComponents: {
+    breg: { entrypoint: 'bregctl', binaries: ['bregctl', 'breg'] },
+    casework: { entrypoint: 'caseworkctl', binaries: ['caseworkctl', 'casework'] },
+  },
   sessions: [
     ['caseworkctl', '.casework/dev/state.json'],
     ['bregctl', '.breg/dev/state.json'],
@@ -588,6 +611,7 @@ const FHIR_MOCK = resolve(dirname(fileURLToPath(import.meta.url)), '../fixtures/
 const FHIR_BASE_URL = 'http://127.0.0.1:8003';
 const FHIR_READY_TIMEOUT_MS = 30_000;
 const WHEEL_HINT = 'release/scripts/assemble-registry-client-packages.py';
+const PYTHON_CLIENT = /(^|\s)(from|import)\s+registry_client(?:\.|\s|$)/mu;
 
 function clientWheel() {
   const wheel = process.env.REGISTRY_CLIENT_PY_WHEEL ?? '';
@@ -632,15 +656,16 @@ const evidenceProduct = productToolset({
   label: 'evidence, evidencectl, and evidence-oid4vci',
   // Not a path such as .evidence/dev, which a page may name; but a page that
   // runs Evidence's own checks from a checkout runs Evidence.
-  commands: /(^|[^\w./=-])(evidencectl|evidence-oid4vci|evidence)([^\w./-]|$)|(^|\s)products\/evidence\/scripts\//mu,
+  commands: /(^|[^\w./=-])(evidencectl|evidence-oid4vci|evidence)([^\w./-]|$)|(^|\s)rstack\s+evidence(?:\s|$)|(^|\s)products\/evidence\/scripts\//mu,
   binaries: [
     ['evidence', 'EVIDENCE_BIN'],
     ['evidencectl', 'EVIDENCECTL_BIN'],
     ['evidence-oid4vci', 'EVIDENCE_OID4VCI_BIN'],
   ],
-  cargoArgs: ['-p', 'registry-evidence', '-p', 'registry-evidencectl', '-p', 'registry-evidence-oid4vci'],
+  cargoArgs: ['-p', 'registry-evidence', '-p', 'registry-evidencectl', '-p', 'registry-evidence-oid4vci', '-p', 'registry-rstack'],
   profileVariable: 'EVIDENCE_TUTORIAL_CARGO_PROFILE',
   targetName: 'evidence-tutorial-source',
+  managedComponents: { evidence: { entrypoint: 'evidencectl', binaries: ['evidencectl', 'evidence', 'evidence-oid4vci'] } },
   sessions: [['evidencectl', '.evidence/dev/control.sock']],
   stopArgs: (project) => ['dev', 'stop', project],
 });
@@ -649,17 +674,21 @@ let fhirMock;
 const evidence = {
   ...evidenceProduct,
 
-  async prepare({ repoRoot, binDir, workRoot, readerDir }) {
-    const wheel = clientWheel();
-    await evidenceProduct.prepare({ repoRoot, binDir });
+  async prepare({ repoRoot, binDir, workRoot, readerDir, steps = [] }) {
+    const needsPythonClient = steps.some((step) => step.kind === 'run' && PYTHON_CLIENT.test(step.code));
+    const wheel = needsPythonClient ? clientWheel() : undefined;
+    await evidenceProduct.prepare({ repoRoot, binDir, workRoot });
     await packageExamples(join(repoRoot, 'products/evidence/examples'), join(readerDir, 'evidence-examples.tar.gz'));
-    const clientPackage = join(workRoot, 'client-package');
-    const unpack = spawnSync('python3', ['-m', 'zipfile', '-e', wheel, clientPackage], { encoding: 'utf8' });
-    if (unpack.status !== 0) throw new ToolsetError(`could not unpack ${wheel}:\n${unpack.stderr}`);
+    let pythonPath;
+    if (wheel !== undefined) {
+      const clientPackage = join(workRoot, 'client-package');
+      const unpack = spawnSync('python3', ['-m', 'zipfile', '-e', wheel, clientPackage], { encoding: 'utf8' });
+      if (unpack.status !== 0) throw new ToolsetError(`could not unpack ${wheel}:\n${unpack.stderr}`);
+      pythonPath = process.env.PYTHONPATH ? `${clientPackage}:${process.env.PYTHONPATH}` : clientPackage;
+    }
     fhirMock = await startFhirMock(workRoot);
-    const pythonPath = process.env.PYTHONPATH ? `${clientPackage}:${process.env.PYTHONPATH}` : clientPackage;
     return {
-      PYTHONPATH: pythonPath,
+      ...(pythonPath === undefined ? {} : { PYTHONPATH: pythonPath }),
       EVIDENCE_OID4VCI_BIN: join(binDir, 'evidence-oid4vci'),
       FHIR_TUTORIAL_TEST_BASE_URL: FHIR_BASE_URL,
     };

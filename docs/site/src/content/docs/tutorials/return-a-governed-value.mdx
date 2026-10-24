@@ -36,7 +36,7 @@ Your first assertion are still running. Prepare a request for the `residence-reg
 definition:
 
 ```sh test-cwd="first-evidence-assertion/adult-status"
-evidencectl request prepare residence-region \
+rstack evidence request prepare residence-region \
   --client tutorial-client \
   --purpose residence-check \
   --subject subject:record-id=adult \
@@ -52,15 +52,12 @@ Prepared authorization: .evidence/requests/residence-region/authorization.curl
 Send the request, then verify the response before reading it:
 
 ```sh
-curl --silent --show-error --fail-with-body \
-  --config .evidence/requests/residence-region/authorization.curl \
-  --request POST \
-  --url http://127.0.0.1:18080/v1/evidence \
-  --header 'Content-Type: application/json' \
-  --header 'Accept: application/jose+json' \
-  --data-binary @.evidence/requests/residence-region/request.json \
+rstack evidence api /v1/evidence \
+  --client tutorial-client \
+  --input .evidence/requests/residence-region/request.json \
+  --accept application/jose+json \
   --output residence-region.jws.json
-evidencectl verify residence-region.jws.json \
+rstack evidence verify residence-region.jws.json \
   --context .evidence/requests/residence-region/verification.json \
   --output residence-region.verified.json
 ```
@@ -107,7 +104,7 @@ past Registry Evidence. One fixture case proves that by returning a value outsid
 region fixtures with their trace:
 
 ```sh
-evidencectl test . --target local-target.yaml --fixture fixtures/residence-region.yaml --explain
+rstack evidence test . --target local-target.yaml --fixture fixtures/residence-region.yaml --explain
 ```
 
 ```text test-excerpt

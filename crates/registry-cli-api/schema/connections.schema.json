@@ -1,0 +1,279 @@
+{
+  "$defs": {
+    "EnvironmentSecretProviderConfig": {
+      "additionalProperties": false,
+      "description": "The environment secret provider. It takes no settings.",
+      "type": "object"
+    },
+    "ExternalId": {
+      "description": "An identifier another system issues, written exactly as its issuer gives it.",
+      "maxLength": 512,
+      "minLength": 1,
+      "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$",
+      "type": "string"
+    },
+    "FileSecretProviderConfig": {
+      "additionalProperties": false,
+      "description": "The file secret provider.",
+      "properties": {
+        "root": {
+          "description": "Absolute directory holding one file per secret. Each file must be a\nregular file owned by the runtime user, mode 0400 or 0600, with exactly\none hard link.",
+          "pattern": "^/",
+          "type": "string"
+        }
+      },
+      "required": [
+        "root"
+      ],
+      "type": "object"
+    },
+    "LocalId": {
+      "description": "A local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`.",
+      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+      "type": "string"
+    },
+    "ProjectSelection": {
+      "additionalProperties": false,
+      "properties": {
+        "connection": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "product": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "project": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "product",
+        "project",
+        "connection"
+      ],
+      "type": "object"
+    },
+    "SavedAuth": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "anonymous",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "tokenRef": {
+              "$ref": "#/$defs/SecretReference"
+            },
+            "type": {
+              "const": "bearer",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "tokenRef"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "assertionAudience": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ExternalId"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional private_key_jwt audience; the token endpoint is the default."
+            },
+            "clientId": {
+              "$ref": "#/$defs/ExternalId",
+              "description": "Client identifier registered by the authorization server."
+            },
+            "privateKeyRef": {
+              "$ref": "#/$defs/SecretReference"
+            },
+            "resource": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ExternalId"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional RFC 8707 resource identifier."
+            },
+            "scopes": {
+              "description": "OAuth scope identifiers requested as a set.",
+              "items": {
+                "$ref": "#/$defs/ExternalId"
+              },
+              "type": "array",
+              "uniqueItems": true
+            },
+            "tokenEndpoint": {
+              "$ref": "#/$defs/Url",
+              "description": "OAuth token endpoint. HTTPS is required except for a loopback development endpoint."
+            },
+            "type": {
+              "const": "private-key-jwt",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "tokenEndpoint",
+            "clientId",
+            "privateKeyRef"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "SavedConnection": {
+      "additionalProperties": false,
+      "properties": {
+        "accessProfile": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LocalId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Stable caller profile for product-owned access-profile headers."
+        },
+        "auth": {
+          "$ref": "#/$defs/SavedAuth"
+        },
+        "baseUrl": {
+          "$ref": "#/$defs/Url",
+          "description": "API service base URL. HTTPS is required except for a loopback development endpoint."
+        },
+        "name": {
+          "$ref": "#/$defs/LocalId",
+          "description": "Local name used by `--connection` and project selections."
+        },
+        "product": {
+          "$ref": "#/$defs/LocalId",
+          "description": "Product command whose remote endpoint this connection names."
+        },
+        "secretProviders": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SecretProvidersConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "trustedRootCertificatesFile": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "product",
+        "name",
+        "baseUrl",
+        "auth"
+      ],
+      "type": "object"
+    },
+    "SecretProvidersConfig": {
+      "additionalProperties": false,
+      "anyOf": [
+        {
+          "properties": {
+            "file": {
+              "$ref": "#/$defs/FileSecretProviderConfig"
+            }
+          },
+          "required": [
+            "file"
+          ]
+        },
+        {
+          "properties": {
+            "environment": {
+              "$ref": "#/$defs/EnvironmentSecretProviderConfig"
+            }
+          },
+          "required": [
+            "environment"
+          ]
+        }
+      ],
+      "description": "The secret providers a runtime enables. A reference is resolved only by a\nprovider declared here: `secret:file/name` under `file.root`, and\n`secret:env/NAME` only when `environment: {}` is present.",
+      "properties": {
+        "environment": {
+          "$ref": "#/$defs/EnvironmentSecretProviderConfig",
+          "description": "Enables `secret:env/NAME` references, read from the process\nenvironment. Declared as an empty mapping: `environment: {}`."
+        },
+        "file": {
+          "$ref": "#/$defs/FileSecretProviderConfig",
+          "description": "Enables `secret:file/name` references, read from files under `root`."
+        }
+      },
+      "type": "object"
+    },
+    "SecretReference": {
+      "description": "An exact secret reference: secret:file/name, resolved under secretProviders.file.root, or secret:env/NAME, resolved only when secretProviders.environment is declared.",
+      "pattern": "^(?:secret:env/[A-Z][A-Z0-9_]{0,127}|secret:file/[a-z][a-z0-9._-]{0,127})$",
+      "type": "string"
+    },
+    "Url": {
+      "description": "An absolute http or https URL with a host preserved as written, no user information, and no backslash, whitespace or control character. DNS case and equivalent IPv6 literals are permitted.",
+      "format": "uri",
+      "maxLength": 2048,
+      "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://[^/?#@\\u005C\\u0000-\\u0020\\u007F-\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]+([/?#][^\\u005C\\u0000-\\u0020\\u007F-\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*)?$",
+      "type": "string"
+    }
+  },
+  "$id": "https://id.registrystack.org/schemas/platform/cli-connections/cli-connections.v1alpha1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "apiVersion": {
+      "const": "id.registrystack.org/formats/platform/cli-connections/v1alpha1"
+    },
+    "connections": {
+      "items": {
+        "$ref": "#/$defs/SavedConnection"
+      },
+      "type": "array"
+    },
+    "kind": {
+      "const": "PlatformCliConnections"
+    },
+    "selections": {
+      "items": {
+        "$ref": "#/$defs/ProjectSelection"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "apiVersion",
+    "kind"
+  ],
+  "title": "Registry Stack CLI saved connections",
+  "type": "object"
+}

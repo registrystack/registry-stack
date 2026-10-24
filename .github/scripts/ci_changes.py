@@ -104,6 +104,7 @@ SHARDS = {
         "registry-evidencectl",
     ),
     "developer-tools": (
+        "registry-cli-api",
         "registry-coordinator",
         "registry-coordinator-client",
         "registry-coordinator-client-node",

@@ -1,0 +1,145 @@
+---
+title: Call an API with rstack
+description: Use a local development client or save a remote connection once, then make short HTTP requests with rstack.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-10-24"
+doc_type: how-to
+persona:
+  - operator
+locale: en
+standards_referenced: []
+---
+
+If you are exploring a running Registry Stack service, use `rstack <product> api` to send a
+request and read its response. Select a local development client, or save your remote endpoint
+and credential references once and reuse the connection by name.
+
+## Use a local client
+
+With a Base Registry Engine (BReg) development session running, run this from your registry
+project or a subdirectory:
+
+```sh
+rstack breg api /v1/records/contacts --client editor
+```
+
+The command finds the project, uses its running endpoint, and acquires a fresh credential for
+`editor`. You do not copy a token or construct an authorization header. Evidence, Casework,
+and Messaging support the same local client selection with their own project and client names.
+
+{/* Evidence: crates/registry-cli-api/src/project.rs, find_project;
+    crates/registry-bregctl/src/dev/mod.rs, local_api_connection;
+    crates/registry-evidencectl/src/request.rs, local_api_connection;
+    crates/registry-caseworkctl/src/dev/mod.rs, api_connection;
+    crates/registry-messagingctl/src/dev/mod.rs, api_connection. */}
+
+## Save a remote connection
+
+Get the endpoint and your credential source from the service operator. Then run the guided
+setup in a terminal:
+
+```sh
+rstack breg connection add pilot
+```
+
+Choose a bearer token file, a token environment variable, or OAuth `private_key_jwt` with
+your registered client key. Discovery can use an anonymous connection. The setup stores
+references to credentials. Private keys and token values stay in their existing sources.
+For OAuth settings, see [Request an access token](../request-an-access-token/).
+
+Call the saved endpoint from any directory:
+
+```sh
+rstack breg api /v1/records/contacts --connection pilot
+```
+
+For unattended setup, supply the same settings as flags. This example saves an existing token
+file reference:
+
+```sh
+rstack breg connection add pilot \
+  --url https://registry.example.com \
+  --token-file /run/credentials/registry-token
+```
+
+The token file is read for each call, so a replacement supplied by your credential manager
+takes effect on the next invocation. An OAuth connection acquires its token automatically.
+A manually supplied token still needs renewal through its issuing system.
+
+Credential files must belong to the account running `rstack`, be regular files with a single
+hard link, and have permissions `0400` or `0600`. Setup checks the supplied file before saving
+the connection. For a deployment with a private certificate authority, add
+`--ca-file /path/to/ca.pem` during setup.
+
+For Casework, save the access profile assigned by the operator with
+`rstack casework connection add pilot --access-profile staff-reviewers`. The guided setup
+also prompts for this profile. Calls then send the selected profile automatically.
+
+{/* Evidence: crates/registry-cli-api/src/connection.rs, run_connection and materialize. */}
+
+## Inspect and select a connection
+
+Inspect the destination and authentication method without displaying or resolving credentials:
+
+```sh
+rstack breg connection list
+rstack breg connection show pilot
+```
+
+To make `pilot` the default for this registry project, select it from the project directory:
+
+```sh
+rstack breg connection use pilot
+rstack breg api /v1/records/contacts
+```
+
+The selection belongs to that product and project. An explicit `--client`, `--connection`, or
+`--url` selects the connection for one invocation. Scripts can name `--connection pilot`
+explicitly. Settings live in `$XDG_CONFIG_HOME/registrystack/connections.yaml`, or
+`~/.config/registrystack/connections.yaml` when `XDG_CONFIG_HOME` is unset.
+
+{/* Evidence: crates/registry-cli-api/src/connection.rs, select and store_path;
+    crates/registry-cli-api/src/api.rs, resolve_connection. */}
+
+## Send a request body
+
+Without a body the method is `GET`. `--input` selects `POST` and supplies a JSON body; use
+`--method` when the endpoint requires another method. For example, from the Messaging starter:
+
+```sh
+rstack messaging api /v1/messages --client case-system \
+  --input message.json --idempotency-key appointment-reminder-1
+```
+
+Use the actual client and request file from your project. Keep an idempotency key with its
+original request for recovery. An endpoint's required revision, task grant, or disclosure
+selection remains part of that request. `--header` accepts additional headers, and
+`--header @FILE` reads existing header files without putting their contents on the command line.
+
+{/* Evidence: crates/registry-cli-api/src/api.rs, ApiArgs and request_method. */}
+
+## Read the response
+
+The response bytes go directly to standard output. Use `--output FILE` to save them, or
+`--include` to include the HTTP status and headers. `--accept` selects a response media type.
+JSON responses can be piped to `jq` without a CLI report wrapper.
+
+An HTTP refusal preserves the response body and exits `1`; invalid usage exits `2`, and a
+transport or local file failure exits `3`. The command sends each request once. It keeps
+credentials on the selected endpoint and preserves any deployment path prefix.
+
+For an Evidence assertion, keep the verification step from
+[Your first assertion](../../tutorials/first-evidence-assertion/). An HTTP response alone does
+not establish that the signed assertion is valid.
+
+{/* Evidence: crates/registry-cli-api/src/api.rs, execute and write_response;
+    crates/registry-cli-api/src/error.rs, exit_code. */}
+
+## Next
+
+- [API contracts](../../reference/apis/)
+- [Request an access token](../request-an-access-token/)
+- [Your first registry](../../tutorials/first-breg/)

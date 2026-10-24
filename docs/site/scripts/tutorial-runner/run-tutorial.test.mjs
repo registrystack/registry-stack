@@ -37,6 +37,37 @@ async function run(args, env = {}) {
 
 const fence = (meta, code) => `\`\`\`${meta}\n${code}\n\`\`\`\n\n`;
 
+async function fakeRstack(dir) {
+  const path = join(dir, 'rstack');
+  await writeFile(
+    path,
+    [
+      '#!/bin/sh',
+      'set -eu',
+      'install_root=',
+      'while [ "$#" -gt 0 ]; do',
+      '  case "$1" in',
+      '    --install-root) install_root="$2"; shift 2 ;;',
+      '    --bin-dir) shift 2 ;;',
+      '    *) break ;;',
+      '  esac',
+      'done',
+      'product="$1"',
+      'shift',
+      'case "$product" in',
+      '  breg) entrypoint=bregctl ;;',
+      '  casework) entrypoint=caseworkctl ;;',
+      '  evidence) entrypoint=evidencectl ;;',
+      '  *) printf "unsupported fixture product: %s\\n" "$product" >&2; exit 2 ;;',
+      'esac',
+      'exec "$install_root/current/components/$product/$entrypoint/$entrypoint" "$@"',
+      '',
+    ].join('\n'),
+  );
+  await chmod(path, 0o755);
+  return path;
+}
+
 test('a journey runs in one shell from an empty directory, and its expectations hold', async () => {
   const body =
     '## Install\n\n' +
@@ -110,6 +141,7 @@ test('the breg toolset serves the given binaries and stops every dev session, ev
     const { code, output } = await run(['--toolset', 'breg', page], {
       BREG_BIN: join(dir, 'breg'),
       BREGCTL_BIN: join(dir, 'bregctl'),
+      RSTACK_BIN: await fakeRstack(dir),
     });
     assert.equal(code, 1, output);
     const log = await readFile(calls, 'utf8');
@@ -124,6 +156,7 @@ test('the breg toolset refuses a relative binary path', async () => {
     const { code, output } = await run(['--toolset', 'breg', page], {
       BREG_BIN: 'breg',
       BREGCTL_BIN: 'bregctl',
+      RSTACK_BIN: await fakeRstack(dirname(page)),
     });
     assert.equal(code, 2, output);
     assert.match(output, /BREG_BIN must be an absolute path: breg/u);
@@ -135,7 +168,7 @@ async function fakeBregBinaries(dir) {
     await writeFile(join(dir, name), `#!/bin/sh\nprintf '%s %s\\n' ${name} "$*"\n`);
     await chmod(join(dir, name), 0o755);
   }
-  return { BREG_BIN: join(dir, 'breg'), BREGCTL_BIN: join(dir, 'bregctl') };
+  return { BREG_BIN: join(dir, 'breg'), BREGCTL_BIN: join(dir, 'bregctl'), RSTACK_BIN: await fakeRstack(dir) };
 }
 
 // A directory holding a packed npm package and a stand-in wheel, as
@@ -225,6 +258,7 @@ test('the casework toolset serves all four binaries and stops Casework sessions 
       CASEWORKCTL_BIN: join(dir, 'caseworkctl'),
       BREG_BIN: join(dir, 'breg'),
       BREGCTL_BIN: join(dir, 'bregctl'),
+      RSTACK_BIN: await fakeRstack(dir),
     });
     assert.equal(code, 1, output);
     const log = (await readFile(calls, 'utf8')).trim().split('\n');
@@ -235,7 +269,7 @@ test('the casework toolset serves all four binaries and stops Casework sessions 
   });
 });
 
-test('the casework toolset takes all four binaries or none', async () => {
+test('the casework toolset takes all five binaries or none', async () => {
   await withPage('## A\n\n' + fence('sh', 'true'), async ({ dir, page }) => {
     const { code, output } = await run(['--toolset', 'casework', page], {
       CASEWORK_BIN: join(dir, 'casework'),
@@ -244,7 +278,7 @@ test('the casework toolset takes all four binaries or none', async () => {
       BREGCTL_BIN: '',
     });
     assert.equal(code, 2, output);
-    assert.match(output, /set CASEWORK_BIN, CASEWORKCTL_BIN, BREG_BIN, and BREGCTL_BIN, or none of them to build from source/u);
+    assert.match(output, /set CASEWORK_BIN, CASEWORKCTL_BIN, BREG_BIN, BREGCTL_BIN, and RSTACK_BIN, or none of them to build from source/u);
   });
 });
 
@@ -389,7 +423,12 @@ async function withGateDocs(pages, fn) {
       await writeFile(join(dir, name), `#!/bin/sh\nprintf '%s %s\\n' ${name} "$*"\n`);
       await chmod(join(dir, name), 0o755);
     }
-    const env = { TUTORIAL_DOCS_ROOT: join(dir, 'docs'), BREG_BIN: join(dir, 'breg'), BREGCTL_BIN: join(dir, 'bregctl') };
+    const env = {
+      TUTORIAL_DOCS_ROOT: join(dir, 'docs'),
+      BREG_BIN: join(dir, 'breg'),
+      BREGCTL_BIN: join(dir, 'bregctl'),
+      RSTACK_BIN: await fakeRstack(dir),
+    };
     return await fn(env);
   } finally {
     await rm(dir, { recursive: true, force: true });
@@ -468,6 +507,7 @@ test('teardown stops only the sessions the journey started, not a committed exam
     const { code, output } = await run(['--toolset', 'breg', page], {
       BREG_BIN: join(dir, 'breg'),
       BREGCTL_BIN: join(dir, 'bregctl'),
+      RSTACK_BIN: await fakeRstack(dir),
     });
     assert.equal(code, 0, output);
     const stops = (await readFile(calls, 'utf8')).split('\n').filter((line) => line.startsWith('bregctl dev stop'));
@@ -560,6 +600,7 @@ test('teardown finds a session\'s control socket and runtime file as the journey
     const { code, output } = await run(['--toolset', 'breg', page], {
       BREG_BIN: join(dir, 'breg'),
       BREGCTL_BIN: join(dir, 'bregctl'),
+      RSTACK_BIN: await fakeRstack(dir),
     });
     assert.equal(code, 0, output);
     assert.equal(await readFile(modes, 'utf8'), '0o600 0o400\n');
@@ -580,6 +621,7 @@ test('--keep-failed retains private diagnostics after stopping owned sessions', 
       TMPDIR: temp,
       BREG_BIN: join(dir, 'breg'),
       BREGCTL_BIN: join(dir, 'bregctl'),
+      RSTACK_BIN: await fakeRstack(dir),
     });
     assert.equal(code, 1, output);
     assert.match(output, /failed journey artifacts retained/u);
@@ -605,6 +647,7 @@ test('a session that cannot be stopped keeps the work directory and fails the jo
       TMPDIR: temp,
       BREG_BIN: join(dir, 'breg'),
       BREGCTL_BIN: join(dir, 'bregctl'),
+      RSTACK_BIN: await fakeRstack(dir),
     });
     assert.equal(code, 1, output);
     assert.match(output, /tutorial PASS/u);
@@ -633,7 +676,7 @@ test('a gate stops at the first toolset error instead of preparing it for every 
   await withGateDocs(pages, async (env) => {
     const { code, output } = await run(['--gate', 'breg'], { ...env, BREGCTL_BIN: '' });
     assert.equal(code, 2, output);
-    assert.equal(output.match(/set BREG_BIN and BREGCTL_BIN, or neither/gu)?.length, 1, output);
+    assert.equal(output.match(/set BREG_BIN, BREGCTL_BIN, and RSTACK_BIN, or none of them/gu)?.length, 1, output);
     assert.doesNotMatch(output, /journey tutorials\/two/u);
     assert.doesNotMatch(output, /gate FAIL/u);
   });
@@ -875,14 +918,14 @@ async function fakeWheel(dir) {
   const wheel = join(dir, 'client.whl');
   await execFileAsync('python3', [
     '-c',
-    'import sys, zipfile\nwith zipfile.ZipFile(sys.argv[1], "w") as z: z.writestr("tutorial_fake_client/__init__.py", "NAME = \\"unpacked\\"\\n")',
+    'import sys, zipfile\nwith zipfile.ZipFile(sys.argv[1], "w") as z: z.writestr("registry_client/__init__.py", "NAME = \\"unpacked\\"\\n")',
     wheel,
   ]);
   return wheel;
 }
 
 async function fakeEvidenceBinaries(dir, calls) {
-  const env = {};
+  const env = { RSTACK_BIN: await fakeRstack(dir) };
   for (const [name, variable] of [
     ['evidence', 'EVIDENCE_BIN'],
     ['evidencectl', 'EVIDENCECTL_BIN'],
@@ -901,7 +944,7 @@ test('the evidence toolset serves its binaries, the client package, and the FHIR
     fence(
       'sh',
       'evidence --version\nevidencectl dev\n"$EVIDENCE_OID4VCI_BIN" --version\n' +
-        'python3 -c "import tutorial_fake_client; print(tutorial_fake_client.NAME)"\n' +
+        "python3 - <<'PY'\nimport registry_client\nprint(registry_client.NAME)\nPY\n" +
         'python3 -c "import os, urllib.request; print(urllib.request.urlopen(os.environ[\'FHIR_TUTORIAL_TEST_BASE_URL\'] + \'/healthz\').status)"\n' +
         'tar -tzf evidence-examples.tar.gz | grep -x fhir/.gitignore\n' +
         'mkdir -p work/project/.evidence/dev\ntouch work/project/.evidence/dev/control.sock',
@@ -925,7 +968,7 @@ test('the evidence toolset serves its binaries, the client package, and the FHIR
 });
 
 test('the evidence toolset needs the client wheel as an absolute path to a file', async () => {
-  await withPage('## A\n\n' + fence('sh', 'true'), async ({ dir, page }) => {
+  await withPage('## A\n\n' + fence('sh', "python3 - <<'PY'\nimport registry_client\nPY"), async ({ dir, page }) => {
     const env = await fakeEvidenceBinaries(dir, join(dir, 'calls.log'));
     for (const [wheel, message] of [
       ['', /REGISTRY_CLIENT_PY_WHEEL is unset: name a client wheel assembled with release\/scripts\/assemble-registry-client-packages\.py/u],

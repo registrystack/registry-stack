@@ -26,7 +26,7 @@ standalone one from your first assertion, prove it over synthetic extracts, and 
   outcome="A SQLite-extract Evidence project passing 13 fixture cases."
   time="About 15 minutes"
   level="Offline authoring with synthetic data"
-  prerequisites={['evidence and evidencectl on PATH, from the same release', 'A shell and an editor']}
+  prerequisites={['The Evidence component installed for rstack', 'A shell and an editor']}
 />
 
 ## Create the SQLite starter
@@ -34,7 +34,7 @@ standalone one from your first assertion, prove it over synthetic extracts, and 
 `init` writes a starter project whose one Source reads an extract:
 
 ```sh
-evidencectl init registry-status \
+rstack evidence init registry-status \
   --transport sqlite-extract \
   --profile local
 ```
@@ -122,8 +122,8 @@ works](../../explanation/how-evidence-works/#what-do-i-define) explains each par
 ## Prove the starter
 
 ```sh
-evidencectl check . --target local-target.yaml --deny-warnings
-evidencectl test . --target local-target.yaml --deny-warnings
+rstack evidence check . --target local-target.yaml --deny-warnings
+rstack evidence test . --target local-target.yaml --deny-warnings
 ```
 
 ```text test-expect
@@ -139,7 +139,7 @@ Proof: offline synthetic fixture evaluation; no live dependency readiness was ch
 
 Each case writes a read-only synthetic extract, and the `evidence` binary runs the fixed statement
 against it and evaluates the answer. Fixtures are how you run this project locally, because
-`evidencectl dev start` refuses a SQLite Source: local serving has no way to bind an extract file.
+`rstack evidence dev start` refuses a SQLite Source: local serving has no way to bind an extract file.
 A warning or error names the file and key to correct.
 
 {/* Evidence: crates/registry-evidencectl/src/fixtures.rs, run_fixtures;
@@ -177,7 +177,7 @@ with `<extract-file>` replaced by its name:
 Check the target again:
 
 ```sh
-evidencectl check . --target local-target.yaml --deny-warnings
+rstack evidence check . --target local-target.yaml --deny-warnings
 ```
 
 ```text test-expect
@@ -190,7 +190,7 @@ Target: local-target.yaml
 This check matches the key `record-status` to the Source's `extractProfile`: a profile with no
 binding is `evidence.runtime.source-extract-unbound`, and a binding no Source names is
 `evidence.runtime.source-extract-unused`. It does not open the file. On the target host,
-`evidencectl doctor` also opens it.
+`rstack evidence doctor` also opens it.
 
 Your export tooling writes the file with one `evidence_extract` row holding `published_at`,
 `publisher`, and `extract_id`. Evidence refuses an extract older than `maximumExtractAgeSeconds`.
@@ -202,7 +202,7 @@ reads. Publish each refresh as one checkpointed, unwritable file at a new path, 
 :::
 
 [Build and deploy a Registry Evidence project](../build-and-deploy-evidence-project/)
-proves the file reachable on the target host with `evidencectl doctor`.
+proves the file reachable on the target host with `rstack evidence doctor`.
 
 {/* Evidence: crates/registry-evidence-authoring/src/target.rs, extracts;
     crates/registry-evidencectl/src/normalized.rs, sourceExtracts;
