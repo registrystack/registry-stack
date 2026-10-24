@@ -281,16 +281,24 @@ export function createSharedTrackingClient(options = {}) {
         clearTimeout(timer);
         reject(error);
       };
-      const timer = setTimeout(() => {
+      let timer;
+      const startTimer = () => setTimeout(() => {
         pending.delete(message.id);
-        dropFailedFrame(requestFrame);
-        rejectOnce(fail());
+        if (requestOptions.recoverUnavailable) {
+          rejectOnce(recoverableFailure());
+        } else {
+          dropFailedFrame(requestFrame);
+          rejectOnce(fail());
+        }
       }, requestOptions.timeoutMs ?? timeoutMs);
+      // An association has one total budget so attribution never delays the
+      // form. Other requests get a response budget after the bounded load.
+      if (requestOptions.timeoutMs !== undefined) timer = startTimer();
       let readiness;
       try {
         readiness = ensureFrame();
       } catch {
-        rejectOnce(fail());
+        rejectOnce(requestOptions.recoverUnavailable ? recoverableFailure() : fail());
         return;
       }
       readiness.then(readyFrame => {
@@ -300,6 +308,7 @@ export function createSharedTrackingClient(options = {}) {
           return;
         }
         requestFrame = readyFrame;
+        if (requestOptions.timeoutMs === undefined) timer = startTimer();
         pending.set(message.id, {
           resolve: resolveOnce,
           reject: rejectOnce,
@@ -314,10 +323,10 @@ export function createSharedTrackingClient(options = {}) {
         } catch {
           pending.delete(message.id);
           dropFailedFrame(readyFrame);
-          rejectOnce(fail());
+          rejectOnce(requestOptions.recoverUnavailable ? recoverableFailure() : fail());
         }
       }, () => {
-        if (!settled) rejectOnce(fail());
+        if (!settled) rejectOnce(requestOptions.recoverUnavailable ? recoverableFailure() : fail());
       });
     });
   };
@@ -382,7 +391,7 @@ export function createSharedTrackingClient(options = {}) {
     },
     async associate(expectedGeneration, requestOptions = {}) {
       if (effectiveState().choice !== 'accepted' || state.generation !== expectedGeneration) throw trackingError();
-      return request('associate', { expectedGeneration }, requestOptions);
+      return request('associate', { expectedGeneration }, { ...requestOptions, recoverUnavailable: true });
     },
     close() {
       closed = true;
