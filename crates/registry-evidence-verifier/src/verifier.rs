@@ -2007,7 +2007,7 @@ mod tests {
     )]
     use std::{collections::BTreeSet, sync::Arc};
 
-    use p256::elliptic_curve::rand_core::OsRng;
+    use p256::elliptic_curve::Generate as _;
     use registry_platform_crypto::{LocalJwkSigner, PrivateJwk, SigningProvider};
     use registry_platform_sdjwt::presentation_disclosure_hash;
     use serde::Deserialize;
@@ -4563,8 +4563,8 @@ mod tests {
     }
 
     fn generated_public_jwk() -> PublicJwk {
-        let signing_key = p256::ecdsa::SigningKey::random(&mut OsRng);
-        let point = signing_key.verifying_key().to_encoded_point(false);
+        let signing_key = p256::ecdsa::SigningKey::generate();
+        let point = signing_key.verifying_key().to_sec1_point(false);
         let mut key = PublicJwk {
             kty: "EC".to_owned(),
             kid: None,

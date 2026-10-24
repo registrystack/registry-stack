@@ -904,7 +904,7 @@ impl Fixture {
         write_sealed_bundle(&root, &state);
 
         let signing_key = SigningKey::from_slice(&[7_u8; 32]).expect("test signing key");
-        let point = signing_key.verifying_key().to_encoded_point(false);
+        let point = signing_key.verifying_key().to_sec1_point(false);
         let mut signing_jwk = json!({
             "kty": "EC",
             "crv": "P-256",

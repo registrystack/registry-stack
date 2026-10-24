@@ -18,7 +18,7 @@ use std::collections::BTreeMap;
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chrono::{DateTime, SecondsFormat, TimeDelta, Utc};
-use p256::{ecdsa::SigningKey, elliptic_curve::rand_core::OsRng};
+use p256::{ecdsa::SigningKey, elliptic_curve::Generate as _};
 use registry_evidence_verifier::{
     model::{Evidence, HolderPublicKey, JwksDocument},
     sdjwt_vc::issuance_input,
@@ -63,9 +63,7 @@ pub(crate) struct SignedEvidenceFixture {
 /// coordinates are returned, because that is all a request ever carries and all
 /// this crate is ever given. Each call returns a distinct key.
 pub(crate) fn holder_key() -> HolderPublicKey {
-    let point = SigningKey::random(&mut OsRng)
-        .verifying_key()
-        .to_encoded_point(false);
+    let point = SigningKey::generate().verifying_key().to_sec1_point(false);
     HolderPublicKey {
         kty: "EC".to_owned(),
         crv: "P-256".to_owned(),
@@ -79,8 +77,8 @@ pub(crate) fn holder_key() -> HolderPublicKey {
 /// A fresh issuer. Two fixtures never share a key or a key identifier, so a
 /// response from one is a response signed by a key the other never pinned.
 pub(crate) fn signed_evidence() -> SignedEvidenceFixture {
-    let signing_key = SigningKey::random(&mut OsRng);
-    let public = signing_key.verifying_key().to_encoded_point(false);
+    let signing_key = SigningKey::generate();
+    let public = signing_key.verifying_key().to_sec1_point(false);
     let mut signing_key = PrivateJwk {
         kty: "EC".to_owned(),
         kid: None,

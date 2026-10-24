@@ -38,7 +38,7 @@ use p256::ecdsa::{
     signature::Verifier as _, Signature as P256Signature, VerifyingKey as P256VerifyingKey,
 };
 #[cfg(feature = "transit")]
-use p256::elliptic_curve::sec1::ToEncodedPoint as _;
+use p256::elliptic_curve::sec1::ToSec1Point as _;
 #[cfg(feature = "transit")]
 use p256::pkcs8::DecodePublicKey as _;
 #[cfg(feature = "transit")]
@@ -968,7 +968,7 @@ fn validate_transit_public_key(pem: &str, configured: &PublicJwk) -> Result<(), 
     configured_sec1.push(0x04);
     configured_sec1.extend_from_slice(&x);
     configured_sec1.extend_from_slice(&y);
-    if provider.to_encoded_point(false).as_bytes() != configured_sec1 {
+    if provider.to_sec1_point(false).as_bytes() != configured_sec1 {
         return Err(transit_error("transit provider public key does not match"));
     }
     Ok(())
@@ -2032,7 +2032,7 @@ mod tests {
     fn p256_public_pem(private: &PrivateJwk) -> String {
         let scalar = decode_fixed(private.d.as_deref(), 32, "d").expect("P-256 scalar");
         let signing = P256SigningKey::from_slice(&scalar).expect("P-256 signing key");
-        let encoded = signing.verifying_key().to_encoded_point(false);
+        let encoded = signing.verifying_key().to_sec1_point(false);
         let public = P256PublicKey::from_sec1_bytes(encoded.as_bytes()).expect("P-256 public key");
         public
             .to_public_key_pem(LineEnding::LF)
@@ -2625,7 +2625,7 @@ mod tests {
 
         let other_scalar = [42_u8; 32];
         let other_signing = P256SigningKey::from_slice(&other_scalar).expect("second P-256 key");
-        let other_point = other_signing.verifying_key().to_encoded_point(false);
+        let other_point = other_signing.verifying_key().to_sec1_point(false);
         let other_public =
             P256PublicKey::from_sec1_bytes(other_point.as_bytes()).expect("second public key");
         let mut wrong_public = transit_metadata(

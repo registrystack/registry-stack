@@ -31,7 +31,7 @@ use axum::{
 use axum_test::TestServer;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chrono::{SecondsFormat, Utc};
-use p256::{ecdsa::SigningKey, elliptic_curve::rand_core::OsRng};
+use p256::{ecdsa::SigningKey, elliptic_curve::Generate as _};
 use registry_evidence_client::{
     AssuranceProfile, EvidenceDefinitionsDocument, HolderBoundRequestSpec, HolderPublicKey,
     EVIDENCE_SD_JWT_VC_BATCH_MEDIA_TYPE, SD_JWT_VC_BATCH_SCHEMA_V1,
@@ -124,8 +124,8 @@ struct FixtureKey {
 
 impl FixtureKey {
     fn generate() -> Self {
-        let key = SigningKey::random(&mut OsRng);
-        let point = key.verifying_key().to_encoded_point(false);
+        let key = SigningKey::generate();
+        let point = key.verifying_key().to_sec1_point(false);
         let public = json!({
             "kty": "EC",
             "crv": "P-256",
@@ -183,8 +183,8 @@ impl FixtureIssuer {
     fn new() -> Self {
         let document: EvidenceDefinitionsDocument =
             serde_json::from_str(DEFINITIONS).expect("the definitions document parses");
-        let generated = SigningKey::random(&mut OsRng);
-        let point = generated.verifying_key().to_encoded_point(false);
+        let generated = SigningKey::generate();
+        let point = generated.verifying_key().to_sec1_point(false);
         let public_without_kid = json!({
             "kty": "EC",
             "crv": "P-256",

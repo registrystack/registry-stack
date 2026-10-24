@@ -14,8 +14,7 @@ use std::{
 use chrono::{DateTime, NaiveDate, SecondsFormat, TimeZone, Utc};
 use chrono_tz::Tz;
 use clap::Parser;
-use p256::ecdsa::SigningKey;
-use rand_core::OsRng;
+use p256::{ecdsa::SigningKey, elliptic_curve::Generate as _};
 use registry_evidence::cli::{Cli, Command, ExplainFormat, OutputFormat};
 use registry_evidence::{
     audit::{last_local_audit_operation, EvidenceAuditError},
@@ -3910,9 +3909,9 @@ async fn sign_and_verify_fixture_evidence(
 async fn offline_fixture_signer() -> Result<EvidenceSigner, CliError> {
     use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 
-    let signing_key = SigningKey::random(&mut OsRng);
+    let signing_key = SigningKey::generate();
     let private_bytes = Zeroizing::new(signing_key.to_bytes());
-    let public = signing_key.verifying_key().to_encoded_point(false);
+    let public = signing_key.verifying_key().to_sec1_point(false);
     let mut private_jwk = PrivateJwk {
         kty: "EC".to_owned(),
         kid: None,

@@ -19,7 +19,7 @@ use async_trait::async_trait;
 use axum::{body::Bytes, http::StatusCode};
 use axum_test::{TestResponse, TestServer};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
-use p256::{ecdsa::SigningKey, elliptic_curve::rand_core::OsRng};
+use p256::{ecdsa::SigningKey, elliptic_curve::Generate as _};
 use registry_evidence_client::{
     EvidenceDefinitionsDocument, HolderBoundRequestSpec, SubjectBindingMode,
 };
@@ -472,8 +472,8 @@ async fn minted_nonce(server: &TestServer) -> String {
 }
 
 fn private_jwk() -> String {
-    let key = SigningKey::random(&mut OsRng);
-    let point = key.verifying_key().to_encoded_point(false);
+    let key = SigningKey::generate();
+    let point = key.verifying_key().to_sec1_point(false);
     json!({
         "kty": "EC",
         "crv": "P-256",
