@@ -1308,7 +1308,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.breg_contracts == 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: ${{ matrix.lane == 'postgres' && 45 || 30 }}
     strategy:
       fail-fast: false
       matrix:
