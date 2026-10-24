@@ -217,13 +217,37 @@ impl OfferAuthorizer for MintResourceServer {
                         return Err(AuthorizationError::Refused);
                     }
                 }
-                Ok(AuthorizedOffer {
-                    client: verified
-                        .matched_client
-                        .or_else(|| verified.claims.client_id.clone())
-                        .or_else(|| verified.claims.azp.clone()),
-                    subject: verified.claims.sub.clone(),
-                })
+                let client = match verified.matched_client_id() {
+                    Ok(Some(client)) => Some(client.to_owned()),
+                    Ok(None) => verified
+                        .claims
+                        .azp
+                        .clone()
+                        .filter(|client| !client.is_empty())
+                        .or_else(|| {
+                            verified
+                                .claims
+                                .client_id
+                                .clone()
+                                .filter(|client| !client.is_empty())
+                        }),
+                    Err(_) => {
+                        tracing::error!(
+                            target: "registry_evidence_oid4vci::authorizer",
+                            "the token verifier returned a malformed matched client"
+                        );
+                        return Err(AuthorizationError::Refused);
+                    }
+                };
+                let subject = verified
+                    .claims
+                    .sub
+                    .clone()
+                    .filter(|subject| !subject.is_empty());
+                if client.is_none() && subject.is_none() {
+                    return Err(AuthorizationError::Refused);
+                }
+                Ok(AuthorizedOffer { client, subject })
             }
             Err(error) if is_key_source_failure(&error) => {
                 tracing::warn!(

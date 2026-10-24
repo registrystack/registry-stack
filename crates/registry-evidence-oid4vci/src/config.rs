@@ -13,12 +13,13 @@
 use std::{
     fmt,
     net::{IpAddr, Ipv4Addr, SocketAddr},
-    path::Path,
+    path::{Path, PathBuf},
 };
 
+use registry_platform_audit::{AuditDestination, AuditDestinationError, AuditDestinationKind};
 use registry_platform_config::{
-    ConfigBlockErrorKind, RemovedKey, RuntimeConfigLoader, RuntimeEnvelope, RuntimeFileCheck,
-    SecretProvidersConfig, SecretReference, DEFAULT_STAND_IN,
+    AuditKeyConfig, ConfigBlockErrorKind, RemovedKey, RuntimeConfigLoader, RuntimeEnvelope,
+    RuntimeFileCheck, SecretProvidersConfig, SecretReference, DEFAULT_STAND_IN,
 };
 use registry_platform_httputil::client::{
     valid_resource_uri, valid_scope_token, MAXIMUM_REQUESTED_SCOPES, MAXIMUM_REQUESTED_SCOPE_BYTES,
@@ -350,6 +351,27 @@ pub struct StoreConfig {
     pub maximum_transaction_code_attempts: u32,
 }
 
+/// The durable adapter audit destination and keyed-pseudonym secret.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AuditConfig {
+    pub key: AuditKeyConfig,
+    pub destination: AuditDestinationKind,
+    pub path: Option<PathBuf>,
+    pub rotate_bytes: Option<u64>,
+    pub retention_days: Option<u32>,
+}
+
+impl AuditConfig {
+    pub fn destination(&self) -> Result<AuditDestination, AuditDestinationError> {
+        AuditDestination::from_settings(
+            self.destination,
+            self.path.clone(),
+            self.rotate_bytes,
+            self.retention_days,
+        )
+    }
+}
+
 impl Default for StoreConfig {
     fn default() -> Self {
         StoreDocument::default().into_config()
@@ -374,6 +396,7 @@ pub struct DeliveryConfig {
     pub listener: ListenerConfig,
     pub metrics_listener: Option<MetricsListenerConfig>,
     pub secret_providers: SecretProvidersConfig,
+    pub audit: AuditConfig,
     pub evidence: EvidenceConfig,
     pub token_client: TokenClientConfig,
     pub offers: OfferAuthorizationConfig,
@@ -504,6 +527,10 @@ pub struct DeliveryDocument {
     pub metrics_listener: Option<registry_platform_config::ListenerConfig>,
     /// The secret providers `tokenClient.privateKeyRef` may name.
     pub secret_providers: SecretProvidersConfig,
+    /// The required durable audit journal for offer attribution and delivery
+    /// outcomes. `stdout` is available for a collector-managed deployment;
+    /// only a file destination supplies durability itself.
+    pub audit: AuditDocument,
     /// The Evidence deployment this service requests credentials from.
     pub evidence: EvidenceDocument,
     /// The identity this service authenticates to its token issuer with.
@@ -513,6 +540,44 @@ pub struct DeliveryDocument {
     /// The bounds of the in-memory store.
     #[serde(default)]
     pub store: StoreDocument,
+}
+
+/// The process-local audit destination and keyed-pseudonym secret.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AuditDocument {
+    #[serde(rename(deserialize = "registry-platform-yaml/shared-block/audit-key"))]
+    #[cfg_attr(feature = "schema", schemars(flatten))]
+    pub key: AuditKeyConfig,
+    #[serde(default)]
+    pub destination: AuditDestinationKind,
+    #[serde(default)]
+    #[cfg_attr(feature = "schema", schemars(extend("pattern" = "^/")))]
+    pub path: Option<PathBuf>,
+    #[serde(default)]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(range(min = registry_platform_audit::MIN_AUDIT_ROTATE_BYTES, max = u32::MAX))
+    )]
+    pub rotate_bytes: Option<u64>,
+    #[serde(default)]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(range(min = 1, max = registry_platform_audit::MAX_AUDIT_RETAIN_DAYS))
+    )]
+    pub retention_days: Option<u32>,
+}
+
+impl AuditDocument {
+    fn destination(&self) -> Result<AuditDestination, AuditDestinationError> {
+        AuditDestination::from_settings(
+            self.destination,
+            self.path.clone(),
+            self.rotate_bytes,
+            self.retention_days,
+        )
+    }
 }
 
 /// The listener a wallet and an adopter reach.
@@ -889,6 +954,7 @@ impl DeliveryDocument {
                 .map(|metrics| metrics.bind.socket_addr()),
         ));
         self.secret_findings(&mut findings);
+        self.audit_findings(&mut findings);
         self.token_client.findings(&mut findings);
         self.offers.findings(&mut findings);
         if self.store.nonce_lifetime_seconds.get() > self.store.access_token_lifetime_seconds.get()
@@ -1045,6 +1111,49 @@ impl DeliveryDocument {
                 .reading(&["/secretProviders"]),
             );
         }
+        if self.audit.key.check(&self.secret_providers).is_err() {
+            findings.push(
+                Finding::error(
+                    "evidence.oid4vci.audit-secret-provider-disabled",
+                    "/audit/hashKeyRef",
+                    "the audit hash key reference names a secret provider this file does not enable",
+                    "Declare the provider the reference names under secretProviders, or reference the audit key through an enabled provider.",
+                )
+                .reading(&["/secretProviders"]),
+            );
+        }
+    }
+
+    fn audit_findings(&self, findings: &mut Vec<Finding>) {
+        if let Err(error) = self.audit.destination() {
+            let pointer = match error {
+                AuditDestinationError::MissingPath
+                | AuditDestinationError::RelativePath
+                | AuditDestinationError::InvalidPathComponent
+                | AuditDestinationError::NoFileName
+                | AuditDestinationError::FileNameTooLong { .. }
+                | AuditDestinationError::PathNamesReservedCompanion { .. } => "/audit/path",
+                AuditDestinationError::FileOnlyField { field: "path" } => "/audit/path",
+                AuditDestinationError::FileOnlyField {
+                    field: "rotateBytes",
+                }
+                | AuditDestinationError::RotateBytesOutOfRange { .. } => "/audit/rotateBytes",
+                AuditDestinationError::FileOnlyField {
+                    field: "retainDays",
+                }
+                | AuditDestinationError::RetainDaysOutOfRange { .. } => "/audit/retentionDays",
+                AuditDestinationError::FileOnlyField { .. } => "/audit",
+                AuditDestinationError::InvalidProcessRole
+                | AuditDestinationError::ProcessRoleOverlapsStream => "/audit",
+                _ => "/audit",
+            };
+            findings.push(Finding::error(
+                "evidence.oid4vci.invalid-audit",
+                pointer,
+                "the audit destination settings are invalid",
+                "Use stdout without file settings, or an absolute file path with supported rotation and retention values.",
+            ));
+        }
     }
 
     fn into_config(self) -> DeliveryConfig {
@@ -1062,6 +1171,13 @@ impl DeliveryDocument {
                 bind: metrics.bind.socket_addr(),
             }),
             secret_providers: self.secret_providers,
+            audit: AuditConfig {
+                key: self.audit.key,
+                destination: self.audit.destination,
+                path: self.audit.path,
+                rotate_bytes: self.audit.rotate_bytes,
+                retention_days: self.audit.retention_days,
+            },
             evidence: EvidenceConfig {
                 base_url: self.evidence.base_url.into_string(),
             },
@@ -1520,6 +1636,9 @@ listener:
 secretProviders:
   file:
     root: /run/secrets/evidence-oid4vci
+audit:
+  destination: stdout
+  hashKeyRef: secret:file/audit-hash-key
 evidence:
   baseUrl: https://evidence.example.org
 tokenClient:
@@ -2194,7 +2313,7 @@ store:
             .source
             .as_ref()
             .expect("the finding is positioned");
-        assert_eq!(source.line, Some(27));
+        assert_eq!(source.line, Some(30));
     }
 
     #[test]
@@ -2345,6 +2464,70 @@ store:
             "secretProviders: {}\n",
         );
         assert_eq!(refused(&none), ["evidence.oid4vci.secret-providers"]);
+    }
+
+    #[test]
+    fn the_audit_destination_and_hash_key_are_required_and_closed() {
+        let without_audit = VALID.replace(
+            "audit:\n  destination: stdout\n  hashKeyRef: secret:file/audit-hash-key\n",
+            "",
+        );
+        assert_eq!(refused(&without_audit), ["config.missing-key"]);
+
+        let file = VALID.replace(
+            "  destination: stdout\n  hashKeyRef: secret:file/audit-hash-key",
+            "  destination: file\n  path: /var/lib/registry-evidence-oid4vci/audit.jsonl\n  hashKeyRef: secret:file/audit-hash-key",
+        );
+        let config = load_from(&file).expect("a durable file destination loads");
+        assert_eq!(config.audit.destination, AuditDestinationKind::File);
+        assert_eq!(
+            config.audit.path.as_deref(),
+            Some(Path::new("/var/lib/registry-evidence-oid4vci/audit.jsonl"))
+        );
+
+        for (member, pointer) in [
+            (
+                "path: /var/lib/registry-evidence-oid4vci/audit.jsonl",
+                "/audit/path",
+            ),
+            ("rotateBytes: 1048576", "/audit/rotateBytes"),
+            ("retentionDays: 30", "/audit/retentionDays"),
+        ] {
+            let stdout_with_file_member = VALID.replace(
+                "  destination: stdout",
+                &format!("  destination: stdout\n  {member}"),
+            );
+            let error = load_from(&stdout_with_file_member)
+                .expect_err("stdout refuses every file-only audit member");
+            let finding = error
+                .diagnostics()
+                .iter()
+                .find(|finding| finding.code == "evidence.oid4vci.invalid-audit")
+                .expect("the audit refusal is reported");
+            assert_eq!(finding.path, pointer, "member {member}");
+        }
+    }
+
+    #[test]
+    fn the_audit_hash_key_uses_an_enabled_secret_provider() {
+        let environment = VALID.replace(
+            "hashKeyRef: secret:file/audit-hash-key",
+            "hashKeyRef: secret:env/EVIDENCE_OID4VCI_AUDIT_HASH_KEY",
+        );
+        assert_eq!(
+            refused(&environment),
+            ["evidence.oid4vci.audit-secret-provider-disabled"]
+        );
+
+        let enabled = environment.replace(
+            "secretProviders:\n",
+            "secretProviders:\n  environment: {}\n",
+        );
+        let config = load_from(&enabled).expect("an enabled audit-key provider loads");
+        assert_eq!(
+            config.audit.key.hash_key_ref.as_str(),
+            "secret:env/EVIDENCE_OID4VCI_AUDIT_HASH_KEY"
+        );
     }
 
     #[test]

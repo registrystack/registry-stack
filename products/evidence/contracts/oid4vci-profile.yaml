@@ -122,7 +122,14 @@ endpoints:
       protected at least as strongly as calling Evidence directly. Every
       request-origin selector must carry exactly the catalog's field set, with
       each value matching its published scalar type and bounds. A mismatch is
-      refused before generating an offer secret or writing exchange state.
+      refused before generating an offer secret or writing exchange state. An
+      available normalized client and/or verified subject are recorded as
+      distinct keyed pseudonyms under a server-generated opaque exchange
+      identifier, and a token carrying neither is refused. When a client is
+      present, it is the verifier's normalized matched client; without a client
+      allowlist, azp is authoritative over client_id. The attempted and
+      created audit entries must reach the configured destination before the
+      offer is released; audit refusal fails closed without returning it.
   - path: POST /token
     authorization: pre-authorized code, and the transaction code when the offer declared one
     rule: >-
@@ -157,17 +164,23 @@ endpoints:
       completed"; the wallet must begin a newly authorized exchange. A transient
       dependency or bounded-state failure detected before a code or token is
       claimed may still return 503 temporarily_unavailable and invite retry of
-      that unclaimed authorization.
+      that unclaimed authorization. After token claim, the adapter writes an
+      attempted delivery entry under the offer's opaque exchange identifier
+      before proof processing or Evidence I/O. It records the terminal proof,
+      Evidence, internal, or released outcome before returning the response;
+      audit refusal releases no credential and returns the same terminal
+      credential_request_denied response as every other post-claim failure.
+      Timeout or cancellation records unfinished while the token remains spent.
   - path: GET /health and GET /ready
     authorization: none
     rule: >-
       Operational probes, not protocol surface. They report that the process is
-      running and answering, and nothing else: readiness deliberately says
-      nothing about the two deployments this service calls outbound, because a
-      delivery front end that took itself out of service for a remote fault
-      would be reporting a fault it does not have. Neither discloses anything
-      about any offer, token, or credential, and both are named here so this
-      endpoint list is the complete set of routes the service answers.
+      running and whether its required local audit destination can accept
+      entries. Readiness deliberately says nothing about the deployments this
+      service calls outbound, because their transient failure does not make the
+      process itself unready. Neither probe discloses anything about any offer,
+      token, or credential, and both are named here so this endpoint list is the
+      complete set of routes the service answers.
 proof_rules:
   - The header type is the bare openid4vci-proof+jwt. The registered media type carries an application prefix; the header value does not, and a value carrying the prefix is rejected.
   - Exactly one of kid, jwk or x5c may be present. An inline public JWK and a locally decoded did:jwk key are read under one closed member set: only kty, crv, x, y, alg, kid and use, with use, when present, reading sig. A member outside that set is rejected rather than silently dropped from the accepted key. A kid is accepted only as a self-contained did:jwk URL with the #0 verification-method fragment, decoded locally to a public P-256 key; any other kid and every x5c are rejected rather than resolved through ambient network or trust state.
@@ -183,7 +196,7 @@ state_model:
     zeroized on claim. The store prunes on write and fails closed on saturation
     rather than evicting a live entry.
   held:
-    - The prepared request and the transaction code tag, keyed by the pre-authorized code's tag, for minutes.
+    - The prepared request, its server-generated opaque exchange identifier, and the transaction code tag, keyed by the pre-authorized code's tag, for minutes.
     - The prepared request carried forward, keyed by the access token's tag, for minutes, so one credential request may be made per token.
     - A ledger of the transaction code failure count and whether the offer was redeemed or locked out, keyed by the pre-authorized code's tag, for the offer's whole life whether or not the offer itself is still redeemable. A lockout drops the offer, so a counter that lived inside the offer would be forgotten by the very event it exists to record, and a counter a restart clears is a restart-to-reset lockout.
   stateless_by_design: >-
@@ -195,7 +208,7 @@ state_model:
   honest_limits:
     - A restart invalidates every offer outstanding in a minutes-wide window. The resulting failure is a clean, value-free error rather than a panic.
     - A backing Evidence bundle or batch-ceiling change requires a coordinated cutover: stop this adapter and discard outstanding exchanges, change or restart Evidence, then restart this adapter so its first catalog comes from the new generation. Do not change Evidence while this adapter continues to serve a cached catalog.
-    - Single use is enforced per process. A second replica breaks it, which is why there is exactly one. Adding a replica means a shared store, and that decision is not taken here.
+    - Each exchange belongs to the process that created it. An independent process has a different random tagging key and no matching live state, so it refuses both live and spent codes and tokens as unknown rather than accepting a replay. Exactly one replica is supported so every later request reaches the process that owns the exchange; adding replicas would require shared state or sticky routing and a reviewed deployment contract.
     - Single use is mostly a detection property. It turns silent duplicate issuance from a stolen offer into one party receiving an error and complaining. The short lifetime and the transaction code are the primary defenses, not the marker.
     - Selector values are held in the deployment's memory rather than encrypted into a client-held code, so they are never placed in a QR code that can be forwarded or photographed.
 operational_telemetry:
@@ -210,6 +223,25 @@ operational_telemetry:
     - offer codes, transaction codes, access tokens, nonces, and proofs
     - holder keys, credentials, selectors, and subject identifiers
     - raw issuer, audience, client, and credential-configuration identifiers
+delivery_audit:
+  rule: >-
+    The adapter owns one durable, append-only audit trail joining authenticated
+    offer creation to the eventual credential-release outcome through a random,
+    opaque exchange identifier. The available normalized client and/or verified
+    subject are distinct keyed pseudonyms, and at least one is required. This
+    trail is separate from Evidence's own authorization
+    and signed-response release audit under the adapter's outbound client
+    identity. A file destination is the durable journal; stdout is durable only
+    when the deployment's collector accepts and preserves every line.
+  excluded_values:
+    - offer codes, transaction codes, access tokens, nonces, and proofs
+    - holder keys, credentials, selectors, and raw subject or client identifiers
+    - credential configuration identifiers and Evidence request material
+  scope: >-
+    Validated, authorized offer-creation attempts and post-claim credential
+    delivery are audited. Unauthenticated or malformed offer refusals, unknown
+    codes or tokens, and nonce requests are not durable audit events because
+    they identify no accepted protected exchange or release.
 prohibitions:
   rule: None of the following is implemented, stubbed, feature-flagged, or left as an extension seam.
   items:
@@ -233,6 +265,7 @@ prohibitions:
 # above cannot outlive the test that enforces it.
 negative_tests:
   - sec-oid4vci-offer-requires-authorization
+  - sec-oid4vci-offer-attribution-audit
   - sec-oid4vci-offer-request-contract
   - sec-oid4vci-code-single-use
   - sec-oid4vci-tx-code-bounded

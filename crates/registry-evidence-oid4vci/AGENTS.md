@@ -26,6 +26,14 @@ adapter.
   closed on saturation. Nonces are stateless freshness challenges. A failure
   after token claim is terminal for that exchange; retry is only for the
   profile's pre-claim transient failures.
+- Durably audit each available normalized client and verified subject that
+  creates an offer as a keyed pseudonym, and require at least one. Carry one
+  server-generated opaque exchange identifier
+  through the prepared request and use it to join offer creation to the
+  credential release outcome. Write the required audit entry before releasing
+  either response, and keep codes, tokens, nonces, proofs, selectors, keys,
+  credentials, and raw identities out of the journal. Evidence keeps its own
+  separate authorization and credential-release audit.
 - One replica owns this state. Restart invalidates outstanding exchanges.
   Backing Evidence bundle changes require the profile's coordinated stop,
   discard, update, and restart cutover so cached catalog generations do not
