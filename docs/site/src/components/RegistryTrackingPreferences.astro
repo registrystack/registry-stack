@@ -1,0 +1,255 @@
+---
+import { SHARED_TRACKING_BRIDGE_URL } from '../lib/tracking-protocol.mjs';
+
+interface Props {
+  canonicalOrigin: string;
+}
+
+const { canonicalOrigin } = Astro.props;
+---
+
+<aside
+  class="registry-tracking-preferences"
+  data-registry-shared-tracking
+  data-shared-tracking-bridge-url={SHARED_TRACKING_BRIDGE_URL}
+  data-canonical-origin={canonicalOrigin}
+  aria-labelledby="registry-tracking-title"
+  hidden
+>
+  <div class="registry-tracking-preferences__content">
+    <h2 id="registry-tracking-title">Cookies on Registry Stack</h2>
+    <p>
+      We use optional cookies to understand how you use the main Registry Stack website and this
+      documentation. If you contact us, we may link this activity to your enquiry. You can change
+      your choice at any time. <a href="/privacy/">Read the privacy policy</a>.
+    </p>
+    <p data-tracking-signal hidden>
+      Your browser asks sites not to track you, so optional tracking stays off.
+    </p>
+    <p class="registry-tracking-preferences__error" data-tracking-error role="alert" hidden>
+      We could not use or save that choice. Optional tracking remains off.
+    </p>
+  </div>
+  <div class="registry-tracking-preferences__actions">
+    <button type="button" data-tracking-choice="accepted">Accept optional cookies</button>
+    <button type="button" data-tracking-choice="rejected">Reject optional cookies</button>
+  </div>
+</aside>
+
+<script>
+  import {
+    buildMauticPageview,
+    createSharedTrackingClient,
+    trackingDeniedByBrowser,
+  } from '../lib/shared-tracking-client.mjs';
+
+  type TrackingState = Awaited<
+    ReturnType<ReturnType<typeof createSharedTrackingClient>['read']>
+  >;
+
+  const panel = document.querySelector<HTMLElement>('[data-registry-shared-tracking]');
+  const openButton = document.querySelector<HTMLButtonElement>('[data-tracking-preferences-open]');
+
+  if (panel && openButton) {
+    openButton.hidden = false;
+    const errorMessage = panel.querySelector<HTMLElement>('[data-tracking-error]');
+    const signalMessage = panel.querySelector<HTMLElement>('[data-tracking-signal]');
+    const acceptButton = panel.querySelector<HTMLButtonElement>(
+      '[data-tracking-choice="accepted"]',
+    );
+    const choiceButtons = panel.querySelectorAll<HTMLButtonElement>('[data-tracking-choice]');
+    const bridgeUrl = panel.dataset.sharedTrackingBridgeUrl;
+    const canonicalOrigin = panel.dataset.canonicalOrigin;
+    const canonicalUrl = canonicalOrigin
+      ? new URL(window.location.pathname, canonicalOrigin).toString()
+      : undefined;
+    const browserDeniesTracking = trackingDeniedByBrowser();
+    let sentGeneration: string | null = null;
+    let pendingGeneration: string | null = null;
+    let currentState: TrackingState | null = null;
+    let client: ReturnType<typeof createSharedTrackingClient> | undefined;
+
+    const showPanel = () => {
+      panel.hidden = false;
+    };
+
+    const hidePanel = () => {
+      panel.hidden = true;
+    };
+
+    const showFailure = () => {
+      if (errorMessage) errorMessage.hidden = false;
+      showPanel();
+    };
+
+    const applyState = async (state: TrackingState) => {
+      currentState = state;
+      if (state.choice === null) {
+        showPanel();
+        return;
+      }
+
+      if (state.choice === 'accepted' && browserDeniesTracking) {
+        showPanel();
+        return;
+      }
+
+      hidePanel();
+      if (
+        state.choice !== 'accepted' ||
+        !state.generation ||
+        state.generation === sentGeneration ||
+        state.generation === pendingGeneration ||
+        !client
+      )
+        return;
+
+      pendingGeneration = state.generation;
+      try {
+        const pageview = buildMauticPageview({
+          canonicalUrl,
+          currentUrl: window.location.href,
+          pageTitle: document.title,
+          referrer: document.referrer,
+        });
+        await client.pageview(pageview);
+        if (
+          currentState?.choice === 'accepted' &&
+          currentState.generation === state.generation
+        ) {
+          sentGeneration = state.generation;
+        }
+      } catch (_error) {
+        if (
+          currentState?.choice === 'accepted' &&
+          currentState.generation === state.generation
+        ) {
+          showFailure();
+        }
+      } finally {
+        if (pendingGeneration === state.generation) pendingGeneration = null;
+      }
+    };
+
+    if (!bridgeUrl || !canonicalUrl) {
+      showFailure();
+    } else {
+      if (browserDeniesTracking) {
+        if (signalMessage) signalMessage.hidden = false;
+        if (acceptButton) acceptButton.disabled = true;
+      }
+
+      const trackingClient = createSharedTrackingClient({
+        bridgeUrl,
+        onStateChange: (state: TrackingState) => void applyState(state),
+        onFailure: showFailure,
+      });
+      client = trackingClient;
+
+      openButton.addEventListener('click', showPanel);
+      choiceButtons.forEach((button) => {
+        button.addEventListener('click', async () => {
+          if (errorMessage) errorMessage.hidden = true;
+          const choice = button.dataset.trackingChoice;
+          if (choice !== 'accepted' && choice !== 'rejected') return;
+          try {
+            await applyState(await trackingClient.choose(choice));
+          } catch (_error) {
+            showFailure();
+          }
+        });
+      });
+
+      trackingClient.read().then(applyState).catch(showFailure);
+      window.addEventListener('pagehide', (event) => {
+        if (!event.persisted) trackingClient.close();
+      });
+    }
+  }
+</script>
+
+<style>
+  .registry-tracking-preferences {
+    position: fixed;
+    z-index: 100;
+    right: 24px;
+    bottom: 24px;
+    width: min(560px, calc(100vw - 32px));
+    border: 2px solid var(--registry-ink-rule);
+    padding: 20px;
+    background: var(--registry-surface);
+    color: var(--registry-body);
+  }
+
+  .registry-tracking-preferences__content {
+    display: grid;
+    gap: 10px;
+  }
+
+  h2,
+  p {
+    margin: 0;
+  }
+
+  h2 {
+    color: var(--registry-ink);
+    font-size: 18px;
+  }
+
+  p {
+    font-size: 14px;
+    line-height: 1.5;
+  }
+
+  a {
+    color: var(--registry-blue);
+    text-underline-offset: 3px;
+  }
+
+  .registry-tracking-preferences__error {
+    color: var(--registry-stamp);
+    font-weight: 600;
+  }
+
+  .registry-tracking-preferences__actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-top: 16px;
+  }
+
+  button {
+    min-height: 40px;
+    border: 1px solid var(--registry-blue);
+    padding: 8px 14px;
+    background: var(--registry-blue);
+    color: #ffffff;
+    font: inherit;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  button:last-child {
+    background: var(--registry-surface);
+    color: var(--registry-blue);
+  }
+
+  button:disabled {
+    border-color: var(--registry-muted);
+    background: var(--registry-rule);
+    color: var(--registry-muted);
+    cursor: not-allowed;
+  }
+
+  @media (max-width: 520px) {
+    .registry-tracking-preferences {
+      right: 16px;
+      bottom: 16px;
+    }
+
+    .registry-tracking-preferences__actions,
+    button {
+      width: 100%;
+    }
+  }
+</style>
