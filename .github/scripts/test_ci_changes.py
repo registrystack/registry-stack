@@ -330,11 +330,12 @@ class CiChangesTest(unittest.TestCase):
 
         self.assertEqual(expected, direct)
         slots = sum(self.static_matrix_slots(self.workflow_jobs[name]) for name in direct)
-        # The budget admits the parallel PostgreSQL shard lanes: they replace
-        # the longest serial integration job, so the pool trades two extra
-        # directly-eligible slots for the shorter critical path.
-        self.assertLessEqual(slots, 17)
-        self.assertEqual(17, slots)
+        # The budget admits the parallel PostgreSQL shard lanes and the split
+        # contracts-journeys lane: they replace the longest serial integration
+        # jobs, so the pool trades extra directly-eligible slots for the
+        # shorter critical path.
+        self.assertLessEqual(slots, 18)
+        self.assertEqual(18, slots)
 
     def test_deferred_ci_work_keeps_its_selector_and_explicit_status_guard(
         self,
@@ -1575,7 +1576,7 @@ class CiChangesTest(unittest.TestCase):
             "\n  scheduling-contracts:\n", 1
         )[0]
         self.assertIn(
-            "if: matrix.lane == 'contracts'\n"
+            "if: matrix.lane == 'contracts-journeys'\n"
             "        env:\n"
             '          BREG_SKIP_BUILD: "1"\n'
             "        run: products/breg/scripts/test-backup-restore.sh",
@@ -3693,9 +3694,11 @@ class EventScopedSelectionTest(unittest.TestCase):
         for name in heavy:
             with self.subTest(event="pull_request", output=name):
                 self.assertFalse(reviewed[name])
-        # Review keeps the plain Base Registry Engine contracts lane.
+        # Review keeps the validator and adopter-journeys contract lanes.
         self.assertTrue(reviewed["breg_contracts"])
-        self.assertEqual(["contracts"], reviewed["breg_contracts_lanes"])
+        self.assertEqual(
+            ["contracts", "contracts-journeys"], reviewed["breg_contracts_lanes"]
+        )
         self.assertTrue(reviewed["rust"])
 
         for event, outputs in (

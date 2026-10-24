@@ -259,7 +259,14 @@ class PostgresRunnerTests(unittest.TestCase):
         # pinned here so a change is a reviewed decision, not silent drift.
         self.assertGreaterEqual(ci_changes.BREG_POSTGRES_SHARDS, 2)
         self.assertEqual(
-            ("contracts", "postgres:1/3", "postgres:2/3", "postgres:3/3", "immediate-actions"),
+            (
+                "contracts",
+                "contracts-journeys",
+                "postgres:1/3",
+                "postgres:2/3",
+                "postgres:3/3",
+                "immediate-actions",
+            ),
             ci_changes.BREG_CONTRACTS_LANES,
         )
         self.assertFalse(job["strategy"]["fail-fast"])
@@ -275,20 +282,30 @@ class PostgresRunnerTests(unittest.TestCase):
         ):
             self.assertEqual(condition, steps[name]["if"])
         runs = {step["run"]: step for step in job["steps"] if "run" in step}
-        contract_commands = (
-            "uv run --no-project --with PyYAML==6.0.2 products/breg/scripts/check-contracts.sh",
-            "products/breg/scripts/check-client-contract.sh",
-            "products/breg/scripts/test-postgres-tls.sh",
-            "products/breg/scripts/test-adopter-workflow.sh",
-            "products/breg/quickstart/run.sh --smoke",
-            "products/breg/quickstart/run.sh --spatial --smoke",
-            "products/breg/scripts/check-mcp-gateway-boundary.sh",
-            "products/breg/scripts/check-service-dependencies.sh",
-            "products/breg/scripts/test-immediate-action-examples.sh",
+        # The validator lane keeps the static contract checks; the adopter
+        # journeys and their TLS-only database run in their own parallel lane.
+        lane_commands = (
+            ("contracts", (
+                "uv run --no-project --with PyYAML==6.0.2 products/breg/scripts/check-contracts.sh",
+                "products/breg/scripts/check-client-contract.sh",
+                "products/breg/scripts/check-mcp-gateway-boundary.sh",
+                "products/breg/scripts/check-service-dependencies.sh",
+            )),
+            ("contracts-journeys", (
+                "products/breg/scripts/test-postgres-tls.sh",
+                "products/breg/scripts/test-adopter-workflow.sh",
+                "products/breg/quickstart/run.sh --smoke",
+                "products/breg/quickstart/run.sh --spatial --smoke",
+                "products/breg/scripts/test-immediate-action-examples.sh",
+            )),
         )
-        for command in contract_commands:
-            self.assertEqual("matrix.lane == 'contracts'", runs[command]["if"])
-        self.assertLess(list(runs).index(contract_commands[2]), list(runs).index(contract_commands[3]))
+        for lane, commands in lane_commands:
+            for command in commands:
+                self.assertEqual(f"matrix.lane == '{lane}'", runs[command]["if"])
+        self.assertLess(
+            list(runs).index("products/breg/scripts/test-postgres-tls.sh"),
+            list(runs).index("products/breg/scripts/test-adopter-workflow.sh"),
+        )
         # The native Action harness uses a plain administrator connection. The
         # TLS proof changes this shared service to TLS-only for adopter checks.
         self.assertLess(
