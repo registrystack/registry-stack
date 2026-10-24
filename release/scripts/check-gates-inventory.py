@@ -272,7 +272,7 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
     ),
     (
         "Casework PostgreSQL gate",
-        "casework-postgres:\n    name: Casework PostgreSQL transactions",
+        "casework-postgres:\n    name: Casework PostgreSQL transactions (${{ matrix.part }})",
     ),
     (
         # Casework and Scheduling run the same pinned PostgreSQL image, so each
