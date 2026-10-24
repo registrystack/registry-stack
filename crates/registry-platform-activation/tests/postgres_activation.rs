@@ -368,6 +368,202 @@ async fn ownership_remediation_leaves_unrelated_objects_unchanged() {
         .expect("PostgreSQL connection completes");
 }
 
+/// Ownership checks resolve the product schema from the ledger rather than
+/// from the first schema on the connection's search path. That preserves
+/// unrelated, same-prefix objects in an earlier schema.
+#[tokio::test]
+async fn ownership_remediation_follows_the_ledger_namespace_across_search_path_schemas() {
+    let (mut client, connection) = tokio_postgres::connect(&database_url(), NoTls)
+        .await
+        .expect("connect to disposable PostgreSQL");
+    let connection_task = tokio::spawn(connection);
+    let suffix = Uuid::new_v4().simple().to_string();
+    let schema = format!("Activation_{suffix}");
+    let quoted_schema = format!("\"{schema}\"");
+    let decoy_schema = format!("decoy_{suffix}");
+    let runtime_role = format!("activation_runtime_{suffix}");
+    let transaction = client.transaction().await.expect("start transaction");
+    transaction
+        .batch_execute(&format!(
+            "CREATE ROLE {runtime_role} NOLOGIN;
+             CREATE SCHEMA {quoted_schema};
+             CREATE SCHEMA {decoy_schema};
+             CREATE TABLE {quoted_schema}.fixture_schema_migrations(version bigint PRIMARY KEY);
+             CREATE TABLE {quoted_schema}.fixture_activations(activation_id uuid PRIMARY KEY);
+             CREATE SEQUENCE {quoted_schema}.fixture_sequence;
+             ALTER SEQUENCE {quoted_schema}.fixture_sequence OWNER TO {runtime_role};
+             CREATE FUNCTION {quoted_schema}.fixture_transform(value integer) RETURNS integer
+               LANGUAGE sql IMMUTABLE AS $body$ SELECT value $body$;
+             ALTER FUNCTION {quoted_schema}.fixture_transform(integer) OWNER TO {runtime_role};
+             CREATE TABLE {decoy_schema}.fixture_records(record_id bigint PRIMARY KEY);
+             ALTER TABLE {decoy_schema}.fixture_records OWNER TO {runtime_role};
+             CREATE SEQUENCE {decoy_schema}.fixture_sequence;
+             ALTER SEQUENCE {decoy_schema}.fixture_sequence OWNER TO {runtime_role};
+             CREATE FUNCTION {decoy_schema}.fixture_transform(value integer) RETURNS integer
+               LANGUAGE sql IMMUTABLE AS $body$ SELECT value $body$;
+             ALTER FUNCTION {decoy_schema}.fixture_transform(integer) OWNER TO {runtime_role};
+             CREATE FUNCTION {decoy_schema}.fixture_trigger() RETURNS trigger
+               LANGUAGE plpgsql AS $body$ BEGIN RETURN NEW; END $body$;
+             CREATE TRIGGER decoy_trigger BEFORE INSERT ON {decoy_schema}.fixture_records
+               FOR EACH ROW EXECUTE FUNCTION {decoy_schema}.fixture_trigger();
+             ALTER SCHEMA {decoy_schema} OWNER TO {runtime_role};
+             GRANT CREATE ON SCHEMA {decoy_schema} TO {runtime_role};
+             GRANT TRIGGER ON {decoy_schema}.fixture_records TO {runtime_role};
+             SET search_path TO {decoy_schema},{quoted_schema};"
+        ))
+        .await
+        .expect("create product and earlier decoy schemas");
+    let migration_role: String = transaction
+        .query_one("SELECT quote_ident(current_user)", &[])
+        .await
+        .expect("read quoted migration role")
+        .get(0);
+    let expected = vec![
+        format!("ALTER SEQUENCE {quoted_schema}.fixture_sequence OWNER TO {migration_role}"),
+        format!(
+            "ALTER ROUTINE {quoted_schema}.fixture_transform(value integer) OWNER TO {migration_role}"
+        ),
+    ];
+
+    let weakness = first_authority_weakness(&transaction, &layout(), &runtime_role)
+        .await
+        .expect("inspect indirect ownership authority")
+        .expect("actual product objects weaken the split role");
+    match weakness.cause {
+        AuthorityCause::OwnedObjects { statements, .. } => assert_eq!(statements, expected),
+        cause => panic!("expected ownership corrections, got {cause:?}"),
+    }
+    let fixes = stray_authority(&transaction, &layout(), Some(&runtime_role))
+        .await
+        .expect("identify exact ownership remediation");
+    assert_eq!(fixes, expected);
+    for fix in &fixes {
+        transaction
+            .batch_execute(fix)
+            .await
+            .expect("execute emitted ownership remediation");
+    }
+
+    let owners = transaction
+        .query_one(
+            "SELECT
+               pg_get_userbyid((SELECT relowner FROM pg_class c JOIN pg_namespace n
+                 ON n.oid=c.relnamespace WHERE n.nspname=$1 AND c.relname='fixture_sequence')),
+               pg_get_userbyid((SELECT proowner FROM pg_proc p JOIN pg_namespace n
+                 ON n.oid=p.pronamespace WHERE n.nspname=$1 AND p.proname='fixture_transform')),
+               pg_get_userbyid((SELECT nspowner FROM pg_namespace WHERE nspname=$2)),
+               pg_get_userbyid((SELECT relowner FROM pg_class c JOIN pg_namespace n
+                 ON n.oid=c.relnamespace WHERE n.nspname=$2 AND c.relname='fixture_records')),
+               pg_get_userbyid((SELECT relowner FROM pg_class c JOIN pg_namespace n
+                 ON n.oid=c.relnamespace WHERE n.nspname=$2 AND c.relname='fixture_sequence')),
+               pg_get_userbyid((SELECT proowner FROM pg_proc p JOIN pg_namespace n
+                 ON n.oid=p.pronamespace WHERE n.nspname=$2 AND p.proname='fixture_transform'))",
+            &[&schema, &decoy_schema],
+        )
+        .await
+        .expect("read product and decoy owners");
+    let current_user: String = transaction
+        .query_one("SELECT current_user::text", &[])
+        .await
+        .expect("read migration role")
+        .get(0);
+    assert_eq!(owners.get::<_, String>(0), current_user);
+    assert_eq!(owners.get::<_, String>(1), current_user);
+    for column in 2..6 {
+        assert_eq!(
+            owners.get::<_, String>(column),
+            runtime_role,
+            "decoy owner in column {column} must remain unchanged"
+        );
+    }
+    assert!(
+        first_authority_weakness(&transaction, &layout(), &runtime_role)
+            .await
+            .expect("reinspect ownership boundary")
+            .is_none()
+    );
+    assert!(
+        stray_authority(&transaction, &layout(), Some(&runtime_role))
+            .await
+            .expect("reinspect ownership remediation")
+            .is_empty()
+    );
+
+    transaction
+        .rollback()
+        .await
+        .expect("roll back isolated multi-schema fixture");
+    drop(client);
+    connection_task
+        .await
+        .expect("join PostgreSQL connection")
+        .expect("PostgreSQL connection completes");
+}
+
+/// Before the ledger exists, an apply connection still has an explicit
+/// migration role and ownership remediation uses its current schema.
+#[tokio::test]
+async fn ownership_remediation_falls_back_to_current_schema_before_the_ledger_exists() {
+    let (mut client, connection) = tokio_postgres::connect(&database_url(), NoTls)
+        .await
+        .expect("connect to disposable PostgreSQL");
+    let connection_task = tokio::spawn(connection);
+    let suffix = Uuid::new_v4().simple().to_string();
+    let schema = format!("activation_{suffix}");
+    let runtime_role = format!("activation_runtime_{suffix}");
+    let transaction = client.transaction().await.expect("start transaction");
+    transaction
+        .batch_execute(&format!(
+            "CREATE ROLE {runtime_role} NOLOGIN;
+             CREATE SCHEMA {schema};
+             SET search_path TO {schema};
+             CREATE TABLE fixture_records(record_id bigint PRIMARY KEY);
+             ALTER TABLE fixture_records OWNER TO {runtime_role};"
+        ))
+        .await
+        .expect("create pre-ledger product object");
+    let migration_role: String = transaction
+        .query_one("SELECT quote_ident(current_user)", &[])
+        .await
+        .expect("read quoted migration role")
+        .get(0);
+    let expected = format!("ALTER TABLE {schema}.fixture_records OWNER TO {migration_role}");
+
+    let fixes = stray_authority(&transaction, &layout(), Some(&runtime_role))
+        .await
+        .expect("identify pre-ledger ownership remediation");
+    assert_eq!(fixes, vec![expected]);
+    transaction
+        .batch_execute(&fixes[0])
+        .await
+        .expect("execute pre-ledger ownership remediation");
+    let owner: String = transaction
+        .query_one(
+            "SELECT pg_get_userbyid(c.relowner) FROM pg_class c JOIN pg_namespace n
+             ON n.oid=c.relnamespace WHERE n.nspname=$1 AND c.relname='fixture_records'",
+            &[&schema],
+        )
+        .await
+        .expect("read corrected owner")
+        .get(0);
+    let current_user: String = transaction
+        .query_one("SELECT current_user::text", &[])
+        .await
+        .expect("read migration role")
+        .get(0);
+    assert_eq!(owner, current_user);
+
+    transaction
+        .rollback()
+        .await
+        .expect("roll back isolated pre-ledger fixture");
+    drop(client);
+    connection_task
+        .await
+        .expect("join PostgreSQL connection")
+        .expect("PostgreSQL connection completes");
+}
+
 #[tokio::test]
 async fn postgres_version_floor_precedes_missing_ledger_observation() {
     let (client, connection) = tokio_postgres::connect(&database_url(), NoTls)

@@ -616,16 +616,20 @@ async fn ownership_corrections(
     let pattern = layout.relation_pattern();
     Ok(client
         .query(
-            "WITH reference AS (
+            "WITH ledger AS (
+               SELECT c.relowner,c.relnamespace FROM pg_class c WHERE c.oid=to_regclass($2)
+             ), reference AS (
                SELECT CASE WHEN $4::text IS NOT NULL
                  THEN (SELECT oid FROM pg_roles WHERE rolname=$4)
-                 ELSE (SELECT relowner FROM pg_class WHERE oid=to_regclass($2)) END AS oid
+                 ELSE (SELECT relowner FROM ledger) END AS oid,
+                 COALESCE((SELECT relnamespace FROM ledger),
+                   (SELECT oid FROM pg_namespace WHERE nspname=current_schema())) schema_oid
              ), context AS (
                SELECT r.oid runtime_oid,n.oid schema_oid,n.nspowner schema_owner,
                  n.nspname schema_name,reference.oid migration_oid,
                  pg_get_userbyid(reference.oid) migration_role
                FROM pg_roles r CROSS JOIN pg_namespace n CROSS JOIN reference
-               WHERE r.rolname=$1 AND n.nspname=current_schema()
+               WHERE r.rolname=$1 AND n.oid=reference.schema_oid
              )
              SELECT quote_ident(pg_get_userbyid(object.owner)),object.statement
              FROM context CROSS JOIN LATERAL (
@@ -674,9 +678,14 @@ pub async fn stray_authority(
     let pattern = layout.relation_pattern();
     let Some(row) = client
         .query_opt(
-            "WITH reference AS (SELECT CASE WHEN $1::text IS NOT NULL
+            "WITH ledger AS (
+               SELECT c.relowner,c.relnamespace FROM pg_class c WHERE c.oid=to_regclass($2)
+             ), reference AS (
+               SELECT CASE WHEN $1::text IS NOT NULL
                  THEN (SELECT oid FROM pg_roles WHERE rolname=current_user::text)
-                 ELSE (SELECT relowner FROM pg_class WHERE oid=to_regclass($2)) END AS oid)
+                 ELSE (SELECT relowner FROM ledger) END AS oid,
+                 COALESCE((SELECT relnamespace FROM ledger),
+                   (SELECT oid FROM pg_namespace WHERE nspname=current_schema())) schema_oid)
              SELECT r.rolsuper OR reference.oid IS NULL OR pg_has_role(r.oid,reference.oid,'MEMBER'),
                current_user::text,
                quote_ident(n.nspname),
@@ -696,7 +705,8 @@ pub async fn stray_authority(
                        AND f.proname=k.proname AND f.pronamespace=n.oid)
                  ORDER BY t.relname,g.tgname)
              FROM pg_roles r,pg_namespace n,reference
-             WHERE r.rolname=COALESCE($1::text,current_user::text) AND n.nspname=current_schema()",
+             WHERE r.rolname=COALESCE($1::text,current_user::text)
+               AND n.oid=reference.schema_oid",
             &[&role, &layout.ledger_relation, &pattern, &tables, &triggers, &functions],
         )
         .await?
