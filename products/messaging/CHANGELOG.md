@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- A split-mode apply that refuses a runtime role owning Messaging objects
+  lists an exact `ALTER ... OWNER TO` statement for each Messaging schema
+  object in place of `REASSIGN OWNED BY`, which also moves the role's objects
+  outside the Messaging schema. A runtime role that is a member of the schema
+  owner is now refused with the schema correction.
 - `messaging --help` and `messaging --version` work even when `MESSAGING_LOG`
   is invalid; `messaging serve` still refuses that invalid log level.
 - Startup names unreadable activation-ledger grants before schema reads, so a

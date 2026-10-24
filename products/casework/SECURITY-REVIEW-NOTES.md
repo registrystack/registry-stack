@@ -123,7 +123,7 @@ two-person rule enforce it on who can read the migration credential.
   generation registration.
 - A trigger runs as whichever role fires it, including the migration role
   inside apply, and it has no owner of its own: one the runtime role attached
-  while it owned a table survives `REASSIGN OWNED BY`. Apply therefore never
+  while it owned a table survives a change of the table's owner. Apply therefore never
   issues `TRIGGER`, and refuses rather than revokes it, as below.
 - The role mode is recorded from the runtime role's effective authority after
   the grants, not from whether the two credentials name different roles. The

@@ -428,11 +428,14 @@ destinations:
 Each URL is one reviewed absolute endpoint without userinfo, query, or
 fragment and with a safe parsed path. Plain `http` is accepted only for an
 explicit loopback host, so a plaintext destination can
-never silently point at another machine. Delivery is attempted once per claim
-on the shared dispatch core, with a five-second attempt timeout and a fixed
-back-off of thirty seconds doubling to 1920 seconds; a transport failure
-schedules a retry, an authorization or routing refusal sets the intent aside
-as failed for the operator, and the eighth failed attempt sets it aside. A
+never silently point at another machine. Delivery runs on the shared
+dispatch core, with a five-second attempt timeout and a fixed back-off of
+thirty seconds doubling to 1920 seconds; a transport failure schedules a
+retry, an authorization or routing refusal sets the intent aside as failed
+for the operator, and the eighth failed attempt sets it aside. An event the
+destination accepted but whose outcome the runtime could not record is
+retried on the same schedule, so a receiver can see it more than once and
+deduplicates by the envelope's stable identifier. A
 cancellation or a reschedule cancels the superseded reminder in its own
 transaction when no attempt has started on it; one a dispatcher already
 holds is set aside without a send by a liveness read under its lease. An absent reminders destination is a supported

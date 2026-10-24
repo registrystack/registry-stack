@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Split-mode refusals for a runtime role that owns Casework objects name an
+  exact `ALTER ... OWNER TO` statement for each Casework schema object, run as
+  a database administrator, then `caseworkctl apply`, in place of
+  `REASSIGN OWNED BY`, which also moves the role's objects outside the
+  Casework schema. A runtime role that is a member of the schema owner is now
+  refused with the schema correction.
 - Startup reports an unreadable activation ledger before attempting schema
   reads, matching the existing plan/status diagnostic for a runtime role that
   lost schema usage or ledger read access.
