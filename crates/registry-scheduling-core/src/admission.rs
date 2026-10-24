@@ -75,8 +75,8 @@ pub struct ExactTimeBundleContext<'a> {
     pub now: DateTime<Utc>,
     pub exclude_reservation: Option<&'a str>,
     /// True only when confirming a held start. An earlier admission already
-    /// accepted that start, so the booking horizon (lead time included) is
-    /// not checked again.
+    /// accepted that start, so the booking horizon (lead time included) and
+    /// the start grid are not checked again.
     pub confirming_hold: bool,
     pub limits: AllocationLimits,
 }
@@ -521,6 +521,7 @@ pub fn evaluate_exact_time_physical_bundle(
             line,
             start,
             displayed_duration,
+            context.confirming_hold,
         )?);
     }
     allocate_resolved_bundle(
@@ -635,13 +636,14 @@ fn resolve_bundle_line(
     check_capabilities(line.offering, request)?;
     check_prerequisites(line.offering, request)?;
     check_duplicate(line.offering, request, snapshot, exclude, now)?;
-    resolve_physical_bundle_line(line, request.start, displayed_duration)
+    resolve_physical_bundle_line(line, request.start, displayed_duration, confirming_hold)
 }
 
 fn resolve_physical_bundle_line(
     line: &ExactTimeBundleLineContext<'_>,
     start: DateTime<Utc>,
     displayed_duration: u32,
+    confirming_hold: bool,
 ) -> Result<ResolvedBundleLine, AdmissionRefusal> {
     if line
         .exact
@@ -693,12 +695,16 @@ fn resolve_physical_bundle_line(
             },
         );
     };
+    // Like the horizon, the start grid judges new requests only: a held
+    // start was on the grid its admission saw, and confirming the hold
+    // transfers that reservation. Opening coverage above still binds it.
     let offset = start.signed_duration_since(covering.start);
     let grid_seconds = i64::from(line.exact.start_increment_minutes) * 60;
-    if offset < Duration::zero()
-        || grid_seconds == 0
-        || offset.subsec_nanos() != 0
-        || offset.num_seconds() % grid_seconds != 0
+    if !confirming_hold
+        && (offset < Duration::zero()
+            || grid_seconds == 0
+            || offset.subsec_nanos() != 0
+            || offset.num_seconds() % grid_seconds != 0)
     {
         return Err(AdmissionRefusal::ScheduleUnpublished);
     }
@@ -1339,6 +1345,65 @@ mod tests {
         assert_eq!(admitted.allocations[0].occupied_end, utc(5, 5, 15));
         assert_eq!(admitted.allocations[1].occupied_start, utc(5, 3, 0));
         assert_eq!(admitted.allocations[1].occupied_end, utc(5, 5, 0));
+    }
+
+    /// A held start was on the grid its admission saw. Confirming the hold
+    /// transfers that reservation, so a later opening that moves the grid
+    /// does not revoke it; opening coverage still binds the confirmation.
+    #[test]
+    fn hold_confirmation_skips_the_start_grid_but_keeps_opening_coverage() {
+        let (offering, exact) = exact_offering();
+        // The opening starts at 02:15, so its 30-minute grid serves 02:45 and
+        // 03:15 but not 03:00.
+        let open = [CalendarInterval {
+            start: utc(5, 2, 15),
+            end: utc(5, 5, 30),
+        }];
+        let lines = [ExactTimeBundleLineContext {
+            requirement_id: "primary".to_owned(),
+            offering: &offering,
+            exact: &exact,
+            members: members(),
+            open: &open,
+            closures: &[],
+            resource: None,
+            stored_resource: false,
+            units: 1,
+        }];
+        let snapshot = LedgerSnapshot::default();
+        let admitting = ExactTimeBundleContext {
+            lines: &lines,
+            snapshot: &snapshot,
+            policy_revision: 1,
+            now: utc(5, 0, 0),
+            exclude_reservation: None,
+            confirming_hold: false,
+            limits: bundle_limits(),
+        };
+        let held = exact_request(utc(5, 3, 0));
+        assert_eq!(
+            evaluate_exact_time_bundle(&admitting, &held),
+            Err(BundleEvaluationError::Admission(
+                AdmissionRefusal::ScheduleUnpublished
+            )),
+            "a new request off the grid is refused"
+        );
+
+        let confirming = ExactTimeBundleContext {
+            confirming_hold: true,
+            ..admitting
+        };
+        let admitted = evaluate_exact_time_bundle(&confirming, &held)
+            .expect("a confirmation does not re-run the start grid");
+        assert_eq!(admitted.start, utc(5, 3, 0));
+        // 05:15 ends its service at 05:45, after the opening closes.
+        assert_eq!(
+            evaluate_exact_time_bundle(&confirming, &exact_request(utc(5, 5, 15))),
+            Err(BundleEvaluationError::Admission(
+                AdmissionRefusal::ScheduleUnpublished
+            )),
+            "a confirmation still needs the opening to cover its service"
+        );
     }
 
     #[test]

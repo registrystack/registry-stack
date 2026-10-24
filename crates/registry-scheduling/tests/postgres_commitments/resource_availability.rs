@@ -112,6 +112,81 @@ async fn a_live_hold_confirms_inside_lead_time() {
     assert_eq!(confirmed["allocations"], hold["allocations"]);
 }
 
+/// Confirmation transfers the reservation a live hold already owns, so a
+/// records swap that moves the start grid away from the held start does not
+/// revoke it: the start grid judges new requests only, like the lead time.
+#[tokio::test]
+async fn a_live_hold_confirms_after_a_records_swap_moves_its_start_off_the_grid() {
+    let fx = fixture().await;
+    let start = first_slot(&fx, OFFERING, 300, 700).await;
+    let (status, hold) = fx
+        .post(
+            "/v1/holds",
+            &fx.agent,
+            "on-grid-hold",
+            admission(&fx, OFFERING, start),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{hold}");
+    let hold_id = hold["holdId"].as_str().expect("a hold id").to_owned();
+
+    // Close the ninety minutes around the held start and reopen an hour of
+    // them a quarter hour off the opening's 30-minute grid. The held service
+    // interval stays inside the reopening, so opening coverage still holds,
+    // but the grid now steps from the reopening's start.
+    let (mut facts, _) = fx.store.facts().await.unwrap();
+    let clock = |minutes: i64| {
+        (start + TimeDelta::minutes(minutes))
+            .format("%H:%M")
+            .to_string()
+    };
+    facts.exceptions.push(CalendarExceptionRecord {
+        id: "grid-closure".to_owned(),
+        location: "north-counter".to_owned(),
+        kind: ExceptionRecordKind::Closure,
+        date: start.date_naive().to_string(),
+        start_time: clock(-30),
+        end_time: clock(60),
+        reopens: None,
+        authority: None,
+    });
+    facts.exceptions.push(CalendarExceptionRecord {
+        id: "grid-reopening".to_owned(),
+        location: "north-counter".to_owned(),
+        kind: ExceptionRecordKind::Opening,
+        date: start.date_naive().to_string(),
+        start_time: clock(-15),
+        end_time: clock(45),
+        reopens: Some("grid-closure".to_owned()),
+        authority: Some("office-manager".to_owned()),
+    });
+    fx.store.replace_facts(SCHEDULING_ID, &facts).await.unwrap();
+
+    // A new request at the held start is off the published grid now.
+    let (status, refusal) = fx
+        .post(
+            "/v1/holds",
+            &fx.agent,
+            "off-grid-hold",
+            admission(&fx, OFFERING, start),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refusal}");
+    assert_eq!(refusal["code"], "schedule.unpublished");
+
+    let (status, confirmed) = fx
+        .post(
+            "/v1/appointments",
+            &fx.agent,
+            "off-grid-confirm",
+            json!({"hold": hold_id, "admission": null}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{confirmed}");
+    assert_eq!(moment(&confirmed, "start"), start);
+    assert_eq!(confirmed["allocations"], hold["allocations"]);
+}
+
 #[tokio::test]
 async fn dated_resource_supply_persists_blocks_new_capacity_and_reports_existing_bookings() {
     let fx = selectable_interval_fixture().await;
