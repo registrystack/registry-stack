@@ -403,6 +403,49 @@ const GATE_PAGES = {
   'tutorials/later': 'tutorial_test:\n  toolset: breg\n  skip: needs a production database\n---\n\n```sh\nbregctl deploy\n```\n',
 };
 
+const SHARD_PAGES = {
+  'tutorials/first': 'tutorial_test:\n  toolset: breg\n---\n\n## One\n\n```sh\nbregctl init work\nmkdir work\n```\n',
+  'tutorials/second': 'tutorial_test:\n  toolset: breg\n---\n\n## Two\n\n```sh\nbregctl init two\nmkdir two\n```\n',
+  'tutorials/third': 'tutorial_test:\n  toolset: breg\n---\n\n## Three\n\n```sh\nbregctl init three\nmkdir three\n```\n',
+  'tutorials/skipped': 'tutorial_test:\n  toolset: breg\n  skip: needs a production database\n---\n\n```sh\nbregctl deploy\n```\n',
+};
+
+test('a gate shard runs its round-robin share, and the shards cover every journey once', async () => {
+  await withGateDocs(SHARD_PAGES, async (env) => {
+    const whole = await run(['--gate', 'breg', '--dry-run'], env);
+    assert.equal(whole.code, 0, whole.output);
+    const journeys = [...whole.output.matchAll(/^journey (\S+)$/gmu)].map((match) => match[1]);
+    assert.equal(journeys.length, 3);
+    const shards = [];
+    for (const shard of ['1/2', '2/2']) {
+      const plan = await run(['--gate', 'breg', '--shard', shard, '--dry-run'], env);
+      assert.equal(plan.code, 0, plan.output);
+      assert.match(plan.output, new RegExp(`gate shard ${shard.replace('/', '\\/')}: \\d+ of 3 journeys`, 'u'));
+      shards.push([...plan.output.matchAll(/^journey (\S+)$/gmu)].map((match) => match[1]));
+      const replayed = await run(['--gate', 'breg', '--shard', shard], env);
+      assert.equal(replayed.code, 0, replayed.output);
+      assert.match(replayed.output, new RegExp(`gate PASS: \\d+ journeys? replayed of shard ${shard.replace('/', '\\/')}, 1 page skipped`, 'u'));
+    }
+    assert.deepEqual([...shards[0], ...shards[1]].sort(), journeys.sort());
+    assert.deepEqual(shards[0].filter((slug) => shards[1].includes(slug)), []);
+  });
+});
+
+test('a shard beyond the journey count refuses instead of passing empty', async () => {
+  await withGateDocs(SHARD_PAGES, async (env) => {
+    const { code, output } = await run(['--gate', 'breg', '--shard', '4/4'], env);
+    assert.equal(code, 2, output);
+    assert.match(output, /gate shard 4\/4 would replay none of the 3 journeys; lower the shard count/u);
+  });
+});
+
+test('a shard must name a gate and a valid position', async () => {
+  assert.match((await run(['--shard', '1/2', 'page.mdx'])).output, /--shard needs --gate/u);
+  assert.match((await run(['--gate', 'breg', '--shard', '0/2'])).output, /--shard is I\/N/u);
+  assert.match((await run(['--gate', 'breg', '--shard', '3/2'])).output, /I is beyond N/u);
+  assert.match((await run(['--gate', 'breg', '--shard', '2/1'])).output, /--shard is I\/N/u);
+});
+
 test('a gate replays every declared journey and names the skipped pages', async () => {
   await withGateDocs(GATE_PAGES, async (env) => {
     const plan = await run(['--gate', 'breg', '--dry-run'], env);

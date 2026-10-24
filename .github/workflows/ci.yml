@@ -2237,13 +2237,20 @@ jobs:
         run: node docs/site/scripts/run-tutorial.mjs --gate evidence
 
   breg-tutorial:
-    name: Base Registry Engine tutorial from source
+    name: Base Registry Engine tutorial from source (${{ matrix.shard }})
     needs:
       - changes
       - rust-policy
     if: ${{ !cancelled() && needs.changes.result == 'success' && needs.changes.outputs.breg_tutorial == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      # The gate's journeys are independent, so two shards replay them in
+      # parallel; the runner's round-robin split covers every journey exactly
+      # once across the shards. Single-copy checks pin to one shard.
+      matrix:
+        shard: ["1/2", "2/2"]
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -2279,10 +2286,12 @@ jobs:
         run: npm ci --ignore-scripts
 
       - name: Test the tutorial runner
+        if: matrix.shard == '1/2'
         working-directory: docs/site
         run: npm run test:tutorial:runner
 
       - name: Check tutorial command drift
+        if: matrix.shard == '1/2'
         working-directory: docs/site
         run: npm run check:tutorial:breg:dry-run
 
@@ -2302,6 +2311,7 @@ jobs:
             -p registry-bregctl --bins
 
       - name: Verify native retained development lifecycle
+        if: matrix.shard == '2/2'
         shell: bash
         run: |
           set -euo pipefail
@@ -2311,6 +2321,7 @@ jobs:
             --test dev_lifecycle -- --ignored --test-threads=1
 
       - name: Verify retained example recovery after process exit
+        if: matrix.shard == '2/2'
         # An inexact name filter that selects nothing still exits 0, so the
         # step names each test exactly and fails unless it reports one pass.
         shell: bash
@@ -2330,12 +2341,13 @@ jobs:
         env:
           BREG_BIN: ${{ github.workspace }}/target/debug/breg
           BREGCTL_BIN: ${{ github.workspace }}/target/debug/bregctl
+          BREG_TUTORIAL_SHARD: ${{ matrix.shard }}
         run: |
           set -euo pipefail
           # This replay does not run in a clean read-only container the way the
           # Evidence one does: `bregctl dev` runs PostgreSQL in a disposable
           # container of its own, which the runner stops when the journey ends.
-          node docs/site/scripts/run-tutorial.mjs --gate breg
+          node docs/site/scripts/run-tutorial.mjs --gate breg --shard "$BREG_TUTORIAL_SHARD"
 
   casework-tutorial:
     name: Registry Casework native review journeys
