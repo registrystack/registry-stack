@@ -45,11 +45,15 @@ test('canonical release analytics uses source-controlled defaults', () => {
   );
 });
 
-async function builtRoot(t, body) {
+const trackingBridge = 'https://registrystack.org/tracking-bridge/';
+const trackingPreferences =
+  `<aside data-registry-shared-tracking data-shared-tracking-bridge-url="${trackingBridge}"></aside>`;
+
+async function builtRoot(t, head, body = '') {
   const root = await mkdtemp(resolve(tmpdir(), 'registry-docs-analytics-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   await mkdir(root, { recursive: true });
-  await writeFile(resolve(root, 'index.html'), `<html><head>${body}</head></html>`);
+  await writeFile(resolve(root, 'index.html'), `<html><head>${head}</head><body>${body}</body></html>`);
   return root;
 }
 
@@ -57,6 +61,7 @@ test('built canonical root contains the exact Registry Docs tracker', async (t) 
   const root = await builtRoot(
     t,
     `<script defer src="${DOCS_UMAMI_SCRIPT_SRC}" data-website-id="${DOCS_UMAMI_WEBSITE_ID}" data-domains="${DOCS_UMAMI_DOMAINS}"></script>`,
+    trackingPreferences,
   );
   await checkBuiltAnalytics(root, { enabled: true });
 });
@@ -65,10 +70,35 @@ test('built canonical root rejects a different website identity', async (t) => {
   const root = await builtRoot(
     t,
     `<script defer src="${DOCS_UMAMI_SCRIPT_SRC}" data-website-id="wrong-id" data-domains="${DOCS_UMAMI_DOMAINS}"></script>`,
+    trackingPreferences,
   );
   await assert.rejects(
     checkBuiltAnalytics(root, { enabled: true }),
     /source-controlled Registry Docs tracker/,
+  );
+});
+
+test('built canonical root requires the pinned shared tracking bridge', async (t) => {
+  const root = await builtRoot(
+    t,
+    `<script defer src="${DOCS_UMAMI_SCRIPT_SRC}" data-website-id="${DOCS_UMAMI_WEBSITE_ID}" data-domains="${DOCS_UMAMI_DOMAINS}"></script>`,
+    '<aside data-registry-shared-tracking data-shared-tracking-bridge-url="https://other.example.org/tracking-bridge/"></aside>',
+  );
+  await assert.rejects(
+    checkBuiltAnalytics(root, { enabled: true }),
+    /source-controlled shared tracking bridge/,
+  );
+});
+
+test('built canonical root rejects a native Mautic tracker outside the bridge', async (t) => {
+  const root = await builtRoot(
+    t,
+    `<script defer src="${DOCS_UMAMI_SCRIPT_SRC}" data-website-id="${DOCS_UMAMI_WEBSITE_ID}" data-domains="${DOCS_UMAMI_DOMAINS}"></script><script src="https://mautic.example.org/mtc.js"></script>`,
+    trackingPreferences,
+  );
+  await assert.rejects(
+    checkBuiltAnalytics(root, { enabled: true }),
+    /must not load Mautic directly/,
   );
 });
 
@@ -80,5 +110,13 @@ test('noncanonical builds reject analytics', async (t) => {
   await assert.rejects(
     checkBuiltAnalytics(root, { enabled: false }),
     /must not contain analytics outside the canonical released tree/,
+  );
+});
+
+test('noncanonical builds reject shared tracking controls', async (t) => {
+  const root = await builtRoot(t, '', trackingPreferences);
+  await assert.rejects(
+    checkBuiltAnalytics(root, { enabled: false }),
+    /must not contain shared tracking outside the canonical released tree/,
   );
 });

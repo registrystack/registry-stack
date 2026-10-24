@@ -646,9 +646,25 @@ pre,
   gap: 24px;
 }
 
-.registry-footer a {
+.registry-footer a,
+.registry-footer button {
   color: var(--registry-muted);
   text-decoration: none;
+}
+
+.registry-footer button {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
+}
+
+.registry-footer a:hover,
+.registry-footer button:hover {
+  color: var(--registry-ink);
+  text-decoration: underline;
+  text-underline-offset: 3px;
 }
 
 .legend-list {
