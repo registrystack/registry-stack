@@ -1,10 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! Claims written before atomic allocations reach the 0105 backfill with no
-//! immutable labels, so each backfills as one version-0 allocation row with
-//! no anchor. That row still counts for capacity, but the service loads only
-//! version-1 rows, so these tests pin what happens to a legacy exact-time
-//! commitment before and after its rows are rematerialized.
+//! A legacy claim carries no immutable labels, and its one version-0
+//! allocation row has no anchor. That row still counts for capacity, but the
+//! service loads only version-1 rows, so these tests pin what happens to a
+//! legacy exact-time commitment before and after its rows are rematerialized.
 
 use super::*;
 
@@ -28,11 +27,9 @@ fn anchored_scope() -> AllocationScope {
     )
 }
 
-/// Return a claim and its allocation rows to the shape a claim written before
-/// the operational-read labels has right after the 0101 and 0105 migrations:
-/// a version-0 claim with no labels, and the one version-0 primary allocation
-/// row the 0105 backfill writes from the claim's own columns, with no labels
-/// and no anchor.
+/// Return a claim and its allocation rows to the legacy shape: a version-0
+/// claim with no labels, and one version-0 primary allocation row written
+/// from the claim's own columns, with no labels and no anchor.
 async fn degrade_to_legacy(fx: &Fixture, claim_id: Uuid) {
     begin_current_test_writer(&fx.admin).await;
     let claims = fx
@@ -173,8 +170,7 @@ async fn migration_relabels_a_legacy_hold_allocation_so_confirmation_keeps_capac
     let slot = first_slot(&fx, OFFERING, 300, 440).await;
     let hold_id = legacy_hold(&fx, slot, "legacy-migrated-hold").await;
 
-    // A migration run with nothing pending still rematerializes, the same
-    // step an upgrade runs right after the 0105 backfill.
+    // A migration run with nothing pending still rematerializes.
     let applied = fx.store.migrate().await.expect("the migration entry point");
     assert!(applied.is_empty(), "no migration was pending: {applied:?}");
     assert_eq!(claim_scope_and_state(&fx, hold_id).await.0, 1);

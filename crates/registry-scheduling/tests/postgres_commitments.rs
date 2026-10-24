@@ -9571,7 +9571,7 @@ async fn activation_trust_rejects_a_same_named_but_altered_allocation_fence() {
 }
 
 #[tokio::test]
-async fn atomic_allocation_migration_ddl_rolls_back_as_one_transaction() {
+async fn the_baseline_migration_ddl_rolls_back_as_one_transaction() {
     let base = std::env::var("SCHEDULING_TEST_DATABASE_URL")
         .expect("SCHEDULING_TEST_DATABASE_URL names a disposable PostgreSQL test server");
     let schema = format!("scheduling_{}", Uuid::new_v4().simple());
@@ -9585,35 +9585,25 @@ async fn atomic_allocation_migration_ddl_rolls_back_as_one_transaction() {
         ))
         .await
         .expect("create the isolated rollback schema");
-    for migration in [
-        include_str!("../migrations/0200_scheduling.sql"),
-        include_str!("../migrations/0201_operational_reads.sql"),
-        include_str!("../migrations/0202_resource_availability.sql"),
-        include_str!("../migrations/0203_booking_party.sql"),
-        include_str!("../migrations/0204_source_manager.sql"),
-    ] {
-        admin
-            .batch_execute(migration)
-            .await
-            .expect("apply a prerequisite migration");
-    }
 
-    let transaction = admin.transaction().await.expect("begin migration 205");
+    let transaction = admin.transaction().await.expect("begin migration 200");
     transaction
-        .batch_execute(include_str!("../migrations/0205_atomic_allocations.sql"))
+        .batch_execute(include_str!("../migrations/0200_scheduling.sql"))
         .await
-        .expect("migration 205 applies inside its transaction");
+        .expect("migration 200 applies inside its transaction");
     transaction
         .rollback()
         .await
-        .expect("roll back migration 205");
+        .expect("roll back migration 200");
 
     let absent: bool = admin
         .query_one(
-            "SELECT to_regclass(format('%I.scheduling_claim_allocations', current_schema())) IS NULL \
-             AND NOT EXISTS (SELECT 1 FROM information_schema.columns \
-                 WHERE table_schema=current_schema() AND table_name='scheduling_pool_members' \
-                   AND column_name='capacity_units')",
+            "SELECT to_regclass(format('%I.scheduling_meta', current_schema())) IS NULL \
+             AND to_regclass(format('%I.scheduling_claim_allocations', current_schema())) IS NULL \
+             AND NOT EXISTS (SELECT 1 FROM pg_proc AS p \
+                 JOIN pg_namespace AS n ON n.oid=p.pronamespace \
+                 WHERE n.nspname=current_schema() \
+                   AND p.proname='scheduling_require_allocation_writer_v2')",
             &[],
         )
         .await
@@ -9621,7 +9611,7 @@ async fn atomic_allocation_migration_ddl_rolls_back_as_one_transaction() {
         .get(0);
     assert!(
         absent,
-        "migration 205 leaves no partial allocation schema after rollback"
+        "migration 200 leaves no partial schema after rollback"
     );
 }
 

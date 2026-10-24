@@ -20,10 +20,7 @@ use uuid::Uuid;
 use super::{
     check_policy_publication, current_schema_in, lock_publication, mark_allocation_writer,
     publish_policy, refuse_combined_conflicts, refuse_pre_1_0_schema, PolicyPublication,
-    PostgresStore, StoreError, ATOMIC_ALLOCATIONS_MIGRATION, ATTENDANCE_MIGRATION,
-    BOOKING_PARTY_MIGRATION, MIGRATION_LOCK_KEY, OPERATIONAL_READS_MIGRATION,
-    RESOURCE_AVAILABILITY_MIGRATION, SCHEDULING_MIGRATION, SCHEMA_VERSIONS, SOURCE_BUSY_MIGRATION,
-    SOURCE_BUSY_OUTCOME_MIGRATION, SOURCE_MANAGER_MIGRATION, WINDOW_RESOURCES_MIGRATION,
+    PostgresStore, StoreError, MIGRATION_LOCK_KEY, SCHEDULING_MIGRATION, SCHEMA_VERSIONS,
 };
 
 /// Said wherever the effective role mode is `single`.
@@ -833,16 +830,6 @@ END;
 "#;
 
 async fn attendance_fence_intact_in(client: &impl GenericClient) -> Result<bool, StoreError> {
-    let installed: bool = client
-        .query_one(
-            "SELECT EXISTS (SELECT 1 FROM scheduling_schema_migrations WHERE version=208)",
-            &[],
-        )
-        .await?
-        .get(0);
-    if !installed {
-        return Ok(true);
-    }
     writer_fence_intact_in(
         client,
         "scheduling_require_attendance_writer_v1",
@@ -1100,51 +1087,12 @@ pub(super) async fn apply_migrations_in(
     let state = schema_state_in(&**transaction).await?;
     state.check()?;
     for version in &state.pending {
-        match *version {
-            200 => {
-                transaction.batch_execute(SCHEDULING_MIGRATION).await?;
-                let schema = current_schema_in(&**transaction).await?;
-                registry_platform_hooks::delivery_schema::install(&**transaction, &schema).await?;
-            }
-            201 => {
-                transaction
-                    .batch_execute(OPERATIONAL_READS_MIGRATION)
-                    .await?
-            }
-            202 => {
-                transaction
-                    .batch_execute(RESOURCE_AVAILABILITY_MIGRATION)
-                    .await?;
-            }
-            203 => {
-                transaction.batch_execute(BOOKING_PARTY_MIGRATION).await?;
-            }
-            204 => {
-                transaction.batch_execute(SOURCE_MANAGER_MIGRATION).await?;
-            }
-            205 => {
-                transaction
-                    .batch_execute(ATOMIC_ALLOCATIONS_MIGRATION)
-                    .await?;
-            }
-            206 => {
-                transaction.batch_execute(SOURCE_BUSY_MIGRATION).await?;
-            }
-            207 => {
-                transaction
-                    .batch_execute(WINDOW_RESOURCES_MIGRATION)
-                    .await?;
-            }
-            208 => {
-                transaction.batch_execute(ATTENDANCE_MIGRATION).await?;
-            }
-            209 => {
-                transaction
-                    .batch_execute(SOURCE_BUSY_OUTCOME_MIGRATION)
-                    .await?;
-            }
-            _ => return Err(StoreError::Corrupt),
+        if *version != SCHEMA_VERSIONS[0] {
+            return Err(StoreError::Corrupt);
         }
+        transaction.batch_execute(SCHEDULING_MIGRATION).await?;
+        let schema = current_schema_in(&**transaction).await?;
+        registry_platform_hooks::delivery_schema::install(&**transaction, &schema).await?;
         transaction
             .execute(
                 "INSERT INTO scheduling_schema_migrations(version,applied_at) VALUES($1,now()) ON CONFLICT(version) DO NOTHING",
@@ -1246,7 +1194,7 @@ mod tests {
             assert!(message.contains("pre-1.0 schema"), "{message}");
             assert!(message.contains("fresh database"), "{message}");
         }
-        for applied in [vec![], vec![200, 201]] {
+        for applied in [vec![], vec![200]] {
             SchemaState {
                 applied,
                 pending: Vec::new(),

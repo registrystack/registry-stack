@@ -152,18 +152,6 @@ in its release notes and is applied to a new database. Availability cursors last
 at most 15 minutes; callers should deduplicate entries by their start when a
 policy, records, or runtime change overlaps an in-flight listing.
 
-An upgrade from a release without atomic allocations backfills each existing
-claim as one allocation row with no labels and no anchor. That row keeps
-consuming its resource. In the same `apply`, each row whose claim recovers its
-labels from the retained policy and whose resource a current pool or window
-anchors takes those labels and that anchor; `schedulingctl operational-scopes
-rematerialize` repeats this after an operator restores a retained policy or a
-resource's pool membership. Until its row is relabeled, a legacy exact-time
-hold refuses confirmation with `service.unavailable` rather than booking
-without counted capacity; release it, or restore the anchor and rematerialize.
-Rescheduling a legacy exact-time appointment replaces its row with a scoped
-one.
-
 `records apply` is the one attributable operator write of a deployment's
 environment records: the locations with their time zones, the resource pools
 and their members, the published arrival windows, and the dated exceptions

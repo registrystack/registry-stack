@@ -572,7 +572,7 @@ pub fn status(config_path: &Path) -> Result<Value> {
     let role_mode = runtime
         .block_on(store.effective_role_mode())
         .context("reading the Scheduling runtime credential's ledger privileges")?;
-    let operational_coverage = if schema.current() >= 201 {
+    let operational_coverage = if schema.current() >= 200 {
         let coverage = runtime
             .block_on(store.operational_scope_coverage())
             .context("reading operational appointment label coverage")?;
