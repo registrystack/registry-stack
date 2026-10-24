@@ -123,7 +123,7 @@ rstack evidence oid4vci check --runtime-config runtime.yaml
 
 `check` reads that one file and nothing else, so it does not prove that the client key resolves
 or parses; `inspect` and `serve` prove that when they start. See
-[`rstack evidence oid4vci check`](../../reference/cli/evidence-oid4vci/check/).
+[`evidence-oid4vci check`](../../reference/cli/evidence-oid4vci/check/).
 
 {/* Evidence: crates/registry-evidence-oid4vci/src/main.rs, check. */}
 
@@ -169,8 +169,8 @@ token issuer.
 
 Run exactly one replica: offers, codes, and tokens live in process memory, and a restart
 invalidates every outstanding exchange. A change to the gateway's bundle or batch ceiling needs a
-coordinated restart: stop the wallet-delivery service, change or restart the gateway, then start it
-again so its first catalog comes from the new gateway.
+coordinated restart: stop `evidence-oid4vci`, change or restart the gateway, then start
+`evidence-oid4vci` again so its first catalog comes from the new gateway.
 
 {/* Evidence: crates/registry-evidence-oid4vci/src/main.rs, openapi;
     crates/registry-evidence-oid4vci/src/authorizer.rs;
