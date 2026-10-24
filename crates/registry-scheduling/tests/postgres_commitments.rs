@@ -1137,6 +1137,33 @@ fn moment(value: &Value, field: &str) -> DateTime<Utc> {
         .with_timezone(&Utc)
 }
 
+/// Every history event one claim recorded, in revision order, as its kind
+/// and its detail document.
+async fn history_details(fx: &Fixture, claim_id: &str) -> Vec<(String, Value)> {
+    fx.admin
+        .query(
+            "SELECT kind, detail FROM scheduling_history WHERE claim_id=$1 ORDER BY revision",
+            &[&Uuid::parse_str(claim_id).expect("a claim id")],
+        )
+        .await
+        .expect("read the claim history")
+        .iter()
+        .map(|row| (row.get::<_, String>(0), row.get::<_, Value>(1)))
+        .collect()
+}
+
+/// The field names of one history detail document, in sorted order.
+fn detail_keys(detail: &Value) -> Vec<&str> {
+    let mut keys = detail
+        .as_object()
+        .expect("a history detail object")
+        .keys()
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    keys.sort_unstable();
+    keys
+}
+
 fn availability_uri(offering: &str, from_minutes: i64, to_minutes: i64) -> String {
     let now = pinned_now();
     format!(
