@@ -526,17 +526,21 @@ def validate_postgres_entrypoint(errors: list[str]) -> None:
     for fragment in required_fragments:
         if fragment not in source:
             errors.append(f"PostgreSQL entrypoint: missing required fail-closed setting {fragment!r}")
-    # Compare the owned feature/target inventory. The runner holds the targets
+    # Compare the owned feature/target inventory. The runner holds most targets
     # in owned bash lists and selects from them per lane and shard at runtime,
-    # so the lists, not per-invocation command lines, are the inventory.
+    # so each list must run once through run_sharded_targets with its feature
+    # set. Any other Cargo test line is a literal command that counts its own
+    # targets, so a stray or dropped target still fails the comparison below.
     list_prefixes = {
         "runtime_targets": "cargo test --locked -p registry-breg --features runtime,tooling,schema",
         "postgres_targets": "cargo test --locked -p registry-breg --features postgres-test,tooling,schema",
-        "evidence_targets": "cargo test --locked -p registry-breg --features postgres-test,tooling,schema",
         "immediate_action_targets": "cargo test --locked -p registry-breg --features postgres-test,tooling,schema",
     }
+    shared_invocation = 'cargo test --locked -p registry-breg --features "$features" "${flags[@]}"'
+    literal_prefix = "uv run --no-project --with PyYAML==6.0.2 "
     cargo_commands: list[str] = []
     seen_lists: set[str] = set()
+    sharded_calls: list[str] = []
     lines = source.replace("\\\n", " ").splitlines()
     index = 0
     while index < len(lines):
@@ -544,12 +548,32 @@ def validate_postgres_entrypoint(errors: list[str]) -> None:
         index += 1
         name = next((n for n in list_prefixes if line.startswith(f"{n}=(")), None)
         if name is None:
-            # The shared invocation selects through the owned lists at runtime;
-            # a literal `--test` target outside them escapes the inventory.
-            if line.startswith("cargo test") and " --test " in f" {line} ":
-                errors.append(
-                    "PostgreSQL entrypoint: test targets must be selected through the owned lists"
-                )
+            if line.startswith("run_sharded_targets "):
+                sharded_calls.append(line)
+                continue
+            if line == shared_invocation or line.startswith("#") or not re.search(r"\bcargo test\b", line):
+                continue
+            if line.startswith(literal_prefix):
+                line = line[len(literal_prefix):]
+            try:
+                arguments = shlex.split(line)
+            except ValueError:
+                errors.append("PostgreSQL entrypoint: invalid Cargo command quoting")
+                continue
+            if (
+                len(arguments) < 9
+                or arguments[:4] != ["cargo", "test", "--locked", "-p"]
+                or arguments[4] not in POSTGRES_TEST_PACKAGES
+                or arguments[5] != "--features"
+            ):
+                errors.append("PostgreSQL entrypoint: unsupported Cargo invocation")
+                continue
+            # The first --test follows the feature value at argument 6.
+            targets = arguments[7:]
+            if len(targets) % 2 or any(flag != "--test" for flag in targets[::2]):
+                errors.append("PostgreSQL entrypoint: targets must be complete test harnesses")
+                continue
+            cargo_commands.extend(" ".join(arguments[:7] + ["--test", target]) for target in targets[1::2])
             continue
         seen_lists.add(name)
         entries: list[str] = [line[line.index("(") + 1:]]
@@ -571,6 +595,15 @@ def validate_postgres_entrypoint(errors: list[str]) -> None:
     missing = sorted(set(list_prefixes) - seen_lists)
     if missing:
         errors.append(f"PostgreSQL entrypoint: missing owned target lists {missing}")
+    expected_calls = [
+        f'run_sharded_targets {prefix.rsplit(" ", 1)[1]} "${{{name}[@]}}"'
+        for name, prefix in list_prefixes.items()
+    ]
+    if Counter(sharded_calls) != Counter(expected_calls):
+        errors.append(
+            "PostgreSQL entrypoint: each owned list must run once through "
+            "run_sharded_targets with its feature set"
+        )
     if Counter(cargo_commands) != Counter(POSTGRES_TEST_COMMANDS):
         errors.append(
             "PostgreSQL entrypoint: must run exactly the owned locked HTTP, kernel, "

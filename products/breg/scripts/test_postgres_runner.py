@@ -231,15 +231,30 @@ class PostgresRunnerTests(unittest.TestCase):
 
     def test_inventory_validator_rejects_lost_duplicate_filtered_or_wrong_feature_targets(self):
         source = RUNNER.read_text(encoding="utf-8")
-        for changed in (
+        for index, changed in enumerate((
             source.replace("  http_auth\n", "  missing_http_auth\n"),
             source.replace("  http_auth\n", "  http_auth\n  http_auth\n"),
             source.replace("  http_auth\n", '  "http_auth\n'),
             source.replace("  http_auth\n", "  http_auth selected_test\n"),
             source.replace("runtime_targets=(\n  http_auth", "postgres_targets=(\n  http_auth"),
             source + "\n cargo test --locked -p registry-breg --features schema --test stray_target\n",
-        ):
-            with self.subTest(changed=changed[:40]), tempfile.TemporaryDirectory() as directory:
+            source + "\nFOO=1 cargo test --locked -p registry-breg --features schema --test stray_target\n",
+            source + "\ncommand cargo test --locked -p registry-breg --features schema --test stray_target\n",
+            source + "\nuv run --no-project --with PyYAML==6.0.2 cargo test --locked -p registry-breg"
+            " --features postgres-test,tooling,schema --test stray_target\n",
+            source + "\ncargo test --locked -p registry-breg --features schema --test=stray_target\n",
+            source.replace("      --test postgres_action_evidence_targets \\\n", ""),
+            source.replace('  run_sharded_targets runtime,tooling,schema "${runtime_targets[@]}"\n', ""),
+            source.replace(
+                'run_sharded_targets runtime,tooling,schema "${runtime_targets[@]}"',
+                'run_sharded_targets postgres-test,tooling,schema "${runtime_targets[@]}"',
+            ),
+            source.replace(
+                '  run_sharded_targets runtime,tooling,schema "${runtime_targets[@]}"\n',
+                '  run_sharded_targets runtime,tooling,schema "${runtime_targets[@]}"\n' * 2,
+            ),
+        )):
+            with self.subTest(mutation=index), tempfile.TemporaryDirectory() as directory:
                 candidate = Path(directory) / "runner.sh"
                 candidate.write_text(changed, encoding="utf-8")
                 candidate.chmod(0o755)
