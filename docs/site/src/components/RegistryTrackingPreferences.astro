@@ -52,6 +52,8 @@ const { canonicalOrigin, privacyUrl } = Astro.props;
   const openButton = document.querySelector<HTMLButtonElement>('[data-tracking-preferences-open]');
 
   if (panel && openButton) {
+    // Keep global controls above sidebars outside Starlight's isolated main pane.
+    document.body.append(panel);
     openButton.hidden = false;
     const errorMessage = panel.querySelector<HTMLElement>('[data-tracking-error]');
     const signalMessage = panel.querySelector<HTMLElement>('[data-tracking-signal]');
