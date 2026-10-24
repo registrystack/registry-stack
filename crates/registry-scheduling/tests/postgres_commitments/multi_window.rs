@@ -1399,3 +1399,173 @@ async fn a_window_room_reservation_ignores_the_party_duplicate_key_policy() {
     let parent = window_parent(&fx, FIRST_WINDOW).await;
     assert_eq!(allocation_rows(&fx, parent).await.len(), 1);
 }
+
+/// Each window commitment records the history event its operation names,
+/// with the detail fields a window claim carries and no allocation list.
+#[tokio::test]
+async fn window_commitments_record_their_history_without_allocations() {
+    let first = session(FIRST_WINDOW, 1, session_start(2), 2);
+    let second = session(SECOND_WINDOW, 2, session_start(3), 2);
+    let fx = sessions_fixture(vec![first.clone(), second.clone()]).await;
+
+    let (status, hold) = fx
+        .post(
+            "/v1/holds",
+            &fx.agent,
+            "history-hold",
+            session_admission(&fx, first.start, 1, None),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{hold}");
+    let hold_id = hold["holdId"].as_str().expect("a hold identifier");
+    let held = history_details(&fx, hold_id).await;
+    assert_eq!(held.len(), 1, "{held:?}");
+    assert_eq!(held[0].0, "held");
+    assert_eq!(detail_keys(&held[0].1), ["expiresAt", "offering"]);
+    assert_eq!(held[0].1["offering"], SESSIONS);
+    assert_eq!(moment(&held[0].1, "expiresAt"), moment(&hold, "expiresAt"));
+
+    let (status, confirmed) = fx
+        .post(
+            "/v1/appointments",
+            &fx.agent,
+            "history-confirm",
+            json!({"hold": hold_id, "admission": null}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{confirmed}");
+    let confirmed_id = confirmed["appointmentId"]
+        .as_str()
+        .expect("an appointment identifier");
+    let consumed = history_details(&fx, hold_id).await;
+    assert_eq!(consumed.len(), 2, "{consumed:?}");
+    assert_eq!(consumed[1].0, "consumed");
+    assert_eq!(consumed[1].1, json!({"appointment": confirmed_id}));
+    let booked = history_details(&fx, confirmed_id).await;
+    assert_eq!(booked.len(), 1, "{booked:?}");
+    assert_eq!(booked[0].0, "confirmed");
+    assert_eq!(detail_keys(&booked[0].1), ["confirmedFrom", "start"]);
+    assert_eq!(booked[0].1["confirmedFrom"], hold_id);
+    assert_eq!(moment(&booked[0].1, "start"), first.start);
+
+    let direct = book_session(&fx, "history-direct", second.start, 2).await;
+    let direct_id = direct["appointmentId"]
+        .as_str()
+        .expect("an appointment identifier");
+    let created = history_details(&fx, direct_id).await;
+    assert_eq!(created.len(), 1, "{created:?}");
+    assert_eq!(created[0].0, "confirmed");
+    assert_eq!(detail_keys(&created[0].1), ["offering", "start"]);
+    assert_eq!(created[0].1["offering"], SESSIONS);
+    assert_eq!(moment(&created[0].1, "start"), second.start);
+
+    let (status, moved) = fx
+        .post(
+            &format!("/v1/appointments/{confirmed_id}/reschedule"),
+            &fx.agent,
+            "history-move",
+            json!({
+                "observedRevision": confirmed["revision"],
+                "admission": session_admission(&fx, second.start, 2, None),
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{moved}");
+    let rescheduled = history_details(&fx, confirmed_id).await;
+    assert_eq!(rescheduled.len(), 2, "{rescheduled:?}");
+    assert_eq!(rescheduled[1].0, "rescheduled");
+    let detail = &rescheduled[1].1;
+    assert_eq!(detail_keys(detail), ["from", "to"]);
+    assert_eq!(detail_keys(&detail["from"]), ["end", "start"]);
+    assert_eq!(detail_keys(&detail["to"]), ["end", "start"]);
+    assert_eq!(moment(&detail["from"], "start"), first.start);
+    assert_eq!(moment(&detail["from"], "end"), first.end);
+    assert_eq!(moment(&detail["to"], "start"), second.start);
+    assert_eq!(moment(&detail["to"], "end"), second.end);
+}
+
+/// A window hold counts against the caller's hold ceiling exactly as an
+/// exact-time hold does: the third hold is refused while the window still
+/// has units to sell.
+#[tokio::test]
+async fn a_window_hold_counts_against_the_callers_hold_ceiling() {
+    let first = session(FIRST_WINDOW, 1, session_start(2), 5);
+    let fx = sessions_fixture(vec![first.clone()]).await;
+    for key in ["ceiling-window-first", "ceiling-window-second"] {
+        let (status, hold) = fx
+            .post(
+                "/v1/holds",
+                &fx.agent,
+                key,
+                session_admission(&fx, first.start, 1, None),
+            )
+            .await;
+        assert_eq!(status, StatusCode::CREATED, "{hold}");
+    }
+    let (status, problem) = fx
+        .post(
+            "/v1/holds",
+            &fx.agent,
+            "ceiling-window-third",
+            session_admission(&fx, first.start, 1, None),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{problem}");
+    assert_eq!(problem["code"], "capacity.exhausted");
+    let entries = session_entries(&fx).await;
+    assert_eq!(
+        entries[FIRST_WINDOW]["remaining"], 3,
+        "the refusal is the ceiling, not the window's units"
+    );
+}
+
+/// An arrival offering keyed on duplicate actives sees a booking in any of
+/// its windows: a party booked into one window cannot book another window
+/// of the same offering under the same key.
+#[tokio::test]
+async fn a_duplicate_key_on_one_window_refuses_a_booking_on_another() {
+    let unkeyed = sessions_policy();
+    let policy = unkeyed.replacen(
+        "    cancellationCutoffMinutes: 240\n    arrival:\n      leadTimeMinutes: 1",
+        "    duplicateActiveKey: subject\n    cancellationCutoffMinutes: 240\n    arrival:\n      leadTimeMinutes: 1",
+        1,
+    );
+    assert_ne!(policy, unkeyed, "the sessions offering is keyed");
+    let first = session(FIRST_WINDOW, 1, session_start(2), 2);
+    let second = session(SECOND_WINDOW, 2, session_start(3), 2);
+    let fx = sessions_fixture_with_policy(&policy, vec![first.clone(), second.clone()]).await;
+
+    let keyed = |start, revision, key: &str| {
+        let mut admission = session_admission(&fx, start, revision, None);
+        admission["duplicateKey"] = json!(key);
+        json!({"hold": null, "admission": admission})
+    };
+    let (status, booked) = fx
+        .post(
+            "/v1/appointments",
+            &fx.agent,
+            "duplicate-window-first",
+            keyed(first.start, 1, "subject:shared"),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{booked}");
+    let (status, problem) = fx
+        .post(
+            "/v1/appointments",
+            &fx.agent,
+            "duplicate-window-second",
+            keyed(second.start, 2, "subject:shared"),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{problem}");
+    assert_eq!(problem["code"], "booking.duplicate-active");
+    let (status, other) = fx
+        .post(
+            "/v1/appointments",
+            &fx.agent,
+            "duplicate-window-other",
+            keyed(second.start, 2, "subject:other"),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{other}");
+}

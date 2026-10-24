@@ -313,6 +313,113 @@ async fn split_primary_and_additional_allocations_survive_every_lifecycle() {
     assert_eq!(stored_allocation_parts(&fx, confirmed_id).await, held_parts);
 }
 
+/// Each bundle commitment records the history event its operation names,
+/// with the allocation list the logical reservation holds at that event.
+#[tokio::test]
+async fn bundle_commitments_record_their_allocations_in_history() {
+    let fx = split_bundle_fixture().await;
+    let direct_slot = first_slot(&fx, OFFERING, 300, 440).await;
+    let (status, direct) = fx
+        .post(
+            "/v1/appointments",
+            &fx.agent,
+            "history-bundle-direct",
+            json!({"hold": null, "admission": split_bundle_admission(&fx, direct_slot)}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{direct}");
+    let direct_id = direct["appointmentId"].as_str().expect("appointment id");
+    let created = history_details(&fx, direct_id).await;
+    assert_eq!(created.len(), 1, "{created:?}");
+    assert_eq!(created[0].0, "confirmed");
+    assert_eq!(
+        detail_keys(&created[0].1),
+        ["allocations", "offering", "start"]
+    );
+    assert_eq!(created[0].1["offering"], OFFERING);
+    assert_eq!(moment(&created[0].1, "start"), direct_slot);
+    assert_eq!(created[0].1["allocations"], direct["allocations"]);
+
+    let held_slot = first_slot(&fx, OFFERING, 480, 620).await;
+    let (status, hold) = fx
+        .post(
+            "/v1/holds",
+            &fx.agent,
+            "history-bundle-hold",
+            split_bundle_admission(&fx, held_slot),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{hold}");
+    let hold_id = hold["holdId"].as_str().expect("hold id");
+    let held = history_details(&fx, hold_id).await;
+    assert_eq!(held.len(), 1, "{held:?}");
+    assert_eq!(held[0].0, "held");
+    assert_eq!(
+        detail_keys(&held[0].1),
+        ["allocations", "expiresAt", "offering"]
+    );
+    assert_eq!(held[0].1["offering"], OFFERING);
+    assert_eq!(moment(&held[0].1, "expiresAt"), moment(&hold, "expiresAt"));
+    assert_eq!(held[0].1["allocations"], hold["allocations"]);
+
+    let (status, confirmed) = fx
+        .post(
+            "/v1/appointments",
+            &fx.agent,
+            "history-bundle-confirm",
+            json!({"hold": hold_id, "admission": null}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{confirmed}");
+    let confirmed_id = confirmed["appointmentId"]
+        .as_str()
+        .expect("confirmed appointment id");
+    let consumed = history_details(&fx, hold_id).await;
+    assert_eq!(consumed.len(), 2, "{consumed:?}");
+    assert_eq!(consumed[1].0, "consumed");
+    assert_eq!(consumed[1].1, json!({"appointment": confirmed_id}));
+    let booked = history_details(&fx, confirmed_id).await;
+    assert_eq!(booked.len(), 1, "{booked:?}");
+    assert_eq!(booked[0].0, "confirmed");
+    assert_eq!(
+        detail_keys(&booked[0].1),
+        ["allocations", "confirmedFrom", "start"]
+    );
+    assert_eq!(booked[0].1["confirmedFrom"], hold_id);
+    assert_eq!(moment(&booked[0].1, "start"), held_slot);
+    assert_eq!(booked[0].1["allocations"], hold["allocations"]);
+
+    let moved_slot = first_slot(&fx, OFFERING, 660, 800).await;
+    let (status, moved) = fx
+        .post(
+            &format!("/v1/appointments/{confirmed_id}/reschedule"),
+            &fx.agent,
+            "history-bundle-move",
+            json!({
+                "observedRevision": confirmed["revision"],
+                "admission": split_bundle_admission(&fx, moved_slot),
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{moved}");
+    let rescheduled = history_details(&fx, confirmed_id).await;
+    assert_eq!(rescheduled.len(), 2, "{rescheduled:?}");
+    assert_eq!(rescheduled[1].0, "rescheduled");
+    let detail = &rescheduled[1].1;
+    assert_eq!(detail_keys(detail), ["from", "to"]);
+    assert_eq!(
+        detail_keys(&detail["from"]),
+        ["allocations", "end", "start"]
+    );
+    assert_eq!(detail_keys(&detail["to"]), ["allocations", "end", "start"]);
+    assert_eq!(moment(&detail["from"], "start"), held_slot);
+    assert_eq!(moment(&detail["from"], "end"), moment(&confirmed, "end"));
+    assert_eq!(detail["from"]["allocations"], confirmed["allocations"]);
+    assert_eq!(moment(&detail["to"], "start"), moved_slot);
+    assert_eq!(moment(&detail["to"], "end"), moment(&moved, "end"));
+    assert_eq!(detail["to"]["allocations"], moved["allocations"]);
+}
+
 #[tokio::test]
 async fn overlapping_bundle_requirements_are_actionably_refused() {
     let fx = bundle_fixture().await;
