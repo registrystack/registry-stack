@@ -112,12 +112,6 @@ test('tracking controls use the shared bridge and remain available after failure
   assert.match(component, /main Registry Stack website and this\s+documentation/i);
   assert.match(component, /data-tracking-error[^>]*role="alert"/);
   assert.match(component, /client\.pageview\(pageview\)/);
-  assert.match(component, /let sentGeneration: string \| null = null/);
-  assert.match(component, /let pendingGeneration: string \| null = null/);
-  assert.match(component, /state\.generation === sentGeneration/);
-  assert.match(component, /state\.generation === pendingGeneration/);
-  assert.match(component, /sentGeneration = state\.generation/);
-  assert.match(component, /currentState\.generation === state\.generation/);
   assert.match(component, /addEventListener\('pagehide', \(event\) => \{/);
   assert.match(component, /if \(!event\.persisted\) trackingClient\.close\(\)/);
   assert.doesNotMatch(component, /location\.reload/);

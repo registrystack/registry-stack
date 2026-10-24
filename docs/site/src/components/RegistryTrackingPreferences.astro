@@ -68,9 +68,8 @@ const { canonicalOrigin, privacyUrl } = Astro.props;
       ? new URL(window.location.pathname, canonicalOrigin).toString()
       : undefined;
     const browserDeniesTracking = trackingDeniedByBrowser();
-    let sentGeneration: string | null = null;
-    let pendingGeneration: string | null = null;
-    let currentState: TrackingState | null = null;
+    // Retain attempts after ambiguous delivery so recovery cannot count a visit twice.
+    let attemptedGeneration: string | null = null;
     let client: ReturnType<typeof createSharedTrackingClient> | undefined;
 
     const showPanel = () => {
@@ -96,7 +95,6 @@ const { canonicalOrigin, privacyUrl } = Astro.props;
         errorMessage.hidden = true;
         delete errorMessage.dataset.trackingFailure;
       }
-      currentState = state;
       if (state.choice === null) {
         showPanel();
         return;
@@ -111,13 +109,11 @@ const { canonicalOrigin, privacyUrl } = Astro.props;
       if (
         state.choice !== 'accepted' ||
         !state.generation ||
-        state.generation === sentGeneration ||
-        state.generation === pendingGeneration ||
+        state.generation === attemptedGeneration ||
         !client
       )
         return;
 
-      pendingGeneration = state.generation;
       try {
         const pageview = buildMauticPageview({
           canonicalUrl,
@@ -125,13 +121,8 @@ const { canonicalOrigin, privacyUrl } = Astro.props;
           pageTitle: document.title,
           referrer: document.referrer,
         });
+        attemptedGeneration = state.generation;
         await client.pageview(pageview);
-        if (
-          currentState?.choice === 'accepted' &&
-          currentState.generation === state.generation
-        ) {
-          sentGeneration = state.generation;
-        }
       } catch (error) {
         if (
           client.state.choice === 'accepted' &&
@@ -139,8 +130,6 @@ const { canonicalOrigin, privacyUrl } = Astro.props;
         ) {
           showFailure(error);
         }
-      } finally {
-        if (pendingGeneration === state.generation) pendingGeneration = null;
       }
     };
 
