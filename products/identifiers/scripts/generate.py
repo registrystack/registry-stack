@@ -15,6 +15,14 @@ from typing import Any
 
 
 BASE_URL = "https://id.registrystack.org"
+# Discovery's published type URIs predate its qualified problem codes.
+# Pin these pairs while other products retain the usual URI derivation.
+DISCOVERY_PROBLEM_URI_SUFFIXES = {
+    "request.invalid": "invalid-request",
+    "request.not-found": "not-found",
+    "request.result-bound-exceeded": "result-bound-exceeded",
+    "service.unavailable": "unavailable",
+}
 REPO_ROOT = Path(__file__).resolve().parents[3]
 PRODUCT_ROOT = REPO_ROOT / "products" / "identifiers"
 SOURCE_CONFIG = PRODUCT_ROOT / "contracts" / "catalog-source.json"
@@ -374,7 +382,10 @@ def problem_entries(
             raise CatalogError(
                 f"{source_config['owner']} problem entry {index} has an invalid shape"
             )
-        if entry["uri"] != source_config["uriPrefix"] + entry["code"].replace(".", "/"):
+        suffix = entry["code"].replace(".", "/")
+        if source_config["uriPrefix"] == f"{BASE_URL}/problems/registry-discovery/":
+            suffix = DISCOVERY_PROBLEM_URI_SUFFIXES.get(entry["code"])
+        if suffix is None or entry["uri"] != source_config["uriPrefix"] + suffix:
             raise CatalogError(
                 f"{source_config['owner']} problem URI and code disagree: {entry}"
             )

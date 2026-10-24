@@ -180,6 +180,7 @@ Package: candidate/bundle
 Runtime: candidate/runtime.yaml
 Authority: candidate/compiled-authority.yaml
 Provision secret:file/audit-hmac-key
+Provision secret:file/signing-p256-private-jwk
 Provision secret:file/subject-binding-hmac-key
 Provision secret:file/synthetic-source-token
 Target runtime paths and deployment secret material remain unverified until `evidencectl doctor --runtime-config candidate/runtime.yaml`.

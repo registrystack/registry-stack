@@ -287,6 +287,52 @@ class CatalogGeneratorTest(unittest.TestCase):
         with self.assertRaisesRegex(generate.CatalogError, "URI and code disagree"):
             self.build()
 
+    def test_discovery_qualified_codes_keep_the_published_problem_uris(self) -> None:
+        prefix = f"{generate.BASE_URL}/problems/registry-discovery/"
+        spellings = {
+            "request.invalid": "invalid-request",
+            "request.not-found": "not-found",
+            "request.result-bound-exceeded": "result-bound-exceeded",
+            "service.unavailable": "unavailable",
+        }
+        config = json.loads(self.config.read_text())
+        config["problemSources"][0]["uriPrefix"] = prefix
+        self.config.write_text(json.dumps(config))
+        template = json.loads(self.fixture_problem_catalog.read_text())["entries"][0]
+        self.fixture_problem_catalog.write_text(
+            json.dumps({
+                "entries": [
+                    {**template, "uri": prefix + suffix, "code": code}
+                    for code, suffix in spellings.items()
+                ]
+            })
+        )
+        problems = {
+            entry["problem"]["code"]: entry["uri"]
+            for entry in self.build()["entries"]
+            if entry["kind"] == "problem"
+        }
+        self.assertEqual(
+            problems, {code: prefix + suffix for code, suffix in spellings.items()}
+        )
+
+    def test_discovery_mapping_rejects_uri_drift_and_does_not_relax_other_products(self) -> None:
+        for namespace, code, suffix in [
+            ("registry-discovery", "request.invalid", "request/invalid"),
+            ("registry-discovery", "invalid-request", "invalid-request"),
+            ("registry-fixture", "request.invalid", "invalid-request"),
+        ]:
+            with self.subTest(namespace=namespace, code=code):
+                prefix = f"{generate.BASE_URL}/problems/{namespace}/"
+                config = json.loads(self.config.read_text())
+                config["problemSources"][0]["uriPrefix"] = prefix
+                self.config.write_text(json.dumps(config))
+                document = json.loads(self.fixture_problem_catalog.read_text())
+                document["entries"][0].update(uri=prefix + suffix, code=code)
+                self.fixture_problem_catalog.write_text(json.dumps(document))
+                with self.assertRaisesRegex(generate.CatalogError, "URI and code disagree"):
+                    self.build()
+
     def test_two_problem_sources_are_merged(self) -> None:
         self.write_evidence_problem_catalog()
         document = json.loads(self.config.read_text())

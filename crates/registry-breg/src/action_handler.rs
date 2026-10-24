@@ -89,6 +89,22 @@ pub struct ActionHandlerDiagnostic {
 }
 
 impl ActionHandlerDiagnostic {
+    /// Locations are compiled identifiers and the cause is a static repair
+    /// message. Script errors, source and input values never enter this log.
+    #[cfg(feature = "runtime")]
+    pub(crate) fn log_failure(&self, action: &CompiledAction, phase: &'static str) {
+        tracing::error!(
+            action_id = %action.id,
+            plan_id = action.handler.as_ref().map(|handler| handler.id.as_str()),
+            phase,
+            slot_id = self.slot.as_deref(),
+            field_id = self.field.as_deref(),
+            handler_failure = self.kind.code(),
+            cause = self.message,
+            "action handler produced no effects"
+        );
+    }
+
     pub(crate) fn new(kind: ActionHandlerError, message: &'static str) -> Self {
         Self {
             kind,

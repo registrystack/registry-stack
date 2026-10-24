@@ -1826,7 +1826,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -4734,7 +4734,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -6540,6 +6540,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
+ "tracing",
  "uuid",
 ]
 
@@ -6613,6 +6614,8 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "tower",
+ "tracing",
+ "tracing-subscriber",
  "url",
  "uuid",
  "wiremock",
@@ -6655,6 +6658,7 @@ dependencies = [
  "comemo",
  "hex",
  "jsonschema",
+ "jsonwebtoken",
  "registry-platform-audit",
  "registry-platform-authcommon",
  "registry-platform-buildinfo",
@@ -6662,7 +6666,9 @@ dependencies = [
  "registry-platform-config",
  "registry-platform-crypto",
  "registry-platform-httpsec",
+ "registry-platform-oidc",
  "registry-platform-yaml",
+ "registry-render-client",
  "rustix 1.1.5",
  "schemars",
  "serde",
@@ -6680,6 +6686,49 @@ dependencies = [
  "typst-assets",
  "typst-pdf",
  "uuid",
+]
+
+[[package]]
+name = "registry-render-client"
+version = "0.44.0"
+dependencies = [
+ "axum",
+ "base64 0.23.1",
+ "chrono",
+ "hex",
+ "registry-platform-canonical-json",
+ "registry-platform-httpsec",
+ "registry-platform-httputil",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "sha2 0.11.1",
+ "thiserror 2.0.21",
+ "tokio",
+ "url",
+]
+
+[[package]]
+name = "registry-render-client-node"
+version = "0.44.0"
+dependencies = [
+ "napi",
+ "napi-build",
+ "napi-derive",
+ "registry-render-client",
+ "serde_json",
+]
+
+[[package]]
+name = "registry-render-client-py"
+version = "0.44.0"
+dependencies = [
+ "pyo3",
+ "pyo3-build-config",
+ "registry-platform-canonical-json",
+ "registry-render-client",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]
@@ -6875,11 +6924,13 @@ dependencies = [
  "chrono",
  "registry-breg-client",
  "registry-casework-client",
+ "registry-coordinator-client",
  "registry-discovery-client",
  "registry-evidence-client",
  "registry-messaging-client",
  "registry-platform-httputil",
  "registry-record",
+ "registry-render-client",
  "registry-scheduling-client",
  "serde_json",
 ]
@@ -7229,7 +7280,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -8012,7 +8063,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix 1.1.5",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -9817,7 +9868,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]

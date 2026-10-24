@@ -89,10 +89,12 @@ class ReleaseRosterTest(TestCase):
             )
         self.assertEqual(output.getvalue(), "true\n")
 
-    def test_unified_clients_hold_coordinator_until_its_client_returns(self) -> None:
-        self.assertIsNone(release_roster.COORDINATOR_CLIENT_FIRST_RELEASE)
-        for version in ((0, 41, 0), (0, 42, 0), (1, 0, 0)):
+    def test_unified_clients_include_coordinator_from_its_first_client_release(self) -> None:
+        self.assertEqual(release_roster.COORDINATOR_CLIENT_FIRST_RELEASE, (0, 44, 0))
+        for version in ((0, 41, 0), (0, 42, 0), (0, 43, 99)):
             self.assertFalse(release_roster.coordinator_client_in_release(version))
+        for version in ((0, 44, 0), (0, 44, 1), (1, 0, 0)):
+            self.assertTrue(release_roster.coordinator_client_in_release(version))
         with mock.patch.object(release_roster, "COORDINATOR_CLIENT_FIRST_RELEASE", (0, 42, 0)):
             self.assertFalse(release_roster.coordinator_client_in_release((0, 41, 99)))
             self.assertTrue(release_roster.coordinator_client_in_release((0, 42, 0)))

@@ -13,6 +13,7 @@ pub(super) enum Availability {
     },
     NotSatisfied {
         revision: u64,
+        guard_reason: Option<String>,
     },
     InputRequired {
         revision: u64,
@@ -27,10 +28,19 @@ impl Availability {
             Self::Satisfied { revision } => json!({
                 "available": true, "observedRevision": revision,
             }),
-            Self::NotSatisfied { revision } => json!({
-                "available": false, "observedRevision": revision,
-                "reason": "guard-not-satisfied", "recovery": "none",
-            }),
+            Self::NotSatisfied {
+                revision,
+                guard_reason,
+            } => {
+                let mut value = json!({
+                    "available": false, "observedRevision": revision,
+                    "reason": "guard-not-satisfied", "recovery": "none",
+                });
+                if let Some(reason) = guard_reason {
+                    value["guardReason"] = json!(reason);
+                }
+                value
+            }
             Self::InputRequired { revision, inputs } => json!({
                 "available": null, "observedRevision": revision,
                 "reason": "input-required", "recovery": "correct-input", "missingInputs": inputs,
@@ -211,7 +221,10 @@ pub(super) async fn observe(
             &today,
             matches!(field.field_type, FieldTypeSource::Timestamp),
         ) {
-            return Ok(Availability::NotSatisfied { revision });
+            return Ok(Availability::NotSatisfied {
+                revision,
+                guard_reason: guard.reason.clone(),
+            });
         }
     }
     Ok(if missing.is_empty() {

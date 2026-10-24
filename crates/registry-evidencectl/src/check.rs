@@ -69,6 +69,8 @@ pub(crate) fn check(
                 crate::build::check_compiled_bundle(
                     &evidence,
                     &compiled.bundle_path,
+                    &compiled.runtime_path,
+                    Some(path),
                     project,
                     &compiled.fixture_paths,
                 )

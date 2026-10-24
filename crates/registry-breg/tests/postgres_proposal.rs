@@ -9,8 +9,8 @@ mod client_http;
 mod postgres_harness;
 
 use registry_breg::api::{VerifiedClaimValue, VerifiedRequestClaims};
-use registry_breg::compiler::{compile_project, CompileProfile};
-use registry_breg::contract::parse_project_json;
+use registry_breg::compiler::{compile_project, compile_project_with_assets, CompileProfile};
+use registry_breg::contract::{parse_project_json, ModuleAssetSource};
 use registry_breg_client::{
     BRegActionInvocationRequest, BRegCreateRequest, BRegDirectWrite, BRegIdempotencyKey,
     BRegProblemCode, BRegProposalDecisionStatus, BRegProposalQuery, BRegProposalState,
@@ -102,6 +102,751 @@ fn compile(source: Value) -> registry_breg::CompiledRegistry {
 }
 fn registry(automatic: bool) -> registry_breg::CompiledRegistry {
     compile(registry_source(automatic))
+}
+
+#[tokio::test]
+async fn holder_identity_is_a_draft_value_but_submit_authority_remains_server_owned() {
+    let mut source = registry_source(false);
+    source["accessProfiles"][0]["default"] = json!(false);
+    source["recordTypes"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("mutationPolicy");
+    source["recordTypes"][0]["fields"][1]["id"] = json!("applicant");
+    source["actions"][0]["inputs"][0] = json!({"id":"applicant","type":"string","maximumLength":64,"required":true,"classification":"internal"});
+    source["actions"][0]["commitGuards"] = json!({});
+    source["actions"][0]["plan"] = json!({"type":"fixed","effects":[{"id":"application","operation":"create","target":{"recordType":"target"},"set":{"name":{"fromInput":"value"},"applicant":{"fromInput":"applicant"}}}]});
+    source["accessProfiles"][0]["permissions"]["records"] = json!([{"recordType":"target","operations":["get","list"],"readableFields":["name","applicant"],"rowBoundaries":[{"field":"applicant","claim":"sub","operator":"equals"}]}]);
+    for family in ["actions", "proposals"] {
+        source["accessProfiles"][0]["permissions"][family][0]["targets"][0]["rowBoundaries"] =
+            json!([{"field":"applicant","claim":"sub","operator":"equals"}]);
+    }
+    let mut staff = source["accessProfiles"][0].clone();
+    staff["id"] = json!("on-behalf");
+    staff["default"] = json!(false);
+    staff["requiredScopes"] = json!(["proposal:staff"]);
+    for family in ["records", "actions", "proposals"] {
+        let grant = &mut staff["permissions"][family][0];
+        if family == "records" {
+            grant["rowBoundaries"] = json!("unrestricted");
+        } else {
+            grant["targets"][0]["rowBoundaries"] = json!("unrestricted");
+        }
+    }
+    source["accessProfiles"].as_array_mut().unwrap().push(staff);
+    let holder = VerifiedRequestClaims::authenticated_with_actor_kind(
+        "sub",
+        "holder",
+        BTreeSet::from(["proposal:manage".into()]),
+        Some("registry-administration".into()),
+        BTreeMap::from([(
+            "sub".into(),
+            VerifiedClaimValue::direct_string("holder").unwrap(),
+        )]),
+        registry_platform_oidc::ActorKind::Human,
+    )
+    .unwrap();
+    let fixture = client_http::ClientFixture::start(compile(source), holder).await;
+    let client = &fixture.http.client;
+    let metadata = client.registry_contract(Some("clerk")).await.unwrap().value;
+    assert!(metadata.select_action("correct-name", "on-behalf").is_err());
+    let action = metadata.select_action("correct-name", "clerk").unwrap();
+    for suffix in [
+        "",
+        "?accessProfile=on-behalf",
+        "?accessProfile=unknown-profile-canary",
+    ] {
+        let response = reqwest::Client::new()
+            .post(format!(
+                "{}{}{suffix}",
+                fixture.http.base_url,
+                action.invoke_path()
+            ))
+            .header("Idempotency-Key", "concealed-profile")
+            .json(&json!({"input":{"applicant":"holder","value":"Application"}}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::NOT_FOUND);
+        let problem: Value = response.json().await.unwrap();
+        assert_eq!(problem["code"], "resource.not_found");
+        for hidden in ["on-behalf", "unknown-profile-canary", "clerk"] {
+            assert!(!problem.to_string().contains(hidden));
+        }
+    }
+    // An incomplete or mismatched draft executes no plan and discloses no target existence.
+    for (index, applicant) in ["holder", "another-holder"].into_iter().enumerate() {
+        let request = BRegActionInvocationRequest::new(
+            &action,
+            map(json!({"applicant":applicant,"value":"Application"})),
+            None,
+        )
+        .unwrap();
+        let draft = client
+            .start_proposal(&action, &request, &key(&format!("holder-start-{index}")))
+            .await
+            .unwrap()
+            .value;
+        let submit = client
+            .prepare_proposal(
+                &draft,
+                "submit",
+                json!({}),
+                &key(&format!("holder-submit-{index}")),
+            )
+            .unwrap();
+        let result = client.execute_proposal(&submit).await;
+        if applicant == "holder" {
+            assert_eq!(result.unwrap().value.state(), BRegProposalState::Submitted);
+        } else {
+            assert!(
+                result.is_err(),
+                "client-filled identity cannot create authority"
+            );
+        }
+    }
+    let staff_claims = VerifiedRequestClaims::authenticated_with_actor_kind(
+        "sub",
+        "officer",
+        BTreeSet::from(["proposal:staff".into()]),
+        Some("registry-administration".into()),
+        BTreeMap::new(),
+        registry_platform_oidc::ActorKind::Human,
+    )
+    .unwrap();
+    let staff = fixture.client_for(staff_claims).await;
+    let metadata = staff
+        .client
+        .registry_contract(Some("on-behalf"))
+        .await
+        .unwrap()
+        .value;
+    let action = metadata.select_action("correct-name", "on-behalf").unwrap();
+    let request = BRegActionInvocationRequest::new(
+        &action,
+        map(json!({"applicant":"another-holder","value":"Staff application"})),
+        None,
+    )
+    .unwrap();
+    let draft = staff
+        .client
+        .start_proposal(&action, &request, &key("on-behalf-start"))
+        .await
+        .unwrap()
+        .value;
+    let submit = staff
+        .client
+        .prepare_proposal(&draft, "submit", json!({}), &key("on-behalf-submit"))
+        .unwrap();
+    assert_eq!(
+        staff
+            .client
+            .execute_proposal(&submit)
+            .await
+            .unwrap()
+            .value
+            .state(),
+        BRegProposalState::Submitted
+    );
+    drop(staff);
+    fixture.finish().await;
+}
+
+#[tokio::test]
+async fn required_inputs_are_completed_at_submit_and_supplied_draft_values_stay_typed() {
+    let mut source = registry_source(false);
+    source["accessProfiles"][0]["permissions"]["proposals"][0]["readableInputs"] =
+        json!(["target", "value"]);
+    let fixture =
+        client_http::ClientFixture::start(compile(source), claims("author", "zone-a")).await;
+    let client = &fixture.http.client;
+    let metadata = client.registry_contract(Some("clerk")).await.unwrap();
+    let action = metadata
+        .value
+        .select_action("correct-name", "clerk")
+        .unwrap();
+    let request = BRegActionInvocationRequest::new(&action, Map::new(), None)
+        .expect("a required input may be absent in a Proposal draft");
+    let draft = client
+        .start_proposal(&action, &request, &key("incomplete-start"))
+        .await
+        .unwrap()
+        .value;
+    assert_eq!(draft.state(), BRegProposalState::Draft);
+    let submit = client
+        .prepare_proposal(&draft, "submit", json!({}), &key("incomplete-submit"))
+        .unwrap();
+    let error = client.execute_proposal(&submit).await.unwrap_err();
+    let registry_breg_client::BaseRegistryClientError::Problem {
+        code, field_path, ..
+    } = error
+    else {
+        panic!("bounded problem")
+    };
+    assert_eq!(code, BRegProblemCode::RequestInvalid);
+    assert_eq!(field_path.unwrap().as_str(), "/input/target");
+    assert!(BRegActionInvocationRequest::new(&action, map(json!({"value":42})), None).is_err());
+    for (index, value) in [json!(42), Value::Null, json!(["value-canary"])]
+        .into_iter()
+        .enumerate()
+    {
+        let response = reqwest::Client::new()
+            .post(format!(
+                "{}{}?accessProfile=clerk",
+                fixture.http.base_url,
+                action.invoke_path()
+            ))
+            .header("Idempotency-Key", format!("draft-invalid-{index}"))
+            .json(&json!({"input":{"value":value}}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::BAD_REQUEST);
+        let problem: Value = response.json().await.unwrap();
+        assert_eq!(problem["code"], "request.invalid");
+        assert!(!problem.to_string().contains("value-canary"));
+    }
+
+    let complete = start(&fixture, "Completed", "complete-source").await;
+    let complete = client.read_proposal(&complete).await.unwrap().value;
+    let edit = client
+        .prepare_proposal(
+            &draft,
+            "edit",
+            json!({"input":complete.input().unwrap()}),
+            &key("incomplete-edit"),
+        )
+        .unwrap();
+    let edited = client.execute_proposal(&edit).await.unwrap().value;
+    let submit = client
+        .prepare_proposal(&edited, "submit", json!({}), &key("complete-submit"))
+        .unwrap();
+    let submitted = client.execute_proposal(&submit).await.unwrap().value;
+    assert_eq!(submitted.state(), BRegProposalState::Submitted);
+    assert!(submitted.effect_digest().is_some());
+    let revise = client
+        .prepare_proposal(
+            &submitted,
+            "revise",
+            json!({"input":{}}),
+            &key("incomplete-revise"),
+        )
+        .unwrap();
+    let revised = client.execute_proposal(&revise).await.unwrap().value;
+    assert_eq!(revised.state(), BRegProposalState::Draft);
+    assert_eq!(revised.submission_version(), 2);
+    let revised = client.read_proposal(&revised).await.unwrap().value;
+    assert!(revised.input().unwrap().is_empty());
+    let rebase = client
+        .prepare_proposal(
+            &revised,
+            "rebase",
+            json!({"input":{}}),
+            &key("incomplete-rebase"),
+        )
+        .unwrap();
+    let rebased = client.execute_proposal(&rebase).await.unwrap().value;
+    assert_eq!(rebased.state(), BRegProposalState::Draft);
+    let submit = client
+        .prepare_proposal(&rebased, "submit", json!({}), &key("incomplete-resubmit"))
+        .unwrap();
+    assert_eq!(
+        client
+            .execute_proposal(&submit)
+            .await
+            .unwrap_err()
+            .problem_code(),
+        Some(BRegProblemCode::RequestInvalid)
+    );
+    fixture.finish().await;
+}
+
+#[tokio::test]
+async fn pending_manual_application_filter_precedes_pagination_and_keeps_authority() {
+    let mut source = registry_source(false);
+    source["reviewAuthorities"] =
+        json!([{"id":"local-review","protocol":"id.registrystack.org/protocols/review/v1"}]);
+    let unreviewed = source["actions"][0].clone();
+    source["actions"][0]["execution"]["proposal"]["review"] = json!({"type":"required","authority":"local-review","source":"proposal-test","policy":{"id":"name-correction","version":"1","digest":format!("sha256:{}","b".repeat(64))}});
+    for (id, automatic) in [("unreviewed-name", false), ("automatic-name", true)] {
+        let mut action = unreviewed.clone();
+        action["id"] = json!(id);
+        if automatic {
+            action["execution"]["proposal"]["application"] =
+                json!({"mode":"automatic","maximumAttempts":3});
+        }
+        source["actions"].as_array_mut().unwrap().push(action);
+        for family in ["actions", "proposals"] {
+            let mut grant = source["accessProfiles"][0]["permissions"][family][0].clone();
+            grant["action"] = json!(id);
+            source["accessProfiles"][0]["permissions"][family]
+                .as_array_mut()
+                .unwrap()
+                .push(grant);
+        }
+    }
+    let review = std::sync::Arc::new(LocalReview {
+        calls: 0.into(),
+        mode: 0.into(),
+        result_id: uuid::Uuid::new_v4(),
+    });
+    let injected = review.clone();
+    let fixture = client_http::ClientFixture::start_with_mutations(
+        compile(source),
+        claims("author", "zone-a"),
+        move |mutations| {
+            mutations.with_proposal_review_substitute_for_test(local_review_binding(), injected)
+        },
+    )
+    .await;
+    let client = &fixture.http.client;
+    let metadata = client.registry_contract(Some("clerk")).await.unwrap().value;
+    let collection = metadata.select_proposals("clerk").unwrap();
+    for query in [
+        "pendingManualApplication=TRUE",
+        "pendingManualApplication=true&pendingManualApplication=false",
+    ] {
+        let response = reqwest::Client::new()
+            .get(format!(
+                "{}/v1/proposals?accessProfile=clerk&{query}",
+                fixture.http.base_url
+            ))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            reqwest::StatusCode::NOT_FOUND,
+            "malformed list queries preserve concealment"
+        );
+    }
+    let mut expected = BTreeSet::new();
+    let mut drafts = Vec::new();
+    for index in 0..24 {
+        drafts.push(start(&fixture, "Queue", &format!("queue-{index}")).await);
+    }
+    drafts.sort_by(|left, right| left.id().cmp(right.id()));
+    // More nonmatching rows than the eight-row scan bound sort before all
+    // required-review matches. UUID randomness cannot mask post-scan filtering.
+    for (index, draft) in drafts.iter().enumerate().skip(12) {
+        let submit = client
+            .prepare_proposal(
+                draft,
+                "submit",
+                json!({}),
+                &key(&format!("queue-submit-{index}")),
+            )
+            .unwrap();
+        let submitted = client.execute_proposal(&submit).await.unwrap().value;
+        let category = (index - 12) % 6;
+        if category != 0 {
+            let status = if category == 3 {
+                registry_review_client::ReviewResultStatus::ChangesRequested
+            } else {
+                registry_review_client::ReviewResultStatus::Approved
+            };
+            retain_queue_review(
+                &fixture,
+                &submitted,
+                &review,
+                status,
+                category == 2,
+                category == 4 && index == 16,
+            )
+            .await;
+        }
+        if category == 1 {
+            expected.insert(submitted.id().to_owned());
+        }
+        if category == 5 {
+            let id = uuid::Uuid::parse_str(submitted.id()).unwrap();
+            fixture.database.admin.execute("UPDATE registry_internal.registry_proposal_review_submissions SET withdrawn=true WHERE proposal_id=$1", &[&id]).await.unwrap();
+            let current = client.read_proposal(&submitted).await.unwrap().value;
+            assert_ne!(
+                serde_json::to_value(&current).unwrap()["applicationStatus"]["state"],
+                "pending"
+            );
+        }
+        if category == 4 {
+            let current = client.read_proposal(&submitted).await.unwrap().value;
+            let (operation, body) = if index == 16 {
+                (
+                    "apply",
+                    json!({"submissionVersion":current.submission_version(),"effectDigest":current.effect_digest().unwrap()}),
+                )
+            } else {
+                ("cancel", json!({}))
+            };
+            let attempt = client
+                .prepare_proposal(
+                    &current,
+                    operation,
+                    body,
+                    &key(&format!("queue-terminal-{index}")),
+                )
+                .unwrap();
+            client.execute_proposal(&attempt).await.unwrap();
+        }
+    }
+    for id in ["unreviewed-name", "automatic-name"] {
+        let draft = start_action(&fixture, id, "Queue", &format!("queue-{id}")).await;
+        let submit = client
+            .prepare_proposal(
+                &draft,
+                "submit",
+                json!({}),
+                &key(&format!("queue-submit-{id}")),
+            )
+            .unwrap();
+        let submitted = client.execute_proposal(&submit).await.unwrap().value;
+        if id == "unreviewed-name" {
+            expected.insert(submitted.id().to_owned());
+        }
+    }
+    let calls = review.calls.load(std::sync::atomic::Ordering::SeqCst);
+    let plan = fixture
+        .mutations
+        .pending_manual_list_plan_for_test(&[
+            "correct-name".into(),
+            "unreviewed-name".into(),
+            "automatic-name".into(),
+        ])
+        .await
+        .unwrap();
+    assert_eq!(plan[0]["Plan"]["Node Type"], "Limit");
+    assert!(plan.to_string().contains("applicationPolicy"));
+    let mut query = BRegProposalQuery {
+        pending_manual_application: true,
+        limit: Some(2),
+        ..Default::default()
+    };
+    let mut observed = BTreeSet::new();
+    loop {
+        let page = client
+            .list_proposals(&collection, &query)
+            .await
+            .unwrap()
+            .value;
+        assert!(!page.items.is_empty());
+        for item in &page.items {
+            assert!(
+                observed.insert(item.id().to_owned()),
+                "each result occurs once"
+            );
+            let value = serde_json::to_value(item).unwrap();
+            assert_eq!(value["applicationStatus"]["mode"], "manual");
+            assert_eq!(value["applicationStatus"]["state"], "pending");
+        }
+        query.cursor = page.next_cursor;
+        if query.cursor.is_none() {
+            break;
+        }
+    }
+    assert_eq!(observed, expected);
+    assert_eq!(
+        review.calls.load(std::sync::atomic::Ordering::SeqCst),
+        calls,
+        "listing performs no per-Proposal Review calls"
+    );
+    let other = fixture.client_for(claims("other", "zone-a")).await;
+    let metadata = other
+        .client
+        .registry_contract(Some("clerk"))
+        .await
+        .unwrap()
+        .value;
+    let page = other
+        .client
+        .list_proposals(
+            &metadata.select_proposals("clerk").unwrap(),
+            &BRegProposalQuery {
+                pending_manual_application: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+        .value;
+    assert!(page.items.is_empty());
+    assert!(
+        page.next_cursor.is_none(),
+        "a concealed collection has no continuation"
+    );
+    drop(other);
+    fixture.finish().await;
+}
+
+#[tokio::test]
+async fn proposal_list_scans_hidden_rows_without_exposing_their_continuation() {
+    let mut source = registry_source(false);
+    source["accessProfiles"][0]["permissions"]["proposals"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("ownership");
+    let fixture =
+        client_http::ClientFixture::start(compile(source), claims("author", "zone-a")).await;
+    let mut drafts = Vec::new();
+    for index in 0..12 {
+        let draft = start(&fixture, "Visible", &format!("concealed-prefix-{index}")).await;
+        let submit = fixture
+            .http
+            .client
+            .prepare_proposal(
+                &draft,
+                "submit",
+                json!({}),
+                &key(&format!("concealed-submit-{index}")),
+            )
+            .unwrap();
+        drafts.push(
+            fixture
+                .http
+                .client
+                .execute_proposal(&submit)
+                .await
+                .unwrap()
+                .value,
+        );
+    }
+    drafts.sort_by(|left, right| left.id().cmp(right.id()));
+    let visible = drafts.last().unwrap();
+    let id = uuid::Uuid::parse_str(visible.id()).unwrap();
+    let input: Value = fixture
+        .database
+        .admin
+        .query_one(
+            "SELECT input FROM registry_internal.registry_proposal_state WHERE proposal_id=$1",
+            &[&id],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    let target = uuid::Uuid::parse_str(input["target"].as_str().unwrap()).unwrap();
+    let entity = &fixture.registry.entities()["target"];
+    fixture
+        .database
+        .admin
+        .execute(
+            &format!(
+                "UPDATE registry_data.\"{}\" SET \"{}\"=$2 WHERE record_id=$1",
+                entity.physical_table, entity.fields["jurisdiction"].physical_name
+            ),
+            &[&target, &"zone-b"],
+        )
+        .await
+        .unwrap();
+    for (jurisdiction, expected) in [("zone-c", None), ("zone-b", Some(visible.id()))] {
+        let reader = fixture.client_for(claims("reader", jurisdiction)).await;
+        let metadata = reader
+            .client
+            .registry_contract(Some("clerk"))
+            .await
+            .unwrap()
+            .value;
+        let page = reader
+            .client
+            .list_proposals(
+                &metadata.select_proposals("clerk").unwrap(),
+                &BRegProposalQuery {
+                    pending_manual_application: true,
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap()
+            .value;
+        assert_eq!(
+            page.items.iter().map(|item| item.id()).collect::<Vec<_>>(),
+            expected.into_iter().collect::<Vec<_>>()
+        );
+        assert!(
+            page.next_cursor.is_none(),
+            "hidden UUIDs never become cursors"
+        );
+        drop(reader);
+    }
+    fixture.finish().await;
+}
+
+#[tokio::test]
+async fn holder_list_never_reads_other_holders_proposals_or_exposes_them_as_cursors() {
+    let fixture = client_http::ClientFixture::start_with_mutations(
+        registry(false),
+        claims("author", "zone-a"),
+        |mutations| mutations.with_action_timeout_for_test(std::time::Duration::from_secs(2)),
+    )
+    .await;
+    let other = fixture.client_for(claims("other", "zone-a")).await;
+    // More concealed rows than several raw candidate batches, all readable
+    // under the row boundary, so only ownership conceals them.
+    let mut concealed = BTreeSet::new();
+    for index in 0..30 {
+        let draft = start_action_as(
+            &other.client,
+            "correct-name",
+            "Other",
+            &format!("other-holder-{index}"),
+        )
+        .await;
+        concealed.insert(draft.id().to_owned());
+    }
+    let visible = start(&fixture, "Mine", "holder-visible").await;
+    // A row lock on every other holder's Proposal stalls any per-candidate
+    // read of one until the request deadline, so a holder list that walks
+    // them answers 503 instead of a page.
+    let ids = concealed
+        .iter()
+        .map(|id| uuid::Uuid::parse_str(id).unwrap())
+        .collect::<Vec<_>>();
+    let (mut blocker, task) = fixture.database.connect_migration().await;
+    let transaction = blocker.transaction().await.unwrap();
+    let locked = transaction
+        .query(
+            "SELECT proposal_id FROM registry_internal.registry_proposal_state WHERE proposal_id=ANY($1) FOR UPDATE",
+            &[&ids],
+        )
+        .await
+        .unwrap();
+    assert_eq!(locked.len(), concealed.len());
+    let metadata = fixture
+        .http
+        .client
+        .registry_contract(Some("clerk"))
+        .await
+        .unwrap()
+        .value;
+    let collection = metadata.select_proposals("clerk").unwrap();
+    let mut query = BRegProposalQuery {
+        limit: Some(1),
+        ..Default::default()
+    };
+    let mut seen = Vec::new();
+    let mut pages = 0;
+    loop {
+        pages += 1;
+        assert!(pages <= 4, "the holder's list must make progress");
+        let page = fixture
+            .http
+            .client
+            .list_proposals(&collection, &query)
+            .await
+            .expect("other holders' Proposals never time a holder's list out")
+            .value;
+        seen.extend(page.items.iter().map(|item| item.id().to_owned()));
+        if let Some(cursor) = &page.next_cursor {
+            assert!(
+                !concealed.contains(cursor),
+                "a concealed Proposal id never becomes a cursor"
+            );
+        }
+        query.cursor = page.next_cursor;
+        if query.cursor.is_none() {
+            break;
+        }
+    }
+    assert_eq!(seen, [visible.id().to_owned()]);
+    transaction.rollback().await.unwrap();
+    drop(blocker);
+    task.abort();
+    drop(other);
+    fixture.finish().await;
+}
+
+#[tokio::test]
+async fn proposal_list_deadline_refuses_a_partial_page_and_cancels_the_wait() {
+    let fixture = client_http::ClientFixture::start_with_mutations(
+        registry(false),
+        claims("author", "zone-a"),
+        |mutations| mutations.with_action_timeout_for_test(std::time::Duration::from_secs(2)),
+    )
+    .await;
+    let mut drafts = Vec::new();
+    for index in 0..2 {
+        drafts.push(start(&fixture, "Draft", &format!("deadline-draft-{index}")).await);
+    }
+    drafts.sort_by(|left, right| left.id().cmp(right.id()));
+    let id = uuid::Uuid::parse_str(drafts[1].id()).unwrap();
+    let (mut blocker, task) = fixture.database.connect_migration().await;
+    let transaction = blocker.transaction().await.unwrap();
+    transaction.query_one("SELECT proposal_id FROM registry_internal.registry_proposal_state WHERE proposal_id=$1 FOR UPDATE", &[&id]).await.unwrap();
+    let metadata = fixture
+        .http
+        .client
+        .registry_contract(Some("clerk"))
+        .await
+        .unwrap()
+        .value;
+    let error = fixture
+        .http
+        .client
+        .list_proposals(
+            &metadata.select_proposals("clerk").unwrap(),
+            &BRegProposalQuery::default(),
+        )
+        .await
+        .err()
+        .expect("a deadline cannot return partial success");
+    assert_eq!(
+        error.problem_code(),
+        Some(BRegProblemCode::ServiceUnavailable)
+    );
+    let waits: i64 = fixture.database.admin.query_one("SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE '%registry_proposal_state%' AND query LIKE '%FOR SHARE%'", &[]).await.unwrap().get(0);
+    assert_eq!(
+        waits, 0,
+        "the timed-out list releases its query and connection"
+    );
+    transaction.rollback().await.unwrap();
+    drop(blocker);
+    task.abort();
+    fixture.finish().await;
+}
+
+async fn retain_queue_review(
+    fixture: &client_http::ClientFixture,
+    proposal: &registry_breg_client::BRegProposal,
+    review: &LocalReview,
+    status: registry_review_client::ReviewResultStatus,
+    expired: bool,
+    apply_result: bool,
+) {
+    let id = uuid::Uuid::parse_str(proposal.id()).unwrap();
+    let version = i64::from(proposal.submission_version());
+    let row = fixture.database.admin.query_one("SELECT create_request,expected_submission_digest FROM registry_internal.registry_proposal_review_submissions WHERE proposal_id=$1 AND submission_version=$2", &[&id,&version]).await.unwrap();
+    let create: registry_review_client::ReviewCreateRequest =
+        serde_json::from_value(row.get(0)).unwrap();
+    let accepted = registry_review_client::ReviewRequestAccepted {
+        request_id: uuid::Uuid::new_v4(),
+        subject: create.subject,
+        policy: serde_json::from_value(serde_json::to_value(create.policy).unwrap()).unwrap(),
+        submission_digest: serde_json::from_value(json!(row.get::<_, String>(1))).unwrap(),
+    };
+    fixture.database.admin.execute("UPDATE registry_internal.registry_proposal_review_submissions SET state='accepted',accepted_binding=$1 WHERE proposal_id=$2 AND submission_version=$3", &[&serde_json::to_value(&accepted).unwrap(),&id,&version]).await.unwrap();
+    let mut result = review.result(&accepted);
+    if !apply_result {
+        result.result_id = uuid::Uuid::new_v4();
+    }
+    result.status = status;
+    result.outcome = Some(
+        if status == registry_review_client::ReviewResultStatus::ChangesRequested {
+            "changes-requested"
+        } else {
+            "approved"
+        }
+        .to_owned(),
+    );
+    if status == registry_review_client::ReviewResultStatus::ChangesRequested {
+        result.public_reason = Some("Confirm the final terms.".into());
+    }
+    if expired {
+        result.completed_at = chrono::Utc::now() - chrono::Duration::hours(2);
+        result.available_until = chrono::Utc::now() - chrono::Duration::hours(1);
+    }
+    let status = serde_json::to_value(status)
+        .unwrap()
+        .as_str()
+        .unwrap()
+        .to_owned();
+    fixture.database.admin.execute("INSERT INTO registry_internal.registry_proposal_review_results (action_id,proposal_id,submission_version,authority,result_id,result,status,completed_at,available_until) VALUES ('correct-name',$1,$2,'local-review',$3,$4,$5,$6,$7)", &[&id,&version,&result.result_id,&serde_json::to_value(&result).unwrap(),&status,&result.completed_at,&result.available_until]).await.unwrap();
 }
 
 async fn proposal_state_lock_wait(fixture: &client_http::ClientFixture, minimum: i64) -> bool {
@@ -364,7 +1109,15 @@ async fn start_action(
     value: &str,
     key_name: &str,
 ) -> registry_breg_client::BRegProposal {
-    let client = &fixture.http.client;
+    start_action_as(&fixture.http.client, action_id, value, key_name).await
+}
+
+async fn start_action_as(
+    client: &registry_breg_client::BaseRegistryClient,
+    action_id: &str,
+    value: &str,
+    key_name: &str,
+) -> registry_breg_client::BRegProposal {
     let metadata = client.registry_contract(Some("clerk")).await.unwrap();
     let BRegDirectWrite::Create(create) = metadata
         .value
@@ -838,6 +1591,17 @@ async fn manual_apply_unique_conflict_blocks_apply_while_stale_revision_stays_re
         .prepare_proposal(&draft, "submit", json!({}), &key("unique-apply-submit"))
         .unwrap();
     let submitted = client.execute_proposal(&submit).await.unwrap().value;
+    let collection = metadata.value.select_proposals("clerk").unwrap();
+    let pending_query = BRegProposalQuery {
+        pending_manual_application: true,
+        ..Default::default()
+    };
+    let pending = client
+        .list_proposals(&collection, &pending_query)
+        .await
+        .unwrap()
+        .value;
+    assert!(pending.items.iter().any(|item| item.id() == submitted.id()));
     client
         .create_record(
             &create,
@@ -877,11 +1641,24 @@ async fn manual_apply_unique_conflict_blocks_apply_while_stale_revision_stays_re
         .expect("the refused Apply records its terminal outcome");
     assert_eq!(terminal["record"]["outcome"], "refused");
     assert!(
+        terminal["record"].get("changedInputs").is_none(),
+        "a refused Apply reports no committed input changes"
+    );
+    assert!(
         terminal["record"].get("applicationReference").is_none(),
         "a refused Apply did not retain an application"
     );
 
     let blocked = client.read_proposal(&submitted).await.unwrap().value;
+    let pending = client
+        .list_proposals(&collection, &pending_query)
+        .await
+        .unwrap()
+        .value;
+    assert!(
+        pending.items.iter().all(|item| item.id() != blocked.id()),
+        "a durably refused Apply leaves the pending manual queue"
+    );
     let blocked_json = serde_json::to_value(&blocked).unwrap();
     assert_eq!(blocked.state(), BRegProposalState::Submitted);
     assert_eq!(blocked.blocked_reason(), None);
@@ -4230,6 +5007,10 @@ async fn missing_review_binding_preserves_unrelated_builtin_work_and_fails_revie
             .is_none(),
         "an absent optional Review mapping must not disable the registry"
     );
+    assert_eq!(
+        runtime.unbound_review_authorities(&registry),
+        vec!["local-review".to_owned()]
+    );
     let fixture = client_http::ClientFixture::start(registry, claims("author", "zone-a")).await;
     let client = &fixture.http.client;
     let draft = start(&fixture, "Independent", "independent-start").await;
@@ -6774,6 +7555,37 @@ fn writable_inputs_source() -> Value {
     source
 }
 
+fn nullable_writable_inputs_registry() -> registry_breg::CompiledRegistry {
+    let mut source = writable_inputs_source();
+    source["functions"] = json!([{
+        "id":"nullable-note-plan", "runtime":"rhai", "source":"plans/nullable-note.rhai",
+        "entrypoint":"plan", "abi":"registry.action-plan/v1"
+    }]);
+    source["actions"][0]["plan"] = json!({
+        "type":"function", "function":"nullable-note-plan", "inputs":["target","value","note"],
+        "writes":[{"id":"name","target":{"fromInput":"target"},"operation":"patch","fields":["name"]}]
+    });
+    let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
+    compile_project_with_assets(
+        &project,
+        &[],
+        &[ModuleAssetSource {
+            module: None,
+            path: "plans/nullable-note.rhai".into(),
+            bytes: br#"fn plan(ctx) {
+                let name = ctx.inputs.value;
+                if "note" in ctx.inputs {
+                    name = if ctx.inputs.note == () { "null-branch-canary" } else { ctx.inputs.note };
+                }
+                #{effects:[#{id:"name",set:#{name:name}}]}
+            }"#
+            .to_vec(),
+        }],
+        CompileProfile::Authoring,
+    )
+    .expect("nullable-input Proposal compiles")
+}
+
 /// One refused input write: a located `request.invalid` with no value echoed,
 /// and exactly one audited refusal that names no value either.
 async fn assert_input_write_refused(
@@ -6814,6 +7626,232 @@ async fn assert_input_write_refused(
             "{operation}: audit disclosed {canary}"
         );
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn writable_inputs_treat_explicit_null_as_a_write() {
+    let fixture = client_http::ClientFixture::start(
+        nullable_writable_inputs_registry(),
+        claims("author", "zone-a"),
+    )
+    .await;
+    let client = &fixture.http.client;
+    let metadata = client.registry_contract(Some("clerk")).await.unwrap();
+    let BRegDirectWrite::Create(create) = metadata
+        .value
+        .select_direct_write("records.target.create", "clerk")
+        .unwrap()
+    else {
+        panic!("create");
+    };
+    let target = client
+        .create_record(
+            &create,
+            &BRegCreateRequest::new(map(json!({"name":"Before","jurisdiction":"zone-a"}))).unwrap(),
+            &key("nullable-writable-record"),
+            BRegRecordFormat::Json,
+        )
+        .await
+        .unwrap()
+        .value
+        .data
+        .record_identifier;
+    let action = metadata
+        .value
+        .select_action("correct-name", "clerk")
+        .unwrap();
+    let clerk_get = metadata.value.select_proposal_get("clerk").unwrap();
+
+    let before = fixture.audit_capture.entries().len();
+    let refused = client
+        .start_proposal(
+            &action,
+            &BRegActionInvocationRequest::new(
+                &action,
+                map(json!({"target":target,"value":"Started","note":null})),
+                None,
+            )
+            .unwrap(),
+            &key("nullable-start-refused"),
+        )
+        .await;
+    assert_input_write_refused(&fixture, refused, before, "start").await;
+
+    let draft_receipt = client
+        .start_proposal(
+            &action,
+            &BRegActionInvocationRequest::new(
+                &action,
+                map(json!({"target":target,"value":"Started"})),
+                None,
+            )
+            .unwrap(),
+            &key("nullable-start"),
+        )
+        .await
+        .unwrap()
+        .value;
+    let draft = client
+        .get_proposal(&clerk_get, draft_receipt.id())
+        .await
+        .unwrap()
+        .value;
+    let mut edited_input = draft.input().unwrap().clone();
+    edited_input.insert("note".into(), Value::Null);
+    let before = fixture.audit_capture.entries().len();
+    let edit = client
+        .prepare_proposal(
+            &draft,
+            "edit",
+            json!({"input":edited_input}),
+            &key("nullable-edit-refused"),
+        )
+        .unwrap();
+    assert_input_write_refused(
+        &fixture,
+        client.execute_proposal(&edit).await,
+        before,
+        "edit",
+    )
+    .await;
+
+    let officer_metadata = client
+        .registry_contract(Some("officer"))
+        .await
+        .unwrap()
+        .value;
+    let officer_get = officer_metadata.select_proposal_get("officer").unwrap();
+    let officer_view = client
+        .get_proposal(&officer_get, draft.id())
+        .await
+        .unwrap()
+        .value;
+    let mut officer_input = officer_view.input().unwrap().clone();
+    officer_input.insert("note".into(), Value::Null);
+    let officer_edit = client
+        .prepare_proposal(
+            &officer_view,
+            "edit",
+            json!({"input":officer_input}),
+            &key("nullable-officer-add-null"),
+        )
+        .unwrap();
+    let with_null_receipt = client.execute_proposal(&officer_edit).await.unwrap().value;
+    let with_null = client
+        .get_proposal(&officer_get, with_null_receipt.id())
+        .await
+        .unwrap()
+        .value;
+    assert_eq!(with_null.input().unwrap().get("note"), Some(&Value::Null));
+
+    let clerk_view = client
+        .get_proposal(&clerk_get, draft.id())
+        .await
+        .unwrap()
+        .value;
+    let mut omitted_input = clerk_view.input().unwrap().clone();
+    omitted_input.remove("note");
+    let before = fixture.audit_capture.entries().len();
+    let edit = client
+        .prepare_proposal(
+            &clerk_view,
+            "edit",
+            json!({"input":omitted_input}),
+            &key("nullable-edit-omitted-refused"),
+        )
+        .unwrap();
+    assert_input_write_refused(
+        &fixture,
+        client.execute_proposal(&edit).await,
+        before,
+        "edit",
+    )
+    .await;
+
+    let officer_view = client
+        .get_proposal(&officer_get, draft.id())
+        .await
+        .unwrap()
+        .value;
+    let mut officer_input = officer_view.input().unwrap().clone();
+    officer_input.remove("note");
+    let officer_edit = client
+        .prepare_proposal(
+            &officer_view,
+            "edit",
+            json!({"input":officer_input}),
+            &key("nullable-officer-remove-null"),
+        )
+        .unwrap();
+    client.execute_proposal(&officer_edit).await.unwrap();
+    let draft = client
+        .get_proposal(&clerk_get, draft.id())
+        .await
+        .unwrap()
+        .value;
+    assert!(!draft.input().unwrap().contains_key("note"));
+
+    let submit = client
+        .prepare_proposal(&draft, "submit", json!({}), &key("nullable-submit"))
+        .unwrap();
+    let submitted_receipt = client.execute_proposal(&submit).await.unwrap().value;
+    let submitted = client
+        .get_proposal(&clerk_get, submitted_receipt.id())
+        .await
+        .unwrap()
+        .value;
+    let mut revised_input = submitted.input().unwrap().clone();
+    revised_input.insert("note".into(), Value::Null);
+    let before = fixture.audit_capture.entries().len();
+    let revise = client
+        .prepare_proposal(
+            &submitted,
+            "revise",
+            json!({"input":revised_input}),
+            &key("nullable-revise-refused"),
+        )
+        .unwrap();
+    assert_input_write_refused(
+        &fixture,
+        client.execute_proposal(&revise).await,
+        before,
+        "revise",
+    )
+    .await;
+
+    let revise = client
+        .prepare_proposal(
+            &submitted,
+            "revise",
+            json!({"input":submitted.input().unwrap()}),
+            &key("nullable-revise"),
+        )
+        .unwrap();
+    let revised_receipt = client.execute_proposal(&revise).await.unwrap().value;
+    let revised = client
+        .get_proposal(&clerk_get, revised_receipt.id())
+        .await
+        .unwrap()
+        .value;
+    let mut rebased_input = revised.input().unwrap().clone();
+    rebased_input.insert("note".into(), Value::Null);
+    let before = fixture.audit_capture.entries().len();
+    let rebase = client
+        .prepare_proposal(
+            &revised,
+            "rebase",
+            json!({"input":rebased_input}),
+            &key("nullable-rebase-refused"),
+        )
+        .unwrap();
+    assert_input_write_refused(
+        &fixture,
+        client.execute_proposal(&rebase).await,
+        before,
+        "rebase",
+    )
+    .await;
+    fixture.finish().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -7015,5 +8053,190 @@ async fn writable_inputs_bound_start_edit_revise_and_rebase_to_the_named_inputs(
         )
         .unwrap();
     client.execute_proposal(&rebase).await.unwrap();
+    let entries = fixture.audit_capture.entries();
+    assert!(entries
+        .iter()
+        .any(|entry| entry["record"]["changedInputs"] == json!(["value"])));
+    assert!(entries
+        .iter()
+        .any(|entry| entry["record"]["changedInputs"] == json!(["note"])));
+    let audit = serde_json::to_string(&entries).unwrap();
+    for canary in [
+        "officer-note-canary",
+        "writable-input-canary",
+        "Revised",
+        "Edited",
+    ] {
+        assert!(!audit.contains(canary));
+    }
+    fixture.finish().await;
+}
+
+#[tokio::test]
+async fn standing_officer_grant_revises_only_named_inputs_and_withdraws_exact_review() {
+    let mut source = writable_inputs_source();
+    source["reviewAuthorities"] =
+        json!([{"id":"local-review","protocol":"id.registrystack.org/protocols/review/v1"}]);
+    source["actions"][0]["execution"]["proposal"]["review"] = json!({"type":"required","authority":"local-review","source":"proposal-test","policy":{"id":"name-correction","version":"1","digest":format!("sha256:{}","b".repeat(64))}});
+    source["accessProfiles"][1]["requiredScopes"] = json!(["proposal:officer"]);
+    let grant = &mut source["accessProfiles"][1]["permissions"]["proposals"][0];
+    grant.as_object_mut().unwrap().remove("ownership");
+    grant["writableInputs"] = json!(["value"]);
+    let review = std::sync::Arc::new(LocalReview {
+        calls: 0.into(),
+        mode: 0.into(),
+        result_id: uuid::Uuid::new_v4(),
+    });
+    let injected = review.clone();
+    let fixture = client_http::ClientFixture::start_with_mutations(
+        compile(source),
+        claims("author", "zone-a"),
+        move |mutations| {
+            mutations.with_proposal_review_substitute_for_test(local_review_binding(), injected)
+        },
+    )
+    .await;
+    let client = &fixture.http.client;
+    let draft = start(&fixture, "Original terms", "officer-source").await;
+    let submit = client
+        .prepare_proposal(&draft, "submit", json!({}), &key("officer-first-submit"))
+        .unwrap();
+    let first = client.execute_proposal(&submit).await.unwrap().value;
+    retain_queue_review(
+        &fixture,
+        &first,
+        &review,
+        registry_review_client::ReviewResultStatus::ChangesRequested,
+        false,
+        false,
+    )
+    .await;
+    let officer_claims = VerifiedRequestClaims::authenticated_with_actor_kind(
+        "sub",
+        "officer",
+        BTreeSet::from(["proposal:officer".into()]),
+        Some("registry-administration".into()),
+        BTreeMap::from([(
+            "jurisdiction".into(),
+            VerifiedClaimValue::direct_string("zone-a").unwrap(),
+        )]),
+        registry_platform_oidc::ActorKind::Human,
+    )
+    .unwrap();
+    let officer = fixture.client_for(officer_claims).await;
+    let metadata = officer
+        .client
+        .registry_contract(Some("officer"))
+        .await
+        .unwrap()
+        .value;
+    let binding = metadata.select_proposal_get("officer").unwrap();
+    let current = officer
+        .client
+        .get_proposal(&binding, first.id())
+        .await
+        .unwrap()
+        .value;
+    let revise = officer
+        .client
+        .prepare_proposal(&current, "revise", json!({}), &key("standing-revise"))
+        .unwrap();
+    let revised = officer
+        .client
+        .execute_proposal(&revise)
+        .await
+        .unwrap()
+        .value;
+    assert_eq!(revised.submission_version(), 2);
+    let history = officer
+        .client
+        .read_proposal_submission(&revised, 1)
+        .await
+        .unwrap()
+        .value;
+    let history = serde_json::to_value(history).unwrap();
+    assert_eq!(history["current"], false);
+    assert_eq!(
+        history["decision"]["publicReason"],
+        "Confirm the final terms."
+    );
+    let cancellation=fixture.database.admin.query_one("SELECT withdrawn,state FROM registry_internal.registry_proposal_review_submissions WHERE proposal_id=$1 AND submission_version=1",&[&uuid::Uuid::parse_str(first.id()).unwrap()]).await.unwrap();
+    assert!(cancellation.get::<_, bool>(0));
+    assert_eq!(cancellation.get::<_, String>(1), "cancelling");
+    let revised = officer.client.read_proposal(&revised).await.unwrap().value;
+    let mut values = revised.input().unwrap().clone();
+    values.insert("note".into(), json!("must-not-leak-canary"));
+    let refused = officer
+        .client
+        .prepare_proposal(
+            &revised,
+            "edit",
+            json!({"input":values}),
+            &key("standing-refused"),
+        )
+        .unwrap();
+    let refusal = officer.client.execute_proposal(&refused).await.unwrap_err();
+    assert_eq!(
+        refusal.problem_code(),
+        Some(BRegProblemCode::RequestInvalid)
+    );
+    assert_eq!(refusal.field_path().unwrap().as_str(), "/input/note");
+    let mut values = revised.input().unwrap().clone();
+    values.insert("value".into(), json!("Final terms canary"));
+    let edit = officer
+        .client
+        .prepare_proposal(
+            &revised,
+            "edit",
+            json!({"input":values}),
+            &key("standing-edit"),
+        )
+        .unwrap();
+    let edited = officer.client.execute_proposal(&edit).await.unwrap().value;
+    let audit_before = fixture.audit_capture.entries().len();
+    let replay = officer.client.execute_proposal(&edit).await.unwrap();
+    assert_eq!(
+        serde_json::to_value(&replay.value).unwrap(),
+        serde_json::to_value(&edited).unwrap(),
+        "replaying the edit retains the exact receipt"
+    );
+    let audit = fixture.audit_capture.entries();
+    let terminal = audit[audit_before..]
+        .iter()
+        .find(|entry| {
+            entry["record"]["phase"] == "terminal"
+                && entry["record"]["operationId"] == "proposals.correct-name.edit"
+        })
+        .expect("the replayed edit records its terminal outcome");
+    assert_eq!(terminal["record"]["outcome"], "replayed");
+    assert!(
+        terminal["record"].get("changedInputs").is_none(),
+        "a replay reports no committed input changes"
+    );
+    let submit = officer
+        .client
+        .prepare_proposal(&edited, "submit", json!({}), &key("standing-submit"))
+        .unwrap();
+    let second = officer
+        .client
+        .execute_proposal(&submit)
+        .await
+        .unwrap()
+        .value;
+    assert_eq!(second.submission_version(), 2);
+    assert_ne!(first.effect_digest(), second.effect_digest());
+    let submissions=fixture.database.admin.query("SELECT snapshot->>'submittedBy' FROM registry_internal.registry_proposal_submissions WHERE proposal_id=$1 ORDER BY submission_version",&[&uuid::Uuid::parse_str(first.id()).unwrap()]).await.unwrap();
+    assert_ne!(
+        submissions[0].get::<_, String>(0),
+        submissions[1].get::<_, String>(0)
+    );
+    let audit = fixture.audit_capture.entries();
+    assert!(audit
+        .iter()
+        .any(|entry| entry["record"]["changedInputs"] == json!(["value"])));
+    let audit = serde_json::to_string(&audit).unwrap();
+    assert!(!audit.contains("Final terms canary"));
+    assert!(!audit.contains("must-not-leak-canary"));
+    drop(officer);
     fixture.finish().await;
 }

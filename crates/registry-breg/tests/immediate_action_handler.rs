@@ -61,6 +61,12 @@ fn result(expression: &str) -> String {
     format!("fn handle(ctx) {{ {expression} }}")
 }
 
+// Runtime decoder tests deliberately return a helper's computed outcome. The
+// direct-literal authoring lint has independent tests below.
+fn runtime_result(expression: &str) -> String {
+    format!("fn outcome(ctx) {{ {expression} }} fn handle(ctx) {{ outcome(ctx) }}")
+}
+
 fn generated_only_project() -> Value {
     let mut source = project();
     source["recordTypes"][0]["fields"] = json!([{
@@ -177,7 +183,7 @@ fn handler_business_refusal_is_exclusive_bounded_and_governed() {
         r#"#{refusal:#{code:"blank-name",data:#{value:"private-canary"}}}"#,
     ] {
         assert_eq!(
-            evaluate(&result(expression)).unwrap_err(),
+            evaluate(&runtime_result(expression)).unwrap_err(),
             ActionHandlerError::Result,
             "{expression}"
         );
@@ -209,7 +215,10 @@ fn handler_rejects_slot_and_value_contract_violations() {
         r#"#{effects:[#{id:"person",set:#{name:"Mina",friend:#{fromEffect:"existing"}}},#{id:"existing",clear:["friend"]}]}"#,
         r#"#{effects:[#{id:"person",set:#{name:"Mina",friend:#{fromEffect:"friend"}}},#{id:"friend",set:#{name:"Sam",friend:#{fromEffect:"person"}}}]}"#,
     ] {
-        assert!(evaluate(&result(expression)).is_err(), "{expression}");
+        assert!(
+            evaluate(&runtime_result(expression)).is_err(),
+            "{expression}"
+        );
     }
 }
 
@@ -330,7 +339,7 @@ fn local_handler_diagnostics_hide_unknown_output_names_and_preserve_success() {
             Some("person"),
         ),
     ] {
-        let action = compile(project(), &result(expression)).unwrap();
+        let action = compile(project(), &runtime_result(expression)).unwrap();
         let diagnostic = evaluate_action_detailed(
             &action,
             inputs().as_object().unwrap(),
@@ -358,7 +367,7 @@ fn local_handler_diagnostics_hide_unknown_output_names_and_preserve_success() {
         r#"let name = ctx.inputs["given-name"]; name.trim(); #{effects:[#{id:"person",set:#{name:name}}]}"#,
         r#"#{refusal:#{code:"blank-name",field:"given-name"}}"#,
     ] {
-        let action = compile(project(), &result(expression)).unwrap();
+        let action = compile(project(), &runtime_result(expression)).unwrap();
         let detailed = evaluate_action_detailed(
             &action,
             inputs().as_object().unwrap(),
@@ -471,7 +480,7 @@ fn handler_decoder_diagnostics_identify_repairable_causes_without_values() {
             "Set only fields declared by this slot.",
         ),
     ] {
-        let action = compile(project(), &result(expression)).unwrap();
+        let action = compile(project(), &runtime_result(expression)).unwrap();
         let diagnostic = evaluate_action_detailed(
             &action,
             inputs().as_object().unwrap(),
@@ -539,6 +548,80 @@ fn handler_optional_inputs_preserve_absence_and_explicit_null() {
             .unwrap_err(),
         ActionHandlerError::Execution
     );
+}
+
+#[test]
+fn absent_optional_input_copied_into_a_field_names_only_compiled_locations() {
+    let action = compile(
+        project(),
+        r#"fn handle(ctx) {
+        #{effects:[#{id:"person",set:#{name:ctx.inputs["family-name"]}}]}
+    }"#,
+    )
+    .unwrap();
+    let diagnostic = evaluate_action_detailed(
+        &action,
+        inputs().as_object().unwrap(),
+        Instant::now() + Duration::from_secs(5),
+    )
+    .unwrap_err();
+    assert_eq!(diagnostic.kind, ActionHandlerError::Result);
+    assert_eq!(diagnostic.slot.as_deref(), Some("person"));
+    assert_eq!(diagnostic.field.as_deref(), Some("name"));
+    let valid = compile(
+        project(),
+        r#"fn handle(ctx) {
+        let fields = #{};
+        if "family-name" in ctx.inputs && ctx.inputs["family-name"] != () {
+            fields.name = ctx.inputs["family-name"];
+        }
+        fields.name = ctx.inputs["given-name"];
+        #{effects:[#{id:"person",set:fields}]}
+    }"#,
+    )
+    .unwrap();
+    assert!(evaluate_action(
+        &valid,
+        inputs().as_object().unwrap(),
+        Instant::now() + Duration::from_secs(5)
+    )
+    .is_ok());
+}
+
+#[test]
+fn directly_returned_literal_outcomes_are_checked_against_the_action_catalogues() {
+    for (script, code) in [
+        (
+            r#"fn handle(ctx) { return #{refusal:#{code:"undeclared-literal-canary"}}; }"#,
+            "breg.action.plan-literal-refusal-undeclared",
+        ),
+        (
+            r#"fn handle(ctx) { #{effects:[#{id:"undeclared-literal-canary",set:#{name:ctx.inputs["given-name"]}}]} }"#,
+            "breg.action.plan-literal-effect-undeclared",
+        ),
+    ] {
+        let failure = compile(project(), script)
+            .expect_err("a definite returned literal typo is refused before execution");
+        let diagnostic = failure
+            .diagnostics()
+            .iter()
+            .find(|diagnostic| diagnostic.code == code)
+            .unwrap_or_else(|| panic!("bounded literal diagnostic: {failure:?}"));
+        assert!(diagnostic.message.contains("line"));
+        assert!(!format!("{failure:?}").contains("undeclared-literal-canary"));
+    }
+    for script in [
+        r#"fn handle(ctx) { #{refusal:#{code:"blank-name"}} }"#,
+        r#"fn handle(ctx) { let unrelated=#{id:"unrelated-canary",code:"unrelated-canary"}; #{effects:[#{id:"person",set:#{name:ctx.inputs["given-name"]}}]} }"#,
+        r#"fn helper() { #{refusal:#{code:"computed-helper-canary"}} } fn handle(ctx) { helper() }"#,
+        r#"fn handle(ctx) { let code=ctx.inputs["given-name"]; #{refusal:#{code:code}} }"#,
+        r#"fn handle(ctx) { #{refusal:#{code:"computed-"+ctx.inputs["given-name"]}} }"#,
+        r#"fn handle(ctx) { let effects=[]; effects.push(#{id:"dynamic-canary"}); #{effects:effects} }"#,
+        r#"fn handle(ctx) { throw #{refusal:#{code:"throw-canary"}}; }"#,
+    ] {
+        compile(project(), script)
+            .expect("uncertain outcomes and unrelated strings remain executable-test concerns");
+    }
 }
 
 #[test]

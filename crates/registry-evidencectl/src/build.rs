@@ -166,6 +166,8 @@ pub(crate) fn validated_question_revisions(
     let report = run_bundle_check_report(
         &evidence_bin,
         &compiled.bundle_path,
+        &compiled.runtime_path,
+        Some(&compiled.target_path),
         project,
         &compiled.fixture_paths,
         &interruption,
@@ -188,6 +190,8 @@ pub(crate) fn validated_question_revisions(
 
 pub(crate) struct TargetFixtureProject {
     pub(crate) bundle_path: PathBuf,
+    pub(crate) runtime_path: PathBuf,
+    pub(crate) target_path: PathBuf,
     pub(crate) fixture_paths: Vec<String>,
     staging: tempfile::TempDir,
 }
@@ -208,7 +212,8 @@ pub(crate) fn compile_target_fixture_project(
     target: &Path,
     evidence_bin: &Path,
 ) -> Result<TargetFixtureProject> {
-    let target = read_target_documents(target)?;
+    let target_path = crate::target::target_path(target);
+    let target = read_target_documents(&target_path)?;
     let staging = tempfile::Builder::new()
         .prefix("evidencectl-target-fixtures-")
         .tempdir()
@@ -220,6 +225,8 @@ pub(crate) fn compile_target_fixture_project(
     let compiled = compile_with_target(project, &target, &staging_path, evidence_bin, None)?;
     Ok(TargetFixtureProject {
         bundle_path: compiled.bundle_path,
+        runtime_path: compiled.runtime_path,
+        target_path,
         fixture_paths: compiled.fixture_paths,
         staging,
     })
@@ -318,6 +325,7 @@ pub(crate) fn read_target_documents(target: &Path) -> Result<TargetDocuments> {
 
 pub(crate) struct TargetCompilation {
     pub(crate) bundle_path: PathBuf,
+    pub(crate) runtime_path: PathBuf,
     pub(crate) fixture_paths: Vec<String>,
     pub(crate) bundle: Value,
 }
@@ -389,8 +397,11 @@ pub(crate) fn compile_with_target(
             crate::authored::to_indented_yaml(&authority)?,
         )?;
     }
+    let runtime_path = staging_root.join("runtime.yaml");
+    fs::write(&runtime_path, &target.runtime)?;
     Ok(TargetCompilation {
         bundle_path: compiled.bundle_path,
+        runtime_path,
         fixture_paths: compiled.fixture_paths,
         bundle: compiled.bundle,
     })
@@ -413,14 +424,14 @@ fn prepare_candidate(
     revision: Option<&str>,
 ) -> Result<(String, Vec<String>)> {
     let compiled = compile_with_target(project, target, staging_root, evidence_bin, revision)?;
-    fs::write(staging_root.join("runtime.yaml"), &target.runtime)?;
     interruption.check()?;
     reject_review_markers(&compiled.bundle_path)?;
     reject_review_markers_in_bytes(&target.runtime, "runtime.yaml")?;
-    let secret_references = secret_references(&compiled.bundle)?;
     let package_digest = run_bundle_check(
         evidence_bin,
         &compiled.bundle_path,
+        &compiled.runtime_path,
+        target.source_path.as_deref(),
         project,
         &compiled.fixture_paths,
         interruption,
@@ -435,6 +446,11 @@ fn prepare_candidate(
             interruption,
         )?;
     }
+    // Secret references are collected only after the delegated bundle check
+    // passes, so a malformed reference in the runtime section is reported by
+    // that check at its authored location first.
+    let runtime = runtime_value(&target.runtime).map_err(anyhow::Error::new)?;
+    let secret_references = secret_references(&json!([compiled.bundle, runtime]))?;
     Ok((package_digest, secret_references))
 }
 
@@ -468,19 +484,29 @@ fn verify_stable_package_root(runtime_bytes: &[u8], candidate: &Path) -> Result<
 fn run_bundle_check(
     evidence_bin: &Path,
     bundle: &Path,
+    runtime: &Path,
+    target: Option<&Path>,
     project: &Path,
     fixtures: &[String],
     interruption: &BuildInterruption,
 ) -> Result<String> {
-    Ok(
-        run_bundle_check_report(evidence_bin, bundle, project, fixtures, interruption)?
-            .package_digest,
-    )
+    Ok(run_bundle_check_report(
+        evidence_bin,
+        bundle,
+        runtime,
+        target,
+        project,
+        fixtures,
+        interruption,
+    )?
+    .package_digest)
 }
 
 fn run_bundle_check_report(
     evidence_bin: &Path,
     bundle: &Path,
+    runtime: &Path,
+    target: Option<&Path>,
     project: &Path,
     fixtures: &[String],
     interruption: &BuildInterruption,
@@ -490,6 +516,8 @@ fn run_bundle_check_report(
         .arg("bundle-check")
         .arg("--bundle")
         .arg(bundle)
+        .arg("--runtime-config")
+        .arg(runtime)
         .arg("--json")
         .env_remove("REGISTRY_EVIDENCE_RUNTIME");
     if let Some(parent) = bundle.parent() {
@@ -501,6 +529,7 @@ fn run_bundle_check_report(
     let output = run_evidence(command, interruption, true, true)?;
     if !output.status.success() {
         if let Some(report) = crate::authored::runtime_refusal(&output.stdout) {
+            let report = crate::authored::runtime_target_refusal(report, runtime, target);
             return Err(
                 crate::authored::runtime_bundle_refusal(report, bundle, project, fixtures).into(),
             );
@@ -528,20 +557,26 @@ pub(crate) struct BundleCheckRequirement {
     pub(crate) configuration_revision: String,
 }
 
-/// Ask the owning runtime to validate only a generated governed bundle.
+/// Ask the owning runtime to validate a generated governed bundle and the
+/// static bindings in its generated runtime document.
 ///
-/// This seam deliberately cannot execute fixtures or load a runtime document.
-/// It is used by the offline authoring check after the existing compiler has
-/// assembled an unpublished bundle.
+/// This seam deliberately cannot execute fixtures, resolve secrets, load
+/// activated authority, or inspect target-host dependencies. It is used by
+/// the offline authoring check after the existing compiler has assembled an
+/// unpublished candidate.
 pub(crate) fn check_compiled_bundle(
     evidence_bin: &Path,
     bundle: &Path,
+    runtime: &Path,
+    target: Option<&Path>,
     project: &Path,
     fixtures: &[String],
 ) -> Result<BundleCheckReport> {
     run_bundle_check_report(
         evidence_bin,
         bundle,
+        runtime,
+        target,
         project,
         fixtures,
         &BuildInterruption::passive(),

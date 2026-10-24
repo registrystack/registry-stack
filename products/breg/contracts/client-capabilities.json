@@ -42,6 +42,7 @@
     "cursor",
     "limit",
     "turn",
+    "pendingManualApplication",
     "submissionVersion",
     "reviewContextField",
     "effectDigest",
@@ -156,6 +157,11 @@
     },
     "turn": {
       "rust": ["BRegProposalQuery.turn"],
+      "node": ["BaseRegistryClient.listProposals.queryJson"],
+      "python": ["BaseRegistryClient.list_proposals.query"]
+    },
+    "pendingManualApplication": {
+      "rust": ["BRegProposalQuery.pending_manual_application"],
       "node": ["BaseRegistryClient.listProposals.queryJson"],
       "python": ["BaseRegistryClient.list_proposals.query"]
     },

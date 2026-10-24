@@ -1,0 +1,27 @@
+[
+  {
+    "deliveryTime": "2026-08-30T00:00:01Z",
+    "signature": "v1=OzL5k0ghZJb9nPbb-JOVsroWeanipBlZXbeKDd52RcM",
+    "valid": true
+  },
+  {
+    "deliveryTime": "2026-08-30T00:00:01.12Z",
+    "signature": "v1=ZQg3DB5VtHVbaMRtqRGO8JpmgK2W1hdtqcK7f5IT7VI",
+    "valid": true
+  },
+  {
+    "deliveryTime": "2026-08-30T00:00:01.120Z",
+    "signature": "v1=pvXNUIIghuILdT1ZNXYEFlEjzIpWTHnSX_RDZm9H4eg",
+    "valid": true
+  },
+  {
+    "deliveryTime": "2026-08-30T00:00:01.000Z",
+    "signature": "v1=0KmEEbkw99AACNmAf24Jt6A24mP3FD7ggMTmbEz1iJg",
+    "valid": true
+  },
+  {
+    "deliveryTime": "invalid-canary-time",
+    "signature": "v1=RXxC0r1vMbqexB3iiQyRie8Bg1stSpJdN1EUMlmFDLY",
+    "valid": false
+  }
+]

@@ -11,7 +11,54 @@ use crate::postgres::{begin_proposal_transaction, ProposalAuthority, ProposalAut
 use crate::proposal_store;
 use std::collections::BTreeMap;
 
+// Keep status selection in the single candidate query before its scan bound.
+// Caller ownership is exact here, so another holder's Proposal never reaches a
+// per-candidate read; `$4` pairs each `$1` Action with the caller's owner
+// reference, or NULL when that authority is not ownership-scoped.
+const PROPOSAL_LIST_CANDIDATES: &str = "SELECT p.proposal_id,p.action_id FROM registry_internal.registry_proposal_state p
+                WHERE p.action_id=ANY($1) AND ($2::uuid IS NULL OR p.proposal_id>$2)
+                  AND EXISTS (SELECT 1 FROM unnest($1::text[],$4::text[]) AS a(action_id,owner_reference)
+                    WHERE a.action_id=p.action_id
+                      AND (a.owner_reference IS NULL OR a.owner_reference=p.owner_reference))
+                  AND (NOT $3 OR (p.state='submitted' AND p.blocked_reason IS NULL AND EXISTS (
+                    SELECT 1 FROM registry_internal.registry_proposal_submissions s
+                    LEFT JOIN registry_internal.registry_proposal_review_submissions review
+                      USING(action_id,proposal_id,submission_version)
+                    LEFT JOIN registry_internal.registry_proposal_review_results r
+                      USING(action_id,proposal_id,submission_version)
+                    WHERE s.action_id=p.action_id AND s.proposal_id=p.proposal_id
+                      AND s.submission_version=p.submission_version
+                      AND s.snapshot->'applicationPolicy'->>'mode'='manual'
+                      AND (s.snapshot->'reviewRequirement'->>'type'='none'
+                        OR (NOT review.withdrawn AND r.status='approved' AND r.available_until>statement_timestamp()))
+                  )))
+                ORDER BY p.proposal_id LIMIT 9";
+
 impl PostgresRecordMutationService {
+    #[cfg(feature = "postgres-test")]
+    pub async fn pending_manual_list_plan_for_test(
+        &self,
+        actions: &[String],
+    ) -> Result<Value, MutationError> {
+        let client = self
+            .pool
+            .get()
+            .await
+            .map_err(|_| MutationError::Unavailable)?;
+        let row = client
+            .query_one(
+                &format!("EXPLAIN (ANALYZE, FORMAT JSON) {PROPOSAL_LIST_CANDIDATES}"),
+                &[
+                    &actions,
+                    &Option::<Uuid>::None,
+                    &true,
+                    &vec![None::<String>; actions.len()],
+                ],
+            )
+            .await
+            .map_err(|_| MutationError::Unavailable)?;
+        Ok(row.get(0))
+    }
     #[cfg(feature = "postgres-test")]
     async fn pause_proposal_read_for_test(&self) {
         if let Some(barrier) = &self.proposal_read_barrier_for_test {
@@ -973,19 +1020,30 @@ impl PostgresRecordMutationService {
         // ceiling. Leave room for the rest of the Proposal and keep pages
         // below the maintained client's 8 MiB response ceiling.
         const MAXIMUM_PAGE_BYTES: usize = 4 * 1024 * 1024;
-        // A turn match needs the full authorized projection. Bound how many
-        // candidates one page projects so sparse filters have bounded work.
+        // A turn match needs the full authorized projection. Bound projections,
+        // privately scanning raw batches under the existing request deadline.
         const MAXIMUM_SCANNED_PROPOSALS: usize = 8;
         let mut page_bytes = 0usize;
         let action_ids = authorities
             .iter()
             .map(|authority| authority.common.action_id().to_owned())
             .collect::<Vec<_>>();
+        let owner_references = authorities
+            .iter()
+            .map(|authority| {
+                (authority.ownership == Some(crate::model::ProposalOwnership::Caller)).then(|| {
+                    self.coordinator
+                        .proposal_owner_reference(authority.common.principal())
+                })
+            })
+            .collect::<Vec<_>>();
         let mut after = query.after;
         let mut items = Vec::new();
         let mut has_more = false;
         let mut continuation = None;
-        'page: {
+        let mut authorized_projections = 0;
+        let mut last_authorized = None;
+        'page: loop {
             if tokio::time::Instant::now() >= deadline {
                 return Err(MutationError::Unavailable);
             }
@@ -993,10 +1051,13 @@ impl PostgresRecordMutationService {
             // filter. Row/ownership concealment precedes filtering and counts.
             let candidates = client
                 .query(
-                    "SELECT proposal_id,action_id FROM registry_internal.registry_proposal_state
-                WHERE action_id=ANY($1) AND ($2::uuid IS NULL OR proposal_id>$2)
-                ORDER BY proposal_id LIMIT 9",
-                    &[&action_ids, &after],
+                    PROPOSAL_LIST_CANDIDATES,
+                    &[
+                        &action_ids,
+                        &after,
+                        &query.pending_manual_application,
+                        &owner_references,
+                    ],
                 )
                 .await
                 .map_err(|_| MutationError::Unavailable)?;
@@ -1053,6 +1114,19 @@ impl PostgresRecordMutationService {
                     }
                     Err(error) => return Err(error),
                 }
+                // Only an authorized UUID may become a continuation. An extra
+                // authorized candidate proves another bounded page is useful.
+                if authorized_projections == MAXIMUM_SCANNED_PROPOSALS {
+                    continuation = last_authorized;
+                    has_more = true;
+                    guarded
+                        .commit()
+                        .await
+                        .map_err(|_| MutationError::Unavailable)?;
+                    break 'page;
+                }
+                authorized_projections += 1;
+                last_authorized = Some(id);
                 let matches = query
                     .action
                     .as_ref()
@@ -1086,6 +1160,9 @@ impl PostgresRecordMutationService {
                         .turn
                         .as_ref()
                         .is_some_and(|turn| value["turn"].as_str() != Some(turn.as_str()))
+                        || query.pending_manual_application
+                            && (value["applicationStatus"]["mode"] != "manual"
+                                || value["applicationStatus"]["state"] != "pending")
                     {
                         guarded
                             .commit()
@@ -1127,10 +1204,9 @@ impl PostgresRecordMutationService {
                     .map_err(|_| MutationError::Unavailable)?;
             }
             if count > MAXIMUM_SCANNED_PROPOSALS {
-                has_more = true;
-                continuation = after;
-                break 'page;
+                continue;
             }
+            break 'page;
         }
         let mut value = json!({"items":items});
         if authorities.iter().any(|authority| {

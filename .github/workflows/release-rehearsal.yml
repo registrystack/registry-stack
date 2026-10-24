@@ -711,11 +711,6 @@ jobs:
               cp "${GITHUB_WORKSPACE}/crates/registry-${client}-client-node/${client}-client.${{ matrix.napi_platform }}.node" \
                 "${platform_dir}/"
             done
-            (cd "${client_dir}" && npm pack \
-              "./npm/${{ matrix.napi_platform }}" \
-              --ignore-scripts --pack-destination "${RUNNER_TEMP}")
-            platform_package="${RUNNER_TEMP}/registrystack-client-${{ matrix.napi_platform }}-${CLIENT_VERSION}.tgz"
-            test -f "${platform_package}"
 
             smoke="${RUNNER_TEMP}/node-rehearsal-registry"
             root_stage="${RUNNER_TEMP}/node-root-registry"
@@ -725,6 +720,11 @@ jobs:
               --package-json "${root_stage}/package.json" \
               --version "${CLIENT_VERSION}" \
               --client stack
+            (cd "${root_stage}" && npm pack \
+              "./npm/${{ matrix.napi_platform }}" \
+              --ignore-scripts --pack-destination "${RUNNER_TEMP}")
+            platform_package="${RUNNER_TEMP}/registrystack-client-${{ matrix.napi_platform }}-${CLIENT_VERSION}.tgz"
+            test -f "${platform_package}"
             (cd "${root_stage}" && npm pack \
               --ignore-scripts --pack-destination "${smoke}")
             root_package="${smoke}/registrystack-client-${CLIENT_VERSION}.tgz"

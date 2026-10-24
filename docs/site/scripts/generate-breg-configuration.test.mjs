@@ -135,7 +135,7 @@ test('Proposal list query keys come from the client capability inventory', async
     new URL('../../../products/breg/contracts/client-capabilities.json', import.meta.url), 'utf8'));
   assert.equal(document.client_proposal_query.file, 'products/breg/contracts/client-capabilities.json');
   assert.deepEqual(document.client_proposal_query.keys.map((entry) => entry.key),
-    ['action', 'owner', 'target', 'state', 'cursor', 'limit', 'turn']);
+    ['action', 'owner', 'target', 'state', 'cursor', 'limit', 'turn', 'pendingManualApplication']);
   for (const entry of document.client_proposal_query.keys) {
     assert.deepEqual(entry, { key: entry.key, ...inventory.queryOptionBindings[entry.key] });
   }

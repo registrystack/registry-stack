@@ -212,6 +212,13 @@ fn rhai_outcome(
     evaluate_action_detailed(action, inputs, deadline())
 }
 
+/// Keep malformed outcome fixtures behind one runtime call. Direct returned
+/// literals are authoring-time lint territory; this corpus exercises the
+/// shared runtime decoder and validator after compilation succeeds.
+fn runtime_rhai_outcome(body: &str) -> String {
+    format!("fn outcome(ctx) {{ {body} }} fn plan(ctx) {{ outcome(ctx) }}")
+}
+
 /// What a parity case expects when both backends refuse the proposal.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Expected {
@@ -286,7 +293,7 @@ fn assert_parity(
 /// the pinned verdict).
 fn person_cases() -> Vec<(&'static str, String, String, Expected)> {
     use ActionHandlerError::{Ceiling, Result as ResultKind};
-    let script = |body: &str| format!("fn plan(ctx) {{ {body} }}");
+    let script = runtime_rhai_outcome;
     vec![
         // Accepted proposals.
         (
@@ -529,19 +536,19 @@ fn refused_proposals_carry_identical_pinned_diagnostics() {
         (
             "unknown write slot",
             r#"{"effects":[{"id":"unknown","set":{"name":"Mina"}}]}"#,
-            r#"fn plan(ctx) { #{effects:[#{id:"unknown",set:#{name:"Mina"}}]} }"#,
+            r#"#{effects:[#{id:"unknown",set:#{name:"Mina"}}]}"#,
             ActionHandlerError::Ceiling,
             "Use an id from the handler's declared write slots.",
         ),
         (
             "set value is null",
             r#"{"effects":[{"id":"person","set":{"name":null}}]}"#,
-            r#"fn plan(ctx) { #{effects:[#{id:"person",set:#{name:()}}]} }"#,
+            r#"#{effects:[#{id:"person",set:#{name:()}}]}"#,
             ActionHandlerError::Result,
             "Set a non-null value; use clear only for optional patch fields.",
         ),
     ] {
-        let action = person_action(script);
+        let action = person_action(&runtime_rhai_outcome(script));
         let diagnostic = assert_parity(
             case,
             &action,

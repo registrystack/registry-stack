@@ -6,6 +6,12 @@ compile_error!(
     "registry-platform-testing is a test-only crate; enable feature \"test-utils\" from dev-dependencies"
 );
 
+mod diagnostic_capture;
+pub use diagnostic_capture::{
+    assert_resource_audience_and_token_type_rules, malformed_access_token_fixtures,
+    CapturedDiagnosticLogs,
+};
+
 #[cfg(feature = "test-authorization-server")]
 mod authorization_server;
 
@@ -226,6 +232,22 @@ pub fn sign_compact_jwt_with_key(
         "kid": kid,
     });
     sign_compact_jwt_header(private, header, claims)
+}
+
+/// Ephemeral asymmetric key for resource-server interoperability tests. No
+/// private fixture bytes are retained or printed.
+#[must_use]
+pub fn access_token_test_key(algorithm: jsonwebtoken::Algorithm) -> PrivateJwk {
+    use registry_platform_crypto::{generate_private_jwk, GeneratedKeyAlgorithm};
+    let mut key = generate_private_jwk(match algorithm {
+        jsonwebtoken::Algorithm::ES256 => GeneratedKeyAlgorithm::Es256,
+        jsonwebtoken::Algorithm::RS256 => GeneratedKeyAlgorithm::Rs384,
+        _ => panic!("the baseline fixture admits only RS256 and ES256"),
+    })
+    .expect("ephemeral test key generates");
+    key.alg = Some(format!("{algorithm:?}"));
+    key.kid = Some("canary-resource-key".to_owned());
+    key
 }
 
 fn sign_compact_jwt_header(private: &PrivateJwk, header: Value, claims: Value) -> String {

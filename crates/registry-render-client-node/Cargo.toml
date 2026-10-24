@@ -1,0 +1,19 @@
+[package]
+name = "registry-render-client-node"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+napi.workspace = true
+napi-derive.workspace = true
+registry-render-client.workspace = true
+serde_json.workspace = true
+
+[build-dependencies]
+napi-build.workspace = true

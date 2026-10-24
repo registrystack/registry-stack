@@ -3069,6 +3069,89 @@ fn bundle_check_names_a_safe_artifact_and_a_value_free_cause_for_every_failure_c
     }
 }
 
+#[test]
+fn bundle_check_with_runtime_refuses_every_static_target_binding_mismatch() {
+    let project = Path::new(env!("CARGO_MANIFEST_DIR")).join(
+        "../../products/evidence/reference/request-adapter/deployment-projects/sqlite-extract-evidence",
+    );
+    for (label, mutate, code, pointer) in [
+        (
+            "missing extract",
+            "missing-extract",
+            "evidence.runtime.source-extract-unbound",
+            "/sourceExtracts",
+        ),
+        (
+            "unused extract",
+            "unused-extract",
+            "evidence.runtime.source-extract-unused",
+            "/sourceExtracts/unused-extract",
+        ),
+        (
+            "signer assurance",
+            "local-signer",
+            "evidence.runtime.signer-assurance-mismatch",
+            "/signer/type",
+        ),
+        (
+            "listener",
+            "trusted-proxy",
+            "evidence.runtime.invalid-listener",
+            "/listener/trustProxyIdentityHeaders",
+        ),
+    ] {
+        let root = tempfile::tempdir().expect("temporary deployment");
+        let bundle = root.path().join("bundle");
+        copy_tree(&project.join("bundle"), &bundle);
+        let runtime = root.path().join("runtime.yaml");
+        fs::copy(project.join("runtime.yaml"), &runtime).expect("stage runtime");
+        let text = fs::read_to_string(&runtime).expect("read runtime");
+        let text = match mutate {
+            "missing-extract" => text
+                .split_once("sourceExtracts:\n")
+                .expect("extract block")
+                .0
+                .to_owned(),
+            "unused-extract" => text.replacen("licence-register-extract:", "unused-extract:", 1),
+            "local-signer" => {
+                let start = text.find("signer:\n").expect("signer block");
+                let end = text[start..]
+                    .find("audit:\n")
+                    .map(|offset| start + offset)
+                    .expect("audit block");
+                format!(
+                    "{}signer:\n  type: local-jwk\n  privateKeyRef: secret:file/signing-key\n{}",
+                    &text[..start],
+                    &text[end..]
+                )
+            }
+            "trusted-proxy" => text.replacen(
+                "  trustProxyIdentityHeaders: false\n",
+                "  trustProxyIdentityHeaders: true\n",
+                1,
+            ),
+            _ => unreachable!(),
+        };
+        fs::write(&runtime, text).expect("write mismatched runtime");
+        refresh_package_envelope(&bundle);
+        set_tree_mode(&bundle, 0o555, 0o444);
+
+        let output = invoke_bundle_check_with_runtime(&bundle, &runtime);
+
+        set_tree_mode(&bundle, 0o755, 0o644);
+        assert_eq!(output.status.code(), Some(1), "{label}");
+        assert!(output.stderr.is_empty(), "{label}");
+        let report: Value = serde_json::from_slice(&output.stdout)
+            .unwrap_or_else(|error| panic!("{label}: invalid JSON report: {error}"));
+        let diagnostic = report["diagnostics"]
+            .as_array()
+            .and_then(|items| items.iter().find(|item| item["code"] == code))
+            .unwrap_or_else(|| panic!("{label}: missing {code}: {report}"));
+        assert_eq!(diagnostic["path"], pointer, "{label}");
+        assert_eq!(diagnostic["source"]["file"], runtime.display().to_string());
+    }
+}
+
 /// The source-plan pass is the one place `bundle-check` and `check` differ:
 /// `compile_bundle_source_plans` checks a statement offline, with no extract
 /// mounted, where `compile_source_plans` may open a bound one. None of the
@@ -5145,6 +5228,19 @@ fn invoke_bundle_check(bundle: &Path) -> Output {
         .arg("bundle-check")
         .arg("--bundle")
         .arg(bundle)
+        .env_remove("REGISTRY_EVIDENCE_RUNTIME")
+        .output()
+        .expect("evidence binary starts")
+}
+
+fn invoke_bundle_check_with_runtime(bundle: &Path, runtime: &Path) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_evidence"))
+        .arg("bundle-check")
+        .arg("--bundle")
+        .arg(bundle)
+        .arg("--runtime-config")
+        .arg(runtime)
+        .arg("--json")
         .env_remove("REGISTRY_EVIDENCE_RUNTIME")
         .output()
         .expect("evidence binary starts")

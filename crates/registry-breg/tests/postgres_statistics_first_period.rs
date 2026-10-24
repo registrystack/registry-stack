@@ -240,14 +240,14 @@ async fn moving_first_period_forward_hides_old_releases_without_changing_the_def
     assert_eq!(retry.status(), StatusCode::CONFLICT);
     let retry: serde_json::Value =
         serde_json::from_slice(&to_bytes(retry.into_body(), 1024 * 1024).await.unwrap()).unwrap();
-    assert_eq!(retry["code"], "idempotency.conflict");
+    assert_eq!(retry["code"], "idempotency.key-reused");
     let retry = call(&mut successor_app, "POST",
         "/v1/statistics/units-by-category/releases/2025-02/versions/1/withdrawal?accessProfile=publisher",
         &claims, Some("withdraw-retry-key"), Some(r#"{"reason":"computation-error"}"#)).await;
     assert_eq!(retry.status(), StatusCode::CONFLICT);
     let retry: serde_json::Value =
         serde_json::from_slice(&to_bytes(retry.into_body(), 1024 * 1024).await.unwrap()).unwrap();
-    assert_eq!(retry["code"], "idempotency.conflict");
+    assert_eq!(retry["code"], "idempotency.key-reused");
     let stored: Vec<u8> = database
         .admin
         .query_one(

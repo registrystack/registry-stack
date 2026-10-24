@@ -498,6 +498,32 @@ impl SigningProvider for FailOnNthSignatureSigner {
 }
 
 #[tokio::test]
+async fn indeterminate_source_outage_has_no_retry_after_and_does_not_change_readiness() {
+    let fixture = acceptance_runtime().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/facts"))
+        .respond_with(ResponseTemplate::new(503))
+        .expect(1)
+        .mount(&fixture.server)
+        .await;
+    let http = TestServer::new(build_app(Arc::clone(&fixture.runtime)));
+    let response = http
+        .post("/v1/evidence")
+        .add_header("authorization", format!("Bearer {}", access_token(None)))
+        .json(&adult_request())
+        .await;
+    assert_eq!(response.status_code(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(response.json::<Value>()["code"], "source.unavailable");
+    assert!(response.maybe_header("retry-after").is_none());
+    http.get("/ready").await.assert_status_ok();
+    assert_eq!(
+        fixture.server.received_requests().await.unwrap().len(),
+        1,
+        "readiness checks its own dependencies without probing the source-data endpoint"
+    );
+}
+
+#[tokio::test]
 async fn real_router_serves_all_definitions_concurrently_without_crossing_boundaries() {
     let fixture = acceptance_runtime().await;
     let http = TestServer::new(build_app(Arc::clone(&fixture.runtime)));

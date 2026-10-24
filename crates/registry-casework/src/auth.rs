@@ -21,6 +21,14 @@ pub struct CaseworkAuthenticator {
 }
 
 impl CaseworkAuthenticator {
+    pub(crate) fn record_header_refusal(&self) {
+        registry_platform_oidc::log_authentication_refusal!(
+            self.verifier,
+            registry_platform_oidc::AuthenticationStage::Header,
+            "Casework authentication refused"
+        );
+    }
+
     /// Constructs an authenticator from a project already validated by
     /// [`CaseworkProject::load`] or [`CaseworkProject::check`].
     #[must_use]
@@ -53,12 +61,18 @@ impl CaseworkAuthenticator {
         scope: &str,
         kind: registry_platform_oidc::ActorKind,
     ) -> Result<registry_platform_oidc::VerifiedToken, AuthenticationError> {
-        validate_compact_access_token(token).map_err(|_| AuthenticationError::Refused)?;
-        let verified = self
-            .verifier
-            .verify(token)
-            .await
-            .map_err(|_| AuthenticationError::Refused)?;
+        validate_compact_access_token(token).map_err(|_| {
+            self.record_header_refusal();
+            AuthenticationError::Refused
+        })?;
+        let verified = self.verifier.verify(token).await.map_err(|error| {
+            registry_platform_oidc::log_authentication_refusal!(
+                self.verifier,
+                error.authentication_stage(),
+                "Casework authentication refused"
+            );
+            AuthenticationError::Refused
+        })?;
         if !matches!(
             verified.claims.aud.as_ref(),
             Some(registry_platform_oidc::Audience::One(_))
@@ -88,16 +102,22 @@ impl CaseworkAuthenticator {
         token: &str,
         selected_profile: &str,
     ) -> Result<ActorContext, AuthenticationError> {
-        validate_compact_access_token(token).map_err(|_| AuthenticationError::Refused)?;
-        let verified = self
-            .verifier
-            .verify(token)
-            .await
-            .map_err(|_| AuthenticationError::Refused)?;
-        let profile = self
-            .profiles
-            .get(selected_profile)
-            .ok_or(AuthenticationError::Profile)?;
+        validate_compact_access_token(token).map_err(|_| {
+            self.record_header_refusal();
+            AuthenticationError::Refused
+        })?;
+        let verified = self.verifier.verify(token).await.map_err(|error| {
+            registry_platform_oidc::log_authentication_refusal!(
+                self.verifier,
+                error.authentication_stage(),
+                "Casework authentication refused"
+            );
+            AuthenticationError::Refused
+        })?;
+        let profile = self.profiles.get(selected_profile).ok_or_else(|| {
+            self.profile_diagnostic();
+            AuthenticationError::Profile
+        })?;
         let requires_person = profile.role != CaseworkRole::Requester
             || self.initiator_profiles.contains(&profile.id);
         if requires_person
@@ -116,6 +136,12 @@ impl CaseworkAuthenticator {
             .iter()
             .all(|scope| actual_scopes.contains(scope.as_str()))
         {
+            registry_platform_oidc::log_authentication_refusal!(
+                self.verifier,
+                registry_platform_oidc::AuthenticationStage::Scope,
+                "Casework authentication profile refused",
+                remedy = "check authentication.oidc.scopeClaim and accessProfiles requiredScopes"
+            );
             return Err(AuthenticationError::Profile);
         }
         if requires_person {
@@ -125,8 +151,12 @@ impl CaseworkAuthenticator {
                 .get(&self.human_identity.claim)
                 .and_then(Value::as_str)
                 .filter(|value| !value.is_empty())
-                .ok_or(AuthenticationError::NotHuman)?;
+                .ok_or_else(|| {
+                    self.profile_diagnostic();
+                    AuthenticationError::NotHuman
+                })?;
             if human_identity != self.human_identity.value {
+                self.profile_diagnostic();
                 return Err(AuthenticationError::NotHuman);
             }
         }
@@ -154,6 +184,15 @@ impl CaseworkAuthenticator {
             profile_id: profile.id.clone(),
             role: profile.role,
         })
+    }
+
+    fn profile_diagnostic(&self) {
+        registry_platform_oidc::log_authentication_refusal!(
+            self.verifier,
+            registry_platform_oidc::AuthenticationStage::Profile,
+            "Casework authentication profile refused",
+            remedy = "check selected accessProfiles and authentication.oidc.humanIdentity profile category"
+        );
     }
 }
 
@@ -196,6 +235,75 @@ mod tests {
     const AUDIENCE: &str = "urn:casework:test";
     const CLIENT: &str = "task-agent";
     const SECRET: &[u8] = b"01234567890123456789012345678901";
+
+    #[tokio::test]
+    async fn equivalent_profile_refusals_share_one_bounded_value_free_diagnostic() {
+        use tracing::instrument::WithSubscriber;
+        #[derive(Clone)]
+        struct Writer(Arc<std::sync::Mutex<Vec<u8>>>);
+        impl std::io::Write for Writer {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let output = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let writer = Writer(Arc::clone(&output));
+        let subscriber = tracing::Dispatch::new(
+            tracing_subscriber::fmt()
+                .json()
+                .without_time()
+                .with_ansi(false)
+                .with_writer(move || writer.clone())
+                .finish(),
+        );
+        let mut p = project();
+        p.access_profiles.push(AccessProfile {
+            id: "staff".into(),
+            principal_claim: "sub".into(),
+            required_scopes: vec!["canary-private-scope".into()],
+            role: CaseworkRole::Staff,
+        });
+        let verifier = TokenVerifierConfig::access_token_profile(
+            ISSUER,
+            vec![AUDIENCE.into()],
+            vec![Algorithm::HS256],
+            vec!["at+jwt".into()],
+        );
+        let auth = CaseworkAuthenticator::new(&p, verifier, keys(), HumanIdentityConfig::default());
+        let base = json!({"sub":"canary-private-subject","scope":"canary-private-scope"});
+        let credential = token(base.clone());
+        assert_eq!(
+            auth.authenticate(&credential, "canary-private-profile")
+                .with_subscriber(subscriber.clone())
+                .await
+                .unwrap_err(),
+            AuthenticationError::Profile
+        );
+        for kind in [None, Some(""), Some("canary-private-actor")] {
+            let mut claims = base.clone();
+            if let Some(kind) = kind {
+                claims["registry_actor_kind"] = json!(kind);
+            }
+            let credential = token(claims);
+            assert_eq!(
+                auth.authenticate(&credential, "staff")
+                    .with_subscriber(subscriber.clone())
+                    .await
+                    .unwrap_err(),
+                AuthenticationError::NotHuman
+            );
+        }
+        let rendered = String::from_utf8(output.lock().unwrap().clone()).unwrap();
+        assert_eq!(rendered.lines().count(), 1);
+        assert!(rendered.contains("profile"));
+        assert!(rendered.contains("authentication.oidc.humanIdentity"));
+        assert!(!rendered.contains("canary-private"));
+        assert!(!rendered.contains(&credential));
+    }
 
     fn project() -> CaseworkProject {
         CaseworkProject {
@@ -315,5 +423,103 @@ mod tests {
             .authenticate_task_client(&allowed, "task-grant", ActorKind::Service)
             .await
             .expect("the listed assertion authority is accepted");
+    }
+    #[tokio::test]
+    async fn compact_token_admission_logs_one_value_free_header_diagnostic() {
+        use registry_platform_testing::{malformed_access_token_fixtures, CapturedDiagnosticLogs};
+        use tracing::instrument::WithSubscriber;
+        let captured = CapturedDiagnosticLogs::default();
+        let subscriber = captured.subscriber();
+        let tokens = malformed_access_token_fixtures();
+        let auth = authenticator(BTreeMap::new());
+        for _ in 0..3 {
+            for token in &tokens {
+                assert!(matches!(
+                    auth.authenticate(token, "requester")
+                        .with_subscriber(subscriber.clone())
+                        .await,
+                    Err(AuthenticationError::Refused)
+                ));
+                assert!(matches!(
+                    auth.authenticate_task_client(
+                        token,
+                        "casework:grants:status",
+                        ActorKind::Service
+                    )
+                    .with_subscriber(subscriber.clone())
+                    .await,
+                    Err(AuthenticationError::Refused)
+                ));
+            }
+        }
+        captured.assert_one_value_free_header_diagnostic(&tokens);
+    }
+
+    #[tokio::test]
+    async fn separate_resource_rs256_and_es256_profiles_refuse_cross_resource_reuse() {
+        for algorithm in [Algorithm::RS256, Algorithm::ES256] {
+            let key = registry_platform_testing::access_token_test_key(algorithm);
+            let jwks = serde_json::from_value(json!({"keys":[key.public()]})).unwrap();
+            let source = Arc::new(JwksFetcher::new_static(jwks, JwksFetcherConfig::defaults()));
+            let verifier = TokenVerifierConfig::access_token_profile(
+                ISSUER,
+                vec![AUDIENCE.to_owned()],
+                vec![algorithm],
+                vec!["at+jwt".to_owned()],
+            )
+            .with_scope_claim("scope")
+            .with_allowed_clients(vec![CLIENT.to_owned()]);
+            let mut p = project();
+            p.access_profiles.push(AccessProfile {
+                id: "staff".into(),
+                principal_claim: "sub".into(),
+                required_scopes: vec!["casework:staff".into()],
+                role: CaseworkRole::Staff,
+            });
+            let auth =
+                CaseworkAuthenticator::new(&p, verifier, source, HumanIdentityConfig::default());
+            let now = Utc::now().timestamp();
+            let claims = json!({"iss":ISSUER,"aud":AUDIENCE,"azp":CLIENT,"sub":"canary-person","scope":"casework:staff","registry_actor_kind":"human","iat":now,"exp":now+300});
+            let sign = |claims: serde_json::Value, typ: &str| {
+                registry_platform_testing::sign_compact_jwt_with_key(
+                    &key,
+                    typ,
+                    "canary-resource-key",
+                    claims,
+                )
+            };
+            registry_platform_testing::assert_resource_audience_and_token_type_rules(
+                &key,
+                claims.clone(),
+                |token: String| {
+                    let auth = &auth;
+                    async move { auth.authenticate(&token, "staff").await }
+                },
+                |error| matches!(error, AuthenticationError::Refused),
+            )
+            .await;
+            // A valid symmetric JWT is outside the asymmetric production baseline.
+            let token = self::token(
+                json!({"azp":CLIENT,"scope":"casework:staff","registry_actor_kind":"human"}),
+            );
+            assert!(matches!(
+                auth.authenticate(&token, "staff").await,
+                Err(AuthenticationError::Refused)
+            ));
+            let mut wrong_actor = claims.clone();
+            wrong_actor["registry_actor_kind"] = json!("canary-invalid-actor");
+            let token = sign(wrong_actor, "at+jwt");
+            assert!(matches!(
+                auth.authenticate(&token, "staff").await,
+                Err(AuthenticationError::NotHuman)
+            ));
+            let mut missing = claims.clone();
+            missing["scope"] = json!("");
+            let token = sign(missing, "at+jwt");
+            assert!(matches!(
+                auth.authenticate(&token, "staff").await,
+                Err(AuthenticationError::Profile)
+            ));
+        }
     }
 }

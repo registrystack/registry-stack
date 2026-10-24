@@ -246,6 +246,13 @@ fn manifest_integrity_diagnostics(
             ),
         ),
         (
+            "manifest.metadata.module-id-collision",
+            list_ids(
+                "/modules",
+                manifest.modules.iter().map(|item| item.id.as_str()),
+            ),
+        ),
+        (
             "manifest.metadata.data-service-id-collision",
             list_ids(
                 "/data_services",
@@ -1139,6 +1146,23 @@ mod tests {
         assert_eq!(finding.related[0].path, "/authorities/0/id");
         assert!(finding.message.contains("`registry-office`"));
         assert!(finding.message.contains("`registry_office`"));
+    }
+
+    #[test]
+    fn metadata_check_refuses_separator_lookalikes_in_the_module_namespace() {
+        let text=format!("{MINIMAL}modules:\n  - id: renewal-worker\n    title: First worker\n  - id: renewal_worker\n    title: Second worker\n");
+        let diagnostics = refused(&text);
+        let finding = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == "manifest.metadata.module-id-collision")
+            .expect("module namespace collision has an owning finding");
+        assert_eq!(finding.path, "/modules/1/id");
+        assert_eq!(finding.related[0].path, "/modules/0/id");
+        assert!(finding
+            .source
+            .as_ref()
+            .is_some_and(|source| source.line.is_some()));
+        assert!(finding.related[0].line.is_some());
     }
 
     #[test]

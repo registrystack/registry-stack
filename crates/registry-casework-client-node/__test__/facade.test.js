@@ -13,6 +13,29 @@ test('facade exports the maintained client and mapped error', () => {
   assert.equal(typeof client.CaseworkClientError, 'function');
 });
 
+test('accepted-result binding diagnostics are bounded and precede token or HTTP effects', async () => {
+  const { CaseworkClient, CaseworkClientError } = require('../client');
+  const client = new CaseworkClient({ baseUrl: 'https://casework.example.invalid/' });
+  const valid = { requestId: '00000000-0000-4000-8000-000000000001',
+    policy: { id: 'review', version: '1', digest: `sha256:${'a'.repeat(64)}` },
+    subject: { source: 'registry', type: 'case', id: 'one', version: '1', digest: `sha256:${'b'.repeat(64)}` },
+    submissionDigest: `sha256:${'c'.repeat(64)}` };
+  for (const field of Object.keys(valid)) {
+    await assert.rejects(client.reviewResult('bad token canary', 'requester', { ...valid, [field]: 'canary-private-binding' }), error => {
+      assert.ok(error instanceof CaseworkClientError);
+      assert.equal(error.kind, 'invalid-request');
+      assert.deepEqual(error.validation, { path: `$.${field}`, reason: 'binding-invalid', allowed: [] });
+      assert.doesNotMatch(error.message, /canary/);
+      return true;
+    });
+  }
+  await assert.rejects(client.reviewResult('bad token canary', 'requester', { ...valid, requestId: '00000000-0000-0000-0000-000000000000' }), error => {
+    assert.deepEqual(error.validation, { path: '$.requestId', reason: 'binding-invalid', allowed: [] });
+    assert.equal(error.kind, 'invalid-request');
+    return true;
+  });
+});
+
 test('review result feed preserves distinct identifiers and refuses nil correlation identifiers', async (context) => {
   const nil = '00000000-0000-0000-0000-000000000000';
   const entry = {

@@ -868,6 +868,8 @@ pub struct BRegProposalQuery {
     pub target: Option<String>,
     pub state: Option<BRegProposalState>,
     pub turn: Option<BRegProposalTurn>,
+    /// Restrict to manual application whose current application status is pending.
+    pub pending_manual_application: bool,
     pub cursor: Option<String>,
     pub limit: Option<u32>,
 }
@@ -1290,6 +1292,9 @@ impl BaseRegistryClient {
         if query.owner_is_caller {
             pairs.push(("owner".to_owned(), "caller".to_owned()));
         }
+        if query.pending_manual_application {
+            pairs.push(("pendingManualApplication".to_owned(), "true".to_owned()));
+        }
         if let Some(target) = &query.target {
             pairs.push(("target".to_owned(), target.clone()));
         }
@@ -1341,6 +1346,11 @@ impl BaseRegistryClient {
                     .is_some_and(|action| action != &item.action_id)
                 || query.state.is_some_and(|state| state != item.state)
                 || query.turn.is_some_and(|turn| Some(turn) != item.turn)
+                || query.pending_manual_application
+                    && item.application_status.as_ref().is_none_or(|status| {
+                        status.mode != BRegProposalApplicationMode::Manual
+                            || status.state != BRegProposalApplicationState::Pending
+                    })
             {
                 return Err(refusal());
             }

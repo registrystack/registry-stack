@@ -1375,6 +1375,7 @@ mod tests {
 
     use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
     use ed25519_dalek::SigningKey;
+    use p256::elliptic_curve::Generate as _;
     use registry_platform_crypto::{verify, PrivateJwk, PublicJwk};
     use serde_json::{json, Value};
     use url::Url;
@@ -1478,7 +1479,6 @@ mod tests {
 
     /// A fresh ES256 client key in the shape adopter tooling writes.
     fn es256_client_key(key_id: Option<&str>) -> PrivateJwk {
-        use p256::elliptic_curve::Generate as _;
         let key = p256::ecdsa::SigningKey::generate();
         let point = key.verifying_key().to_sec1_point(false);
         let mut document = json!({

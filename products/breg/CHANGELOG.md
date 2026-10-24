@@ -15,6 +15,39 @@
   restricted to the caller.
 - Preserve bounded authentication-refusal warnings after a poisoned timestamp
   lock, while retaining their rate limit.
+- Serialize import-run admission so one authority has at most one open or
+  blocked run. Successor plan and apply refuse legacy duplicates under a live
+  current authority before maintenance while the existing runtime remains
+  available for creator-scoped recovery through `bregctl data runs list` and
+  `data runs cancel`; historical runs under retired authorities do not block an
+  upgrade.
+- BREAKING: rename the `409 idempotency.conflict` wire code to
+  `idempotency.key-reused`. Update code-based error handling when upgrading;
+  older clients treat the renamed code as an unrecognized problem. BReg keeps
+  its 256-byte key limit; 128 bytes remains the portable cross-product guidance.
+- Allow required Proposal inputs to be completed at Submit. Start, Edit,
+  Revise, and Rebase accept incomplete drafts while checking every supplied
+  value and its write grant. Immediate Actions still require complete inputs.
+- Add `pendingManualApplication=true` to Proposal List. The local current
+  submission and unexpired, non-withdrawn approval determine eligibility before
+  pagination; listing does not call the Review provider for each Proposal.
+- Add optional field-guard `reason` copy keys. Availability and
+  `412 action.guard_failed` disclose `guardReason` only when every guard and
+  row-boundary fact for the target is readable; commit-time enforcement remains
+  authoritative.
+- Add value-free Invoke and Submit planner diagnostics and doctor advisories
+  for unbound logical Review authorities. An omitted optional authority permits
+  startup and unrelated work while its dependent Submit remains unavailable.
+- Select free owned development ports when preferred defaults are occupied,
+  retain the assignment across restarts, and preserve borrowed issuer endpoints.
+  Keep the raw pre-apply doctor report as private evidence outside failure logs.
+- BREAKING: diagnose incompatible field options, fixture refusal pairs, and
+  directly returned Rhai literal refusal codes and write-slot IDs before
+  execution. A package whose handler directly returns an undeclared refusal code
+  or write-slot ID now fails `check`, even when that return is unreachable.
+  Computed and helper-returned plans retain runtime validation. Executable
+  examples cover success, refusal, and exact expected handler failure, including
+  complete synthetic Evidence transcripts.
 - A plain successor apply verifies its target catalog and reconciles runtime
   grants in the same transaction as its DDL. A fingerprint refusal rolls that
   transaction back and preserves the failed target for inspection and exact

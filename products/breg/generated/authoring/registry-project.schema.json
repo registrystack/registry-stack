@@ -855,6 +855,10 @@
           "description": "Requires the stored value to be unset. Only `true` is read.",
           "type": "boolean"
         },
+        "reason": {
+          "$ref": "#/$defs/LocalId",
+          "description": "Stable application copy key; disclosure still requires readable guard facts."
+        },
         "revision": {
           "$ref": "#/$defs/GuardRevisionSource"
         }

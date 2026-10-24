@@ -309,6 +309,10 @@ pub enum PostgresKernelError {
     /// Local work must finish under its capturing activation before go-live.
     #[error("retained local hook deliveries prevent activation")]
     RetainedLocalHooks(RetainedLocalHookDeliveries),
+    /// More than one retained run occupies the same import authority. The
+    /// creators must recover that legacy state before activation can begin.
+    #[error("multiple non-terminal import runs share one import authority")]
+    ConflictingImportRuns,
     /// PostgreSQL refused a migration statement. Only the SQLSTATE and the
     /// object names the server reported are retained.
     #[error("PostgreSQL refused a migration statement: {0}")]

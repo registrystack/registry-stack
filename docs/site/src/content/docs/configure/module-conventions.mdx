@@ -1,0 +1,71 @@
+---
+title: Conventions for module authors
+description: Find the owning contracts for resource tokens, problems, retries, tracing, and signed delivery.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: unreviewed
+doc_type: how-to
+locale: en
+standards_referenced: []
+---
+
+If you write a service or worker beside Registry Stack, including Base Registry Engine (BReg),
+preserve each product's authority and use
+its released interface. Your module owns its own authorization, state, and recovery; an accepted
+review or a delivered notification does not grant it source mutation rights.
+
+## Authenticate to one resource
+
+Use the [shared token profile](https://github.com/registrystack/registry-stack/blob/main/products/platform/ACCESS-TOKENS.md)
+and the [token acquisition guide](../request-an-access-token/).
+Configure a separate token provider for each resource, audience, and scope set. The shared SDK
+authentication facade removes token acquisition plumbing while the selected product still checks
+its own principal, profile, and permissions.
+
+The [client API reference](../../reference/client-api/) owns the supported language surfaces.
+Keep private keys server-side and request the scopes the deployment admits.
+
+## Handle problems, tracing, and uncertain effects
+
+The [common HTTP problem contract](https://github.com/registrystack/registry-stack/blob/main/products/platform/HTTP-PROBLEMS.md)
+owns the envelope and trace relationship. Branch on the owning product's code and documented
+recovery action, and keep response trace context for diagnosis. Do not expose raw tokens or
+upstream transport errors to callers.
+
+Use the product's idempotency contract for the operation you call. Preserve the original key,
+body, profile, and revision guards after an uncertain write, then recover or read back its state.
+An operation that offers no idempotency key must not acquire a retry loop by convention.
+The [shared client rules](https://github.com/registrystack/registry-stack/blob/main/crates/CLIENTS.md)
+limit retries; the [BReg API](../../reference/breg-api/) and
+[Casework API](../../reference/apis/registry-casework/) define their operation-specific effects.
+Render's correlation key is not a deduplication promise.
+
+## Receive signed delivery
+
+Use the [delivery signing contract](https://github.com/registrystack/registry-stack/blob/main/products/platform/DELIVERY-SIGNING.md)
+for exact header and byte rules. Verify the original body bytes before parsing them, compare the
+signature in constant time, and bind deduplication to the verified delivery identity and payload.
+A completion wake announces that a result can be read; read that result from its authoritative
+product and correlate it to the request you accepted.
+
+The deterministic [cross-language fixtures](https://github.com/registrystack/registry-stack/blob/main/crates/registry-platform-crypto/tests/fixtures/delivery-signatures.json)
+come from that owning implementation. Run their exact bytes, key, and expected signatures through
+your language's implementation, including the negative cases, before sending or accepting live
+traffic. The owning drift test ensures the fixtures and signing implementation agree.
+
+## Try the Python composition
+
+The [Python reference service](https://github.com/registrystack/registry-stack/tree/main/products/platform/examples/python-composition)
+combines BReg, Casework, and Messaging over the released client interfaces, with a resource-bound
+token helper and a completion wake receiver. It is one example composition, not a required set of
+products. Its README owns installation, local configuration, and the runnable journey.
+
+## Describe the module optionally
+
+Use existing Manifest `data_services` for a real service that serves declared datasets. A worker
+can use the separate static `modules` description without a dataset. The
+[Manifest reference](../../products/registry-manifest/reference/#adopter-owned-modules) owns that
+metadata contract. Manifest performs no health check, authentication, dynamic registration, or
+capability enforcement for a described module.

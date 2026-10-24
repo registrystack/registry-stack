@@ -31,7 +31,7 @@ use registry_platform_dispatch::{
     idempotency_key, AttemptTimeoutBound, Backoff, DispatchError, FailureCode, Jitter, JobPolicy,
     ReceiverReference, RetrySchedule, SendOutcome, Sent, UncertainOutcome,
 };
-use tokio::sync::{oneshot, watch, Notify};
+use tokio::sync::{oneshot, watch, Barrier, Notify};
 use tokio_postgres::{NoTls, Row, Transaction};
 use uuid::Uuid;
 
@@ -1018,6 +1018,7 @@ type Script = Box<dyn Fn(&LeasedJob<TestJob>) -> SendOutcome + Send + Sync>;
 struct ScriptedTransport {
     script: Script,
     pause: Duration,
+    rendezvous: Option<Arc<Barrier>>,
     sends: Mutex<Vec<(JobKey, i64, i16)>>,
     in_flight: AtomicUsize,
     peak: AtomicUsize,
@@ -1028,6 +1029,7 @@ impl ScriptedTransport {
         Self {
             script: Box::new(script),
             pause: Duration::ZERO,
+            rendezvous: None,
             sends: Mutex::new(Vec::new()),
             in_flight: AtomicUsize::new(0),
             peak: AtomicUsize::new(0),
@@ -1036,6 +1038,11 @@ impl ScriptedTransport {
 
     fn pausing(mut self, pause: Duration) -> Self {
         self.pause = pause;
+        self
+    }
+
+    fn rendezvous(mut self, participants: usize) -> Self {
+        self.rendezvous = Some(Arc::new(Barrier::new(participants)));
         self
     }
 
@@ -1060,6 +1067,9 @@ impl DispatchTransport for ScriptedTransport {
             .lock()
             .expect("sends lock")
             .push((job.key.clone(), job.generation, job.attempt));
+        if let Some(rendezvous) = &self.rendezvous {
+            rendezvous.wait().await;
+        }
         if !self.pause.is_zero() {
             tokio::time::sleep(self.pause).await;
         }
@@ -2267,8 +2277,7 @@ async fn the_worker_drains_a_batch_under_bounded_concurrency() {
     for _ in 0..12 {
         enqueue_message(&harness, &Message::default()).await;
     }
-    let transport =
-        Arc::new(ScriptedTransport::new(|_| accepted()).pausing(Duration::from_millis(100)));
+    let transport = Arc::new(ScriptedTransport::new(|_| accepted()).rendezvous(3));
     let worker = DispatchWorker::new(
         dispatcher(&harness),
         Arc::clone(&transport),
@@ -2278,7 +2287,10 @@ async fn the_worker_drains_a_batch_under_bounded_concurrency() {
         },
     );
     let (_shutdown_tx, shutdown) = watch::channel(false);
-    assert_eq!(worker.drain(&shutdown).await, 12);
+    let moved = tokio::time::timeout(Duration::from_secs(10), worker.drain(&shutdown))
+        .await
+        .expect("all three lanes reach each send batch before the bounded deadline");
+    assert_eq!(moved, 12);
     let peak = transport.peak.load(Ordering::SeqCst);
     assert!(peak <= 3, "at most three sends run at once, saw {peak}");
     assert!(peak >= 2, "the lanes send in parallel, saw {peak}");

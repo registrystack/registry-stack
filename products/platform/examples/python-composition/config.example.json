@@ -1,0 +1,37 @@
+{
+  "bregUrl": "https://registry.example.org/",
+  "bregProfile": "issuance-applier",
+  "caseworkUrl": "https://casework.example.org/",
+  "caseworkProfile": "staff",
+  "messagingUrl": "https://messaging.example.org/",
+  "tokens": {
+    "breg": {
+      "headerFile": "/run/secrets/app/breg.headers",
+      "resource": "urn:example:breg",
+      "scopes": [
+        "licensing:issue"
+      ]
+    },
+    "casework": {
+      "headerFile": "/run/secrets/app/casework.headers",
+      "resource": "urn:example:casework",
+      "scopes": [
+        "casework:staff"
+      ]
+    },
+    "messaging": {
+      "headerFile": "/run/secrets/app/messaging.headers",
+      "resource": "urn:example:messaging",
+      "scopes": [
+        "messaging:send"
+      ]
+    }
+  },
+  "inbox": "/var/lib/example-application/inbox.sqlite",
+  "listen": "127.0.0.1:9300",
+  "caseworkSourceProfile": "proposal-reviewer",
+  "hookKeyFile": "/run/secrets/app/breg-hook-key",
+  "hookSource": "urn:registrystack:registry:licensing:instance:primary",
+  "hookType": "proposal.applied",
+  "hookSchema": "https://id.registrystack.org/contracts/breg/proposal-event/v1"
+}

@@ -929,11 +929,13 @@ pub async fn check_loaded(config: RuntimeConfig) -> Result<CheckedStartup> {
     let connection = config
         .runtime_database_connection_config()
         .map_err(map_runtime_config_error)?;
+    let unbound_review_authorities = config.unbound_review_authorities(package.registry());
     prepare_verified_package_with_connection(config, package, connection, AuditOpening::CheckOnly)
         .await
         .map(|prepared| CheckedStartup {
             postgres_advisories: prepared.postgres_advisories().to_vec(),
             role_mode: prepared.role_mode(),
+            unbound_review_authorities,
         })
 }
 
@@ -943,6 +945,7 @@ pub async fn check_loaded(config: RuntimeConfig) -> Result<CheckedStartup> {
 pub struct CheckedStartup {
     pub postgres_advisories: Vec<BaselineAdvisory>,
     pub role_mode: RoleMode,
+    pub unbound_review_authorities: Vec<String>,
 }
 
 /// Prepare the clean database capability consumed by the production pre-sign

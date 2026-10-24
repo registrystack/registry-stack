@@ -431,7 +431,7 @@ async fn audited_erasure_deletes_targeted_history_and_makes_bookmark_unavailable
         "erased idempotency tombstones refuse replay before releasing cached bytes"
     );
     // The refusal is permanent, so it must reach the caller as the terminal
-    // 409 idempotency.conflict rather than an outage clients retry forever.
+    // 409 idempotency.key-reused rather than an outage clients retry forever.
     assert!(
         matches!(
             registry_breg::mutation::MutationError::from(

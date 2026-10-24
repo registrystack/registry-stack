@@ -26,6 +26,17 @@ const refusal = (extra) => ({
   ...extra,
 });
 
+const guardFailure = (extra) => ({
+  type: 'https://id.registrystack.org/problems/registry-breg/action/guard_failed',
+  title: 'Precondition Failed',
+  status: 412,
+  detail: 'The action guard was not satisfied.',
+  code: 'action.guard_failed',
+  traceId: TRACE_ID,
+  guardReason: 'legal_name_unchanged',
+  ...extra,
+});
+
 let server;
 let baseUrl;
 let document;
@@ -73,6 +84,60 @@ test('a declared refusal reaches the caller with its reason', async () => {
     assert.equal(error.traceId, TRACE_ID);
     assert.equal('planRefusal' in error, false);
   }
+});
+
+test('a failed guard exposes only its bounded authored copy key', async () => {
+  for (const reason of ['a', 'legal_name_unchanged', `a${'b'.repeat(63)}`]) {
+    const error = await answer(guardFailure({guardReason: reason}));
+    assert.equal(error.kind, 'problem');
+    assert.equal(error.status, 412);
+    assert.equal(error.code, 'action.guard_failed');
+    assert.equal(error.guardReason, reason);
+    assert.equal(error.refusalCode, undefined);
+    assert.equal(error.reasonCode, undefined);
+    assert.equal(Object.prototype.propertyIsEnumerable.call(error, 'guardReason'), false);
+    for (const render of [inspect, format, JSON.stringify]) {
+      if (reason.length > 1) assert.equal(render(error).includes(reason), false);
+    }
+  }
+  for (const problem of [
+    guardFailure({guardReason: ''}),
+    guardFailure({guardReason: 'Uppercase'}),
+    guardFailure({guardReason: 'has.dot'}),
+    guardFailure({guardReason: `a${'b'.repeat(64)}`}),
+    guardFailure({guardReason: null}),
+    refusal({guardReason: 'misplaced'}),
+    guardFailure({refusalCode: REFUSAL_CODE}),
+    guardFailure({reasonCode: 'source-data-error'}),
+  ]) {
+    const error = await answer(problem);
+    assert.equal(error.kind, 'protocol');
+    assert.equal(error.guardReason, undefined);
+    assert.equal(error.refusalCode, undefined);
+    assert.equal(error.reasonCode, undefined);
+  }
+});
+
+test('the typed idempotency key reuse problem uses the current wire code', async () => {
+  const current = await answer({
+    type: 'https://id.registrystack.org/problems/registry-breg/idempotency/key-reused',
+    title: 'Conflict', status: 409,
+    detail: 'The idempotency key is bound to another request.',
+    code: 'idempotency.key-reused', traceId: TRACE_ID,
+  });
+  assert.equal(current.kind, 'problem');
+  assert.equal(current.code, 'idempotency.key-reused');
+  assert.equal(current.status, 409);
+  assert.equal(current.outcomeUnknown, false);
+
+  const retired = await answer({
+    type: 'https://id.registrystack.org/problems/registry-breg/idempotency/conflict',
+    title: 'Conflict', status: 409,
+    detail: 'The idempotency key is bound to another request.',
+    code: 'idempotency.conflict', traceId: TRACE_ID,
+  });
+  assert.equal(retired.kind, 'problem');
+  assert.equal(retired.code, undefined);
 });
 
 test('row-local constraints expose bounded identifiers without default rendering', async () => {

@@ -112,6 +112,28 @@ pub fn verify_v1(
     now: SystemTime,
     allowed_skew: Duration,
 ) -> Result<(), VerificationError> {
+    verify_signature(key, fields, signature)?;
+    validate_delivery_time(fields.delivery_time, now, allowed_skew)
+}
+
+/// Authenticate exact Version 1 bytes and validate RFC 3339 time grammar.
+/// The caller must enforce its own clock window before using the delivery.
+pub fn verify_v1_authenticity(
+    key: &[u8],
+    fields: SignatureFields<'_>,
+    signature: &str,
+) -> Result<(), VerificationError> {
+    verify_signature(key, fields, signature)?;
+    OffsetDateTime::parse(fields.delivery_time, &Rfc3339)
+        .map_err(|_| VerificationError::InvalidDeliveryTime)?;
+    Ok(())
+}
+
+fn verify_signature(
+    key: &[u8],
+    fields: SignatureFields<'_>,
+    signature: &str,
+) -> Result<(), VerificationError> {
     validate_key(key).map_err(|()| VerificationError::InvalidKey)?;
     let input = signing_input(fields).ok_or(VerificationError::InputTooLarge)?;
     let encoded = signature
@@ -130,7 +152,7 @@ pub fn verify_v1(
     mac.update(&input);
     mac.verify_slice(&tag)
         .map_err(|_| VerificationError::InvalidSignature)?;
-    validate_delivery_time(fields.delivery_time, now, allowed_skew)
+    Ok(())
 }
 
 fn validate_key(key: &[u8]) -> Result<(), ()> {
@@ -191,13 +213,6 @@ fn validate_delivery_time(
 ) -> Result<(), VerificationError> {
     let parsed = OffsetDateTime::parse(value, &Rfc3339)
         .map_err(|_| VerificationError::InvalidDeliveryTime)?;
-    if parsed
-        .format(&Rfc3339)
-        .map_err(|_| VerificationError::InvalidDeliveryTime)?
-        != value
-    {
-        return Err(VerificationError::InvalidDeliveryTime);
-    }
     let delivery_nanos = parsed.unix_timestamp_nanos();
     let now_nanos = system_time_unix_nanos(now);
     if delivery_nanos.abs_diff(now_nanos) > allowed_skew.as_nanos() {
@@ -294,6 +309,67 @@ mod tests {
     }
 
     #[test]
+    fn rfc3339_fraction_spellings_bind_raw_bytes_before_freshness() {
+        for timestamp in [
+            "2026-08-30T00:00:01Z",
+            "2026-08-30T00:00:01.12Z",
+            "2026-08-30T00:00:01.120Z",
+            "2026-08-30T00:00:01.000Z",
+        ] {
+            let exact = SignatureFields {
+                delivery_time: timestamp,
+                ..fields()
+            };
+            let signature = sign_v1(KEY, exact).unwrap();
+            assert_eq!(
+                verify_v1(
+                    KEY,
+                    exact,
+                    &signature,
+                    delivery_time(),
+                    Duration::from_secs(1)
+                ),
+                Ok(()),
+                "{timestamp}"
+            );
+            let changed = SignatureFields {
+                delivery_time: "invalid-canary-time",
+                ..exact
+            };
+            assert_eq!(
+                verify_v1(
+                    KEY,
+                    changed,
+                    &signature,
+                    delivery_time(),
+                    Duration::from_secs(1)
+                ),
+                Err(VerificationError::InvalidSignature)
+            );
+            assert_eq!(
+                verify_v1(
+                    KEY,
+                    changed,
+                    &sign_v1(KEY, changed).unwrap(),
+                    delivery_time(),
+                    Duration::from_secs(1)
+                ),
+                Err(VerificationError::InvalidDeliveryTime)
+            );
+            assert_eq!(
+                verify_v1(
+                    KEY,
+                    exact,
+                    &signature,
+                    delivery_time() + Duration::from_secs(31),
+                    Duration::from_secs(1)
+                ),
+                Err(VerificationError::DeliveryTimeSkew)
+            );
+        }
+    }
+
+    #[test]
     fn verify_v1_refuses_wrong_version_signature_and_delivery_time() {
         let signature = sign_v1(KEY, fields()).unwrap();
         assert_eq!(
@@ -326,13 +402,13 @@ mod tests {
             ),
             Err(VerificationError::DeliveryTimeSkew)
         );
-        let mut noncanonical = fields();
-        noncanonical.delivery_time = "2026-08-30T00:00:01+00:00";
+        let mut invalid = fields();
+        invalid.delivery_time = "2026-08-30T00:00:61Z";
         assert_eq!(
             verify_v1(
                 KEY,
-                noncanonical,
-                &sign_v1(KEY, noncanonical).unwrap(),
+                invalid,
+                &sign_v1(KEY, invalid).unwrap(),
                 delivery_time(),
                 Duration::from_secs(30)
             ),

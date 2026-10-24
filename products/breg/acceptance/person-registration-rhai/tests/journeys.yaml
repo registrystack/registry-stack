@@ -79,7 +79,7 @@ journeys:
     expect:
       outcome: refusal
       status: 409
-      problemCode: idempotency.conflict
+      problemCode: idempotency.key-reused
   - id: duplicate-identifier
     action: register-person
     accessProfile: person-registrar

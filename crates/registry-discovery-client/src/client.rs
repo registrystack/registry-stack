@@ -378,6 +378,8 @@ struct ProblemBody {
     type_uri: String,
     title: String,
     status: u16,
+    #[serde(flatten)]
+    additional: serde_json::Map<String, serde_json::Value>,
 }
 
 fn problem_from_response(
@@ -388,37 +390,57 @@ fn problem_from_response(
     if body.status != status.as_u16() {
         return Err(DiscoveryClientError::Protocol);
     }
-    let problem = match (body.type_uri.as_str(), body.title.as_str()) {
+    let (problem, expected_code) = match (body.type_uri.as_str(), body.title.as_str()) {
         (
             "https://id.registrystack.org/problems/registry-discovery/invalid-request",
             "Invalid request",
-        ) if status == StatusCode::BAD_REQUEST => DiscoveryProblem::InvalidRequest,
+        ) if status == StatusCode::BAD_REQUEST => {
+            (DiscoveryProblem::InvalidRequest, "request.invalid")
+        }
         ("https://id.registrystack.org/problems/registry-discovery/not-found", "Not found")
             if status == StatusCode::NOT_FOUND =>
         {
-            DiscoveryProblem::NotFound
+            (DiscoveryProblem::NotFound, "request.not-found")
         }
         (
             "https://id.registrystack.org/problems/registry-discovery/result-bound-exceeded",
             "Result bound exceeded",
-        ) if status == StatusCode::UNPROCESSABLE_ENTITY => DiscoveryProblem::ResultBoundExceeded,
+        ) if status == StatusCode::UNPROCESSABLE_ENTITY => (
+            DiscoveryProblem::ResultBoundExceeded,
+            "request.result-bound-exceeded",
+        ),
         ("https://id.registrystack.org/problems/registry-discovery/unavailable", "Unavailable")
             if status == StatusCode::SERVICE_UNAVAILABLE =>
         {
-            DiscoveryProblem::Unavailable
+            (DiscoveryProblem::Unavailable, "service.unavailable")
         }
         _ if known_problem_type(&body.type_uri) => return Err(DiscoveryClientError::Protocol),
         _ if valid_unrecognized_problem(&body, status) => {
             return Ok(DiscoveryClientError::UnrecognizedProblem {
                 status: status.as_u16(),
-            })
+            });
         }
         _ => return Err(DiscoveryClientError::Protocol),
     };
+    validate_supplied_code(&body, expected_code)?;
     Ok(DiscoveryClientError::Problem {
         status: status.as_u16(),
         problem,
     })
+}
+
+/// Legacy documents carry no `code`. When a known problem supplies one it must
+/// be that problem's code; every other supplied member stays opaque and bounded
+/// by the whole problem-body limit.
+fn validate_supplied_code(
+    body: &ProblemBody,
+    expected_code: &str,
+) -> Result<(), DiscoveryClientError> {
+    match body.additional.get("code") {
+        None => Ok(()),
+        Some(value) if value.as_str() == Some(expected_code) => Ok(()),
+        Some(_) => Err(DiscoveryClientError::Protocol),
+    }
 }
 
 fn known_problem_type(type_uri: &str) -> bool {
@@ -866,6 +888,90 @@ mod tests {
             DiscoveryClientConfig::new(url::Url::parse(&format!("http://{address}")).unwrap())
                 .with_maximum_response_bytes(maximum);
         (DiscoveryClient::new(config).unwrap(), state)
+    }
+
+    fn legacy_problem() -> serde_json::Value {
+        json!({"type":"https://id.registrystack.org/problems/registry-discovery/invalid-request",
+            "title":"Invalid request", "status":400})
+    }
+
+    async fn exchange_problem(
+        body: serde_json::Value,
+        traceparents: &[&str],
+    ) -> DiscoveryClientError {
+        let bytes = serde_json::to_vec(&body).unwrap();
+        let parents = traceparents
+            .iter()
+            .map(|value| reqwest::header::HeaderValue::from_str(value).unwrap())
+            .collect::<Vec<_>>();
+        let app = Router::new().route(
+            "/{*path}",
+            any(move || {
+                let bytes = bytes.clone();
+                let parents = parents.clone();
+                async move {
+                    let mut response =
+                        response_with_media_type(StatusCode::BAD_REQUEST, PROBLEM_JSON, bytes);
+                    for parent in parents {
+                        response.headers_mut().append("traceparent", parent);
+                    }
+                    response
+                }
+            }),
+        );
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let client = DiscoveryClient::new(DiscoveryClientConfig::new(
+            url::Url::parse(&format!("http://{address}")).unwrap(),
+        ))
+        .unwrap();
+        let result = client.search_services(ServiceFilters::default()).await;
+        server.abort();
+        result.expect_err("fixture responds with a problem")
+    }
+
+    #[tokio::test]
+    async fn problem_classification_ignores_the_response_traceparent() {
+        const TRACE: &str = "11111111111111111111111111111111";
+        const HEADER: &str = "00-11111111111111111111111111111111-2222222222222222-01";
+        let mut current = legacy_problem();
+        current["code"] = json!("request.invalid");
+        current["detail"] = json!("Different safe guidance from a compatible server.");
+        current["traceId"] = json!(TRACE);
+        current["futureRecovery"] = json!({"retry":false});
+        for body in [legacy_problem(), current.clone()] {
+            for headers in [
+                vec![],
+                vec![HEADER],
+                vec!["00-33333333333333333333333333333333-2222222222222222-01"],
+                vec![HEADER, HEADER],
+                vec!["invalid"],
+            ] {
+                assert!(
+                    matches!(
+                        exchange_problem(body.clone(), &headers).await,
+                        DiscoveryClientError::Problem {
+                            problem: DiscoveryProblem::InvalidRequest,
+                            ..
+                        }
+                    ),
+                    "traceparent {headers:?} must not change the classification"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_supplied_code_must_match_the_known_problem() {
+        for value in [json!("service.unavailable"), json!(null)] {
+            let mut body = legacy_problem();
+            body["code"] = value;
+            assert!(matches!(
+                exchange_problem(body, &[]).await,
+                DiscoveryClientError::Protocol
+            ));
+        }
     }
 
     #[tokio::test]

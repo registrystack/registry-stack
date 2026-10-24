@@ -529,6 +529,8 @@ pub struct CompiledProposalTargetPermission {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct CompiledCommitGuard {
     pub input: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
     #[serde(rename = "recordType")]
     pub entity_id: String,
     pub field: String,

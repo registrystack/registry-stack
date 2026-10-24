@@ -221,6 +221,84 @@ fn a_mismatched_evidence_binary_is_refused_before_any_step() {
 }
 
 #[test]
+fn installed_evidencectl_prefers_its_sibling_before_path_and_preserves_overrides() {
+    for selection in ["sibling", "environment", "path", "mismatch"] {
+        let fixture = Fixture::new();
+        let installed = fixture.root.join("installed-bin");
+        let path_bin = fixture.root.join("path-bin");
+        fs::create_dir_all(&installed).unwrap();
+        fs::create_dir_all(&path_bin).unwrap();
+        let ctl = installed.join("evidencectl");
+        fs::copy(env!("CARGO_BIN_EXE_evidencectl"), &ctl).unwrap();
+        let marker = fixture.root.join("selected-runtime");
+        let write_runtime = |path: &Path, name: &str, matching: bool| {
+            let script = FAKE_EVIDENCE.replace(
+                "  printf 'evidence %s\\n' \"$FAKE_EVIDENCE_VERSION\"",
+                &format!(
+                    "  printf '%s\\n' '{name}' >> \"$RESOLVER_SELECTION_LOG\"\n  printf 'evidence %s\\n' {}",
+                    if matching { "\"$FAKE_EVIDENCE_VERSION\"" } else { "'0.0.0-other'" }
+                ),
+            );
+            fs::write(path, script).unwrap();
+            fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
+        };
+        if selection != "path" {
+            write_runtime(
+                &installed.join("evidence"),
+                "sibling",
+                selection != "mismatch",
+            );
+        }
+        write_runtime(&path_bin.join("evidence"), "path", selection == "path");
+        let mut paths = vec![path_bin];
+        paths.extend(std::env::split_paths(
+            &std::env::var_os("PATH").unwrap_or_default(),
+        ));
+        let mut command = Command::new(ctl);
+        command
+            .args(["package"])
+            .arg(&fixture.project)
+            .arg("--target")
+            .arg(&fixture.target)
+            .arg("--output")
+            .arg(&fixture.output)
+            .env_remove("EVIDENCE_BIN")
+            .env("PATH", std::env::join_paths(paths).unwrap())
+            .env("RESOLVER_SELECTION_LOG", &marker)
+            .env("FAKE_EVIDENCE_LOG", &fixture.log)
+            .env(
+                "FAKE_EVIDENCE_VERSION",
+                registry_platform_buildinfo::DISPLAY_VERSION,
+            );
+        if selection == "environment" {
+            let override_binary = fixture.root.join("override-evidence");
+            write_runtime(&override_binary, "environment", true);
+            command.env("EVIDENCE_BIN", override_binary);
+        }
+        let output = command.output().expect("installed evidencectl starts");
+        if selection == "mismatch" {
+            assert_failed(&output, "a mismatched sibling is not bypassed for PATH");
+            let message = stderr(&output);
+            assert!(message.contains("EVIDENCE_BIN"));
+            assert!(message.contains("--evidence-bin"));
+            assert!(!fixture.output.exists());
+            assert!(fixture.invocations().is_empty());
+        } else {
+            assert!(output.status.success(), "{}", stderr(&output));
+            assert!(fixture.output.exists());
+            assert!(!fixture.invocations().is_empty());
+        }
+        let selected = fs::read_to_string(marker).unwrap();
+        let expected = if selection == "mismatch" {
+            "sibling"
+        } else {
+            selection
+        };
+        assert!(selected.lines().all(|line| line == expected), "{selected}");
+    }
+}
+
+#[test]
 fn an_evidence_binary_that_does_not_identify_itself_is_refused_before_any_step() {
     let fixture = Fixture::new();
 
@@ -346,6 +424,112 @@ fn package_accepts_local_targets_with_the_same_complete_grant_model() {
         assert_eq!(fixture.steps(), ["check", "evaluate:fixtures/answer.yaml"]);
         assert_value_free(&output);
         fixture.assert_no_staging_residue();
+    }
+}
+
+#[test]
+fn provisioning_reports_the_bundle_and_runtime_secret_union_once() {
+    let expected = [
+        "audit-hmac-key",
+        "signing-p256-private-jwk",
+        "source-token",
+        "subject-binding-hmac-key",
+    ];
+    for format in ["human", "json"] {
+        let fixture = Fixture::new();
+        fixture.use_default_local_signer();
+        edit_json(&fixture.target, |target| {
+            target["connections"]["registry-http"]["authentication"] =
+                json!({"type":"bearer","tokenRef":"secret:file/source-token"});
+        });
+
+        let output = fixture.package(format);
+
+        assert_success(&output, "local package provisioning report");
+        assert_value_free(&output);
+        if format == "json" {
+            let report: Value = serde_json::from_slice(&output.stdout).expect("JSON report");
+            assert_eq!(
+                report["requiredSecrets"],
+                json!(expected),
+                "the JSON report must include the exact sorted union"
+            );
+        } else {
+            let stdout = String::from_utf8(output.stdout).expect("human report");
+            let reported = stdout
+                .lines()
+                .filter_map(|line| line.strip_prefix("Provision secret:file/"))
+                .collect::<Vec<_>>();
+            assert_eq!(reported, expected);
+        }
+    }
+}
+
+#[test]
+fn target_check_and_package_refuse_runtime_mismatches_at_the_authored_location() {
+    for command in ["check", "package"] {
+        let fixture = Fixture::new();
+        edit_json(&fixture.target, |target| {
+            target["listener"]["trustProxyIdentityHeaders"] = json!(true);
+        });
+
+        let output = if command == "check" {
+            fixture.check_production("json")
+        } else {
+            fixture.package("json")
+        };
+
+        assert_failed(&output, "invalid target listener");
+        assert_value_free(&output);
+        assert!(!fixture.output.exists());
+        let report: Value = serde_json::from_slice(&output.stdout).expect("JSON refusal report");
+        let diagnostic = report["diagnostics"]
+            .as_array()
+            .and_then(|items| {
+                items
+                    .iter()
+                    .find(|item| item["code"] == "evidence.runtime.invalid-listener")
+            })
+            .unwrap_or_else(|| panic!("{command}: missing listener diagnostic: {report}"));
+        assert_eq!(diagnostic["path"], "/listener/trustProxyIdentityHeaders");
+        assert!(diagnostic["source"]["file"]
+            .as_str()
+            .is_some_and(|file| file.ends_with("production-target/target.yaml")));
+        fixture.assert_no_staging_residue();
+    }
+}
+
+#[test]
+fn runtime_refusal_at_the_authored_location_precedes_secret_reference_syntax() {
+    for command in ["check", "package"] {
+        let fixture = Fixture::new();
+        edit_json(&fixture.target, |target| {
+            target["listener"]["trustProxyIdentityHeaders"] = json!(true);
+            target["signer"]["keyName"] = json!("secret:file/Bad");
+        });
+
+        let output = if command == "check" {
+            fixture.check_production("json")
+        } else {
+            fixture.package("json")
+        };
+
+        assert_failed(
+            &output,
+            "invalid listener with a malformed secret reference",
+        );
+        let report: Value = serde_json::from_slice(&output.stdout).unwrap_or_else(|_| {
+            panic!(
+                "{command}: expected a JSON refusal report: {}",
+                stderr(&output)
+            )
+        });
+        assert!(
+            report["diagnostics"].as_array().is_some_and(|items| items
+                .iter()
+                .any(|item| item["code"] == "evidence.runtime.invalid-listener")),
+            "{command}: the authored runtime diagnostic must win: {report}"
+        );
     }
 }
 
@@ -1962,12 +2146,19 @@ fi
 
 fixture=''
 json=0
+runtime=''
 previous=''
 for arg in "$@"; do
   if [ "$previous" = '--fixture' ]; then fixture=$arg; fi
+  if [ "$previous" = '--runtime-config' ]; then runtime=$arg; fi
   if [ "$arg" = '--json' ]; then json=1; fi
   previous=$arg
 done
+
+if [ -n "$runtime" ] && grep -q 'trustProxyIdentityHeaders: true' "$runtime"; then
+  printf '{"ok":false,"command":"bundle-check","status":"domain-refusal","apiVersion":"id.registrystack.org/formats/evidence/ctl-report/v1alpha1","kind":"EvidenceCtlReport","filesChecked":1,"diagnostics":[{"severity":"error","code":"evidence.runtime.invalid-listener","path":"/listener/trustProxyIdentityHeaders","message":"proxy identity headers must not be trusted","suggestedAction":"Write false; Evidence authenticates every request itself.","source":{"file":"%s","line":9,"column":31}}]}\n' "$runtime"
+  exit 1
+fi
 
 failure=${FAKE_EVIDENCE_FAIL:-}
 if [ "$failure" = 'check' ] && [ -z "$fixture" ]; then

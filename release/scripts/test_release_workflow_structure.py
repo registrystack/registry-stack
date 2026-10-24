@@ -582,7 +582,18 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         ci = document["jobs"]["protected-ci"]
         self.assertEqual(ci["needs"], "validate")
         _, protected_workflow = workflow("ci.yml")
-        longest_ci_job = max(job.get("timeout-minutes", 0) for job in protected_workflow["jobs"].values())
+        ci_timeouts = []
+        for name, job in protected_workflow["jobs"].items():
+            timeout = job.get("timeout-minutes", 0)
+            if name == "breg-contracts":
+                self.assertEqual(
+                    timeout,
+                    "${{ matrix.lane == 'postgres' && 45 || 30 }}",
+                )
+                timeout = 45
+            self.assertIsInstance(timeout, int)
+            ci_timeouts.append(timeout)
+        longest_ci_job = max(ci_timeouts)
         self.assertGreater(ci["timeout-minutes"], longest_ci_job)
         self.assertIn("protected-ci", document["jobs"]["attest"]["needs"])
         self.assertNotIn("if", document["jobs"]["attest"])
@@ -1788,6 +1799,21 @@ class MessagingClientWorkflowStructureTest(unittest.TestCase):
         self.assertIn("platform_clients+=(coordinator)", node)
 
 
+class HeldClientRosterWorkflowStructureTest(unittest.TestCase):
+    def test_release_platform_packages_are_packed_from_the_projected_staging_tree(self) -> None:
+        for name in ("release-candidate.yml", "release-rehearsal.yml"):
+            with self.subTest(workflow=name):
+                _text, document = workflow(name)
+                scripts = [step.get("run", "") for job in document["jobs"].values()
+                    for step in job.get("steps", [])
+                    if "bind-optional-deps" in step.get("run", "") and "--client stack" in step.get("run", "")]
+                self.assertTrue(scripts)
+                for script in scripts:
+                    packed = re.search(r'\(cd "\$\{root_stage\}" && npm pack \\\s*"\./npm/\$\{\{ matrix\.napi_platform \}\}"', script)
+                    self.assertIsNotNone(packed, "platform package must come from the roster-projected root staging tree")
+                    self.assertGreater(packed.start(), script.index("bind-optional-deps"))
+
+
 class MacOSFipsWorkflowStructureTest(unittest.TestCase):
     def test_candidate_packages_shared_fips_before_client_publication(self) -> None:
         _, document = workflow("release-candidate.yml")
@@ -1801,8 +1827,12 @@ class MacOSFipsWorkflowStructureTest(unittest.TestCase):
         self.assertIn('--macos-library-root "${CARGO_TARGET_DIR}"', python)
         self.assertIn('"${macos_wheel_args[@]}"', python)
         bundle = "release/scripts/bundle-client-macos-fips.py"
-        pack = '(cd "${GITHUB_WORKSPACE}/crates/registry-stack-client-node" && npm pack'
-        self.assertLess(node.index(bundle), node.index(pack))
+        smoke = step_run(document, "clients", "Smoke Node client packages")
+        pack = '(cd "${root_stage}" && npm pack'
+        self.assertIn(bundle, node)
+        steps = [step.get("name") for step in document["jobs"]["clients"]["steps"]]
+        self.assertLess(steps.index("Build Node client packages"), steps.index("Smoke Node client packages"))
+        self.assertLess(smoke.index("bind-optional-deps"), smoke.index(pack))
         self.assertIn('--library-directory "${platform_dir}"', node)
 
     def test_candidate_optional_wheel_arguments_expand_empty_under_macos_bash(self) -> None:
@@ -3542,6 +3572,7 @@ PYTHON_STABLE_ABI_FEATURE = "abi3-py311"
 PYTHON_WHEEL_ABI_TAG = "cp311-abi3"
 PYTHON_CLIENT_PACKAGES = (
     "registry-coordinator-client-py",
+    "registry-render-client-py",
     "registry-breg-client-py",
     "registry-casework-client-py",
     "registry-discovery-client-py",

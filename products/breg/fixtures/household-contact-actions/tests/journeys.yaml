@@ -241,7 +241,7 @@ journeys:
         expect:
           outcome: refusal
           status: 409
-          problemCode: idempotency.conflict
+          problemCode: idempotency.key-reused
   - id: link-only-target-authority-is-still-enforced
     steps:
       - id: create-household

@@ -36,6 +36,31 @@ current-source policy also needs a read-only context provider.
 {/* Evidence: crates/registry-casework/src/{config,runtime,store,auth}.rs;
     crates/registry-casework/src/audit.rs. */}
 
+## Connect identity and completion delivery
+
+Establish issuer signing-key trust and TLS trust separately. The
+[OIDC connection guide](../advanced/connect-an-oidc-issuer/) explains issuer configuration and
+key discovery; the Casework runtime's `authentication.oidc` block binds the accepted resource,
+clients, and human identity claim. Configure downstream HTTPS trust through the owning connection's
+certificate setting, rather than weakening verification.
+
+Present a resource-specific access token and select the authored profile with
+`Registry-Casework-Profile` on Casework task and directory routes. Shared producer Review routes
+use `Registry-Review-Profile`. The [Casework API](../../reference/apis/registry-casework/) owns the
+route, token, scope, and profile requirements; a scope does not replace an authored access profile.
+
+For a producer completion destination, follow
+[completion destinations](../casework-retention/#completion-destinations), then read the result
+through the producer's independently authorized client. The wake carries no decision and cannot
+approve or apply a source operation. Acknowledge only after accepting the wake under the
+[delivery contract](../../configure/module-conventions/#receive-signed-delivery); authentication,
+binding, and acknowledgement failures must remain visible to the dispatcher. For released 0.43 behavior, return exactly
+`204 No Content` with an empty body after acceptance. The shared delivery contract governs the
+next release's acknowledgement behavior; returning an empty `204` remains compatible with both.
+
+{/* Evidence: products/casework/README.md; crates/registry-casework/src/auth.rs;
+    crates/registry-casework/src/runtime.rs, review_completion_worker, completion_acknowledged. */}
+
 ## Install the runtime
 
 Install matching `casework` and `caseworkctl` binaries on the serving and operator hosts:

@@ -730,6 +730,71 @@ async fn immediate_action_availability_preserves_disclosure_and_commit_boundarie
     database.cleanup().await;
 }
 
+#[tokio::test]
+async fn authored_guard_reason_requires_all_guard_and_boundary_facts_to_be_readable() {
+    for readable in [
+        &["status", "zone", "secondary"][..],
+        &["zone", "secondary"][..],
+        &["status", "zone"][..],
+    ] {
+        let mut source = with_parent_get(support::project(), readable);
+        source["recordTypes"][0]["fields"].as_array_mut().unwrap().push(json!({"id":"secondary","type":"string","maximumLength":32,"classification":"restricted"}));
+        source["actions"][0]["commitGuards"]["targets"][0]["reason"] = json!("parent-inactive");
+        // A second unreadable guard must conceal even a readable failed guard.
+        source["actions"][0]["commitGuards"]["targets"].as_array_mut().unwrap().push(
+            json!({"input":"parent","field":"secondary","equals":"ready","reason":"secondary-unready"})
+        );
+        let (database, registry, identity) = setup_with_project(source).await;
+        let entity = &registry.entities()["parent"];
+        database
+            .admin
+            .execute(
+                &format!(
+                    "UPDATE registry_data.\"{}\" SET \"{}\"='ready' WHERE record_id=$1",
+                    entity.physical_table, entity.fields["secondary"].physical_name
+                ),
+                &[&Uuid::parse_str(ID).unwrap()],
+            )
+            .await
+            .unwrap();
+        let app = app(&database, registry.clone(), identity, None);
+        let observed = availability(app.clone(), json!({"parentId":ID})).await;
+        let disclosed = readable.contains(&"status") && readable.contains(&"secondary");
+        if disclosed {
+            assert_eq!(observed.1["availability"]["available"], true);
+        }
+        database
+            .admin
+            .execute(
+                &status_sql(&registry),
+                &[&"inactive", &Uuid::parse_str(ID).unwrap()],
+            )
+            .await
+            .unwrap();
+        let before = counts(&database, &registry).await;
+        let current = availability(app.clone(), json!({"parentId":ID})).await;
+        let hidden = availability(app.clone(), json!({"parentId":FOREIGN_ID})).await;
+        assert!(hidden.1["availability"].get("guardReason").is_none());
+        let refused_hidden = invoke(app.clone(), "authored-hidden-reason", FOREIGN_ID).await;
+        assert_eq!(refused_hidden.1["code"], "precondition.failed");
+        assert!(refused_hidden.1.get("guardReason").is_none());
+        let refused = invoke(app, "authored-reason", ID).await;
+        assert_eq!(refused.0, StatusCode::PRECONDITION_FAILED);
+        if disclosed {
+            assert_eq!(current.1["availability"]["guardReason"], "parent-inactive");
+            assert_eq!(refused.1["code"], "action.guard_failed");
+            assert_eq!(refused.1["guardReason"], "parent-inactive");
+        } else {
+            assert_eq!(current.1["availability"]["reason"], "not-disclosed");
+            assert!(current.1["availability"].get("guardReason").is_none());
+            assert_eq!(refused.1["code"], "precondition.failed");
+            assert!(refused.1.get("guardReason").is_none());
+        }
+        assert_eq!(before, counts(&database, &registry).await);
+        database.cleanup().await;
+    }
+}
+
 /// Adds a second required reference to `parent`. It carries no field guard,
 /// so its own checks are reference visibility and any revision condition.
 fn with_other_parent(mut source: Value) -> Value {

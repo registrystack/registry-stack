@@ -4,18 +4,64 @@
   "description": "Unified Node.js client for Registry Stack products.",
   "license": "Apache-2.0",
   "homepage": "https://docs.registrystack.org/reference/client-api/",
-  "bugs": { "url": "https://github.com/registrystack/registry-stack/issues" },
-  "keywords": ["registry", "registrystack", "discovery", "evidence", "breg", "casework", "messaging", "scheduling"],
-  "publishConfig": { "access": "public", "provenance": true },
-  "repository": { "type": "git", "url": "https://github.com/registrystack/registry-stack", "directory": "crates/registry-stack-client-node" },
+  "bugs": {
+    "url": "https://github.com/registrystack/registry-stack/issues"
+  },
+  "keywords": [
+    "registry",
+    "registrystack",
+    "discovery",
+    "evidence",
+    "breg",
+    "casework",
+    "messaging",
+    "scheduling",
+    "render",
+    "coordinator"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/registrystack/registry-stack",
+    "directory": "crates/registry-stack-client-node"
+  },
   "main": "index.js",
   "types": "index.d.ts",
   "exports": {
-    ".": { "types": "./index.d.ts", "default": "./index.js" },
-    "./compatibility.json": "./compatibility.json"
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./index.js"
+    },
+    "./compatibility.json": "./compatibility.json",
+    "./render": {
+      "types": "./render/client.d.ts",
+      "default": "./render/client.js"
+    },
+    "./coordinator": {
+      "types": "./coordinator/client.d.ts",
+      "default": "./coordinator/client.js"
+    }
   },
-  "files": ["index.js", "index.d.ts", "native.js", "compatibility.json", "discovery", "evidence", "breg", "casework", "messaging", "scheduling"],
-  "engines": { "node": ">=24.11.0" },
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "native.js",
+    "compatibility.json",
+    "discovery",
+    "evidence",
+    "breg",
+    "casework",
+    "messaging",
+    "scheduling",
+    "render",
+    "coordinator"
+  ],
+  "engines": {
+    "node": ">=24.11.0"
+  },
   "scripts": {
     "sync": "python3 ../../release/scripts/sync-registry-client-node.py",
     "sync:check": "python3 ../../release/scripts/sync-registry-client-node.py --check",
