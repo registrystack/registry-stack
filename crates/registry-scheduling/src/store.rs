@@ -51,16 +51,15 @@ use registry_platform_calendar::CalendarInterval;
 use registry_platform_config::SecretResolver;
 use registry_platform_dispatch::postgres::{cancel_unattempted, JobKey, JobTable};
 use registry_scheduling_core::{
-    assess_window_record_impact, evaluate_exact_time_admission, evaluate_exact_time_bundle,
-    evaluate_exact_time_physical_bundle, evaluate_hold_state, evaluate_window_admission,
-    location_closure_intervals, location_open_intervals, maximum_concurrent_units,
-    AdditionalAllocationRequest, AdmissionRefusal, AllocationDocument, AllocationError,
-    AllocationInterval, AllocationLimits, AllocationRequirementDocument, BundleAdmission,
-    BundleAllocation, BundleEvaluationError, ExactTimeBundleContext, ExactTimeBundleLineContext,
-    ExactTimeContext, ExternalReference, LedgerClaim, LedgerKind, LedgerSnapshot, PartyCounts,
-    PartyReference, PolicyCheckReason, PoolMember, PublishedWindow, SchedulingDiagnostic,
-    SchedulingFacts, SchedulingPolicy, StandingAllocation, APPOINTMENT_CANCELLED_TRIGGER,
-    APPOINTMENT_CONFIRMED_TRIGGER, APPOINTMENT_RESCHEDULED_TRIGGER,
+    assess_window_record_impact, evaluate_exact_time_bundle, evaluate_exact_time_physical_bundle,
+    evaluate_hold_state, evaluate_window_admission, location_closure_intervals,
+    location_open_intervals, maximum_concurrent_units, AdditionalAllocationRequest,
+    AdmissionRefusal, AllocationDocument, AllocationError, AllocationInterval, AllocationLimits,
+    AllocationRequirementDocument, BundleAdmission, BundleAllocation, BundleEvaluationError,
+    ExactTimeBundleContext, ExactTimeBundleLineContext, ExternalReference, LedgerClaim, LedgerKind,
+    LedgerSnapshot, PartyCounts, PartyReference, PolicyCheckReason, PoolMember, PublishedWindow,
+    SchedulingDiagnostic, SchedulingFacts, SchedulingPolicy, StandingAllocation,
+    APPOINTMENT_CANCELLED_TRIGGER, APPOINTMENT_CONFIRMED_TRIGGER, APPOINTMENT_RESCHEDULED_TRIGGER,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -787,22 +786,15 @@ impl Commitment<'_> {
     }
 }
 
-/// The policy-resolved supply an admission runs against.
-pub enum SupplyContext<'p> {
-    ExactTime {
-        exact: &'p registry_scheduling_core::ExactTimeOffering,
-        members: &'p [PoolMember],
-        open: &'p [CalendarInterval],
-        closures: &'p [CalendarInterval],
-    },
-    Window {
-        window: &'p registry_scheduling_core::PublishedWindow,
-        lead_time_minutes: u32,
-        horizon_days: u32,
-        channels: &'p [registry_scheduling_core::Channel],
-        open: &'p [CalendarInterval],
-        closures: &'p [CalendarInterval],
-    },
+/// The policy-resolved window a single-supply admission runs against. An
+/// exact-time admission commits as bundle lines ([`BundleSupplyLine`]).
+pub struct SupplyContext<'p> {
+    pub window: &'p registry_scheduling_core::PublishedWindow,
+    pub lead_time_minutes: u32,
+    pub horizon_days: u32,
+    pub channels: &'p [registry_scheduling_core::Channel],
+    pub open: &'p [CalendarInterval],
+    pub closures: &'p [CalendarInterval],
 }
 
 /// One policy-resolved exact-time requirement in a logical reservation.
@@ -820,7 +812,7 @@ pub struct BundleSupplyLine<'p> {
 }
 
 /// The policy-resolved supply one capacity commitment places its claim on:
-/// one window or exact-time offering, or every line of an exact-time bundle.
+/// one window offering, or every line of an exact-time bundle.
 #[derive(Clone, Copy)]
 pub enum CommitSupply<'p> {
     Single {
@@ -1920,6 +1912,38 @@ impl PostgresStore {
         Ok(CommitOutcome::Booking(claim))
     }
 
+    /// Answer the confirmation of a hold on an exact-time offering that
+    /// carries no allocation rows. Every exact-time hold this runtime writes
+    /// carries them, so such a hold is a window hold that ended before its
+    /// offering was republished as exact time: it has nothing to place and
+    /// nothing to consume. The transaction answers a stored attempt, then
+    /// refuses on the guards [`Self::confirm_hold`] applies, in its order. A
+    /// hold that passes them all is still live, an inconsistent ledger, and
+    /// fails without writing.
+    pub async fn confirm_unallocated_hold(
+        &self,
+        hold_id: Uuid,
+        commitment: Commitment<'_>,
+    ) -> Result<CommitOutcome, CommitError> {
+        let scope = format!("hold:{hold_id}:confirm");
+        let mut client = self.client().await?;
+        let transaction = client.transaction().await?;
+        if let Some(replay) = open_commitment(&transaction, &commitment, &scope).await? {
+            transaction.commit().await?;
+            return Ok(replay);
+        }
+        let hold = active_claim(&transaction, hold_id, LedgerKind::Hold).await?;
+        guard_revisions(&transaction, &commitment).await?;
+        evaluate_hold_state(&hold_ledger_claim(&hold), self.observed_now())?;
+        if hold.policy_revision != commitment.policy_revision {
+            return Err(AdmissionRefusal::PolicyChanged.into());
+        }
+        if !hold.is_managed_by(&commitment) {
+            return Err(CommitError::Unauthorized);
+        }
+        Err(StoreError::Corrupt.into())
+    }
+
     /// Release a hold early.
     pub async fn release_hold(
         &self,
@@ -2712,14 +2736,6 @@ fn snapshot_from_rows(rows: Vec<Row>) -> LedgerSnapshot {
     }
 }
 
-/// The window id a window admission's claim occupies.
-fn window_supply_id<'a>(supply: &'a SupplyContext<'a>) -> &'a str {
-    match supply {
-        SupplyContext::Window { window, .. } => &window.id,
-        SupplyContext::ExactTime { .. } => "",
-    }
-}
-
 impl<'a> CommitSupply<'a> {
     /// The offering whose operational labels, reminders, and duplicate rule
     /// the logical claim carries: a bundle's primary line.
@@ -2733,13 +2749,7 @@ impl<'a> CommitSupply<'a> {
     /// Whether the claim names a pool member: every placement except a
     /// window's.
     fn resource_is_member(&self) -> bool {
-        !matches!(
-            self,
-            Self::Single {
-                supply: SupplyContext::Window { .. },
-                ..
-            }
-        )
+        matches!(self, Self::Bundle(_))
     }
 
     fn snapshot_plan(
@@ -2761,14 +2771,7 @@ impl<'a> CommitSupply<'a> {
         appointment_id: Uuid,
     ) -> Result<Vec<String>, CommitError> {
         match *self {
-            Self::Single {
-                supply: SupplyContext::ExactTime { .. },
-                ..
-            } => Ok(Vec::new()),
-            Self::Single {
-                supply: SupplyContext::Window { window, .. },
-                ..
-            } => Ok(transaction
+            Self::Single { supply, .. } => Ok(transaction
                 .query_opt(
                     "SELECT supply_id FROM scheduling_claims WHERE claim_id=$1 AND kind='booking'",
                     &[&appointment_id],
@@ -2776,7 +2779,7 @@ impl<'a> CommitSupply<'a> {
                 .await
                 .map_err(StoreError::from)?
                 .map(|row| row.get::<_, String>(0))
-                .filter(|current| *current != window.id)
+                .filter(|current| *current != supply.window.id)
                 .into_iter()
                 .collect()),
             Self::Bundle(_) => Ok(transaction
@@ -2840,7 +2843,7 @@ impl<'a> CommitSupply<'a> {
                     // reschedule may change.
                     supply_id: admission
                         .resource
-                        .unwrap_or_else(|| window_supply_id(supply).to_owned()),
+                        .unwrap_or_else(|| supply.window.id.clone()),
                     units: i32::try_from(admission.units).map_err(|_| StoreError::Corrupt)?,
                     offering: admission.offering,
                     start: admission.start,
@@ -2866,7 +2869,7 @@ impl<'a> CommitSupply<'a> {
         commitment: &Commitment<'_>,
     ) -> Result<Placement<'a>, CommitError> {
         match *self {
-            Self::Single { offering, supply } => {
+            Self::Single { .. } => {
                 // The snapshot is read under the lock for serialization
                 // order, but admission is not re-evaluated: the hold's own
                 // reservation transfers to the booking in this same
@@ -2874,48 +2877,6 @@ impl<'a> CommitSupply<'a> {
                 // identity (the policy revision the hold was admitted under
                 // is still current), checked with the other revision guards
                 // under the anchor.
-                //
-                // A hold reserves capacity, but a subsequently recorded
-                // absence must not turn into a confirmed promise. The facts
-                // revision was checked under the anchor; keep the hold intact
-                // for release or expiry.
-                if let SupplyContext::ExactTime {
-                    exact,
-                    members,
-                    open,
-                    closures,
-                } = supply
-                {
-                    let member = members
-                        .iter()
-                        .find(|member| member.resource_id == hold.supply_id)
-                        .ok_or(AdmissionRefusal::ResourceUnavailable)?;
-                    if !member.serves(&offering.requires_capabilities) {
-                        return Err(AdmissionRefusal::CapabilityUnmatched.into());
-                    }
-                    if !member.available_during(hold.occupied_start, hold.occupied_end) {
-                        return Err(AdmissionRefusal::ResourceUnavailable.into());
-                    }
-                    let (start, end) = match exact.opening_coverage {
-                        registry_scheduling_core::OpeningCoverage::ServiceInterval => {
-                            (hold.displayed_start, hold.displayed_end)
-                        }
-                        registry_scheduling_core::OpeningCoverage::OccupiedInterval => {
-                            (hold.occupied_start, hold.occupied_end)
-                        }
-                    };
-                    if !registry_scheduling_core::covers_span(open, start, end) {
-                        return Err(if closures
-                            .iter()
-                            .any(|closed| start < closed.end && closed.start < end)
-                        {
-                            AdmissionRefusal::LocationClosed
-                        } else {
-                            AdmissionRefusal::ScheduleUnpublished
-                        }
-                        .into());
-                    }
-                }
                 Ok(Placement {
                     offering: hold.offering.clone(),
                     start: hold.displayed_start,
@@ -2951,11 +2912,10 @@ impl<'a> CommitSupply<'a> {
     /// other placement's anchor is the one it decides against.
     fn holds_claim_anchor(&self, current_anchors: &[String], claim: &ClaimRow) -> bool {
         match *self {
-            Self::Single {
-                supply: SupplyContext::Window { window, .. },
-                ..
-            } => claim.supply_id == window.id || current_anchors.contains(&claim.supply_id),
-            Self::Single { .. } | Self::Bundle(_) => true,
+            Self::Single { supply, .. } => {
+                claim.supply_id == supply.window.id || current_anchors.contains(&claim.supply_id)
+            }
+            Self::Bundle(_) => true,
         }
     }
 }
@@ -2994,11 +2954,10 @@ impl<'a> SnapshotPlan<'a> {
     /// without repeats.
     fn anchors(&self, also_held: &[String]) -> Vec<String> {
         let mut anchors = match self {
+            Self::Single(supply) => vec![supply.window.id.clone()],
             // The anchor is the pool, not the members: two offerings on one
             // pool sell the same members and must serialize against each
             // other, and `apply_policy` anchors pool ids only.
-            Self::Single(SupplyContext::ExactTime { exact, .. }) => vec![exact.pool.clone()],
-            Self::Single(SupplyContext::Window { window, .. }) => vec![window.id.clone()],
             Self::Bundle { lines, .. } => {
                 lines.iter().map(|line| line.exact.pool.clone()).collect()
             }
@@ -3078,7 +3037,9 @@ struct Locked {
 /// 3. The revision guard's share lock on the meta row, matching records
 ///    publication's supply-then-meta order.
 ///
-/// No commitment takes a supply anchor after a claim lock.
+/// No commitment takes a supply anchor after a claim lock. Confirming a hold
+/// that carries no allocation rows (`confirm_unallocated_hold`) places
+/// nothing, so it takes no anchor: only steps 2 and 3, in that order.
 async fn lock_commitment(
     transaction: &deadpool_postgres::Transaction<'_>,
     supply: &CommitSupply<'_>,
@@ -3354,60 +3315,19 @@ async fn single_snapshot(
     supply: &SupplyContext<'_>,
     now: DateTime<Utc>,
 ) -> Result<LedgerSnapshot, StoreError> {
-    match supply {
-        SupplyContext::ExactTime {
-            exact,
-            members,
-            open,
-            ..
-        } => {
-            // Claims occupy a member, so the snapshot reads member ids even
-            // though the lock is the pool's.
-            let member_ids: Vec<String> = members
-                .iter()
-                .map(|member| member.resource_id.clone())
-                .collect();
-            let earliest = open
-                .iter()
-                .map(|interval| interval.start)
-                .min()
-                .unwrap_or(now);
-            let latest = open
-                .iter()
-                .map(|interval| interval.end)
-                .max()
-                .unwrap_or(now);
-            let buffer = TimeDelta::minutes(
-                i64::from(exact.buffer_before_minutes) + i64::from(exact.buffer_after_minutes),
-            );
-            let duration = TimeDelta::minutes(i64::from(exact.duration_minutes));
-            let earliest = earliest
-                .checked_sub_signed(buffer)
-                .ok_or(StoreError::Corrupt)?;
-            let latest = latest
-                .checked_add_signed(duration + buffer)
-                .ok_or(StoreError::Corrupt)?;
-            let rows = transaction
-                .query(CONSUMING_CLAUSES, &[&member_ids, &earliest, &latest, &now])
-                .await?;
-            Ok(snapshot_from_rows(rows))
-        }
-        SupplyContext::Window { window, .. } => {
-            let rows = transaction
-                .query(
-                    "SELECT claim_id, offering, supply_id, kind, channel, occupied_start, occupied_end, \
-                     units, duplicate_key, hold_expires_at \
-                     FROM scheduling_claims \
-                     WHERE state='active' \
-                       AND (kind='booking' OR (kind='hold' AND hold_expires_at > $2)) \
-                       AND supply_id = $1 \
-                     ORDER BY occupied_start",
-                    &[&window.id, &now],
-                )
-                .await?;
-            Ok(snapshot_from_rows(rows))
-        }
-    }
+    let rows = transaction
+        .query(
+            "SELECT claim_id, offering, supply_id, kind, channel, occupied_start, occupied_end, \
+             units, duplicate_key, hold_expires_at \
+             FROM scheduling_claims \
+             WHERE state='active' \
+               AND (kind='booking' OR (kind='hold' AND hold_expires_at > $2)) \
+               AND supply_id = $1 \
+             ORDER BY occupied_start",
+            &[&supply.window.id, &now],
+        )
+        .await?;
+    Ok(snapshot_from_rows(rows))
 }
 
 /// Lock a bundle's supply anchors and read its snapshot, for a records swap
@@ -3880,50 +3800,22 @@ fn evaluate(
     commitment: &Commitment<'_>,
     exclude: Option<&str>,
 ) -> Result<registry_scheduling_core::Admission, AdmissionRefusal> {
-    match supply {
-        SupplyContext::ExactTime {
-            exact,
-            members,
-            open,
-            closures,
-        } => evaluate_exact_time_admission(
-            &ExactTimeContext {
-                offering,
-                exact,
-                members,
-                open,
-                closures,
-                snapshot,
-                policy_revision: u64::try_from(commitment.policy_revision).unwrap_or(u64::MAX),
-                now: commitment.now,
-            },
-            request,
-            exclude,
-        ),
-        SupplyContext::Window {
-            window,
-            lead_time_minutes,
-            horizon_days,
-            channels,
-            open,
-            closures,
-        } => evaluate_window_admission(
-            &registry_scheduling_core::WindowContext {
-                offering,
-                window,
-                open,
-                closures,
-                lead_time_minutes: *lead_time_minutes,
-                horizon_days: *horizon_days,
-                snapshot,
-                policy_revision: u64::try_from(commitment.policy_revision).unwrap_or(u64::MAX),
-                channels,
-                now: commitment.now,
-            },
-            request,
-            exclude,
-        ),
-    }
+    evaluate_window_admission(
+        &registry_scheduling_core::WindowContext {
+            offering,
+            window: supply.window,
+            open: supply.open,
+            closures: supply.closures,
+            lead_time_minutes: supply.lead_time_minutes,
+            horizon_days: supply.horizon_days,
+            snapshot,
+            policy_revision: u64::try_from(commitment.policy_revision).unwrap_or(u64::MAX),
+            channels: supply.channels,
+            now: commitment.now,
+        },
+        request,
+        exclude,
+    )
 }
 
 fn hold_ledger_claim(hold: &ClaimRow) -> LedgerClaim {
