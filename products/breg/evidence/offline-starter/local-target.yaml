@@ -51,3 +51,6 @@ rateLimits:
   burstPerPrincipal: 16
   failedSelectorAttemptsPerPrincipalAuthorityPerMinute: 10
 assuranceProfile: local
+extracts:
+  record-status-extract:
+    path: extracts/record-status.sqlite

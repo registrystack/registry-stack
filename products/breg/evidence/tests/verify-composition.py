@@ -155,6 +155,9 @@ def verify(workspace: Path, binaries: dict[str, Path]) -> dict:
             "scope": "registry:evidence:lookup", "maximumCacheSeconds": 60,
         },
     }
+    # A target binds every extract profile its Sources use; `target new` leaves
+    # the file path to the operator.
+    settings["extracts"] = {"record-status-extract": {"path": "extracts/record-status.sqlite"}}
     write(target / "target.yaml", settings)
     run(binaries["evidencectl"], "check", project, "--target", target,
         environment=environment)
