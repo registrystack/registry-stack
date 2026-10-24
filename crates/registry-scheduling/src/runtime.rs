@@ -15,25 +15,34 @@
 //! For reminders,
 //! each due outbox intent is rendered as one shared hook envelope in canonical
 //! JSON and POSTed with `content-type: application/json` to the
-//! operator-configured destination, exactly once per claim, with
-//! the transport and the notification bus wholly external (INT-02). When no
-//! destination is configured the outbox is the boundary: intents are recorded
-//! and marked local, never pretended delivered.
+//! operator-configured destination, once per leased attempt, through the
+//! platform dispatch core, with the transport and the notification bus wholly
+//! external (INT-02). When no destination is configured the outbox is the
+//! boundary: intents are recorded and set aside as local, never pretended
+//! delivered.
+//!
+//! A cancellation or reschedule cancels the appointment's reminders no
+//! attempt has started on inside its own transaction. A reminder a
+//! dispatcher already holds is checked under its lease immediately before
+//! the send and set aside when its appointment was cancelled or moved. A
+//! cancel or reschedule that commits between that check and the send still
+//! sends the stale reminder, and the receiver gets no ordering promise
+//! across processes: that is inherent to at-least-once delivery.
 
 use std::future::Future;
+use std::num::NonZeroUsize;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
-use chrono::{DateTime, TimeDelta, Utc};
 use clap::{Arg, Command};
 use registry_platform_audit::{AuditProfile, AuditWriter};
 use registry_platform_config::{ProtectedSecret, SecretResolver};
+use registry_platform_dispatch::postgres::{DispatchOutcome, DispatchWorker, WorkerConfig};
 use registry_platform_hooks::{Causation, EnvelopeLimits, EventSubject, HookEnvelope};
 use registry_platform_httputil::destination::{
     DataDestinationPolicy, DataDestinationRequestTemplate, DestinationAuthorizationTemplate,
-    DestinationAuthorizationValue, DestinationBodyTemplate, DestinationMethod, DestinationProfile,
-    FixedDestinationPolicy,
+    DestinationBodyTemplate, DestinationMethod, DestinationProfile, FixedDestinationPolicy,
 };
 use registry_platform_oidc::task_grant::TaskGrantStatusRegistry;
 use thiserror::Error;
@@ -50,9 +59,9 @@ use crate::config::{
 use crate::hooks::{ActivatedHooks, HookActivationError, HookRuntimeIdentity};
 use crate::http::{router, HttpState};
 use crate::service::SchedulingService;
-use crate::store::{
-    OutboxRow, PostgresStore, RoleMode, StoreError, REMINDER_SEND_TIMEOUT, SINGLE_ROLE_STATEMENT,
-};
+use crate::store::{OutboxRow, PostgresStore, RoleMode, StoreError, SINGLE_ROLE_STATEMENT};
+
+mod intents;
 
 /// How often each background loop wakes. The intervals are fixed constants,
 /// not configuration: they are internal mechanics of one deployment, not an
@@ -60,24 +69,10 @@ use crate::store::{
 const WORKER_INTERVAL: Duration = Duration::from_secs(2);
 /// Retention sweeps run every thirtieth maintenance tick.
 const RETENTION_TICKS: u8 = 30;
-/// How many holds one expiry pass may retire, and how many intents one
-/// dispatch pass may claim.
+/// How many holds one expiry pass may retire.
 const HOLD_EXPIRY_BATCH: i64 = 100;
-const REMINDER_BATCH: i64 = 100;
-/// The delivery attempts an intent may consume before it is held as failed for
-/// the operator to see.
-const REMINDER_ATTEMPTS_CEILING: i32 = 8;
-/// Exponential backoff between reminder attempts, from half a minute to an
-/// hour.
-const REMINDER_RETRY_BASE_SECONDS: i64 = 30;
-const REMINDER_RETRY_MAX_SECONDS: i64 = 3600;
-/// The lease one dispatch pass holds its claimed intents for. The worst
-/// case of one whole claimed batch is every intent sending to its full
-/// timeout, 100 x 5 s = 500 s, plus the database round trips around each
-/// send; 600 s covers both, so a second dispatcher never re-sends what a
-/// slow first one still owns, and a dispatcher that dies delays its
-/// intents by exactly one lease.
-const INTENT_DISPATCH_LEASE_SECONDS: i64 = 600;
+/// The most intents one test dispatch pass carries before it stops.
+const INTENT_DRAIN_LIMIT: usize = 1024;
 /// One rendered reminder event is bounded, as is the whole request.
 const REMINDER_MAXIMUM_BODY_BYTES: usize = 16 * 1024;
 const REMINDER_MAXIMUM_REQUEST_BYTES: usize = 32 * 1024;
@@ -208,6 +203,8 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
         &config.destinations.hooks,
         &secrets,
         HookRuntimeIdentity {
+            database_id: config.database_id().to_owned(),
+            package_digest: package_digest.clone(),
             scheduling_id: scheduling_id.clone(),
             policy_revision,
             policy_digest: policy_digest.clone(),
@@ -303,29 +300,32 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
         },
     ));
 
-    let dispatch_store = store.clone();
-    let dispatch_id = scheduling_id.clone();
-    let dispatch_destination = reminders;
+    // One lane, so each intent is leased and sent in turn, as the outbox
+    // was always drained.
+    let intent_dispatcher = intents::intent_dispatcher(store.clone())
+        .await
+        .map_err(database_step("delivery intent dispatcher"))?;
+    let intent_worker = DispatchWorker::new(
+        intent_dispatcher.clone(),
+        Arc::new(intents::IntentTransport::new(
+            intent_dispatcher,
+            scheduling_id.clone(),
+            reminders.map(Arc::new),
+        )),
+        WorkerConfig {
+            concurrency: NonZeroUsize::MIN,
+            idle_poll: WORKER_INTERVAL,
+        },
+    );
+    let (intent_shutdown, intent_shutdown_rx) = tokio::sync::watch::channel(false);
     workers.push(supervise(
         "reminder dispatch",
         worker_stopped.clone(),
         async move {
-            let mut interval = worker_timer();
-            loop {
-                interval.tick().await;
-                if let Err(error) = dispatch_due_intents(
-                    &dispatch_store,
-                    &dispatch_id,
-                    dispatch_destination.as_ref(),
-                )
-                .await
-                {
-                    tracing::warn!(
-                        error = %error,
-                        "Scheduling reminder dispatch pass did not complete"
-                    );
-                }
-            }
+            // Keep the sender for the lifetime of the supervised worker. Runtime
+            // shutdown aborts this future and releases the dispatch loop.
+            let _keepalive = intent_shutdown;
+            intent_worker.run(intent_shutdown_rx).await;
         },
     ));
 
@@ -724,28 +724,17 @@ fn delivery_of(status: u16) -> Delivery {
     }
 }
 
-/// The backoff before the next attempt of one intent, exponential from the
-/// base and capped at the hour, counted from `now`.
-fn next_attempt(now: DateTime<Utc>, attempts: i32) -> DateTime<Utc> {
-    let shift = (attempts.max(1) - 1).min(7) as u32;
-    let seconds = (REMINDER_RETRY_BASE_SECONDS << shift).min(REMINDER_RETRY_MAX_SECONDS);
-    now + TimeDelta::seconds(seconds)
-}
-
-/// Claim every due intent and give each one dispatch attempt. A transport
-/// failure proves nothing and schedules a retry; a refusal outside the retry
-/// classes is held as failed for the operator; with no destination
-/// configured the intent is marked local: recorded, never pretended
-/// delivered.
+/// Carry every due intent through one dispatch attempt, one at a time,
+/// until none is due. A transport failure proves nothing and schedules a
+/// retry on the frozen schedule; a refusal outside the retry classes, a
+/// payload that cannot become an event, and an exhausted attempt budget set
+/// the intent aside as failed for the operator; with no destination
+/// configured the intent is set aside as local: recorded, never pretended
+/// delivered. A claimed reminder whose appointment was cancelled or moved to
+/// a newer revision is set aside without a send.
 ///
-/// A claimed intent is leased for the pass that claimed it and fenced by
-/// its attempt number, so a concurrent or restarted dispatcher cannot
-/// re-send it or overwrite a newer outcome. Reminders whose appointment has
-/// been cancelled or moved to a newer revision are skipped before the send
-/// rather than delivered against a decision the caller already changed; the
-/// residual race, a suppression landing while the send itself is in flight,
-/// is reported as a lost outcome rather than erased, and the destination
-/// deduplicates by the event's stable identifier.
+/// The runtime runs the same dispatch as a supervised worker; this pass is
+/// the bounded form the database suite drives.
 ///
 /// # Errors
 ///
@@ -754,153 +743,141 @@ fn next_attempt(now: DateTime<Utc>, attempts: i32) -> DateTime<Utc> {
 pub async fn dispatch_due_intents(
     store: &PostgresStore,
     scheduling_id: &str,
-    transport: Option<&ReminderTransport>,
+    transport: Option<Arc<ReminderTransport>>,
 ) -> Result<(), StoreError> {
-    let now = store.observed_now();
-    let lease = TimeDelta::seconds(INTENT_DISPATCH_LEASE_SECONDS);
-    for row in store.claim_due_intents(now, REMINDER_BATCH, lease).await? {
-        let Some(transport) = transport else {
-            let owned = store.hold_intent_local(row.outbox_id, row.attempts).await?;
-            if !owned {
-                // Nothing was sent: no destination exists. The intent was
-                // suppressed or taken over between the claim and this write,
-                // and its owner holds the record.
-                tracing::warn!(
-                    outbox_id = %row.outbox_id,
-                    attempts = row.attempts,
-                    "a local hold arrived after its attempt lost the intent; nothing was sent"
-                );
-            }
-            continue;
-        };
-        // The claim's own liveness: a suppressed reminder, or one whose
-        // appointment moved to a newer revision, is not sent.
-        if !store
-            .intent_still_dispatchable(row.outbox_id, row.attempts)
-            .await?
-        {
-            tracing::info!(
-                outbox_id = %row.outbox_id,
-                "a claimed intent was suppressed or superseded before its dispatch"
-            );
-            continue;
-        }
-        let body = match reminder_event(scheduling_id, &row) {
-            Ok(body) => body,
-            Err(error) => {
-                tracing::error!(
-                    error = %error,
-                    outbox_id = %row.outbox_id,
-                    "a due reminder intent could not be rendered"
-                );
-                // An unrenderable intent is held, not retried: no amount of
-                // retrying fixes a payload that cannot become an event.
-                store
-                    .retry_intent(
-                        row.outbox_id,
-                        next_attempt(store.observed_now(), row.attempts),
-                        row.attempts,
-                        row.attempts,
-                    )
-                    .await?;
-                continue;
-            }
-        };
-        let authorization = transport
-            .bearer
-            .as_ref()
-            .map(|secret| DestinationAuthorizationValue::bearer(secret.expose_secret().to_vec()))
-            .transpose();
-        let request = match authorization {
-            Ok(authorization) => transport.template.render(&[], &[], authorization, Some(body)),
-            Err(_) => Err(registry_platform_httputil::destination::DestinationRequestError::InvalidAuthorization),
-        };
-        let outcome = match request {
-            Ok(request) => match transport.policy.send(request, REMINDER_SEND_TIMEOUT).await {
-                Ok(response) => Some(delivery_of(response.status().as_u16())),
-                Err(error) => {
-                    tracing::warn!(
-                        error = %error,
-                        outbox_id = %row.outbox_id,
-                        "a reminder delivery attempt did not reach a verdict"
-                    );
-                    Some(Delivery::Transient)
-                }
-            },
-            Err(error) => {
-                tracing::error!(
-                    error = %error,
-                    outbox_id = %row.outbox_id,
-                    "a reminder delivery request could not be rendered"
-                );
-                None
-            }
-        };
-        match outcome.unwrap_or(Delivery::Transient) {
-            Delivery::Delivered => {
-                let owned = store
-                    .mark_intent_delivered(row.outbox_id, row.attempts)
-                    .await?;
-                if !owned {
-                    // The send completed, but suppression or a superseding
-                    // attempt owns the row now. The row records its own
-                    // state; this line is the delivery's accounting.
-                    report_lost_outcome(&row);
-                }
-            }
-            Delivery::Transient => {
-                // A retry write that loses its claim needs no report: the
-                // attempt that took the intent over writes the outcome that
-                // counts, and a back-off nobody owes is nobody's news.
-                store
-                    .retry_intent(
-                        row.outbox_id,
-                        next_attempt(store.observed_now(), row.attempts),
-                        REMINDER_ATTEMPTS_CEILING,
-                        row.attempts,
-                    )
-                    .await?;
-            }
-            // A refusal the retry classes do not cover (an authorization
-            // refusal, a routing refusal) is terminal: the ceiling set to the
-            // attempt count holds the intent as failed on this very write.
-            Delivery::Refused => {
-                tracing::warn!(
-                    outbox_id = %row.outbox_id,
-                    status = row.attempts,
-                    "a reminder destination refused an intent outright"
-                );
-                store
-                    .retry_intent(
-                        row.outbox_id,
-                        next_attempt(store.observed_now(), row.attempts),
-                        row.attempts,
-                        row.attempts,
-                    )
-                    .await?;
-            }
+    let dispatcher = intents::intent_dispatcher(store.clone()).await?;
+    let transport =
+        intents::IntentTransport::new(dispatcher.clone(), scheduling_id.to_owned(), transport);
+    for _ in 0..INTENT_DRAIN_LIMIT {
+        match dispatcher.dispatch_once(&transport).await {
+            Ok(DispatchOutcome::Idle) => return Ok(()),
+            Ok(_) => {}
+            Err(_) => return Err(StoreError::IntentDispatch),
         }
     }
     Ok(())
 }
 
-/// Report an outcome write that landed on nobody: the intent was
-/// suppressed, or a superseding attempt took it over, while this attempt
-/// was in flight. The row keeps the state its owner left it in; what this
-/// records is that a send this attempt made may have reached a destination
-/// that no outbox state will name.
-fn report_lost_outcome(row: &OutboxRow) {
-    tracing::warn!(
-        outbox_id = %row.outbox_id,
-        attempts = row.attempts,
-        "a dispatch outcome arrived after its attempt lost the intent; a send may have completed"
-    );
+/// One leased delivery intent, held by a test between its claim and its
+/// finish.
+#[cfg(feature = "postgres-test")]
+#[doc(hidden)]
+pub struct IntentLeaseForTest(registry_platform_dispatch::postgres::LeasedJob<OutboxRow>);
+
+#[cfg(feature = "postgres-test")]
+impl IntentLeaseForTest {
+    #[must_use]
+    pub fn outbox_id(&self) -> uuid::Uuid {
+        self.0.job.outbox_id
+    }
+
+    #[must_use]
+    pub fn purpose(&self) -> &str {
+        &self.0.job.purpose
+    }
+
+    #[must_use]
+    pub fn claim_id(&self) -> uuid::Uuid {
+        self.0.job.claim_id
+    }
+
+    #[must_use]
+    pub fn payload(&self) -> &serde_json::Value {
+        &self.0.job.payload
+    }
+
+    #[must_use]
+    pub fn attempt(&self) -> i16 {
+        self.0.attempt
+    }
+}
+
+/// Lease the next due intent as the dispatch worker would, without sending
+/// it.
+#[cfg(feature = "postgres-test")]
+#[doc(hidden)]
+pub async fn claim_due_intent_for_test(
+    store: &PostgresStore,
+) -> Result<Option<IntentLeaseForTest>, StoreError> {
+    let dispatcher = intents::intent_dispatcher(store.clone()).await?;
+    let claim = dispatcher
+        .claim()
+        .await
+        .map_err(|_| StoreError::IntentDispatch)?;
+    Ok(claim.leased().map(IntentLeaseForTest))
+}
+
+/// Record the outcome of a leased intent under its lease: delivered, or a
+/// transient failure.
+///
+/// # Errors
+///
+/// Returns [`StoreError::IntentDispatch`] when the lease no longer owns the
+/// intent.
+#[cfg(feature = "postgres-test")]
+#[doc(hidden)]
+pub async fn finish_intent_for_test(
+    store: &PostgresStore,
+    lease: &IntentLeaseForTest,
+    delivered: bool,
+) -> Result<(), StoreError> {
+    let dispatcher = intents::intent_dispatcher(store.clone()).await?;
+    let outcome = if delivered {
+        registry_platform_dispatch::SendOutcome::Accepted {
+            receiver_reference: None,
+        }
+    } else {
+        registry_platform_dispatch::SendOutcome::Transient { retry_after: None }
+    };
+    dispatcher
+        .finish(
+            &lease.0,
+            registry_platform_dispatch::Sent {
+                outcome,
+                detail: (),
+            },
+        )
+        .await
+        .map_err(|_| StoreError::IntentDispatch)?;
+    Ok(())
+}
+
+/// Send one leased intent as the dispatch worker would, under its lease,
+/// and record the outcome the send returned.
+///
+/// # Errors
+///
+/// Returns [`StoreError::IntentDispatch`] when the send started nothing
+/// because the lease no longer owns the intent, or when the outcome could
+/// not be recorded under it.
+#[cfg(feature = "postgres-test")]
+#[doc(hidden)]
+pub async fn send_claimed_intent_for_test(
+    store: &PostgresStore,
+    scheduling_id: &str,
+    transport: Option<Arc<ReminderTransport>>,
+    lease: &IntentLeaseForTest,
+) -> Result<(), StoreError> {
+    use registry_platform_dispatch::postgres::DispatchTransport as _;
+
+    let dispatcher = intents::intent_dispatcher(store.clone()).await?;
+    let transport =
+        intents::IntentTransport::new(dispatcher.clone(), scheduling_id.to_owned(), transport);
+    let sent = transport
+        .send(&lease.0)
+        .await
+        .map_err(|_| StoreError::IntentDispatch)?;
+    dispatcher
+        .finish(&lease.0, sent)
+        .await
+        .map_err(|_| StoreError::IntentDispatch)?;
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::TimeZone as _;
+    use chrono::{TimeZone as _, Utc};
     use serde_json::Value;
     use uuid::Uuid;
 
@@ -912,7 +889,6 @@ mod tests {
             claim_id: Uuid::new_v4(),
             appointment_revision: 3,
             due_at: due,
-            attempts: 1,
             payload: serde_json::json!({"appointment": "a-1", "minutesBefore": 60}),
         }
     }
@@ -963,23 +939,6 @@ mod tests {
         assert!(matches!(delivery_of(301), Delivery::Refused));
         assert!(matches!(delivery_of(401), Delivery::Refused));
         assert!(matches!(delivery_of(422), Delivery::Refused));
-    }
-
-    #[test]
-    fn retry_backoff_grows_exponentially_and_caps_at_the_hour() {
-        let now = Utc::now();
-        let first = next_attempt(now, 1)
-            .signed_duration_since(now)
-            .num_seconds();
-        let second = next_attempt(now, 2)
-            .signed_duration_since(now)
-            .num_seconds();
-        let ceiling = next_attempt(now, 50)
-            .signed_duration_since(now)
-            .num_seconds();
-        assert_eq!(first, REMINDER_RETRY_BASE_SECONDS);
-        assert_eq!(second, 2 * REMINDER_RETRY_BASE_SECONDS);
-        assert_eq!(ceiling, REMINDER_RETRY_MAX_SECONDS);
     }
 
     #[test]

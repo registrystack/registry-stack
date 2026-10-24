@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Startup reports an unreadable activation ledger before attempting schema
+  reads, matching the existing plan/status diagnostic for a runtime role that
+  lost schema usage or ledger read access.
+- `caseworkctl dev` retains redacted one-shot issuer setup logs in its private
+  log directory and includes that directory in failed-start guidance.
+
 - BREAKING: `caseworkctl --format json` reports now use
   `id.registrystack.org/formats/casework/report/v1alpha2`. Successful `explain`
   reports require the new per-policy usage and dependency-scope members and
@@ -25,6 +31,35 @@
 - Allow distinct local clients to share an access profile, so development
   sessions can exercise independent reviewers without changing the policy.
 - Correct the peer version-mismatch remedy to name `--bregctl-bin`.
+- Make `caseworkctl check --production` validate the exact package input
+  closure offline, with an authored `provider pair` recovery for unpaired
+  context providers. Complete runtime-schema secret-provider parity for every
+  secret reference, and describe the bodyless pending, concealed-or-unknown,
+  and expired review-result responses in OpenAPI.
+
+- BREAKING: Casework installs its schema as a new baseline numbered version
+  200, and later migrations take 201, 202, and onward. A database whose
+  ledger holds any version below 200, including the version 100 that
+  v0.42.0 and v0.43.0 recorded, is refused by name as a pre-1.0 schema:
+  `caseworkctl plan` and `apply` report `casework.activation.beta-schema`,
+  and readiness and startup refuse with the same message. Recovery: keep the
+  old database with the release that wrote it, create a fresh database, and
+  apply the package. Queued completion deliveries in the old database are not
+  carried forward.
+
+- `casework_review_completion_outbox` refuses a `leased` row without a
+  `lease_expires_at`, through the corrected shared dispatch job shape. Apply
+  this release to a fresh database.
+
+- BREAKING: review completion delivery runs on the shared dispatch core.
+  `casework_review_completion_outbox` takes the dispatch job table shape: the
+  attempt count is `attempt`, a lease carries `lease_token`, and a row that
+  stops without delivery ends `dead-lettered` when its attempts run out or
+  `expired` when its result window closes, instead of `exhausted`. A lapsed
+  lease counts as a failed attempt and waits `retryDelaySeconds`. A row whose
+  destination is no longer configured stops without a send. A database
+  created by an earlier release must be recreated, not upgraded: apply this
+  release to a fresh database.
 
 ## 0.43.0 - 2026-10-21
 

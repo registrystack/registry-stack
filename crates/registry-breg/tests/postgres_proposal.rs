@@ -7015,6 +7015,196 @@ async fn compatibility_inventory_refuses_rebound_frozen_review_subject_context_a
 
 #[cfg(feature = "tooling")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn every_activation_preserves_a_refused_apply_block_until_rebase() {
+    let mut source = registry_source(false);
+    source["recordTypes"][0]["constraints"] =
+        json!([{"id":"unique-name","type":"unique","fields":["name"]}]);
+    source["reviewAuthorities"] =
+        json!([{"id":"local-review","protocol":"id.registrystack.org/protocols/review/v1"}]);
+    let policy =
+        json!({"id":"name-correction","version":"1","digest":format!("sha256:{}","b".repeat(64))});
+    source["actions"][0]["execution"]["proposal"]["review"] = json!({"type":"required","authority":"local-review","source":"proposal-test","policy":policy});
+    let authority =
+        proposal_review_authority::LocalAuthority::start(serde_json::from_value(policy).unwrap())
+            .await;
+    let configured = authority.registry.clone();
+    let fixture = client_http::ClientFixture::start_with_mutations(
+        compile(source.clone()),
+        claims("author", "zone-a"),
+        move |mutations| mutations.with_review_result_source(configured),
+    )
+    .await;
+    let client = &fixture.http.client;
+    let draft = start(&fixture, "Reserved", "refused-keep-start").await;
+    let submit = client
+        .prepare_proposal(&draft, "submit", json!({}), &key("refused-keep-submit"))
+        .unwrap();
+    let submitted = client.execute_proposal(&submit).await.unwrap().value;
+    for _ in 0..2 {
+        assert!(
+            registry_breg::review_store::run_review_authority_once_for_test(
+                &fixture.pool,
+                &authority.registry,
+                &fixture.mutations,
+            )
+            .await
+            .unwrap()
+        );
+    }
+    let metadata = client.registry_contract(Some("clerk")).await.unwrap();
+    let BRegDirectWrite::Create(create) = metadata
+        .value
+        .select_direct_write("records.target.create", "clerk")
+        .unwrap()
+    else {
+        panic!("create");
+    };
+    client
+        .create_record(
+            &create,
+            &BRegCreateRequest::new(map(json!({"name":"Reserved","jurisdiction":"zone-a"})))
+                .unwrap(),
+            &key("refused-keep-reserved"),
+            BRegRecordFormat::Json,
+        )
+        .await
+        .unwrap();
+    let approved = client.read_proposal(&submitted).await.unwrap().value;
+    let apply = client
+        .prepare_proposal(
+            &approved,
+            "apply",
+            json!({"submissionVersion":approved.submission_version(),
+                "effectDigest":approved.effect_digest().unwrap()}),
+            &key("refused-keep-apply"),
+        )
+        .unwrap();
+    assert_eq!(
+        client
+            .execute_proposal(&apply)
+            .await
+            .unwrap_err()
+            .problem_code(),
+        Some(BRegProblemCode::MutationConflict)
+    );
+    let admin = &fixture.database.admin;
+    let state = || async {
+        let row = admin
+            .query_one(
+                "SELECT s.blocked_reason,r.state,r.withdrawn
+                   FROM registry_internal.registry_proposal_state s
+                   JOIN registry_internal.registry_proposal_review_submissions r
+                     USING (action_id,proposal_id,submission_version)",
+                &[],
+            )
+            .await
+            .unwrap();
+        (
+            row.get::<_, Option<String>>(0),
+            row.get::<_, String>(1),
+            row.get::<_, bool>(2),
+        )
+    };
+    let refused = state().await;
+    assert_eq!(refused.0.as_deref(), Some("application-refused"));
+    assert!(!refused.2, "a refused Apply keeps its review round");
+
+    let activate = |registry: registry_breg::CompiledRegistry, digest: String| {
+        let database = &fixture.database;
+        async move {
+            let (mut connection, task) = database.connect_admin().await;
+            let tx = connection.transaction().await.unwrap();
+            registry_breg::proposal_retention::mark_incompatible_proposals_for_test(
+                &tx,
+                &registry,
+                &digest,
+                &uuid::Uuid::new_v4().to_string(),
+            )
+            .await
+            .unwrap();
+            tx.commit().await.unwrap();
+            drop(connection);
+            task.abort();
+        }
+    };
+
+    // A compatible activation leaves the refusal and its review round alone.
+    activate(
+        (*fixture.registry).clone(),
+        fixture.identity.package_digest.clone(),
+    )
+    .await;
+    assert_eq!(state().await, refused);
+
+    // An activation that changes the Action withdraws the review round, but
+    // the refusal stays the Proposal's reason; only Rebase clears it.
+    let mut changed = source.clone();
+    changed["actions"][0]["execution"]["proposal"]["review"]["policy"]["digest"] =
+        json!(format!("sha256:{}", "c".repeat(64)));
+    let changed = compile(changed);
+    assert_ne!(
+        fixture.registry.actions().actions[0].definition_revision,
+        changed.actions().actions[0].definition_revision
+    );
+    activate(changed, format!("sha256:{}", "c".repeat(64))).await;
+    let withdrawn = state().await;
+    assert_eq!(withdrawn.0.as_deref(), Some("application-refused"));
+    assert!(withdrawn.2, "the incompatible activation withdraws Review");
+
+    // Restoring the original Action neither clears the refusal nor reopens
+    // the withdrawn round.
+    activate(
+        (*fixture.registry).clone(),
+        fixture.identity.package_digest.clone(),
+    )
+    .await;
+    assert_eq!(state().await, withdrawn);
+    let after = client.read_proposal(&submitted).await.unwrap().value;
+    let after_json = serde_json::to_value(&after).unwrap();
+    assert_eq!(after_json["applicationStatus"]["state"], "blocked");
+    assert_eq!(
+        after_json["applicationStatus"]["reason"],
+        "application-refused"
+    );
+    assert!(
+        !after
+            .link("apply")
+            .unwrap()
+            .availability()
+            .unwrap()
+            .available
+    );
+    assert_eq!(
+        client
+            .execute_proposal(&apply)
+            .await
+            .unwrap_err()
+            .problem_code(),
+        Some(BRegProblemCode::PreconditionFailed)
+    );
+    let target: String = admin
+        .query_one(
+            "SELECT input->>'target' FROM registry_internal.registry_proposal_state",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    let rebase = client
+        .prepare_proposal(
+            &after,
+            "rebase",
+            json!({"input":{"target":target,"value":"Fresh"}}),
+            &key("refused-keep-rebase"),
+        )
+        .unwrap();
+    let rebased = client.execute_proposal(&rebase).await.unwrap().value;
+    assert_eq!(rebased.state(), BRegProposalState::Draft);
+    fixture.finish().await;
+}
+
+#[cfg(feature = "tooling")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn incompatible_or_expired_inventory_cannot_activate_or_change_proposals_and_records() {
     use registry_breg::migration::{
         apply_verified_package, ActivationDeployment, ApplyPrecondition, ApplyRoles, ApplyTimeouts,

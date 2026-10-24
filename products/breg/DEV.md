@@ -105,11 +105,12 @@ compiled destination ID in `dev-clients.yaml`:
 ```yaml
 secretProviders:
   file: {root: /absolute/owner-only/dev-secrets}
-eventDestinations:
-  openfn:
-    origin: http://127.0.0.1:8088
-    path: /webhooks/registry
-    hmacSha256KeyRef: secret:file/openfn-webhook-key
+destinations:
+  hooks:
+    openfn:
+      origin: http://127.0.0.1:8088
+      path: /webhooks/registry
+      hmacSha256KeyRef: secret:file/openfn-webhook-key
 ```
 
 The key is a [secret reference](#secret-references). The session copies it
@@ -117,7 +118,7 @@ into its private state and uses the same bounded outbox delivery and replay
 rules.
 The origin must be numeric loopback HTTP with an explicit port. An explicit
 destination map starts no built-in receiver, so `dev events` has no inbox
-receipts; inspect the receiving service and `bregctl webhook list` instead.
+receipts; inspect the receiving service and `bregctl hook list` instead.
 
 For a governed action package that declares Evidence providers, bind every
 required provider in the project's `dev-clients.yaml` before its first start:
@@ -232,15 +233,15 @@ the absolute runtime configuration path:
 
 ```sh
 SSL_CERT_FILE="$PWD/registry/.breg/dev/tls/ca.pem" \
-  bregctl webhook list --runtime-config "$PWD/registry/.breg/dev/runtime.yaml"
+  bregctl hook list --runtime-config "$PWD/registry/.breg/dev/runtime.yaml"
 ```
 
 Delivered rows leave that queue. Automatic retries keep the event UUID and
 idempotency key; an eligible operator replay increments the generation. Use
-the identifiers and generation from `webhook list` with `bregctl webhook replay
+the identifiers and generation from `hook list` with `bregctl hook replay
 --help`. Supply the same `SSL_CERT_FILE` and absolute runtime path for replay.
 The normal event delivery, dead-letter and replay rules also apply to
-this generated runtime. See [Events and webhooks](EVENTS-AND-WEBHOOKS.md).
+this generated runtime. See [Events and hooks](EVENTS-AND-WEBHOOKS.md).
 
 The supervisor starts the receiver before BReg and stops it after BReg during
 normal shutdown or failed startup. It captures runtime deliveries, including

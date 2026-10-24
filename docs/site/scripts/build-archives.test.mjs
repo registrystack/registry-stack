@@ -41,6 +41,7 @@ import {
   CONTRACTS as coordinatorContracts,
   OPERATION_CATALOG as coordinatorOperationCatalog,
 } from './generate-coordinator-configuration.mjs';
+import { CONTRACTS as documentsContracts } from './generate-documents-configuration.mjs';
 
 const execFileAsync = promisify(execFile);
 const scriptsDir = dirname(fileURLToPath(import.meta.url));
@@ -186,6 +187,7 @@ test('archive generation excludes current-source generators', async () => {
     'generate-render-configuration.mjs',
     'generate-messaging-configuration.mjs',
     'generate-coordinator-configuration.mjs',
+    'generate-documents-configuration.mjs',
     'generate-configuration-formats.mjs',
     'generate-cli-reference.mjs',
   ]) {
@@ -214,6 +216,7 @@ test('archive generation excludes current-source generators', async () => {
     'docs/site/src/data/generated/render-configuration.json',
     'docs/site/src/data/generated/messaging-configuration.json',
     'docs/site/src/data/generated/coordinator-configuration.json',
+    'docs/site/src/data/generated/documents-configuration.json',
     'docs/site/src/data/generated/configuration-formats.json',
   ]);
 });
@@ -362,6 +365,7 @@ test('legacy archives retain pinned CLI bytes and generate missing current confi
   const renderPath = resolve(siteRoot, 'src/data/generated/render-configuration.json');
   const messagingPath = resolve(siteRoot, 'src/data/generated/messaging-configuration.json');
   const coordinatorPath = resolve(siteRoot, 'src/data/generated/coordinator-configuration.json');
+  const documentsPath = resolve(siteRoot, 'src/data/generated/documents-configuration.json');
   const legacyCli = 'exact committed legacy CLI bytes\n';
   await mkdir(dirname(cliPath), { recursive: true });
   await mkdir(dirname(evidencePath), { recursive: true });
@@ -390,6 +394,7 @@ test('legacy archives retain pinned CLI bytes and generate missing current confi
       ...renderContracts,
       ...messagingContracts,
       ...coordinatorContracts,
+      ...documentsContracts,
     ].map((contract) => contract.file),
     bregClientCapabilities,
     configurationFormatsSource,
@@ -417,6 +422,7 @@ test('legacy archives retain pinned CLI bytes and generate missing current confi
   const currentCoordinator = JSON.parse(await readFile(coordinatorPath, 'utf8'));
   assert.equal(currentCoordinator.contracts.length, coordinatorContracts.length);
   assert.ok(currentCoordinator.operations.length > 0);
+  assert.equal(JSON.parse(await readFile(documentsPath, 'utf8')).contracts.length, documentsContracts.length);
   await restore();
   await assert.rejects(readFile(cliPath), { code: 'ENOENT' });
   assert.equal(await readFile(evidencePath, 'utf8'), currentEvidence);

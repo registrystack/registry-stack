@@ -143,6 +143,8 @@ async fn verify_retained(
         &loaded.config.destinations.hooks,
         &loaded.resolver,
         HookRuntimeIdentity {
+            database_id: deployed.database_id,
+            package_digest: deployed.package_digest,
             scheduling_id: deployed.scheduling_id,
             policy_revision: deployed.policy_revision,
             policy_digest: deployed.policy_digest,
@@ -411,6 +413,8 @@ fn apply_audited(
     candidate_hooks(
         &loaded,
         HookRuntimeIdentity {
+            database_id: loaded.config.database_id().to_owned(),
+            package_digest: loaded.package_digest.clone(),
             scheduling_id: loaded.policy.project.id.to_string(),
             policy_revision: 1,
             policy_digest: loaded.policy.policy_digest(),

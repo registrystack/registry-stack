@@ -340,12 +340,12 @@ every activation, and store secrets separately.
     and drop_expired_receipts();
     crates/registry-bregctl/src/lib.rs, IdempotencyRetentionEraseArgs;
     crates/registry-breg/src/audit.rs;
-    crates/registry-breg/src/webhook.rs;
+    crates/registry-breg/src/hooks.rs;
     crates/registry-breg/src/subject_access_log.rs, run_retention() and expire_tick();
     crates/registry-breg/src/ingestion_store.rs, install() and scrub_receipts_for_records();
     products/breg/ACCESS-LOG.md;
-    crates/registry-breg/src/runtime_config.rs, DEFAULT_WEBHOOK_PAYLOAD_RETENTION_DAYS
-    and MAX_WEBHOOK_PAYLOAD_RETENTION_DAYS;
+    crates/registry-breg/src/runtime_config.rs, DEFAULT_HOOK_PAYLOAD_RETENTION_DAYS
+    and MAX_HOOK_PAYLOAD_RETENTION_DAYS;
     crates/registry-bregctl/src/data_lifecycle.rs. */}
 
 ## Spent idempotency keys

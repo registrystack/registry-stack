@@ -24,3 +24,4 @@ products:
   registry-messaging: messaging
   registry-breg-services: breg-mcp
   registry-coordinator: coordinator
+  registry-documents: documents

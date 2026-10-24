@@ -66,7 +66,7 @@ fn native_observers_load_owned_assets_generate_schema_and_sample_the_real_transi
         "bregctl".into(),
         "--format".into(),
         "json".into(),
-        "webhook".into(),
+        "hook".into(),
         "sample".into(),
         root.as_os_str().into(),
         "--event".into(),

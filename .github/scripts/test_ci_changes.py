@@ -25,12 +25,14 @@ from ci_changes import (
     DISCOVERY_PROVIDER_IMPLEMENTATION_INPUTS,
     DISCOVERY_PROVIDER_INPUTS,
     DISCOVERY_TUTORIAL_INPUTS,
+    DOCUMENTS_TUTORIAL_INPUTS,
     EVIDENCE_AUTHORING_GUIDE_IMPLEMENTATION_INPUTS,
     EVIDENCE_TUTORIAL_INPUTS,
     IDENTIFIER_CATALOG_INPUTS,
     REGISTRY_RECORD_CROSS_PRODUCT_INPUTS,
     BREG_PACKAGES,
     CASEWORK_PACKAGES,
+    DOCUMENTS_PACKAGES,
     MESSAGING_PACKAGES,
     MESSAGING_TUTORIAL_INPUTS,
     RENDER_TUTORIAL_INPUTS,
@@ -346,6 +348,12 @@ class CiChangesTest(unittest.TestCase):
                 "needs.changes.outputs.messaging_postgres == 'true'"
             ),
             "coordinator-postgres": "needs.changes.outputs.coordinator == 'true'",
+            "documents-contracts": (
+                "needs.changes.outputs.documents_contracts == 'true'"
+            ),
+            "documents-postgres": (
+                "needs.changes.outputs.documents_postgres == 'true'"
+            ),
             "messaging-contracts": (
                 "needs.changes.outputs.messaging_contracts == 'true'"
             ),
@@ -370,6 +378,9 @@ class CiChangesTest(unittest.TestCase):
             ),
             "messaging-tutorial": (
                 "needs.changes.outputs.messaging_tutorial == 'true'"
+            ),
+            "documents-tutorial": (
+                "needs.changes.outputs.documents_tutorial == 'true'"
             ),
             "render-tutorial": "needs.changes.outputs.render_tutorial == 'true'",
             "scheduling-tutorial": (
@@ -481,6 +492,8 @@ class CiChangesTest(unittest.TestCase):
             "messaging-contracts",
             "messaging-postgres",
             "messaging-smtp",
+            "documents-contracts",
+            "documents-postgres",
             "coordinator-postgres",
             "release-tool",
             "release-tool-required",
@@ -490,6 +503,7 @@ class CiChangesTest(unittest.TestCase):
             "breg-tutorial",
             "casework-tutorial",
             "messaging-tutorial",
+            "documents-tutorial",
             "render-tutorial",
             "scheduling-tutorial",
             "breg-evidence-composition",
@@ -522,6 +536,8 @@ class CiChangesTest(unittest.TestCase):
                 "messaging-postgres",
                 "messaging-contracts",
                 "messaging-smtp",
+                "documents-contracts",
+                "documents-postgres",
                 "coordinator-postgres",
                 "config-conformance",
             ),
@@ -550,6 +566,8 @@ class CiChangesTest(unittest.TestCase):
                 "messaging-postgres",
                 "messaging-contracts",
                 "messaging-smtp",
+                "documents-contracts",
+                "documents-postgres",
                 "coordinator-postgres",
                 "config-conformance",
                 "release-tool",
@@ -558,6 +576,7 @@ class CiChangesTest(unittest.TestCase):
                 "breg-tutorial",
                 "casework-tutorial",
                 "messaging-tutorial",
+                "documents-tutorial",
                 "render-tutorial",
                 "scheduling-tutorial",
                 "breg-evidence-composition",
@@ -599,6 +618,7 @@ class CiChangesTest(unittest.TestCase):
             "breg-tutorial",
             "casework-tutorial",
             "messaging-tutorial",
+            "documents-tutorial",
             "render-tutorial",
             "scheduling-tutorial",
             "breg-evidence-composition",
@@ -612,7 +632,7 @@ class CiChangesTest(unittest.TestCase):
             final_needs,
             previous_final_needs.difference({"rust-result"}).union(rust_needs),
         )
-        self.assertEqual(37, len(final_needs))
+        self.assertEqual(40, len(final_needs))
         # Platform line coverage publishes from main and the nightly sweep;
         # it does not hold the merge queue.
         self.assertNotIn("platform-coverage", final_needs)
@@ -1168,6 +1188,33 @@ class CiChangesTest(unittest.TestCase):
         unrelated = classify(self.workspace, ("crates/registry-scheduling/src/lib.rs",))
         self.assertFalse(unrelated["messaging_contracts"])
         self.assertFalse(unrelated["messaging_postgres"])
+
+    def test_document_store_product_and_core_select_its_own_gates(self) -> None:
+        for path in (
+            "products/documents/README.md",
+            "crates/registry-documents-core/src/project.rs",
+            "crates/registry-documents/src/http.rs",
+        ):
+            with self.subTest(path=path):
+                outputs = classify(self.workspace, (path,))
+                self.assertIn(
+                    "documents",
+                    {row["name"] for row in outputs["rust_matrix"]["include"]},
+                )
+                self.assertTrue(outputs["documents_contracts"])
+                self.assertTrue(outputs["documents_postgres"])
+                self.assertFalse(outputs["messaging_postgres"])
+        product = classify(self.workspace, ("products/documents/README.md",))
+        self.assertLessEqual(set(DOCUMENTS_PACKAGES), set(product["rust_packages"]))
+        unrelated = classify(self.workspace, ("crates/registry-messaging/src/lib.rs",))
+        self.assertFalse(unrelated["documents_contracts"])
+        self.assertFalse(unrelated["documents_postgres"])
+
+    def test_registry_render_selects_the_document_store_postgres_journey(self) -> None:
+        """The journey suite drives the real registry-render binary."""
+        outputs = classify(self.workspace, ("crates/registry-render/src/main.rs",))
+        self.assertTrue(outputs["documents_postgres"])
+        self.assertFalse(outputs["documents_contracts"])
 
     def test_coordinator_selects_its_runtime_cli_reference_and_postgres_proof(self) -> None:
         for path in (
@@ -1863,6 +1910,55 @@ class CiChangesTest(unittest.TestCase):
         self.assertFalse(
             classify(self.workspace, ("docs/site/src/content/docs/start/registry-render.mdx",))[
                 "render_tutorial"
+            ]
+        )
+
+    def test_documents_tutorial_inputs_cover_the_replayed_tutorial(self) -> None:
+        # The Document Store page runs under the runner's `none` toolset from
+        # the package.json script, so the script is the registry of what it
+        # replays.
+        package = json.loads(
+            (
+                Path(__file__).resolve().parents[2] / "docs/site/package.json"
+            ).read_text()
+        )
+        script = package["scripts"]["check:tutorial:documents"]
+        pages = [
+            f"docs/site/{word}" for word in script.split() if word.endswith(".mdx")
+        ]
+        self.assertTrue(pages, "the script must name at least one page")
+        for page in pages:
+            with self.subTest(page=page):
+                self.assertTrue(
+                    any(
+                        fnmatch.fnmatchcase(page, pattern)
+                        for pattern in DOCUMENTS_TUTORIAL_INPUTS
+                    )
+                )
+        self.assertTrue(
+            any(
+                fnmatch.fnmatchcase("docs/site/scripts/run-tutorial.mjs", pattern)
+                for pattern in DOCUMENTS_TUTORIAL_INPUTS
+            )
+        )
+
+    def test_documents_tutorial_routing(self) -> None:
+        infrastructure = (
+            "docs/site/scripts/run-tutorial.mjs",
+            "docs/site/scripts/tutorial-runner/toolsets.mjs",
+            "docs/site/src/content/docs/tutorials/first-documents.mdx",
+            "docs/site/package.json",
+            "crates/registry-documents-core/src/project.rs",
+            "crates/registry-documentsctl/src/main.rs",
+        )
+        for path in infrastructure:
+            with self.subTest(path=path):
+                self.assertTrue(
+                    classify(self.workspace, (path,))["documents_tutorial"]
+                )
+        self.assertFalse(
+            classify(self.workspace, ("docs/site/src/content/docs/start/documents.mdx",))[
+                "documents_tutorial"
             ]
         )
 
@@ -3396,6 +3492,7 @@ class LockfileSelectionTest(unittest.TestCase):
                     "registry-evidence-authoring",
                     "registry-evidencectl",
                     "registry-messaging",
+                    "registry-platform-hooks",
                     "registry-platform-script",
                 }
             ),

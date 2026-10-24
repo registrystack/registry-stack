@@ -2,12 +2,12 @@
 
 //! The undelivered delivery-intents read command.
 //!
-//! A deployment that declares no reminders destination holds every delivery
-//! intent locally, and a destination that refused every attempt leaves the
-//! intent failed. Both are recorded in the outbox and then waited on by
+//! A deployment that declares no reminders destination sets every delivery
+//! intent aside locally, and a destination that refused every attempt leaves
+//! the intent failed. Both are recorded in the outbox and then waited on by
 //! nobody, so this is the read path an operator has without one: it lists
-//! what the sweep has stopped carrying, oldest due first, in the store's own
-//! terms. A reminder suppressed by a cancellation or a reschedule is not
+//! what the dispatcher has stopped carrying, oldest due first, in the store's
+//! own terms. A reminder superseded by a cancellation or a reschedule is not
 //! listed: nobody was ever meant to deliver it, and the row is retained as
 //! accounting rather than as work.
 

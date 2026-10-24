@@ -3494,9 +3494,130 @@ formats:
     securityMembers: []
     restrictingMembers: []
 
+  # documents
+  - id: documents/project
+    product: documents
+    title: Document Store project
+    files: [documents.yaml]
+    syntax: yaml
+    audience: authored
+    stability: unpromised
+    topLevel: project
+    current:
+      apiVersion: id.registrystack.org/formats/documents/project/v1alpha1
+      kind: DocumentsProject
+      checkedBy:
+        file: crates/registry-documents-core/src/naming.rs
+        symbol: DOCUMENTS_PROJECT_API_VERSION
+    target:
+      apiVersion: id.registrystack.org/formats/documents/project/v1alpha1
+      kind: DocumentsProject
+    schema:
+      path: products/documents/generated/project/project.schema.json
+      id: https://id.registrystack.org/schemas/documents/project/project.v1alpha1.schema.json
+      origin: generated
+      generator: cargo run -p registry-documents --features schema --example project-schema -- --output products/documents/generated/project
+      driftCheck: crates/registry-documents/src/schema.rs
+    reader:
+      crate: registry-documents-core
+      file: crates/registry-documents-core/src/project.rs
+      function: decode
+      type: DocumentsProject
+    check: documentsctl check --project {project}
+    example: products/documents/examples/starter/documents.yaml
+    conformance:
+      requiredText: /project/id
+      optionalText: none
+      integer: /documentPolicies/citizen-delivery/mandatoryRestrictions/grantExpiryHours
+      boolean: none
+      idList: /hooks
+      set: /accessProfiles/custodian-app/requiredScopes
+      reference: /documentPolicies/citizen-delivery/custodyProfiles/0
+    securityMembers:
+      - pointer: /accessProfiles/*/requiredScopes
+        whenOmitted: refused
+      - pointer: /accessProfiles/*/requesterClients
+        whenOmitted: refused
+    restrictingMembers: [/accessProfiles/*/requiredScopes, /accessProfiles/*/requesterClients]
+  - id: documents/runtime
+    product: documents
+    title: Document Store runtime configuration
+    files: [runtime.yaml, runtime.example.yaml]
+    syntax: yaml
+    audience: operator
+    stability: unpromised
+    current:
+      apiVersion: id.registrystack.org/formats/documents/runtime/v1alpha1
+      kind: DocumentsRuntimeConfig
+      checkedBy:
+        file: crates/registry-documents-core/src/naming.rs
+        symbol: DOCUMENTS_RUNTIME_API_VERSION
+    target:
+      apiVersion: id.registrystack.org/formats/documents/runtime/v1alpha1
+      kind: DocumentsRuntimeConfig
+    schema:
+      path: products/documents/generated/runtime/runtime.schema.json
+      id: https://id.registrystack.org/schemas/documents/runtime/runtime.v1alpha1.schema.json
+      origin: generated
+      generator: cargo run -p registry-documents --features schema --example runtime-schema -- --output products/documents/generated/runtime
+      driftCheck: crates/registry-documents/src/schema.rs
+    reader:
+      crate: registry-documents
+      file: crates/registry-documents/src/config.rs
+      function: load
+      type: RuntimeConfig
+    check: documentsctl check --project {project} --runtime-config {file}
+    example: products/documents/examples/starter/runtime.example.yaml
+    conformance:
+      requiredText: /authentication/oidc/audience
+      optionalText: /audit/path
+      integer: /retention/receiptRetentionDays
+      boolean: none
+      set: /authentication/oidc/allowedClients
+    securityMembers:
+      - pointer: /listener/bind
+        whenOmitted: refused
+      - pointer: /authentication/oidc/allowedClients
+        whenOmitted: refused
+      - pointer: /authentication/oidc/allowInsecureHttp
+        whenOmitted: closed
+      - pointer: /contentVerification
+        whenOmitted: refused
+      - pointer: /package/expectedDigest
+        whenOmitted: open
+    restrictingMembers: [/authentication/oidc/allowedClients]
+  - id: documents/ctl-report
+    product: documents
+    title: documentsctl --format json report
+    files: []
+    syntax: json
+    audience: generated
+    stability: unpromised
+    current:
+      apiVersion: id.registrystack.org/formats/documents/ctl-report/v1alpha1
+      kind: DocumentsCtlReport
+      checkedBy:
+        file: crates/registry-documents-core/src/naming.rs
+        symbol: DOCUMENTS_CTL_REPORT_API_VERSION
+    target:
+      apiVersion: id.registrystack.org/formats/documents/ctl-report/v1alpha1
+      kind: DocumentsCtlReport
+    schema: none
+    reader: none
+    emittedBy:
+      file: crates/registry-documentsctl/src/report.rs
+      symbol: write
+    check: none
+    example: products/documents/examples/formats/ctl-report.json
+    conformance: none
+    securityMembers: []
+    restrictingMembers: []
+
 outOfScope:
   - files: products/breg/generated/event-schemas/proposal-lifecycle.schema.json
     reason: Generated Proposal lifecycle event payload, governed by the BReg event contract rather than a configuration format.
+  - files: products/documents/generated/events/*.schema.json
+    reason: Generated Document Store event data payloads, governed by the document event contract rather than a configuration format.
   - files: products/breg/generated/*/generated/**
     reason: Compiled package content; the registry/package format governs the envelope.
   - files: products/evidence/contracts/{audit-event,authority-context,definitions,evidence,request,request-batch,request-batch-response,request-batch-audit-event}.schema.yaml

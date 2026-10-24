@@ -137,6 +137,16 @@ the routes it reaches.
 
 </DocsetProduct>
 
+<DocsetProduct product="registry-documents">
+
+The unified packages carry no Registry Document Store namespace. Its client is the
+`registry-documents-client` Rust crate, with no Node.js or Python binding. The
+[Document Store API operations](../apis/documents/) reference describes the routes it reaches.
+
+{/* Evidence: products/documents/AGENTS.md, client binding rule. */}
+
+</DocsetProduct>
+
 Import only the namespaces an application uses. Nothing crosses a namespace, and a Discovery
 selection is inert metadata that grants no access.
 
@@ -679,10 +689,10 @@ shape is refused at construction with kind `configuration`.
     crates/registry-breg-client-node/client.d.ts, attemptTimeoutMilliseconds,
     crates/registry-breg-client-py/python/registry_breg_client/__init__.pyi, attempt_timeout_seconds */}
 
-### Verify a webhook delivery
+### Verify a hook delivery
 
-`verifyWebhookDelivery` in Node and `verify_webhook_delivery` in Python authenticate one exact BReg
-Version 1 webhook request with the shared Rust verifier. Pass the received method, request target,
+`verifyHookDelivery` in Node and `verify_hook_delivery` in Python authenticate one exact BReg
+Version 1 hook request with the shared Rust verifier. Pass the received method, request target,
 headers, body bytes, and key without normalizing them. The result carries the authenticated
 CloudEvents attributes, delivery metadata, and body. It does not decide whether the delivery is
 fresh, expected by this receiver, or already applied; the receiver checks those, in this order.
@@ -728,7 +738,7 @@ async function exactBody(request) {
 
 async function receiveWebhook(request, response, key, eventStore) {
   const body = await exactBody(request);
-  const delivery = breg.verifyWebhookDelivery({
+  const delivery = breg.verifyHookDelivery({
     method: request.method,
     path: request.url,
     headers: exactHeaders(request.rawHeaders),
@@ -738,7 +748,7 @@ async function receiveWebhook(request, response, key, eventStore) {
 
   const skew = Math.abs(Date.now() - Date.parse(delivery.deliveryTime));
   if (!Number.isFinite(skew) || skew > MAX_CLOCK_SKEW_MS) {
-    throw new Error('webhook delivery is outside the accepted clock skew');
+    throw new Error('hook delivery is outside the accepted clock skew');
   }
   if (delivery.source !== EXPECTED_SOURCE
       || delivery.type !== EXPECTED_TYPE
@@ -769,14 +779,14 @@ EXPECTED_DATASCHEMA = (
 
 
 def receive_webhook(method, path, headers, body, key, event_store):
-    delivery = breg.verify_webhook_delivery(
+    delivery = breg.verify_hook_delivery(
         method=method, path=path, headers=headers, body=body, key=key,
     )
 
     sent = datetime.fromisoformat(delivery["delivery_time"])
     skew = abs((datetime.now(timezone.utc) - sent).total_seconds())
     if skew > MAX_CLOCK_SKEW_SECONDS:
-        raise ValueError("webhook delivery is outside the accepted clock skew")
+        raise ValueError("hook delivery is outside the accepted clock skew")
     if (delivery["source"], delivery["type"], delivery["dataschema"]) != (
         EXPECTED_SOURCE, EXPECTED_TYPE, EXPECTED_DATASCHEMA,
     ):
@@ -793,7 +803,7 @@ repeats one before building the dict, and bound the body size before reading it.
 and key buffers backed by shared memory and copies the rest before verifying.
 
 Keep the key in server-side secret storage and never log the input or a failed delivery. A failure
-raises `BaseRegistryClientError` with kind `webhook-verification`; its `code` and message name the
+raises `BaseRegistryClientError` with kind `hook-verification`; its `code` and message name the
 input to check without rendering its value. Generation and attempt are decimal strings, so a 64-bit
 generation never rounds in JavaScript. A delivery outside the skew bound can still carry a valid
 signature, so reject it before deduplication. The idempotency key identifies one delivery generation
@@ -801,11 +811,11 @@ and survives automatic retries, but an operator replay creates a new generation 
 an effect that must happen once on `source` plus `id`, or on a business key.
 [Webhooks](../../operate/breg-webhooks/) covers provisioning the key and building a receiver.
 
-{/* Evidence: crates/registry-breg-client/src/webhook.rs, verify_webhook_delivery;
-    crates/registry-breg-client-node/src/lib.rs, verify_webhook_delivery;
-    crates/registry-breg-client-node/client.js, verifyWebhookDelivery, isSharedArrayBuffer;
-    crates/registry-breg-client-py/python/registry_breg_client/__init__.pyi, verify_webhook_delivery,
-    VerifiedWebhookDelivery;
+{/* Evidence: crates/registry-breg-client/src/hook.rs, verify_hook_delivery;
+    crates/registry-breg-client-node/src/lib.rs, verify_hook_delivery;
+    crates/registry-breg-client-node/client.js, verifyHookDelivery, isSharedArrayBuffer;
+    crates/registry-breg-client-py/python/registry_breg_client/__init__.pyi, verify_hook_delivery,
+    VerifiedHookDelivery;
     crates/registry-breg-client-py/tests/python/test_webhook_verification.py;
     crates/registry-platform-crypto/src/delivery_signature.rs, verify_v1 */}
 
@@ -910,7 +920,7 @@ optional `code`, `refusalCode`, `reasonCode`, `fieldPath`, `constraint`, `status
 | `problem` | The server answered with any other Problem |
 | `protocol` | The response broke the contract |
 | `metadata-selection` | No binding matched the metadata |
-| `webhook-verification` | A webhook delivery failed authentication |
+| `hook-verification` | A hook delivery failed authentication |
 | `client` | Any other client-side failure |
 
 `refusalCode` carries the declared reason for `action.refused` or
@@ -929,7 +939,7 @@ committed, so follow the same-key retry. `idempotency.expired` is a known code. 
 {/* Evidence: crates/registry-breg-client/src/error.rs, BaseRegistryClientError,
     BRegConstraintViolation, crates/registry-breg-client/src/client.rs, parse_constraint_violation,
     crates/registry-breg-client-node/src/lib.rs, client_error, selection_error,
-    webhook_verification_error,
+    hook_verification_error,
     crates/registry-breg-client-py/src/lib.rs, sdk_error, MappedError,
     crates/registry-breg-client-node/client.d.ts, reasonCode, refusalCode,
     crates/registry-breg-client-py/python/registry_breg_client/__init__.pyi, reason_code,
@@ -1418,5 +1428,12 @@ Deployment-defined data stays dynamic at the SDK boundary.
 
 - [Registry Coordinator API](../apis/registry-coordinator/) for the Coordinator HTTP, run state, and
   problem contracts.
+
+</DocsetProduct>
+
+<DocsetProduct product="registry-documents">
+
+- [Document Store API operations](../apis/documents/) for the Document Store HTTP and problem
+  contracts.
 
 </DocsetProduct>

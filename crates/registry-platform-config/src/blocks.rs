@@ -14,7 +14,7 @@ use std::net::{IpAddr, Ipv6Addr, SocketAddr};
 use std::path::{Component, Path, PathBuf};
 use std::str::FromStr;
 
-use registry_platform_yaml::{ExternalId, Url};
+use registry_platform_yaml::{BoundedU32, ExternalId, Invalid, LocalId, Url};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::{SecretError, SecretProvider, SecretReference, SecretResolver, MAX_SECRET_BYTES};
@@ -1067,6 +1067,245 @@ fn default_task_grant_status_scope() -> ExternalId {
 
 fn default_task_grant_status_path() -> String {
     DEFAULT_TASK_GRANT_STATUS_PATH.to_owned()
+}
+
+/// The longest one object-store or verifier attempt may run, body included,
+/// the upper bound of each block's `attemptTimeoutMilliseconds`.
+pub const MAX_ATTEMPT_TIMEOUT_MILLISECONDS: u64 = 60_000;
+
+/// The shortest attempt an object-store or verifier block accepts.
+pub const MIN_ATTEMPT_TIMEOUT_MILLISECONDS: u64 = 100;
+
+/// The attempt timeout an object-store or verifier block applies when
+/// `attemptTimeoutMilliseconds` is omitted.
+pub const DEFAULT_ATTEMPT_TIMEOUT_MILLISECONDS: u64 = 10_000;
+
+/// A bounded attempt timeout in milliseconds.
+pub type AttemptTimeoutMilliseconds = registry_platform_yaml::BoundedU64<
+    MIN_ATTEMPT_TIMEOUT_MILLISECONDS,
+    MAX_ATTEMPT_TIMEOUT_MILLISECONDS,
+>;
+
+/// One S3-compatible bucket a runtime keeps content bytes in, and the
+/// runtime's credentials for it. The decode checks only the shape; the
+/// object-store transport refuses a non-loopback `http` URL, a URL carrying a
+/// path, query, or fragment, and a malformed bucket or region name before it
+/// sends anything.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ObjectStorageConfig {
+    /// The service's base URL, with no path. It is `https`; `http` is
+    /// accepted only for a loopback host, for local development.
+    pub url: Url,
+    /// The bucket name: lowercase letters, digits, `-` and `.`.
+    #[cfg_attr(feature = "schema", schemars(length(min = 3, max = 63)))]
+    pub bucket: String,
+    /// The signing region: lowercase letters, digits and `-`.
+    #[cfg_attr(feature = "schema", schemars(length(min = 1, max = 64)))]
+    pub region: String,
+    /// Address the bucket as a path under `url` rather than as a host name.
+    /// Omitted, `true`.
+    #[serde(default = "default_path_style")]
+    pub path_style: bool,
+    pub access_key_id_ref: SecretReference,
+    pub secret_access_key_ref: SecretReference,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schema", schemars(with = "SecretReference"))]
+    pub session_token_ref: Option<SecretReference>,
+    /// PEM CA bundle for the service. Omitted, the platform's trusted roots
+    /// verify it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schema", schemars(with = "SecretReference"))]
+    pub ca_bundle_ref: Option<SecretReference>,
+    /// The longest one request may run, body included. Omitted, 10000.
+    #[serde(default = "default_attempt_timeout")]
+    pub attempt_timeout_milliseconds: AttemptTimeoutMilliseconds,
+}
+
+impl fmt::Debug for ObjectStorageConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("ObjectStorageConfig(<configured>)")
+    }
+}
+
+/// One external HTTP verifier a runtime submits content bytes to for an
+/// `approved` or `rejected` verdict, and the runtime's bearer credential for
+/// it. The block carries no default: a runtime that makes verification
+/// optional states its own disabled form beside it.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AttachmentVerifierConfig {
+    /// The URL the content is posted to. It is `https`; `http` is accepted
+    /// only for a loopback host, for local development.
+    pub url: Url,
+    pub authorization_ref: SecretReference,
+    /// Non-secret identity of the external scanner and its rules generation.
+    #[cfg_attr(
+        feature = "schema",
+        schemars(length(min = 1, max = 128), regex(pattern = r"^[\x21-\x7E]+$"))
+    )]
+    pub policy_id: String,
+    /// The longest one verification attempt may run, body included.
+    /// Omitted, 10000.
+    #[serde(default = "default_attempt_timeout")]
+    pub attempt_timeout_milliseconds: AttemptTimeoutMilliseconds,
+}
+
+impl fmt::Debug for AttachmentVerifierConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("AttachmentVerifierConfig(<configured>)")
+    }
+}
+
+/// The most URL hook destinations one runtime may bind.
+pub const MAX_HOOK_DESTINATIONS: usize = 128;
+
+/// The shortest one URL hook delivery attempt may be bounded to, in
+/// milliseconds.
+pub const MIN_HOOK_ATTEMPT_TIMEOUT_MILLISECONDS: u32 = 100;
+
+/// The longest one URL hook delivery attempt may be bounded to, in
+/// milliseconds.
+pub const MAX_HOOK_ATTEMPT_TIMEOUT_MILLISECONDS: u32 = 10_000;
+
+/// The attempt timeout a URL hook destination applies when
+/// `attemptTimeoutMilliseconds` is omitted.
+pub const DEFAULT_HOOK_ATTEMPT_TIMEOUT_MILLISECONDS: u32 = 5_000;
+
+/// The most delivery attempts a URL hook destination may allow one event.
+pub const MAX_HOOK_ATTEMPTS: u8 = 20;
+
+/// The attempt count a URL hook destination applies when `maximumAttempts`
+/// is omitted.
+pub const DEFAULT_HOOK_MAXIMUM_ATTEMPTS: u8 = 8;
+
+/// One URL hook destination a runtime signs and sends hook deliveries to:
+/// the URL, the HMAC-SHA256 key reference, and the delivery budget. The
+/// outbound policy is fixed: `registry-platform-hooks` activates it with no
+/// private address range and no client certificate. A runtime whose
+/// destinations need either configures its own full outbound policy instead.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UrlHookDestinationConfig {
+    /// An https URL, or http on 127.0.0.1, localhost, or [::1], without a
+    /// query or fragment.
+    pub url: Url,
+    pub hmac_sha256_key_ref: SecretReference,
+    /// How long one delivery attempt may take, from 100 through 10000
+    /// milliseconds.
+    #[serde(
+        default = "default_hook_attempt_timeout_milliseconds",
+        deserialize_with = "hook_attempt_timeout_milliseconds"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(range(
+            min = MIN_HOOK_ATTEMPT_TIMEOUT_MILLISECONDS,
+            max = MAX_HOOK_ATTEMPT_TIMEOUT_MILLISECONDS
+        ))
+    )]
+    pub attempt_timeout_milliseconds: u32,
+    /// How many delivery attempts one event gets, from 1 through 20.
+    #[serde(
+        default = "default_hook_maximum_attempts",
+        deserialize_with = "hook_maximum_attempts"
+    )]
+    #[cfg_attr(feature = "schema", schemars(range(min = 1, max = MAX_HOOK_ATTEMPTS)))]
+    pub maximum_attempts: u8,
+}
+
+impl UrlHookDestinationConfig {
+    /// Whether the attempt timeout and attempt count stay inside the
+    /// delivery budget: the bound the reader enforces at load and hook
+    /// activation enforces again before it binds the destination.
+    #[must_use]
+    pub fn within_delivery_budget(&self) -> bool {
+        (MIN_HOOK_ATTEMPT_TIMEOUT_MILLISECONDS..=MAX_HOOK_ATTEMPT_TIMEOUT_MILLISECONDS)
+            .contains(&self.attempt_timeout_milliseconds)
+            && (1..=MAX_HOOK_ATTEMPTS).contains(&self.maximum_attempts)
+    }
+}
+
+impl fmt::Debug for UrlHookDestinationConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("UrlHookDestinationConfig(<configured>)")
+    }
+}
+
+/// A URL hook destination map: at most [`MAX_HOOK_DESTINATIONS`] bindings,
+/// each keyed by a local identifier (CFG-ID-1). A host field reads it with
+/// `#[serde(deserialize_with = "url_hook_destinations")]` and describes it
+/// with [`url_hook_destinations_schema`].
+pub fn url_hook_destinations<'de, D>(
+    deserializer: D,
+) -> Result<BTreeMap<String, UrlHookDestinationConfig>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let hooks = BTreeMap::<LocalId, UrlHookDestinationConfig>::deserialize(deserializer)?;
+    if hooks.len() > MAX_HOOK_DESTINATIONS {
+        return Err(Invalid::expected(
+            "at most 128 hook destinations",
+            "Remove hook destinations until at most 128 remain.",
+        )
+        .into_error());
+    }
+    Ok(hooks
+        .into_iter()
+        .map(|(id, destination)| (id.into_string(), destination))
+        .collect())
+}
+
+/// The schema of a [`url_hook_destinations`] map.
+#[cfg(feature = "schema")]
+pub fn url_hook_destinations_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({
+        "type": "object",
+        "maxProperties": MAX_HOOK_DESTINATIONS,
+        "propertyNames": generator.subschema_for::<LocalId>(),
+        "additionalProperties": generator.subschema_for::<UrlHookDestinationConfig>()
+    })
+}
+
+fn hook_attempt_timeout_milliseconds<'de, D>(deserializer: D) -> Result<u32, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    BoundedU32::<MIN_HOOK_ATTEMPT_TIMEOUT_MILLISECONDS, MAX_HOOK_ATTEMPT_TIMEOUT_MILLISECONDS>::deserialize(
+        deserializer,
+    )
+    .map(BoundedU32::get)
+}
+
+/// A URL hook destination's attempt count, from 1 through
+/// [`MAX_HOOK_ATTEMPTS`].
+fn hook_maximum_attempts<'de, D>(deserializer: D) -> Result<u8, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    const MAX: u32 = MAX_HOOK_ATTEMPTS as u32;
+    let attempts = BoundedU32::<1, MAX>::deserialize(deserializer)?.get();
+    u8::try_from(attempts).map_err(|_| Invalid::out_of_range(1, MAX).into_error())
+}
+
+const fn default_hook_attempt_timeout_milliseconds() -> u32 {
+    DEFAULT_HOOK_ATTEMPT_TIMEOUT_MILLISECONDS
+}
+
+const fn default_hook_maximum_attempts() -> u8 {
+    DEFAULT_HOOK_MAXIMUM_ATTEMPTS
+}
+
+fn default_path_style() -> bool {
+    true
+}
+
+fn default_attempt_timeout() -> AttemptTimeoutMilliseconds {
+    AttemptTimeoutMilliseconds::new(DEFAULT_ATTEMPT_TIMEOUT_MILLISECONDS)
+        .expect("the default attempt timeout is in bounds")
 }
 
 #[cfg(test)]

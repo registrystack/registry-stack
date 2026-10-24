@@ -26,6 +26,8 @@ pub(crate) struct ResolvedProposalTargets {
     pub records: BTreeMap<(String, Uuid), Operation>,
 }
 
+type ProposalCreateFields = BTreeMap<(String, Uuid), Map<String, Value>>;
+
 #[derive(Clone, Debug)]
 pub(crate) struct ProposalTargetSnapshot {
     pub entity_id: String,
@@ -78,10 +80,12 @@ pub(crate) fn resolve_targets(
         if effect.mutations.iter().any(|mutation| {
             let (CompiledPlanMutation::Set { field, .. } | CompiledPlanMutation::Clear { field }) =
                 mutation;
-            entity
-                .fields
-                .get(field)
-                .is_none_or(|field| field.encryption.is_some())
+            entity.fields.get(field).is_none_or(|field| {
+                field.encryption.is_some()
+                    || field.generate.is_some()
+                    || (effect.operation == Operation::Patch
+                        && entity.is_generated_identifier_immutable(&field.id))
+            })
         }) {
             return Err(MutationError::InvalidRequest);
         }
@@ -160,7 +164,102 @@ pub(crate) fn validate_draft_inputs(
     Ok(())
 }
 
+/// Resolve the authored values needed by each create before the database-backed
+/// identifier allocator fills generated fields. A reviewed plan cannot provide
+/// a generated value itself.
+pub(crate) fn materialize_create_fields(
+    registry: &CompiledRegistry,
+    input: &Map<String, Value>,
+    resolved: &ResolvedProposalTargets,
+) -> Result<ProposalCreateFields, MutationError> {
+    let mut creates = BTreeMap::new();
+    for effect in &resolved.effects {
+        if effect.operation != Operation::Create {
+            continue;
+        }
+        let record_id = *resolved
+            .effect_records
+            .get(&effect.id)
+            .ok_or(MutationError::InvalidRequest)?;
+        let entity = registry
+            .entities()
+            .get(&effect.target.entity_id)
+            .ok_or(MutationError::InvalidRequest)?;
+        let mut fields = Map::new();
+        for mutation in &effect.mutations {
+            let field_id = match mutation {
+                CompiledPlanMutation::Set { field, .. } | CompiledPlanMutation::Clear { field } => {
+                    field
+                }
+            };
+            let field = entity
+                .fields
+                .get(field_id)
+                .ok_or(MutationError::InvalidRequest)?;
+            if field.encryption.is_some()
+                || field.generate.is_some()
+                || fields.contains_key(field_id)
+            {
+                return Err(MutationError::InvalidRequest);
+            }
+            let value = match mutation {
+                CompiledPlanMutation::Set { value, .. } => {
+                    resolve_plan_value(input, resolved, value)?
+                }
+                CompiledPlanMutation::Clear { .. } if !field.required => Value::Null,
+                CompiledPlanMutation::Clear { .. } => return Err(MutationError::InvalidRequest),
+            };
+            if !validate_field_value(DataFieldValue::Json(&value), &field.field_type) {
+                return Err(MutationError::InvalidRequest);
+            }
+            fields.insert(field_id.clone(), value);
+        }
+        if creates
+            .insert((entity.id.clone(), record_id), fields)
+            .is_some()
+        {
+            return Err(MutationError::InvalidRequest);
+        }
+    }
+    Ok(creates)
+}
+
+fn resolve_plan_value(
+    input: &Map<String, Value>,
+    resolved: &ResolvedProposalTargets,
+    value: &CompiledPlanValue,
+) -> Result<Value, MutationError> {
+    match value {
+        CompiledPlanValue::Literal { value } => Ok(value.clone()),
+        CompiledPlanValue::FromInput { input: id } => input
+            .get(id)
+            .filter(|value| !value.is_null())
+            .cloned()
+            .ok_or(MutationError::InvalidRequest),
+        CompiledPlanValue::FromEffect {
+            effect: source,
+            target_entity_id,
+        } => {
+            if !resolved.effects.iter().any(|effect| {
+                effect.id == *source
+                    && effect.operation == Operation::Create
+                    && effect.target.entity_id == *target_entity_id
+            }) {
+                return Err(MutationError::InvalidRequest);
+            }
+            Ok(Value::String(
+                resolved
+                    .effect_records
+                    .get(source)
+                    .ok_or(MutationError::InvalidRequest)?
+                    .to_string(),
+            ))
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 pub(crate) fn prepare(
     registry: &CompiledRegistry,
     action: &CompiledAction,
@@ -168,6 +267,32 @@ pub(crate) fn prepare(
     input_revision: i64,
     package_fingerprint: &str,
     resolved: &ResolvedProposalTargets,
+    bases: BTreeMap<(String, Uuid), (i64, Map<String, Value>)>,
+    guard_bases: BTreeMap<String, (Uuid, i64, Map<String, Value>)>,
+) -> Result<PreparedProposalPlan, MutationError> {
+    let create_fields = materialize_create_fields(registry, input, resolved)?;
+    prepare_with_reserved_create_fields(
+        registry,
+        action,
+        input,
+        input_revision,
+        package_fingerprint,
+        resolved,
+        create_fields,
+        bases,
+        guard_bases,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn prepare_with_reserved_create_fields(
+    registry: &CompiledRegistry,
+    action: &CompiledAction,
+    input: &Map<String, Value>,
+    input_revision: i64,
+    package_fingerprint: &str,
+    resolved: &ResolvedProposalTargets,
+    reserved_create_fields: BTreeMap<(String, Uuid), Map<String, Value>>,
     bases: BTreeMap<(String, Uuid), (i64, Map<String, Value>)>,
     guard_bases: BTreeMap<String, (Uuid, i64, Map<String, Value>)>,
 ) -> Result<PreparedProposalPlan, MutationError> {
@@ -181,6 +306,19 @@ pub(crate) fn prepare(
         .collect::<BTreeSet<_>>();
     if bases.keys().cloned().collect::<BTreeSet<_>>() != expected_bases {
         return Err(MutationError::PreconditionFailed);
+    }
+    let expected_creates = resolved
+        .records
+        .iter()
+        .filter_map(|(key, operation)| (*operation == Operation::Create).then_some(key.clone()))
+        .collect::<BTreeSet<_>>();
+    if reserved_create_fields
+        .keys()
+        .cloned()
+        .collect::<BTreeSet<_>>()
+        != expected_creates
+    {
+        return Err(MutationError::InvalidRequest);
     }
     let mut snapshots = BTreeMap::new();
     for ((entity_id, record_id), operation) in &resolved.records {
@@ -210,6 +348,7 @@ pub(crate) fn prepare(
         );
     }
     let mut changed = BTreeSet::new();
+    let mut authored_change_count = 0usize;
     let mut effects = Vec::new();
     for effect in &resolved.effects {
         let record_id = *resolved
@@ -242,11 +381,18 @@ pub(crate) fn prepare(
             if !changed.insert((key.clone(), field.clone())) {
                 return Err(MutationError::InvalidRequest);
             }
+            authored_change_count = authored_change_count
+                .checked_add(1)
+                .ok_or(MutationError::InvalidRequest)?;
             let compiled = entity
                 .fields
                 .get(field)
                 .ok_or(MutationError::InvalidRequest)?;
-            if compiled.encryption.is_some() {
+            if compiled.encryption.is_some()
+                || compiled.generate.is_some()
+                || (effect.operation == Operation::Patch
+                    && entity.is_generated_identifier_immutable(&compiled.id))
+            {
                 return Err(MutationError::InvalidRequest);
             }
             let before = snapshot
@@ -259,33 +405,7 @@ pub(crate) fn prepare(
             let field_id = workflow(FieldId::new(field))?;
             let change = match mutation {
                 CompiledPlanMutation::Set { value, .. } => {
-                    let value = match value {
-                        CompiledPlanValue::Literal { value } => value.clone(),
-                        CompiledPlanValue::FromInput { input: id } => input
-                            .get(id)
-                            .filter(|v| !v.is_null())
-                            .cloned()
-                            .ok_or(MutationError::InvalidRequest)?,
-                        CompiledPlanValue::FromEffect {
-                            effect: source,
-                            target_entity_id,
-                        } => {
-                            if !resolved.effects.iter().any(|e| {
-                                e.id == *source
-                                    && e.operation == Operation::Create
-                                    && e.target.entity_id == *target_entity_id
-                            }) {
-                                return Err(MutationError::InvalidRequest);
-                            }
-                            Value::String(
-                                resolved
-                                    .effect_records
-                                    .get(source)
-                                    .ok_or(MutationError::InvalidRequest)?
-                                    .to_string(),
-                            )
-                        }
-                    };
+                    let value = resolve_plan_value(input, resolved, value)?;
                     if !validate_field_value(DataFieldValue::Json(&value), &compiled.field_type) {
                         return Err(MutationError::InvalidRequest);
                     }
@@ -302,6 +422,31 @@ pub(crate) fn prepare(
             };
             fields.push(change);
         }
+        if effect.operation == Operation::Create {
+            let reserved = reserved_create_fields
+                .get(&key)
+                .ok_or(MutationError::InvalidRequest)?;
+            for generated in entity.generated_fields() {
+                let value = reserved
+                    .get(&generated.id)
+                    .cloned()
+                    .ok_or(MutationError::InvalidRequest)?;
+                if !changed.insert((key.clone(), generated.id.clone()))
+                    || !validate_field_value(DataFieldValue::Json(&value), &generated.field_type)
+                {
+                    return Err(MutationError::InvalidRequest);
+                }
+                snapshot.after.insert(generated.id.clone(), value.clone());
+                fields.push(workflow(PreparedFieldChange::set(
+                    workflow(FieldId::new(&generated.id))?,
+                    FieldValue::Missing,
+                    value,
+                ))?);
+            }
+            if &snapshot.after != reserved {
+                return Err(MutationError::InvalidRequest);
+            }
+        }
         effects.push(
             workflow(PreparedEffect::new(
                 workflow(EffectId::new(&effect.id))?,
@@ -312,7 +457,7 @@ pub(crate) fn prepare(
             .with_dependencies(effect.depends_on.clone()),
         );
     }
-    if changed.len() > usize::from(action.maximum_field_mutations) {
+    if authored_change_count > usize::from(action.maximum_field_mutations) {
         return Err(MutationError::InvalidRequest);
     }
     let mut bytes = canonical_size(input)?;

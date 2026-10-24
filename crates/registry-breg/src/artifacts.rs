@@ -349,11 +349,17 @@ pub(crate) fn event_data_schema_binding(
             .get(field_id)
             .expect("validated event projection refers to a compiled field");
         let schema = field_schema(&field.field_type);
-        let schema = if field.required {
+        let mut schema = if field.required {
             schema
         } else {
             json!({"anyOf": [schema, {"type": "null"}]})
         };
+        if field.generate.is_some() {
+            schema
+                .as_object_mut()
+                .expect("field schemas are objects")
+                .insert("readOnly".to_owned(), Value::Bool(true));
+        }
         value_properties.insert(field_id.clone(), schema);
     }
     let trigger = match event.trigger {
@@ -414,7 +420,7 @@ fn entity_schema(entity: &CompiledEntity) -> Value {
     for field in &entity.stored_fields {
         properties.insert(
             field.logical.api_name.clone(),
-            field_value_schema(&field.logical.field_type, !field.required),
+            stored_field_value_schema(field, entity.fields[&field.logical.id].generate.is_some()),
         );
         if field.required {
             required.push(Value::String(field.logical.api_name.clone()));
@@ -462,6 +468,9 @@ pub(crate) fn openapi_entity_input_schema(
     let mut properties = Map::new();
     let mut required = Vec::new();
     for field in &entity.stored_fields {
+        if entity.fields[&field.logical.id].generate.is_some() {
+            continue;
+        }
         if writable_fields.is_some_and(|fields| !fields.contains(&field.logical.id)) {
             continue;
         }
@@ -485,6 +494,17 @@ pub(crate) fn openapi_entity_input_schema(
             MutationMode::CreateOnly => "create-only",
         }
     })
+}
+
+fn stored_field_value_schema(field: &crate::model::CompiledStoredField, generated: bool) -> Value {
+    let mut schema = field_value_schema(&field.logical.field_type, !field.required);
+    if generated {
+        schema
+            .as_object_mut()
+            .expect("field schemas are objects")
+            .insert("readOnly".to_owned(), Value::Bool(true));
+    }
+    schema
 }
 
 fn application_reason_schema() -> Value {
@@ -667,7 +687,7 @@ pub fn inspect_registry(registry: &crate::model::CompiledRegistry) -> Value {
                     "id": field.logical.id, "apiName": field.logical.api_name,
                     "display": record_type.fields[&field.logical.id].display,
                     "fieldType": field.logical.field_type,
-                    "schema": field_value_schema(&field.logical.field_type, !field.required),
+                    "schema": stored_field_value_schema(field, record_type.fields[&field.logical.id].generate.is_some()),
                     "classification": field.logical.classification,
                     "encrypted": field.logical.encryption.is_some(),
                     "required": field.required, "validTimeRole": field.valid_time_role,
@@ -3242,7 +3262,12 @@ fn record_member_schema(spec: OpenApiOperationSpec<'_>) -> Value {
         .map(|field| {
             (
                 field.logical.api_name.clone(),
-                field_value_schema(&field.logical.field_type, !field.required),
+                stored_field_value_schema(
+                    field,
+                    spec.response_entity.fields[&field.logical.id]
+                        .generate
+                        .is_some(),
+                ),
             )
         })
         .chain(
@@ -3440,14 +3465,12 @@ fn geojson_response_schema(spec: OpenApiOperationSpec<'_>) -> Option<Value> {
     let mut properties = Map::new();
     for field in &entity.stored_fields {
         if fields.contains(&field.logical.id) && field.logical.id != binding.geometry_field {
-            let schema = field_schema(&field.logical.field_type);
             properties.insert(
                 field.logical.api_name.clone(),
-                if field.required {
-                    schema
-                } else {
-                    json!({"anyOf": [schema, {"type": "null"}]})
-                },
+                stored_field_value_schema(
+                    field,
+                    entity.fields[&field.logical.id].generate.is_some(),
+                ),
             );
         }
     }

@@ -1940,11 +1940,12 @@ impl<'de> Deserialize<'de> for ActionInputSource {
             || raw.pattern.is_some()
             || raw.encrypted.is_some()
             || raw.lookup.is_some()
+            || raw.generate.is_some()
             || raw.relationship.is_some()
         {
             return Err(Invalid::expected(
-                "an action input without validTimeRole, pattern, encrypted, or lookup",
-                "Remove validTimeRole, pattern, encrypted, and lookup from the action input.",
+                "an action input without validTimeRole, pattern, encrypted, lookup, or generate",
+                "Remove validTimeRole, pattern, encrypted, lookup, and generate from the action input.",
             )
             .into_error());
         }
@@ -2050,6 +2051,14 @@ pub const MAX_ENCRYPTED_FIELDS_PER_ENTITY: usize = 128;
 /// Maximum number of transformations in one blind-index normalization pipeline.
 pub const MAX_FIELD_LOOKUP_NORMALIZATION_STEPS: usize = 8;
 
+/// Maximum authored characters in a generated identifier prefix or payload.
+pub const MAX_GENERATED_IDENTIFIER_COMPONENT_LENGTH: u32 = 128;
+/// Maximum stored fields that may scope one generated identifier sequence.
+pub const MAX_GENERATED_IDENTIFIER_SCOPE_FIELDS: usize = 8;
+/// The alphabet of every random identifier. It avoids visually ambiguous
+/// characters while retaining five bits of entropy per generated character.
+pub const DEFAULT_GENERATED_IDENTIFIER_ALPHABET: &str = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
+
 /// A normalization step applied to the canonical string form of an encrypted
 /// value before its blind index is derived. The vocabulary is closed.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -2078,6 +2087,87 @@ pub struct FieldLookupSource {
     pub unique: bool,
 }
 
+/// Server-side generation requested for a persisted business identifier.
+///
+/// The canonical record UUID remains independent. On a sequence, `scope`
+/// names required, immutable stored fields whose values partition the
+/// numbering. A random code has one namespace per field.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(
+    remote = "Self",
+    deny_unknown_fields,
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase"
+)]
+#[cfg_attr(feature = "schema", schemars(!remote, tag = "type"))]
+pub enum FieldGenerationSource {
+    Sequence {
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        #[cfg_attr(
+            feature = "schema",
+            schemars(
+                length(max = MAX_GENERATED_IDENTIFIER_COMPONENT_LENGTH),
+                regex(pattern = "^[!-~]*$"),
+                extend("default" = "")
+            )
+        )]
+        prefix: String,
+        #[serde(
+            deserialize_with = "bounded_u32::<_, 1, MAX_GENERATED_IDENTIFIER_COMPONENT_LENGTH>"
+        )]
+        #[cfg_attr(
+            feature = "schema",
+            schemars(with = "BoundedU32<1, MAX_GENERATED_IDENTIFIER_COMPONENT_LENGTH>")
+        )]
+        minimum_digits: u32,
+        #[serde(default)]
+        #[cfg_attr(
+            feature = "schema",
+            schemars(length(max = MAX_GENERATED_IDENTIFIER_SCOPE_FIELDS))
+        )]
+        scope: UniqueSet<String>,
+    },
+    Random {
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        #[cfg_attr(
+            feature = "schema",
+            schemars(
+                length(max = MAX_GENERATED_IDENTIFIER_COMPONENT_LENGTH),
+                regex(pattern = "^[!-~]*$"),
+                extend("default" = "")
+            )
+        )]
+        prefix: String,
+        #[serde(
+            deserialize_with = "bounded_u32::<_, 1, MAX_GENERATED_IDENTIFIER_COMPONENT_LENGTH>"
+        )]
+        #[cfg_attr(
+            feature = "schema",
+            schemars(with = "BoundedU32<1, MAX_GENERATED_IDENTIFIER_COMPONENT_LENGTH>")
+        )]
+        length: u32,
+    },
+}
+registry_platform_yaml::tagged_union!(FieldGenerationSource);
+serialize_tagged_union!(FieldGenerationSource, tag = "type");
+
+impl FieldGenerationSource {
+    pub fn prefix(&self) -> &str {
+        match self {
+            Self::Sequence { prefix, .. } | Self::Random { prefix, .. } => prefix,
+        }
+    }
+
+    /// The fields that partition a sequence; a random code has none.
+    pub fn scope(&self) -> Option<&UniqueSet<String>> {
+        match self {
+            Self::Sequence { scope, .. } => Some(scope),
+            Self::Random { .. } => None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct FieldSource {
@@ -2099,6 +2189,8 @@ pub struct FieldSource {
     pub encrypted: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lookup: Option<FieldLookupSource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generate: Option<FieldGenerationSource>,
     pub display: DisplaySource,
     pub relationship: Option<RelationshipSource>,
 }
@@ -2183,6 +2275,8 @@ struct StringFieldSourceSchema {
     encrypted: bool,
     #[serde(default)]
     lookup: Option<FieldLookupSource>,
+    #[serde(default)]
+    generate: Option<FieldGenerationSource>,
 }
 
 #[cfg(feature = "schema")]
@@ -2572,6 +2666,7 @@ impl<'de> Deserialize<'de> for FieldSource {
             valid_time_role: raw.valid_time_role,
             encrypted,
             lookup: raw.lookup,
+            generate: raw.generate,
             display: raw.display,
             relationship: raw.relationship,
         })
@@ -2604,10 +2699,11 @@ impl<'de> Deserialize<'de> for DerivedFieldSource {
             || raw.pattern.is_some()
             || raw.encrypted.is_some()
             || raw.lookup.is_some()
+            || raw.generate.is_some()
         {
             return Err(Invalid::expected(
-                "a derived field without required, validTimeRole, pattern, encrypted, or lookup",
-                "Remove required, validTimeRole, pattern, encrypted, and lookup from the derived \
+                "a derived field without required, validTimeRole, pattern, encrypted, lookup, or generate",
+                "Remove required, validTimeRole, pattern, encrypted, lookup, and generate from the derived \
                  field.",
             )
             .into_error());
@@ -2816,6 +2912,8 @@ struct RawFieldSource {
     encrypted: Option<bool>,
     #[serde(default)]
     lookup: Option<FieldLookupSource>,
+    #[serde(default)]
+    generate: Option<FieldGenerationSource>,
     #[serde(default)]
     display: DisplaySource,
     #[serde(default)]
@@ -3195,6 +3293,7 @@ impl<'de> Deserialize<'de> for FieldTypeSource {
             pattern: None,
             encrypted: None,
             lookup: None,
+            generate: None,
             display: DisplaySource::default(),
             relationship: None,
         })
@@ -3898,7 +3997,7 @@ pub struct HookSource {
     /// Declared field identifiers to include in `values`. System event metadata is included separately.
     pub projection: UniqueSet<String>,
     /// Governed, destination-neutral delivery. `destinationId` is a key in
-    /// runtime `eventDestinations`; the project carries no URL or secret, and
+    /// runtime `destinations.hooks`; the project carries no URL or secret, and
     /// deployment configuration may tighten the bounds it binds but cannot
     /// supply or widen this authority. Production compilation requires it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -4083,14 +4182,14 @@ impl schemars::JsonSchema for EventScalarValue {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
-pub enum WebhookAuthenticationProfile {
+pub enum HookAuthenticationProfile {
     HmacSha256V1,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
-pub enum WebhookDeadLetterMode {
+pub enum HookDeadLetterMode {
     Required,
 }
 

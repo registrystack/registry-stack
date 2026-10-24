@@ -6,7 +6,7 @@
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 use breg_client_sdk::{
-    verify_webhook_delivery as verify_core_webhook_delivery, BRegActionAvailabilityRequest,
+    verify_hook_delivery as verify_core_hook_delivery, BRegActionAvailabilityRequest,
     BRegActionBinding, BRegActionInvocationRequest, BRegActionTargetConditions,
     BRegActionTargetConditionsRequest, BRegAsOfContinuation, BRegAsOfContinuationProjection,
     BRegAsOfListRequest, BRegBatchBinding, BRegBatchBuilder, BRegBoundingBox, BRegChangeContext,
@@ -14,7 +14,8 @@ use breg_client_sdk::{
     BRegCreateRequest, BRegCurrentContinuation, BRegCurrentContinuationProjection,
     BRegCurrentListRequest, BRegDirectWrite, BRegEtag, BRegGeoJsonContinuation,
     BRegGeoJsonContinuationProjection, BRegGeoJsonListRequest, BRegGeoJsonOptions,
-    BRegIdempotencyKey, BRegIngestionChunk as CoreIngestionChunk, BRegIngestionError,
+    BRegHookDelivery as CoreHookDelivery, BRegHookVerificationError, BRegIdempotencyKey,
+    BRegIngestionChunk as CoreIngestionChunk, BRegIngestionError,
     BRegIngestionPrefixDigest as CoreIngestionPrefixDigest, BRegIngestionRunListQuery,
     BRegIngestionRunRequest, BRegListRequest, BRegLookupRequest, BRegMetadata as CoreMetadata,
     BRegMetadataSelectionError, BRegMetadataSelectionErrorKind, BRegPage, BRegPatchBinding,
@@ -23,8 +24,7 @@ use breg_client_sdk::{
     BRegRawDocument, BRegRecordFormat, BRegRecordOptions, BRegRelationshipContinuation,
     BRegRelationshipContinuationProjection, BRegRelationshipListRequest, BRegReleaseSelection,
     BRegReleaseStatus, BRegSnapshotContinuation, BRegSnapshotContinuationProjection,
-    BRegSnapshotListRequest, BRegStatisticsFormat, BRegTombstoneBinding,
-    BRegWebhookDelivery as CoreWebhookDelivery, BRegWebhookVerificationError, BRegWithdrawalReason,
+    BRegSnapshotListRequest, BRegStatisticsFormat, BRegTombstoneBinding, BRegWithdrawalReason,
     BaseRegistryClient as RustClient, BaseRegistryClientError as RustClientError, TokenError,
 };
 use pyo3::{
@@ -991,15 +991,15 @@ fn encode_ingestion_chunk(
         .map_err(|error| ingestion_error(py, error))
 }
 
-fn webhook_text(py: Python<'_>, value: &Bound<'_, PyAny>, field: &str) -> PyResult<String> {
+fn hook_text(py: Python<'_>, value: &Bound<'_, PyAny>, field: &str) -> PyResult<String> {
     value
         .cast::<PyString>()
         .ok()
         .and_then(|text| text.to_str().ok().map(str::to_owned))
-        .ok_or_else(|| invalid(py, format!("webhook {field} must be a string")))
+        .ok_or_else(|| invalid(py, format!("hook {field} must be a string")))
 }
 
-fn webhook_bytes<'py>(
+fn hook_bytes<'py>(
     py: Python<'py>,
     value: &Bound<'py, PyAny>,
     field: &str,
@@ -1007,11 +1007,11 @@ fn webhook_bytes<'py>(
     value
         .cast::<PyBytes>()
         .cloned()
-        .map_err(|_| invalid(py, format!("webhook {field} must be bytes")))
+        .map_err(|_| invalid(py, format!("hook {field} must be bytes")))
 }
 
-fn webhook_headers(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<BTreeMap<String, String>> {
-    let refused = || invalid(py, "webhook headers must map string names to string values");
+fn hook_headers(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<BTreeMap<String, String>> {
+    let refused = || invalid(py, "hook headers must map string names to string values");
     let headers = value.cast::<PyDict>().map_err(|_| refused())?;
     let mut result = BTreeMap::new();
     for (name, value) in headers.iter() {
@@ -1030,13 +1030,13 @@ fn webhook_headers(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<BTreeMa
     Ok(result)
 }
 
-fn webhook_verification_error(py: Python<'_>, error: BRegWebhookVerificationError) -> PyErr {
-    let mut mapped = MappedError::binding("webhook-verification", error.to_string());
+fn hook_verification_error(py: Python<'_>, error: BRegHookVerificationError) -> PyErr {
+    let mut mapped = MappedError::binding("hook-verification", error.to_string());
     mapped.code = Some(error.code().to_owned());
     to_py_err(py, mapped)
 }
 
-/// Verify one exact Base Registry Engine Version 1 webhook delivery with the
+/// Verify one exact Base Registry Engine Version 1 hook delivery with the
 /// shared Rust verifier and return its authenticated attributes and body.
 ///
 /// `path` is the request target the receiver was called on, `headers` maps
@@ -1044,11 +1044,11 @@ fn webhook_verification_error(py: Python<'_>, error: BRegWebhookVerificationErro
 /// the exact request body, and `key` is the destination's HMAC key. Receiver
 /// policy is the caller's: bound `delivery_time` against the receiver clock
 /// and deduplicate before acting on `body`. Refusal raises
-/// `BaseRegistryClientError` with kind `webhook-verification` and a value-free
+/// `BaseRegistryClientError` with kind `hook-verification` and a value-free
 /// `code`; input of the wrong shape raises kind `invalid-request`.
 #[pyfunction]
 #[pyo3(signature = (*, method, path, headers, body, key))]
-fn verify_webhook_delivery<'py>(
+fn verify_hook_delivery<'py>(
     py: Python<'py>,
     method: &Bound<'py, PyAny>,
     path: &Bound<'py, PyAny>,
@@ -1056,19 +1056,19 @@ fn verify_webhook_delivery<'py>(
     body: &Bound<'py, PyAny>,
     key: &Bound<'py, PyAny>,
 ) -> PyResult<Bound<'py, PyDict>> {
-    let method = webhook_text(py, method, "method")?;
-    let path = webhook_text(py, path, "path")?;
-    let headers = webhook_headers(py, headers)?;
-    let body = webhook_bytes(py, body, "body")?;
-    let key = webhook_bytes(py, key, "key")?;
-    let verified = verify_core_webhook_delivery(CoreWebhookDelivery {
+    let method = hook_text(py, method, "method")?;
+    let path = hook_text(py, path, "path")?;
+    let headers = hook_headers(py, headers)?;
+    let body = hook_bytes(py, body, "body")?;
+    let key = hook_bytes(py, key, "key")?;
+    let verified = verify_core_hook_delivery(CoreHookDelivery {
         method: &method,
         path: &path,
         headers: &headers,
         body: body.as_bytes(),
         key: key.as_bytes(),
     })
-    .map_err(|error| webhook_verification_error(py, error))?;
+    .map_err(|error| hook_verification_error(py, error))?;
     let result = PyDict::new(py);
     result.set_item("id", verified.id)?;
     result.set_item("source", verified.source)?;
@@ -3376,7 +3376,7 @@ fn registry_breg_client(module: &Bound<'_, PyModule>) -> PyResult<()> {
         module.py().get_type::<BaseRegistryClientError>(),
     )?;
     module.add_function(pyo3::wrap_pyfunction!(encode_ingestion_chunk, module)?)?;
-    module.add_function(pyo3::wrap_pyfunction!(verify_webhook_delivery, module)?)?;
+    module.add_function(pyo3::wrap_pyfunction!(verify_hook_delivery, module)?)?;
     module.add("__version__", env!("CARGO_PKG_VERSION"))?;
     Ok(())
 }

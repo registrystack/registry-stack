@@ -48,9 +48,9 @@ test('BReg reference includes module extensions, hook conditions, and runtime de
   assert.deepEqual(module.get('recordTypes[].hooks[].handler.type').values, ['rhai', 'url', 'wasm']);
   assert.ok(module.has('recordTypes[].hooks[].handler.destinationId'));
   assert.ok(!module.has('recordTypes[].hooks[].handler.origin'));
-  assert.ok(runtime.has('eventDestinations.*.hmacSha256KeyRef'));
-  assert.ok(runtime.has('eventDestinations.*.tls.clientIdentityRef'));
-  assert.ok(runtime.has('eventDestinations.*.deliveryCeilings.maximumAttempts'));
+  assert.ok(runtime.has('destinations.hooks.*.hmacSha256KeyRef'));
+  assert.ok(runtime.has('destinations.hooks.*.tls.clientIdentityRef'));
+  assert.ok(runtime.has('destinations.hooks.*.deliveryCeilings.maximumAttempts'));
   assert.deepEqual(runtime.get('retention.hookPayloadRetentionDays').defaults, ['7']);
   assert.ok(runtime.get('retention.hookPayloadRetentionDays').constraints.flat().includes('maximum: 30'));
 });

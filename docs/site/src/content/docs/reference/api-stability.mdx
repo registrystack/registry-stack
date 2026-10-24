@@ -264,7 +264,10 @@ before you start the next.
 configuration you carry over, rebuild packages, and apply them to new databases as the
 [upgrade runbook](../../operate/advanced/upgrade-and-retire/#upgrade-in-this-order) describes.
 The forward state path starts at `v0.40.0`; subsequent pre-1.0 releases read the state their
-immediate predecessor wrote, subject to an explicitly documented product replacement.
+immediate predecessor wrote, subject to an explicitly documented product replacement. The fresh
+baselines below are such replacements, so a product's state carries forward only from its latest
+baseline, and the predecessor rehearsal starts from the release that [Enforcement](#enforcement)
+names, not from `v0.40.0`.
 
 Evidence's normalized `v0.42.0` model starts a new baseline. Retired split
 question/source projects and targets with bundled authority have no in-place conversion.
@@ -287,6 +290,18 @@ for reconciliation, and apply the current package to a fresh database as
 [the upgrade runbook](../../operate/advanced/upgrade-and-retire/#upgrade-in-this-order) describes.
 Messages still queued, and Scheduling holds and appointments, in the previous database are not
 carried forward.
+
+`v0.44.0` starts Casework and Scheduling at a fresh baseline again. Each installs schema version
+200, and its `plan`, `apply`, and startup refuse a ledger below version 200 as a pre-1.0 schema.
+BReg in `v0.44.0` refuses a database holding the `v0.43.0` attachment verification tables, at
+startup and in `bregctl doctor` with the code `startup.database.pre-1-0-schema`, and in
+`bregctl plan` and `apply` with `apply.database.pre-1-0-schema`. For each, retain the previous
+database and audit journal, and apply the current package to a fresh database; for BReg, rebuild
+the package with the `v0.44.0` `bregctl test` and `bregctl package`
+([Check, test, package](../../operate/breg/#check-test-package)), then run
+`bregctl apply --package DIR --initial`. Casework reviews, Scheduling holds
+and appointments, and BReg records in the previous database are not carried forward. Messaging
+keeps its baseline: `messagingctl apply` migrates a `v0.43.0` database forward in place.
 
 Upgrades are forward-only: no release reads state a later release wrote. An ordinary release's
 `apply` migrates the database in place, so to roll back, restore the backup taken before the
@@ -314,7 +329,13 @@ Base Registry Engine's Beta pilot conditions are under
     products/evidence/CHANGELOG.md, Unreleased; products/messaging/CHANGELOG.md, Unreleased;
     crates/registry-messaging/src/store.rs; products/scheduling/CHANGELOG.md, Unreleased;
     crates/registry-scheduling/src/store.rs; crates/registry-discovery/Cargo.toml;
-    crates/registry-casework/src/store.rs; crates/registry-casework/migrations/0100_reviews.sql. */}
+    crates/registry-casework/src/store.rs; crates/registry-casework/migrations/0200_reviews.sql;
+    crates/registry-scheduling/migrations/0200_scheduling.sql;
+    crates/registry-messaging/migrations/0101_dispatch_lease_expiry.sql;
+    crates/registry-breg/src/startup.rs, StartupError::Pre1_0Schema;
+    crates/registry-bregctl/src/doctor.rs, startup.database.pre-1-0-schema;
+    products/casework/CHANGELOG.md, products/scheduling/CHANGELOG.md, products/breg/CHANGELOG.md,
+    and products/messaging/CHANGELOG.md, Unreleased (v0.44.0). */}
 
 ## Enforcement
 

@@ -151,7 +151,7 @@ def encode_ingestion_chunk(
     prefix_digest: str,
 ) -> BRegIngestionChunk: ...
 
-WebhookVerificationRefusalCode = Literal[
+HookVerificationRefusalCode = Literal[
     "missing-header",
     "invalid-delivery-time",
     "duplicate-header",
@@ -162,7 +162,7 @@ WebhookVerificationRefusalCode = Literal[
     "unsupported-version",
 ]
 
-class VerifiedWebhookDelivery(TypedDict):
+class VerifiedHookDelivery(TypedDict):
     id: str
     source: str
     type: str
@@ -174,15 +174,15 @@ class VerifiedWebhookDelivery(TypedDict):
     idempotency_key: str
     body: bytes
 
-def verify_webhook_delivery(
+def verify_hook_delivery(
     *,
     method: str,
     path: str,
     headers: dict[str, str],
     body: bytes,
     key: bytes,
-) -> VerifiedWebhookDelivery:
-    """Authenticate one exact Base Registry Engine Version 1 webhook delivery.
+) -> VerifiedHookDelivery:
+    """Authenticate one exact Base Registry Engine Version 1 hook delivery.
     Apply delivery-time skew and deduplication policy before acting on the body."""
     ...
 

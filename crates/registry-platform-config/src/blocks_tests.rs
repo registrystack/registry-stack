@@ -921,3 +921,247 @@ fn task_grant_status_refuses_an_unknown_key_with_its_position_and_never_its_valu
     );
     assert!(!report.to_string().contains("canary-"), "{report}");
 }
+
+const OBJECT_STORAGE: &str = "url: https://objects.example.test\n\
+bucket: registry-content\n\
+region: us-east-1\n\
+accessKeyIdRef: secret:file/s3-access-key\n\
+secretAccessKeyRef: secret:file/s3-secret-key\n";
+
+const ATTACHMENT_VERIFIER: &str = "url: https://scanner.example.test/verify\n\
+authorizationRef: secret:file/scanner-token\n\
+policyId: scanner-rules-2026-09\n";
+
+#[test]
+fn object_storage_defaults_to_path_style_and_the_attempt_timeout() {
+    let defaults: ObjectStorageConfig = read_block(OBJECT_STORAGE).unwrap();
+    assert_eq!(defaults.url.as_str(), "https://objects.example.test");
+    assert!(defaults.path_style);
+    assert_eq!(
+        defaults.attempt_timeout_milliseconds.get(),
+        DEFAULT_ATTEMPT_TIMEOUT_MILLISECONDS
+    );
+    assert_eq!(defaults.session_token_ref, None);
+    assert_eq!(defaults.ca_bundle_ref, None);
+    let serialized = serde_json::to_value(&defaults).unwrap();
+    assert!(serialized.get("sessionTokenRef").is_none());
+    assert!(serialized.get("caBundleRef").is_none());
+    assert_eq!(
+        serde_json::from_value::<ObjectStorageConfig>(serialized).unwrap(),
+        defaults
+    );
+
+    let configured: ObjectStorageConfig = read_block(&format!(
+        "{OBJECT_STORAGE}pathStyle: false\n\
+         sessionTokenRef: secret:file/s3-session\n\
+         caBundleRef: secret:file/s3-ca\n\
+         attemptTimeoutMilliseconds: 60000\n"
+    ))
+    .unwrap();
+    assert!(!configured.path_style);
+    assert_eq!(configured.attempt_timeout_milliseconds.get(), 60_000);
+    assert_eq!(
+        configured
+            .session_token_ref
+            .as_ref()
+            .map(SecretReference::as_str),
+        Some("secret:file/s3-session")
+    );
+    assert_eq!(
+        format!("{configured:?}"),
+        "ObjectStorageConfig(<configured>)"
+    );
+}
+
+#[test]
+fn attachment_verifier_requires_its_policy_and_has_no_default_form() {
+    let configured: AttachmentVerifierConfig = read_block(ATTACHMENT_VERIFIER).unwrap();
+    assert_eq!(
+        configured.url.as_str(),
+        "https://scanner.example.test/verify"
+    );
+    assert_eq!(configured.policy_id, "scanner-rules-2026-09");
+    assert_eq!(
+        configured.attempt_timeout_milliseconds.get(),
+        DEFAULT_ATTEMPT_TIMEOUT_MILLISECONDS
+    );
+    assert_eq!(
+        format!("{configured:?}"),
+        "AttachmentVerifierConfig(<configured>)"
+    );
+    assert!(read_block::<AttachmentVerifierConfig>("{}\n").is_err());
+    assert!(read_block::<AttachmentVerifierConfig>(
+        "url: https://scanner.example.test/verify\nauthorizationRef: secret:file/scanner-token\n"
+    )
+    .is_err());
+}
+
+#[test]
+fn cfg_val_7_both_blocks_name_their_destination_url_and_refuse_endpoint() {
+    for yaml in [
+        OBJECT_STORAGE.replace("url:", "endpoint:"),
+        ATTACHMENT_VERIFIER.replace("url:", "endpoint:"),
+    ] {
+        let report = if yaml.contains("bucket") {
+            read_block::<ObjectStorageConfig>(&yaml).unwrap_err()
+        } else {
+            read_block::<AttachmentVerifierConfig>(&yaml).unwrap_err()
+        };
+        assert!(codes(&report).contains(&"config.unknown-key"), "{report}");
+    }
+    for url in [
+        "https://user:secret@objects.example.test",
+        "ftp://objects.example.test",
+    ] {
+        let yaml = OBJECT_STORAGE.replace("https://objects.example.test", url);
+        let report = read_block::<ObjectStorageConfig>(&yaml).unwrap_err();
+        assert!(!report.to_string().contains("secret@"), "{report}");
+    }
+}
+
+#[test]
+fn attempt_timeouts_are_bounded_in_both_blocks() {
+    for timeout in [0, 99, 60_001] {
+        assert!(read_block::<ObjectStorageConfig>(&format!(
+            "{OBJECT_STORAGE}attemptTimeoutMilliseconds: {timeout}\n"
+        ))
+        .is_err());
+        assert!(read_block::<AttachmentVerifierConfig>(&format!(
+            "{ATTACHMENT_VERIFIER}attemptTimeoutMilliseconds: {timeout}\n"
+        ))
+        .is_err());
+    }
+    let short: AttachmentVerifierConfig = read_block(&format!(
+        "{ATTACHMENT_VERIFIER}attemptTimeoutMilliseconds: 100\n"
+    ))
+    .unwrap();
+    assert_eq!(short.attempt_timeout_milliseconds.get(), 100);
+}
+
+#[test]
+fn storage_and_verifier_secret_members_are_references_never_values() {
+    let yaml = OBJECT_STORAGE.replace("secret:file/s3-secret-key", "inline-secret-canary");
+    let report = read_block::<ObjectStorageConfig>(&yaml).unwrap_err();
+    assert!(
+        !report.to_string().contains("inline-secret-canary"),
+        "{report}"
+    );
+    let yaml = ATTACHMENT_VERIFIER.replace("secret:file/scanner-token", "inline-token-canary");
+    let report = read_block::<AttachmentVerifierConfig>(&yaml).unwrap_err();
+    assert!(
+        !report.to_string().contains("inline-token-canary"),
+        "{report}"
+    );
+}
+
+const URL_HOOK_DESTINATION: &str = "url: https://events.example.test/hooks\n\
+hmacSha256KeyRef: secret:file/hook-key\n";
+
+#[test]
+fn url_hook_destination_defaults_its_delivery_budget_and_never_prints_its_binding() {
+    let defaults: UrlHookDestinationConfig = read_block(URL_HOOK_DESTINATION).unwrap();
+    assert_eq!(defaults.url.as_str(), "https://events.example.test/hooks");
+    assert_eq!(
+        defaults.hmac_sha256_key_ref.as_str(),
+        "secret:file/hook-key"
+    );
+    assert_eq!(
+        defaults.attempt_timeout_milliseconds,
+        DEFAULT_HOOK_ATTEMPT_TIMEOUT_MILLISECONDS
+    );
+    assert_eq!(defaults.attempt_timeout_milliseconds, 5_000);
+    assert_eq!(defaults.maximum_attempts, DEFAULT_HOOK_MAXIMUM_ATTEMPTS);
+    assert_eq!(defaults.maximum_attempts, 8);
+    assert!(defaults.within_delivery_budget());
+    let printed = format!("{defaults:?}");
+    assert_eq!(printed, "UrlHookDestinationConfig(<configured>)");
+    assert!(!printed.contains("events.example.test"));
+    assert!(!printed.contains("hook-key"));
+}
+
+#[test]
+fn url_hook_destination_bounds_its_attempt_timeout_and_attempt_count() {
+    for (timeout, accepted) in [
+        (0, false),
+        (MIN_HOOK_ATTEMPT_TIMEOUT_MILLISECONDS - 1, false),
+        (MIN_HOOK_ATTEMPT_TIMEOUT_MILLISECONDS, true),
+        (MAX_HOOK_ATTEMPT_TIMEOUT_MILLISECONDS, true),
+        (MAX_HOOK_ATTEMPT_TIMEOUT_MILLISECONDS + 1, false),
+    ] {
+        let read = read_block::<UrlHookDestinationConfig>(&format!(
+            "{URL_HOOK_DESTINATION}attemptTimeoutMilliseconds: {timeout}\n"
+        ));
+        assert_eq!(
+            read.is_ok(),
+            accepted,
+            "attemptTimeoutMilliseconds {timeout}"
+        );
+    }
+    for (attempts, accepted) in [
+        (0, false),
+        (1, true),
+        (u32::from(MAX_HOOK_ATTEMPTS), true),
+        (u32::from(MAX_HOOK_ATTEMPTS) + 1, false),
+        (256, false),
+    ] {
+        let read = read_block::<UrlHookDestinationConfig>(&format!(
+            "{URL_HOOK_DESTINATION}maximumAttempts: {attempts}\n"
+        ));
+        assert_eq!(read.is_ok(), accepted, "maximumAttempts {attempts}");
+    }
+    let mut widened: UrlHookDestinationConfig = read_block(URL_HOOK_DESTINATION).unwrap();
+    widened.maximum_attempts = MAX_HOOK_ATTEMPTS + 1;
+    assert!(!widened.within_delivery_budget());
+}
+
+#[test]
+fn url_hook_destination_refuses_unknown_keys_and_inline_signing_keys() {
+    let report = read_block::<UrlHookDestinationConfig>(&format!(
+        "{URL_HOOK_DESTINATION}networkProfile: private\n"
+    ))
+    .unwrap_err();
+    assert!(codes(&report).contains(&"config.unknown-key"), "{report}");
+    let yaml = URL_HOOK_DESTINATION.replace("secret:file/hook-key", "inline-hook-key-canary");
+    let report = read_block::<UrlHookDestinationConfig>(&yaml).unwrap_err();
+    assert!(
+        !report.to_string().contains("inline-hook-key-canary"),
+        "{report}"
+    );
+    assert!(read_block::<UrlHookDestinationConfig>("url: https://events.example.test\n").is_err());
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HookDestinationsHost {
+    #[serde(deserialize_with = "url_hook_destinations")]
+    hooks: BTreeMap<String, UrlHookDestinationConfig>,
+}
+
+fn hook_destinations_yaml(ids: impl IntoIterator<Item = String>) -> String {
+    let mut yaml = "hooks:\n".to_owned();
+    for id in ids {
+        yaml.push_str(&format!(
+            "  {id}: {{url: https://events.example.test/hooks, hmacSha256KeyRef: secret:file/hook-key}}\n"
+        ));
+    }
+    yaml
+}
+
+#[test]
+fn url_hook_destinations_are_keyed_by_local_identifiers_and_bounded() {
+    let bound = read_block::<HookDestinationsHost>(&hook_destinations_yaml(
+        (0..MAX_HOOK_DESTINATIONS).map(|index| format!("events-{index}")),
+    ))
+    .unwrap();
+    assert_eq!(bound.hooks.len(), MAX_HOOK_DESTINATIONS);
+    assert!(read_block::<HookDestinationsHost>(&hook_destinations_yaml(
+        (0..=MAX_HOOK_DESTINATIONS).map(|index| format!("events-{index}")),
+    ))
+    .is_err());
+    for id in ["Events", "2events", "-events", "events.v1"] {
+        assert!(
+            read_block::<HookDestinationsHost>(&hook_destinations_yaml([id.to_owned()])).is_err(),
+            "{id}"
+        );
+    }
+}

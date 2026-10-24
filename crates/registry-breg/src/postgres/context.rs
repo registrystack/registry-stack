@@ -682,7 +682,7 @@ impl ImmediateActionTargetContext {
                     .ok_or_else(invalid_context)?,
             );
         }
-        validate_action_effect_binding(&effects, &binding)?;
+        validate_action_effect_binding(registry, &effects, &binding)?;
         let grant = action
             .permissions
             .iter()
@@ -1091,13 +1091,21 @@ impl fmt::Debug for ImmediateActionLinkContext {
 }
 
 fn validate_action_effect_binding(
+    registry: &CompiledRegistry,
     effects: &[&CompiledPlanEffect],
     binding: &ImmediateActionTargetBinding,
 ) -> Result<()> {
     if effects.is_empty() {
         return Err(invalid_context());
     }
-    let expected_fields = action_effect_fields(effects);
+    let mut expected_fields = action_effect_fields(effects);
+    if binding.operation == Operation::Create {
+        let entity = registry
+            .entities()
+            .get(&binding.target_entity_id)
+            .ok_or_else(invalid_context)?;
+        expected_fields.extend(entity.generated_fields().map(|field| field.id.clone()));
+    }
     if expected_fields != binding.fields {
         return Err(invalid_context());
     }

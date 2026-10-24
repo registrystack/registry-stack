@@ -29,8 +29,8 @@ use registry_breg::postgres::{
 use registry_breg::runtime_config::{parse_runtime_config_with_env, RuntimeConfigError};
 use registry_breg::startup::{
     operational_log_level, select_operational_log_level, with_request_timeout_and_metrics_for_test,
-    with_request_timeout_for_test, BackgroundTask, BackgroundTaskStop, OperationalEvent,
-    OperationalLogLevel, StartupError, WebhookStateTransitionCode,
+    with_request_timeout_for_test, BackgroundTask, BackgroundTaskStop, HookStateTransitionCode,
+    OperationalEvent, OperationalLogLevel, StartupError,
 };
 use registry_breg::{compile_project, parse_project_yaml, CompileProfile, CompiledRegistry};
 use registry_platform_crypto::PrivateJwk;
@@ -506,7 +506,7 @@ async fn request_operational_log_has_only_closed_value_free_fields() {
 /// A description the audit writer gives for a torn audit file.
 const AUDIT_DESTINATION_REASON: &str = "the audit file could not be opened: audit file has an incomplete final entry; archive it and restart with a fresh path";
 
-fn startup_errors() -> [StartupError; 36] {
+fn startup_errors() -> [StartupError; 37] {
     [
         // The wrapped cause never changes the rendered operational message: it
         // only lets `bregctl doctor` name it. Any `RuntimeConfigError` variant
@@ -537,6 +537,7 @@ fn startup_errors() -> [StartupError; 36] {
         },
         StartupError::DatabaseUninitialized,
         StartupError::UnrecognizedDatabase,
+        StartupError::Pre1_0Schema,
         StartupError::InstanceClaimMismatch,
         StartupError::RuntimeWriteAuthority,
         StartupError::RuntimeGrantsMissing,
@@ -552,7 +553,7 @@ fn startup_errors() -> [StartupError; 36] {
         StartupError::Authentication,
         StartupError::AuthenticationClientsUnlisted,
         StartupError::EventDestinations,
-        StartupError::RetainedWebhookBindings {
+        StartupError::RetainedHookBindings {
             retained_deliveries: 2,
         },
         StartupError::InstanceIdChangedWithPendingDeliveries {
@@ -618,12 +619,12 @@ fn expected_operational_event(
                 code,
             )
         }
-        OperationalEvent::WebhookWorkerIterationFailed => (
+        OperationalEvent::HookWorkerIterationFailed => (
             OperationalLogLevel::Warn,
-            "registry_breg::webhook",
-            "webhook worker iteration failed",
+            "registry_breg::hooks",
+            "hook worker iteration failed",
             None,
-            Some("webhook.worker.iteration_failed"),
+            Some("hook.worker.iteration_failed"),
         ),
         OperationalEvent::AttachmentVerificationIterationFailed => (
             OperationalLogLevel::Warn,
@@ -660,12 +661,12 @@ fn expected_operational_event(
             None,
             Some("metrics.queue_sample.failed"),
         ),
-        OperationalEvent::WebhookStateTransitionFailed(code) => (
+        OperationalEvent::HookStateTransitionFailed(code) => (
             OperationalLogLevel::Warn,
-            "registry_breg::webhook",
-            "webhook state transition failed",
+            "registry_breg::hooks",
+            "hook state transition failed",
             None,
-            Some(expected_webhook_state_transition_code(code)),
+            Some(expected_hook_state_transition_code(code)),
         ),
         OperationalEvent::BackgroundTaskStopped(task, stop) => (
             OperationalLogLevel::Error,
@@ -752,12 +753,16 @@ fn expected_startup_error(error: StartupError) -> &'static str {
         StartupError::PackageEnvelopeRefused(_) => "the Registry package was refused",
         StartupError::DatabaseConnection(cause) => cause.message(),
         StartupError::DatabaseUnready => "the Registry database is not ready for this package",
+        StartupError::SchemaTestSetupRefused(_) => "the schema-test database setup was refused",
         StartupError::DatabaseCatalogDrift { .. } => "the Registry database catalog differs from the runtime package; run `bregctl doctor` to name the objects",
         StartupError::DatabaseUninitialized => {
             "the Registry database records no activated package; run `bregctl apply --package DIR --initial` to activate the first package"
         }
         StartupError::UnrecognizedDatabase => {
             "the Registry database holds registry state this release does not recognise; a release reads only the state its predecessor wrote, so upgrade the database one release at a time"
+        }
+        StartupError::Pre1_0Schema => {
+            "the Registry database uses the attachment verification schema of a pre-1.0 release; this release supports fresh installs only. Create a fresh database, rebuild the package with this release's `bregctl test` and `bregctl package`, and run `bregctl apply --package DIR --initial`"
         }
         StartupError::DatabaseIdentityMismatch => {
             "the Registry database records a different database id than identity.databaseId; point the runtime file at the database it names or correct identity.databaseId"
@@ -789,11 +794,11 @@ fn expected_startup_error(error: StartupError) -> &'static str {
             "the project names clients that authentication.oidc.allowedClients does not list; list each client named in requesterClients, trusted actors, or consent recipients there"
         }
         StartupError::EventDestinations => "the Registry event destination bindings were refused",
-        StartupError::RetainedWebhookBindings { .. } => {
-            "retained webhook deliveries require superseded bindings; run `bregctl doctor` to name the recovery"
+        StartupError::RetainedHookBindings { .. } => {
+            "retained hook deliveries require superseded bindings; run `bregctl doctor` to name the recovery"
         }
         StartupError::InstanceIdChangedWithPendingDeliveries { .. } => {
-            "pending webhook deliveries were captured under a different identity.instanceId; restore the previous identity.instanceId until they drain, and run `bregctl doctor` to name it"
+            "pending hook deliveries were captured under a different identity.instanceId; restore the previous identity.instanceId until they drain, and run `bregctl doctor` to name it"
         }
         StartupError::ReviewBindings | StartupError::ReviewAuthorityMissing { .. } => {
             "the Registry retained review bindings were refused"
@@ -814,15 +819,15 @@ fn expected_startup_error(error: StartupError) -> &'static str {
     }
 }
 
-fn expected_webhook_state_transition_code(code: WebhookStateTransitionCode) -> &'static str {
+fn expected_hook_state_transition_code(code: HookStateTransitionCode) -> &'static str {
     match code {
-        WebhookStateTransitionCode::ClaimIdentityRefused => "webhook.claim.identity_refused",
-        WebhookStateTransitionCode::ClaimRecoveryFailed => "webhook.claim.recovery_failed",
-        WebhookStateTransitionCode::ClaimSelectFailed => "webhook.claim.select_failed",
-        WebhookStateTransitionCode::ClaimPolicyRefused => "webhook.claim.policy_refused",
-        WebhookStateTransitionCode::ClaimUpdateFailed => "webhook.claim.update_failed",
-        WebhookStateTransitionCode::ClaimAuditFailed => "webhook.claim.audit_failed",
-        WebhookStateTransitionCode::ClaimCommitFailed => "webhook.claim.commit_failed",
+        HookStateTransitionCode::ClaimIdentityRefused => "hook.claim.identity_refused",
+        HookStateTransitionCode::ClaimRecoveryFailed => "hook.claim.recovery_failed",
+        HookStateTransitionCode::ClaimSelectFailed => "hook.claim.select_failed",
+        HookStateTransitionCode::ClaimPolicyRefused => "hook.claim.policy_refused",
+        HookStateTransitionCode::ClaimUpdateFailed => "hook.claim.update_failed",
+        HookStateTransitionCode::ClaimAuditFailed => "hook.claim.audit_failed",
+        HookStateTransitionCode::ClaimCommitFailed => "hook.claim.commit_failed",
     }
 }
 
@@ -831,8 +836,8 @@ fn expected_background_task_stop_code(
     stop: BackgroundTaskStop,
 ) -> &'static str {
     match (task, stop) {
-        (BackgroundTask::WebhookWorker, BackgroundTaskStop::Panicked) => "webhook.worker.panicked",
-        (BackgroundTask::WebhookWorker, BackgroundTaskStop::Returned) => "webhook.worker.returned",
+        (BackgroundTask::HookWorker, BackgroundTaskStop::Panicked) => "hook.worker.panicked",
+        (BackgroundTask::HookWorker, BackgroundTaskStop::Returned) => "hook.worker.returned",
         (BackgroundTask::AttachmentVerificationWorker, BackgroundTaskStop::Panicked) => {
             "attachment_verification.worker.panicked"
         }
@@ -886,7 +891,7 @@ async fn every_operational_event_renders_exact_closed_value_free_json_fields() {
     events.push(OperationalEvent::RoleMode(RoleMode::Single));
     events.push(OperationalEvent::RoleMode(RoleMode::Split));
     events.push(OperationalEvent::ClientsUnrestricted);
-    events.push(OperationalEvent::WebhookWorkerIterationFailed);
+    events.push(OperationalEvent::HookWorkerIterationFailed);
     events.push(OperationalEvent::AttachmentVerificationIterationFailed);
     events.push(OperationalEvent::AttachmentVerificationRetryPending);
     events.push(OperationalEvent::ReviewWorkerIterationFailed);
@@ -900,9 +905,9 @@ async fn every_operational_event_renders_exact_closed_value_free_json_fields() {
         );
     }
     events.extend(
-        WebhookStateTransitionCode::ALL
+        HookStateTransitionCode::ALL
             .into_iter()
-            .map(OperationalEvent::WebhookStateTransitionFailed),
+            .map(OperationalEvent::HookStateTransitionFailed),
     );
     events.extend(
         baseline_advisories()
@@ -1001,7 +1006,7 @@ async fn every_operational_event_renders_exact_closed_value_free_json_fields() {
         assert!(matches!(
             expected.target(),
             "registry_breg::startup"
-                | "registry_breg::webhook"
+                | "registry_breg::hooks"
                 | "registry_breg::attachment_verification"
                 | "registry_breg::review"
                 | "registry_breg::metrics"
@@ -1653,7 +1658,8 @@ audit:
 cursor:
   secretRef: secret:file/cursor-key
   maximumAgeSeconds: 300
-eventDestinations: {{}}
+destinations:
+  hooks: {{}}
 operationalTimeouts:
   httpRequestMilliseconds: 10000
   shutdownGraceMilliseconds: 30000
@@ -1670,12 +1676,12 @@ operationalTimeouts:
 #[tokio::test]
 async fn serve_returns_after_graceful_shutdown_signal() {
     use axum::routing::get;
+    use registry_breg::hooks::HookWorkerLifecycleProbe;
     use registry_breg::startup::{serve_until_shutdown, PreparedServer};
-    use registry_breg::webhook::WebhookWorkerLifecycleProbe;
 
     let app = axum::Router::new().route("/healthz", get(|| async { "ok" }));
-    let probe = WebhookWorkerLifecycleProbe::new(false);
-    let prepared = PreparedServer::from_parts_with_webhook_worker_for_test(
+    let probe = HookWorkerLifecycleProbe::new(false);
+    let prepared = PreparedServer::from_parts_with_hook_worker_for_test(
         "127.0.0.1:0".parse().expect("ephemeral bind parses"),
         app,
         Duration::from_secs(2),
@@ -1698,8 +1704,8 @@ async fn serve_returns_after_graceful_shutdown_signal() {
 #[tokio::test]
 async fn shutdown_signal_failure_still_stops_and_joins_the_bound_server() {
     use axum::routing::get;
+    use registry_breg::hooks::HookWorkerLifecycleProbe;
     use registry_breg::startup::{serve_until_shutdown, PreparedServer, StartupError};
-    use registry_breg::webhook::WebhookWorkerLifecycleProbe;
     use tokio::net::TcpListener;
 
     let reservation = TcpListener::bind("127.0.0.1:0")
@@ -1710,8 +1716,8 @@ async fn shutdown_signal_failure_still_stops_and_joins_the_bound_server() {
         .expect("ephemeral listener address reads");
     drop(reservation);
     let app = axum::Router::new().route("/healthz", get(|| async { "ok" }));
-    let probe = WebhookWorkerLifecycleProbe::new(false);
-    let prepared = PreparedServer::from_parts_with_webhook_worker_for_test(
+    let probe = HookWorkerLifecycleProbe::new(false);
+    let prepared = PreparedServer::from_parts_with_hook_worker_for_test(
         bind,
         app,
         Duration::from_secs(2),
@@ -1738,8 +1744,8 @@ async fn shutdown_signal_failure_still_stops_and_joins_the_bound_server() {
 #[tokio::test]
 async fn listener_bind_failure_never_starts_or_detaches_the_webhook_worker() {
     use axum::routing::get;
+    use registry_breg::hooks::HookWorkerLifecycleProbe;
     use registry_breg::startup::{serve_until_shutdown, PreparedServer, StartupError};
-    use registry_breg::webhook::WebhookWorkerLifecycleProbe;
     use tokio::net::TcpListener;
 
     let occupied = TcpListener::bind("127.0.0.1:0")
@@ -1747,8 +1753,8 @@ async fn listener_bind_failure_never_starts_or_detaches_the_webhook_worker() {
         .expect("occupied listener binds");
     let bind = occupied.local_addr().expect("occupied address reads");
     let app = axum::Router::new().route("/healthz", get(|| async { "ok" }));
-    let probe = WebhookWorkerLifecycleProbe::new(false);
-    let prepared = PreparedServer::from_parts_with_webhook_worker_for_test(
+    let probe = HookWorkerLifecycleProbe::new(false);
+    let prepared = PreparedServer::from_parts_with_hook_worker_for_test(
         bind,
         app,
         Duration::from_secs(1),
@@ -1768,8 +1774,8 @@ async fn listener_bind_failure_never_starts_or_detaches_the_webhook_worker() {
 #[tokio::test]
 async fn shutdown_timeout_aborts_and_joins_the_webhook_worker_before_returning() {
     use axum::routing::get;
+    use registry_breg::hooks::HookWorkerLifecycleProbe;
     use registry_breg::startup::{serve_until_shutdown, PreparedServer, StartupError};
-    use registry_breg::webhook::WebhookWorkerLifecycleProbe;
     use tokio::net::TcpListener;
 
     let reservation = TcpListener::bind("127.0.0.1:0")
@@ -1780,8 +1786,8 @@ async fn shutdown_timeout_aborts_and_joins_the_webhook_worker_before_returning()
         .expect("ephemeral listener address reads");
     drop(reservation);
     let app = axum::Router::new().route("/healthz", get(|| async { "ok" }));
-    let probe = WebhookWorkerLifecycleProbe::new(true);
-    let prepared = PreparedServer::from_parts_with_webhook_worker_for_test(
+    let probe = HookWorkerLifecycleProbe::new(true);
+    let prepared = PreparedServer::from_parts_with_hook_worker_for_test(
         bind,
         app,
         Duration::from_millis(25),
@@ -1801,11 +1807,11 @@ async fn shutdown_timeout_aborts_and_joins_the_webhook_worker_before_returning()
     drop(rebound);
 }
 
-/// Serve with a webhook worker probe that stops on its own, and return what
+/// Serve with a hook worker probe that stops on its own, and return what
 /// serve returned plus the operational records it emitted.
 #[cfg(feature = "postgres-test")]
 async fn serve_with_self_stopping_worker(
-    probe: &registry_breg::webhook::WebhookWorkerLifecycleProbe,
+    probe: &registry_breg::hooks::HookWorkerLifecycleProbe,
 ) -> (
     registry_breg::startup::Result<()>,
     Vec<Value>,
@@ -1823,7 +1829,7 @@ async fn serve_with_self_stopping_worker(
         .expect("ephemeral listener address reads");
     drop(reservation);
     let app = axum::Router::new().route("/healthz", get(|| async { "ok" }));
-    let prepared = PreparedServer::from_parts_with_webhook_worker_for_test(
+    let prepared = PreparedServer::from_parts_with_hook_worker_for_test(
         bind,
         app,
         Duration::from_secs(2),
@@ -1875,20 +1881,20 @@ fn background_task_stop_codes(records: &[Value]) -> Vec<String> {
 #[cfg(feature = "postgres-test")]
 #[tokio::test(flavor = "current_thread")]
 async fn a_panicking_background_task_stops_serve_with_a_distinct_error() {
-    use registry_breg::webhook::WebhookWorkerLifecycleProbe;
+    use registry_breg::hooks::HookWorkerLifecycleProbe;
 
     let _capture_guard = TRACING_CAPTURE.lock().await;
-    let probe = WebhookWorkerLifecycleProbe::panicking();
+    let probe = HookWorkerLifecycleProbe::panicking();
     let (result, records, bind) = serve_with_self_stopping_worker(&probe).await;
 
     assert_eq!(result, Err(StartupError::BackgroundTaskStopped));
     assert_eq!(
         background_task_stop_codes(&records),
-        vec!["webhook.worker.panicked".to_owned()]
+        vec!["hook.worker.panicked".to_owned()]
     );
     let stopped = records
         .iter()
-        .find(|record| record["fields"]["code"] == "webhook.worker.panicked")
+        .find(|record| record["fields"]["code"] == "hook.worker.panicked")
         .expect("the panicked task is reported");
     assert_eq!(stopped["level"], "ERROR");
     assert_eq!(
@@ -1911,16 +1917,16 @@ async fn a_panicking_background_task_stops_serve_with_a_distinct_error() {
 #[cfg(feature = "postgres-test")]
 #[tokio::test(flavor = "current_thread")]
 async fn an_early_returning_background_task_stops_serve_with_a_distinct_error() {
-    use registry_breg::webhook::WebhookWorkerLifecycleProbe;
+    use registry_breg::hooks::HookWorkerLifecycleProbe;
 
     let _capture_guard = TRACING_CAPTURE.lock().await;
-    let probe = WebhookWorkerLifecycleProbe::returning();
+    let probe = HookWorkerLifecycleProbe::returning();
     let (result, records, bind) = serve_with_self_stopping_worker(&probe).await;
 
     assert_eq!(result, Err(StartupError::BackgroundTaskStopped));
     assert_eq!(
         background_task_stop_codes(&records),
-        vec!["webhook.worker.returned".to_owned()]
+        vec!["hook.worker.returned".to_owned()]
     );
     assert!(probe.started());
     assert!(probe.stopped());
@@ -1934,12 +1940,12 @@ async fn an_early_returning_background_task_stops_serve_with_a_distinct_error() 
 #[tokio::test(flavor = "current_thread")]
 async fn a_requested_shutdown_reports_no_background_task_stop() {
     use axum::routing::get;
+    use registry_breg::hooks::HookWorkerLifecycleProbe;
     use registry_breg::startup::{serve_until_shutdown, PreparedServer};
-    use registry_breg::webhook::WebhookWorkerLifecycleProbe;
 
     let _capture_guard = TRACING_CAPTURE.lock().await;
-    let probe = WebhookWorkerLifecycleProbe::new(false);
-    let prepared = PreparedServer::from_parts_with_webhook_worker_for_test(
+    let probe = HookWorkerLifecycleProbe::new(false);
+    let prepared = PreparedServer::from_parts_with_hook_worker_for_test(
         "127.0.0.1:0".parse().expect("ephemeral bind parses"),
         axum::Router::new().route("/healthz", get(|| async { "ok" })),
         Duration::from_secs(2),

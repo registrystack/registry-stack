@@ -1268,3 +1268,90 @@ fn sole_profile_is_implicit_default_and_action_routes_may_require_explicit_selec
         .iter()
         .any(|diagnostic| diagnostic.code == "breg.action.route-access-default-multiple"));
 }
+
+/// A profile with no row or membership boundary, listing a non-public record type.
+fn unbounded_listing_source() -> Value {
+    let mut value = source();
+    value["recordTypes"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("accessRequirements");
+    value["accessProfiles"][0]["permissions"]["records"][0]["rowBoundaries"] =
+        json!("unrestricted");
+    value
+}
+
+fn finding_codes(value: &Value) -> Vec<String> {
+    compile(value)
+        .unwrap()
+        .findings()
+        .iter()
+        .map(|d| d.code.to_string())
+        .collect()
+}
+
+#[test]
+fn a_profile_requiring_scopes_and_purposes_may_read_whole_collections_without_a_warning() {
+    let mut value = unbounded_listing_source();
+    assert_eq!(
+        value["accessProfiles"][0]["permissions"]["records"][0]["operations"],
+        json!(["get", "list"])
+    );
+    let codes = finding_codes(&value);
+    for code in [
+        "breg.access.profile-unrestricted-collection",
+        "breg.access.profile-unrestricted-rows",
+    ] {
+        assert!(!codes.iter().any(|c| c == code), "{code}: {codes:?}");
+    }
+
+    value["accessProfiles"][0]["permissions"]["records"][0]["operations"] = json!(["get"]);
+    let codes = finding_codes(&value);
+    assert!(
+        !codes
+            .iter()
+            .any(|c| c == "breg.access.profile-unrestricted-rows"),
+        "{codes:?}"
+    );
+}
+
+#[test]
+fn a_profile_missing_scopes_or_purposes_is_reported_as_unrestricted() {
+    let mut without_purposes = unbounded_listing_source();
+    without_purposes["accessProfiles"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("requiredPurposes");
+    let codes = finding_codes(&without_purposes);
+    assert!(
+        codes
+            .iter()
+            .any(|c| c == "breg.access.profile-unrestricted-collection"),
+        "{codes:?}"
+    );
+
+    let mut without_scopes = unbounded_listing_source();
+    without_scopes["accessProfiles"][0]["requiredScopes"] = json!("unrestricted");
+    let codes = finding_codes(&without_scopes);
+    assert!(
+        codes
+            .iter()
+            .any(|c| c == "breg.access.profile-unrestricted-collection"),
+        "{codes:?}"
+    );
+
+    let mut rows_without_purposes = unbounded_listing_source();
+    rows_without_purposes["accessProfiles"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("requiredPurposes");
+    rows_without_purposes["accessProfiles"][0]["permissions"]["records"][0]["operations"] =
+        json!(["get"]);
+    let codes = finding_codes(&rows_without_purposes);
+    assert!(
+        codes
+            .iter()
+            .any(|c| c == "breg.access.profile-unrestricted-rows"),
+        "{codes:?}"
+    );
+}

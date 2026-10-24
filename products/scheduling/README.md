@@ -211,9 +211,19 @@ declares, each due a fixed number of minutes before the appointment, and a
 worker renders every due intent as one
 shared hook envelope in canonical JSON, the same envelope an appointment
 observer receives, and POSTs it to the configured reminder destination with
-`content-type: application/json`, exactly once per claim. A transport
-failure schedules an exponential retry, a refusal the retry classes do not
-cover holds the intent for the operator, and eight failed attempts hold it.
+`content-type: application/json`, once per claim. Delivery runs on the
+shared dispatch core: each attempt is bounded at five seconds, a transport
+failure retries after thirty seconds, doubling to about thirty-two minutes,
+a refusal the retry classes do not cover sets the intent aside for the
+operator, and the eighth failed attempt sets it aside. A worker that stops
+mid-attempt leaves its lease to lapse, and the attempt counts as a failure.
+A cancellation or reschedule cancels the appointment's reminders no attempt
+has started on, in the same transaction. Just before each send the runtime
+reads, under the attempt's lease, whether the intent still describes the
+appointment: a reminder whose appointment was cancelled or moved to a newer
+revision is set aside as superseded and never sent, and a lapsed lease
+starts no send. The destination
+deduplicates on the envelope `id`, the same on every attempt.
 
 Every event carries the same envelope:
 
@@ -239,7 +249,8 @@ revision, offering, start, and how many minutes before the start it was
 minted for.
 
 With no reminder destination configured, the intents stay readable in place:
-they are written to the outbox and marked local, never pretended delivered.
+each is set aside in the outbox as local when it falls due, never pretended
+delivered.
 Adopting the product does not require wiring a notification bus first.
 
 Appointment observers are governed hooks. A policy may declare `phase: after`
@@ -269,8 +280,9 @@ task grants, resource and channel identifiers, duplicate keys, and cancellation
 reasons cannot be projected. Retained payloads expire after
 `retention.hookPayloadRetentionDays`. Operator replay is not exposed in this slice.
 Terminal delivery metadata uses `retention.receiptRetentionDays`: every
-delivered outbox intent (confirmation, change, cancellation, reminder) and
-every completed hook delivery ages out in bounded retention batches.
+delivered outbox intent (confirmation, change, cancellation, reminder), every
+reminder cancelled or set aside as superseded, and every completed hook
+delivery ages out in bounded retention batches.
 Dead-letter metadata ages from the original `dead_lettered_at` timestamp and
 requires completed payload expiry and erased payload bytes before removal.
 Later payload expiry does not restart the metadata window, so an old dead letter
@@ -401,13 +413,13 @@ is not database verification.
 ## Dependency boundary
 
 No scheduling crate, directly or through any shared dependency, may reach a
-Base Registry Engine, Casework, or Evidence crate, and none of those products
-may reach a scheduling crate. The restriction is scoped to the MVP, because
-the crates that would compose across those boundaries do not exist yet; the
-workspace `AGENTS.md` records what changes when one does. The source-neutral
-core sits at the bottom of the product depending on no other scheduling
-crate, and the client shares the core without ever linking the runtime or
-adopter tooling.
+Base Registry Engine, Casework, Document Store, Evidence, or Messaging crate,
+and none of those products may reach a scheduling crate. The restriction is
+scoped to the MVP, because the crates that would compose across those
+boundaries do not exist yet; the workspace `AGENTS.md` records what changes when one does. The
+source-neutral core sits at the bottom of the product depending on no other
+scheduling crate, and the client shares the core without ever linking the
+runtime or adopter tooling.
 
 ## Observe an original receipt
 

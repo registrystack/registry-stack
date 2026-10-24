@@ -1,0 +1,20 @@
+apiVersion: id.registrystack.org/formats/breg/dev-clients/v1alpha1
+kind: BRegDevClients
+clients:
+  - id: clerk-a
+    accessProfiles: [application-clerk]
+    scopes: [registry:applications:write]
+    claims:
+      registry_principal: synthetic-clerk-a
+      registry_purpose: application-administration
+      jurisdiction: zone-a
+  - id: clerk-b
+    accessProfiles: [application-clerk]
+    scopes: [registry:applications:write]
+    claims:
+      registry_principal: synthetic-clerk-b
+      registry_purpose: application-administration
+      jurisdiction: zone-b
+    testBindings:
+      - journeyId: generated-application-numbers
+        stepId: create-zone-b

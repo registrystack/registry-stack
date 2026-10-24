@@ -109,6 +109,9 @@ project can build on. An action handler can also be a WebAssembly module:
 [WASM action handlers](wasm-action-handlers.md) covers what ships, the
 server-compatibility contract, operator configuration, and the upgrade and
 rollback paths.
+For institution-facing record numbers and codes, [Generated business
+identifiers](generated-identifiers.md) explains sequences, random codes,
+uniqueness scopes, and migration from retained values.
 
 ## Pilot operator lifecycle
 
@@ -266,7 +269,7 @@ retention boundaries, see [Corrections and historical queries](HISTORY.md).
 For the opt-in log that lets a record subject see named reads of that record,
 including retention, intermediary attribution, and delayed disclosure, see
 [Subject-facing access logs](ACCESS-LOG.md).
-See [Events and webhooks](EVENTS-AND-WEBHOOKS.md) for committed record and Proposal events.
+See [Events and hooks](EVENTS-AND-WEBHOOKS.md) for committed record and Proposal events.
 
 [Point queries and QGIS](SPATIAL-QUERIES.md) describes GeoJSON output and
 explicitly granted PostGIS-backed bbox queries. The spatial quickstart uses
@@ -337,9 +340,11 @@ lifecycle column rewrites each reference source table. Adding the target's
 unique lifecycle key and temporarily changing FORCE RLS on the source and target
 take ACCESS EXCLUSIVE locks. The source and target locks acquired by the FORCE
 changes are held while PostgreSQL validates existing links.
-An additive activation runs its compiler DDL in one transaction, so a validation
-refusal rolls that DDL back. A reviewed activation commits compiler and authored
-steps at durable checkpoints; a later reference validation refusal leaves those
+An additive activation runs its compiler DDL, runtime grants, and exact target
+catalog verification in one transaction, so a validation or fingerprint refusal
+rolls that DDL back. Maintenance still pins the exact target for recovery; this
+check is performed during apply, not by a successor plan before maintenance.
+A reviewed activation commits compiler and authored steps at durable checkpoints; a later reference validation refusal leaves those
 earlier checkpoints in place and pins maintenance as failed. Follow the exact
 target retry, reconciliation, or backup-restore procedure above.
 

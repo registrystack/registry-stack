@@ -307,12 +307,12 @@ impl Breg {
                 config["taskGrantStatus"] = status.clone();
             }
             if let Some(origin) = event_origin {
-                config["eventDestinations"] = json!({"coordinator":{
+                config["destinations"] = json!({"hooks":{"coordinator":{
                     "origin":format!("{origin}/"),"path":"/v1/events/proposal-event-proof/submitted",
                     "networkProfile":"loopback-development-http","dnsFamily":"dual-stack-strict",
                     "allowedPrivateCidrs":[],"hmacSha256KeyRef":"secret:file/event-key",
                     "classificationCeiling":"internal","deliveryCeilings":{"attemptTimeoutMilliseconds":1000,"maximumAttempts":3}
-                }});
+                }}});
             }
             config
         };

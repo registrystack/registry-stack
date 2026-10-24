@@ -381,9 +381,17 @@ Get, List and turn filtering keep the Proposal recoverable, while its retained
 decision remains historical evidence. Manual rounds also return the turn to the
 requester and refuse Apply after a restoring package clears the block.
 
+A Proposal blocked by a refused manual Apply (`application-refused`) keeps
+that reason through every package activation; only Rebase clears it. A
+compatible activation leaves the block, its Review round and its Apply refusal
+in place. An activation that changes the Action withdraws the Review as above
+but keeps `application-refused` as the reason, and a later restoring package
+neither clears the refusal nor reopens the withdrawn round.
+
 `bregctl review-recovery resubmit` and `retry-application` refuse a currently
-blocked, still-submitted Proposal with reason `package-changed` and direct its
-requester to Rebase for fresh Review or Cancel. Once cancelled, it receives the
+blocked, still-submitted Proposal with reason `package-changed` or
+`application-refused` and direct its requester to Rebase for fresh Review or
+Cancel. Once cancelled, it receives the
 existing terminal or withdrawn refusal instead. The recovery operations keep their
 authority and cannot reopen a withdrawn round after rollback.
 

@@ -398,7 +398,7 @@ seed:
     assert!(std::net::TcpStream::connect(receiver_address).is_ok());
     let runtime_file = dev.join("runtime.yaml");
     let configuration: Value = serde_norway::from_slice(&fs::read(&runtime_file).unwrap()).unwrap();
-    let destinations = configuration["eventDestinations"].as_object().unwrap();
+    let destinations = configuration["destinations"]["hooks"].as_object().unwrap();
     assert_eq!(destinations.len(), 2);
     for destination in ["receiver-a", "receiver-b"] {
         assert_eq!(
@@ -409,7 +409,7 @@ seed:
     let events = || session.success(&["dev", "events", project.to_str().unwrap()]);
     let pending = || {
         session.success(&[
-            "webhook",
+            "hook",
             "list",
             "--runtime-config",
             runtime_file.to_str().unwrap(),
@@ -554,7 +554,7 @@ seed:
                     && earlier["generation"] == delivery["generation"]
             }));
         let replay = session.success(&[
-            "webhook",
+            "hook",
             "replay",
             "--runtime-config",
             runtime_file.to_str().unwrap(),

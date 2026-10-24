@@ -106,7 +106,7 @@ CFG-SCHEMA-3).
 **CFG-ENV-2 (MUST). `apiVersion` is
 `id.registrystack.org/formats/<product>/<format>/<version>`.** `<product>` is
 the product token (CFG-ENV-3). `kind` matches
-`^(BReg|Casework|Coordinator|Scheduling|Messaging|Discovery|Render|Evidence|Manifest|Platform)([A-Z][a-z0-9]+)+$`,
+`^(BReg|Casework|Coordinator|Documents|Scheduling|Messaging|Discovery|Render|Evidence|Manifest|Platform)([A-Z][a-z0-9]+)+$`,
 with acronyms written as words (`Mcp`, `Oid4vci`). `<format>` derives from
 `kind`: remove the product prefix; remove a trailing `Config`; split the rest
 before each uppercase letter; lowercase each word and join with `-`. The
@@ -138,6 +138,7 @@ prefix, and is unique across the stack.**
 | `BReg` | `breg` |
 | `Casework` | `casework` |
 | `Coordinator` | `coordinator` |
+| `Documents` | `documents` |
 | `Scheduling` | `scheduling` |
 | `Messaging` | `messaging` |
 | `Discovery` | `discovery` |
@@ -421,6 +422,7 @@ here is added to the list in the same change that first uses it. See CFG-QTY.
 | How long an idempotency receipt stays replayable, from 1 through 365 days | `receiptRetentionDays` | `attemptReceiptRetentionDays`, `submissionReceiptRetentionDays` |
 | Cache entry lifetime | `cacheTtlSeconds` | |
 | Largest accepted body or file | `maximum<Thing>Bytes` | `max<Thing>Bytes`, `maxSize` outside `pool` |
+| Outbound hook destination bindings, one entry per destination id | `destinations.hooks` | `eventDestinations` |
 
 Adding a shared concept adds a row here in the same change.
 *Enforced by:* the schema convention lint (one unit per key stem across all
@@ -734,8 +736,8 @@ A path longer than 120 characters is shown as its first and last 60 joined by
 
 **CFG-DIAG-3 (MUST). Codes are dotted, lowercase, each segment kebab-case.**
 A product code is `<product>.<area>.<condition>` with the product token
-(`breg`, `casework`, `coordinator`, `scheduling`, `messaging`, `discovery`, `render`,
-`evidence`, `manifest`, `platform`); a shared reader code is
+(`breg`, `casework`, `coordinator`, `documents`, `scheduling`, `messaging`, `discovery`,
+`render`, `evidence`, `manifest`, `platform`); a shared reader code is
 `<namespace>.<condition>`, with `yaml` for syntax and `config` for envelope,
 key, and type problems. A code is never reused for a different condition.
 
@@ -820,13 +822,26 @@ The reader refuses unknown keys in the same positions (CFG-SCHEMA-8).
 defines `ListenerConfig`, `PrivateListenerConfig`, `DatabaseConfig`,
 `OidcIssuerConfig`, `OidcClientsConfig`, `JwksSource`, `AuditKeyConfig`,
 `SecretProvidersConfig`, `SecretReference`, `TaskGrantStatusConfig`,
-`IdentityConfig`, `ProjectIdentity`, `Url`, `LocalId`, `ExternalId`, and
-`Digest`. A product
+`ObjectStorageConfig`, `AttachmentVerifierConfig`,
+`UrlHookDestinationConfig`, `IdentityConfig`, `ProjectIdentity`, `Url`,
+`LocalId`, `ExternalId`, and `Digest`. A product
 embeds a shared definition unchanged under its shared name, or flattens a
 shared block from the platform crate, and never declares its own type for a
-concept a shared block covers, whatever its shape. Embedded definitions are
-compared with the platform schema; flattened blocks are checked at their Rust
-type.
+concept a shared block covers, whatever its shape. A shared block held as the
+newtype variant of a tagged union is flattened beside the union's tag.
+Embedded definitions are compared with the platform schema; flattened blocks
+are checked at their Rust type.
+
+The shared concept includes its policy capabilities, not only its transport.
+`UrlHookDestinationConfig` covers signed URL delivery under the fixed outbound
+policy defined by `registry-platform-hooks`: no configured private address
+ranges or client certificate. Documents and Scheduling embed that block
+unchanged. BReg's `RawEventDestinationConfig` additionally governs explicit
+private ranges, TLS identities, classification and delivery ceilings; that
+full-policy configuration is outside the simple block's scope and remains
+product-owned. Both use the platform delivery primitives. A product needing
+only the fixed policy must use the shared block; a different name or field
+shape alone is never a reason to copy it.
 
 **CFG-SCHEMA-6 (MUST). Every authored and operator format is mapped for
 editors** by

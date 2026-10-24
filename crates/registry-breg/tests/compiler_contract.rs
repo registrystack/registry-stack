@@ -2210,7 +2210,7 @@ fn module_extension_hook_diagnostics_keep_the_second_hook_and_member_paths() {
         format!("{third}.projection[field=secret]")
     );
     assert_eq!(
-        path("breg.event.webhook-destination-invalid"),
+        path("breg.event.hook-destination-invalid"),
         format!("{third}.handler.destinationId")
     );
 }
@@ -8433,12 +8433,12 @@ where
 #[test]
 fn an_enumerated_word_is_read_in_kebab_case_and_refused_in_snake_case() {
     use registry_breg::contract::{
-        CurrentDatePredicateSource, LookupValueOrigin, ManifestProjectionDatasetStatus,
-        MutationMode, ProposalRetentionMode, ValidTimeRole, WebhookAuthenticationProfile,
+        CurrentDatePredicateSource, HookAuthenticationProfile, LookupValueOrigin,
+        ManifestProjectionDatasetStatus, MutationMode, ProposalRetentionMode, ValidTimeRole,
     };
     use registry_breg::model::{
-        ActionRouteKind, CompiledCurrentDateRelation, CompiledProposalRetentionMode,
-        CompiledQueryTemporalSemantics, CompiledWebhookDeliveryMode, CompiledWebhookRetryProfile,
+        ActionRouteKind, CompiledCurrentDateRelation, CompiledHookDeliveryMode,
+        CompiledHookRetryProfile, CompiledProposalRetentionMode, CompiledQueryTemporalSemantics,
     };
 
     macro_rules! words {
@@ -8461,13 +8461,13 @@ fn an_enumerated_word_is_read_in_kebab_case_and_refused_in_snake_case() {
         ValidTimeRole: "valid-from", "valid-to";
         LookupValueOrigin: "verified-claim";
         ManifestProjectionDatasetStatus: "under-development";
-        WebhookAuthenticationProfile: "hmac-sha256-v1";
+        HookAuthenticationProfile: "hmac-sha256-v1";
         ActionRouteKind: "target-conditions";
         CompiledQueryFilterOperator: "is-null", "is-not-null";
         CompiledQueryKind: "as-of";
         CompiledQueryTemporalSemantics: "start-inclusive-end-exclusive";
-        CompiledWebhookDeliveryMode: "after-commit";
-        CompiledWebhookRetryProfile: "registry-v1";
+        CompiledHookDeliveryMode: "after-commit";
+        CompiledHookRetryProfile: "registry-v1";
     }
 }
 

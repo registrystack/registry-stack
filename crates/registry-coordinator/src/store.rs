@@ -17,7 +17,7 @@ use registry_platform_crypto::domain_separated_sha256;
 use registry_platform_dispatch::postgres::{
     enqueue, AttemptAudit, ClaimRefusal, Decoded, DispatchConfig, DispatchConnection,
     DispatchEvent, DispatchSql, DispatchStore, Dispatcher, Disposition, ExpirySql, JobKey,
-    JobState, JobTable, LeasedJob, ReplayAudit, SelectSql, TargetAction, Transition,
+    JobState, JobTable, LeasedJob, PooledClient, ReplayAudit, SelectSql, TargetAction, Transition,
     TransitionAudit, TransitionOutcome,
 };
 use registry_platform_dispatch::{
@@ -27,7 +27,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
     collections::BTreeMap,
-    ops::{Deref, DerefMut},
     sync::{Arc, Mutex},
     time::{Duration, SystemTime},
 };
@@ -88,24 +87,6 @@ pub struct Store {
     /// committed. Each dispatcher starts with its own empty map, so an entry
     /// whose commit was never reported ends with that dispatcher.
     settling: Arc<Mutex<BTreeMap<(Uuid, String), RunOutcome>>>,
-}
-
-/// One pooled session, framed for Dispatch's connection seam. The pool takes
-/// the session back when this is dropped.
-pub(crate) struct PooledClient(deadpool_postgres::Client);
-
-impl Deref for PooledClient {
-    type Target = tokio_postgres::Client;
-
-    fn deref(&self) -> &tokio_postgres::Client {
-        &self.0
-    }
-}
-
-impl DerefMut for PooledClient {
-    fn deref_mut(&mut self) -> &mut tokio_postgres::Client {
-        &mut self.0
-    }
 }
 
 /// Construct only from a token verified and authorized by the service boundary.
@@ -428,6 +409,80 @@ impl Detail {
     }
 }
 
+/// The dispatch job table of the protected state schema in `namespace`.
+fn job_table(namespace: &str) -> Result<JobTable> {
+    JobTable::new(namespace, "jobs", "run_id", "step").map_err(unavailable)
+}
+
+/// Every DDL statement that creates the protected state schema at
+/// [`SCHEMA_VERSION`] in `namespace`, in the order apply runs them. It is a
+/// pure function of the namespace, so a test pins the exact text each schema
+/// version creates.
+pub(crate) fn schema_statements(namespace: &str) -> Result<Vec<String>> {
+    let mut statements = vec![
+        format!(
+            "CREATE SCHEMA {0}; COMMENT ON SCHEMA {0} IS '{1}'",
+            namespace, NAMESPACE_MARKER
+        ),
+        format!("CREATE TABLE {0}.control (
+            id boolean PRIMARY KEY CHECK(id), database_id text NOT NULL, schema_version integer NOT NULL CHECK(schema_version={1}),
+            restore_hold boolean NOT NULL DEFAULT false, admissions_hold boolean NOT NULL DEFAULT false, restore_evidence_hash text, admission_recovery_hash text, active_flows_digest text, active_flows jsonb NOT NULL DEFAULT '{{}}', admission_key_commitment text NOT NULL, state_key_commitments jsonb NOT NULL);
+            CREATE TABLE {0}.runs (
+            run_id uuid PRIMARY KEY, start_identity text UNIQUE NOT NULL, input_digest text NOT NULL, owner_hash text NOT NULL,
+            workflow_id text NOT NULL, workflow_version text NOT NULL, definition_digest text NOT NULL,
+            snapshot jsonb, input jsonb, outputs jsonb, event_binding text,
+            binding_digest text NOT NULL, step text NOT NULL, state text NOT NULL DEFAULT 'running',
+            outcome text, terminal_output jsonb, failure_code text, failure_path text, admitted_at timestamptz NOT NULL, deadline_at timestamptz NOT NULL,
+            cancel_requested boolean NOT NULL DEFAULT false, authored_cancel_requested boolean NOT NULL DEFAULT false,
+            authored_cancel_pending_step text CHECK(authored_cancel_pending_step IS NULL OR authored_cancel_requested),
+            restore_review_required boolean NOT NULL DEFAULT false, completed_at timestamptz, payload_erased_at timestamptz);
+            CREATE TABLE {0}.admission_lock (id boolean PRIMARY KEY CHECK(id));
+            INSERT INTO {0}.admission_lock VALUES(true)", namespace, SCHEMA_VERSION),
+    ];
+    statements.extend(job_table(namespace)?.create_statements());
+    // The core job shape is widened by exactly one product state: a
+    // zero-attempt hold that restore places before any command is frozen.
+    // The table is still empty, so the constraint is replaced, not migrated.
+    statements.push(format!(
+        "ALTER TABLE {0}.jobs ADD COLUMN command jsonb,
+                ADD COLUMN uncertain boolean NOT NULL DEFAULT false,
+                ADD COLUMN receipt_expired boolean NOT NULL DEFAULT false,
+                ADD COLUMN pure boolean NOT NULL DEFAULT false,
+                ADD COLUMN failure_code text,
+                ADD COLUMN failure_path text,
+                DROP CONSTRAINT jobs_shape,
+                ADD CONSTRAINT jobs_shape CHECK (({1}) OR (
+                state='dead-lettered' AND attempt=0 AND command IS NULL
+                AND NOT uncertain AND NOT receipt_expired
+                AND next_attempt_at IS NULL AND attempt_started_at IS NULL
+                AND lease_expires_at IS NULL AND lease_token IS NULL
+                AND delivered_at IS NULL AND expired_at IS NULL
+                AND dead_lettered_at IS NOT NULL
+                AND failure_code IS NOT DISTINCT FROM 'restore-pre-command-held'))",
+        namespace,
+        JobTable::shape_predicate()
+    ));
+    // One row per waiting step while its wait lasts. The key is a keyed
+    // hash of the producer's request identifier, so a completion event
+    // finds its wait without the identifier being stored in clear. Rows
+    // name a job but carry no foreign key: deployment cleanup deletes
+    // jobs and runs in its own order.
+    statements.push(format!(
+        "CREATE TABLE {0}.completion_waits (
+                run_id uuid NOT NULL, step text NOT NULL, wait_key text NOT NULL,
+                timeout_at timestamptz NOT NULL, read_at timestamptz,
+                woken_at timestamptz, recheck_at timestamptz,
+                started_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
+                not_before timestamptz NOT NULL DEFAULT transaction_timestamp(),
+                observations integer NOT NULL DEFAULT 0 CHECK(observations>=0),
+                interval_seconds integer NOT NULL DEFAULT 30 CHECK(interval_seconds BETWEEN 30 AND 86400),
+                PRIMARY KEY (run_id, step));
+            CREATE INDEX completion_waits_key_idx ON {0}.completion_waits (wait_key)",
+        namespace
+    ));
+    Ok(statements)
+}
+
 fn unavailable(_: impl std::fmt::Display) -> CoordinatorError {
     CoordinatorError::new("store-unavailable", "durable state is unavailable")
 }
@@ -470,7 +525,7 @@ impl Store {
                 "use a dedicated coordinator_ lowercase SQL namespace",
             ));
         }
-        let table = JobTable::new(namespace, "jobs", "run_id", "step").map_err(unavailable)?;
+        let table = job_table(namespace)?;
         let config: tokio_postgres::Config = database_url.parse().map_err(unavailable)?;
         let local = !config.get_hosts().is_empty()
             && config.get_hosts().iter().all(|host| match host {
@@ -746,74 +801,10 @@ impl Store {
     /// transaction that claims the namespace. An existing namespace is never
     /// altered.
     async fn create_schema(&self, tx: &Transaction<'_>) -> Result<()> {
-        tx.batch_execute(&format!(
-            "CREATE SCHEMA {0}; COMMENT ON SCHEMA {0} IS '{1}'",
-            self.namespace, NAMESPACE_MARKER
-        ))
-        .await
-        .map_err(unavailable)?;
-        tx.batch_execute(&format!("CREATE TABLE {0}.control (
-            id boolean PRIMARY KEY CHECK(id), database_id text NOT NULL, schema_version integer NOT NULL CHECK(schema_version={1}),
-            restore_hold boolean NOT NULL DEFAULT false, admissions_hold boolean NOT NULL DEFAULT false, restore_evidence_hash text, admission_recovery_hash text, active_flows_digest text, active_flows jsonb NOT NULL DEFAULT '{{}}', admission_key_commitment text NOT NULL, state_key_commitments jsonb NOT NULL);
-            CREATE TABLE {0}.runs (
-            run_id uuid PRIMARY KEY, start_identity text UNIQUE NOT NULL, input_digest text NOT NULL, owner_hash text NOT NULL,
-            workflow_id text NOT NULL, workflow_version text NOT NULL, definition_digest text NOT NULL,
-            snapshot jsonb, input jsonb, outputs jsonb, event_binding text,
-            binding_digest text NOT NULL, step text NOT NULL, state text NOT NULL DEFAULT 'running',
-            outcome text, terminal_output jsonb, failure_code text, failure_path text, admitted_at timestamptz NOT NULL, deadline_at timestamptz NOT NULL,
-            cancel_requested boolean NOT NULL DEFAULT false, authored_cancel_requested boolean NOT NULL DEFAULT false,
-            authored_cancel_pending_step text CHECK(authored_cancel_pending_step IS NULL OR authored_cancel_requested),
-            restore_review_required boolean NOT NULL DEFAULT false, completed_at timestamptz, payload_erased_at timestamptz);
-            CREATE TABLE {0}.admission_lock (id boolean PRIMARY KEY CHECK(id));
-            INSERT INTO {0}.admission_lock VALUES(true)", self.namespace, SCHEMA_VERSION)).await.map_err(unavailable)?;
-        tx.execute(&format!("INSERT INTO {}.control(id,database_id,schema_version,admission_key_commitment,state_key_commitments) VALUES(true,$1,$2,$3,$4)",self.namespace), &[&self.security.database_id,&SCHEMA_VERSION,&self.admission_key_marker(),&self.security.keys.custody_markers(&self.security.database_id)]).await.map_err(unavailable)?;
-        for sql in self.table.create_statements() {
+        for sql in schema_statements(&self.namespace)? {
             tx.batch_execute(&sql).await.map_err(unavailable)?;
         }
-        // The core job shape is widened by exactly one product state: a
-        // zero-attempt hold that restore places before any command is frozen.
-        // The table is still empty, so the constraint is replaced, not migrated.
-        tx.batch_execute(&format!(
-            "ALTER TABLE {0}.jobs ADD COLUMN command jsonb,
-                ADD COLUMN uncertain boolean NOT NULL DEFAULT false,
-                ADD COLUMN receipt_expired boolean NOT NULL DEFAULT false,
-                ADD COLUMN pure boolean NOT NULL DEFAULT false,
-                ADD COLUMN failure_code text,
-                ADD COLUMN failure_path text,
-                DROP CONSTRAINT jobs_shape,
-                ADD CONSTRAINT jobs_shape CHECK (({1}) OR (
-                state='dead-lettered' AND attempt=0 AND command IS NULL
-                AND NOT uncertain AND NOT receipt_expired
-                AND next_attempt_at IS NULL AND attempt_started_at IS NULL
-                AND lease_expires_at IS NULL AND lease_token IS NULL
-                AND delivered_at IS NULL AND expired_at IS NULL
-                AND dead_lettered_at IS NOT NULL
-                AND failure_code IS NOT DISTINCT FROM 'restore-pre-command-held'))",
-            self.namespace,
-            JobTable::shape_predicate()
-        ))
-        .await
-        .map_err(unavailable)?;
-        // One row per waiting step while its wait lasts. The key is a keyed
-        // hash of the producer's request identifier, so a completion event
-        // finds its wait without the identifier being stored in clear. Rows
-        // name a job but carry no foreign key: deployment cleanup deletes
-        // jobs and runs in its own order.
-        tx.batch_execute(&format!(
-            "CREATE TABLE {0}.completion_waits (
-                run_id uuid NOT NULL, step text NOT NULL, wait_key text NOT NULL,
-                timeout_at timestamptz NOT NULL, read_at timestamptz,
-                woken_at timestamptz, recheck_at timestamptz,
-                started_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
-                not_before timestamptz NOT NULL DEFAULT transaction_timestamp(),
-                observations integer NOT NULL DEFAULT 0 CHECK(observations>=0),
-                interval_seconds integer NOT NULL DEFAULT 30 CHECK(interval_seconds BETWEEN 30 AND 86400),
-                PRIMARY KEY (run_id, step));
-            CREATE INDEX completion_waits_key_idx ON {0}.completion_waits (wait_key)",
-            self.namespace
-        ))
-        .await
-        .map_err(unavailable)?;
+        tx.execute(&format!("INSERT INTO {}.control(id,database_id,schema_version,admission_key_commitment,state_key_commitments) VALUES(true,$1,$2,$3,$4)",self.namespace), &[&self.security.database_id,&SCHEMA_VERSION,&self.admission_key_marker(),&self.security.keys.custody_markers(&self.security.database_id)]).await.map_err(unavailable)?;
         Ok(())
     }
 
@@ -2676,6 +2667,28 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use registry_platform_testing::MIGRATION_PIN_RULE;
+    use sha2::{Digest, Sha256};
+
+    /// The protected state schema a version creates is fixed once a release
+    /// ships it: existing databases are never altered, so an edit would give
+    /// fresh installs a different shape at the same version. The digest covers
+    /// every statement that creates the schema, including the shared dispatch
+    /// job table, its product widening, and the activation ledger.
+    #[test]
+    fn schema_version_4_is_pinned() {
+        let mut ddl = schema_statements("coordinator_pin").expect("a valid namespace");
+        ddl.push(crate::deployment::activation_ledger_statements());
+        let digest = hex::encode(Sha256::digest(ddl.join("\n")));
+        assert_eq!(
+            (SCHEMA_VERSION, digest.as_str()),
+            (
+                4,
+                "300095e7d11e42ce13af316bdbca00b8b90577020fae056fd589ddf7f53340e9"
+            ),
+            "the protected state schema DDL changed at this SCHEMA_VERSION; {MIGRATION_PIN_RULE}"
+        );
+    }
 
     fn job(pure: bool) -> Job {
         Job {

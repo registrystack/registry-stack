@@ -3,8 +3,9 @@
 //! The PostgreSQL lease machine over a product-owned job table.
 //!
 //! The product creates its job table from [`JobTable::create_statements`],
-//! enqueues work with [`enqueue`] inside its own transaction, and implements
-//! [`DispatchStore`] for decoding, audit, and extra columns and
+//! enqueues work with [`enqueue`] inside its own transaction, may withdraw
+//! work never attempted with [`cancel_unattempted`] in the same way, and
+//! implements [`DispatchStore`] for decoding, audit, and extra columns and
 //! [`DispatchTransport`] for the send. [`Dispatcher`] runs every transition;
 //! [`DispatchWorker`] drains due jobs under bounded concurrency.
 //!
@@ -14,6 +15,7 @@
 //! outcome before recovery may take the job over.
 
 mod dispatcher;
+mod pooled;
 mod retention;
 mod sql;
 mod store;
@@ -24,6 +26,7 @@ pub use dispatcher::{
     CancelOutcome, Claim, DispatchConfig, DispatchOutcome, Dispatcher, LeasedReadError,
     LEASE_FINALIZATION_ALLOWANCE,
 };
+pub use pooled::PooledClient;
 pub use retention::{prune_terminal, RetentionError, MAX_PRUNE_BATCH};
 pub use sql::{Columns, DispatchSql, ExpirySql, SelectSql};
 pub use store::{
@@ -32,5 +35,8 @@ pub use store::{
     QuarantineDisposition, QuarantineReason, ReplayAudit, ReplayOutcome, TargetAction, Transition,
     TransitionAudit, TransitionCode, TransitionOutcome,
 };
-pub use table::{enqueue, JobKey, JobState, JobTable, MAX_JOB_PART_BYTES, MAX_TABLE_NAME_BYTES};
+pub use table::{
+    cancel_unattempted, enqueue, JobKey, JobState, JobTable, MAX_JOB_PART_BYTES,
+    MAX_TABLE_NAME_BYTES,
+};
 pub use worker::{DispatchWorker, WorkerConfig};

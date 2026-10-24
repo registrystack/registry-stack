@@ -19,10 +19,12 @@ appointments decided inside one capacity transaction under a task grant),
 **Registry Messaging** (one message to one destination over one channel for
 an authorized caller, from a reviewed template through an operator-configured
 provider), **Registry Coordinator** (finite, reviewed workflows of product
-API calls separated by durable waits), and **Registry Discovery** (a curated,
-immutable index over public provider descriptions). Registry Manifest
-describes sources portably; `registry-platform-*` crates are shared
-primitives; `registry-breg-mcp`, `registry-breg-review`, and
+API calls separated by durable waits), **Document Store** (document bytes held
+in custody for an owning system, with an exact, verified version released to
+the recipient a document grant names; held out of releases), and **Registry
+Discovery** (a curated, immutable index over public provider descriptions).
+Registry Manifest describes sources portably; `registry-platform-*` crates are
+shared primitives; `registry-breg-mcp`, `registry-breg-review`, and
 `registry-evidence-oid4vci` are supporting services beside a product, not
 products of their own.
 
@@ -35,6 +37,11 @@ products of their own.
 | `crates/registry-coordinator-client-node` | Internal napi-rs binding for the Coordinator client, built from source and not part of the unified Node.js client |
 | `crates/registry-coordinator-client-py` | Internal PyO3 binding for the Coordinator client, built from source and not part of the unified Python client |
 | `products/coordinator` | Coordinator product contract, deployment runbook, example projects, generated schemas, OpenAPI and operation contracts, and contributor check and test scripts |
+| `crates/registry-documents-core` | Source-neutral Document Store project model, problem codes, and wire constants |
+| `crates/registry-documents` | PostgreSQL-backed Document Store runtime and the `documents` binary |
+| `crates/registry-documentsctl` | Document Store operator tooling and the `documentsctl` binary |
+| `crates/registry-documents-client` | Bounded Rust Document Store client over the runtime's HTTP contract |
+| `products/documents` | Document Store product contracts, starter example, generated schemas and OpenAPI document, and contributor check scripts |
 | `crates/registry-discovery` | Immutable Registry Discovery index runtime and the `discovery` binary |
 | `crates/registry-discovery-profile` | Closed provider-publication profile implemented by Evidence; published v1alpha1 resources retain their historical broader vocabulary |
 | `crates/registry-discovery-client` | Rust relying-party SDK for bounded search, resolution, and inert exact selections |
@@ -108,6 +115,8 @@ Before editing an area, read its owning guide:
 - `registry-messaging*`, `registry-messagingctl`:
   `products/messaging/AGENTS.md`
 - `registry-coordinator*`: `products/coordinator/AGENTS.md`
+- `registry-documents*`, `registry-documentsctl`:
+  `products/documents/AGENTS.md`
 - `registry-discovery*`, `registry-discoveryctl`:
   `products/discovery/AGENTS.md`
 - `registry-manifest-*`: `products/manifest/AGENTS.md`
@@ -211,12 +220,12 @@ the runtime's own capacity transaction, under a task grant matched against the
 offering's service, location, and action before the transaction opens and
 re-checked inside it; no other product may write to that ledger, directly or
 through a shared database. Reminders, observer-hook delivery, and retention
-are outbox work. For the MVP, no scheduling crate reaches a BReg, Casework, or
-Evidence crate in either direction; the dependency-direction gate enforces
-that on the whole forward closure, and the sentence is relaxed only by the
-change that adds an adapter crate, in the gate and here together. Task-grant
-status checks over HTTP through `registry-platform-oidc` are a protocol call,
-not such a reach.
+are outbox work. For the MVP, no scheduling crate reaches a BReg, Casework,
+Document Store, Evidence, or Messaging crate in either direction; the
+dependency-direction gate enforces that on the whole forward closure, and the
+sentence is relaxed only by the change that adds an adapter crate, in the gate
+and here together. Task-grant status checks over HTTP through
+`registry-platform-oidc` are a protocol call, not such a reach.
 
 **Registry Messaging** (`registry-messaging`, `registry-messaging-core`,
 `registry-messagingctl`, its clients) owns rendering, its dispatch queue,
@@ -240,6 +249,19 @@ Casework through `registry-casework-client` alone; its client reaches
 (only `registry-cli-docs` may), and the Casework, Scheduling, and Messaging
 gates refuse the Coordinator from their side. A run may submit its own Review
 request to Casework as a producer; Coordinator is not a Review provider.
+
+**Document Store** (`registry-documents`, `registry-documents-core`,
+`registry-documentsctl`, `registry-documents-client`) owns its custody records,
+document grants, stored bytes, content verification state, and audit journal;
+why a document exists, who it concerns, and whether a recipient is entitled to
+it stay with the owning system. It is held out of releases while
+`DOCUMENTS_FIRST_RELEASE` in `release/scripts/release_roster.py` is unset. No
+Document Store crate reaches a BReg, Casework, Coordinator, Evidence,
+Messaging, or Scheduling crate, and no product crate reaches the Document
+Store runtime or `documentsctl`: products reach it over its public HTTP
+contract like any external caller, and its dependency-direction gate enforces
+that on the whole forward closure. The source-neutral core depends on no other
+Document Store crate, and the client never reaches the runtime.
 
 **Registry Discovery** is a curated index, not a trust broker, authorization
 service, protocol adapter, or data proxy. `registry-discovery-profile` is the
@@ -280,6 +302,7 @@ Each owning guide lists its own gates. The entry points:
 | Scheduling | `products/scheduling/scripts/check-checkpoint.sh`, `check-contracts.sh`, the `postgres_commitments` suite | `products/scheduling/AGENTS.md`, `products/scheduling/README.md` |
 | Messaging | `products/messaging/scripts/check-checkpoint.sh`, `check-contracts.sh`, the `postgres_migrate` suite | `products/messaging/AGENTS.md`, `CONTRIBUTING.md` |
 | Coordinator | `products/coordinator/scripts/check_dependency_direction.py`, `check-schemas.sh`, `test-postgres.sh` | `products/coordinator/AGENTS.md` |
+| Document Store | `products/documents/scripts/check-checkpoint.sh`, `check-contracts.sh`, the PostgreSQL suites (`postgres_journey` also needs `REGISTRY_RENDER_BIN`) | `products/documents/AGENTS.md`, `products/documents/README.md` |
 | Discovery | `products/discovery/scripts/check-contracts.sh`, `test-http.sh` | `products/discovery/AGENTS.md` |
 | Clients, bindings, unified packages | per-binding `npm test` and `unittest` runs, `release/scripts/sync-registry-client-node.py --check` | `crates/CLIENTS.md` |
 | Release | `release/scripts/registry-release validate release/manifests/<current>.yaml`, `check-release-source-model.sh` | `CONTRIBUTING.md`, `release/VERIFY.md` |

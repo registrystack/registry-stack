@@ -14,7 +14,11 @@ new baseline, has no supported state to carry forward. Its leg is omitted and
 the report says why. The forward state path started at 0.42.0 with Evidence's
 normalized baseline and the Messaging and Scheduling fresh schema baselines.
 Release 0.43.0 continued that path from 0.42.0. This source reads state from
-0.43.0, its immediate predecessor.
+0.43.0, its immediate predecessor. Release 0.44.0 starts Casework and
+Scheduling at a fresh version 200 baseline and has BReg refuse the 0.43.0
+attachment verification state, so those legs are omitted; Messaging migrates
+its 0.43.0 ledger forward, and its leg checks the corrected dispatch job shape
+after the upgrade.
 
 While no release on the forward state path is published, there is no
 predecessor to download: the rehearsal then runs every leg with this source's
@@ -87,7 +91,11 @@ FIPS_LIBRARY = re.compile(r"^libaws_lc_fips_[A-Za-z0-9_]+\.dylib$")
 # projects and bundled authority, which the current compiler refuses. Messaging
 # and Scheduling each install one schema baseline and refuse a pre-1.0 ledger by
 # name. Release 0.43.0 continued that path from 0.42.0; this source reads state
-# from 0.43.0, its immediate predecessor.
+# from 0.43.0, its immediate predecessor. Release 0.44.0 starts Casework and
+# Scheduling again at a version 200 baseline that refuses a ledger below 200,
+# and BReg refuses the 0.43.0 attachment verification shape, so all three are
+# RETIRED_PRODUCTS. Messaging keeps its version 100 baseline and migrates
+# forward through version 101.
 FORWARD_PATH_FLOOR = (0, 43, 0)
 
 STACK_VERSION = re.compile(r"\Astack:\n(?:  .*\n)*?  version: (\S+)\n")
@@ -98,25 +106,37 @@ BINARIES = (
 )
 PLATFORMS = ("linux-amd64", "macos-arm64")
 PRODUCTS = ("evidence", "messaging")
-PRODUCT_CHOICES = (*PRODUCTS, "breg", "casework")
+PRODUCT_CHOICES = (*PRODUCTS, "breg", "casework", "scheduling")
 # Keep retired products selectable so a focused request receives their
 # supported transition instead of argparse's generic invalid-choice error.
 BREG_NO_IN_PLACE_UPGRADE = (
     "BReg's native Record, Dataset, Action, and Proposal model requires a fresh "
     "database; retired entity/Request state and packages have no in-place upgrade "
     "path. Start a new native registry and use the maintained BReg operator "
-    "workflow gates for native package successors, history, and backup/restore"
+    "workflow gates for native package successors, history, and backup/restore. "
+    "From 0.44.0, BReg also refuses the 0.43.0 attachment verification schema at "
+    "startup (startup.database.pre-1-0-schema); create a fresh database, rebuild "
+    "the package with the 0.44.0 bregctl test and bregctl package, and run "
+    "bregctl apply --package DIR --initial"
 )
 CASEWORK_NO_IN_PLACE_UPGRADE = (
     "Casework's current review-only contract requires a fresh database and refuses "
     "retired schemas before mutation; drain or reconcile legacy review work under "
     "the release that wrote it, provision a fresh database, then run "
     "products/casework/scripts/check-review-journeys.sh and "
-    "products/casework/scripts/test-backup-restore.sh"
+    "products/casework/scripts/test-backup-restore.sh. From 0.44.0 its schema "
+    "starts at a fresh version 200 baseline and refuses a ledger below version 200"
+)
+SCHEDULING_NO_IN_PLACE_UPGRADE = (
+    "Scheduling's contract starts at a new baseline in 0.44.0: its schema is a "
+    "fresh version 200 baseline, and it refuses a ledger below version 200 by "
+    "name at plan, apply, and startup. Provision a fresh database and activate "
+    "the policy package with schedulingctl plan and schedulingctl apply"
 )
 RETIRED_PRODUCTS = {
     "breg": BREG_NO_IN_PLACE_UPGRADE,
     "casework": CASEWORK_NO_IN_PLACE_UPGRADE,
+    "scheduling": SCHEDULING_NO_IN_PLACE_UPGRADE,
 }
 # A product joins the rehearsal from the first release that published it, and
 # is downloaded only for the platforms that release publishes it for.
@@ -1141,6 +1161,21 @@ class Messaging:
         return ledger_digest_differences(activated, planned)
 
 
+def dispatch_shape_differences(definition: str | None) -> list[str]:
+    """Name a dispatch job shape that still accepts a lease without an expiry.
+
+    Messaging's version 101 migration replaces the version 100 shape, whose
+    leased arm a NULL lease expiry passed. definition is the constraint's
+    pg_get_constraintdef text after the upgrade, or None when it is absent.
+    """
+    if definition is None:
+        return ["the upgraded ledger has no messaging_dispatch_jobs_shape constraint"]
+    if "(lease_expires_at IS NOT NULL)" not in definition:
+        return ["the upgraded messaging_dispatch_jobs_shape constraint still accepts "
+                "a leased job without a lease_expires_at"]
+    return []
+
+
 def rehearse_messaging(work: Path, keys: Keys, postgres: Postgres, old: Side, new: Side,
                        report: dict[str, Any]) -> None:
     messaging = Messaging(work, keys, postgres)
@@ -1173,6 +1208,10 @@ def rehearse_messaging(work: Path, keys: Keys, postgres: Postgres, old: Side, ne
     # that reports a change once any pending schema versions are applied means
     # the upgrade lost the activation.
     differences = messaging.upgrade(new, activated)
+    differences += dispatch_shape_differences(postgres.sql("messaging", """
+        SELECT pg_get_constraintdef(oid) FROM pg_constraint
+        WHERE conname = 'messaging_dispatch_jobs_shape';
+    """).strip() or None)
     losses = row_count_losses(before_counts, postgres.row_counts("messaging"))
     service = Service(new, "messaging", [*runtime, "serve"], work / "messaging-new.log", ready)
     try:

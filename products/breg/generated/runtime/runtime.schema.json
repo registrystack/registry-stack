@@ -283,35 +283,36 @@
         },
         {
           "additionalProperties": false,
+          "description": "One S3-compatible bucket a runtime keeps content bytes in, and the\nruntime's credentials for it. The decode checks only the shape; the\nobject-store transport refuses a non-loopback `http` URL, a URL carrying a\npath, query, or fragment, and a malformed bucket or region name before it\nsends anything.",
           "properties": {
             "accessKeyIdRef": {
               "$ref": "#/$defs/SecretReference"
             },
             "attemptTimeoutMilliseconds": {
               "default": 10000,
+              "description": "The longest one request may run, body included. Omitted, 10000.",
               "format": "uint64",
               "maximum": 60000,
               "minimum": 100,
               "type": "integer"
             },
             "bucket": {
+              "description": "The bucket name: lowercase letters, digits, `-` and `.`.",
               "maxLength": 63,
               "minLength": 3,
               "type": "string"
             },
             "caBundleRef": {
-              "$ref": "#/$defs/SecretReference"
-            },
-            "endpoint": {
-              "maxLength": 2048,
-              "minLength": 1,
-              "type": "string"
+              "$ref": "#/$defs/SecretReference",
+              "description": "PEM CA bundle for the service. Omitted, the platform's trusted roots\nverify it."
             },
             "pathStyle": {
               "default": true,
+              "description": "Address the bucket as a path under `url` rather than as a host name.\nOmitted, `true`.",
               "type": "boolean"
             },
             "region": {
+              "description": "The signing region: lowercase letters, digits and `-`.",
               "maxLength": 64,
               "minLength": 1,
               "type": "string"
@@ -325,11 +326,15 @@
             "type": {
               "const": "s3",
               "type": "string"
+            },
+            "url": {
+              "$ref": "#/$defs/Url",
+              "description": "The service's base URL, with no path. It is `https`; `http` is\naccepted only for a loopback host, for local development."
             }
           },
           "required": [
             "type",
-            "endpoint",
+            "url",
             "bucket",
             "region",
             "accessKeyIdRef",
@@ -356,9 +361,11 @@
         },
         {
           "additionalProperties": false,
+          "description": "One external HTTP verifier a runtime submits content bytes to for an\n`approved` or `rejected` verdict, and the runtime's bearer credential for\nit. The block carries no default: a runtime that makes verification\noptional states its own disabled form beside it.",
           "properties": {
             "attemptTimeoutMilliseconds": {
               "default": 10000,
+              "description": "The longest one verification attempt may run, body included.\nOmitted, 10000.",
               "format": "uint64",
               "maximum": 60000,
               "minimum": 100,
@@ -367,13 +374,8 @@
             "authorizationRef": {
               "$ref": "#/$defs/SecretReference"
             },
-            "endpoint": {
-              "maxLength": 2048,
-              "minLength": 1,
-              "type": "string"
-            },
             "policyId": {
-              "description": "Non-secret identity of the external scanner and rules generation.",
+              "description": "Non-secret identity of the external scanner and its rules generation.",
               "maxLength": 128,
               "minLength": 1,
               "pattern": "^[\\x21-\\x7E]+$",
@@ -382,11 +384,15 @@
             "type": {
               "const": "http",
               "type": "string"
+            },
+            "url": {
+              "$ref": "#/$defs/Url",
+              "description": "The URL the content is posted to. It is `https`; `http` is accepted\nonly for a loopback host, for local development."
             }
           },
           "required": [
             "type",
-            "endpoint",
+            "url",
             "authorizationRef",
             "policyId"
           ],
@@ -660,6 +666,24 @@
         "databaseId",
         "databaseInitializationEnvironment"
       ],
+      "type": "object"
+    },
+    "RawDestinationsConfig": {
+      "additionalProperties": false,
+      "description": "Outbound destination bindings, grouped by what sends to them.",
+      "properties": {
+        "hooks": {
+          "additionalProperties": {
+            "$ref": "#/$defs/RawEventDestinationConfig"
+          },
+          "description": "URL hook destinations, keyed by the identifier a reviewed hook names.",
+          "maxProperties": 128,
+          "propertyNames": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "type": "object"
+        }
+      },
       "type": "object"
     },
     "RawEventDestinationConfig": {
@@ -1203,7 +1227,7 @@
       "properties": {
         "hookPayloadRetentionDays": {
           "default": 7,
-          "description": "Defaults to the bounded retained payload lifetime for pending or dead-letter webhook work.",
+          "description": "Defaults to the bounded retained payload lifetime for pending or dead-letter hook work.",
           "format": "uint32",
           "maximum": 30,
           "minimum": 1,
@@ -1489,15 +1513,9 @@
     "database": {
       "$ref": "#/$defs/RawRegistryDatabase"
     },
-    "eventDestinations": {
-      "additionalProperties": {
-        "$ref": "#/$defs/RawEventDestinationConfig"
-      },
-      "maxProperties": 128,
-      "propertyNames": {
-        "$ref": "#/$defs/LocalId"
-      },
-      "type": "object"
+    "destinations": {
+      "$ref": "#/$defs/RawDestinationsConfig",
+      "description": "Outbound destination bindings. Absent by default, which binds no\ndestination."
     },
     "evidenceProviders": {
       "additionalProperties": {

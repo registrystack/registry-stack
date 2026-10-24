@@ -184,10 +184,10 @@ async fn activated_setup(
         audit.clone(),
         Some(destinations.clone()),
     );
-    let service = WebhookDeliveryService::new(
+    let service = HookDeliveryService::new(
         pool.clone(),
         destinations,
-        Arc::new(HookHandlerRegistry::new(&compiled, &identity.activation_id)),
+        hook_handlers(&compiled, &identity.activation_id),
         Arc::new(compiled.clone()),
         identity.clone(),
         "hook-proposal-instance",
@@ -386,7 +386,7 @@ async fn old_activation_hook_answer_is_terminal_and_names_both_activations() {
         .await;
     assert_eq!(
         service.deliver_once().await,
-        Ok(WebhookWorkOutcome::DeadLettered)
+        Ok(HookWorkOutcome::DeadLettered)
     );
     let row = delivery_row(&setup, event.event_id, delivery_id).await;
     assert_eq!(
@@ -408,7 +408,7 @@ async fn old_activation_hook_answer_is_terminal_and_names_both_activations() {
     );
     assert_eq!(listed.proposal_summary.as_deref(), Some(summary.as_str()));
     let replay = service.replay(event.event_id, delivery_id, 1).await;
-    assert!(summary.contains(&setup.identity.activation_id) && summary.contains(&active_id) && replay == Err(WebhookDeliveryError::Unavailable), "old-activation refusal must name both activations and forbid replay; summary: {summary}; replay: {replay:?}");
+    assert!(summary.contains(&setup.identity.activation_id) && summary.contains(&active_id) && replay == Err(HookDeliveryError::Unavailable), "old-activation refusal must name both activations and forbid replay; summary: {summary}; replay: {replay:?}");
     assert_eq!(service.discard(event.event_id, delivery_id, 1).await, Ok(2));
     drop(service);
     setup.teardown().await;
@@ -448,13 +448,13 @@ async fn predecessor_answer_across_activation(committed: bool, unreadable_state:
             .await;
         assert_eq!(
             setup.service.deliver_once().await,
-            Ok(WebhookWorkOutcome::Delivered)
+            Ok(HookWorkOutcome::Delivered)
         );
         assert_eq!(record_count(&setup, "followup").await, 1);
         rewind_to_crashed_lease(&setup, &event, delivery_id, &payload).await;
         assert_eq!(
             setup.service.deliver_once().await,
-            Ok(WebhookWorkOutcome::Idle)
+            Ok(HookWorkOutcome::Idle)
         );
         wait_until_delivery_is_due(&setup, &event, delivery_id).await;
     }
@@ -532,7 +532,7 @@ async fn predecessor_answer_across_activation(committed: bool, unreadable_state:
     assert_eq!(record_count(&setup, "case").await, 1);
     assert_eq!(record_count(&setup, "followup").await, i64::from(committed));
     if unreadable_state {
-        assert_eq!(outcome, Err(WebhookDeliveryError::Unavailable));
+        assert_eq!(outcome, Err(HookDeliveryError::Unavailable));
         assert_eq!(row.state, "leased");
         assert_eq!(row.disposition, None);
         assert_eq!(row.code, None);
@@ -550,7 +550,7 @@ async fn predecessor_answer_across_activation(committed: bool, unreadable_state:
         expire_lease(&setup, &event, delivery_id).await;
         assert_eq!(
             active_service.deliver_once().await,
-            Ok(WebhookWorkOutcome::Idle)
+            Ok(HookWorkOutcome::Idle)
         );
         let recovered = delivery_row(&setup, event.event_id, delivery_id).await;
         assert_eq!(recovered.state, "dead-lettered");
@@ -593,7 +593,7 @@ async fn predecessor_answer_across_activation(committed: bool, unreadable_state:
         replay_release_tx.send(()).unwrap();
         assert_eq!(
             replay_worker.await.unwrap(),
-            Ok(WebhookWorkOutcome::DeadLettered)
+            Ok(HookWorkOutcome::DeadLettered)
         );
         let replayed = delivery_row(&setup, event.event_id, delivery_id).await;
         assert_eq!(
@@ -613,7 +613,7 @@ async fn predecessor_answer_across_activation(committed: bool, unreadable_state:
         assert!(!listed.replay_eligible);
         assert_eq!(
             active_service.replay(event.event_id, delivery_id, 2).await,
-            Err(WebhookDeliveryError::Unavailable)
+            Err(HookDeliveryError::Unavailable)
         );
         drop(active_service);
         setup.teardown().await;
@@ -623,9 +623,9 @@ async fn predecessor_answer_across_activation(committed: bool, unreadable_state:
     assert_eq!(
         outcome,
         Ok(if committed {
-            WebhookWorkOutcome::Delivered
+            HookWorkOutcome::Delivered
         } else {
-            WebhookWorkOutcome::DeadLettered
+            HookWorkOutcome::DeadLettered
         }),
         "the same predecessor worker must settle its late answer; state: {}; code: {:?}",
         row.state,
@@ -656,12 +656,12 @@ async fn predecessor_answer_across_activation(committed: bool, unreadable_state:
         assert!(listed.discard_eligible);
         assert_eq!(
             active_service.replay(event.event_id, delivery_id, 1).await,
-            Err(WebhookDeliveryError::Unavailable)
+            Err(HookDeliveryError::Unavailable)
         );
     }
     assert_eq!(
         setup.service.deliver_once().await,
-        Err(WebhookDeliveryError::Unavailable),
+        Err(HookDeliveryError::Unavailable),
         "the predecessor cannot claim any further work after activation"
     );
     drop(active_service);
@@ -832,23 +832,21 @@ async fn classified_proposal_across_activation(
         i64::from(matches!(kind, CompletionKind::Applied))
     );
     if let Some(fault) = fault {
-        assert_eq!(result, Err(WebhookDeliveryError::Unavailable), "{fault:?}");
+        assert_eq!(result, Err(HookDeliveryError::Unavailable), "{fault:?}");
         assert_eq!(row.state, "leased", "{fault:?}");
         assert_eq!(row.disposition, None, "{fault:?}");
         assert_eq!(row.code, None, "{fault:?}");
     } else {
         let (expected_outcome, state, disposition, code) = match kind {
-            CompletionKind::Applied => {
-                (WebhookWorkOutcome::Delivered, "delivered", "applied", None)
-            }
+            CompletionKind::Applied => (HookWorkOutcome::Delivered, "delivered", "applied", None),
             CompletionKind::Refused => (
-                WebhookWorkOutcome::Delivered,
+                HookWorkOutcome::Delivered,
                 "delivered",
                 "refused",
                 Some("hook.proposal.outcome_refused"),
             ),
             CompletionKind::DeadLettered => (
-                WebhookWorkOutcome::DeadLettered,
+                HookWorkOutcome::DeadLettered,
                 "dead-lettered",
                 "dead-lettered",
                 Some("hook.proposal.no_principal"),
@@ -880,14 +878,14 @@ async fn classified_proposal_across_activation(
         } else {
             assert_eq!(
                 active_service.replay(event.event_id, delivery_id, 1).await,
-                Err(WebhookDeliveryError::Unavailable),
+                Err(HookDeliveryError::Unavailable),
                 "a delivered decision cannot be replayed"
             );
         }
     }
     assert_eq!(
         setup.service.deliver_once().await,
-        Err(WebhookDeliveryError::Unavailable)
+        Err(HookDeliveryError::Unavailable)
     );
     setup.teardown().await;
     receiver.stop().await;
@@ -934,7 +932,7 @@ async fn local_drain_limits_attempts_and_leaves_url_work_and_live_leases_untouch
     assert_eq!(report.delivered, 1);
     assert_eq!(
         report.stop_reason,
-        registry_breg::webhook::WebhookDrainStopReason::AttemptBudget
+        registry_breg::hooks::HookDrainStopReason::AttemptBudget
     );
     assert_eq!(report.remaining.retained_deliveries, 2);
     assert_eq!(record_count(&setup, "followup").await, 1);
@@ -946,7 +944,7 @@ async fn local_drain_limits_attempts_and_leaves_url_work_and_live_leases_untouch
     assert_eq!(report.delivered, 1);
     assert_eq!(
         report.stop_reason,
-        registry_breg::webhook::WebhookDrainStopReason::Idle
+        registry_breg::hooks::HookDrainStopReason::Idle
     );
     assert_eq!(report.remaining.retained_deliveries, 1);
     let rows = setup.database.admin.query("SELECT state.state, state.attempt FROM registry_internal.registry_webhook_delivery_state AS state
@@ -960,7 +958,7 @@ async fn local_drain_limits_attempts_and_leaves_url_work_and_live_leases_untouch
     for event in [first, second] {
         let rows = setup.service.list(20).await.unwrap();
         assert!(rows.iter().any(|row| row.event_id == event.event_id
-            && row.state == registry_breg::webhook::WebhookDeliveryStatusKind::Pending));
+            && row.state == registry_breg::hooks::HookDeliveryStatusKind::Pending));
     }
     assert_ready(&setup).await;
     setup.teardown().await;
@@ -1095,7 +1093,8 @@ async fn failing_local_hooks_stay_retained_until_explicit_discard() {
 #[cfg(feature = "wasm")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn local_drain_executes_wasm_with_the_captured_active_authority() {
-    registry_breg::wasm_runtime::install_default().unwrap();
+    // No process action handler runtime is installed: the drain starts its
+    // own hook runtime from the runtime configuration.
     let receiver = HttpsReceiver::start().await;
     let (mut project, mut assets) = project(true);
     project["recordTypes"][0]["hooks"][0]["handler"] =
@@ -1149,7 +1148,7 @@ async fn local_drain_stops_at_the_time_budget_and_preserves_an_unfinished_lease(
         .unwrap();
     assert_eq!(
         report.stop_reason,
-        registry_breg::webhook::WebhookDrainStopReason::TimeBudget
+        registry_breg::hooks::HookDrainStopReason::TimeBudget
     );
     assert_eq!(report.completed_attempts, 0);
     assert!(started.elapsed() < Duration::from_secs(5));

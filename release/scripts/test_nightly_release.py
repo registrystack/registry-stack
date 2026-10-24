@@ -418,6 +418,20 @@ class NightlyTest(unittest.TestCase):
         )
         self.assertEqual(after, nightly.validate_v2_roster(after, tag_41))
 
+    def test_no_nightly_roster_carries_the_document_store_while_it_is_held_out(self):
+        # The Document Store is held out by DOCUMENTS_FIRST_RELEASE and has no
+        # release packaging yet, so no nightly roster profile may name it.
+        self.assertIsNone(nightly.release_roster.DOCUMENTS_FIRST_RELEASE)
+        for base in ("0.44.0", "1.0.0"):
+            with self.subTest(base=base):
+                roster = nightly.current_roster(
+                    base, f"v{base}-nightly.20261022.{SHA}"
+                )
+                for field in ("images", "installers", "payloads"):
+                    self.assertFalse(
+                        any(name.startswith("documents") for name in roster[field])
+                    )
+
     @roster_patch("release_roster.COORDINATOR_FIRST_RELEASE", (0, 42, 0))
     def test_published_roster_profiles_keep_their_meaning(self):
         path = self.root / "nightly.json"

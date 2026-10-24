@@ -194,7 +194,8 @@ audit:
 cursor:
   secretRef: secret:file/cursor-key
   maximumAgeSeconds: 300
-eventDestinations: {{}}
+destinations:
+  hooks: {{}}
 operationalTimeouts:
   httpRequestMilliseconds: 10000
   shutdownGraceMilliseconds: 30000
@@ -304,7 +305,7 @@ impl S3Fixture {
             }
         }
         let raw = format!(
-            "{}\nattachmentStorage:\n  type: s3\n  endpoint: {endpoint}\n  bucket: synthetic-proposal\n  region: us-east-1\n  accessKeyIdRef: secret:file/access\n  secretAccessKeyRef: secret:file/key\n  attemptTimeoutMilliseconds: 2000\nattachmentVerification:\n  type: http\n  endpoint: {endpoint}/verify\n  policyId: synthetic-policy\n  authorizationRef: secret:file/verifier\n",
+            "{}\nattachmentStorage:\n  type: s3\n  url: {endpoint}\n  bucket: synthetic-proposal\n  region: us-east-1\n  accessKeyIdRef: secret:file/access\n  secretAccessKeyRef: secret:file/key\n  attemptTimeoutMilliseconds: 2000\nattachmentVerification:\n  type: http\n  url: {endpoint}/verify\n  policyId: synthetic-policy\n  authorizationRef: secret:file/verifier\n",
             valid_runtime(secrets.path(), secrets.path())
         );
         let config = parse_runtime_config(&raw).unwrap();

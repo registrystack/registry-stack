@@ -34,8 +34,8 @@ use crate::audit::{
     RegistryAudit, RegistryAuditError, TerminalAudit, TerminalAuditOutcome,
 };
 use crate::compiler::{
-    event_classification_ceiling, WEBHOOK_ATTEMPT_TIMEOUT_MS, WEBHOOK_BACKOFF_MULTIPLIER,
-    WEBHOOK_INITIAL_BACKOFF_MS, WEBHOOK_MAXIMUM_ATTEMPTS, WEBHOOK_MAXIMUM_BACKOFF_MS,
+    event_classification_ceiling, HOOK_ATTEMPT_TIMEOUT_MS, HOOK_BACKOFF_MULTIPLIER,
+    HOOK_INITIAL_BACKOFF_MS, HOOK_MAXIMUM_ATTEMPTS, HOOK_MAXIMUM_BACKOFF_MS,
 };
 use crate::contract::{
     AccessProfileSource, EventTrigger, FieldTypeSource, MutationMode, Operation,
@@ -63,9 +63,9 @@ use crate::ingestion_store::{
 pub use crate::ingestion_store::{IngestionChunkBinding, IngestionRefusal};
 use crate::model::{
     ActionRouteKind, CompiledAction, CompiledEntity, CompiledEventDelivery, CompiledField,
-    CompiledFieldEncryption, CompiledPlanEffect, CompiledPlanMutation, CompiledPlanTargetBinding,
-    CompiledPlanValue, CompiledRegistry, CompiledRoute, CompiledWebhookDeliveryMode,
-    CompiledWebhookRetryProfile, HttpMethod,
+    CompiledFieldEncryption, CompiledHookDeliveryMode, CompiledHookRetryProfile,
+    CompiledPlanEffect, CompiledPlanMutation, CompiledPlanTargetBinding, CompiledPlanValue,
+    CompiledRegistry, CompiledRoute, HttpMethod,
 };
 use crate::outbox::{
     event_data_schemas, insert_configured_events, EnvelopeBinding, OutboxError, OutboxMutation,
@@ -125,7 +125,7 @@ pub async fn install_mutation_schema(
         ))
         .await
         .map_err(|_| MutationError::Unavailable)?;
-    registry_platform_hooks::delivery_schema::install(migration, crate::webhook::DELIVERY_SCHEMA)
+    registry_platform_hooks::delivery_schema::install(migration, crate::hooks::DELIVERY_SCHEMA)
         .await
         .map_err(|_| MutationError::Unavailable)?;
 
@@ -575,21 +575,21 @@ fn exact_entity_event_deliveries(
             || delivery.data_schema_fingerprint != data_schema.fingerprint
             || delivery.data_schema_artifact_path != data_schema.artifact_path
             || delivery.authentication_profile
-                != crate::contract::WebhookAuthenticationProfile::HmacSha256V1
-            || delivery.delivery_mode != CompiledWebhookDeliveryMode::AfterCommit
-            || delivery.retry_profile != CompiledWebhookRetryProfile::RegistryV1
-            || delivery.attempt_timeout_ms != WEBHOOK_ATTEMPT_TIMEOUT_MS
-            || delivery.initial_backoff_ms != WEBHOOK_INITIAL_BACKOFF_MS
-            || delivery.maximum_backoff_ms != WEBHOOK_MAXIMUM_BACKOFF_MS
-            || delivery.exponential_backoff_multiplier != WEBHOOK_BACKOFF_MULTIPLIER
-            || delivery.maximum_attempts != WEBHOOK_MAXIMUM_ATTEMPTS
+                != crate::contract::HookAuthenticationProfile::HmacSha256V1
+            || delivery.delivery_mode != CompiledHookDeliveryMode::AfterCommit
+            || delivery.retry_profile != CompiledHookRetryProfile::RegistryV1
+            || delivery.attempt_timeout_ms != HOOK_ATTEMPT_TIMEOUT_MS
+            || delivery.initial_backoff_ms != HOOK_INITIAL_BACKOFF_MS
+            || delivery.maximum_backoff_ms != HOOK_MAXIMUM_BACKOFF_MS
+            || delivery.exponential_backoff_multiplier != HOOK_BACKOFF_MULTIPLIER
+            || delivery.maximum_attempts != HOOK_MAXIMUM_ATTEMPTS
             || delivery.retry_delays_ms
                 != expected_retry_delays(
-                    WEBHOOK_INITIAL_BACKOFF_MS,
-                    WEBHOOK_MAXIMUM_BACKOFF_MS,
-                    WEBHOOK_MAXIMUM_ATTEMPTS,
+                    HOOK_INITIAL_BACKOFF_MS,
+                    HOOK_MAXIMUM_BACKOFF_MS,
+                    HOOK_MAXIMUM_ATTEMPTS,
                 )
-            || delivery.dead_letter != crate::contract::WebhookDeadLetterMode::Required
+            || delivery.dead_letter != crate::contract::HookDeadLetterMode::Required
             || !delivery.operator_replay
             || Some(delivery.maximum_payload_bytes)
                 != expected_maximum_event_payload_bytes(registry.registry_id(), entity, event)
@@ -746,7 +746,7 @@ impl MutationTransaction {
         audit: RegistryAudit,
         event_destinations: Option<Arc<ActivatedEventDestinationRegistry>>,
     ) -> Self {
-        let event_source = crate::webhook::delivery_source(&expected.package_id, instance_id);
+        let event_source = crate::hooks::delivery_source(&expected.package_id, instance_id);
         Self {
             lock_key,
             lock_timeout,
@@ -2248,6 +2248,47 @@ pub enum MutationError {
     PackagePinMismatch(registry_platform_config::blocks::PackageDigestMismatch),
 }
 
+/// PostgreSQL allocation schema entry point exposed only to the real-database
+/// test target. Production installation is conditional on the compiled
+/// registry using generated identifiers.
+#[cfg(feature = "postgres-test")]
+#[doc(hidden)]
+pub async fn install_generated_identifier_schema_for_test(
+    migration: &impl GenericClient,
+    runtime_role: &SqlIdentifier,
+) -> Result<(), MutationError> {
+    crate::generated_identifiers::install(migration, runtime_role)
+        .await
+        .map_err(MutationError::from)?;
+    let revoke = crate::postgres::RuntimeRevoke::detect(migration, runtime_role)
+        .await
+        .map_err(|_| MutationError::Unavailable)?;
+    migration
+        .batch_execute(&format!(
+            "REVOKE ALL ON SCHEMA registry_internal FROM {};
+             GRANT USAGE ON SCHEMA registry_internal TO \"{}\";",
+            revoke.with_public(),
+            runtime_role.as_str(),
+        ))
+        .await
+        .map_err(|_| MutationError::Unavailable)
+}
+
+/// PostgreSQL allocation entry point exposed only to the real-database test
+/// target. Production callers use the crate-private allocator from the owning
+/// mutation, Action, or Proposal transaction.
+#[cfg(feature = "postgres-test")]
+#[doc(hidden)]
+pub async fn reserve_generated_identifiers_for_test(
+    transaction: &Transaction<'_>,
+    entity: &CompiledEntity,
+    fields: &mut Map<String, Value>,
+) -> Result<(), MutationError> {
+    crate::generated_identifiers::reserve_for_create(transaction, entity, fields)
+        .await
+        .map_err(MutationError::from)
+}
+
 /// Value-free identifiers for one compiler-owned row-local constraint.
 ///
 /// Construction stays inside the PostgreSQL error mapper, after its physical
@@ -2363,8 +2404,16 @@ async fn apply_current_row(
             let MutationBody::Create(data) = &request.body else {
                 return Err(MutationError::InvalidRequest);
             };
-            authorize_record_snapshot(request, data, record_uuid)?;
-            let row = apply_create_row(transaction, request, &record_id, field_encryption).await?;
+            let mut data = data.clone();
+            crate::generated_identifiers::reserve_for_create(
+                transaction,
+                &request.plan.entity,
+                &mut data,
+            )
+            .await?;
+            authorize_record_snapshot(request, &data, record_uuid)?;
+            let row =
+                apply_create_row(transaction, request, &record_id, &data, field_encryption).await?;
             Ok(row)
         }
         Operation::Patch => {
@@ -2445,11 +2494,9 @@ async fn apply_create_row(
     transaction: &Transaction<'_>,
     request: &MutationRequest<'_>,
     record_id: &str,
+    data: &Map<String, Value>,
     field_encryption: Option<&FieldEncryptionService>,
 ) -> Result<CurrentRow, MutationError> {
-    let MutationBody::Create(data) = &request.body else {
-        return Err(MutationError::InvalidRequest);
-    };
     // The parent writer retains its create-return authority context.
     transaction
         .execute(
@@ -2516,6 +2563,10 @@ pub(super) async fn write_plan_row(
         || fields
             .keys()
             .any(|field| !entity.fields.contains_key(field))
+        || expected_revision.is_some()
+            && fields
+                .keys()
+                .any(|field| entity.is_generated_identifier_immutable(field))
     {
         return Err(MutationError::InvalidRequest);
     }
@@ -2958,6 +3009,9 @@ fn normalize_create_data(
     let mut normalized = Map::new();
     for (api_name, value) in data {
         let field_id = field_id_for_api_name(entity, api_name)?;
+        if entity.fields[field_id].generate.is_some() {
+            return Err(MutationError::InvalidRequest);
+        }
         if normalized
             .insert(field_id.to_owned(), value.clone())
             .is_some()
@@ -2972,25 +3026,28 @@ fn normalize_patch_operation(
     entity: &CompiledEntity,
     operation: &PatchOperation,
 ) -> Result<PatchOperation, MutationError> {
-    let normalized_path = |path: &str| -> Result<String, MutationError> {
+    let normalized_path = |path: &str, write: bool| -> Result<String, MutationError> {
         let api_name = patch_field(path)?;
         let field_id = field_id_for_api_name(entity, &api_name)?;
+        if write && entity.is_generated_identifier_immutable(field_id) {
+            return Err(MutationError::InvalidRequest);
+        }
         Ok(format!("/data/{}", encode_pointer_segment(field_id)))
     };
     Ok(match operation {
         PatchOperation::Add { path, value } => PatchOperation::Add {
-            path: normalized_path(path)?,
+            path: normalized_path(path, true)?,
             value: value.clone(),
         },
         PatchOperation::Replace { path, value } => PatchOperation::Replace {
-            path: normalized_path(path)?,
+            path: normalized_path(path, true)?,
             value: value.clone(),
         },
         PatchOperation::Remove { path } => PatchOperation::Remove {
-            path: normalized_path(path)?,
+            path: normalized_path(path, true)?,
         },
         PatchOperation::Test { path, value } => PatchOperation::Test {
-            path: normalized_path(path)?,
+            path: normalized_path(path, false)?,
             value: value.clone(),
         },
     })
@@ -3336,13 +3393,9 @@ fn validate_request(
             let MutationBody::Create(data) = &request.body else {
                 unreachable!("create request body matched above")
             };
-            if let Some(field) = request
-                .plan
-                .entity
-                .fields
-                .values()
-                .find(|field| field.required && !data.contains_key(&field.id))
-            {
+            if let Some(field) = request.plan.entity.fields.values().find(|field| {
+                field.required && field.generate.is_none() && !data.contains_key(&field.id)
+            }) {
                 return Err(MutationError::InvalidRequestAt(data_field_location(
                     &request.plan.entity,
                     profile,
@@ -3754,7 +3807,10 @@ fn record_reference(
         .map_err(|_| MutationError::Unavailable)
 }
 
-fn sql_value(value: &Value, field_type: &FieldTypeSource) -> Result<Option<String>, MutationError> {
+pub(crate) fn sql_value(
+    value: &Value,
+    field_type: &FieldTypeSource,
+) -> Result<Option<String>, MutationError> {
     if value.is_null() {
         return Ok(None);
     }
@@ -3782,7 +3838,7 @@ fn sql_value(value: &Value, field_type: &FieldTypeSource) -> Result<Option<Strin
     Ok(Some(value))
 }
 
-fn typed_parameter(index: usize, field_type: &FieldTypeSource) -> String {
+pub(crate) fn typed_parameter(index: usize, field_type: &FieldTypeSource) -> String {
     let cast = match field_type {
         FieldTypeSource::Boolean => "boolean",
         FieldTypeSource::String { .. }

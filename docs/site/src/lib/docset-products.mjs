@@ -50,6 +50,13 @@ export const PRODUCT_PAGES = Object.freeze({
     'reference/coordinator-configuration',
     'reference/apis/registry-coordinator',
   ]),
+  'registry-documents': Object.freeze([
+    'start/documents',
+    'tutorials/first-documents',
+    'operate/documents',
+    'reference/documents-configuration',
+    'reference/apis/registry-documents',
+  ]),
 });
 
 /**
@@ -63,6 +70,7 @@ export const PRODUCT_CLI_BINARIES = Object.freeze({
   'registry-render': Object.freeze(['registry-render']),
   'registry-messaging': Object.freeze(['messaging', 'messagingctl']),
   'registry-coordinator': Object.freeze(['coordinator', 'coordinatorctl']),
+  'registry-documents': Object.freeze(['documents', 'documentsctl']),
 });
 
 /**

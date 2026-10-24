@@ -52,6 +52,7 @@
         "field-length-widened",
         "field-physical-name-changed",
         "field-requiredness-changed",
+        "field-generation-changed",
         "field-pattern-added",
         "field-pattern-changed",
         "field-pattern-removed",

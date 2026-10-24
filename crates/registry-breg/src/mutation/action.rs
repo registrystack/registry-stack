@@ -1561,6 +1561,10 @@ impl MutationTransaction {
                 }
             }
         }
+        if effect.operation == Operation::Create {
+            crate::generated_identifiers::reserve_for_create(transaction, entity, &mut fields)
+                .await?;
+        }
         match effect.operation {
             Operation::Create => target_context
                 .authorize_rows(entity, None, &fields, record_uuid)
@@ -2462,7 +2466,7 @@ fn action_target_group_context(
             Ok(declared)
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let fields = declared_effects
+    let mut fields = declared_effects
         .iter()
         .flat_map(|effect| &effect.mutations)
         .map(|mutation| match mutation {
@@ -2471,6 +2475,13 @@ fn action_target_group_context(
             }
         })
         .collect::<BTreeSet<_>>();
+    if effect.operation == Operation::Create {
+        let entity = registry
+            .entities()
+            .get(&effect.target.entity_id)
+            .ok_or(MutationError::InvalidRequest)?;
+        fields.extend(entity.generated_fields().map(|field| field.id.clone()));
+    }
     ImmediateActionTargetContext::for_effect(
         registry,
         claims,

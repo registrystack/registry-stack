@@ -2,6 +2,7 @@ apiVersion: registry.registrystack.org/product-contract/v1
 product: breg
 traceability:
   - {id: BREG-SEC-01, state: enforced, negativeId: BREG-NEG-01, negativeTest: {path: crates/registry-breg/tests/compiler_contract.rs, name: deployment_identity_keys_in_the_project_are_refused_as_unknown_fields}}
+  # Plain successor DDL rollback proof: crates/registry-breg/tests/postgres_package.rs::plain_successor_catalog_verification_precedes_ddl_commit
   - {id: BREG-SEC-02, state: enforced, negativeId: BREG-NEG-02, negativeTest: {path: crates/registry-breg/tests/postgres_package.rs, name: real_postgres_package_startup_apply_failure_and_old_process_are_closed}}
   - {id: BREG-SEC-03, state: enforced, negativeId: BREG-NEG-03, negativeTest: {path: crates/registry-breg/tests/postgres_kernel.rs, name: real_postgres_kernel_proves_roles_rls_interlock_and_pool_isolation}}
   - {id: BREG-SEC-04, state: enforced, negativeId: BREG-NEG-04, negativeTest: {path: crates/registry-breg/tests/postgres_kernel.rs, name: real_postgres_kernel_proves_roles_rls_interlock_and_pool_isolation}}
@@ -54,7 +55,7 @@ traceability:
   - {id: BREG-SEC-51, state: enforced, negativeId: BREG-NEG-51, negativeTest: {path: crates/registry-breg/src/proposal_workflow.rs, name: proposal_digest_binds_attachment_hash_type_size_and_slot}}
   - {id: BREG-SEC-52, state: enforced, negativeId: BREG-NEG-52, negativeTest: {path: crates/registry-breg/tests/postgres_native_retention.rs, name: shared_attachment_bytes_survive_until_the_last_native_proposal_erasure}}
   - {id: BREG-SEC-53, state: enforced, negativeId: BREG-NEG-53, negativeTest: {path: crates/registry-breg/tests/postgres_native_retention.rs, name: external_tombstones_survive_late_writes_failed_rechecks_and_backend_change}}
-  - {id: BREG-SEC-54, state: enforced, negativeId: BREG-NEG-54, negativeTest: {path: crates/registry-breg/src/attachment_storage.rs, name: downloads_refuse_missing_corrupt_oversized_and_redirect_responses}}
+  - {id: BREG-SEC-54, state: enforced, negativeId: BREG-NEG-54, negativeTest: {path: crates/registry-platform-objectstore/src/s3_tests.rs, name: downloads_refuse_missing_corrupt_oversized_versioned_and_redirect_responses}}
   - {id: BREG-SEC-55, state: enforced, negativeId: BREG-NEG-55, negativeTest: {path: crates/registry-breg/src/attachment_verification.rs, name: malformed_oversized_and_failed_verdicts_remain_unavailable}}
   - {id: BREG-SEC-56, state: enforced, negativeId: BREG-NEG-56, negativeTest: {path: crates/registry-breg/tests/postgres_proposal.rs, name: attachment_binding_integrity_and_detail_erasure_preserve_record_history}}
   - {id: BREG-SEC-57, state: enforced, negativeId: BREG-NEG-57, negativeTest: {path: crates/registry-breg/tests/postgres_proposal_s3.rs, name: s3_integrity_binding_quarantine_and_authority_refusals_precede_transport}}
@@ -193,3 +194,4 @@ traceability:
   - {"id": "BREG-SEC-186", "state": "enforced", "negativeId": "BREG-NEG-186", "negativeTest": {"path": "crates/registry-breg/tests/postgres_immediate_action_requirements.rs", "name": "immediate_action_availability_preserves_disclosure_and_commit_boundaries"}}
   - {"id": "BREG-SEC-187", "state": "enforced", "negativeId": "BREG-NEG-187", "negativeTest": {"path": "crates/registry-breg/tests/postgres_reference_integrity.rs", "name": "active_references_refuse_tombstones_and_preserve_retained_links"}}
   - {"id": "BREG-SEC-188", "state": "enforced", "negativeId": "BREG-NEG-188", "negativeTest": {"path": "crates/registry-breg/tests/postgres_proposal.rs", "name": "writable_inputs_bound_start_edit_revise_and_rebase_to_the_named_inputs"}}
+  - {"id": "BREG-SEC-189", "state": "enforced", "negativeId": "BREG-NEG-189", "negativeTest": {"path": "crates/registry-breg/tests/generated_identifier_compiler.rs", "name": "sequence_scope_fields_cannot_hold_restricted_values_or_references"}}

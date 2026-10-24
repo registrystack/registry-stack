@@ -2389,6 +2389,86 @@ fn retained_service_journal_stays_bounded_and_keeps_latest_diagnostics() {
 }
 
 #[test]
+fn issuer_failure_keeps_its_private_log_beside_supervisor_logs() {
+    let root = crate::canonical_tempdir();
+    let project = standalone(root.path());
+    let state = session(&project);
+    let issuer_root = state.root().join("issuer");
+    private::directory(&project.join(".casework")).unwrap();
+    private::directory(&state.root()).unwrap();
+    private::directory(&issuer_root).unwrap();
+    private::directory(&issuer_root.join("database")).unwrap();
+    private::directory(&state.root().join("logs")).unwrap();
+    // A retained seed means setup is attempted once, then fails before any
+    // public issuer endpoint or database is needed.
+    private::create(&issuer_root.join("database/seed"), b"seeded").unwrap();
+    let engine = root.path().join("engine");
+    fs::write(
+        &engine,
+        "#!/bin/sh\n\
+         case \"$1\" in\n\
+           image|ps) exit 0;;\n\
+           run) printf 'setup %s\\n' \"$ADMIN_PASSWORD\"; exit 17;;\n\
+         esac\n\
+         exit 1\n",
+    )
+    .unwrap();
+    fs::set_permissions(&engine, fs::Permissions::from_mode(0o700)).unwrap();
+    let error = issuer(&engine, &state, &AtomicBool::new(false)).unwrap_err();
+    let cause = bounded_supervisor_error(&error);
+    let reported = start_failure(Some(&cause), &state.root()).to_string();
+    assert!(reported.contains("exited with status 17"), "{reported}");
+    let logs: Vec<_> = fs::read_dir(state.root().join("logs"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect();
+    assert_eq!(logs.len(), 1, "{logs:?}");
+    assert!(
+        reported.contains(&logs[0].display().to_string()),
+        "{reported}"
+    );
+    let kept = fs::read_to_string(&logs[0]).unwrap();
+    assert!(kept.contains("setup [redacted]"), "{kept}");
+    assert!(!issuer_root.join("logs").exists());
+}
+
+#[test]
+fn issuer_log_paths_survive_both_supervisor_reports() {
+    let root = PathBuf::from("/")
+        .join("p".repeat(200))
+        .join("q".repeat(200))
+        .join("project/.casework/dev");
+    let log = root.join("logs/thunderid-agent-schema.canary.log");
+    let error = anyhow::Error::from(registry_thunderid_tooling::ToolingError::OneShotFailed {
+        step: "the agent-schema bootstrap failed; staged state is preserved",
+        one_shot: "agent-schema",
+        exit_code: Some(17),
+        log_file: Some(log.clone()),
+    });
+    let cause = bounded_supervisor_error(&error);
+    assert!(cause.chars().count() > MAX_REFUSAL);
+    let reported = start_failure(Some(&cause), &root).to_string();
+    for fact in [
+        "exited with status 17",
+        &log.display().to_string(),
+        "retained data is preserved",
+    ] {
+        assert!(reported.contains(fact), "{fact}: {reported}");
+    }
+    let supervisor = bounded_supervisor_error(&anyhow::anyhow!(cause));
+    assert!(
+        supervisor.contains(&log.display().to_string()),
+        "{supervisor}"
+    );
+    assert_eq!(
+        reported
+            .matches(&root.join("logs").display().to_string())
+            .count(),
+        1
+    );
+}
+
+#[test]
 fn supervisor_log_stays_bounded_and_resists_path_swaps_and_links() {
     let root = crate::canonical_tempdir();
     let logs = root.path().join("logs");
@@ -2400,7 +2480,7 @@ fn supervisor_log_stays_bounded_and_resists_path_swaps_and_links() {
     private::create(&path, &oversized).unwrap();
     let new_error = anyhow::anyhow!(
         "latest-current-supervisor-failure:{}",
-        "\u{1f980}".repeat(MAX_REFUSAL)
+        "\u{1f980}".repeat(MAX_SUPERVISOR_REFUSAL)
     );
     let bounded = bounded_supervisor_error(&new_error);
 
@@ -2414,9 +2494,11 @@ fn supervisor_log_stays_bounded_and_resists_path_swaps_and_links() {
         .windows(old_marker.len())
         .any(|window| window == old_marker));
     assert!(String::from_utf8_lossy(&retained).contains("latest-current-supervisor-failure"));
-    assert_eq!(bounded.chars().count(), MAX_REFUSAL);
-    let maximum_width =
-        bounded_supervisor_error(&anyhow::anyhow!("{}", "\u{1f980}".repeat(MAX_REFUSAL + 1)));
+    assert_eq!(bounded.chars().count(), MAX_SUPERVISOR_REFUSAL);
+    let maximum_width = bounded_supervisor_error(&anyhow::anyhow!(
+        "{}",
+        "\u{1f980}".repeat(MAX_SUPERVISOR_REFUSAL + 1)
+    ));
     // `main_entry` writes this string directly with `eprintln!("{error:#}")`:
     // no prefix, and exactly one framing newline.
     assert_eq!(maximum_width.len() + 1, MAX_SUPERVISOR_ERROR_BYTES as usize);

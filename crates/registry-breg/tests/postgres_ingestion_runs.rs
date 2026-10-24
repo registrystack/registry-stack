@@ -4736,9 +4736,9 @@ fn compiled_registry_with_created_webhook() -> registry_breg::CompiledRegistry {
         r#"{"phase":"after","id":"widget-created","trigger":"created","projection":["label"],"handler":{"type":"url","destinationId":"widget-events"}}"#,
         1,
     );
-    let project = parse_project_json(fixture.as_bytes()).expect("webhook fixture parses");
+    let project = parse_project_json(fixture.as_bytes()).expect("hook fixture parses");
     compile_project(&project, &[], CompileProfile::Authoring)
-        .expect("webhook fixture compiles to trusted inventories")
+        .expect("hook fixture compiles to trusted inventories")
 }
 
 /// A widget registry carrying one restricted, encrypted field, so chunk

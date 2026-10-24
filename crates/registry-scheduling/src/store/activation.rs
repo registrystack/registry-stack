@@ -24,7 +24,10 @@ use super::{
 /// Said wherever the effective role mode is `single`.
 pub use registry_platform_activation::{Activation, RoleMode, SINGLE_ROLE_STATEMENT};
 
-fn activation_layout() -> Layout {
+/// The Scheduling activation ledger's layout, which the hook worker's
+/// identity check and test fixtures read the record through.
+#[must_use]
+pub fn activation_layout() -> Layout {
     Layout::new(
         "scheduling",
         "scheduling_activations",
@@ -55,8 +58,8 @@ pub struct SchemaState {
 }
 
 impl SchemaState {
-    /// Refuse a version this release does not know: one below the 1.0
-    /// baseline was left by a pre-1.0 release, a newer one belongs to a later
+    /// Refuse a version this release does not know: one below the
+    /// baseline was left by an earlier pre-1.0 release, a newer one belongs to a later
     /// release, and an unknown one in between is a damaged ledger.
     pub fn check(&self) -> Result<(), StoreError> {
         self.check_against(&SCHEMA_VERSIONS)
@@ -90,6 +93,12 @@ pub struct DeployedPolicy {
     pub scheduling_id: String,
     pub policy_revision: i64,
     pub policy_digest: String,
+    /// The database identity the active activation names, empty before the
+    /// first activation.
+    pub database_id: String,
+    /// The package digest the active activation names, empty before the
+    /// first activation.
+    pub package_digest: String,
 }
 
 /// The activation a records swap answers to: the database identity and the
@@ -233,8 +242,9 @@ impl PostgresStore {
     ///
     /// `verify_retained` proves retained hook events stay deliverable under
     /// the candidate. It runs on its own connection against the committed
-    /// state, before this transaction takes the publication locks, because
-    /// the verification reads the meta row under a share lock.
+    /// state, before this transaction takes the publication locks or runs a
+    /// migration, because the verification reads the activation record and
+    /// the delivery tables those statements lock.
     pub async fn activate<F, Fut>(
         &self,
         request: &ActivationRequest<'_>,
@@ -296,7 +306,7 @@ impl PostgresStore {
             }
         }
         schema.check()?;
-        let deployed = deployed_policy_in(&*transaction).await?;
+        let deployed = deployed_policy_in(&*transaction, active.as_ref()).await?;
         if let Some(deployed) = &deployed {
             refuse_foreign_scheduling_id(deployed, request.policy)?;
             if retains_hook_state(deployed, &schema) {
@@ -310,7 +320,8 @@ impl PostgresStore {
         // publication locks come before any migration DDL lock and a
         // migration never holds a table while it waits on an anchor. The
         // retained-binding check above runs before them on its own
-        // connection, because it reads the meta row under a share lock. A
+        // connection, because it reads the activation record and the
+        // delivery tables those statements lock. A
         // database without the supply and meta tables has no anchor to wait
         // on, so its publication locks are taken once migrations create them.
         let publication_locked = publication_tables_exist(&*transaction).await?;
@@ -459,7 +470,7 @@ impl PostgresStore {
                 changes_pending: false,
             });
         }
-        let deployed = deployed_policy_in(&*transaction).await?;
+        let deployed = deployed_policy_in(&*transaction, active.as_ref()).await?;
         let mut retained_hook_bindings_verified = None;
         if let Some(deployed) = &deployed {
             if let Err(refusal) = refuse_foreign_scheduling_id(deployed, policy) {
@@ -748,7 +759,9 @@ pub fn policy_pool_ids(policy: &SchedulingPolicy) -> Vec<String> {
 /// read as empty, or SELECT on `scheduling_activations` or
 /// `scheduling_schema_migrations`, as a rotated runtime role does before
 /// apply grants it. `pg_class` names the ledger whatever the role may use.
-async fn unreadable_ledger_in(client: &impl GenericClient) -> Result<Option<String>, StoreError> {
+pub(super) async fn unreadable_ledger_in(
+    client: &impl GenericClient,
+) -> Result<Option<String>, StoreError> {
     platform_activation::unreadable_ledger(client, &activation_layout())
         .await
         .map_err(platform_error)
@@ -789,6 +802,7 @@ async fn active_activation_in(
 
 async fn deployed_policy_in(
     client: &impl GenericClient,
+    active: Option<&Activation>,
 ) -> Result<Option<DeployedPolicy>, StoreError> {
     let exists: bool = client
         .query_one("SELECT to_regclass('scheduling_meta') IS NOT NULL", &[])
@@ -807,6 +821,8 @@ async fn deployed_policy_in(
         scheduling_id: row.get(0),
         policy_revision: row.get(1),
         policy_digest: row.get(2),
+        database_id: active.map_or_else(String::new, |active| active.database_id.clone()),
+        package_digest: active.map_or_else(String::new, |active| active.package_digest.clone()),
     }))
 }
 
@@ -888,42 +904,52 @@ mod tests {
     #[test]
     fn a_newer_schema_version_names_the_release_that_applied_it() {
         let state = SchemaState {
-            applied: SCHEMA_VERSIONS.iter().copied().chain([199]).collect(),
+            applied: SCHEMA_VERSIONS.iter().copied().chain([299]).collect(),
             pending: Vec::new(),
         };
         assert!(matches!(
             state.check(),
-            Err(StoreError::SchemaNewer { version: 199 })
+            Err(StoreError::SchemaNewer { version: 299 })
         ));
         let damaged = SchemaState {
-            applied: vec![100, 102],
+            applied: vec![200, 202],
             pending: Vec::new(),
         };
         assert!(matches!(
-            damaged.check_against(&[100, 101, 103]),
+            damaged.check_against(&[200, 201, 203]),
             Err(StoreError::Corrupt)
         ));
     }
 
     #[test]
-    fn the_baseline_is_version_100_and_later_versions_increase() {
-        assert_eq!(SCHEMA_VERSIONS[0], 100);
+    fn the_baseline_is_version_200_and_later_versions_increase() {
+        assert_eq!(SCHEMA_VERSIONS[0], 200);
         assert!(crate::store::versions_start_at_baseline_and_increase(
             &SCHEMA_VERSIONS
         ));
         assert!(crate::store::versions_start_at_baseline_and_increase(&[
-            100, 101
+            200, 201
         ]));
         assert!(!crate::store::versions_start_at_baseline_and_increase(&[1]));
         assert!(!crate::store::versions_start_at_baseline_and_increase(&[
-            100, 100
+            100
+        ]));
+        assert!(!crate::store::versions_start_at_baseline_and_increase(&[
+            200, 200
         ]));
     }
 
     #[test]
     fn every_ledger_below_the_baseline_is_a_named_pre_1_0_refusal() {
         let beta_range: Vec<i64> = (1..=13).collect();
-        for applied in [vec![1], vec![1, 2], beta_range, vec![19], vec![1, 100]] {
+        for applied in [
+            vec![1],
+            vec![1, 2],
+            beta_range,
+            vec![19],
+            vec![1, 100],
+            vec![100],
+        ] {
             let state = SchemaState {
                 applied: applied.clone(),
                 pending: Vec::new(),
@@ -939,7 +965,7 @@ mod tests {
             assert!(message.contains("pre-1.0 schema"), "{message}");
             assert!(message.contains("fresh database"), "{message}");
         }
-        for applied in [vec![], vec![100]] {
+        for applied in [vec![], vec![200]] {
             SchemaState {
                 applied,
                 pending: Vec::new(),

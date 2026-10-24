@@ -627,6 +627,29 @@
     {
       "if": {
         "properties": {
+          "secretProviders": {
+            "not": {
+              "required": [
+                "environment"
+              ]
+            }
+          }
+        },
+        "required": [
+          "secretProviders"
+        ]
+      },
+      "then": {
+        "properties": {
+          "audit": {
+            "properties": {
+              "hashKeyRef": {
+                "not": {
+                  "pattern": "^secret:env/"
+                }
+              }
+            }
+          },
           "authentication": {
             "properties": {
               "oidc": {
@@ -634,39 +657,79 @@
                   "jwksSource": {
                     "properties": {
                       "documentRef": {
-                        "pattern": "^secret:env/"
+                        "not": {
+                          "pattern": "^secret:env/"
+                        }
                       }
-                    },
-                    "required": [
-                      "documentRef"
-                    ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "contextProviders": {
+            "additionalProperties": {
+              "properties": {
+                "clientAssertionKeyRef": {
+                  "not": {
+                    "pattern": "^secret:env/"
                   }
                 },
-                "required": [
-                  "jwksSource"
-                ]
+                "clientIdRef": {
+                  "not": {
+                    "pattern": "^secret:env/"
+                  }
+                }
               }
-            },
-            "required": [
-              "oidc"
-            ]
-          }
-        },
-        "required": [
-          "authentication"
-        ]
-      },
-      "then": {
-        "properties": {
-          "secretProviders": {
+            }
+          },
+          "database": {
             "properties": {
-              "environment": {
-                "$ref": "#/$defs/EnvironmentSecretProviderConfig"
+              "migrationUrlRef": {
+                "not": {
+                  "pattern": "^secret:env/"
+                }
+              },
+              "runtimeUrlRef": {
+                "not": {
+                  "pattern": "^secret:env/"
+                }
+              },
+              "trustedRootCertificateRef": {
+                "not": {
+                  "pattern": "^secret:env/"
+                }
               }
-            },
-            "required": [
-              "environment"
-            ]
+            }
+          },
+          "reviewCompletionDestinations": {
+            "additionalProperties": {
+              "properties": {
+                "auth": {
+                  "properties": {
+                    "secretRef": {
+                      "not": {
+                        "pattern": "^secret:env/"
+                      }
+                    }
+                  }
+                },
+                "bearerTokenRef": {
+                  "not": {
+                    "pattern": "^secret:env/"
+                  }
+                }
+              }
+            }
+          },
+          "taskAuthority": {
+            "properties": {
+              "signingKeyRef": {
+                "not": {
+                  "pattern": "^secret:env/"
+                }
+              }
+            }
           }
         }
       }
@@ -674,6 +737,29 @@
     {
       "if": {
         "properties": {
+          "secretProviders": {
+            "not": {
+              "required": [
+                "file"
+              ]
+            }
+          }
+        },
+        "required": [
+          "secretProviders"
+        ]
+      },
+      "then": {
+        "properties": {
+          "audit": {
+            "properties": {
+              "hashKeyRef": {
+                "not": {
+                  "pattern": "^secret:file/"
+                }
+              }
+            }
+          },
           "authentication": {
             "properties": {
               "oidc": {
@@ -681,39 +767,79 @@
                   "jwksSource": {
                     "properties": {
                       "documentRef": {
-                        "pattern": "^secret:file/"
+                        "not": {
+                          "pattern": "^secret:file/"
+                        }
                       }
-                    },
-                    "required": [
-                      "documentRef"
-                    ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "contextProviders": {
+            "additionalProperties": {
+              "properties": {
+                "clientAssertionKeyRef": {
+                  "not": {
+                    "pattern": "^secret:file/"
                   }
                 },
-                "required": [
-                  "jwksSource"
-                ]
+                "clientIdRef": {
+                  "not": {
+                    "pattern": "^secret:file/"
+                  }
+                }
               }
-            },
-            "required": [
-              "oidc"
-            ]
-          }
-        },
-        "required": [
-          "authentication"
-        ]
-      },
-      "then": {
-        "properties": {
-          "secretProviders": {
+            }
+          },
+          "database": {
             "properties": {
-              "file": {
-                "$ref": "#/$defs/FileSecretProviderConfig"
+              "migrationUrlRef": {
+                "not": {
+                  "pattern": "^secret:file/"
+                }
+              },
+              "runtimeUrlRef": {
+                "not": {
+                  "pattern": "^secret:file/"
+                }
+              },
+              "trustedRootCertificateRef": {
+                "not": {
+                  "pattern": "^secret:file/"
+                }
               }
-            },
-            "required": [
-              "file"
-            ]
+            }
+          },
+          "reviewCompletionDestinations": {
+            "additionalProperties": {
+              "properties": {
+                "auth": {
+                  "properties": {
+                    "secretRef": {
+                      "not": {
+                        "pattern": "^secret:file/"
+                      }
+                    }
+                  }
+                },
+                "bearerTokenRef": {
+                  "not": {
+                    "pattern": "^secret:file/"
+                  }
+                }
+              }
+            }
+          },
+          "taskAuthority": {
+            "properties": {
+              "signingKeyRef": {
+                "not": {
+                  "pattern": "^secret:file/"
+                }
+              }
+            }
           }
         }
       }

@@ -30,7 +30,7 @@ PLACEHOLDER = re.compile(r"\b(?:TODO|TBD|FIXME|placeholder)\b", re.IGNORECASE)
 CONTRACT_STATES = {"enforced", "partial", "planned"}
 V1_REQUIREMENT_IDS = tuple(f"BREG-V1-{index:02d}" for index in range(1, 45))
 ACCEPTANCE_JOURNEY_IDS = tuple(f"BREG-J{index:02d}" for index in range(1, 25))
-SECURITY_INVARIANT_IDS = tuple(f"BREG-SEC-{index:02d}" for index in range(1, 189) if index not in {61, 62})
+SECURITY_INVARIANT_IDS = tuple(f"BREG-SEC-{index:02d}" for index in range(1, 190) if index not in {61, 62})
 ACCEPTANCE_FIXTURES = {
     "BREG-J01": ("asset-site-placement", "acceptance/asset-site-placement"),
     "BREG-J02": ("asset-site-placement", "acceptance/asset-site-placement"),
@@ -120,6 +120,7 @@ POSTGRES_TEST_COMMANDS = (
     "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_webhook_delivery",
     "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_hook_changes",
     "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_immediate_action_requirements",
+    "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_immediate_action_generated_identifiers",
     "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_registry_extensibility",
     "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_consent_access",
     "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_consent_examples",
@@ -138,6 +139,7 @@ POSTGRES_TEST_COMMANDS = (
     "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_import_authority",
     "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_refactor",
     "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_proposal",
+    "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_proposal_generated_identifiers",
     "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_proposal_shape_activation",
     "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_native_retention",
     "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_proposal_human_recovery",
@@ -149,11 +151,14 @@ POSTGRES_TEST_COMMANDS = (
     "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_facility_proposal",
     "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_action_task_grants",
     "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_generated_console",
+    "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_generated_identifiers",
+    "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_generated_identifier_batch_import",
     "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_pilot_acceptance",
     "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_tombstone_revision",
     "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_field_encryption",
     "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_package",
     "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_migration",
+    "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_generated_identifier_migration",
     "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_spatial_migration",
     "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_reference_indexes",
     "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_reference_integrity",

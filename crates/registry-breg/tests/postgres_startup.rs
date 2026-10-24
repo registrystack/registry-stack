@@ -333,7 +333,7 @@ async fn startup_refuses_an_instance_id_change_while_deliveries_are_pending() {
         prepare_with_connection_config_for_test(&restored_path, database.runtime_config.clone())
             .await
             .err(),
-        Some(StartupError::RetainedWebhookBindings {
+        Some(StartupError::RetainedHookBindings {
             retained_deliveries: 2
         })
     );
@@ -349,7 +349,7 @@ enum CapturedDeliveryState {
     DeadLettered,
 }
 
-/// Write one captured webhook delivery whose stored envelope names `source`,
+/// Write one captured hook delivery whose stored envelope names `source`,
 /// in the given state, as a previous deployment's capture would have left it.
 async fn insert_captured_delivery(
     database: &TestDatabase,
@@ -519,7 +519,7 @@ async fn runtime_startup_preserves_retained_attachment_and_tombstone_backend_bin
     }
     let s3_config = fixture.root.join("runtime-attachment-s3.yaml");
     let base_config = fs::read_to_string(&database_config).unwrap();
-    fs::write(&s3_config,format!("{base_config}\nattachmentStorage:\n  type: s3\n  endpoint: {endpoint}\n  bucket: startup-attachments\n  region: us-east-1\n  accessKeyIdRef: secret:file/attachment-access\n  secretAccessKeyRef: secret:file/attachment-secret\n")).unwrap();
+    fs::write(&s3_config,format!("{base_config}\nattachmentStorage:\n  type: s3\n  url: {endpoint}\n  bucket: startup-attachments\n  region: us-east-1\n  accessKeyIdRef: secret:file/attachment-access\n  secretAccessKeyRef: secret:file/attachment-secret\n")).unwrap();
     let activated = registry_breg::runtime_config::load_runtime_config(&s3_config)
         .unwrap()
         .activate_attachment_storage(verified.registry().registry_id())
@@ -563,7 +563,7 @@ async fn runtime_startup_preserves_retained_attachment_and_tombstone_backend_bin
         .root
         .join("runtime-attachment-changed-verifier.yaml");
     let original_s3 = fs::read_to_string(&s3_config).unwrap();
-    fs::write(&changed_verifier_config,format!("{original_s3}\nattachmentVerification:\n  type: http\n  endpoint: {endpoint}/verify\n  policyId: changed-verifier-policy\n  authorizationRef: secret:file/attachment-secret\n")).unwrap();
+    fs::write(&changed_verifier_config,format!("{original_s3}\nattachmentVerification:\n  type: http\n  url: {endpoint}/verify\n  policyId: changed-verifier-policy\n  authorizationRef: secret:file/attachment-secret\n")).unwrap();
     assert_eq!(
         prepare_with_connection_config_for_test(
             &changed_verifier_config,
@@ -1640,6 +1640,96 @@ async fn startup_refuses_a_database_without_subject_access_log_storage_and_write
     database.cleanup().await;
 }
 
+/// A database a pre-1.0 release activated keeps the attachment verification
+/// shape that release installed: lease and attempt columns on the verdict
+/// table and no verification job table. Installing from code never revisits
+/// an existing table, so the shape cannot be upgraded in place. Startup names
+/// the pre-1.0 schema and the fresh-database recovery instead of a catalog
+/// drift a backup would carry too, and writes nothing.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn startup_refuses_the_v0_43_0_attachment_verification_shape_by_name() {
+    let _runtime_guard = WASM_RUNTIME_TEST_LOCK.lock().await;
+    let database = TestDatabase::create(4).await;
+    let fixture = StartupFixture::new();
+    let (package, _verified, _active) = split_activated_startup_package(&database, &fixture).await;
+    let idp = MockIdp::start().await;
+    let config_path = fixture.write_static_jwks_config(
+        &package,
+        &database.migration_role,
+        &database.runtime_role,
+        &idp,
+        Some("0123456789abcdef0123456789abcdef"),
+    );
+    let prepared =
+        prepare_with_connection_config_for_test(&config_path, database.runtime_config.clone())
+            .await
+            .expect("the activation serves with the current verification shape");
+    drop(prepared);
+
+    install_v0_43_0_attachment_verification(&database.admin).await;
+    let before = managed_database_snapshot(&database.admin).await;
+    let refusal =
+        prepare_with_connection_config_for_test(&config_path, database.runtime_config.clone())
+            .await
+            .err();
+
+    assert_eq!(refusal, Some(StartupError::Pre1_0Schema));
+    let message = StartupError::Pre1_0Schema.to_string();
+    assert!(message.contains("pre-1.0"), "{message}");
+    assert!(message.contains("fresh database"), "{message}");
+    assert!(
+        message.contains(
+            "rebuild the package with this release's `bregctl test` and `bregctl package`"
+        ),
+        "{message}"
+    );
+    assert_eq!(
+        managed_database_snapshot(&database.admin).await,
+        before,
+        "a refused startup writes nothing"
+    );
+
+    // A verdict table without the verification job table is the same
+    // release's shape, whatever columns it still carries.
+    database
+        .admin
+        .batch_execute(
+            "ALTER TABLE registry_internal.registry_attachment_verification
+                 DROP COLUMN lease_id CASCADE",
+        )
+        .await
+        .expect("administrator removes the lease column");
+    let refusal =
+        prepare_with_connection_config_for_test(&config_path, database.runtime_config.clone())
+            .await
+            .err();
+    assert_eq!(refusal, Some(StartupError::Pre1_0Schema));
+    idp.stop().await;
+    database.cleanup().await;
+}
+
+/// The attachment verification shape v0.43.0 installed: the verdict table
+/// carried its own lease and attempt columns and its pending index, and no
+/// verification job table existed.
+async fn install_v0_43_0_attachment_verification(admin: &impl GenericClient) {
+    admin
+        .batch_execute(
+            "DROP TABLE registry_internal.registry_attachment_verification_jobs;
+             ALTER TABLE registry_internal.registry_attachment_verification
+                 DROP COLUMN verification_id,
+                 ADD COLUMN next_attempt_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
+                 ADD COLUMN lease_id uuid,
+                 ADD COLUMN lease_expires_at timestamptz,
+                 ADD COLUMN attempts bigint NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+                 ADD CHECK ((lease_id IS NULL) = (lease_expires_at IS NULL));
+             CREATE INDEX registry_attachment_verification_pending
+                 ON registry_internal.registry_attachment_verification
+                     (policy_digest,next_attempt_at,sha256,content_type) WHERE verdict='pending'",
+        )
+        .await
+        .expect("administrator installs the v0.43.0 verification shape");
+}
+
 /// Activate the startup package in split mode against a fingerprint the
 /// compiled schema rehearses.
 async fn split_activated_startup_package(
@@ -2561,11 +2651,7 @@ async fn assert_metrics_publish_the_verified_package_and_every_queue(
         )],
         "the scrape names the verified package once:\n{body}"
     );
-    for queue in [
-        "webhook-delivery",
-        "review-submission",
-        "review-application",
-    ] {
+    for queue in ["hook-delivery", "review-submission", "review-application"] {
         assert!(
             body.contains(&format!(
                 "breg_queue_oldest_pending_age_seconds{{queue=\"{queue}\"}} 0\n"

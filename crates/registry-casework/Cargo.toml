@@ -47,6 +47,7 @@ registry-platform-audit.workspace = true
 registry-platform-authcommon.workspace = true
 registry-platform-buildinfo.workspace = true
 registry-platform-config.workspace = true
+registry-platform-dispatch = { workspace = true, features = ["postgres"] }
 registry-platform-httpsec = { workspace = true, features = ["server"] }
 registry-platform-oidc.workspace = true
 registry-platform-httputil.workspace = true
@@ -77,7 +78,7 @@ registry-casework-client.workspace = true
 registry-breg-client.workspace = true
 registry-review-client.workspace = true
 registry-bregctl.workspace = true
-registry-platform-testing = { workspace = true, features = ["test-utils"] }
+registry-platform-testing = { workspace = true, features = ["test-utils", "migration-pins"] }
 tempfile.workspace = true
 tower.workspace = true
 wiremock.workspace = true

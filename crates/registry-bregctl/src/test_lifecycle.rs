@@ -88,18 +88,37 @@ pub(crate) enum TestLifecycleError {
     RuntimeConfigPath,
     RuntimeConfig(RuntimeConfigError),
     Candidate,
-    ReviewFingerprint { declared: String, measured: String },
+    ReviewFingerprint {
+        declared: String,
+        measured: String,
+    },
     Rehearsal(Box<MigrationRehearsalError>),
-    Journeys { message: String },
+    Journeys {
+        message: String,
+    },
     JourneyDocument(registry_platform_yaml::Report),
-    JourneyStep { path: String, message: String },
-    Credentials { path: String, message: String },
+    JourneyStep {
+        path: String,
+        message: String,
+    },
+    Credentials {
+        path: String,
+        message: String,
+    },
     CredentialsDocument(Report),
     Database,
-    FieldPatternSyntax { entity_id: String, field_id: String },
+    /// The fixed, value-free role or catalog invariant that schema-test
+    /// preparation refused.
+    DatabaseSetupRefused(&'static str),
+    FieldPatternSyntax {
+        entity_id: String,
+        field_id: String,
+    },
     Execution,
     RuntimeSetup(SchemaTestRuntimeSetupError),
-    OutputPreflight { message: String },
+    OutputPreflight {
+        message: String,
+    },
     OutputCommit,
     Runtime,
 }
@@ -552,6 +571,9 @@ fn schema_preparation_error(error: startup::StartupError) -> TestLifecycleError 
             entity_id,
             field_id,
         },
+        startup::StartupError::SchemaTestSetupRefused(invariant) => {
+            TestLifecycleError::DatabaseSetupRefused(invariant)
+        }
         _ => TestLifecycleError::Database,
     }
 }
@@ -1031,8 +1053,8 @@ bindings:
                 SchemaTestRuntimeSetupError::EventDestinations(
                     EventDestinationActivationError::InventoryMismatch,
                 ),
-                "test.event-destinations.inventory-mismatch",
-                "eventDestinations",
+                "test.hook-destinations.inventory-mismatch",
+                "destinations.hooks",
             ),
         ];
         for error in [
@@ -1044,8 +1066,8 @@ bindings:
         ] {
             cases.push((
                 SchemaTestRuntimeSetupError::EventDestinations(error),
-                "test.event-destinations.activation-failed",
-                "eventDestinations",
+                "test.hook-destinations.activation-failed",
+                "destinations.hooks",
             ));
         }
         for (error, code, path) in cases {
@@ -1090,6 +1112,39 @@ bindings:
             "expected HTTP 409, received HTTP 412; problem precondition.failed: The mutation precondition failed."
         );
         assert!(!report.to_string().contains("recreate"));
+    }
+
+    #[test]
+    fn a_refused_setup_prerequisite_names_the_cause_not_an_unavailable_database() {
+        let error = schema_preparation_error(startup::StartupError::SchemaTestSetupRefused(
+            "schema-test runtime connection uses unexpected authority",
+        ));
+        let report = serde_json::to_value(crate::test_lifecycle_failure(error))
+            .expect("setup refusal report serializes");
+        let diagnostic = &report["diagnostics"][0];
+        assert_eq!(diagnostic["code"], "test.database.setup-refused");
+        assert_eq!(diagnostic["path"], "database");
+        assert_eq!(diagnostic["artifact"], "schema-test-database");
+        assert_eq!(diagnostic["suggestedAction"], "correct-database-setup");
+        let message = diagnostic["message"].as_str().unwrap();
+        assert!(
+            message.contains("schema-test runtime connection uses unexpected authority"),
+            "{message}"
+        );
+        assert!(message.contains("Provision PostgreSQL"), "{message}");
+    }
+
+    #[test]
+    fn an_unready_database_stays_unavailable() {
+        let error = schema_preparation_error(startup::StartupError::DatabaseUnready);
+        let report = serde_json::to_value(crate::test_lifecycle_failure(error))
+            .expect("unavailable report serializes");
+        let diagnostic = &report["diagnostics"][0];
+        assert_eq!(diagnostic["code"], "test.database.unavailable");
+        assert_eq!(
+            diagnostic["suggestedAction"],
+            "recreate-disposable-database"
+        );
     }
 
     #[test]

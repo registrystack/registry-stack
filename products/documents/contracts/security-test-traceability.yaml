@@ -1,0 +1,324 @@
+contract: registry.documents.security-test-traceability/v1
+executionStatus: not-recorded
+note: >-
+  Every entry names the tests that carry its invariant. Tests
+  under crates/registry-documents/tests run only with the postgres-test
+  feature and a disposable database. This file records the obligation, not a
+  passing run.
+entries:
+  - id: DOCUMENTS-SEC-01
+    tests:
+      - {path: crates/registry-documents/src/runtime.rs, name: a_refused_document_reports_every_finding_before_anything_binds}
+      - {path: crates/registry-documents/src/config.rs, name: an_unknown_member_is_refused_by_the_shared_reader}
+      - {path: crates/registry-documentsctl/src/lib.rs, name: a_refused_project_is_reported_at_its_member_and_exits_one}
+  - id: DOCUMENTS-SEC-02
+    tests:
+      - {path: crates/registry-documents/src/http.rs, name: every_other_route_is_not_found}
+      - {path: crates/registry-documents/src/http.rs, name: another_method_on_health_is_refused}
+      - {path: crates/registry-documents/src/http.rs, name: health_answers_without_a_credential}
+      - {path: crates/registry-documents/src/http.rs, name: the_trace_is_echoed_on_a_refusal}
+      - {path: crates/registry-documents/tests/postgres_startup.rs, name: a_prepared_runtime_serves_documents_only_to_a_verified_caller}
+  - id: DOCUMENTS-SEC-03
+    tests:
+      - {path: crates/registry-documents/src/config.rs, name: plaintext_database_is_refused_outside_test_builds}
+  - id: DOCUMENTS-SEC-04
+    tests:
+      - {path: crates/registry-documents/src/config.rs, name: disabled_content_verification_requires_development_loopback}
+  - id: DOCUMENTS-SEC-05
+    tests:
+      - {path: crates/registry-documents/src/config.rs, name: unrestricted_clients_are_refused}
+  - id: DOCUMENTS-SEC-06
+    tests:
+      - {path: crates/registry-documentsctl/src/lib.rs, name: a_refused_runtime_configuration_names_the_finding_without_the_value}
+      - {path: crates/registry-documents/src/config.rs, name: a_reference_to_a_disabled_provider_is_refused}
+      - {path: crates/registry-documentsctl/src/report.rs, name: a_validator_reason_is_the_message_unless_it_repeats_the_value}
+  - id: DOCUMENTS-SEC-07
+    tests:
+      - {path: crates/registry-documents-client/tests/http_boundary.rs, name: a_problem_whose_trace_disagrees_is_a_protocol_failure}
+      - {path: crates/registry-documents-client/tests/http_boundary.rs, name: a_problem_whose_status_disagrees_with_its_code_is_a_protocol_failure}
+      - {path: crates/registry-documents-client/tests/http_boundary.rs, name: a_failure_that_is_not_a_problem_is_a_protocol_failure}
+      - {path: crates/registry-documents-client/tests/http_boundary.rs, name: a_healthy_answer_without_a_trace_is_a_protocol_failure}
+      - {path: crates/registry-documents-client/tests/http_boundary.rs, name: a_healthy_answer_with_a_body_is_a_protocol_failure}
+      - {path: crates/registry-documents-client/src/client.rs, name: debug_withholds_url_and_certificate_material}
+      - {path: crates/registry-documents-core/src/wire.rs, name: a_problem_that_differs_from_the_vocabulary_is_not_recognized}
+  - id: DOCUMENTS-SEC-08
+    tests:
+      - {path: crates/registry-documents/src/config.rs, name: a_plaintext_hook_destination_is_refused_outside_development}
+      - {path: crates/registry-documentsctl/src/lib.rs, name: a_refused_runtime_configuration_names_the_finding_without_the_value}
+  - id: DOCUMENTS-SEC-09
+    tests:
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: an_uploaded_document_is_released_only_after_it_is_verified}
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: stored_content_that_no_longer_matches_its_digest_is_never_released}
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_rejected_version_is_never_released}
+      - {path: crates/registry-documents/tests/postgres_s3.rs, name: s3_content_is_staged_verified_over_http_and_released}
+      - {path: crates/registry-documents/tests/postgres_s3.rs, name: an_s3_object_that_no_longer_matches_is_never_released}
+      - {path: crates/registry-documents/tests/postgres_s3.rs, name: an_s3_outage_on_download_is_journaled_unavailable_not_as_an_integrity_failure}
+      - {path: crates/registry-platform-objectstore/src/s3_tests.rs, name: an_interrupted_download_body_is_unavailable_not_an_integrity_failure}
+      - {path: crates/registry-platform-objectstore/src/s3_tests.rs, name: a_download_body_stalled_past_the_attempt_timeout_is_unavailable}
+  - id: DOCUMENTS-SEC-10
+    tests:
+      - {path: crates/registry-documents/tests/postgres_startup.rs, name: a_prepared_runtime_serves_documents_only_to_a_verified_caller}
+      - {path: crates/registry-documents/src/auth.rs, name: a_malformed_or_foreign_credential_is_refused}
+      - {path: crates/registry-documents/src/auth.rs, name: a_token_outside_every_profile_is_a_profile_refusal}
+      - {path: crates/registry-documents-core/src/access.rs, name: a_principal_the_store_could_not_render_is_refused_as_claims}
+      - {path: crates/registry-documents/src/auth.rs, name: an_exchanged_token_is_refused_where_no_assertion_authority_is_declared}
+      - {path: crates/registry-documents/src/auth.rs, name: a_key_set_outage_is_not_a_credential_refusal}
+      - {path: crates/registry-documents/src/http.rs, name: a_credential_refusal_carries_the_bearer_challenge}
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: grant_authority_and_unknown_ids_answer_without_disclosing_a_document}
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: an_uploaded_document_is_released_only_after_it_is_verified}
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_json_body_is_not_read_before_the_caller_is_authenticated}
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: an_authenticated_json_body_over_the_limit_is_refused_as_too_large}
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: the_owning_system_that_is_not_the_custodian_is_refused_the_content_as_unauthorized}
+  - id: DOCUMENTS-SEC-11
+    tests:
+      - {path: crates/registry-documents/src/config.rs, name: shared_runtime_loader_refuses_environment_expressions_in_secret_references}
+      - {path: crates/registry-documents-core/src/project.rs, name: a_substitution_expression_is_refused_in_the_authored_file}
+  - id: DOCUMENTS-SEC-12
+    tests:
+      - {path: crates/registry-documents-core/src/project.rs, name: an_empty_scope_or_client_list_is_refused_at_its_member}
+  - id: DOCUMENTS-SEC-13
+    tests:
+      - {path: crates/registry-documents/src/package.rs, name: a_package_digest_mismatch_is_refused_in_the_shared_shape}
+  - id: DOCUMENTS-SEC-14
+    tests:
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: content_that_differs_from_the_reserved_digest_or_length_never_finalizes}
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: the_database_refuses_a_finalized_version_without_a_computed_digest}
+      - {path: crates/registry-documents/src/content.rs, name: content_is_checked_by_digest_and_length}
+      - {path: crates/registry-documents/tests/postgres_journey.rs, name: a_rendered_document_reaches_a_named_recipient_and_outlives_its_share}
+  - id: DOCUMENTS-SEC-15
+    tests:
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_body_over_the_reserved_length_is_cut_off_and_keeps_nothing}
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_document_above_the_policy_size_is_refused_before_any_byte_moves}
+  - id: DOCUMENTS-SEC-16
+    tests:
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_media_type_outside_the_policy_is_refused_at_reservation_and_at_upload_without_sniffing}
+      - {path: crates/registry-documents-core/src/custody.rs, name: a_media_type_outside_the_policy_list_is_refused_at_reservation}
+  - id: DOCUMENTS-SEC-17
+    tests:
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: an_unavailable_verifier_never_releases_and_a_dead_letter_neither_approves_nor_rejects}
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_rejected_version_is_never_released}
+      - {path: crates/registry-documents/tests/postgres_s3.rs, name: an_http_verifier_rejection_or_outage_never_releases}
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: the_database_refuses_a_releasable_version_under_a_stale_or_mismatched_verdict}
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_verdict_that_records_nothing_under_the_current_binding_is_retried}
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: the_database_refuses_a_releasable_version_with_a_null_verdict_column}
+  - id: DOCUMENTS-SEC-18
+    tests:
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_verifier_binding_change_at_restart_suspends_and_verifies_again}
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_start_refused_at_its_listener_does_not_suspend_verified_versions}
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_worker_under_another_binding_leaves_the_job_pending_for_its_own}
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: the_database_refuses_a_releasable_version_under_a_stale_or_mismatched_verdict}
+  - id: DOCUMENTS-SEC-19
+    tests:
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: concurrent_uploads_of_one_reservation_finalize_once}
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_retry_after_finalize_with_the_same_content_is_answered_and_other_content_is_refused}
+  - id: DOCUMENTS-SEC-20
+    tests:
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: the_custodian_quota_holds_against_concurrent_reservations}
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: custodian_quotas_are_independent_for_humans_and_services_with_the_same_subject}
+  - id: DOCUMENTS-SEC-21
+    tests:
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: custody_is_placed_only_by_a_custody_profile_and_a_human_only_into_its_own}
+  - id: DOCUMENTS-SEC-22
+    tests:
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: the_issuing_institution_comes_from_the_profile_and_a_differing_body_is_refused}
+  - id: DOCUMENTS-SEC-23
+    tests:
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: an_idempotency_key_replays_its_reservation_and_refuses_another_body}
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: an_idempotent_grant_retry_after_revocation_releases_nothing}
+      - {path: crates/registry-documents/src/http.rs, name: the_idempotency_key_is_present_bounded_and_graphical}
+      - {path: crates/registry-documents/src/service.rs, name: an_idempotency_key_is_scoped_to_the_principal_and_the_operation}
+  - id: DOCUMENTS-SEC-24
+    tests:
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_grant_releases_one_exact_version_to_its_named_recipient_until_expiry_or_revocation}
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: an_uploaded_document_is_released_only_after_it_is_verified}
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_grant_releases_only_to_a_caller_of_the_actor_kind_it_names}
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: the_database_refuses_a_grant_on_another_document_s_version_or_of_an_unknown_kind}
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_recipient_s_grant_list_pages_only_grants_it_may_redeem}
+      - {path: crates/registry-documents-core/src/wire.rs, name: a_grant_request_names_one_version_and_one_subject_of_one_kind}
+      - {path: crates/registry-documents/tests/postgres_journey.rs, name: a_rendered_document_reaches_a_named_recipient_and_outlives_its_share}
+  - id: DOCUMENTS-SEC-25
+    tests:
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: an_idempotent_grant_retry_after_revocation_releases_nothing}
+  - id: DOCUMENTS-SEC-26
+    tests:
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: grant_authority_and_unknown_ids_answer_without_disclosing_a_document}
+      - {path: crates/registry-documents-core/src/access.rs, name: the_owner_matches_the_reserver_s_kind_as_well_as_its_subject}
+      - {path: crates/registry-documents-core/src/access.rs, name: the_reserving_system_sees_a_delivered_document_but_may_neither_grant_nor_read_it}
+  - id: DOCUMENTS-SEC-27
+    tests:
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_version_approved_under_another_binding_is_released_to_nobody}
+  - id: DOCUMENTS-SEC-28
+    tests:
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: an_exhausted_transfer_budget_refuses_uploads_and_downloads}
+      - {path: crates/registry-documents/src/transfer.rs, name: a_transfer_beyond_the_remaining_budget_is_refused_until_room_returns}
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_verification_attempt_waits_for_transfer_budget_only_within_its_attempt_timeout}
+  - id: DOCUMENTS-SEC-29
+    tests:
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_stalled_upload_is_cut_off_at_its_deadline}
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_download_not_read_before_its_deadline_ends_in_an_error}
+      - {path: crates/registry-documents/src/transfer.rs, name: a_stalled_release_lets_go_of_its_bytes_at_the_deadline}
+  - id: DOCUMENTS-SEC-30
+    tests:
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_request_audit_failure_refuses_the_upload_and_the_download}
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_response_audit_failure_after_commit_answers_unavailable_and_the_retry_answers_the_commit}
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: an_upload_to_an_unknown_or_another_caller_s_reservation_is_journalled}
+  - id: DOCUMENTS-SEC-31
+    tests:
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_label_is_bounded_and_returned_untouched}
+  - id: DOCUMENTS-SEC-32
+    tests:
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: under_institutional_custody_the_named_person_has_no_standing_without_a_grant}
+      - {path: crates/registry-documents-core/src/access.rs, name: under_institutional_custody_the_reserving_system_stays_the_custodian}
+  - id: DOCUMENTS-SEC-33
+    tests:
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: the_journal_records_no_unchecked_text_from_a_request}
+  - id: DOCUMENTS-SEC-34
+    tests:
+      - {path: crates/registry-documents/tests/postgres_operator.rs, name: apply_requires_the_migration_credential}
+      - {path: crates/registry-documents/tests/postgres_hooks.rs, name: a_split_runtime_role_captures_and_delivers_under_its_own_grants}
+      - {path: crates/registry-documents/tests/postgres_operator.rs, name: invalid_operator_references_are_refused_before_anything_is_written}
+      - {path: crates/registry-documents/tests/postgres_operator.rs, name: plan_reports_the_change_and_writes_nothing}
+      - {path: crates/registry-documents/tests/postgres_operator.rs, name: apply_fails_closed_on_an_unwritable_audit_journal}
+  - id: DOCUMENTS-SEC-35
+    tests:
+      - {path: crates/registry-documents/tests/postgres_operator.rs, name: successor_activation_fences_every_old_route_and_preserves_an_admitted_download}
+      - {path: crates/registry-documents/tests/postgres_operator.rs, name: a_running_runtime_fails_closed_when_activation_access_is_lost}
+      - {path: crates/registry-documents/tests/postgres_operator.rs, name: an_upload_admitted_before_activation_cannot_finalize_under_the_old_package}
+      - {path: crates/registry-documents/tests/postgres_operator.rs, name: activation_waits_for_a_mutation_that_already_holds_package_authority}
+      - {path: crates/registry-documents/tests/postgres_operator.rs, name: runtime_and_apply_refuse_an_activation_ledger_in_a_later_search_path_schema}
+      - {path: crates/registry-documents/tests/postgres_operator.rs, name: a_running_runtime_refuses_a_new_schema_before_its_activation_ledger}
+      - {path: crates/registry-documents/tests/postgres_operator.rs, name: runtime_effects_use_read_committed_despite_the_roles_default_isolation}
+      - {path: crates/registry-documents/tests/postgres_operator.rs, name: successor_activation_stops_old_verification_erasure_and_cleanup_work}
+      - {path: crates/registry-documents/tests/postgres_operator.rs, name: a_verification_leased_before_activation_cannot_send_or_record_an_old_verdict}
+      - {path: crates/registry-documents/tests/postgres_s3.rs, name: a_stale_erasure_worker_neither_deletes_objects_nor_records_a_leased_erasure}
+      - {path: crates/registry-documents/tests/postgres_operator.rs, name: a_fresh_database_is_refused_by_serve_until_the_package_is_applied}
+      - {path: crates/registry-documents/tests/postgres_operator.rs, name: a_database_recorded_for_another_deployment_is_refused}
+      - {path: crates/registry-documents/tests/postgres_operator.rs, name: apply_is_idempotent_for_one_package_and_records_a_changed_one}
+      - {path: crates/registry-documentsctl/tests/postgres_cli.rs, name: apply_refuses_a_package_that_is_not_the_pinned_one}
+      - {path: crates/registry-documents/tests/postgres_operator.rs, name: serve_refuses_a_runtime_role_that_gained_authority_over_the_schema}
+      - {path: crates/registry-documents/tests/postgres_operator.rs, name: serve_refuses_a_runtime_role_that_lost_a_grant}
+      - {path: crates/registry-documents/tests/postgres_operator.rs, name: serve_refuses_a_runtime_role_that_lost_usage_on_the_schema_as_a_grant_problem}
+      - {path: crates/registry-documents/tests/postgres_operator.rs, name: serve_refuses_an_activated_database_with_a_newer_schema_version}
+  - id: DOCUMENTS-SEC-36
+    tests:
+      - {path: crates/registry-documents/tests/postgres_operator.rs, name: replay_refuses_an_unknown_version_and_an_unactivated_database}
+      - {path: crates/registry-documents/tests/postgres_operator.rs, name: replay_returns_a_dead_lettered_verification_to_pending}
+      - {path: crates/registry-documents/tests/postgres_operator.rs, name: a_replay_whose_audit_request_is_refused_changes_nothing}
+      - {path: crates/registry-documents/tests/postgres_operator.rs, name: a_replay_whose_audit_response_is_refused_stands_and_says_so}
+      - {path: crates/registry-documents/tests/postgres_operator.rs, name: replay_fails_closed_on_an_unwritable_audit_journal}
+      - {path: crates/registry-documents/tests/postgres_operator.rs, name: replay_refuses_a_verification_whose_content_is_being_removed}
+      - {path: crates/registry-documents/tests/postgres_operator.rs, name: erasure_replay_returns_a_dead_lettered_erasure_to_pending}
+      - {path: crates/registry-documents/tests/postgres_operator.rs, name: an_erasure_replay_whose_audit_request_is_refused_changes_nothing}
+      - {path: crates/registry-documents/tests/postgres_operator.rs, name: an_erasure_replay_whose_audit_response_is_refused_stands_and_says_so}
+      - {path: crates/registry-documents/tests/postgres_operator.rs, name: erasure_replay_fails_closed_on_an_unwritable_audit_journal}
+      - {path: crates/registry-documentsctl/src/operate.rs, name: each_replay_outcome_reports_its_own_job_code}
+      - {path: crates/registry-documentsctl/tests/postgres_cli.rs, name: the_dead_letter_verbs_refuse_a_database_that_is_not_activated}
+      - {path: crates/registry-documents/src/http.rs, name: every_other_route_is_not_found}
+  - id: DOCUMENTS-SEC-37
+    tests:
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_custodian_erasure_request_stops_release_and_the_sweep_erases_the_bytes}
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: the_database_refuses_a_releasable_version_under_erasure}
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: removing_a_rejected_document_revokes_its_grants}
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: an_approval_after_a_removal_request_releases_nothing}
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_verification_job_leased_across_a_removal_is_set_aside}
+      - {path: crates/registry-documents/tests/postgres_operator.rs, name: replay_refuses_a_verification_whose_content_is_being_removed}
+  - id: DOCUMENTS-SEC-38
+    tests:
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_custodian_erasure_request_stops_release_and_the_sweep_erases_the_bytes}
+      - {path: crates/registry-documents-core/src/access.rs, name: only_the_custodian_may_request_erasure_and_an_erasing_document_offers_its_shares_only}
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_document_under_an_undeclared_policy_cannot_be_removed}
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: under_institutional_custody_only_the_institution_may_remove}
+  - id: DOCUMENTS-SEC-39
+    tests:
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: grant_expiry_and_revocation_erase_nothing_held_in_custody}
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_rejected_version_is_erased_after_its_grace}
+      - {path: crates/registry-documents/tests/postgres_journey.rs, name: a_rendered_document_reaches_a_named_recipient_and_outlives_its_share}
+  - id: DOCUMENTS-SEC-40
+    tests:
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_paused_deployment_erases_nothing}
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: a_job_armed_before_a_pause_erases_nothing}
+      - {path: crates/registry-documents/tests/postgres_operator.rs, name: a_replayed_erasure_waits_while_erasure_is_paused}
+  - id: DOCUMENTS-SEC-41
+    tests:
+      - {path: crates/registry-documents/tests/postgres_s3.rs, name: an_unconfirmed_s3_delete_keeps_the_version_pending}
+      - {path: crates/registry-documents/tests/postgres_s3.rs, name: an_s3_erasure_deletes_the_object_and_confirms_it_gone}
+  - id: DOCUMENTS-SEC-42
+    tests:
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: an_interrupted_erasure_batch_resumes_without_double_erasure}
+      - {path: crates/registry-documents/tests/postgres_s3.rs, name: an_s3_erasure_interrupted_after_the_delete_resumes_once}
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: the_job_tables_refuse_a_lease_without_an_expiry}
+  - id: DOCUMENTS-SEC-43
+    tests:
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: the_database_refuses_an_erasure_state_without_its_timestamps}
+  - id: DOCUMENTS-SEC-44
+    tests:
+      - {path: crates/registry-documents/tests/postgres_s3.rs, name: the_orphan_sweep_erases_only_old_uncommitted_objects}
+      - {path: crates/registry-documents/tests/postgres_s3.rs, name: a_commit_after_the_orphan_sweep_is_refused}
+      - {path: crates/registry-documents/tests/postgres_s3.rs, name: an_orphan_whose_delete_fails_does_not_hold_back_the_others}
+      - {path: crates/registry-documents/tests/postgres_s3.rs, name: a_first_s3_write_that_never_finalizes_still_pins_the_storage}
+  - id: DOCUMENTS-SEC-45
+    tests:
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: an_upload_to_a_removed_document_is_refused}
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: an_unfinished_upload_past_its_deadline_is_expired_by_the_sweep}
+  - id: DOCUMENTS-SEC-46
+    tests:
+      - {path: crates/registry-documents/tests/postgres_documents.rs, name: no_delete_cascades_through_custody_records}
+  - id: DOCUMENTS-SEC-47
+    tests:
+      - {path: crates/registry-documents-client/tests/document_routes.rs, name: a_download_whose_digest_disagrees_hands_the_caller_nothing}
+  - id: DOCUMENTS-SEC-48
+    tests:
+      - {path: crates/registry-documents/src/hooks_tests.rs, name: no_forbidden_field_can_be_projected}
+      - {path: crates/registry-documents/src/hooks_tests.rs, name: each_family_projects_exactly_its_closed_fields}
+      - {path: crates/registry-documents/src/hooks_tests.rs, name: a_projection_carries_only_the_fields_it_names}
+      - {path: crates/registry-documents/src/hooks_tests.rs, name: every_projection_conforms_to_its_published_data_schema}
+      - {path: crates/registry-documents/src/hooks_tests.rs, name: compile_refuses_an_unknown_trigger_and_a_field_outside_its_trigger}
+      - {path: crates/registry-documents-core/src/project.rs, name: a_hook_projection_names_only_its_trigger_s_closed_fields}
+      - {path: crates/registry-documents-core/src/project.rs, name: a_grant_field_is_refused_on_a_version_trigger}
+      - {path: crates/registry-documents/tests/postgres_hooks.rs, name: a_verdict_captures_one_delivery_per_matching_observer_with_the_closed_projection}
+      - {path: crates/registry-documents/tests/postgres_hooks.rs, name: grant_issue_and_revoke_each_capture_one_event_and_repeats_capture_none}
+      - {path: crates/registry-documents/tests/postgres_hooks.rs, name: a_hook_hears_nothing_about_a_document_under_a_policy_it_does_not_name}
+      - {path: crates/registry-documents/src/hooks_tests.rs, name: compile_refuses_a_hook_scoped_to_no_policy_or_to_one_twice}
+      - {path: crates/registry-documents/src/hooks_tests.rs, name: the_compiled_fingerprint_covers_the_policy_scope_but_not_its_order}
+      - {path: crates/registry-documents-core/src/project.rs, name: a_hook_without_policies_is_refused}
+      - {path: crates/registry-documents-core/src/project.rs, name: an_empty_hook_policy_list_is_refused_at_its_member}
+      - {path: crates/registry-documents-core/src/project.rs, name: a_repeated_hook_policy_is_refused}
+      - {path: crates/registry-documents-core/src/project.rs, name: a_hook_policy_the_project_does_not_declare_is_refused}
+  - id: DOCUMENTS-SEC-49
+    tests:
+      - {path: crates/registry-documents/tests/postgres_hooks.rs, name: a_capture_that_cannot_commit_rolls_its_transition_back}
+      - {path: crates/registry-documents/tests/postgres_hooks.rs, name: a_rolled_back_transition_captures_nothing}
+      - {path: crates/registry-documents/tests/postgres_hooks.rs, name: a_rolled_back_removal_captures_nothing}
+      - {path: crates/registry-documents/tests/postgres_hooks.rs, name: grant_issue_and_revoke_each_capture_one_event_and_repeats_capture_none}
+      - {path: crates/registry-documents/tests/postgres_hooks.rs, name: a_removal_captures_one_revoked_event_per_grant_it_revokes_and_a_repeat_none}
+      - {path: crates/registry-documents/tests/postgres_hooks.rs, name: a_rejection_captures_the_rejected_event_once}
+  - id: DOCUMENTS-SEC-50
+    tests:
+      - {path: crates/registry-documents/tests/postgres_hooks.rs, name: a_failing_destination_is_retried_then_dead_lettered_without_touching_the_transition}
+      - {path: crates/registry-documents/tests/postgres_hooks.rs, name: an_unreachable_destination_never_blocks_a_transition}
+      - {path: crates/registry-documents/src/hooks_tests.rs, name: retries_back_off_from_thirty_seconds_to_an_hour}
+  - id: DOCUMENTS-SEC-51
+    tests:
+      - {path: crates/registry-documents/src/hooks_tests.rs, name: compile_refuses_a_rhai_handler}
+      - {path: crates/registry-documents/src/hooks_tests.rs, name: compile_refuses_a_wasm_handler}
+      - {path: crates/registry-documents/src/hooks_tests.rs, name: compile_refuses_a_condition}
+      - {path: crates/registry-documents/src/hooks_tests.rs, name: compile_refuses_a_principal}
+      - {path: crates/registry-documents/src/hooks_tests.rs, name: compile_refuses_a_phase_other_than_after}
+      - {path: crates/registry-documents-core/src/project.rs, name: a_local_hook_handler_kind_is_refused}
+      - {path: crates/registry-documents-core/src/project.rs, name: a_hook_condition_or_principal_is_refused}
+      - {path: crates/registry-documents-core/src/project.rs, name: a_before_phase_hook_is_refused}
+  - id: DOCUMENTS-SEC-52
+    tests:
+      - {path: crates/registry-documents/tests/postgres_hooks.rs, name: delivery_sends_the_signed_envelope_and_refuses_a_returned_proposal}
+      - {path: crates/registry-documents/src/hooks_tests.rs, name: an_observer_proposal_is_refused_with_a_kebab_case_code}
+  - id: DOCUMENTS-SEC-53
+    tests:
+      - {path: crates/registry-documents/tests/postgres_hooks.rs, name: startup_refuses_a_project_hook_whose_destination_is_not_bound}
+      - {path: crates/registry-documents/tests/postgres_hooks.rs, name: a_destination_changed_under_a_pending_delivery_refuses_startup_until_it_drains}
+      - {path: crates/registry-documents/src/hooks_tests.rs, name: activation_refuses_a_hook_whose_destination_is_not_bound}
+      - {path: crates/registry-documents/src/hooks_tests.rs, name: activation_refuses_a_signing_secret_it_cannot_resolve}
+      - {path: crates/registry-documents/src/hooks_tests.rs, name: hook_destination_binding_digests_are_pinned}
+  - id: DOCUMENTS-SEC-54
+    tests:
+      - {path: crates/registry-documents-core/src/project.rs, name: profiles_of_one_actor_kind_reading_different_principal_claims_are_refused}
+      - {path: crates/registry-documents-core/src/project.rs, name: profiles_of_different_actor_kinds_may_read_different_principal_claims}

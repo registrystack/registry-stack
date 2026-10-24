@@ -23,8 +23,19 @@ def metadata(edges: dict[str, list[str]]) -> dict:
         "breg-client": "registry-breg-client",
         "casework-core": "registry-casework-core",
         "evidence-client": "registry-evidence-client",
+        "messaging-client": "registry-messaging-client",
         "coordinator": "registry-coordinator",
         "coordinator-client": "registry-coordinator-client",
+        "documents-core": "registry-documents-core",
+        "discovery": "registry-discovery",
+        "discovery-client": "registry-discovery-client",
+        "discovery-profile": "registry-discovery-profile",
+        "render": "registry-render",
+        "review-protocol": "registry-review-protocol",
+        "review-client": "registry-review-client",
+        "thunderid": "registry-thunderid-tooling",
+        "manifest-core": "registry-manifest-core",
+        "cli-docs": "registry-cli-docs",
         "platform": "registry-platform-calendar",
         "serde": "serde",
     }
@@ -99,6 +110,49 @@ class DependencyDirectionTests(unittest.TestCase):
             failures,
         )
 
+    def test_a_document_store_dependency_is_rejected_both_ways(self):
+        edges = {
+            "core": ["serde"],
+            "client": ["documents-core"],
+            "runtime": ["core"],
+            "ctl": ["core"],
+            "documents-core": [],
+            "platform": [],
+            "serde": [],
+        }
+        failures = "\n".join(MODULE.violations(metadata(edges)))
+        self.assertIn(
+            "registry-scheduling-client transitively depends on other-product package(s): registry-documents-core",
+            failures,
+        )
+        edges = {**edges, "client": ["core"], "documents-core": ["client"]}
+        failures = "\n".join(MODULE.violations(metadata(edges)))
+        self.assertIn(
+            "registry-documents-core transitively depends on Scheduling package(s): registry-scheduling-client, registry-scheduling-core",
+            failures,
+        )
+
+    def test_messaging_dependency_from_core_is_rejected(self):
+        graph = metadata(
+            {
+                "core": ["serde"],
+                "client": ["core"],
+                "runtime": ["core"],
+                "ctl": ["core"],
+                "breg-client": [],
+                "casework-core": [],
+                "evidence-client": [],
+                "messaging-client": [],
+                "platform": [],
+                "serde": ["messaging-client"],
+            }
+        )
+        failures = "\n".join(MODULE.violations(graph))
+        self.assertIn(
+            "registry-scheduling-core transitively depends on other-product package(s): registry-messaging-client",
+            failures,
+        )
+
     def test_core_depending_on_the_runtime_is_rejected(self):
         graph = metadata(
             {
@@ -159,6 +213,27 @@ class DependencyDirectionTests(unittest.TestCase):
             failures,
         )
 
+
+    def test_messaging_dependency_on_scheduling_is_rejected(self):
+        graph = metadata(
+            {
+                "core": ["serde"],
+                "client": ["core"],
+                "runtime": ["core"],
+                "ctl": ["core"],
+                "breg-client": [],
+                "casework-core": [],
+                "evidence-client": [],
+                "messaging-client": ["client"],
+                "platform": [],
+                "serde": [],
+            }
+        )
+        failures = "\n".join(MODULE.violations(graph))
+        self.assertIn(
+            "registry-messaging-client transitively depends on Scheduling package(s): registry-scheduling-client",
+            failures,
+        )
 
     def test_bindings_and_the_unified_client_beside_other_products_are_accepted(self):
         graph = metadata(
@@ -323,6 +398,52 @@ class DependencyDirectionTests(unittest.TestCase):
                         f"{name} transitively depends on Scheduling runtime package(s): {reached}",
                         failures,
                     )
+
+    def test_discovery_and_render_boundaries_are_checked_in_both_directions(self):
+        for product in ("discovery", "discovery-client", "discovery-profile", "render"):
+            with self.subTest(product=product):
+                edges = {"runtime": ["platform"], "platform": [product]}
+                failures = "\n".join(MODULE.violations(metadata(edges)))
+                self.assertIn("registry-scheduling transitively depends on other-product", failures)
+                edges = {product: ["platform"], "platform": ["runtime"]}
+                failures = "\n".join(MODULE.violations(metadata(edges)))
+                self.assertIn(f"registry-{product} transitively depends on Scheduling", failures)
+
+    def test_shared_protocols_and_tooling_do_not_become_runtime_products(self):
+        edges = {
+            "runtime": ["core", "review-protocol"],
+            "core": ["platform"],
+            "client": ["core", "review-client"],
+            "review-client": ["review-protocol"],
+            "review-protocol": ["platform"],
+            "ctl": ["runtime", "thunderid", "manifest-core"],
+            "cli-docs": ["runtime", "ctl"],
+        }
+        self.assertEqual(MODULE.violations(metadata(edges)), [])
+
+    def test_a_dependency_test_tool_does_not_become_a_product_dependency(self):
+        edges = {"runtime": ["platform"], "core": ["platform"], "platform": ["discovery"]}
+        graph = metadata(edges)
+        node = next(n for n in graph["resolve"]["nodes"] if n["id"] == "platform")
+        node["deps"][0]["dep_kinds"] = [{"kind": "dev", "target": None}]
+        self.assertEqual(MODULE.violations(graph), [])
+        # The same edge in a supported build is still part of the boundary.
+        node["deps"][0]["dep_kinds"].append({"kind": "build", "target": None})
+        failures = "\n".join(MODULE.violations(graph))
+        self.assertIn("registry-scheduling transitively depends on other-product", failures)
+
+    def test_the_products_own_dev_dependencies_still_count(self):
+        edges = {"runtime": ["discovery"]}
+        graph = metadata(edges)
+        node = next(n for n in graph["resolve"]["nodes"] if n["id"] == "runtime")
+        node["deps"][0]["dep_kinds"] = [{"kind": "dev", "target": None}]
+        failures = "\n".join(MODULE.violations(graph))
+        self.assertIn("registry-scheduling transitively depends on other-product", failures)
+
+    def test_test_tooling_may_use_the_public_client(self):
+        edges = {"thunderid": ["client"], "client": ["core"], "core": ["platform"]}
+        self.assertEqual(MODULE.violations(metadata(edges)), [])
+
 
 if __name__ == "__main__":
     unittest.main()

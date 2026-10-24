@@ -27,6 +27,7 @@ use crate::attachment_verification_worker::AttachmentVerificationWorker;
 use crate::audit::RegistryAudit;
 use crate::auth::{AuthenticationConfigError, RegistryAuthenticator};
 use crate::field_encryption::{FieldEncryptionProvider, FieldEncryptionService};
+use crate::hooks::{HookDeliveryService, HookRetainedBindingError, HookWorker};
 use crate::metrics::{self, LastSuccess, Metrics, ProgressWorker};
 #[cfg(all(feature = "runtime", feature = "tooling"))]
 use crate::model::CompiledRegistry;
@@ -40,7 +41,6 @@ use crate::postgres::{
     PostgresSnapshotReadService, RegistryLockKey, RoleMode, RuntimePool, SqlIdentifier,
 };
 use crate::runtime_config::{load_runtime_config, RuntimeConfig, RuntimeConfigError};
-use crate::webhook::{WebhookDeliveryService, WebhookRetainedBindingError, WebhookWorker};
 
 /// Bounded startup refusal. Package paths, request identifiers, stored review
 /// values, and physical catalog details are intentionally unavailable through
@@ -59,6 +59,11 @@ pub enum StartupError {
     DatabaseConnection(DatabaseConnectionCause),
     #[error("the Registry database is not ready for this package")]
     DatabaseUnready,
+    /// Schema-test preparation refused a role or catalog prerequisite. The
+    /// text is the kernel's fixed, value-free invariant, which names the cause
+    /// without any role name, catalog value, or connection detail.
+    #[error("the schema-test database setup was refused: {0}")]
+    SchemaTestSetupRefused(&'static str),
     /// Managed database object names only. No catalog values, role names, or
     /// connection details are included.
     #[error("the Registry database catalog differs from the runtime package")]
@@ -76,6 +81,15 @@ pub enum StartupError {
          reads only the state its predecessor wrote, so upgrade the database one release at a time"
     )]
     UnrecognizedDatabase,
+    /// The database carries the attachment verification shape a pre-1.0
+    /// release installed, which this release cannot upgrade in place.
+    #[error(
+        "the Registry database uses the attachment verification schema of a pre-1.0 release; \
+         this release supports fresh installs only. Create a fresh database, rebuild the \
+         package with this release's `bregctl test` and `bregctl package`, and run `bregctl \
+         apply --package DIR --initial`"
+    )]
+    Pre1_0Schema,
     /// The database records a database id other than the runtime file's
     /// `identity.databaseId`.
     #[error(
@@ -140,17 +154,17 @@ pub enum StartupError {
     #[error("the Registry event destination bindings were refused")]
     EventDestinations,
     #[error(
-        "{retained_deliveries} retained webhook deliveries require superseded bindings; inspect \
-         them with `bregctl webhook list` and either restore the exact bindings or explicitly \
+        "{retained_deliveries} retained hook deliveries require superseded bindings; inspect \
+         them with `bregctl hook list` and either restore the exact bindings or explicitly \
          discard each delivery"
     )]
-    RetainedWebhookBindings { retained_deliveries: u64 },
-    /// Pending or leased webhook deliveries were captured under an event
+    RetainedHookBindings { retained_deliveries: u64 },
+    /// Pending or leased hook deliveries were captured under an event
     /// source other than the one `identity.instanceId` derives. The worker
     /// would refuse each stored envelope and dead-letter it, so startup
     /// refuses first. Both values are deployment identifiers, not secrets.
     #[error(
-        "{pending_deliveries} pending webhook deliveries were captured under event source \
+        "{pending_deliveries} pending hook deliveries were captured under event source \
          {stored_source}, but identity.instanceId {configured_instance_id} derives another; \
          restore the previous identity.instanceId until those deliveries drain, then change it"
     )]
@@ -195,10 +209,10 @@ pub enum OperationalLogLevel {
     Error,
 }
 
-/// Closed webhook state-transition failure codes. These codes identify only
+/// Closed hook state-transition failure codes. These codes identify only
 /// the failed transition class and never carry destination or event values.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum WebhookStateTransitionCode {
+pub enum HookStateTransitionCode {
     ClaimIdentityRefused,
     ClaimRecoveryFailed,
     ClaimSelectFailed,
@@ -208,7 +222,7 @@ pub enum WebhookStateTransitionCode {
     ClaimCommitFailed,
 }
 
-impl WebhookStateTransitionCode {
+impl HookStateTransitionCode {
     /// Every allowed state-transition code, used by exhaustive operational-log
     /// contract tests.
     pub const ALL: [Self; 7] = [
@@ -224,13 +238,13 @@ impl WebhookStateTransitionCode {
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
-            Self::ClaimIdentityRefused => "webhook.claim.identity_refused",
-            Self::ClaimRecoveryFailed => "webhook.claim.recovery_failed",
-            Self::ClaimSelectFailed => "webhook.claim.select_failed",
-            Self::ClaimPolicyRefused => "webhook.claim.policy_refused",
-            Self::ClaimUpdateFailed => "webhook.claim.update_failed",
-            Self::ClaimAuditFailed => "webhook.claim.audit_failed",
-            Self::ClaimCommitFailed => "webhook.claim.commit_failed",
+            Self::ClaimIdentityRefused => "hook.claim.identity_refused",
+            Self::ClaimRecoveryFailed => "hook.claim.recovery_failed",
+            Self::ClaimSelectFailed => "hook.claim.select_failed",
+            Self::ClaimPolicyRefused => "hook.claim.policy_refused",
+            Self::ClaimUpdateFailed => "hook.claim.update_failed",
+            Self::ClaimAuditFailed => "hook.claim.audit_failed",
+            Self::ClaimCommitFailed => "hook.claim.commit_failed",
         }
     }
 }
@@ -238,7 +252,7 @@ impl WebhookStateTransitionCode {
 /// The closed set of background tasks `serve` runs beside the HTTP listener.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BackgroundTask {
-    WebhookWorker,
+    HookWorker,
     AttachmentVerificationWorker,
     ReviewWorker,
     SubjectAccessLogRetention,
@@ -250,7 +264,7 @@ impl BackgroundTask {
     /// Every supervised task, used by exhaustive operational-log contract
     /// tests.
     pub const ALL: [Self; 6] = [
-        Self::WebhookWorker,
+        Self::HookWorker,
         Self::AttachmentVerificationWorker,
         Self::ReviewWorker,
         Self::SubjectAccessLogRetention,
@@ -274,8 +288,8 @@ impl BackgroundTaskStop {
 
 const fn background_task_stop_code(task: BackgroundTask, stop: BackgroundTaskStop) -> &'static str {
     match (task, stop) {
-        (BackgroundTask::WebhookWorker, BackgroundTaskStop::Panicked) => "webhook.worker.panicked",
-        (BackgroundTask::WebhookWorker, BackgroundTaskStop::Returned) => "webhook.worker.returned",
+        (BackgroundTask::HookWorker, BackgroundTaskStop::Panicked) => "hook.worker.panicked",
+        (BackgroundTask::HookWorker, BackgroundTaskStop::Returned) => "hook.worker.returned",
         (BackgroundTask::AttachmentVerificationWorker, BackgroundTaskStop::Panicked) => {
             "attachment_verification.worker.panicked"
         }
@@ -352,7 +366,7 @@ pub enum OperationalEvent {
     Listening,
     Stopped,
     StoppedWithError(StartupError),
-    WebhookWorkerIterationFailed,
+    HookWorkerIterationFailed,
     AttachmentVerificationIterationFailed,
     AttachmentVerificationRetryPending,
     ReviewWorkerIterationFailed,
@@ -362,7 +376,7 @@ pub enum OperationalEvent {
     /// The queue ages could not be read for one metrics scrape, so that
     /// scrape publishes none.
     MetricsQueueSampleFailed,
-    WebhookStateTransitionFailed(WebhookStateTransitionCode),
+    HookStateTransitionFailed(HookStateTransitionCode),
     /// One PostgreSQL baseline advisory, logged once at startup. It carries a
     /// closed code and message plus the server's observed setting counts.
     PostgresBaselineAdvisory(BaselineAdvisory),
@@ -431,12 +445,12 @@ impl OperationalEvent {
                 error: None,
                 code: Some("startup.authentication.clients_unrestricted"),
             },
-            Self::WebhookWorkerIterationFailed => OperationalLogRecord {
+            Self::HookWorkerIterationFailed => OperationalLogRecord {
                 level: OperationalLogLevel::Warn,
-                target: "registry_breg::webhook",
-                message: "webhook worker iteration failed",
+                target: "registry_breg::hooks",
+                message: "hook worker iteration failed",
                 error: None,
-                code: Some("webhook.worker.iteration_failed"),
+                code: Some("hook.worker.iteration_failed"),
             },
             Self::AttachmentVerificationIterationFailed => OperationalLogRecord {
                 level: OperationalLogLevel::Warn,
@@ -473,10 +487,10 @@ impl OperationalEvent {
                 error: None,
                 code: Some("metrics.queue_sample.failed"),
             },
-            Self::WebhookStateTransitionFailed(code) => OperationalLogRecord {
+            Self::HookStateTransitionFailed(code) => OperationalLogRecord {
                 level: OperationalLogLevel::Warn,
-                target: "registry_breg::webhook",
-                message: "webhook state transition failed",
+                target: "registry_breg::hooks",
+                message: "hook state transition failed",
                 error: None,
                 code: Some(code.as_str()),
             },
@@ -572,9 +586,9 @@ impl OperationalEvent {
                 let code = record.code.expect("metrics warning records have a code");
                 tracing::warn!(target: "registry_breg::metrics", code, message = record.message);
             }
-            Self::WebhookWorkerIterationFailed | Self::WebhookStateTransitionFailed(_) => {
-                let code = record.code.expect("webhook warning records have a code");
-                tracing::warn!(target: "registry_breg::webhook", code, message = record.message);
+            Self::HookWorkerIterationFailed | Self::HookStateTransitionFailed(_) => {
+                let code = record.code.expect("hook warning records have a code");
+                tracing::warn!(target: "registry_breg::hooks", code, message = record.message);
             }
             Self::PostgresBaselineAdvisory(advisory) => {
                 let code = record.code.expect("baseline advisory records have a code");
@@ -618,6 +632,7 @@ impl StartupError {
             Self::PackageEnvelopeRefused(_) => "the Registry package was refused",
             Self::DatabaseConnection(cause) => cause.message(),
             Self::DatabaseUnready => "the Registry database is not ready for this package",
+            Self::SchemaTestSetupRefused(_) => "the schema-test database setup was refused",
             Self::DatabaseCatalogDrift { .. } => {
                 "the Registry database catalog differs from the runtime package; run `bregctl doctor` to name the objects"
             }
@@ -626,6 +641,9 @@ impl StartupError {
             }
             Self::UnrecognizedDatabase => {
                 "the Registry database holds registry state this release does not recognise; a release reads only the state its predecessor wrote, so upgrade the database one release at a time"
+            }
+            Self::Pre1_0Schema => {
+                "the Registry database uses the attachment verification schema of a pre-1.0 release; this release supports fresh installs only. Create a fresh database, rebuild the package with this release's `bregctl test` and `bregctl package`, and run `bregctl apply --package DIR --initial`"
             }
             Self::DatabaseIdentityMismatch => {
                 "the Registry database records a different database id than identity.databaseId; point the runtime file at the database it names or correct identity.databaseId"
@@ -660,11 +678,11 @@ impl StartupError {
                 "the Registry attachment storage or verification binding was refused"
             }
             Self::EventDestinations => "the Registry event destination bindings were refused",
-            Self::RetainedWebhookBindings { .. } => {
-                "retained webhook deliveries require superseded bindings; run `bregctl doctor` to name the recovery"
+            Self::RetainedHookBindings { .. } => {
+                "retained hook deliveries require superseded bindings; run `bregctl doctor` to name the recovery"
             }
             Self::InstanceIdChangedWithPendingDeliveries { .. } => {
-                "pending webhook deliveries were captured under a different identity.instanceId; restore the previous identity.instanceId until they drain, and run `bregctl doctor` to name it"
+                "pending hook deliveries were captured under a different identity.instanceId; restore the previous identity.instanceId until they drain, and run `bregctl doctor` to name it"
             }
             Self::FieldEncryption => "the Registry field-encryption key state was refused",
             Self::FieldEncryptionCustody => {
@@ -720,7 +738,7 @@ pub struct PreparedServer {
     bind: SocketAddr,
     app: Router,
     shutdown_grace: Duration,
-    webhook_worker: Option<WebhookWorker>,
+    hook_worker: Option<HookWorker>,
     attachment_verification_worker: Option<AttachmentVerificationWorker>,
     review_worker: Option<crate::review_store::ReviewWorker>,
     access_log_retention: Option<(RuntimePool, Arc<LastSuccess>)>,
@@ -801,7 +819,7 @@ impl PreparedServer {
             bind,
             app,
             shutdown_grace,
-            webhook_worker: None,
+            hook_worker: None,
             attachment_verification_worker: None,
             review_worker: None,
             access_log_retention: None,
@@ -830,17 +848,17 @@ impl PreparedServer {
     #[cfg(feature = "postgres-test")]
     #[doc(hidden)]
     #[must_use]
-    pub fn from_parts_with_webhook_worker_for_test(
+    pub fn from_parts_with_hook_worker_for_test(
         bind: SocketAddr,
         app: Router,
         shutdown_grace: Duration,
-        webhook_worker: WebhookWorker,
+        hook_worker: HookWorker,
     ) -> Self {
         Self {
             bind,
             app,
             shutdown_grace,
-            webhook_worker: Some(webhook_worker),
+            hook_worker: Some(hook_worker),
             attachment_verification_worker: None,
             review_worker: None,
             access_log_retention: None,
@@ -1071,6 +1089,10 @@ fn schema_preparation_error(error: crate::postgres::PostgresKernelError) -> Star
             entity_id,
             field_id,
         },
+        crate::postgres::PostgresKernelError::RoleInvariant(invariant)
+        | crate::postgres::PostgresKernelError::CatalogInvariant(invariant) => {
+            StartupError::SchemaTestSetupRefused(invariant)
+        }
         _ => StartupError::DatabaseUnready,
     }
 }
@@ -1292,7 +1314,7 @@ impl std::io::Write for RefuseEveryEntry {
 /// Every request, including the transactions it holds, is abandoned after the
 /// configured request timeout, at most one minute. Outside a request, the
 /// longest wait a server transaction holds open is one object-store read by
-/// the attachment verification worker, also capped at one minute; webhook,
+/// the attachment verification worker, also capped at one minute; hook,
 /// review, Evidence, and verifier calls run between transactions. A pool
 /// checkout waits at most one minute too. The bound is twice the largest of
 /// those caps, so it only ends a transaction that nothing is still bounding.
@@ -1515,16 +1537,22 @@ async fn finish_prepared_server(
         Some(field_encryption) => snapshots.with_field_encryption(field_encryption),
         None => snapshots,
     });
-    let hook_handlers = Arc::new(crate::hook_handler::HookHandlerRegistry::new(
-        &registry,
-        &expected.activation_id,
-    ));
+    let hook_handlers = crate::hooks::local_hook_handlers(&registry, &expected.activation_id);
+    // Local WASM hook programs run on their own hook runtime under the
+    // operator budgets and backend, apart from the action handler runtime
+    // and its module cache.
+    #[cfg(feature = "wasm")]
+    let hook_handlers = hook_handlers.with_wasm_runtime(
+        crate::hooks::hook_wasm_runtime(config.wasm_execution())
+            .map_err(|_| StartupError::RuntimeConfig(RuntimeConfigError::InvalidWasmExecution))?,
+    );
+    let hook_handlers = Arc::new(hook_handlers);
     // Every write path spends idempotency keys under the one verified issuer
     // and holds responses for the configured receipt horizon.
     let idempotency = config
         .idempotency_policy()
         .map_err(StartupError::RuntimeConfig)?;
-    let webhook_delivery = WebhookDeliveryService::new_with_runtime_bindings(
+    let hook_delivery = HookDeliveryService::new_with_runtime_bindings(
         pool.clone(),
         Arc::clone(&event_destinations),
         hook_handlers,
@@ -1539,21 +1567,21 @@ async fn finish_prepared_server(
     );
     verify_pending_delivery_source(&pool, &expected.package_id, config.identity().instance_id())
         .await?;
-    webhook_delivery
+    hook_delivery
         .verify_retained_bindings()
         .await
         .map_err(|error| match error {
-            WebhookRetainedBindingError::Mismatch {
+            HookRetainedBindingError::Mismatch {
                 retained_deliveries,
-            } => StartupError::RetainedWebhookBindings {
+            } => StartupError::RetainedHookBindings {
                 retained_deliveries,
             },
-            WebhookRetainedBindingError::Unavailable => StartupError::EventDestinations,
+            HookRetainedBindingError::Unavailable => StartupError::EventDestinations,
         })?;
     // The worker also owns payload expiry, so it runs even when the active
     // package declares no events. Compatible retained work is checked above.
-    let webhook_progress = webhook_delivery.last_success();
-    let webhook_worker = Some(WebhookWorker::new(webhook_delivery));
+    let hook_progress = hook_delivery.last_success();
+    let hook_worker = Some(HookWorker::new(hook_delivery));
     let evidence = config
         .activate_evidence(&registry)
         .map_err(StartupError::RuntimeConfig)?;
@@ -1662,7 +1690,7 @@ async fn finish_prepared_server(
     let telemetry_metrics = config.metrics_listener().map(|_| {
         let mut registry = Metrics::new(telemetry_pool)
             .with_active_package(startup.package().package_digest())
-            .with_worker_progress(ProgressWorker::Webhook, webhook_progress);
+            .with_worker_progress(ProgressWorker::Hook, hook_progress);
         if let Some(worker) = &attachment_verification_worker {
             registry = registry.with_worker_progress(
                 ProgressWorker::AttachmentVerification,
@@ -1696,7 +1724,7 @@ async fn finish_prepared_server(
         bind: config.listener().bind(),
         app,
         shutdown_grace: config.operational_timeouts().shutdown_grace,
-        webhook_worker,
+        hook_worker,
         attachment_verification_worker,
         review_worker,
         access_log_retention,
@@ -1906,7 +1934,7 @@ pub async fn serve_until_shutdown(
         bind,
         app,
         shutdown_grace,
-        webhook_worker,
+        hook_worker,
         attachment_verification_worker,
         review_worker,
         access_log_retention,
@@ -1969,9 +1997,9 @@ pub async fn serve_until_shutdown(
             task_stopped_tx.clone(),
         )
     });
-    let mut worker = webhook_worker.map(|worker| {
+    let mut worker = hook_worker.map(|worker| {
         SupervisedTask::spawn(
-            BackgroundTask::WebhookWorker,
+            BackgroundTask::HookWorker,
             worker.run(worker_shutdown_rx.clone()),
             worker_shutdown_rx.clone(),
             task_stopped_tx.clone(),
@@ -2315,6 +2343,15 @@ async fn verify_opened_startup(
         }
         crate::postgres::RegistryStateShape::Ledger => {}
     }
+    // A pre-1.0 attachment verification shape is named before the role and
+    // catalog checks, which would otherwise report it as missing grants or
+    // drift whose recovery a backup of the same database cannot provide.
+    if crate::postgres::pre_1_0_attachment_verification_present(&transaction)
+        .await
+        .map_err(|_| StartupError::DatabaseUnready)?
+    {
+        return Err(StartupError::Pre1_0Schema);
+    }
     verify_configured_runtime_role(&transaction, migration_role, runtime_role).await?;
     // A separate runtime role missing its grants may not even read the state
     // the checks below read, so the grants are checked first.
@@ -2506,7 +2543,7 @@ impl DynamicRuntimeReadiness {
     }
 }
 
-/// Bind retained webhook work to the event source this deployment stamps.
+/// Bind retained hook work to the event source this deployment stamps.
 ///
 /// Threat: the delivery worker accepts a stored envelope only when its
 /// `source` equals the source `identity.instanceId` derives, so renaming the
@@ -2521,7 +2558,7 @@ async fn verify_pending_delivery_source(
     package_id: &str,
     instance_id: &str,
 ) -> Result<()> {
-    let expected_source = crate::webhook::delivery_source(package_id, instance_id);
+    let expected_source = crate::hooks::delivery_source(package_id, instance_id);
     let client = pool
         .get()
         .await
@@ -2699,4 +2736,36 @@ async fn verify_configured_runtime_role(
         return Err(StartupError::DatabaseUnready);
     }
     Ok(())
+}
+
+#[cfg(all(test, feature = "runtime", feature = "tooling"))]
+mod schema_preparation_error_tests {
+    use super::*;
+    use crate::postgres::PostgresKernelError;
+
+    #[test]
+    fn role_and_catalog_invariants_keep_their_cause() {
+        assert_eq!(
+            schema_preparation_error(PostgresKernelError::RoleInvariant(
+                "schema-test runtime connection uses unexpected authority"
+            )),
+            StartupError::SchemaTestSetupRefused(
+                "schema-test runtime connection uses unexpected authority"
+            )
+        );
+        assert_eq!(
+            schema_preparation_error(PostgresKernelError::CatalogInvariant(
+                "administrator-installed btree_gist is required"
+            )),
+            StartupError::SchemaTestSetupRefused("administrator-installed btree_gist is required")
+        );
+    }
+
+    #[test]
+    fn connection_failures_stay_database_unready() {
+        assert_eq!(
+            schema_preparation_error(PostgresKernelError::Connection),
+            StartupError::DatabaseUnready
+        );
+    }
 }

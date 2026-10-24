@@ -105,6 +105,14 @@ class ReleaseRosterTest(TestCase):
             self.assertFalse(release_roster.coordinator_in_release((0, 41, 99)))
             self.assertTrue(release_roster.coordinator_in_release((0, 42, 0)))
 
+    def test_document_store_is_held_out_of_every_release(self) -> None:
+        self.assertIsNone(release_roster.DOCUMENTS_FIRST_RELEASE)
+        for version in ((0, 43, 0), (0, 44, 0), (1, 0, 0)):
+            self.assertFalse(release_roster.documents_in_release(version))
+        with mock.patch.object(release_roster, "DOCUMENTS_FIRST_RELEASE", (0, 44, 0)):
+            self.assertFalse(release_roster.documents_in_release((0, 43, 99)))
+            self.assertTrue(release_roster.documents_in_release((0, 44, 0)))
+
     def test_coordinator_binary_release_does_not_release_its_image(self):
         self.assertFalse(release_roster.coordinator_binaries_in_release((0, 43, 99)))
         self.assertTrue(release_roster.coordinator_binaries_in_release((0, 44, 0)))
@@ -149,7 +157,11 @@ class ReleaseRosterTest(TestCase):
                 self.assertEqual(0, result)
                 self.assertEqual(expected, stdout.getvalue())
 
-        for command in ("coordinator-client-in-release", "coordinator-in-release"):
+        for command in (
+            "coordinator-client-in-release",
+            "coordinator-in-release",
+            "documents-in-release",
+        ):
             for version, expected in (("0.41.9", "false\n"), ("v0.42.0", "false\n")):
                 with self.subTest(command=command, version=version):
                     stdout = io.StringIO()

@@ -8,6 +8,206 @@ security-invariant matrix in `contracts/security-invariant-matrix.yaml` is the
 row-per-invariant baseline; this file is the narrative behind the decisions
 and the residuals the matrix rows do not state.
 
+## Generated business identifiers
+
+The public code is an immutable stored field, while the record UUID remains
+the engine identity. The threat is a caller choosing or reusing a code, moving
+it to a different uniqueness scope, or causing a Proposal retry or migration
+to issue a code twice. Compiler validation in `compiler.rs` requires a bounded
+string field and required stored scalar scope fields classified public or
+internal and not references, excludes generated fields from caller-writable
+contracts, and rejects incompatible successor rules.
+Mutation admission in `mutation.rs`, `immediate_actions.rs`, and
+`proposal_prepare.rs` refuses caller or Action values for generated fields and
+later changes to either a generated field or its scope. Proposal Submit reserves
+codes once and freezes them in the reviewed effects; Apply and Retry use those
+effects without another allocation.
+
+`generated_identifiers.rs` allocates and reserves inside the owning PostgreSQL
+transaction. Sequence counters lock per scope; random codes use operating-system
+entropy and bounded collision retries. An append-only reservation ledger keeps
+issued values unavailable after tombstone or erasure. Migration-owned functions
+have a pinned search path; the runtime role has only EXECUTE, with no direct
+counter or reservation-table grants. `generated_ddl.rs` and
+`postgres/interlock.rs` seed reservations and sequence high-water marks after a
+reviewed backfill, then check the scoped unique constraint before activation.
+The focused PostgreSQL allocator, Action, Proposal, and migration tests cover
+role grants, rollback, scoped reuse, retained rows, replay, and recovery.
+
+Generated codes are institution-facing labels, not proof of authority. A
+holder still needs the ordinary Record or Action grant. A code space can fill;
+the bounded allocator returns a conflict instead of silently recycling values.
+
+Residual: the reservation ledger is append-only and no erasure path touches
+it, so each issued value and its sequence scope values stay in
+`registry_generated_identifier_reservations` after the Record is tombstoned or
+erased. That is the price of never reissuing a code. It is acceptable because
+the compiler limits generated fields and scope fields to public or internal
+values (scope fields also cannot be references), so the ledger holds a
+jurisdiction or category code beside an institution-issued number, never
+restricted data or a link to a person. Hashing the scope values would remove
+even that, and stays open if a register needs to scope by more sensitive data.
+
+## Attachment storage and verification through the shared object store
+
+The S3 adapter and the attachment verifier transport moved from
+`registry-breg` into `registry-platform-objectstore`, so another product can
+store and verify content under its own namespace without a second copy of the
+signing, integrity, and verdict code. The threat is drift: a moved adapter
+that signs, addresses, or accepts differently would change which bytes a
+registry releases, or would leave the binding a registry pinned at its first
+upload unrecognised.
+
+The engine supplies its namespace, `NAMESPACE` in
+`crates/registry-breg/src/attachment_storage.rs` and
+`crates/registry-breg/src/attachment_verification.rs`: key prefix `breg`,
+binding domains `breg-attachment-s3-v1` and
+`breg-attachment-verification-http-v1`, and the attachment size bound. The
+object key, the storage binding digest (domain, bucket URL, region, and the
+digest of the database and registry scope), and the verification binding
+digest (domain, URL, `policyId`) are computed as before, so a registry that
+pinned its bindings starts unchanged. The request shapes, the four verifier
+headers, the attempt and connect timeouts, the refusal of redirects, proxies,
+retries, and versioned buckets, and the closed fail-closed verdict parser are
+unchanged; `policyId` is still committed in the binding and never sent.
+
+The only configuration change is the destination member: `endpoint` is now
+`url` in both blocks (CFG-VAL-7), and `endpoint` is refused as a removed key.
+The defaults are unchanged: storage defaults to `type: database` and
+verification to `type: disabled`; the shared verifier block has no default of
+its own.
+
+### Tests
+
+- `crates/registry-platform-objectstore/src/s3_tests.rs` pins the SigV4
+  canonical request and signature, the header set, the object key and binding
+  digest, and the refusal of missing, corrupt, oversized, versioned,
+  redirected, and interrupted responses (BREG-SEC-54 now points here).
+- `crates/registry-platform-objectstore/src/verifier_tests.rs` pins the
+  request bytes and headers, the absence of `policyId` on the wire, the
+  timeouts, the binding digest, and every unavailable verdict.
+- `the_registry_namespace_keeps_its_key_prefix_and_binding_digest` in
+  `crates/registry-breg/src/attachment_storage.rs` pins the engine's key
+  prefix, domain, and request paths; the verifier tests in
+  `crates/registry-breg/src/attachment_verification.rs` keep BREG-SEC-55.
+- `attachment_destinations_are_named_url_and_the_endpoint_key_is_refused` in
+  `crates/registry-breg/tests/runtime_config.rs` pins the removed-key refusal.
+
+### Accepted residuals
+
+- **Refusal messages name object storage.** An adapter error's display text
+  says "object storage" rather than "attachment storage". Every engine call
+  site maps the error to its own closed refusal, so no message an operator or
+  caller sees changes.
+- The crate's own notes are in the "Security review notes" section of
+  `crates/registry-platform-objectstore/README.md`.
+
+## Attachment verification on the shared dispatch core
+
+Attachment verification moved from a lease, attempt counter, and retry time
+held on each verdict row to the shared `registry-platform-dispatch` job core,
+the same core the Document Store's verification uses. The threat is a weaker
+worker: a verdict committed for bytes, a media type, or a verifier binding it
+was not given, a verdict committed by a worker whose lease another worker
+has taken over, an attempt the audit journal never records, or a file that
+leaves quarantine without a verdict.
+
+### Enforcement and defaults
+
+- `attachment_store::install` creates
+  `registry_internal.registry_attachment_verification_jobs` from the
+  dispatch table declaration, and `put` enqueues one job in the upload
+  transaction that creates a pending verdict row, so every pending row has
+  exactly one job. The verdict row loses its lease, attempt, and retry
+  columns and gains `verification_id`, the job's key.
+- The claim selects a due job only when its verdict row is gone or decided,
+  so the job can end, or when the row waits under the pinned verifier
+  binding for live bytes a live reference holds
+  (`CLAIM_PREDICATE` in
+  `crates/registry-breg/src/attachment_verification_worker.rs`). Every
+  dispatch transaction, and the transaction that reads the bytes, is
+  admitted as before: bounded lock and statement waits, the shared registry
+  lock, the ready registry identity, the attachment row-level security
+  scope, and the pinned storage and verifier bindings.
+- The attempt's `request` audit entry is accepted before the lease commits,
+  and so before any byte is read or sent. The content read
+  (`load_verification_content`) and the verdict write
+  (`record_verification_verdict`) each require the job's lease token to be
+  live, so a worker whose lease lapsed and was taken over cannot read or
+  decide. Bytes are checked against the blob's size and SHA-256 before the
+  verifier sees them.
+- Only an `approved` or `rejected` answer from the configured verifier ends
+  a job with a verdict. A verifier failure, a content read or integrity
+  failure, or the 60-second attempt budget running out leaves the row
+  pending and retries the job after a delay drawn with equal jitter between
+  half and all of a base delay that starts at 30 seconds and doubles to one
+  hour, so the first retry follows in 15 to 30 seconds and no delay exceeds
+  one hour. The policy has no expiry, treats an uncertain outcome as a
+  retry, and allows 32,767 attempts, so a quarantined file waits for a
+  verdict rather than for an operator; a job that stops anyway fails the
+  worker pass visibly.
+- A lease a stopped worker left behind is recovered by the next claim to a
+  backed-off retry, and the recovering worker writes that attempt's
+  `unfinished` terminal entry. A verdict that arrives after its row was
+  retired commits nothing and is audited as `discarded`, and the job of a
+  retired row is deleted with the row unless a worker holds it, in which
+  case that worker deletes it when it finishes.
+- The audit schema is `breg-attachment-verification-audit/v3`, replacing
+  `/v2` with the same record fields: the keyed verification reference is
+  derived under the `breg-attachment-verification-v2` domain from the
+  verification id and the lease token, in place of the
+  `breg-attachment-verification-v1` domain over the content digest, content
+  type, and lease id. A reader joining entries across the change branches on
+  the schema, as `products/breg/contracts/audit-identity.md` states.
+- The worker records its last success only for a pass that reached a
+  verdict, or that found no due job while no job an earlier attempt failed,
+  or a lapsed lease, waits for its retry, and no verifiable pending verdict
+  is stranded: its job missing, or stopped (dead-lettered, unknown, expired,
+  or cancelled) without a verdict. A stranded verdict is otherwise claimed
+  by nothing, so the growing last-success age is its signal.
+
+### Tests
+
+`crates/registry-breg/tests/postgres_proposal_s3.rs`:
+`verification_runs_on_the_shared_dispatch_job_table` pins the job table and
+the removed verdict columns, the retry wait without a success, the verdict
+after the retry, the lapsed-lease recovery and its `unfinished` entry, and a
+single verifier request and verdict for a recovered job;
+`native_verifier_worker_releases_only_exact_approved_bytes` keeps the exact
+bytes, media type, binding, quarantine, and refusal checks against the
+shared dispatcher. The unit tests in
+`crates/registry-breg/src/attachment_verification_worker.rs` pin the policy
+and the mapping of verifier answers. The new suite test was written first
+and did not compile against the code before it.
+
+### Accepted residuals
+
+- **No row-level security on the job table.** The job table holds only job
+  keys, states, attempts, and timestamps. The runtime role can read and
+  change it without an admitted transaction, as it can the hook delivery
+  state table. A changed job row can cause an extra
+  verifier request or stall a verification; it cannot release bytes,
+  because a verdict is written only into the admitted verdict row under a
+  live lease, and a pending row stays quarantined.
+- **No outer iteration bound.** The 180-second bound on a whole worker pass
+  is gone. Each database statement is bounded by the 30-second statement
+  timeout and the configured lock timeout, and the content read and
+  verifier request by the 60-second attempt budget.
+- **Double `unfinished`.** One attempt can be answered `unfinished` twice:
+  by the worker that wrote it, and again by the worker that recovers its
+  lapsed lease. The first comes from a finish whose commit cannot be
+  confirmed, from a claim whose lease commit failed and whose read-back
+  found nothing, and from a finish whose commit cannot be confirmed after
+  `after_finished` deleted the job row of a retired verdict, so the
+  read-back finds no row even when the finish committed. A worker whose
+  lease lapsed before it finished writes no `discarded` or verdict entry at
+  all: its finish is refused by the stale fence, the recovering worker's
+  `unfinished` is the attempt's only terminal entry, and the lapsed pass
+  emits `attachment_verification.worker.iteration_failed`.
+- **Longer retry wait.** A verifier that recovers after a long outage may
+  wait up to an hour, jitter included, before a quarantined file is
+  retried.
+
 ## Immediate Action availability and guard refusal disclosure
 
 An application may ask whether one referenced target currently satisfies an
@@ -81,7 +281,7 @@ and require completed expiry and erased payloads. Active or uncertain work,
 shared-event siblings, spent idempotency keys, and audit history remain protected.
 Neither cleanup path recreates erased material or grants replay authority.
 
-Webhook operational logs carry only committed counts and a closed failure reason:
+Hook operational logs carry only committed counts and a closed failure reason:
 `registry-not-ready`, `lock-timeout`, `query-cancelled`, or `database`. A later batch
 failure reports only earlier committed progress. A capped tick emits one warning,
 a normal nonempty tick one completion, and an idle tick no completion. SQLSTATE
@@ -1099,7 +1299,7 @@ executor's corrected credentials or grants do not.
 
 ### Discarding a retained delivery
 
-`bregctl webhook discard` permanently closes one pending delivery, dead
+`bregctl hook discard` permanently closes one pending delivery, dead
 letter with retained payload, or expired lease at its exact generation. The
 generation and lease checks run under `FOR UPDATE` on the delivery state and
 the shared outbox row, and a worker cannot apply after the discard because it
@@ -1120,15 +1320,15 @@ apply before maintenance in `migration.rs`. Across captured revisions it counts
 pending or leased local rows and operator-replayable dead letters with retained,
 unexpired payloads. Other terminal metadata, non-replayable dead letters, and
 rows whose payload expired or was erased can remain after activation.
-`bregctl webhook drain` attempts
+`bregctl hook drain` attempts
 only due local work for the active activation, with attempt and time bounds.
 It preserves URL work, live leases, future retries and dead letters for their
 existing recovery paths; a drain can itself produce more governed hook work.
 Apply rechecks retention under its activation lock.
 
 Drain executes reviewed Rhai/Wasm handlers in the `bregctl` process. In
-`crates/registry-breg/src/webhook.rs`,
-`WebhookOperatorService::from_runtime_config_with_execution` loads the active
+`crates/registry-breg/src/hooks.rs`,
+`HookOperatorService::from_runtime_config_with_execution` loads the active
 package and execution configuration and uses the runtime database connection.
 It needs the configured destination and audit secrets, handler assets, and,
 when fields are encrypted, the existing field-encryption provider and keys.
@@ -1176,7 +1376,7 @@ committed-receipt tests, and
 Its faults cover the lease token, generation, database, package, maintenance
 state, and an unreadable registry state. No fault case covers the attempt
 comparison in the shared Dispatch lease transition or the shared activation
-lock that `verify_delivery_transaction` in `crates/registry-breg/src/webhook.rs`
+lock that `verify_delivery_transaction` in `crates/registry-breg/src/hooks.rs`
 takes; both are enforced, and their assurance rests on review of that code.
 `in_flight_predecessor_answer_keeps_unreadable_activation_uncertain` continues
 through final-lease recovery, explicit replay, a second receiver request, and
@@ -1308,11 +1508,12 @@ scrape exhaust the runtime pool or hold locks the workers need.
   label and an age; it is absent until the worker first succeeds. The
   attachment verification worker notes a success only for a pass that
   reached a verdict, or that found no due job while no job an earlier
-  attempt failed waits for its retry. A pass whose content read or verifier
-  request failed and left its job pending for a retry is never a success,
-  and neither is an idle pass during that retry wait.
+  attempt failed waits for its retry and no verifiable pending verdict is
+  stranded without a job that can still run. A pass whose content read or
+  verifier request failed and left its job pending for a retry is never a
+  success, and neither is an idle pass during that retry wait.
 - `breg_queue_oldest_pending_age_seconds` carries only a closed `queue`
-  label (`webhook-delivery`, `review-submission`, `review-application`) and
+  label (`hook-delivery`, `review-submission`, `review-application`) and
   an age. Each scrape takes one runtime pool connection, serialized across
   scrapes by a mutex, inside a read-only transaction whose statement timeout
   is 5 seconds, and runs one aggregate statement that reads only
@@ -1347,10 +1548,9 @@ which covers every stop code and the review and metrics events.
 and `an_unreadable_queue_omits_every_queue_age_and_emits_a_closed_value_free_event`.
 `crates/registry-breg/tests/postgres_webhook_delivery.rs`:
 `real_postgres_webhook_worker_records_its_last_success_on_an_idle_iteration`.
-`crates/registry-breg/tests/postgres_change_requests.rs`:
-`real_postgres_attachment_verification_worker_records_its_last_success_when_idle`,
-`real_postgres_attachment_verification_worker_records_no_success_while_the_verifier_fails`,
-and `real_postgres_attachment_verification_worker_claims_the_next_due_job_without_waiting`.
+`crates/registry-breg/tests/postgres_proposal_s3.rs`:
+`verification_runs_on_the_shared_dispatch_job_table`, which pins the
+attachment verification worker's success only when idle or after a verdict.
 `crates/registry-breg/tests/postgres_access_log.rs`:
 `a_retention_tick_without_failure_records_its_last_success`.
 `crates/registry-breg/tests/postgres_startup.rs`:
@@ -1391,9 +1591,11 @@ added codes.
   keeps routing to a process until it exits. Between a task stopping and the
   exit, the process drains within the shutdown grace.
 - **Attachment queue.** The attachment verification queue is not sampled by
-  `breg_queue_oldest_pending_age_seconds`, because its row policy admits
-  only a transaction the attachment worker has admitted; its worker progress
-  age is published.
+  `breg_queue_oldest_pending_age_seconds`. Its signal is the worker's
+  `breg_worker_last_success_age_seconds`, which stops advancing while a job
+  waits for a retry, a lease lapsed, or a verifiable pending verdict has no
+  job that can still run (missing or dead-lettered), so an operator sees a
+  stalled, lost, or given-up verification as a growing age.
 - **Retention failures.** A failed subject access log retention pass still
   writes a raw error record without a closed `code`; only its last-success
   age and its stop code are closed.
@@ -1735,7 +1937,8 @@ It changes which packages such a build activates, a deployment default.
 - Package loading rederives the package through the same compiler, so the
   build refuses to load a package a wasm-enabled build produced.
 - Default builds carry the `wasm` feature and are unchanged. The runtime's
-  late refusal of a WASM hook in `hook_handler.rs` stays as a second line.
+  late refusal of a WASM hook, now in the shared executor in
+  `registry-platform-hooks`, stays as a second line.
 
 ### Tests
 
@@ -3101,8 +3304,8 @@ its terminal result.
   `crates/registry-breg-client-py/src/lib.rs`. Shared transport words come
   from `TransportKind::kind`; retryability, unknown-outcome reporting and
   response validation are unchanged.
-- `BRegWebhookVerificationError::code` in
-  `crates/registry-breg-client/src/webhook.rs` preserves distinct
+- `BRegHookVerificationError::code` in
+  `crates/registry-breg-client/src/hook.rs` preserves distinct
   `invalid-delivery-time`, `duplicate-header`, `body-too-large`, and
   `invalid-key` causes alongside the signature and missing-header failures.
   Every message names the input to fix without rendering its value.
@@ -4172,6 +4375,57 @@ without source reads. Its HTTP proof also refuses another producer and retains
 reviewer and supervisor concealment. Remote cancellation is asynchronous, so
 in-flight work and dependency outages are settled through retained exact
 recovery; the change does not claim a cross-service atomic transaction.
+
+## Hook adapter and executor in the platform crate
+
+The hook delivery adapter and the local handler executor move from
+`webhook.rs` and `hook_handler.rs` into `registry-platform-hooks`; BReg keeps
+`apply_proposal`, the proposal completion barrier, its triggers and
+projections, and its identity preflight in `crates/registry-breg/src/hooks.rs`.
+
+**What changes for authority.** Nothing. The signing URL destination, the
+pooled connection, the audit mapping, and the retry schedule are the same
+code with the product prefix as a parameter. A local program still runs only
+when its delivery id, package revision, handler kind, and handler digest
+match the compiled package, and its message is still applied through
+`apply_proposal` under BReg's own authorization and audit.
+
+**Hook Rhai engine.** Hook programs now run on the bare
+`registry-platform-script` engine, without the action planner helpers. Rhai
+resolves functions when a call runs, so a package whose hook program calls
+`join` still compiles and activates, and the call fails at execution as an
+execution failure (dead-letter reason `handler-execution`), which
+dead-letters every delivery of that hook; it does not reach a different
+helper. No admission-time walk of called functions is added; the BReg
+changelog tells operators to look for `handler-execution` dead letters after
+upgrading. Action handlers keep the
+planner engine. `a_hook_program_calling_a_planner_helper_fails_on_the_bare_engine`
+in `crates/registry-breg/src/tests/hooks_tests.rs` pins this.
+
+**WASM hook runtime.** Hook modules run on a hook-owned WASM runtime with its
+own fuel, epoch ticker, and prepared-module cache, so a hook module and an
+action module no longer share cache slots or eviction.
+
+**Identity preflight.** BReg's preflight still reads
+`registry_internal.registry_state` under a shared transaction advisory lock
+and compares package id, database id, active package digest, activation id,
+and schema fingerprint. It does not use the platform's activation-record
+preflight: BReg's activation takes the same advisory lock exclusively, so a
+delivery transaction and an activation are serialized rather than compared
+against a snapshot, and the readiness and schema fingerprint checks have no
+counterpart in the activation record. Moving BReg onto the shared preflight
+is left to a separate change.
+
+**Audit.** Hook delivery entries move to `breg-hook-audit/v1` with
+`"event": "breg.hook-delivery"` and reference domains `breg-hook-event-v1` and
+`breg-hook-delivery-v1`; the redaction and the field set are unchanged.
+`contracts/audit-identity.md` and the audit identity goldens record the
+change.
+
+**Configuration.** `eventDestinations` moves to `destinations.hooks` and the
+old key is refused with `config.removed-key`. The destination binding digest
+keeps its internal `eventDestinations` member name, so retained deliveries
+captured before the upgrade verify against the same digest.
 
 ## Proposal input write grants
 

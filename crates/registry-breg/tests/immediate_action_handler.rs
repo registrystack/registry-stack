@@ -67,6 +67,67 @@ fn runtime_result(expression: &str) -> String {
     format!("fn outcome(ctx) {{ {expression} }} fn handle(ctx) {{ outcome(ctx) }}")
 }
 
+fn generated_only_project() -> Value {
+    let mut source = project();
+    source["recordTypes"][0]["fields"] = json!([{
+        "id": "number",
+        "type": "string",
+        "minimumLength": 1,
+        "maximumLength": 32,
+        "required": true,
+        "classification": "internal",
+        "generate": {"type": "sequence", "minimumDigits": 1}
+    }]);
+    source["actions"][0]["plan"]["writes"] = json!([{
+        "id": "person",
+        "target": {"recordType": "person"},
+        "operation": "create",
+        "fields": []
+    }]);
+    source["accessProfiles"][0]["permissions"]["actions"][0]["results"] = json!(["person"]);
+    source
+}
+
+#[test]
+fn handler_generated_only_create_accepts_an_empty_mutation_list() {
+    let script = result(r#"#{effects:[#{id:"person"}]}"#);
+    let mut ordinary_empty_slot = project();
+    ordinary_empty_slot["actions"][0]["plan"]["writes"][0]["fields"] = json!([]);
+    let failure = compile(ordinary_empty_slot, &script)
+        .expect_err("a create without generated fields still needs a field ceiling");
+    assert!(failure
+        .diagnostics()
+        .iter()
+        .any(|diagnostic| diagnostic.code == "breg.action.handler-fields-empty"));
+
+    let action = compile(generated_only_project(), &script)
+        .expect("a generated-only create write slot compiles");
+    let ActionHandlerOutcome::Effects(effects) = evaluate_action(
+        &action,
+        inputs().as_object().unwrap(),
+        Instant::now() + Duration::from_secs(5),
+    )
+    .expect("the server-generated create needs no handler mutations") else {
+        panic!("effects expected")
+    };
+    assert_eq!(effects.len(), 1);
+    assert_eq!(effects[0].id, "person");
+    assert!(effects[0].mutations.is_empty());
+
+    let ordinary = compile(project(), &script).expect("ordinary write ceiling compiles");
+    let diagnostic = evaluate_action_detailed(
+        &ordinary,
+        inputs().as_object().unwrap(),
+        Instant::now() + Duration::from_secs(5),
+    )
+    .expect_err("an ordinary create slot still requires a mutation");
+    assert_eq!(diagnostic.kind, ActionHandlerError::Result);
+    assert_eq!(
+        diagnostic.message,
+        "Return at least one set or clear mutation for the slot."
+    );
+}
+
 #[test]
 fn handler_computes_from_authored_input_ids_and_omits_slots() {
     let outcome = evaluate(r#"fn handle(ctx) { let name = ctx.inputs["given-name"]; name.trim(); #{effects:[#{id:"person",set:#{name:name,friend:#{fromInput:"person"}}}]} }"#).unwrap();

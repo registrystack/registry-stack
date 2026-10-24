@@ -95,7 +95,6 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::future::Future;
 use std::num::NonZeroUsize;
-use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
@@ -105,7 +104,7 @@ use registry_platform_audit::AuditEntry;
 use registry_platform_dispatch::postgres::{
     AttemptAudit, ClaimRefusal, Decoded, DispatchConfig, DispatchConnection, DispatchEvent,
     DispatchSql, DispatchStore, DispatchTransport, Dispatcher, Disposition, ExpirySql, JobKey,
-    JobState, JobTable, LeasedJob, LeasedReadError, Quarantine, QuarantineAudit,
+    JobState, JobTable, LeasedJob, LeasedReadError, PooledClient, Quarantine, QuarantineAudit,
     QuarantineDisposition, QuarantineReason, ReplayAudit, ReplayOutcome, SelectSql, TargetAction,
     Transition, TransitionAudit, TransitionOutcome,
 };
@@ -405,24 +404,6 @@ pub struct MessageJob {
     pub sender_profile: String,
 }
 
-/// One pooled runtime client framed for the dispatch core's connection
-/// seam. The pool receives the client back when this wrapper is dropped.
-struct PooledClient(deadpool_postgres::Client);
-
-impl Deref for PooledClient {
-    type Target = tokio_postgres::Client;
-
-    fn deref(&self) -> &tokio_postgres::Client {
-        &self.0
-    }
-}
-
-impl DerefMut for PooledClient {
-    fn deref_mut(&mut self) -> &mut tokio_postgres::Client {
-        &mut self.0
-    }
-}
-
 /// The Messaging consumer of the platform dispatch core.
 pub struct MessageDispatchStore {
     store: PostgresStore,
@@ -684,7 +665,7 @@ impl DispatchStore for MessageDispatchStore {
             .client()
             .await
             .map_err(|_| DispatchError::Unavailable)?;
-        Ok(Box::new(PooledClient(client)))
+        Ok(PooledClient::boxed(client))
     }
 
     async fn verify_transaction(&self, transaction: &Transaction<'_>) -> Result<(), DispatchError> {

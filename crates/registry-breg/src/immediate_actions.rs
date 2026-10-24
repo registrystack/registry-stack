@@ -576,7 +576,9 @@ fn compile_handler(
         let mut required_fields = BTreeSet::new();
         let mut reference_sources = BTreeMap::new();
         let mut mutations = Vec::new();
-        if slot.fields.is_empty() {
+        let generates_create_field = slot.operation == Operation::Create
+            && target_entity.generated_fields().next().is_some();
+        if slot.fields.is_empty() && !generates_create_field {
             errors.push(Diagnostic::error(
                 "breg.action.handler-fields-empty",
                 &slot_path,
@@ -600,6 +602,24 @@ fn compile_handler(
                 ));
                 continue;
             };
+            if field.generate.is_some() {
+                errors.push(Diagnostic::error(
+                    "breg.action.handler-field-generated",
+                    &field_path,
+                    "a handler cannot write a server-generated identifier",
+                ));
+                continue;
+            }
+            if slot.operation == Operation::Patch
+                && target_entity.is_generated_identifier_immutable(field_id)
+            {
+                errors.push(Diagnostic::error(
+                    "breg.action.handler-field-generated-scope",
+                    &field_path,
+                    "a handler cannot patch a field that scopes a generated identifier",
+                ));
+                continue;
+            }
             if input_classification
                 .is_some_and(|classification| classification > field.classification)
             {
@@ -668,7 +688,7 @@ fn compile_handler(
             required_fields = target_entity
                 .fields
                 .values()
-                .filter(|field| field.required)
+                .filter(|field| field.required && field.generate.is_none())
                 .map(|field| field.id.clone())
                 .collect();
             if !required_fields.is_subset(&fields) {
@@ -1287,7 +1307,9 @@ fn compile_effects(
         let Some(target_entity) = entities.get(&target.entity_id) else {
             continue;
         };
-        if effect.set.is_empty() && effect.clear.is_empty() {
+        let generates_create_field = effect.operation == Operation::Create
+            && target_entity.generated_fields().next().is_some();
+        if effect.set.is_empty() && effect.clear.is_empty() && !generates_create_field {
             errors.push(Diagnostic::error(
                 "breg.action.effect-empty",
                 "actions[].plan.effects[]",
@@ -1305,6 +1327,24 @@ fn compile_effects(
                 ));
                 continue;
             };
+            if target_field.generate.is_some() {
+                errors.push(Diagnostic::error(
+                    "breg.action.effect-field-generated",
+                    "actions[].plan.effects[].set",
+                    "an Action effect cannot set a server-generated identifier",
+                ));
+                continue;
+            }
+            if effect.operation == Operation::Patch
+                && target_entity.is_generated_identifier_immutable(field)
+            {
+                errors.push(Diagnostic::error(
+                    "breg.action.effect-field-generated-scope",
+                    "actions[].plan.effects[].set",
+                    "an Action effect cannot patch a field that scopes a generated identifier",
+                ));
+                continue;
+            }
             if let Some(compiled) = compile_value(
                 inputs,
                 field,
@@ -1343,6 +1383,24 @@ fn compile_effects(
                 ));
                 continue;
             };
+            if target_field.generate.is_some() {
+                errors.push(Diagnostic::error(
+                    "breg.action.effect-field-generated",
+                    "actions[].plan.effects[].clear",
+                    "an Action effect cannot clear a server-generated identifier",
+                ));
+                continue;
+            }
+            if effect.operation == Operation::Patch
+                && target_entity.is_generated_identifier_immutable(field)
+            {
+                errors.push(Diagnostic::error(
+                    "breg.action.effect-field-generated-scope",
+                    "actions[].plan.effects[].clear",
+                    "an Action effect cannot patch a field that scopes a generated identifier",
+                ));
+                continue;
+            }
             if effect.operation == Operation::Create {
                 errors.push(Diagnostic::error(
                     "breg.action.effect-clear-on-create",
@@ -1648,7 +1706,11 @@ fn validate_required_create_fields(
                 CompiledPlanMutation::Clear { .. } => None,
             })
             .collect::<BTreeSet<_>>();
-        for field in entity.fields.values().filter(|field| field.required) {
+        for field in entity
+            .fields
+            .values()
+            .filter(|field| field.required && field.generate.is_none())
+        {
             if !written.contains(field.id.as_str()) {
                 errors.push(Diagnostic::error(
                     "breg.action.effect-create-required-field-missing",
@@ -1798,7 +1860,20 @@ fn validate_plan_bounds(
             "an Action plan exceeds the supported target-record ceiling",
         ));
     }
-    let mutation_count: usize = effects.iter().map(|effect| effect.mutations.len()).sum();
+    let mutation_count: usize = effects
+        .iter()
+        .map(|effect| {
+            let generated_fields = if effect.operation == Operation::Create {
+                entities
+                    .get(&effect.target.entity_id)
+                    .map(|entity| entity.generated_fields().count())
+                    .unwrap_or_default()
+            } else {
+                0
+            };
+            effect.mutations.len().saturating_add(generated_fields)
+        })
+        .sum();
     if mutation_count > usize::from(MAX_PLAN_FIELD_MUTATIONS) {
         errors.push(Diagnostic::error(
             "breg.action.bounds-field-mutations",
@@ -1854,6 +1929,15 @@ fn maximum_snapshot_bytes(
                 .checked_add(field.len() as u64 + 8)?
                 .checked_add(before)?
                 .checked_add(after)?;
+        }
+        if effect.operation == Operation::Create {
+            for generated in target.generated_fields() {
+                let max = maximum_field_json_bytes(&generated.field_type)?;
+                total = total
+                    .checked_add(generated.id.len() as u64 + 8)?
+                    .checked_add(max.max(4))?
+                    .checked_add(max)?;
+            }
         }
     }
     Some(total)
@@ -2903,6 +2987,15 @@ pub(crate) fn finalize_action_revisions(
                 target.read_fields.insert(guard.field.clone());
             }
         }
+        for ((entity_id, operation), target) in &mut targets {
+            if *operation == Operation::Create {
+                if let Some(entity) = entities.get(entity_id) {
+                    target
+                        .fields
+                        .extend(entity.generated_fields().map(|field| field.id.clone()));
+                }
+            }
+        }
         let targets = targets.into_values().collect::<Vec<_>>();
         let payload = json!({"actionId":action.id,"actionRevision":action.definition_revision,"targets":targets});
         let revision = format!(
@@ -2950,7 +3043,13 @@ pub(crate) fn definition_revision(
         // Both write operations freeze and validate complete before/after rows,
         // so requiredness and retained-field bounds belong to their closure.
         if action.effects.iter().any(|effect|effect.target.entity_id==id && matches!(effect.operation,Operation::Create|Operation::Patch)) {fields.extend(target.fields.keys().cloned());}
-        let fields=fields.into_iter().filter_map(|id|target.fields.get(&id).map(|field|(id,json!({"type":field.field_type,"required":field.required,"classification":field.classification,"pattern":field.pattern,"encrypted":field.encryption})))).collect::<BTreeMap<_,_>>();
+        let fields=fields.into_iter().filter_map(|id|target.fields.get(&id).map(|field|{
+            let mut contract=json!({"type":field.field_type,"required":field.required,"classification":field.classification,"pattern":field.pattern,"encrypted":field.encryption});
+            if let Some(generate)=&field.generate {
+                contract["generate"]=json!(generate);
+            }
+            (id,contract)
+        })).collect::<BTreeMap<_,_>>();
         Some((id,json!({"fields":fields,"constraints":target.constraints,"mutationMode":target.mutation_mode,"changeControl":target.change_control})))
     }).collect::<BTreeMap<_,_>>();
     let policy = match &action.execution {

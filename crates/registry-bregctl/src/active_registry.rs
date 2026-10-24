@@ -27,6 +27,9 @@ pub(crate) enum ActiveRegistryError {
     Uninitialized,
     /// The database holds registry state this release does not recognise.
     Unrecognized,
+    /// The database carries the attachment verification shape a pre-1.0
+    /// release installed.
+    Pre1_0Schema,
     /// The database records a different database id than the runtime
     /// configuration names.
     DatabaseMismatch,
@@ -108,6 +111,7 @@ pub(crate) fn observed_identity_for_digest(
 fn read_refusal(error: MigrationError) -> ActiveRegistryError {
     match error {
         MigrationError::UnrecognizedDatabase => ActiveRegistryError::Unrecognized,
+        MigrationError::Pre1_0Schema => ActiveRegistryError::Pre1_0Schema,
         MigrationError::MigrationLockHeld => ActiveRegistryError::InProgress,
         _ => ActiveRegistryError::Unavailable,
     }
@@ -152,6 +156,10 @@ mod tests {
         assert_eq!(
             read_refusal(MigrationError::UnrecognizedDatabase),
             ActiveRegistryError::Unrecognized
+        );
+        assert_eq!(
+            read_refusal(MigrationError::Pre1_0Schema),
+            ActiveRegistryError::Pre1_0Schema
         );
     }
 }
