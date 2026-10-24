@@ -4,7 +4,7 @@
 use super::{private, State, DATABASE_ID, MAX_BYTES, MIGRATION_ROLE, RUNTIME_ROLE};
 use anyhow::{bail, Context, Result};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
-use p256::ecdsa::SigningKey;
+use p256::{ecdsa::SigningKey, elliptic_curve::Generate as _};
 use registry_breg::literal_text::{
     LiteralText, WRITE_THE_VALUE, WRITE_THE_VALUE_OR_A_SECRET_REFERENCE,
 };
@@ -1300,8 +1300,8 @@ pub(super) fn hash(bytes: &[u8]) -> String {
 
 pub(super) fn keypair(root: &Path) -> Result<Value> {
     private::directory(root)?;
-    let key = SigningKey::random(&mut p256::elliptic_curve::rand_core::OsRng);
-    let point = key.verifying_key().to_encoded_point(false);
+    let key = SigningKey::generate();
+    let point = key.verifying_key().to_sec1_point(false);
     let x = URL_SAFE_NO_PAD.encode(point.x().context("generated key lacks x")?);
     let y = URL_SAFE_NO_PAD.encode(point.y().context("generated key lacks y")?);
     let kid = URL_SAFE_NO_PAD.encode(Sha256::digest(serde_json::to_vec(

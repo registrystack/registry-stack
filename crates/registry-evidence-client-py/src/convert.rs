@@ -1138,6 +1138,7 @@ mod tests {
     use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
     use ed25519_dalek::SigningKey;
     use evidence_client_sdk::{NonceError, OAuthErrorCode, TransportKind};
+    use p256::elliptic_curve::Generate as _;
     use pyo3::{
         types::{PyDict, PyList},
         Python,
@@ -1163,9 +1164,8 @@ mod tests {
     /// The shape `evidencectl access client add --generate-local-key` writes,
     /// which is the file the published tutorial hands to this binding.
     fn generated_es256_private_jwk_json() -> Value {
-        let signing_key =
-            p256::ecdsa::SigningKey::random(&mut p256::elliptic_curve::rand_core::OsRng);
-        let point = signing_key.verifying_key().to_encoded_point(false);
+        let signing_key = p256::ecdsa::SigningKey::generate();
+        let point = signing_key.verifying_key().to_sec1_point(false);
         serde_json::json!({
             "kty": "EC",
             "crv": "P-256",

@@ -1478,8 +1478,9 @@ mod tests {
 
     /// A fresh ES256 client key in the shape adopter tooling writes.
     fn es256_client_key(key_id: Option<&str>) -> PrivateJwk {
-        let key = p256::ecdsa::SigningKey::random(&mut p256::elliptic_curve::rand_core::OsRng);
-        let point = key.verifying_key().to_encoded_point(false);
+        use p256::elliptic_curve::Generate as _;
+        let key = p256::ecdsa::SigningKey::generate();
+        let point = key.verifying_key().to_sec1_point(false);
         let mut document = json!({
             "kty": "EC",
             "crv": "P-256",

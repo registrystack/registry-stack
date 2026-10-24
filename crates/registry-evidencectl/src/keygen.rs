@@ -12,7 +12,7 @@ use std::{
 use anyhow::{bail, Context, Result};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use clap::{Args, Subcommand, ValueEnum};
-use p256::ecdsa::SigningKey;
+use p256::{ecdsa::SigningKey, elliptic_curve::Generate as _};
 use registry_platform_crypto::{GeneratedKeyAlgorithm, PrivateJwk, PublicJwk};
 use serde_json::{json, Map, Value};
 use zeroize::Zeroizing;
@@ -357,8 +357,8 @@ struct KeypairFiles {
 /// Generate the P-256 ES256 pair the service signing key, the holder binding
 /// key, and a scaffolded project's key material all use.
 fn generate_p256_keypair() -> Result<KeypairFiles> {
-    let signing_key = SigningKey::random(&mut p256::elliptic_curve::rand_core::OsRng);
-    let point = signing_key.verifying_key().to_encoded_point(false);
+    let signing_key = SigningKey::generate();
+    let point = signing_key.verifying_key().to_sec1_point(false);
     let x = URL_SAFE_NO_PAD.encode(point.x().expect("uncompressed P-256 point has x"));
     let y = URL_SAFE_NO_PAD.encode(point.y().expect("uncompressed P-256 point has y"));
     let d = Zeroizing::new(URL_SAFE_NO_PAD.encode(signing_key.to_bytes()));

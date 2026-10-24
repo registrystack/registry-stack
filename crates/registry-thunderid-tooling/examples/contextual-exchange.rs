@@ -14,6 +14,7 @@ use std::sync::{
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use p256::elliptic_curve::Generate as _;
 use registry_platform_authcommon::client_assertion::{
     sign_client_assertion, ClientAssertionRequest,
 };
@@ -58,8 +59,8 @@ fn random() -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 fn key(kid: &str) -> (PrivateJwk, String) {
-    let secret = p256::ecdsa::SigningKey::random(&mut p256::elliptic_curve::rand_core::OsRng);
-    let point = secret.verifying_key().to_encoded_point(false);
+    let secret = p256::ecdsa::SigningKey::generate();
+    let point = secret.verifying_key().to_sec1_point(false);
     let public = json!({"kty":"EC","crv":"P-256","alg":"ES256","kid":kid,"use":"sig",
         "x":URL_SAFE_NO_PAD.encode(point.x().expect("x")),"y":URL_SAFE_NO_PAD.encode(point.y().expect("y"))});
     let mut private = public.clone();

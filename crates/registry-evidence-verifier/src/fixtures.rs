@@ -160,7 +160,7 @@ pub fn jwks_document(
 
 #[cfg(test)]
 mod tests {
-    use p256::{elliptic_curve::sec1::ToEncodedPoint, SecretKey};
+    use p256::{elliptic_curve::sec1::ToSec1Point, SecretKey};
 
     use super::*;
 
@@ -170,7 +170,7 @@ mod tests {
             .checked_add(1)
             .expect("test key index remains bounded");
         let secret = SecretKey::from_slice(&scalar).expect("test scalar is valid");
-        let encoded = secret.public_key().to_encoded_point(false);
+        let encoded = secret.public_key().to_sec1_point(false);
         let mut key = PublicJwk {
             kty: "EC".to_owned(),
             kid: None,

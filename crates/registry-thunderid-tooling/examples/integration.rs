@@ -13,6 +13,7 @@ use std::time::Duration;
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
+use p256::elliptic_curve::Generate as _;
 use registry_platform_crypto::PrivateJwk;
 use registry_platform_httputil::{PrivateKeyJwt, PrivateKeyJwtConfig, TokenProvider};
 use registry_thunderid_tooling::bootstrap::{Bootstrap, SystemCommandRunner};
@@ -42,8 +43,8 @@ fn fail(message: &str) -> ! {
 /// the session state; only the public JWKS is rendered into the
 /// registration.
 fn fresh_client_key(kid: &str) -> (PrivateJwk, String) {
-    let secret = p256::ecdsa::SigningKey::random(&mut p256::elliptic_curve::rand_core::OsRng);
-    let point = secret.verifying_key().to_encoded_point(false);
+    let secret = p256::ecdsa::SigningKey::generate();
+    let point = secret.verifying_key().to_sec1_point(false);
     let encode = |bytes: &[u8]| URL_SAFE_NO_PAD.encode(bytes);
     let public_jwks = format!(
         "{{\"keys\":[{{\"kty\":\"EC\",\"crv\":\"P-256\",\"alg\":\"ES256\",\"kid\":\"{kid}\",\"use\":\"sig\",\"key_ops\":[\"verify\"],\"x\":\"{}\",\"y\":\"{}\"}}]}}",

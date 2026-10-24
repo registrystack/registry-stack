@@ -1163,6 +1163,7 @@ fn insert_retry_after(fields: &mut Map<String, Value>, retry_after_seconds: Opti
 mod tests {
     use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
     use ed25519_dalek::SigningKey;
+    use p256::elliptic_curve::Generate as _;
     use registry_evidence_client::{
         EvidenceObjectType, OAuthErrorCode, SubjectBinding, SubjectBindingMode, SupportedValue,
         TransportKind, VerificationError,
@@ -1726,8 +1727,8 @@ mod tests {
     /// A fresh ES256 signing key, in the shape `evidencectl access client add
     /// --generate-local-key` writes.
     fn generated_es256_client_key_json(key_id: &str) -> Value {
-        let key = p256::ecdsa::SigningKey::random(&mut p256::elliptic_curve::rand_core::OsRng);
-        let point = key.verifying_key().to_encoded_point(false);
+        let key = p256::ecdsa::SigningKey::generate();
+        let point = key.verifying_key().to_sec1_point(false);
         serde_json::json!({
             "kty": "EC",
             "crv": "P-256",

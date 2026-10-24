@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Upgrade the P-256 dependency stack to use `crypto-bigint` 0.7.6, addressing
+  RUSTSEC-2026-0387. Key generation retains operating-system randomness and
+  existing SEC1 and JWK formats; signing algorithms and providers are unchanged.
+
 - CFG-SCHEMA-5 clarifies that the shared URL hook block owns fixed-policy
   delivery. BReg's explicit private-network, TLS-identity and classification
   controls remain product-owned while using the shared delivery primitives;

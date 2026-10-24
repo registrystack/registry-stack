@@ -43,7 +43,7 @@ const PRINCIPAL: &str = "urn:example:offer-caller";
 fn signing_key_pair(seed: u8) -> (Value, Value) {
     let scalar = [seed; 32];
     let signing = p256::ecdsa::SigningKey::from_slice(&scalar).expect("a valid P-256 scalar");
-    let encoded = signing.verifying_key().to_encoded_point(false);
+    let encoded = signing.verifying_key().to_sec1_point(false);
     let x = URL_SAFE_NO_PAD.encode(encoded.x().expect("an uncompressed point has x"));
     let y = URL_SAFE_NO_PAD.encode(encoded.y().expect("an uncompressed point has y"));
     let bare = PublicJwk::parse(
