@@ -7838,6 +7838,152 @@ async fn a_retry_replays_its_receipt_after_its_offering_changes_service() {
     assert_eq!(replayed["appointmentId"], appointment_id);
 }
 
+/// Every row the commitment ledger holds, table by table, in one reading, so
+/// a request can be shown to have left all of them exactly as it found them.
+async fn ledger_contents(fx: &Fixture) -> Vec<(&'static str, Value)> {
+    let mut contents = Vec::new();
+    for table in [
+        "scheduling_claims",
+        "scheduling_claim_allocations",
+        "scheduling_history",
+        "scheduling_outbox",
+        "scheduling_attempts",
+    ] {
+        let rows: Value = fx
+            .admin
+            .query_one(
+                &format!(
+                    "SELECT coalesce(jsonb_agg(to_jsonb(t) ORDER BY to_jsonb(t)::text), \
+                     '[]'::jsonb) FROM {table} t"
+                ),
+                &[],
+            )
+            .await
+            .unwrap_or_else(|_| panic!("read {table}"))
+            .get(0);
+        contents.push((table, rows));
+    }
+    contents
+}
+
+/// A third change a closed claim outlives: once the booking a window hold
+/// confirmed into is cancelled and the window leaves the records, nothing on
+/// the arrival offering is live, and publication may serve the same
+/// identifier as exact time. The consumed window hold carries no allocation
+/// rows, so the exact-time confirmation path meets it unallocated. The retry
+/// of the original confirmation must replay the receipt it stored, not read
+/// the hold as an inconsistent ledger and not place it again.
+#[tokio::test]
+async fn a_confirmation_replays_its_receipt_after_its_window_offering_turns_exact_time() {
+    let day = (pinned_now() + TimeDelta::days(2)).date_naive();
+    let start = DateTime::<Utc>::from_naive_utc_and_offset(
+        day.and_hms_opt(9, 0, 0).expect("a morning instant"),
+        Utc,
+    );
+    let fx = fixture_with_window(start).await;
+    let (status, hold) = fx
+        .post(
+            "/v1/holds",
+            &fx.agent,
+            "turned-offering-hold",
+            arrival(&fx, start, None)["admission"].clone(),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{hold}");
+    let hold_id = hold["holdId"].as_str().expect("a hold id").to_owned();
+
+    let confirmation = json!({"hold": hold_id, "admission": null});
+    let (status, confirmed) = fx
+        .post(
+            "/v1/appointments",
+            &fx.agent,
+            "turned-offering-confirm",
+            confirmation.clone(),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{confirmed}");
+    let appointment_id = confirmed["appointmentId"]
+        .as_str()
+        .expect("an appointment id")
+        .to_owned();
+    let revision = confirmed["revision"].as_u64().expect("a revision");
+    let hold_allocations: i64 = fx
+        .admin
+        .query_one(
+            "SELECT count(*) FROM scheduling_claim_allocations WHERE claim_id=$1",
+            &[&Uuid::parse_str(&hold_id).expect("a hold UUID")],
+        )
+        .await
+        .expect("count the hold's allocation rows")
+        .get(0);
+    assert_eq!(
+        hold_allocations, 0,
+        "a window hold carries no allocation rows"
+    );
+
+    let (status, cancelled) = fx
+        .post(
+            &format!("/v1/appointments/{appointment_id}/cancel"),
+            &fx.agent,
+            "turned-offering-cancel",
+            json!({"observedRevision": revision, "reason": null}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{cancelled}");
+    assert_eq!(cancelled["state"], "cancelled");
+
+    fx.store
+        .replace_facts(SCHEDULING_ID, &records_without(&[]))
+        .await
+        .expect("the idle window leaves the records");
+    let window_policy = policy_with_window();
+    let exact_policy = window_policy
+        .replace("    mode: arrival-window\n", "    mode: exact-time\n")
+        .replace(
+            &format!(
+                "    arrival:\n      window: {WINDOW_ID}\n      leadTimeMinutes: 1\n      \
+                 horizonDays: 60\n"
+            ),
+            "    exactTime:\n      durationMinutes: 30\n      bufferBeforeMinutes: 0\n      \
+             bufferAfterMinutes: 0\n      leadTimeMinutes: 60\n      horizonDays: 60\n      \
+             pool: north-counter\n      startIncrementMinutes: 30\n      maximumRecipients: 1\n",
+        );
+    assert!(
+        !exact_policy.contains("arrival-window") && !exact_policy.contains(WINDOW_ID),
+        "the arrival offering is served as exact time"
+    );
+    let mut replacement = read_policy(&exact_policy).expect("the offering as exact time");
+    replacement.project.version = "2".to_owned();
+    let turned = republished(
+        &fx,
+        replacement,
+        &["north-counter".to_owned(), "two-counter".to_owned()],
+    )
+    .await;
+
+    let before = ledger_contents(&fx).await;
+    let (status, replayed) = send(
+        turned,
+        "POST".to_owned(),
+        "/v1/appointments".to_owned(),
+        fx.agent.clone(),
+        Some("turned-offering-confirm".to_owned()),
+        Some(confirmation),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "the confirmation replays its receipt: {replayed}"
+    );
+    assert_eq!(replayed, confirmed, "the replay answers the stored receipt");
+    assert_eq!(
+        ledger_contents(&fx).await,
+        before,
+        "the replay writes nothing"
+    );
+}
+
 #[tokio::test]
 async fn policy_publication_refuses_to_move_an_active_offering_between_pools() {
     let fx = fixture().await;
