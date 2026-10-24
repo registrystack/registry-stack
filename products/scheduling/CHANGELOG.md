@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Split-mode refusals for a runtime role that owns Scheduling objects name an
+  exact `ALTER ... OWNER TO` statement for each Scheduling schema object, then
+  `schedulingctl apply`, in place of `REASSIGN OWNED BY`, which also moves the
+  role's objects outside the Scheduling schema.
 - Startup reports an unreadable activation ledger before attempting schema
   reads, matching plan/status when the runtime role lost schema usage or ledger
   read access.

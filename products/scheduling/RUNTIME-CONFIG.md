@@ -126,13 +126,14 @@ reissues the grants after the runtime role is rotated or the deployment moves
 to split mode, and `scheduling serve` refuses a ledger that recorded `split`
 for a credential that can now write it. A runtime role that owns, or is a
 member of an owner of, the Scheduling schema or any `scheduling_*` table,
-sequence, view, or function, that holds TRIGGER on a `scheduling_*` table or
+sequence, view, or routine, that holds TRIGGER on a `scheduling_*` table or
 view, or that holds CREATE on the schema, can write the ledger indirectly,
 and so can a trigger already attached to a `scheduling_*` table, since no
 Scheduling migration creates one. With two roles, `plan`, `apply`, and
-`serve` refuse them. After `REASSIGN OWNED BY <owner> TO <migrator>` the
-refusal names `schedulingctl apply --runtime-config FILE`, which reissues
-the grants the moved objects lost, and `serve` refuses until it has; after
+`serve` refuse them. For ownership, the refusal names an exact `ALTER ...
+OWNER TO <migrator>` for each affected Scheduling schema object, followed by
+`schedulingctl apply --runtime-config FILE`, which reissues the grants the
+moved objects lost; `serve` refuses until it has. After
 `REVOKE TRIGGER ON <table> FROM <grantee>`, `REVOKE CREATE ON SCHEMA
 <schema> FROM <grantee>` (the grantee being the runtime role, PUBLIC, or a
 role it is a member of), or `DROP TRIGGER <name> ON <schema>.<table>` it
@@ -427,11 +428,14 @@ destinations:
 Each URL is one reviewed absolute endpoint without userinfo, query, or
 fragment and with a safe parsed path. Plain `http` is accepted only for an
 explicit loopback host, so a plaintext destination can
-never silently point at another machine. Delivery is attempted once per claim
-on the shared dispatch core, with a five-second attempt timeout and a fixed
-back-off of thirty seconds doubling to 1920 seconds; a transport failure
-schedules a retry, an authorization or routing refusal sets the intent aside
-as failed for the operator, and the eighth failed attempt sets it aside. A
+never silently point at another machine. Delivery runs on the shared
+dispatch core, with a five-second attempt timeout and a fixed back-off of
+thirty seconds doubling to 1920 seconds; a transport failure schedules a
+retry, an authorization or routing refusal sets the intent aside as failed
+for the operator, and the eighth failed attempt sets it aside. An event the
+destination accepted but whose outcome the runtime could not record is
+retried on the same schedule, so a receiver can see it more than once and
+deduplicates by the envelope's stable identifier. A
 cancellation or a reschedule cancels the superseded reminder in its own
 transaction when no attempt has started on it; one a dispatcher already
 holds is set aside without a send by a liveness read under its lease. An absent reminders destination is a supported

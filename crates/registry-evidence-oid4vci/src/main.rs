@@ -15,7 +15,7 @@ use clap::Parser;
 use registry_evidence_oid4vci::{
     cli::{Cli, Command, OutputFormat},
     config::{check_file, DeliveryConfig},
-    service::{serve, DeliveryService},
+    service::{inspect as inspect_service, serve, DeliveryService},
 };
 use registry_platform_yaml::{Diagnostic, Report};
 
@@ -67,14 +67,9 @@ fn run(cli: Cli) -> Result<(), String> {
         Command::Inspect { config } => {
             let config = load_config(&config)?;
             let runtime = runtime()?;
-            let document = runtime.block_on(async move {
-                let service = DeliveryService::load(config)
-                    .map_err(|error| format!("the service cannot be inspected: {error}"))?;
-                service
-                    .inspect()
-                    .await
-                    .map_err(|error| format!("the service metadata is unavailable: {error}"))
-            })?;
+            let document = runtime
+                .block_on(inspect_service(&config))
+                .map_err(|error| format!("the service metadata is unavailable: {error}"))?;
             let rendered = serde_json::to_string_pretty(&document)
                 .map_err(|_| "the service metadata could not be rendered".to_owned())?;
             println!("{rendered}");
@@ -101,6 +96,7 @@ fn run(cli: Cli) -> Result<(), String> {
             runtime.block_on(async move {
                 let service = Arc::new(
                     DeliveryService::load(config)
+                        .await
                         .map_err(|error| format!("the service could not start: {error}"))?,
                 );
                 serve(service, shutdown_signal())

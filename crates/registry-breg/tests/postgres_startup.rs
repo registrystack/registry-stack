@@ -1371,7 +1371,7 @@ async fn split_startup_refuses_a_runtime_role_that_can_write_the_ledger_and_writ
     for (grant, undo) in [
         (
             format!("ALTER TABLE {table} OWNER TO {runtime}"),
-            format!("REASSIGN OWNED BY {runtime} TO {migration}"),
+            format!("ALTER TABLE {table} OWNER TO {migration}"),
         ),
         (
             format!("GRANT CREATE ON SCHEMA registry_data TO {runtime}"),
@@ -1415,8 +1415,8 @@ async fn split_startup_refuses_a_runtime_role_that_can_write_the_ledger_and_writ
             .batch_execute(&undo)
             .await
             .expect("administrator applies the named fix");
-        // A reassignment carries the runtime role's own grants away with the
-        // ownership, so startup then names the apply that reissues them.
+        // An ownership change carries the runtime role's own grants away with
+        // the ownership, so startup then names the apply that reissues them.
         match prepare_with_connection_config_for_test(&config_path, database.runtime_config.clone())
             .await
         {

@@ -15,11 +15,13 @@
 //! For reminders,
 //! each due outbox intent is rendered as one shared hook envelope in canonical
 //! JSON and POSTed with `content-type: application/json` to the
-//! operator-configured URL for its purpose, once per leased attempt, through
-//! the platform dispatch core, with the transport and the notification bus
-//! wholly external (INT-02). When no destination is configured the outbox is the
-//! boundary: intents are recorded and set aside as local, never pretended
-//! delivered.
+//! operator-configured URL for its purpose through the platform dispatch core.
+//! Delivery attempts may repeat after a destination accepts an event whose
+//! outcome the runtime cannot record; receivers deduplicate by the event's
+//! stable identifier, and a signed delivery also carries a stable idempotency
+//! key. The transport and notification bus remain external (INT-02). When no
+//! destination is configured the outbox is the boundary: intents are recorded
+//! and set aside as local, never pretended delivered.
 //!
 //! A cancellation or reschedule cancels the appointment's reminders no
 //! attempt has started on inside its own transaction. A reminder a
@@ -948,6 +950,9 @@ fn delivery_of(status: u16) -> Delivery {
 ///
 /// The runtime runs the same dispatch as a supervised worker; this pass is
 /// the bounded form the database suite drives.
+/// When a destination accepts a send but its outcome is unrecorded, lease
+/// recovery counts an uncertain attempt and schedules a retry. Receivers
+/// deduplicate repeated events by their stable envelope identifier.
 ///
 /// # Errors
 ///

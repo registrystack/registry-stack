@@ -123,7 +123,7 @@ two-person rule enforce it on who can read the migration credential.
   generation registration.
 - A trigger runs as whichever role fires it, including the migration role
   inside apply, and it has no owner of its own: one the runtime role attached
-  while it owned a table survives `REASSIGN OWNED BY`. Apply therefore never
+  while it owned a table survives a change of the table's owner. Apply therefore never
   issues `TRIGGER`, and refuses rather than revokes it, as below.
 - The role mode is recorded from the runtime role's effective authority after
   the grants, not from whether the two credentials name different roles. The
@@ -146,13 +146,14 @@ two-person rule enforce it on who can read the migration credential.
   before it changes anything, with `casework.activation.role-mode-weakened`,
   rather than record it as single-role, since reassigning the objects,
   revoking the grant, or dropping the trigger takes the authority away. The
-  refusal names each statement to run as the migration role:
-  `REASSIGN OWNED BY <owner> TO <migration role>`,
+  refusal names each statement to run as a database administrator: exact
+  `ALTER ... OWNER TO <migration role>` corrections for the affected Casework
+  schema objects,
   `REVOKE CREATE ON SCHEMA <schema> FROM <grantee>`,
   `REVOKE TRIGGER ON <schema>.<table> FROM <grantee>`, and
   `DROP TRIGGER <trigger> ON <schema>.<table>`. A privilege held through
-  `PUBLIC` is named `FROM PUBLIC`. Reassigning takes the runtime role's
-  grants on the objects too, so a fix with a `REASSIGN` ends with
+  `PUBLIC` is named `FROM PUBLIC`. Moving ownership takes the runtime role's
+  grants on the objects too, so an ownership fix ends with
   `caseworkctl apply --runtime-config FILE` to reissue them; the others end
   with rerunning the command that refused, or
   `caseworkctl plan --runtime-config FILE` to confirm. `plan` reports the same
@@ -166,8 +167,8 @@ two-person rule enforce it on who can read the migration credential.
   migrations would name tables its rollback removes. A single-role
   deployment already holds the ledger and is refused none of these.
 - A split-role runtime role that does not hold every grant apply issues it,
-  as after `REASSIGN OWNED BY` takes a table back, is refused at startup with
-  `RuntimeError::RuntimeGrantsMissing`, naming
+  as after an exact owner correction takes a table back, is refused at
+  startup with `RuntimeError::RuntimeGrantsMissing`, naming
   `caseworkctl apply --runtime-config FILE`. `plan` reports the active
   package as pending, without effects when the runtime role can no longer
   read a Casework table, and apply reissues the grants. The grants checked

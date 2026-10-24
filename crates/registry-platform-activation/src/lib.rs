@@ -596,6 +596,77 @@ pub async fn observe_role(
     }))
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct OwnershipCorrection {
+    owner: String,
+    statement: String,
+}
+
+/// Exact owner changes for product objects through which `role` inherits
+/// migration authority, ordered as schema, non-sequence relations, sequences,
+/// and routines. An identity or owned sequence cannot change owner before its
+/// parent table does. `target_role` names the migration connection when it is
+/// known; otherwise the activation ledger's owner is the target.
+async fn ownership_corrections(
+    client: &impl GenericClient,
+    layout: &Layout,
+    role: &str,
+    target_role: Option<&str>,
+) -> Result<Vec<OwnershipCorrection>, Error> {
+    let pattern = layout.relation_pattern();
+    Ok(client
+        .query(
+            "WITH ledger AS (
+               SELECT c.relowner,c.relnamespace FROM pg_class c WHERE c.oid=to_regclass($2)
+             ), reference AS (
+               SELECT CASE WHEN $4::text IS NOT NULL
+                 THEN (SELECT oid FROM pg_roles WHERE rolname=$4)
+                 ELSE (SELECT relowner FROM ledger) END AS oid,
+                 COALESCE((SELECT relnamespace FROM ledger),
+                   (SELECT oid FROM pg_namespace WHERE nspname=current_schema())) schema_oid
+             ), context AS (
+               SELECT r.oid runtime_oid,n.oid schema_oid,n.nspowner schema_owner,
+                 n.nspname schema_name,reference.oid migration_oid,
+                 pg_get_userbyid(reference.oid) migration_role
+               FROM pg_roles r CROSS JOIN pg_namespace n CROSS JOIN reference
+               WHERE r.rolname=$1 AND n.oid=reference.schema_oid
+             )
+             SELECT quote_ident(pg_get_userbyid(object.owner)),object.statement
+             FROM context CROSS JOIN LATERAL (
+               SELECT context.schema_owner owner,0 kind,context.schema_name object_name,
+                 '' signature,
+                 format('ALTER SCHEMA %I OWNER TO %I',context.schema_name,context.migration_role)
+                   statement
+               UNION ALL
+               SELECT c.relowner,CASE WHEN c.relkind='S' THEN 2 ELSE 1 END,c.relname,'',
+                 format('ALTER %s %I.%I OWNER TO %I',
+                   CASE c.relkind WHEN 'r' THEN 'TABLE' WHEN 'p' THEN 'TABLE'
+                     WHEN 'v' THEN 'VIEW' WHEN 'm' THEN 'MATERIALIZED VIEW'
+                     WHEN 'S' THEN 'SEQUENCE' WHEN 'f' THEN 'FOREIGN TABLE' END,
+                   context.schema_name,c.relname,context.migration_role)
+               FROM pg_class c WHERE c.relnamespace=context.schema_oid
+                 AND c.relname LIKE $3 AND c.relkind IN ('r','p','v','m','S','f')
+               UNION ALL
+               SELECT p.proowner,3,p.proname,pg_get_function_identity_arguments(p.oid),
+                 format('ALTER ROUTINE %I.%I(%s) OWNER TO %I',context.schema_name,p.proname,
+                   pg_get_function_identity_arguments(p.oid),context.migration_role)
+               FROM pg_proc p WHERE p.pronamespace=context.schema_oid AND p.proname LIKE $3
+             ) object
+             WHERE context.migration_oid IS NOT NULL
+               AND object.owner<>context.migration_oid
+               AND pg_has_role(context.runtime_oid,object.owner,'MEMBER')
+             ORDER BY object.kind,object.object_name,object.signature,object.statement",
+            &[&role, &layout.ledger_relation, &pattern, &target_role],
+        )
+        .await?
+        .into_iter()
+        .map(|row| OwnershipCorrection {
+            owner: row.get(0),
+            statement: row.get(1),
+        })
+        .collect())
+}
+
 /// SQL statements that remove a runtime role's indirect authority to write
 /// the activation ledger through migration-owned code.
 pub async fn stray_authority(
@@ -607,19 +678,17 @@ pub async fn stray_authority(
     let pattern = layout.relation_pattern();
     let Some(row) = client
         .query_opt(
-            "WITH reference AS (SELECT CASE WHEN $1::text IS NOT NULL
+            "WITH ledger AS (
+               SELECT c.relowner,c.relnamespace FROM pg_class c WHERE c.oid=to_regclass($2)
+             ), reference AS (
+               SELECT CASE WHEN $1::text IS NOT NULL
                  THEN (SELECT oid FROM pg_roles WHERE rolname=current_user::text)
-                 ELSE (SELECT relowner FROM pg_class WHERE oid=to_regclass($2)) END AS oid)
-             SELECT r.rolsuper OR reference.oid IS NULL OR pg_has_role(r.oid,reference.oid,'MEMBER')
-                 OR pg_has_role(r.oid,n.nspowner,'MEMBER'),
-               quote_ident(COALESCE((SELECT rolname FROM pg_roles WHERE oid=reference.oid),'')),
+                 ELSE (SELECT relowner FROM ledger) END AS oid,
+                 COALESCE((SELECT relnamespace FROM ledger),
+                   (SELECT oid FROM pg_namespace WHERE nspname=current_schema())) schema_oid)
+             SELECT r.rolsuper OR reference.oid IS NULL OR pg_has_role(r.oid,reference.oid,'MEMBER'),
+               current_user::text,
                quote_ident(n.nspname),
-               ARRAY(SELECT DISTINCT quote_ident(o.rolname) FROM (
-                 SELECT c.relowner owner FROM pg_class c WHERE c.relnamespace=n.oid
-                   AND c.relname LIKE $3 AND c.relkind IN ('r','p','v','m','S','f')
-                 UNION SELECT p.proowner FROM pg_proc p WHERE p.pronamespace=n.oid AND p.proname LIKE $3
-               ) owned JOIN pg_roles o ON o.oid=owned.owner
-                 WHERE pg_has_role(r.oid,owned.owner,'MEMBER') ORDER BY 1),
                ARRAY(SELECT DISTINCT CASE WHEN a.grantee=0 THEN 'PUBLIC' ELSE quote_ident(g.rolname) END
                  FROM aclexplode(n.nspacl) a LEFT JOIN pg_roles g ON g.oid=a.grantee
                  WHERE a.privilege_type='CREATE' AND (a.grantee=0 OR pg_has_role(r.oid,a.grantee,'MEMBER')) ORDER BY 1),
@@ -636,7 +705,8 @@ pub async fn stray_authority(
                        AND f.proname=k.proname AND f.pronamespace=n.oid)
                  ORDER BY t.relname,g.tgname)
              FROM pg_roles r,pg_namespace n,reference
-             WHERE r.rolname=COALESCE($1::text,current_user::text) AND n.nspname=current_schema()",
+             WHERE r.rolname=COALESCE($1::text,current_user::text)
+               AND n.oid=reference.schema_oid",
             &[&role, &layout.ledger_relation, &pattern, &tables, &triggers, &functions],
         )
         .await?
@@ -646,15 +716,21 @@ pub async fn stray_authority(
     if row.get(0) {
         return Ok(Vec::new());
     }
-    let migration_role: String = row.get(1);
+    let current_user: String = row.get(1);
     let schema: String = row.get(2);
-    let owners: Vec<String> = row.get(3);
-    let grantees: Vec<String> = row.get(4);
-    let trigger_grants: Vec<String> = row.get(5);
-    let stray_triggers: Vec<String> = row.get(6);
-    Ok(owners
+    let grantees: Vec<String> = row.get(3);
+    let trigger_grants: Vec<String> = row.get(4);
+    let stray_triggers: Vec<String> = row.get(5);
+    let ownership = ownership_corrections(
+        client,
+        layout,
+        role.unwrap_or(current_user.as_str()),
+        role.map(|_| current_user.as_str()),
+    )
+    .await?;
+    Ok(ownership
         .into_iter()
-        .map(|owner| format!("REASSIGN OWNED BY {owner} TO {migration_role}"))
+        .map(|correction| correction.statement)
         .chain(
             grantees
                 .into_iter()
@@ -681,9 +757,17 @@ pub struct AttachedTrigger {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum AuthorityCause {
-    OwnedObject { owner: String },
-    TriggerPrivilege { relation: String, grantee: String },
-    SchemaCreate { grantee: String },
+    OwnedObjects {
+        owners: Vec<String>,
+        statements: Vec<String>,
+    },
+    TriggerPrivilege {
+        relation: String,
+        grantee: String,
+    },
+    SchemaCreate {
+        grantee: String,
+    },
     AttachedTriggers(Vec<AttachedTrigger>),
 }
 
@@ -708,12 +792,6 @@ pub async fn first_authority_weakness(
         .query_opt(
             "SELECT quote_ident(r.rolname),quote_ident(n.nspname),
                quote_ident(pg_get_userbyid(c.relowner)),
-               (SELECT quote_ident(pg_get_userbyid(owner)) FROM (
-                 SELECT n.nspowner owner UNION ALL
-                 SELECT o.relowner FROM pg_class o WHERE o.relnamespace=n.oid AND o.relname LIKE $3
-                 UNION ALL SELECT p.proowner FROM pg_proc p WHERE p.pronamespace=n.oid AND p.proname LIKE $3
-               ) owners WHERE pg_has_role(r.oid,owner,'MEMBER')
-                 ORDER BY owner=r.oid DESC,pg_get_userbyid(owner) LIMIT 1),
                triggers.relation,triggers.grantee,
                has_schema_privilege(r.oid,n.oid,'CREATE'),
                (SELECT CASE WHEN a.grantee=0 THEN 'PUBLIC' ELSE quote_ident(pg_get_userbyid(a.grantee)) END
@@ -742,13 +820,25 @@ pub async fn first_authority_weakness(
     let runtime_role: String = row.get(0);
     let schema: String = row.get(1);
     let migration_role: String = row.get(2);
-    let owner: Option<String> = row.get(3);
-    let trigger_relation: Option<String> = row.get(4);
-    let trigger_grantee: Option<String> = row.get(5);
-    let creates: bool = row.get(6);
-    let create_grantee: Option<String> = row.get(7);
-    let cause = if let Some(owner) = owner {
-        AuthorityCause::OwnedObject { owner }
+    let trigger_relation: Option<String> = row.get(3);
+    let trigger_grantee: Option<String> = row.get(4);
+    let creates: bool = row.get(5);
+    let create_grantee: Option<String> = row.get(6);
+    let ownership = ownership_corrections(client, layout, role, None).await?;
+    let cause = if !ownership.is_empty() {
+        let mut owners = ownership
+            .iter()
+            .map(|correction| correction.owner.clone())
+            .collect::<Vec<_>>();
+        owners.sort();
+        owners.dedup();
+        AuthorityCause::OwnedObjects {
+            owners,
+            statements: ownership
+                .into_iter()
+                .map(|correction| correction.statement)
+                .collect(),
+        }
     } else if let Some(relation) = trigger_relation {
         AuthorityCause::TriggerPrivilege {
             relation,

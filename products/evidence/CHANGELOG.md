@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- BREAKING: the OID4VCI wallet delivery runtime requires an `audit` block. It
+  records each offer's creating client and subject as keyed pseudonyms, and
+  each wallet delivery outcome, in a durable journal. To upgrade, store a
+  random audit hash key of at least 32 bytes under an enabled secret provider
+  and name it in `audit.hashKeyRef`; set `audit.destination: file` with an
+  absolute `audit.path` on durable storage, or `audit.destination: stdout`
+  when a collector retains the stream; then run `evidence-oid4vci check
+  --runtime-config FILE`. `serve` resolves the key and opens the journal as it
+  starts and refuses to start if either fails. Back up the journal and the key
+  together: without the key, its pseudonyms cannot be matched to new entries.
+  Offer creation answers 503 and `/ready` reports not ready while the journal
+  cannot be written.
 - `evidencectl dev` retains redacted one-shot issuer setup logs in its private
   log directory and includes that directory in failed-start guidance.
 

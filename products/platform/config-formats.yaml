@@ -2829,6 +2829,8 @@ formats:
         whenOmitted: refused
       - pointer: /tokenClient/privateKeyRef
         whenOmitted: refused
+      - pointer: /audit/hashKeyRef
+        whenOmitted: refused
     restrictingMembers: [/offers/authorizedClients, /offers/requiredScopes]
   - id: evidence/client-profile
     product: evidence

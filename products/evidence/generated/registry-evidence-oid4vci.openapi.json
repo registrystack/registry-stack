@@ -262,6 +262,18 @@
         ],
         "type": "object"
       },
+      "HealthResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "status": {
+            "const": "ok"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "type": "object"
+      },
       "NonceResponse": {
         "additionalProperties": false,
         "properties": {
@@ -341,21 +353,6 @@
         ],
         "type": "object"
       },
-      "ProbeResponse": {
-        "additionalProperties": false,
-        "properties": {
-          "status": {
-            "enum": [
-              "ok",
-              "ready"
-            ]
-          }
-        },
-        "required": [
-          "status"
-        ],
-        "type": "object"
-      },
       "Problem": {
         "additionalProperties": false,
         "properties": {
@@ -380,6 +377,21 @@
         "required": [
           "error",
           "error_description"
+        ],
+        "type": "object"
+      },
+      "ReadinessResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "status": {
+            "enum": [
+              "ready",
+              "not_ready"
+            ]
+          }
+        },
+        "required": [
+          "status"
         ],
         "type": "object"
       },
@@ -875,7 +887,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProbeResponse"
+                  "$ref": "#/components/schemas/HealthResponse"
                 }
               }
             },
@@ -1266,7 +1278,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProbeResponse"
+                  "$ref": "#/components/schemas/ReadinessResponse"
                 }
               }
             },
@@ -1295,6 +1307,30 @@
               }
             },
             "description": "The configured request deadline elapsed",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
+              "Pragma": {
+                "schema": {
+                  "const": "no-cache",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadinessResponse"
+                }
+              }
+            },
+            "description": "The required local audit destination is stopped or stalled",
             "headers": {
               "Cache-Control": {
                 "schema": {

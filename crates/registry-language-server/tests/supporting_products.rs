@@ -249,6 +249,7 @@ kind: EvidenceOid4vciRuntimeConfig
 credentialIssuer: https://issuer.example.test
 listener: {bind: 127.0.0.1:8081}
 secretProviders: {file: {root: /run/secrets/delivery}}
+audit: {destination: stdout, hashKeyRef: secret:file/audit-hash-key}
 evidence: {baseUrl: 'https://evidence.example.test'}
 tokenClient:
   tokenEndpoint: https://identity.example.test/token

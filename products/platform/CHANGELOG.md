@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- `registry-platform-activation` advises an exact, quoted `ALTER ... OWNER TO`
+  statement for each product schema object a runtime role owns or inherits
+  ownership of, in place of `REASSIGN OWNED BY`, which also moves the role's
+  objects outside the product schema. It inspects the schema that holds the
+  activation ledger, and a runtime role that is a member of the schema owner
+  is refused with an `ALTER SCHEMA ... OWNER TO` correction rather than
+  passed.
 - Discovery problems add `code`, fixed `detail` and `traceId` (previously only
   `type`, `title`, `status`), plus a matching `traceparent` header (previously
   absent). Codes are `request.invalid`, `request.not-found`,
