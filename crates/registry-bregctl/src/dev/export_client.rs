@@ -113,7 +113,7 @@ pub(super) fn validate_pair(id: &[u8], key: &[u8], label: &str) -> Result<()> {
         }
         let d = Zeroizing::new(URL_SAFE_NO_PAD.decode(jwk["d"].as_str()?).ok()?);
         let signing = p256::ecdsa::SigningKey::from_slice(&d).ok()?;
-        let point = signing.verifying_key().to_encoded_point(false);
+        let point = signing.verifying_key().to_sec1_point(false);
         if jwk["x"].as_str()? != URL_SAFE_NO_PAD.encode(point.x()?)
             || jwk["y"].as_str()? != URL_SAFE_NO_PAD.encode(point.y()?)
         {

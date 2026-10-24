@@ -4,14 +4,14 @@
 //! key, and no value derived from one, is written to a tracked file.
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
-use p256::{ecdsa::SigningKey, elliptic_curve::rand_core::OsRng};
+use p256::{ecdsa::SigningKey, elliptic_curve::Generate as _};
 use registry_platform_crypto::{sign, PrivateJwk};
 use serde_json::{json, Value};
 
 /// A freshly generated P-256 private JWK, as JSON text.
 pub(crate) fn private_jwk(key_id: &str) -> String {
-    let key = SigningKey::random(&mut OsRng);
-    let point = key.verifying_key().to_encoded_point(false);
+    let key = SigningKey::generate();
+    let point = key.verifying_key().to_sec1_point(false);
     json!({
         "kty": "EC",
         "crv": "P-256",

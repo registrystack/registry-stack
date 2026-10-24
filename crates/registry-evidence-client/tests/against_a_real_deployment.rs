@@ -39,7 +39,7 @@ use std::{
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chrono::Utc;
-use p256::{ecdsa::SigningKey, elliptic_curve::rand_core::OsRng};
+use p256::{ecdsa::SigningKey, elliptic_curve::Generate as _};
 use registry_evidence::{runtime::EvidenceRuntime, server};
 use registry_evidence_client::{
     AssuranceProfile, AudienceScopedRequest, BearerToken, ConceptForm, DefinitionCardinality,
@@ -3250,8 +3250,8 @@ fn generate_key(key_id: &str) -> PrivateJwk {
 /// A fresh ES256 private JWK for a client, in the shape `evidencectl access
 /// client add --generate-local-key` writes.
 fn generate_es256_key(key_id: &str) -> PrivateJwk {
-    let signing_key = SigningKey::random(&mut OsRng);
-    let point = signing_key.verifying_key().to_encoded_point(false);
+    let signing_key = SigningKey::generate();
+    let point = signing_key.verifying_key().to_sec1_point(false);
     let document = json!({
         "kty": "EC",
         "crv": "P-256",
@@ -3267,8 +3267,8 @@ fn generate_es256_key(key_id: &str) -> PrivateJwk {
 
 /// A fresh ES256 service key whose identifier is its RFC 7638 thumbprint.
 fn service_key() -> (String, PublicJwk) {
-    let signing_key = SigningKey::random(&mut OsRng);
-    let point = signing_key.verifying_key().to_encoded_point(false);
+    let signing_key = SigningKey::generate();
+    let point = signing_key.verifying_key().to_sec1_point(false);
     let x = URL_SAFE_NO_PAD.encode(point.x().expect("the public point has x"));
     let y = URL_SAFE_NO_PAD.encode(point.y().expect("the public point has y"));
     let mut public = PublicJwk {

@@ -26,7 +26,7 @@ use std::{fs, path::Path};
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
-use p256::{ecdsa::SigningKey, elliptic_curve::rand_core::OsRng};
+use p256::{ecdsa::SigningKey, elliptic_curve::Generate as _};
 // This file is a separate integration-test crate, and Cargo auto-links two
 // different crates under the identical name `registry_evidence_client` here:
 // this package's own compiled library (its `[lib] name`) and the wrapped SDK
@@ -84,8 +84,8 @@ fn fixture_issued_at() -> DateTime<Utc> {
 /// leaves the process that made it: regeneration commits only the public key,
 /// and the real-clock check below discards the whole pair when it returns.
 fn fixture_signer() -> LocalJwkSigner {
-    let signing_key = SigningKey::random(&mut OsRng);
-    let public = signing_key.verifying_key().to_encoded_point(false);
+    let signing_key = SigningKey::generate();
+    let public = signing_key.verifying_key().to_sec1_point(false);
     let mut private_jwk = PrivateJwk {
         kty: "EC".to_owned(),
         kid: None,

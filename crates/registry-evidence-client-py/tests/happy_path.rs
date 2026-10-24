@@ -41,7 +41,7 @@ use evidence_client_sdk::{
 };
 use p256::{
     ecdsa::{signature::Signer, Signature, SigningKey},
-    elliptic_curve::rand_core::OsRng,
+    elliptic_curve::Generate as _,
 };
 use pyo3::prelude::*;
 use registry_evidence_verifier::{
@@ -121,11 +121,11 @@ fn request_batch_spec_json() -> serde_json::Value {
 /// response for a nonce that does not exist until `prepare()` runs, so they
 /// cannot use a response signed ahead of time.
 fn fresh_signing_key() -> SigningKey {
-    SigningKey::random(&mut OsRng)
+    SigningKey::generate()
 }
 
 fn public_jwk(signing_key: &SigningKey) -> PublicJwk {
-    let point = signing_key.verifying_key().to_encoded_point(false);
+    let point = signing_key.verifying_key().to_sec1_point(false);
     let mut key = PublicJwk {
         kty: "EC".to_owned(),
         kid: None,
