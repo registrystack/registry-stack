@@ -1,8 +1,11 @@
-export function docsSharedTrackingEnabled({ isReleasedArchiveBuild, base, path }) {
-  return Boolean(
-    isReleasedArchiveBuild &&
-      base === '/' &&
-      path !== '/404/' &&
-      path !== '/404',
-  );
+export function docsSharedTrackingEnabled({
+  isReleasedArchiveBuild,
+  isCurrentDocsetBuild,
+  base,
+  path,
+}) {
+  const isPublicBuild =
+    (isReleasedArchiveBuild && base === '/') ||
+    (isCurrentDocsetBuild && base === '/dev/');
+  return Boolean(isPublicBuild && path !== '/404/' && path !== '/404');
 }

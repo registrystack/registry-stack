@@ -3,9 +3,10 @@ import { SHARED_TRACKING_BRIDGE_URL } from '../lib/tracking-protocol.mjs';
 
 interface Props {
   canonicalOrigin: string;
+  privacyUrl: string;
 }
 
-const { canonicalOrigin } = Astro.props;
+const { canonicalOrigin, privacyUrl } = Astro.props;
 ---
 
 <aside
@@ -21,7 +22,7 @@ const { canonicalOrigin } = Astro.props;
     <p>
       We use optional cookies to understand how you use the main Registry Stack website and this
       documentation. If you contact us, we may link this activity to your enquiry. You can change
-      your choice at any time. <a href="/privacy/">Read the privacy policy</a>.
+      your choice at any time. <a href={privacyUrl}>Read the privacy policy</a>.
     </p>
     <p data-tracking-signal hidden>
       Your browser asks sites not to track you, so optional tracking stays off.
