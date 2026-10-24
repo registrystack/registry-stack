@@ -681,6 +681,11 @@ ROWS: tuple[Row, ...] = (
             "the wallet delivery service owns no installed package; the Evidence "
             "runtime it calls verifies the bundle it serves"
         ),
+        rust_blocks=(
+            RustBlock(
+                "crates/registry-evidence-oid4vci/src/config.rs", "AuditDocument", "key", "AuditKeyConfig",
+            ),
+        ),
     ),
 )
 

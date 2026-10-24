@@ -61,6 +61,10 @@ up these alongside every database backup, on the same schedule:
   JWK signer is for local assurance only.
 - The audit master and subject-binding secrets, including every previous audit master whose
   pseudonyms must stay recomputable.
+- When `evidence-oid4vci` delivers to wallets, its separate audit journal and
+  `audit.hashKeyRef`. The adapter records the authenticated offer origin and credential-release
+  outcome under one opaque exchange identifier; Evidence's journal records its separate
+  authorization and signed-response release.
 
 ### Registry Messaging state
 
@@ -92,7 +96,8 @@ retention guides describe, so the archive, not the host, is the audit record:
 [Evidence](../../evidence-audit/#ship-audit-to-append-only-storage), and
 [Messaging](../../messaging/#watch-the-journal-and-metrics). For Messaging, preserve the active file and
 every sealed segment of both `audit.path` and its `messagingctl` sibling. A restore never replaces
-the live audit directory.
+the live audit directory. Apply the same rule to `evidence-oid4vci` when it uses a file destination;
+when it uses stdout, the collector's retained stream is the journal.
 
 {/* Evidence: crates/registry-platform-audit/src/writer.rs, for_process();
     crates/registry-messaging/src/runtime.rs, open_audit(). */}
@@ -308,7 +313,9 @@ evidence check --runtime-config /etc/evidence/runtime.yaml --require-runtime-dep
 Rate limits and caches start empty. Restore audit history into your archive, never into the live
 audit directory. When `evidence-oid4vci` delivers credentials, start it after Evidence is ready:
 its offers live in memory, so a restart invalidates every outstanding offer and wallets must ask
-for a fresh one. See
+for a fresh one. Preserve and resume the adapter's separate audit journal and hash key. The audit
+survives restart; the exchange state does not, so an outstanding exchange can remain recorded as
+attempted or unfinished without becoming valid after recovery. See
 [Serve](../../../configure/evidence-oid4vci/#serve).
 
 {/* Evidence: products/evidence/OPERATOR-CONTRACT.md, "no application database" and the audit

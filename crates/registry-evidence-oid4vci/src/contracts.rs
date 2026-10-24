@@ -20,12 +20,9 @@ pub fn openapi_document() -> Value {
     let mut paths = serde_json::Map::new();
     paths.insert(
         HEALTH_PATH.to_owned(),
-        json!({"get": probe_operation("health", "Liveness probe")}),
+        json!({"get": probe_operation("health", "Liveness probe", "HealthResponse")}),
     );
-    paths.insert(
-        READY_PATH.to_owned(),
-        json!({"get": probe_operation("readiness", "Process readiness probe")}),
-    );
+    paths.insert(READY_PATH.to_owned(), json!({"get": readiness_operation()}));
     paths.insert(
         ISSUER_METADATA_PATH.to_owned(),
         json!({
@@ -163,15 +160,25 @@ pub fn openapi_document() -> Value {
     })
 }
 
-fn probe_operation(operation: &str, summary: &str) -> Value {
+fn probe_operation(operation: &str, summary: &str, schema: &str) -> Value {
     json!({
         "operationId": operation,
         "summary": summary,
         "responses": {
-            "200": json_response("Process status", "ProbeResponse"),
+            "200": json_response("Process status", schema),
             "408": problem_response("The configured request deadline elapsed")
         }
     })
+}
+
+fn readiness_operation() -> Value {
+    let mut operation =
+        probe_operation("readiness", "Process readiness probe", "ReadinessResponse");
+    operation["responses"]["503"] = json_response(
+        "The required local audit destination is stopped or stalled",
+        "ReadinessResponse",
+    );
+    operation
 }
 
 fn required_json_body(schema: &str) -> Value {
@@ -278,9 +285,13 @@ fn framework_response(description: &str) -> Value {
 
 fn schemas() -> Value {
     json!({
-        "ProbeResponse": {
+        "HealthResponse": {
             "type": "object", "additionalProperties": false, "required": ["status"],
-            "properties": {"status": {"enum": ["ok", "ready"]}}
+            "properties": {"status": {"const": "ok"}}
+        },
+        "ReadinessResponse": {
+            "type": "object", "additionalProperties": false, "required": ["status"],
+            "properties": {"status": {"enum": ["ready", "not_ready"]}}
         },
         "Problem": {
             "type": "object", "additionalProperties": false,

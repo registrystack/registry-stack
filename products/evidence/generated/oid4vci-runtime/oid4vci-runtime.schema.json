@@ -9,6 +9,55 @@
       ],
       "type": "string"
     },
+    "AuditDestinationKind": {
+      "description": "The configured audit destination kind, as written in product configuration.",
+      "oneOf": [
+        {
+          "const": "file",
+          "description": "Durable, rotated JSON Lines file.",
+          "type": "string"
+        },
+        {
+          "const": "stdout",
+          "description": "One JSON line per entry on standard output, flushed per entry.",
+          "type": "string"
+        }
+      ]
+    },
+    "AuditDocument": {
+      "additionalProperties": false,
+      "description": "The process-local audit destination and keyed-pseudonym secret.",
+      "properties": {
+        "destination": {
+          "$ref": "#/$defs/AuditDestinationKind",
+          "default": "file"
+        },
+        "hashKeyRef": {
+          "$ref": "#/$defs/SecretReference",
+          "description": "Secret reference to the audit hash key."
+        },
+        "path": {
+          "pattern": "^/",
+          "type": "string"
+        },
+        "retentionDays": {
+          "format": "uint32",
+          "maximum": 36500,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "rotateBytes": {
+          "format": "uint64",
+          "maximum": 4294967295,
+          "minimum": 1048576,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "hashKeyRef"
+      ],
+      "type": "object"
+    },
     "ClaimNamesDocument": {
       "additionalProperties": false,
       "description": "The contextual claim names an offer-token issuer uses. Each is distinct,\nand none is a registered or authentication claim.",
@@ -404,6 +453,10 @@
       "description": "The format version of this file.",
       "type": "string"
     },
+    "audit": {
+      "$ref": "#/$defs/AuditDocument",
+      "description": "The required durable audit journal for offer attribution and delivery\noutcomes. `stdout` is available for a collector-managed deployment;\nonly a file destination supplies durability itself."
+    },
     "credentialIssuer": {
       "$ref": "#/$defs/Url",
       "description": "The `credential_issuer` identifier this service publishes, and the\nvalue a wallet proof must carry as its `aud`: a bare origin with no\npath, query, or fragment. https in strict mode. A trailing slash is\nremoved, so what is published and what is compared are the same bytes."
@@ -460,6 +513,7 @@
     "credentialIssuer",
     "listener",
     "secretProviders",
+    "audit",
     "evidence",
     "tokenClient",
     "offers"

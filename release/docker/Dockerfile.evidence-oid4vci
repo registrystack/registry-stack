@@ -10,10 +10,11 @@ ADD --checksum=sha256:8784eda966b189c777a384dac5ce009e8fc9b52d006926c5a013e7fa8a
 ADD --checksum=sha256:ff16bc048bcd7d1b256094450b79c77947d8e76fe2a24bd99b91021d591fa074 https://snapshot.debian.org/archive/debian-security/20260930T060347Z/pool/updates/main/o/openssl/libssl3t64_3.5.7-1~deb13u3_amd64.deb /workspace/runtime-packages/libssl3t64_3.5.7-1~deb13u3_amd64.deb
 ADD --checksum=sha256:d0681293a160392186c6ef85a165e40603d1628a099936137d24d391bd591f97 https://snapshot.debian.org/archive/debian-security/20260930T060347Z/pool/updates/main/o/openssl/libssl3t64_3.5.7-1~deb13u3_arm64.deb /workspace/runtime-packages/libssl3t64_3.5.7-1~deb13u3_arm64.deb
 
-# The runtime configuration and the token-client private key it references are
-# deployment inputs mounted read-only. Delivery flow state is bounded and
-# process-local, and Evidence owns the credential-release audit, so this
-# supporting service needs no persistent state or audit directory.
+# The runtime configuration, token-client private key, and audit hash key are
+# deployment inputs mounted read-only. Delivery flow state remains bounded and
+# process-local. The writable runtime directory holds this adapter's durable
+# offer-attribution and delivery-outcome audit; Evidence separately owns its
+# credential-release audit.
 RUN --mount=type=bind,source=dist/image-bin,target=/workspace/image-bin \
     --mount=type=bind,source=LICENSE,target=/workspace/LICENSE \
     --mount=type=bind,source=THIRD_PARTY_NOTICES,target=/workspace/THIRD_PARTY_NOTICES,readonly \

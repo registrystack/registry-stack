@@ -8,6 +8,7 @@
 
 use std::{
     fs,
+    io::{self, Write},
     sync::{
         atomic::{AtomicI64, Ordering},
         Arc, Mutex,
@@ -24,6 +25,7 @@ use registry_evidence_client::{
     EvidenceDefinitionsDocument, HolderBoundRequestSpec, SubjectBindingMode,
 };
 use registry_evidence_oid4vci::{
+    audit::DeliveryAudit,
     authorizer::{AuthorizationError, AuthorizedOffer, OfferAuthorizer},
     config::DeliveryConfig,
     issuer::{CredentialIssuer, IssuanceError},
@@ -34,6 +36,7 @@ use registry_evidence_oid4vci::{
     },
     PRE_AUTHORIZED_CODE_GRANT_TYPE,
 };
+use registry_platform_audit::AuditWriter;
 use registry_platform_crypto::{sign, PrivateJwk};
 use serde_json::{json, Value};
 use tokio::sync::Barrier;
@@ -50,6 +53,9 @@ listener: {bind: "127.0.0.1:8090"}
 secretProviders:
   file:
     root: /run/secrets/evidence-oid4vci
+audit:
+  destination: stdout
+  hashKeyRef: secret:file/unused-audit-hash-key
 evidence:
   baseUrl: https://evidence.example.org
 tokenClient:
@@ -317,6 +323,34 @@ struct Harness {
     issuer: Arc<RecordingIssuer>,
 }
 
+#[derive(Clone, Default)]
+struct AuditCapture(Arc<Mutex<Vec<u8>>>);
+
+impl Write for AuditCapture {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.0
+            .lock()
+            .expect("audit capture lock")
+            .extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+impl AuditCapture {
+    fn entries(&self) -> Vec<Value> {
+        let bytes = self.0.lock().expect("audit capture lock").clone();
+        String::from_utf8(bytes)
+            .expect("audit is UTF-8 JSON Lines")
+            .lines()
+            .map(|line| serde_json::from_str(line).expect("audit entry is JSON"))
+            .collect()
+    }
+}
+
 /// The clock a test runs the service on: the wall-clock second a deployment
 /// reads, plus an offset the test moves forward.
 ///
@@ -360,14 +394,40 @@ fn loaded_config() -> DeliveryConfig {
 }
 
 fn service_with_issuer(
+    config: DeliveryConfig,
+    issuer: Arc<dyn CredentialIssuer>,
+) -> DeliveryService {
+    service_with_issuer_and_audit(
+        config,
+        issuer,
+        Arc::new(
+            DeliveryAudit::with_writer(
+                AuditWriter::from_line_sink(Box::new(io::sink())),
+                b"0123456789abcdef0123456789abcdef".to_vec(),
+            )
+            .expect("the test audit profile is valid"),
+        ),
+    )
+}
+
+fn service_with_issuer_and_audit(
     mut config: DeliveryConfig,
     issuer: Arc<dyn CredentialIssuer>,
+    audit: Arc<DeliveryAudit>,
 ) -> DeliveryService {
     // The listener belongs to a real deployment. axum-test binds its own
     // random loopback port, while every published identifier remains the
     // deployment's exact configured value.
     config.listener.bind = "127.0.0.1:8090".parse().expect("a socket address");
-    DeliveryService::with_halves(config, Arc::new(StubAuthorizer), issuer)
+    DeliveryService::with_halves(config, Arc::new(StubAuthorizer), issuer, audit)
+}
+
+fn server_with_issuer_and_audit(
+    config: DeliveryConfig,
+    issuer: Arc<dyn CredentialIssuer>,
+    audit: Arc<DeliveryAudit>,
+) -> Arc<TestServer> {
+    served(service_with_issuer_and_audit(config, issuer, audit))
 }
 
 fn served(service: DeliveryService) -> Arc<TestServer> {
@@ -807,9 +867,18 @@ async fn post_claim_evidence_failures_are_terminal_and_never_restore_the_token()
         PostClaimFailure::Configuration,
     ] {
         let issuer = Arc::new(FailingIssuer::new(failure));
-        let server = server_with_issuer(
+        let audit_capture = AuditCapture::default();
+        let audit = Arc::new(
+            DeliveryAudit::with_writer(
+                AuditWriter::from_line_sink(Box::new(audit_capture.clone())),
+                b"0123456789abcdef0123456789abcdef".to_vec(),
+            )
+            .expect("the test audit profile is valid"),
+        );
+        let server = server_with_issuer_and_audit(
             loaded_config(),
             Arc::clone(&issuer) as Arc<dyn CredentialIssuer>,
+            audit,
         );
         let token = access_token(&server).await;
         let nonce = minted_nonce(&server).await;
@@ -835,6 +904,14 @@ async fn post_claim_evidence_failures_are_terminal_and_never_restore_the_token()
             1,
             "{failure:?} reaches the Evidence boundary once"
         );
+        let entries = audit_capture.entries();
+        let expected = match failure {
+            PostClaimFailure::Refused | PostClaimFailure::NotAvailable => "evidence_refused",
+            PostClaimFailure::Unavailable
+            | PostClaimFailure::Malformed
+            | PostClaimFailure::Configuration => "evidence_unavailable",
+        };
+        assert_eq!(entries[3]["record"]["outcome"], expected, "{failure:?}");
 
         // A deployment failure may be transient, but this authorization is not:
         // the token was permanently claimed before Evidence was called. A retry
@@ -859,7 +936,19 @@ async fn a_post_claim_timeout_is_terminal_and_never_restores_the_token() {
     let mut config = loaded_config();
     config.listener.request_timeout_milliseconds = 100;
     let issuer = Arc::new(SlowIssuer::new(SlowBoundary::Issuance));
-    let server = server_with_issuer(config, Arc::clone(&issuer) as Arc<dyn CredentialIssuer>);
+    let audit_capture = AuditCapture::default();
+    let audit = Arc::new(
+        DeliveryAudit::with_writer(
+            AuditWriter::from_line_sink(Box::new(audit_capture.clone())),
+            b"0123456789abcdef0123456789abcdef".to_vec(),
+        )
+        .expect("the test audit profile is valid"),
+    );
+    let server = server_with_issuer_and_audit(
+        config,
+        Arc::clone(&issuer) as Arc<dyn CredentialIssuer>,
+        audit,
+    );
     let token = access_token(&server).await;
     let nonce = minted_nonce(&server).await;
     let request = credential_body(vec![proof_jwt(&private_jwk(), &nonce)]);
@@ -881,6 +970,15 @@ async fn a_post_claim_timeout_is_terminal_and_never_restores_the_token() {
         1,
         "the claimed request enters Evidence exactly once before timing out"
     );
+    let mut entries = audit_capture.entries();
+    for _ in 0..50 {
+        if entries.len() >= 4 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        entries = audit_capture.entries();
+    }
+    assert_eq!(entries[3]["record"]["outcome"], "unfinished");
 
     let retry = server
         .post(CREDENTIAL_PATH)
