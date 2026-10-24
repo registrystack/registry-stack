@@ -183,3 +183,10 @@ export function parseTrackingChanged(value) {
   ) return null;
   return { ...value, state: { ...value.state } };
 }
+
+export function parseTrackingReady(value) {
+  if (!exactKeys(value, ['protocol', 'version', 'type']) ||
+      value.protocol !== TRACKING_PROTOCOL ||
+      value.version !== TRACKING_PROTOCOL_VERSION || value.type !== 'ready') return null;
+  return { ...value };
+}

@@ -49,6 +49,7 @@ function fixture(options = {}) {
     createElement: tag => {
       assert.equal(tag, 'iframe');
       const frameListeners = new Map();
+      const attributes = new Map();
       frame = {
         contentWindow: { postMessage: (data, origin) => {
           if (remainingSendFailures > 0) {
@@ -57,7 +58,8 @@ function fixture(options = {}) {
           }
           sent.push({ data, origin });
         } },
-        setAttribute() {},
+        setAttribute: (name, value) => attributes.set(name, value),
+        getAttribute: name => attributes.get(name) ?? null,
         addEventListener: (type, listener) => frameListeners.set(type, listener),
         fireLoad: () => frameListeners.get('load')?.(),
         fireError: () => frameListeners.get('error')?.(),
@@ -108,18 +110,86 @@ async function nextRequest(run) {
   return { promise };
 }
 
-test('reads shared consent through one fixed iframe without a parent tracking script', async () => {
+test('reads shared consent through one fixed iframe without a parent tracking script', async (t) => {
   const f = fixture();
+  t.after(() => f.client.close());
   const { promise } = await nextRequest(() => f.client.read());
+  void promise.catch(() => {});
   assert.equal(f.frame.src, bridgeUrl);
   assert.equal(f.frame.hidden, true);
   assert.equal(f.frame.referrerPolicy, 'no-referrer');
   assert.equal(f.sent[0].origin, 'https://registrystack.org');
   assert.equal(f.sent[0].data.type, 'read');
+  assert.equal(f.frame.getAttribute('data-tracking-ready'), 'load');
   f.reply(unknown);
   assert.deepEqual(await promise, unknown);
   assert.equal(f.values.size, 0);
   f.client.close();
+});
+
+test('broker readiness permits a consent read before the iframe load event', async (t) => {
+  const f = fixture({ autoLoad: false });
+  t.after(() => f.client.close());
+  const { promise } = await nextRequest(() => f.client.read());
+  void promise.catch(() => {});
+  assert.equal(f.sent.length, 0);
+
+  f.message({ protocol: envelope.protocol, version: envelope.version, type: 'ready' });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.sent.length, 1);
+  assert.equal(f.sent[0].data.type, 'read');
+  assert.equal(f.frame.getAttribute('data-tracking-ready'), 'broker');
+  assert.deepEqual(f.client.state, unknown);
+  f.reply(rejected);
+  assert.deepEqual(await promise, rejected);
+
+  f.frame.fireLoad();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.sent.length, 1);
+  assert.equal(f.failures.length, 0);
+});
+
+test('readiness requires the exact envelope from the current bridge origin and frame', async (t) => {
+  const f = fixture({ autoLoad: false });
+  t.after(() => f.client.close());
+  const { promise } = await nextRequest(() => f.client.read());
+  void promise.catch(() => {});
+  const ready = { protocol: envelope.protocol, version: envelope.version, type: 'ready' };
+  f.message(ready, { origin: 'https://attacker.example' });
+  f.message(ready, { source: {} });
+  f.message({ ...ready, state: rejected });
+  f.message({ ...ready, version: 1 });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.sent.length, 0);
+  assert.deepEqual(f.client.state, unknown);
+
+  f.message(ready);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.sent.length, 1);
+  f.reply(rejected);
+  assert.deepEqual(await promise, rejected);
+});
+
+test('readiness from a removed failed frame cannot unlock its replacement', async (t) => {
+  const f = fixture({ autoLoad: false });
+  t.after(() => f.client.close());
+  const { promise } = await nextRequest(() => f.client.read());
+  void promise.catch(() => {});
+  const oldFrame = f.frame;
+  oldFrame.fireError();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.frames.length, 2);
+  const ready = { protocol: envelope.protocol, version: envelope.version, type: 'ready' };
+  f.message(ready, { source: oldFrame.contentWindow });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.sent.length, 0);
+
+  f.message(ready);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.sent.length, 1);
+  f.reply(rejected);
+  assert.deepEqual(await promise, rejected);
+  assert.equal(f.failures.length, 0);
 });
 
 test('concurrent startup and resume reads share one request and confirm an unchanged remote state', async (t) => {

@@ -2,6 +2,7 @@ import {
   SHARED_TRACKING_BRIDGE_URL,
   createTrackingRequest,
   parseTrackingChanged,
+  parseTrackingReady,
   parseTrackingResponse,
 } from './tracking-protocol.mjs';
 
@@ -89,6 +90,7 @@ export function createSharedTrackingClient(options = {}) {
   let frame;
   let frameReady;
   let frameReadyCancel;
+  let frameReadySignal;
   let closed = false;
   let suspended = false;
   let localRefusal = false;
@@ -194,6 +196,10 @@ export function createSharedTrackingClient(options = {}) {
 
   const receive = event => {
     if (closed || event.origin !== bridge.origin || event.source !== frame?.contentWindow) return;
+    if (parseTrackingReady(event.data)) {
+      frameReadySignal?.('broker');
+      return;
+    }
     const changed = parseTrackingChanged(event.data);
     if (changed) {
       update(changed.state);
@@ -255,12 +261,13 @@ export function createSharedTrackingClient(options = {}) {
       if (frame === candidate) frame = undefined;
       if (frameReady === ready) frameReady = undefined;
       if (frameReadyCancel === reset) frameReadyCancel = undefined;
+      if (frameReadySignal === markReady) frameReadySignal = undefined;
       candidate.remove();
       rejectReady(trackingError(code));
     };
     const timer = setTimeout(() => reset('frame-load-timeout'), frameLoadTimeoutMs);
     frameReadyCancel = reset;
-    candidate.addEventListener('load', () => {
+    const markReady = via => {
       if (settled) return;
       if (closed || frame !== candidate || frameReady !== ready) {
         reset();
@@ -269,8 +276,14 @@ export function createSharedTrackingClient(options = {}) {
       settled = true;
       clearTimeout(timer);
       if (frameReadyCancel === reset) frameReadyCancel = undefined;
+      if (frameReadySignal === markReady) frameReadySignal = undefined;
+      candidate.setAttribute('data-tracking-ready', via);
       resolveReady(candidate);
-    }, { once: true });
+    };
+    frameReadySignal = markReady;
+    // The broker can be usable before unrelated iframe resources finish loading.
+    // Retain load for cached bridges that do not emit application readiness.
+    candidate.addEventListener('load', () => markReady('load'), { once: true });
     candidate.addEventListener('error', () => reset('frame-load-failed'), { once: true });
     try {
       currentDocument.body.append(candidate);
