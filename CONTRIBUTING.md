@@ -60,10 +60,13 @@ runner contention. The maintainers own this budget alongside the CI workflow.
 Rust test shards run at most six at a time to reduce competition with the longer
 product integration jobs; all selected shards still execute.
 
-Post-classification fanout is capped at fifteen static matrix slots by making
+Post-classification fanout is capped at eighteen static matrix slots by making
 shorter and later-stage jobs wait for the existing Rust policy check. This
 leaves capacity for the longer product, native client, documentation, and
-security jobs to start. Their original path selectors remain in force and an
+security jobs to start. The Base Registry Engine contracts job takes six of
+those slots: its PostgreSQL journeys run as three shards and its adopter
+journeys in a lane of their own, which shortens the longest serial integration
+job. Their original path selectors remain in force and an
 explicit [`!cancelled()` status check](https://docs.github.com/en/actions/reference/workflows-and-actions/expressions#status-check-functions)
 lets selected jobs run after a Rust policy failure or skip while still honoring
 workflow cancellation. The same guard requires successful change
