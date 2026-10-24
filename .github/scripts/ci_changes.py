@@ -662,6 +662,7 @@ DOCS_ARCHIVE_INPUTS = frozenset(
         "docs/site/src/lib/docset-retention.mjs",
         "docs/site/src/lib/generated-api-bases.mjs",
         "docs/site/src/lib/page-markdown.ts",
+        "docs/site/src/lib/tracking-protocol.mjs",
     }
 )
 
