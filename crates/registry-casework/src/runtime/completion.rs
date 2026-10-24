@@ -32,7 +32,7 @@ use registry_platform_dispatch::{
 };
 use tokio_postgres::{Row, Transaction};
 
-use super::{deliver_review_completion, ReviewCompletionTarget};
+use super::{completion_failure_diagnostic, deliver_review_completion, ReviewCompletionTarget};
 use crate::config::{
     MAXIMUM_REVIEW_COMPLETION_TIMEOUT_MILLISECONDS, MINIMUM_REVIEW_COMPLETION_TIMEOUT_MILLISECONDS,
 };
@@ -212,9 +212,11 @@ impl DispatchStore for CompletionStore {
     type Job = LeasedReviewCompletion;
     type Record = ();
     type Detail = ();
-    type Context = ();
+    type Context = tracing::Dispatch;
 
-    fn capture_context(&self) {}
+    fn capture_context(&self) -> Self::Context {
+        tracing::dispatcher::get_default(Clone::clone)
+    }
 
     async fn connection(&self) -> Result<DispatchConnection, DispatchError> {
         let client = self
@@ -293,10 +295,21 @@ impl DispatchStore for CompletionStore {
     // fact, and the outbox row records where its delivery stands.
     async fn record_attempt_audit(
         &self,
-        _job: &LeasedJob<LeasedReviewCompletion>,
-        _audit: AttemptAudit<'_, ()>,
-        _context: &(),
+        job: &LeasedJob<LeasedReviewCompletion>,
+        audit: AttemptAudit<'_, ()>,
+        context: &Self::Context,
     ) -> Result<(), DispatchError> {
+        if let AttemptAudit::Finished { sent, disposition } = audit {
+            if !matches!(sent.outcome, SendOutcome::Accepted { .. }) {
+                tracing::dispatcher::with_default(context, || {
+                    completion_failure_diagnostic(
+                        &job.job.destination_id,
+                        i32::from(job.attempt),
+                        disposition,
+                    );
+                });
+            }
+        }
         Ok(())
     }
 
@@ -304,7 +317,7 @@ impl DispatchStore for CompletionStore {
         &self,
         _audit: &TransitionAudit<()>,
         _outcome: TransitionOutcome,
-        _context: &(),
+        _context: &Self::Context,
     ) -> Result<(), DispatchError> {
         Ok(())
     }
@@ -312,7 +325,7 @@ impl DispatchStore for CompletionStore {
     async fn record_replay_audit(
         &self,
         _audit: &ReplayAudit<()>,
-        _context: &(),
+        _context: &Self::Context,
     ) -> Result<(), DispatchError> {
         Err(DispatchError::Unavailable)
     }

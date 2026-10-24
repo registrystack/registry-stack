@@ -34,8 +34,8 @@ products of their own.
 |---|---|
 | `crates/registry-coordinator` | Optional Coordinator runtime and operator CLI, durable workflow state and client adapters |
 | `crates/registry-coordinator-client` | Bounded Rust Coordinator client over the runtime's HTTP contract |
-| `crates/registry-coordinator-client-node` | Internal napi-rs binding for the Coordinator client, built from source and not part of the unified Node.js client |
-| `crates/registry-coordinator-client-py` | Internal PyO3 binding for the Coordinator client, built from source and not part of the unified Python client |
+| `crates/registry-coordinator-client-node` | Internal napi-rs binding assembled into the unified Node.js client from v0.44.0 |
+| `crates/registry-coordinator-client-py` | Internal PyO3 binding assembled into the unified Python client from v0.44.0 |
 | `products/coordinator` | Coordinator product contract, deployment runbook, example projects, generated schemas, OpenAPI and operation contracts, and contributor check and test scripts |
 | `crates/registry-documents-core` | Source-neutral Document Store project model, problem codes, and wire constants |
 | `crates/registry-documents` | PostgreSQL-backed Document Store runtime and the `documents` binary |
@@ -79,6 +79,8 @@ products of their own.
 | `crates/registry-messaging-client-py` | Internal PyO3 binding used to assemble the unified Python client |
 | `crates/registry-record` | Product-neutral Registry Record v1 response DTOs used by the Base Registry Engine clients |
 | `crates/registry-render` | Registry Render: governed, byte-stable PDF documents from registry data, rendered with Typst, and the `registry-render` binary |
+| `crates/registry-render-client` | Bounded HTTP client for the optional Render serving adapter |
+| `crates/registry-render-client-node`, `crates/registry-render-client-py` | Internal Render bindings for explicit local candidates; release readiness remains held |
 | `crates/registry-stack-client` | Rust facade over the maintained Registry Stack product clients |
 | `crates/registry-stack-client-node` | Public `@registrystack/client` facade and platform package definitions |
 | `crates/registry-stack-client-py` | Public `registry-stack-client` Python facade assembled with all native bindings |

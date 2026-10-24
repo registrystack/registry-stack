@@ -8,7 +8,8 @@ deployment.
 
 Set the following absolute paths before starting Compose:
 
-- `EVIDENCE_CANDIDATE_DIR`, the approved package directory containing `SHA256SUMS`.
+- `EVIDENCE_CANDIDATE_DIR`, the create-only output from `evidencectl package`,
+  containing `bundle/`, `runtime.yaml`, and `compiled-authority.yaml`.
 - `EVIDENCE_RUNTIME_FILE`, a container-specific runtime document.
 - `EVIDENCE_SECRET_ROOT`, owner-only Evidence secret files.
 - `EVIDENCE_TRANSIT_SOCKET_DIR`, the dedicated directory containing `transit-proxy.sock`.
@@ -25,17 +26,23 @@ The Transit socket directory must be searchable but not writable by the Evidence
 The proxy owns the directory and creates a mode `0660` socket whose group admits only that Evidence
 identity.
 
-The service mounts the approved bundle, runtime, and secrets read-only. It also mounts the dedicated
-Transit socket directory created by an operator-managed host proxy or sidecar. Evidence receives no
-provider token or auto-auth credential. Its named audit volume is the only writable Evidence
-storage. A separate long-form read-only tmpfs replaces Docker's otherwise
+The service mounts the approved bundle, compiled authority document, runtime, secrets, and activated
+authority state read-only. It also mounts the dedicated Transit socket directory created by an
+operator-managed host proxy or sidecar. Evidence receives no provider token or auto-auth credential.
+Its named audit volume is the only writable Evidence storage. The one-shot `authority-activate`
+service mounts the authority volume writable only while it commits the selected document. A separate
+long-form read-only tmpfs replaces Docker's otherwise
 writable `/dev/shm`; do not remove or widen it. The runtime uses container
 paths and explicitly binds the wildcard address under
 `listener.networkExposure: container-private`; the Compose network and
 upstream TLS proxy are the exposure boundary.
-Provision the named volume so UID and GID `65532` can create and append the configured audit file
-before the first start. Do not widen the Evidence process to root to compensate for a root-owned
-volume.
+Provision the audit and authority named volumes from an Evidence image built from a source revision
+that contains this adapter before the first start. That image seeds both mountpoints for UID and GID
+`65532`, so the service can append the configured audit file and the one-shot activation can commit
+authority as the same nonroot identity. Published 0.43 images predate this image contract; a
+compatibility run with one requires a separately provisioned authority volume already owned by UID
+and GID `65532`, and does not prove the fresh-volume seed. Do not widen either process to root to
+compensate for a root-owned volume.
 
 ```sh
 export EVIDENCE_CANDIDATE_DIR='<candidate>'
@@ -45,6 +52,21 @@ export EVIDENCE_TRANSIT_SOCKET_DIR='<transit-socket-directory>'
 export EVIDENCE_IMAGE='<reviewed-evidence-image-by-digest>'
 docker compose -f docker-compose.yaml config
 ```
+
+Set `authority.target` in the container runtime to the target named by
+`compiled-authority.yaml`. Activate that authority before any check or start:
+
+```sh
+docker compose -f docker-compose.yaml run --rm authority-activate
+```
+
+The activation service uses an opt-in Compose profile, so an untargeted
+`docker compose up` never runs it. Explicitly targeting the one-shot service
+as above enables it without a separate profile flag.
+
+An identical retry is harmless. A different candidate must be activated from
+its own exact `compiled-authority.yaml`; startup refuses absent authority and
+authority state bound to another package or target.
 
 Start the operator-managed Transit proxy and confirm it created the configured socket. Then run the
 target-context check before starting the service:
@@ -80,6 +102,12 @@ python3 docker/runtime-preflight.py \
   --service evidence=evidence
 ```
 
+After preflight passes, start only the serving service:
+
+```sh
+docker compose -f docker-compose.yaml up -d evidence
+```
+
 The native check runs under a bounded deadline of 1800 seconds. Add
 `--native-check-timeout-seconds SECONDS` to select another deadline from 30 to
 21600 seconds when a slow dependency needs longer, or when the deployment
@@ -105,7 +133,8 @@ changes to the source Compose or environment files cannot change the checked
 containers between phases. Host storage durability, daemon state, and changes
 made after preflight remain operator responsibilities.
 
-The package digest remains unchanged when only the container runtime changes. Run fixtures again
+The package digest remains unchanged when only the container runtime changes. Authority activation
+is still bound to the exact package digest, so activate again after installing another candidate. Run fixtures again
 only when governed package content changes. The runtime and package being read-only does not waive secret
 owner or mode checks for the container service identity.
 

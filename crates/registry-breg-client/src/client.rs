@@ -2705,6 +2705,7 @@ async fn breg_problem(response: Response, transport: &Transport) -> BaseRegistry
             )
         || extensions.reason_code.is_some()
             != (code == BRegProblemCode::StatisticalDatasetVersionWithdrawn)
+        || extensions.guard_reason.is_some() && code != BRegProblemCode::ActionGuardFailed
         || (code == BRegProblemCode::StatisticalDatasetReleaseRefused
             && !extensions
                 .refusal_code
@@ -2724,7 +2725,10 @@ async fn breg_problem(response: Response, transport: &Transport) -> BaseRegistry
         trace_id,
         field_path: extensions.field_path.map(|(_, path)| path),
         constraint: extensions.constraint,
-        refusal_code: extensions.refusal_code.or(extensions.reason_code),
+        refusal_code: extensions
+            .refusal_code
+            .or(extensions.reason_code)
+            .or(extensions.guard_reason),
     }
 }
 
@@ -2805,6 +2809,7 @@ struct BRegProblemExtensions {
     field_path: Option<(BRegProblemPath, BRegProblemFieldPath)>,
     refusal_code: Option<BRegRefusalCode>,
     reason_code: Option<BRegRefusalCode>,
+    guard_reason: Option<BRegRefusalCode>,
 }
 
 /// BReg owns paired field locations, problem locations, and the declared code an
@@ -2858,6 +2863,13 @@ fn parse_breg_problem(body: &[u8]) -> Result<(ProblemDocument, BRegProblemExtens
         Some(serde_json::Value::String(code)) => Some(BRegRefusalCode::parse(&code).ok_or(())?),
         _ => return Err(()),
     };
+    let guard_reason = match object.remove("guardReason") {
+        None => None,
+        Some(Value::String(code)) if crate::error::valid_guard_reason(&code) => {
+            Some(BRegRefusalCode::parse(&code).ok_or(())?)
+        }
+        _ => return Err(()),
+    };
     object.retain(|key, _| {
         matches!(
             key.as_str(),
@@ -2882,6 +2894,7 @@ fn parse_breg_problem(body: &[u8]) -> Result<(ProblemDocument, BRegProblemExtens
             field_path,
             refusal_code,
             reason_code,
+            guard_reason,
         },
     ))
 }

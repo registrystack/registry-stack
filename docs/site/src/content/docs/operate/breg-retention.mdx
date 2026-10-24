@@ -107,7 +107,7 @@ Erased the requested history. 1 commit affected.
 
 One run erases at most 10,000 revisions in one transaction. It replaces each held response that
 could replay an erased revision with a refusal, so a retry of that key answers
-`409 idempotency.conflict` instead of returning the erased body. A request file that is not
+`409 idempotency.key-reused` instead of returning the erased body. A request file that is not
 owner-only is refused before any connection opens. Live reads and writes continue.
 
 Snapshot references at or after the earliest erased commit become unavailable, and erasing a
@@ -326,7 +326,7 @@ The held response stays available for `retention.receiptRetentionDays` after the
 7 days unless the runtime file sets a value from 1 to 365. The horizon is fixed at commit, so a
 changed setting applies to later writes only. Past it, an exact retry answers
 `410 idempotency.expired` and never runs. A key whose response an erasure removed answers
-`409 idempotency.conflict` on either side of the horizon.
+`409 idempotency.key-reused` on either side of the horizon.
 
 Until the drop runs, a spent key also keeps the raw issuer, principal value, and key it was sent
 under, beside the history it produced. Schedule the drop to match the horizon:

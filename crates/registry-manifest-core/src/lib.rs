@@ -386,6 +386,9 @@ pub struct MetadataManifest {
     pub public_services: Vec<ServiceManifest>,
     #[serde(default)]
     pub data_services: Vec<DataServiceManifest>,
+    /// Optional static descriptions of adopter-owned modules. No runtime authority.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub modules: Vec<ModuleManifest>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub distributions: Vec<DistributionManifest>,
     #[serde(default)]
@@ -459,6 +462,8 @@ pub struct MetadataManifestFields {
     #[serde(default)]
     data_services: UniqueIdList<DataServiceManifest>,
     #[serde(default)]
+    modules: UniqueIdList<ModuleManifest>,
+    #[serde(default)]
     distributions: UniqueIdList<DistributionManifest>,
     #[serde(default)]
     forms: UniqueIdList<FormManifest>,
@@ -482,6 +487,7 @@ impl From<MetadataManifestFields> for MetadataManifest {
             authorities: fields.authorities.into_vec(),
             public_services: fields.public_services.into_vec(),
             data_services: fields.data_services.into_vec(),
+            modules: fields.modules.into_vec(),
             distributions: fields.distributions.into_vec(),
             forms: fields.forms.into_vec(),
             datasets: fields.datasets.into_vec(),
@@ -886,6 +892,25 @@ pub struct DataServiceManifest {
     pub serves_datasets: Vec<String>,
     #[serde(default)]
     pub conforms_to: Option<String>,
+}
+
+/// A portable description of an adopter-owned module, independent of datasets.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct ModuleManifest {
+    pub id: String,
+    pub title: LocalizedText,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<LocalizedText>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub documentation_url: Option<String>,
+}
+
+impl Identified for ModuleManifest {
+    fn id(&self) -> &str {
+        &self.id
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -1463,6 +1488,8 @@ pub struct CompiledMetadataInner {
     pub authorities: BTreeMap<String, CompiledAuthority>,
     pub public_services: BTreeMap<String, CompiledService>,
     pub data_services: BTreeMap<String, CompiledDataService>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub modules: Vec<ModuleManifest>,
     pub distributions: BTreeMap<String, CompiledDistribution>,
     pub forms: BTreeMap<String, CompiledForm>,
     pub requirements: BTreeMap<String, CompiledRequirement>,
@@ -2053,6 +2080,7 @@ impl CompiledMetadata {
         CompiledMetadata {
             inner: Arc::new(CompiledMetadataInner {
                 catalog: self.inner.catalog.clone(),
+                modules: self.inner.modules.clone(),
                 authorities: self.inner.authorities.clone(),
                 public_services,
                 data_services,
@@ -2684,6 +2712,12 @@ fn validate_collection_limits(manifest: &MetadataManifest, errors: &mut Vec<Vali
         errors,
     );
     validate_count_limit(
+        manifest.modules.len(),
+        "modules",
+        MAX_TOP_LEVEL_COLLECTION_ITEMS,
+        errors,
+    );
+    validate_count_limit(
         manifest.data_services.len(),
         "data_services",
         MAX_TOP_LEVEL_COLLECTION_ITEMS,
@@ -3184,6 +3218,7 @@ pub fn compile_manifest(manifest: &MetadataManifest) -> Result<CompiledMetadata,
             authorities,
             public_services,
             data_services,
+            modules: manifest.modules.clone(),
             distributions,
             forms,
             requirements,
@@ -3230,6 +3265,9 @@ pub fn render_catalog(compiled: &CompiledMetadata) -> Value {
     let data_services = compiled.data_services().collect::<Vec<_>>();
     if !data_services.is_empty() {
         catalog["data_services"] = json!(data_services);
+    }
+    if !compiled.inner.modules.is_empty() {
+        catalog["modules"] = json!(compiled.inner.modules);
     }
     let distributions = compiled.distributions().collect::<Vec<_>>();
     if !distributions.is_empty() {
@@ -4137,6 +4175,33 @@ fn validate_service_catalog<'a>(
         }
     }
 
+    let mut module_ids = BTreeSet::new();
+    for (index, module) in manifest.modules.iter().enumerate() {
+        let path = format!("modules[{index}]");
+        validate_id(&module.id, format!("{path}.id"), errors);
+        if !module_ids.insert(module.id.as_str()) {
+            errors.push(ValidationError::new(
+                ValidationCondition::DuplicateId,
+                format!("{path}.id"),
+                "module id must be unique",
+            ));
+        }
+        validate_non_empty(&module.title.text(), format!("{path}.title"), errors);
+        if let Some(description) = &module.description {
+            validate_non_empty(&description.text(), format!("{path}.description"), errors);
+        }
+        if module
+            .documentation_url
+            .as_deref()
+            .is_some_and(|url| !is_well_formed_http_https_iri(url))
+        {
+            errors.push(ValidationError::new(
+                ValidationCondition::InvalidUrl,
+                format!("{path}.documentation_url"),
+                "module documentation URL must be a well-formed absolute HTTP(S) IRI",
+            ));
+        }
+    }
     let mut data_service_ids = BTreeSet::new();
     for (index, data_service) in manifest.data_services.iter().enumerate() {
         let path = format!("data_services[{index}]");

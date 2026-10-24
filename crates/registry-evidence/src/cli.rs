@@ -194,6 +194,10 @@ pub enum Command {
     BundleCheck {
         #[arg(long)]
         bundle: PathBuf,
+        /// Validate the generated target runtime against the bundle without
+        /// resolving target-host dependencies.
+        #[arg(long = "runtime-config")]
+        runtime_config: Option<PathBuf>,
         /// Validate compiled target grants offline, without activating them.
         #[arg(long)]
         authority_document: Option<PathBuf>,

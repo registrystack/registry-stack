@@ -1,3 +1,5 @@
+import * as render from './render/client'
+import * as coordinator from './coordinator/client'
 import * as discovery from './discovery/client'
 import * as evidence from './evidence/client'
 import * as breg from './breg/client'
@@ -5,4 +7,4 @@ import * as casework from './casework/client'
 import * as messaging from './messaging/client'
 import * as scheduling from './scheduling/client'
 
-export { discovery, evidence, breg, casework, messaging, scheduling }
+export { discovery, evidence, breg, casework, messaging, scheduling, render, coordinator }

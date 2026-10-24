@@ -75,7 +75,7 @@ journeys:
         expect:
           outcome: refusal
           status: 409
-          problemCode: idempotency.conflict
+          problemCode: idempotency.key-reused
       - id: boundary-escape-is-refused
         action: register-asset-with-inspection
         accessProfile: asset-action-registrar

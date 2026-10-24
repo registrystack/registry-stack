@@ -40,7 +40,6 @@ pub struct SchedulingAuthenticator {
     verifier: TokenVerifier,
     claim_names: ClaimNames,
     audience: String,
-    scope_claim: String,
     reads_scope: String,
     explain_scope: String,
     /// Whether the deployment declared any assertion authority at all.
@@ -48,6 +47,14 @@ pub struct SchedulingAuthenticator {
 }
 
 impl SchedulingAuthenticator {
+    pub(crate) fn record_header_refusal(&self) {
+        registry_platform_oidc::log_authentication_refusal!(
+            self.verifier,
+            registry_platform_oidc::AuthenticationStage::Header,
+            "Scheduling authentication refused"
+        );
+    }
+
     #[must_use]
     pub fn new(oidc: &OidcConfig, verifier: TokenVerifierConfig, keys: Arc<JwksFetcher>) -> Self {
         // The default contextual-claim profile is the closed one this product
@@ -60,7 +67,6 @@ impl SchedulingAuthenticator {
             verifier: TokenVerifier::new(verifier, keys),
             claim_names,
             audience: oidc.provider.audience.clone(),
-            scope_claim: oidc.scope_claim.clone(),
             reads_scope: oidc.reads_scope.clone(),
             explain_scope: oidc.explain_scope.clone(),
             binds_assertion_issuers: !oidc.clients.assertion_issuers.is_empty(),
@@ -82,27 +88,22 @@ impl SchedulingAuthenticator {
     }
 
     /// Admit a verified caller holding `required`, or refuse it as a profile
-    /// miss. The refusal tells the operator which claim was read and which
-    /// scope was expected, and which keys select them, because a deployment
-    /// whose issuer emits a different claim or scope spelling sees nothing
-    /// but this refusal. The caller's own scopes are never logged.
+    /// miss. Diagnostics name only the fixed stage, never scope or claim values.
     fn require_scope(
         &self,
         caller: Caller,
         scopes: &[String],
         required: &str,
-        key: &str,
+        _key: &str,
     ) -> Result<Caller, AuthenticationError> {
         if scopes.iter().any(|scope| scope == required) {
             return Ok(caller);
         }
-        tracing::info!(
-            "{}",
-            MissingScope {
-                claim: &self.scope_claim,
-                scope: required,
-                key,
-            }
+        registry_platform_oidc::log_authentication_refusal!(
+            self.verifier,
+            registry_platform_oidc::AuthenticationStage::Scope,
+            "Scheduling authentication profile refused",
+            remedy = "check authentication.oidc.scopeClaim and readsScope or explainScope"
         );
         Err(AuthenticationError::Profile)
     }
@@ -121,9 +122,16 @@ impl SchedulingAuthenticator {
         &self,
         token: &str,
     ) -> Result<(Caller, Vec<String>), AuthenticationError> {
-        validate_compact_access_token(token).map_err(|_| AuthenticationError::Refused)?;
+        validate_compact_access_token(token).map_err(|_| {
+            self.record_header_refusal();
+            AuthenticationError::Refused
+        })?;
         let verified = self.verifier.verify(token).await.map_err(|error| {
-            tracing::debug!(error = %error, "the Scheduling bearer credential did not verify");
+            registry_platform_oidc::log_authentication_refusal!(
+                self.verifier,
+                error.authentication_stage(),
+                "Scheduling authentication refused"
+            );
             verifier_failure(&error)
         })?;
         // An exchanged token names the authority whose assertion produced it.
@@ -192,24 +200,6 @@ impl SchedulingAuthenticator {
             },
             verified.scopes,
         ))
-    }
-}
-
-/// The operator sentence a scope refusal logs: the claim read, the scope
-/// expected, and the two keys that select them.
-struct MissingScope<'a> {
-    claim: &'a str,
-    scope: &'a str,
-    key: &'a str,
-}
-
-impl std::fmt::Display for MissingScope<'_> {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            formatter,
-            "a Scheduling request was refused because the token's `{}` claim does not carry the `{}` scope the route requires; issue that scope to the client, or set authentication.oidc.scopeClaim and authentication.oidc.{} to what the issuer emits",
-            self.claim, self.scope, self.key
-        )
     }
 }
 
@@ -467,30 +457,6 @@ mod tests {
             .expect("a caller without the reads scope still reaches a mutation");
     }
 
-    #[test]
-    fn a_scope_refusal_names_the_expected_claim_scope_and_keys() {
-        let read = MissingScope {
-            claim: "registry_scopes",
-            scope: "scheduling-read",
-            key: "readsScope",
-        }
-        .to_string();
-        assert!(read.contains("`registry_scopes` claim"), "{read}");
-        assert!(read.contains("`scheduling-read` scope"), "{read}");
-        assert!(read.contains("authentication.oidc.scopeClaim"), "{read}");
-        assert!(read.contains("authentication.oidc.readsScope"), "{read}");
-        let explain = MissingScope {
-            claim: "scope",
-            scope: "scheduling-explain",
-            key: "explainScope",
-        }
-        .to_string();
-        assert!(
-            explain.contains("authentication.oidc.explainScope"),
-            "{explain}"
-        );
-    }
-
     #[tokio::test]
     async fn the_explain_path_demands_its_own_scope() {
         let authenticator = authenticator();
@@ -743,6 +709,7 @@ mod tests {
             OidcError::AudienceMismatch,
             OidcError::SignatureInvalid,
             OidcError::InvalidToken,
+            OidcError::InvalidTimeClaims,
             OidcError::ClientNotAllowed,
             OidcError::AssertionIssuerNotAllowed,
         ] {
@@ -781,5 +748,97 @@ mod tests {
             authenticator().authenticate_read(&forged).await,
             Err(AuthenticationError::Refused)
         ));
+    }
+    #[tokio::test]
+    async fn compact_token_admission_logs_one_value_free_header_diagnostic() {
+        use registry_platform_testing::{malformed_access_token_fixtures, CapturedDiagnosticLogs};
+        use tracing::instrument::WithSubscriber;
+        let captured = CapturedDiagnosticLogs::default();
+        let subscriber = captured.subscriber();
+        let tokens = malformed_access_token_fixtures();
+        let auth = authenticator();
+        for _ in 0..3 {
+            for token in &tokens {
+                assert!(matches!(
+                    auth.authenticate_read(token)
+                        .with_subscriber(subscriber.clone())
+                        .await,
+                    Err(AuthenticationError::Refused)
+                ));
+                assert!(matches!(
+                    auth.authenticate_explain(token)
+                        .with_subscriber(subscriber.clone())
+                        .await,
+                    Err(AuthenticationError::Refused)
+                ));
+                assert!(matches!(
+                    auth.authenticate_mutate(token)
+                        .with_subscriber(subscriber.clone())
+                        .await,
+                    Err(AuthenticationError::Refused)
+                ));
+            }
+        }
+        captured.assert_one_value_free_header_diagnostic(&tokens);
+    }
+
+    #[tokio::test]
+    async fn separate_resource_rs256_and_es256_profiles_refuse_cross_resource_reuse() {
+        for algorithm in [Algorithm::RS256, Algorithm::ES256] {
+            let key = registry_platform_testing::access_token_test_key(algorithm);
+            let jwks = serde_json::from_value(json!({"keys":[key.public()]})).unwrap();
+            let source = Arc::new(JwksFetcher::new_static(jwks, JwksFetcherConfig::defaults()));
+            let verifier = TokenVerifierConfig::access_token_profile(
+                ISSUER,
+                vec![AUDIENCE.to_owned()],
+                vec![algorithm],
+                vec!["at+jwt".to_owned()],
+            )
+            .with_scope_claim("registry_scopes")
+            .with_allowed_clients(vec![CLIENT.to_owned()]);
+            let auth = SchedulingAuthenticator::new(&oidc(), verifier, source);
+            let now = Utc::now().timestamp();
+            let claims = json!({"iss":ISSUER,"aud":AUDIENCE,"azp":CLIENT,"sub":"canary-person","registry_scopes":"scheduling-read","registry_actor_kind":"human","iat":now,"exp":now+300});
+            let sign = |claims: serde_json::Value, typ: &str| {
+                registry_platform_testing::sign_compact_jwt_with_key(
+                    &key,
+                    typ,
+                    "canary-resource-key",
+                    claims,
+                )
+            };
+            registry_platform_testing::assert_resource_audience_and_token_type_rules(
+                &key,
+                claims.clone(),
+                |token: String| {
+                    let auth = &auth;
+                    async move { auth.authenticate_read(&token).await }
+                },
+                |error| matches!(error, AuthenticationError::Refused),
+            )
+            .await;
+            // A valid symmetric JWT is outside the asymmetric production baseline.
+            let token = self::token(
+                json!({"azp":CLIENT,"registry_scopes":"scheduling-read","registry_actor_kind":"human"}),
+            );
+            assert!(matches!(
+                auth.authenticate_read(&token).await,
+                Err(AuthenticationError::Refused)
+            ));
+            let mut wrong_actor = claims.clone();
+            wrong_actor["registry_actor_kind"] = json!("canary-invalid-actor");
+            let token = sign(wrong_actor, "at+jwt");
+            assert!(matches!(
+                auth.authenticate_read(&token).await,
+                Err(AuthenticationError::Claims)
+            ));
+            let mut missing = claims.clone();
+            missing["registry_scopes"] = json!("");
+            let token = sign(missing, "at+jwt");
+            assert!(matches!(
+                auth.authenticate_read(&token).await,
+                Err(AuthenticationError::Profile)
+            ));
+        }
     }
 }

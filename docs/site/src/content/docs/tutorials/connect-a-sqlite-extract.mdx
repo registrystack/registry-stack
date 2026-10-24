@@ -162,14 +162,16 @@ Change these together, then rerun both commands:
 
 ## Bind an extract file
 
-The target, not the project, says which file an extract profile reads. Add a binding to
-`local-target.yaml`, with `<extract-file>` replaced by the name of the file your export tooling
-published:
+The target, not the project, says which file an extract profile reads. `init` already bound
+`record-status` to a placeholder path in `local-target.yaml`, because a target must bind every
+extract profile its Sources use. Point the binding at the file your export tooling published,
+with `<extract-file>` replaced by its name:
 
-```yaml title="local-target.yaml" test-append
-extracts:
-  record-status:
-    path: /var/lib/registry-evidence/extracts/<extract-file>.sqlite
+```diff lang="yaml" title="local-target.yaml" test-edit
+ extracts:
+   record-status:
+-    path: extracts/record-status.sqlite
++    path: /var/lib/registry-evidence/extracts/<extract-file>.sqlite
 ```
 
 Check the target again:
@@ -185,10 +187,10 @@ Target: local-target.yaml
 0 errors, 0 warnings in 1 file
 ```
 
-This check neither opens the file nor matches the key `record-status` to a Source's
-`extractProfile`, so keep the two names equal. On the target host, `evidencectl doctor` does
-both: it reports a profile with no binding as `evidence.runtime.source-extract-unbound`, and a
-binding no Source names as `evidence.runtime.source-extract-unused`.
+This check matches the key `record-status` to the Source's `extractProfile`: a profile with no
+binding is `evidence.runtime.source-extract-unbound`, and a binding no Source names is
+`evidence.runtime.source-extract-unused`. It does not open the file. On the target host,
+`evidencectl doctor` also opens it.
 
 Your export tooling writes the file with one `evidence_extract` row holding `published_at`,
 `publisher`, and `extract_id`. Evidence refuses an extract older than `maximumExtractAgeSeconds`.

@@ -49,8 +49,8 @@ CLIENT_ONLY_CORES = {
     "registry-casework-core": "registry-casework-client",
 }
 
-# The unified Rust facade. It carries no Coordinator client and is never a
-# dependency of the runtime.
+# The unified Rust facade carries the public Coordinator client and is never
+# a dependency of the runtime.
 UNIFIED_CLIENT = "registry-stack-client"
 
 # Every crate outside the Coordinator that may depend on a Coordinator crate,
@@ -58,6 +58,7 @@ UNIFIED_CLIENT = "registry-stack-client"
 ALLOWED_DEPENDENTS = {
     # Builds the published CLI reference from the `coordinator` command tree.
     "registry-cli-docs": frozenset({COORDINATOR_RUNTIME}),
+    "registry-stack-client": frozenset({"registry-coordinator-client"}),
 }
 
 def package_graph(

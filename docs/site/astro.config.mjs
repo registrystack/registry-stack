@@ -620,6 +620,7 @@ export default defineConfig({
           label: 'Start',
           items: [
             { label: 'Overview', link: '/' },
+            { label: 'Four ways to adopt', slug: 'start/adopt' },
             { label: 'How the products fit together', slug: 'start/concepts' },
           ],
         },
@@ -940,6 +941,7 @@ export default defineConfig({
             { label: 'Environment variables', slug: 'reference/environment-variables' },
             { label: 'Configuration files', slug: 'reference/configuration-files' },
             { label: 'API overview', slug: 'reference/apis' },
+            { label: 'Module conventions', slug: 'configure/module-conventions' },
             ...cliReferenceSidebar(undefined, { omit: omittedCliBinaries(selectedDocset) }),
             {
               label: 'Compatibility',

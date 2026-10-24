@@ -138,7 +138,8 @@ submission digest and carries a terminal status such as `approved`,
 `rejected`, `answered`, `cancelled`, or `superseded`. A decided result names
 its `outcome` and any `publicReason`; a cancelled or superseded one carries
 neither. A completion destination,
-when configured, receives an authenticated payload-free wake. A wake carries
+when configured, receives an authenticated [completion wake](COMPLETION-RECEIVERS.md)
+with event, request and result identifiers. Delivery is at-least-once. A wake carries
 no decision payload; the producer fetches the result and authorizes any later
 mutation independently.
 

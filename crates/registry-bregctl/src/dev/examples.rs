@@ -423,6 +423,12 @@ fn read_source(path: &Path) -> Result<Vec<u8>> {
 }
 fn catalogue(project: &Path) -> Result<(Catalogue, Vec<u8>)> {
     let path = project.join(CATALOGUE_FILE);
+    if !path
+        .try_exists()
+        .context("cannot inspect the example catalogue")?
+    {
+        bail!("examples/scenarios.json is absent; create a complete example project with bregctl init, or add an examples/scenarios.json catalogue before running bregctl examples list");
+    }
     let bytes = read_source(&path)?;
     let decoded = Reader::new(path.display().to_string())
         .with_hook(&mut LiteralText {

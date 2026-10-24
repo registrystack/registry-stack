@@ -1382,13 +1382,6 @@ jobs:
                 --library-root "${CARGO_TARGET_DIR}" \
                 --library-directory "${platform_dir}"
             fi
-            (cd "${GITHUB_WORKSPACE}/crates/registry-stack-client-node" && npm pack \
-              "./npm/${{ matrix.napi_platform }}" \
-              --ignore-scripts --pack-destination "${RUNNER_TEMP}")
-            platform_package="registrystack-client-${{ matrix.napi_platform }}-${CLIENT_VERSION}.tgz"
-            test -f "${RUNNER_TEMP}/${platform_package}"
-            cp "${RUNNER_TEMP}/${platform_package}" \
-              "${GITHUB_WORKSPACE}/candidate-client-package/clients/${platform_package}"
           fi
 
       - name: Smoke Node client packages
@@ -1422,6 +1415,13 @@ jobs:
               --package-json "${root_stage}/package.json" \
               --version "${CLIENT_VERSION}" \
               --client stack
+            (cd "${root_stage}" && npm pack \
+              "./npm/${{ matrix.napi_platform }}" \
+              --ignore-scripts --pack-destination "${RUNNER_TEMP}")
+            platform_package="registrystack-client-${{ matrix.napi_platform }}-${CLIENT_VERSION}.tgz"
+            test -f "${RUNNER_TEMP}/${platform_package}"
+            cp "${RUNNER_TEMP}/${platform_package}" \
+              "${GITHUB_WORKSPACE}/candidate-client-package/clients/${platform_package}"
             (cd "${root_stage}" && npm pack \
               --ignore-scripts --pack-destination "${smoke}")
             root_package="${smoke}/registrystack-client-${CLIENT_VERSION}.tgz"

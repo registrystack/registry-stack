@@ -28,6 +28,14 @@ impl BRegRefusalCode {
     }
 }
 
+pub(crate) fn valid_guard_reason(reason: &str) -> bool {
+    matches!(reason.as_bytes().first(), Some(b'a'..=b'z'))
+        && reason.len() <= 64
+        && reason
+            .bytes()
+            .all(|byte| matches!(byte, b'a'..=b'z' | b'0'..=b'9' | b'_' | b'-'))
+}
+
 impl std::fmt::Debug for BRegRefusalCode {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str("BRegRefusalCode(<undisclosed>)")
@@ -210,7 +218,7 @@ impl BRegProblemCode {
             Self::ActionHandlerFailed => "action.handler_failed",
             Self::ActionRefused => "action.refused",
             Self::AuthenticationRefused => "authentication.refused",
-            Self::IdempotencyConflict => "idempotency.conflict",
+            Self::IdempotencyConflict => "idempotency.key-reused",
             Self::IdempotencyExpired => "idempotency.expired",
             Self::IngestionChunkMismatch => "ingestion.chunk_mismatch",
             Self::IngestionProfileMismatch => "ingestion.profile_mismatch",
@@ -612,6 +620,18 @@ impl BaseRegistryClientError {
                 refusal_code: Some(reason_code),
                 ..
             } => Some(reason_code.as_str()),
+            _ => None,
+        }
+    }
+
+    /// The disclosed authored guard copy key; never rendered in error messages.
+    pub fn guard_reason(&self) -> Option<&str> {
+        match self {
+            Self::Problem {
+                code: BRegProblemCode::ActionGuardFailed,
+                refusal_code: Some(reason),
+                ..
+            } => Some(reason.as_str()),
             _ => None,
         }
     }

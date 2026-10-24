@@ -158,20 +158,22 @@ the path from the helper's `REGISTRY_CARGO_RUNTIME_LIBRARY_PATH` on the child
 that imports the addon, and the Python bootstraps preload the same library.
 
 ```sh
-product=discovery # or evidence, breg, casework, messaging, scheduling, coordinator
+product=discovery # or evidence, breg, casework, messaging, scheduling, coordinator, render
 . scripts/cargo-runtime-library-path.sh
 registry_prepare_cargo_runtime "$PWD" --locked -p "registry-${product}-client-node"
 (cd "crates/registry-${product}-client-node" && npm run build:debug && npm test)
 (cd "crates/registry-${product}-client-py" && python3 -m unittest discover -s tests/python -v)
 ```
 
-In checkouts containing the unified Node.js and Python packages, those packages
-are generated from the BReg, Casework, Discovery, Evidence, Messaging, and
-Scheduling bindings. Published packages include Messaging from v0.38.0 and
-Scheduling from v0.40.0; earlier release assembly preserves its
-version-selected inventory. The Coordinator binding is not part of the unified
-packages. Source CI uses the explicit local `--include-messaging` and
-`--include-scheduling` overrides when assembling the current six bindings.
+The unified Node.js and Python client roster contains BReg, Casework, Discovery,
+Evidence, Messaging, Scheduling, and Coordinator from v0.44.0. Messaging joined
+in v0.38.0 and Scheduling in v0.40.0; historical releases retain their own
+inventory. The Render source binding is held independently and omitted from
+default assembly. Add it only with the explicit local-candidate
+`--include-render` option. That option does not enable publication or change
+the released seven-product roster. Historical source integration may also need `--include-messaging`,
+`--include-scheduling`, or `--include-coordinator`; use a release tag to
+reproduce its published package.
 When changing that assembly,
 confirm the facade directories, `sync-registry-client-node.py`, and
 `test_assemble_registry_client_wheel.py` are present, then run from the monorepo
@@ -201,3 +203,13 @@ For changed wire surfaces, use owning product contract gates, including
 client, verifier, binding, authoring, and language-server source also stays
 under Evidence's neutrality checks. Package checks alone do not prove a
 changed runtime authorization or disclosure boundary.
+
+## Shared protocol references
+
+[HTTP problems and recovery](../products/platform/HTTP-PROBLEMS.md) owns the
+common envelope, deliberate bodyless/concealed states, meaningful Retry-After,
+idempotency guidance and the two pagination families.
+[Access tokens](../products/platform/ACCESS-TOKENS.md) owns the per-resource
+verification table. Python `registry_client.auth.PrivateKeyJwt` is the same
+canonical provider as the compatibility BReg entry point; configure one
+instance per resource. A facade grants no shared bearer authority.

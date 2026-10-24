@@ -219,7 +219,8 @@ impl From<PostgresKernelError> for ReconcileError {
             | PostgresKernelError::SchemaFingerprintMismatch { .. }
             | PostgresKernelError::RegistryUnavailable
             | PostgresKernelError::HistoryCoverageIncomplete
-            | PostgresKernelError::RetainedLocalHooks(_) => Self::Unavailable,
+            | PostgresKernelError::RetainedLocalHooks(_)
+            | PostgresKernelError::ConflictingImportRuns => Self::Unavailable,
         }
     }
 }
@@ -241,6 +242,7 @@ impl From<MigrationError> for ReconcileError {
             | MigrationError::DatabaseMismatch
             | MigrationError::HistoryCoverage
             | MigrationError::RetainedLocalHooks(_)
+            | MigrationError::ConflictingImportRuns
             | MigrationError::DatabaseUnavailable
             | MigrationError::FieldPatternSyntax { .. }
             | MigrationError::FieldPatternExistingRows { .. }

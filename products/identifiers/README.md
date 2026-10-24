@@ -19,6 +19,10 @@ The generated active-only catalog closes three maintained surfaces:
 - Namespace and vocabulary records come from the explicit entries in the same
   source file and are SHA-256 bound to the source that defines them.
 
+Discovery preserves its four published problem type URIs while using qualified
+`request.*` and `service.*` codes. The generator pins those exact URI/code pairs;
+it does not derive replacement URIs or relax URI/code checks for other products.
+
 `generated/catalog.v1.json` is deterministic. Regenerate it with:
 
 ```bash

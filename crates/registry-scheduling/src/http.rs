@@ -565,7 +565,8 @@ struct ExplainQuery {
 }
 
 async fn authenticate_read(state: &HttpState, headers: &HeaderMap) -> Result<Caller, HttpError> {
-    let token = bearer_token(headers)?;
+    let token =
+        bearer_token(headers).inspect_err(|_| state.authenticator.record_header_refusal())?;
     state
         .authenticator
         .authenticate_read(token)
@@ -574,7 +575,8 @@ async fn authenticate_read(state: &HttpState, headers: &HeaderMap) -> Result<Cal
 }
 
 async fn authenticate_explain(state: &HttpState, headers: &HeaderMap) -> Result<Caller, HttpError> {
-    let token = bearer_token(headers)?;
+    let token =
+        bearer_token(headers).inspect_err(|_| state.authenticator.record_header_refusal())?;
     state
         .authenticator
         .authenticate_explain(token)
@@ -583,7 +585,8 @@ async fn authenticate_explain(state: &HttpState, headers: &HeaderMap) -> Result<
 }
 
 async fn authenticate_mutate(state: &HttpState, headers: &HeaderMap) -> Result<Caller, HttpError> {
-    let token = bearer_token(headers)?;
+    let token =
+        bearer_token(headers).inspect_err(|_| state.authenticator.record_header_refusal())?;
     state
         .authenticator
         .authenticate_mutate(token)

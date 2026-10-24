@@ -5,6 +5,7 @@ import type { Loader } from 'astro/loaders';
 import { z } from 'astro/zod';
 
 import docsetsManifest from './data/generated/docsets.json';
+import { expandReferenceEntry } from './lib/reference-tables.mjs';
 import { DOC_PERSONAS } from './lib/doc-personas.mjs';
 import { isEntryGatedOut, selectedDocset } from './lib/docset-products.mjs';
 
@@ -20,7 +21,14 @@ function docsetDocsLoader(): Loader {
     load: async (context) => {
       await loader.load(context);
       for (const id of [...context.store.keys()]) {
-        if (isEntryGatedOut(id, docset)) context.store.delete(id);
+        if (isEntryGatedOut(id, docset)) {
+          context.store.delete(id);
+          continue;
+        }
+        // Both the Markdown twins and raw LLM collection consumers read body.
+        // Rendered HTML continues to use the normal MDX component renderer.
+        const entry = context.store.get(id);
+        if (entry) context.store.set(expandReferenceEntry(entry, context.generateDigest));
       }
     },
   };

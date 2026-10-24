@@ -259,6 +259,24 @@ for (const f of sampleFiles) {
   }
 }
 
+// Generated reference components must survive machine output, not just HTML.
+if (docset.status === 'current' && await exists('reference/breg-api.md')) {
+  const normalize = (line) => line.replace(/\s*\|\s*/g, '|').trim();
+  const markdown = await readDist('reference/breg-api.md');
+  const full = corpusContents.get('llms-full.txt') ?? '';
+  for (const [source, id] of [['breg-api', 'problem-codes'], ['breg-events', 'headers']]) {
+    const tables = JSON.parse(await readFile(resolve(here, `../src/data/generated/${source}.json`), 'utf8'));
+    const table = tables.find((entry) => entry.id === id);
+    const expected = normalize(`| ${table.rows[0].join(' | ')} |`);
+    for (const [label, content] of [['Markdown twin', markdown], ['full corpus', full]]) {
+      assert(`${label} preserves ${source}/${id} generated row`,
+        content.split('\n').some((line) => normalize(line) === expected), expected);
+    }
+  }
+  assert('Markdown twin expands API and event reference components',
+    !/<(?:Api|Event)ReferenceTable\b/.test(markdown));
+}
+
 // ---- 6. Per-page .md file title heading ----
 const archFile = 'explanation/architecture.md';
 if (await exists(archFile)) {

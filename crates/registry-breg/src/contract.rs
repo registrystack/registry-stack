@@ -1861,6 +1861,14 @@ pub struct ActionHandlerRefusalSource {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ActionRequirementSource {
     pub input: String,
+    /// Stable application copy key; disclosure still requires readable guard facts.
+    #[serde(
+        default,
+        deserialize_with = "optional_local_id",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(feature = "schema", schemars(with = "Option<LocalId>"))]
+    pub reason: Option<String>,
     #[serde(default)]
     pub field: String,
     #[serde(
@@ -2712,13 +2720,10 @@ impl<'de> Deserialize<'de> for DerivedFieldSource {
 }
 
 fn parse_field_type<E: serde::de::Error>(raw: &RawFieldSource) -> Result<FieldTypeSource, E> {
+    reject_type_options::<E>(raw, raw.kind.option_allowances())?;
     let field_type = match raw.kind {
-        RawFieldKind::Boolean => {
-            reject_type_options::<E>(raw, TypeOptionAllowances::NONE)?;
-            FieldTypeSource::Boolean
-        }
+        RawFieldKind::Boolean => FieldTypeSource::Boolean,
         RawFieldKind::String => {
-            reject_type_options::<E>(raw, TypeOptionAllowances::STRING)?;
             let max_length = raw.max_length.ok_or_else(|| {
                 Invalid::expected(
                     "a string field with maximumLength",
@@ -2738,24 +2743,17 @@ fn parse_field_type<E: serde::de::Error>(raw: &RawFieldSource) -> Result<FieldTy
                 max_length,
             }
         }
-        RawFieldKind::Text => {
-            reject_type_options::<E>(raw, TypeOptionAllowances::TEXT)?;
-            FieldTypeSource::Text {
-                max_length: raw.max_length.ok_or_else(|| {
-                    Invalid::expected(
-                        "a text field with maximumLength",
-                        "Declare maximumLength on the text field.",
-                    )
-                    .into_error()
-                })?,
-            }
-        }
-        RawFieldKind::Int64 => {
-            reject_type_options::<E>(raw, TypeOptionAllowances::NONE)?;
-            FieldTypeSource::Int64
-        }
+        RawFieldKind::Text => FieldTypeSource::Text {
+            max_length: raw.max_length.ok_or_else(|| {
+                Invalid::expected(
+                    "a text field with maximumLength",
+                    "Declare maximumLength on the text field.",
+                )
+                .into_error()
+            })?,
+        },
+        RawFieldKind::Int64 => FieldTypeSource::Int64,
         RawFieldKind::Decimal => {
-            reject_type_options::<E>(raw, TypeOptionAllowances::DECIMAL)?;
             let precision = raw.precision.ok_or_else(|| {
                 Invalid::expected(
                     "a decimal field with precision",
@@ -2783,46 +2781,30 @@ fn parse_field_type<E: serde::de::Error>(raw: &RawFieldSource) -> Result<FieldTy
                 maximum: raw.maximum.clone(),
             }
         }
-        RawFieldKind::Date => {
-            reject_type_options::<E>(raw, TypeOptionAllowances::NONE)?;
-            FieldTypeSource::Date
-        }
-        RawFieldKind::Timestamp => {
-            reject_type_options::<E>(raw, TypeOptionAllowances::NONE)?;
-            FieldTypeSource::Timestamp
-        }
-        RawFieldKind::Uuid => {
-            reject_type_options::<E>(raw, TypeOptionAllowances::NONE)?;
-            FieldTypeSource::Uuid
-        }
-        RawFieldKind::VocabularyCode => {
-            reject_type_options::<E>(raw, TypeOptionAllowances::VOCABULARY)?;
-            FieldTypeSource::VocabularyCode {
-                vocabulary: raw.vocabulary.clone().ok_or_else(|| {
-                    Invalid::expected(
-                        "a vocabulary-code field with vocabulary",
-                        "Declare vocabulary on the vocabulary-code field.",
-                    )
-                    .into_error()
-                })?,
-                values: raw.values.clone(),
-            }
-        }
-        RawFieldKind::Reference => {
-            reject_type_options::<E>(raw, TypeOptionAllowances::REFERENCE)?;
-            FieldTypeSource::Reference {
-                target: raw.target.clone().ok_or_else(|| {
-                    Invalid::expected(
-                        "a reference field with target",
-                        "Declare target on the reference field.",
-                    )
-                    .into_error()
-                })?,
-                on_delete: raw.on_delete.clone().unwrap_or_default(),
-            }
-        }
+        RawFieldKind::Date => FieldTypeSource::Date,
+        RawFieldKind::Timestamp => FieldTypeSource::Timestamp,
+        RawFieldKind::Uuid => FieldTypeSource::Uuid,
+        RawFieldKind::VocabularyCode => FieldTypeSource::VocabularyCode {
+            vocabulary: raw.vocabulary.clone().ok_or_else(|| {
+                Invalid::expected(
+                    "a vocabulary-code field with vocabulary",
+                    "Declare vocabulary on the vocabulary-code field.",
+                )
+                .into_error()
+            })?,
+            values: raw.values.clone(),
+        },
+        RawFieldKind::Reference => FieldTypeSource::Reference {
+            target: raw.target.clone().ok_or_else(|| {
+                Invalid::expected(
+                    "a reference field with target",
+                    "Declare target on the reference field.",
+                )
+                .into_error()
+            })?,
+            on_delete: raw.on_delete.clone().unwrap_or_default(),
+        },
         RawFieldKind::Crs84Point => {
-            reject_type_options::<E>(raw, TypeOptionAllowances::CRS84_POINT)?;
             let precision = raw.precision.ok_or_else(|| {
                 Invalid::expected(
                     "a crs84-point field with precision",
@@ -2842,25 +2824,22 @@ fn parse_field_type<E: serde::de::Error>(raw: &RawFieldSource) -> Result<FieldTy
                 bbox: raw.bbox.clone(),
             }
         }
-        RawFieldKind::Structured => {
-            reject_type_options::<E>(raw, TypeOptionAllowances::STRUCTURED)?;
-            FieldTypeSource::Structured {
-                max_bytes: raw.max_bytes.ok_or_else(|| {
-                    Invalid::expected(
-                        "a structured field with maximumBytes",
-                        "Declare maximumBytes on the structured field.",
-                    )
-                    .into_error()
-                })?,
-                schema: raw.schema.clone().ok_or_else(|| {
-                    Invalid::expected(
-                        "a structured field with schema",
-                        "Declare schema on the structured field.",
-                    )
-                    .into_error()
-                })?,
-            }
-        }
+        RawFieldKind::Structured => FieldTypeSource::Structured {
+            max_bytes: raw.max_bytes.ok_or_else(|| {
+                Invalid::expected(
+                    "a structured field with maximumBytes",
+                    "Declare maximumBytes on the structured field.",
+                )
+                .into_error()
+            })?,
+            schema: raw.schema.clone().ok_or_else(|| {
+                Invalid::expected(
+                    "a structured field with schema",
+                    "Declare schema on the structured field.",
+                )
+                .into_error()
+            })?,
+        },
     };
     Ok(field_type)
 }
@@ -2986,7 +2965,7 @@ pub struct ReadPathSource {
     pub route: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Copy, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 enum RawFieldKind {
     Boolean,
@@ -3003,6 +2982,41 @@ enum RawFieldKind {
     #[serde(rename = "crs84-point")]
     Crs84Point,
     Structured,
+}
+
+impl RawFieldKind {
+    fn from_name(name: &str) -> Option<Self> {
+        Some(match name {
+            "boolean" => Self::Boolean,
+            "string" => Self::String,
+            "text" => Self::Text,
+            "int64" => Self::Int64,
+            "decimal" => Self::Decimal,
+            "date" => Self::Date,
+            "timestamp" => Self::Timestamp,
+            "uuid" => Self::Uuid,
+            "vocabulary-code" => Self::VocabularyCode,
+            "reference" => Self::Reference,
+            "crs84-point" => Self::Crs84Point,
+            "structured" => Self::Structured,
+            _ => return None,
+        })
+    }
+
+    fn option_allowances(self) -> TypeOptionAllowances {
+        match self {
+            Self::Boolean | Self::Int64 | Self::Date | Self::Timestamp | Self::Uuid => {
+                TypeOptionAllowances::NONE
+            }
+            Self::String => TypeOptionAllowances::STRING,
+            Self::Text => TypeOptionAllowances::TEXT,
+            Self::Decimal => TypeOptionAllowances::DECIMAL,
+            Self::VocabularyCode => TypeOptionAllowances::VOCABULARY,
+            Self::Reference => TypeOptionAllowances::REFERENCE,
+            Self::Crs84Point => TypeOptionAllowances::CRS84_POINT,
+            Self::Structured => TypeOptionAllowances::STRUCTURED,
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -3065,6 +3079,22 @@ impl TypeOptionAllowances {
         structured: true,
         ..Self::NONE
     };
+
+    fn allows(self, option: &str) -> bool {
+        match option {
+            "minimumLength" => self.min_length,
+            "maximumLength" => self.max_length,
+            "precision" => self.precision,
+            "scale" => self.scale,
+            "minimum" | "maximum" => self.decimal_bounds,
+            "maximumBytes" | "schema" => self.structured,
+            "vocabulary" | "values" => self.vocabulary,
+            "target" => self.target,
+            "bbox" => self.bbox,
+            "onDelete" => self.delete,
+            _ => false,
+        }
+    }
 }
 
 fn reject_type_options<E: serde::de::Error>(
@@ -4886,6 +4916,10 @@ fn read_with_value_types<T: DeserializeOwned>(
         mut value,
         document,
     } = read_authored::<Value>(file, bytes, format)?;
+    let option_errors = field_option_diagnostics(&document, &value);
+    if !option_errors.is_empty() {
+        return Err(document.report_with(option_errors));
+    }
     if value.get("valueTypes").is_none() {
         return document.decode().map(|value| Decoded { value, document });
     }
@@ -4960,6 +4994,78 @@ fn read_with_value_types<T: DeserializeOwned>(
             Err(Report::new(diagnostics))
         }
     }
+}
+
+/// Type names and option names here come from the closed field grammar.
+/// Values, including invalid bound values, are never rendered.
+fn field_option_diagnostics(
+    document: &registry_platform_yaml::Document,
+    value: &Value,
+) -> Vec<registry_platform_yaml::Diagnostic> {
+    const OPTIONS: [&str; 13] = [
+        "minimumLength",
+        "maximumLength",
+        "precision",
+        "scale",
+        "minimum",
+        "maximum",
+        "vocabulary",
+        "values",
+        "target",
+        "onDelete",
+        "bbox",
+        "maximumBytes",
+        "schema",
+    ];
+
+    let mut errors = Vec::new();
+    let mut check = |field: &Value, path: String| {
+        let Some(kind) = field.get("type").and_then(Value::as_str) else {
+            return;
+        };
+        let Some(allowed) = RawFieldKind::from_name(kind).map(RawFieldKind::option_allowances)
+        else {
+            return;
+        };
+        for option in OPTIONS {
+            if field.get(option).is_some() && !allowed.allows(option) {
+                errors.push(document.diagnostic_at_key(
+                    Severity::Error,
+                    "config.invalid-value",
+                    &format!("{path}/{option}"),
+                    &format!("option `{option}` is incompatible with field type `{kind}`"),
+                    &format!("Remove `{option}` or choose a field type that accepts it."),
+                ));
+            }
+        }
+    };
+    for (collection, fields) in [
+        ("recordTypes", "fields"),
+        ("actions", "inputs"),
+        ("extendRecordTypes", "fields"),
+    ] {
+        if let Some(items) = value.get(collection).and_then(Value::as_array) {
+            for (index, item) in items.iter().enumerate() {
+                if let Some(items) = item.get(fields).and_then(Value::as_array) {
+                    for (field_index, field) in items.iter().enumerate() {
+                        check(
+                            field,
+                            format!("/{collection}/{index}/{fields}/{field_index}"),
+                        );
+                    }
+                }
+            }
+        }
+    }
+    if let Some(types) = value.get("valueTypes").and_then(Value::as_object) {
+        for (name, field) in types {
+            check(
+                field,
+                format!("/valueTypes/{}", name.replace('~', "~0").replace('/', "~1")),
+            );
+        }
+    }
+    errors
 }
 
 /// Read an authored module through the shared reader, as

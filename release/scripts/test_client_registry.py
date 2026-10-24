@@ -6,6 +6,7 @@ import hashlib
 import importlib.util
 import io
 import json
+import shutil
 import tarfile
 import tempfile
 import unittest
@@ -207,6 +208,47 @@ class ClientRegistryTest(unittest.TestCase):
             self.assertFalse(
                 any(name.startswith("registry_client/casework/") for name in archive.namelist())
             )
+
+    def test_node_facade_staging_tracks_the_selected_product_roster(self) -> None:
+        source = SCRIPT.parents[2] / "crates/registry-stack-client-node"
+        for include_render in (False, True):
+            with self.subTest(include_render=include_render):
+                staged = self.directory / f"staged-{include_render}"
+                shutil.copytree(source, staged, ignore=shutil.ignore_patterns("node_modules", "*.node"))
+                self.module.bind_optional_dependencies(staged / "package.json", "0.44.0", "stack", include_render=include_render)
+                before = {path.relative_to(staged): path.read_bytes() for path in staged.rglob("*") if path.is_file()}
+                self.module.bind_optional_dependencies(staged / "package.json", "0.44.0", "stack", include_render=include_render)
+                self.assertEqual(before, {path.relative_to(staged): path.read_bytes() for path in staged.rglob("*") if path.is_file()})
+                manifest = json.loads((staged / "package.json").read_text())
+                self.assertEqual("render" in manifest["files"], include_render)
+                self.assertEqual("./render" in manifest["exports"], include_render)
+                self.assertEqual("exports.render" in (staged / "index.js").read_text(), include_render)
+                self.assertEqual("import * as render" in (staged / "index.d.ts").read_text(), include_render)
+                for platform in self.module.NPM_PLATFORM_NAMES:
+                    index = (staged / "npm" / platform / "index.js").read_text()
+                    self.assertEqual("render:" in index, include_render)
+                    files = json.loads((staged / "npm" / platform / "package.json").read_text())["files"]
+                    self.assertNotIn("*.node", files)
+                    self.assertEqual(f"render-client.{platform}.node" in files, include_render)
+        self.assertIn("exports.render", (source / "index.js").read_text())
+
+    def test_explicit_render_candidate_is_refused_by_publication_wheel_validation(self) -> None:
+        version = "0.44.0"
+        namespaces = self.module.stack_python_namespaces(version, include_render=True)
+        for path in self.module.wheel_paths(self.directory, version, "stack"):
+            write_wheel(path, project="registry-stack-client", version=version, namespaces=namespaces)
+        self.module.validate_wheels(self.directory, version, "stack", include_render=True)
+        with self.assertRaisesRegex(self.module.ClientRegistryError, "unexpectedly contains the render namespace"):
+            self.module.validate_wheels(self.directory, version, "stack")
+
+    def test_early_coordinator_candidate_is_refused_by_historical_wheel_validation(self) -> None:
+        version = "0.43.0"
+        namespaces = self.module.stack_python_namespaces(version, include_coordinator=True)
+        for path in self.module.wheel_paths(self.directory, version, "stack"):
+            write_wheel(path, project="registry-stack-client", version=version, namespaces=namespaces)
+        self.module.validate_wheels(self.directory, version, "stack", include_coordinator=True)
+        with self.assertRaisesRegex(self.module.ClientRegistryError, "unexpectedly contains the coordinator namespace"):
+            self.module.validate_wheels(self.directory, version, "stack")
 
     def test_messaging_joins_the_unified_clients_at_v0_38(self) -> None:
         self.assertNotIn(
@@ -872,7 +914,7 @@ class ClientReadmeInstallTest(unittest.TestCase):
         )
         # Seven products have Node and Python bindings, and both unified
         # facades remain present.
-        self.assertEqual(16, len(found), found)
+        self.assertEqual(18, len(found), found)
         return found
 
     def test_install_lines_name_only_the_unified_packages(self) -> None:

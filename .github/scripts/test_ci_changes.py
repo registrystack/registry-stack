@@ -2579,6 +2579,26 @@ class CiChangesTest(unittest.TestCase):
         self.assertTrue(outputs["client_bindings"])
         self.assertTrue(outputs["evidence_tutorial"])
 
+    def test_python_composition_and_release_client_example_run_native_clients(self) -> None:
+        for path in (
+            "products/platform/examples/python-composition/service.py",
+            "products/platform/examples/python-composition/uv.lock",
+            "products/coordinator/examples/reviewed-notice/released_client.py",
+            "products/coordinator/examples/reviewed-notice/tests/test_released_client.py",
+        ):
+            with self.subTest(path=path):
+                self.assertTrue(classify(self.workspace, (path,))["client_bindings"])
+
+    def test_render_bindings_and_facades_run_native_clients(self) -> None:
+        for path in (
+            "crates/registry-render-client-node/src/lib.rs",
+            "crates/registry-render-client-py/src/lib.rs",
+            "crates/registry-stack-client-node/render/client.js",
+            "crates/registry-stack-client-py/python/registry_client/__init__.py",
+        ):
+            with self.subTest(path=path):
+                self.assertTrue(classify(self.workspace, (path,))["client_bindings"])
+
     def test_casework_bindings_run_the_native_client_job(self) -> None:
         # The Casework bindings are covered only by the shared native-client
         # job, and the Python one also ships in the assembled package the

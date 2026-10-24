@@ -88,8 +88,8 @@ fn validate_attachment_authority(
 
 /// Refuse a value for an input outside the grant's `writableInputs`. Start
 /// has no base, so any value is refused; Edit, Revise and Rebase must restate
-/// each fixed input exactly as `base` holds it, with an absent input equal to
-/// null. A grant without `writableInputs` leaves every input writable.
+/// each fixed input exactly as `base` holds it. A grant without
+/// `writableInputs` leaves every input writable.
 fn validate_input_write_authority(
     action: &CompiledAction,
     authority: &ProposalAuthority,
@@ -116,24 +116,19 @@ fn validate_input_write_authority(
 }
 
 /// The API name of the first declared input outside `writable` whose value
-/// differs from `base`, treating an absent input and null as the same.
+/// differs from `base`. Presence is part of the handler input ABI, so an
+/// explicit null differs from an absent optional input.
 fn fixed_input_changed<'a>(
     action: &'a CompiledAction,
     writable: &BTreeSet<String>,
     values: &Map<String, Value>,
     base: Option<&Map<String, Value>>,
 ) -> Option<&'a str> {
-    let present = |input: Option<&Map<String, Value>>, id: &str| {
-        input
-            .and_then(|input| input.get(id))
-            .filter(|value| !value.is_null())
-            .cloned()
-    };
     action
         .inputs
         .iter()
         .filter(|declared| !writable.contains(&declared.id))
-        .find(|declared| present(Some(values), &declared.id) != present(base, &declared.id))
+        .find(|declared| values.get(&declared.id) != base.and_then(|base| base.get(&declared.id)))
         .map(|declared| declared.api_name.as_str())
 }
 
@@ -901,6 +896,7 @@ impl MutationTransaction {
                 &document,
                 TerminalAuditOutcome::Replayed,
                 0,
+                &[],
             )?;
             check_current_proposal_grant(input.authority)?;
             guarded
@@ -1070,6 +1066,7 @@ impl MutationTransaction {
                 &document,
                 TerminalAuditOutcome::Replayed,
                 0,
+                &[],
             )?;
             check_current_proposal_grant(input.authority)?;
             guarded
@@ -1088,6 +1085,7 @@ impl MutationTransaction {
         }
         let actor = self.proposal_actor(input.authority.common.principal())?;
         let mut result_count = 0u16;
+        let mut changed_inputs = Vec::new();
         let mut terminal_error = None;
         let (id, from_state, transition) = match input.operation {
             ProposalAuthorityOperation::Start => {
@@ -1176,13 +1174,15 @@ impl MutationTransaction {
                             .input
                             .as_ref()
                             .ok_or(MutationError::PreconditionFailed)?;
-                        let values = validate_proposal_input(action, values)?;
+                        proposal_prepare::validate_inputs(action, values)?;
+                        let values = values.clone();
                         let candidate = crate::action_handler::evaluate_plan_detailed(
                             action,
                             &values,
                             deadline.into_std(),
                         )
                         .map_err(|diagnostic| {
+                            diagnostic.log_failure(action, "submit");
                             MutationError::ActionHandlerFailure(diagnostic.kind)
                         })?;
                         let effects = match candidate {
@@ -1325,6 +1325,19 @@ impl MutationTransaction {
                             frozen.review_requirement(),
                             CompiledProposalReview::Required { .. }
                         ) {
+                            let CompiledProposalReview::Required { authority, .. } =
+                                frozen.review_requirement()
+                            else {
+                                unreachable!()
+                            };
+                            if !self
+                                .review_authorities
+                                .as_ref()
+                                .is_some_and(|bindings| bindings.contains(authority))
+                            {
+                                tracing::warn!(review_authority = %authority, phase = "submit", "Proposal Submit needs an unbound review authority; configure reviewAuthorities for this logical authority");
+                                return Err(MutationError::Unavailable);
+                            }
                             let authorities = self
                                 .review_authorities
                                 .as_ref()
@@ -1371,6 +1384,18 @@ impl MutationTransaction {
                             &values,
                             document.input.as_ref(),
                         )?;
+                        changed_inputs = action
+                            .inputs
+                            .iter()
+                            .filter(|declared| {
+                                values.get(&declared.id)
+                                    != document
+                                        .input
+                                        .as_ref()
+                                        .and_then(|prior| prior.get(&declared.id))
+                            })
+                            .map(|declared| declared.id.clone())
+                            .collect();
                         let workflow = match operation {
                             ProposalOperation::Edit => workflow.edit_draft(context),
                             ProposalOperation::Revise => workflow.revise(context),
@@ -1703,6 +1728,7 @@ impl MutationTransaction {
                 &document,
                 TerminalAuditOutcome::Refused,
                 0,
+                &[],
             )?;
             if tokio::time::Instant::now() >= deadline {
                 return Err(MutationError::Unavailable);
@@ -1809,6 +1835,7 @@ impl MutationTransaction {
             &document,
             TerminalAuditOutcome::Committed,
             result_count,
+            &changed_inputs,
         )?;
         if tokio::time::Instant::now() >= deadline {
             return Err(MutationError::Unavailable);
@@ -1879,6 +1906,7 @@ impl MutationTransaction {
         document: &ProposalDocument,
         outcome: TerminalAuditOutcome,
         count: u16,
+        changed_inputs: &[String],
     ) -> Result<AuditEntry, MutationError> {
         let terminal = TerminalAudit {
             grant: input.authority.common.grant_audit().cloned(),
@@ -1914,6 +1942,16 @@ impl MutationTransaction {
             )
         }?;
         let mut record = entry.record().clone();
+        if outcome == TerminalAuditOutcome::Committed
+            && matches!(
+                input.operation,
+                ProposalAuthorityOperation::Lifecycle(
+                    ProposalOperation::Edit | ProposalOperation::Revise | ProposalOperation::Rebase
+                )
+            )
+        {
+            record["changedInputs"] = json!(changed_inputs);
+        }
         record["authorityKind"] = json!(if input.authority.is_system() {
             "system"
         } else {
@@ -3300,11 +3338,10 @@ async fn proposal_application_status(
         return Ok(value);
     }
     if !automatic {
-        let awaiting_review = matches!(
-            frozen.review_requirement(),
-            CompiledProposalReview::Required { .. }
-        ) && proposal_review_result(tx, document).await?["state"]
-            != "approved";
+        let awaiting_review = !matches!(
+            review_progress(tx, document, frozen).await?,
+            ProposalReviewProgress::NotRequired | ProposalReviewProgress::Approved
+        );
         value["state"] = json!(if awaiting_review {
             "awaiting-review"
         } else {
@@ -3780,7 +3817,7 @@ fn validate_proposal_input(
     action: &CompiledAction,
     input: &Map<String, Value>,
 ) -> Result<Map<String, Value>, MutationError> {
-    proposal_prepare::validate_inputs(action, input)?;
+    proposal_prepare::validate_draft_inputs(action, input)?;
     Ok(input.clone())
 }
 fn input_targets(
@@ -4139,23 +4176,23 @@ mod input_write_tests {
         value.as_object().unwrap().clone()
     }
     #[test]
-    fn fixed_inputs_compare_absent_and_null_as_equal_and_name_the_api_name() {
+    fn fixed_inputs_distinguish_absent_and_null_and_name_the_api_name() {
         let action = action();
         let writable = BTreeSet::from(["target".to_owned(), "value".to_owned()]);
         let base = input(json!({"target":"t","value":"before"}));
-        for values in [
-            json!({"target":"t","value":"after"}),
-            json!({"target":"t","value":"after","licence-number":null}),
-        ] {
-            assert_eq!(
-                fixed_input_changed(&action, &writable, &input(values), Some(&base)),
-                None
-            );
-        }
+        let writable_only = input(json!({"target":"t","value":"after"}));
+        assert_eq!(
+            fixed_input_changed(&action, &writable, &writable_only, Some(&base)),
+            None
+        );
         let with_null = input(json!({"target":"t","value":"before","licence-number":null}));
         assert_eq!(
+            fixed_input_changed(&action, &writable, &with_null, Some(&base)),
+            Some("licenceNumber")
+        );
+        assert_eq!(
             fixed_input_changed(&action, &writable, &base, Some(&with_null)),
-            None
+            Some("licenceNumber")
         );
         let changed = input(json!({"target":"t","value":"before","licence-number":"L-1"}));
         assert_eq!(

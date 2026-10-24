@@ -114,7 +114,7 @@ SHARDS = {
         "registry-cli-reference",
         "registry-language-server",
     ),
-    "render": ("registry-render",),
+    "render": ("registry-render", "registry-render-client", "registry-render-client-node", "registry-render-client-py"),
 }
 
 EVIDENCE_PACKAGES = frozenset(SHARDS["evidence"])
@@ -486,6 +486,7 @@ NATIVE_BINDING_PACKAGES = (
     | MESSAGING_BINDING_PACKAGES
     | SCHEDULING_BINDING_PACKAGES
     | COORDINATOR_BINDING_PACKAGES
+    | frozenset({"registry-render-client-node", "registry-render-client-py"})
 )
 
 # The breg-contracts matrix lanes. Review runs the first; the merge queue, the
@@ -1456,6 +1457,10 @@ def classify(
         complete
         or bool(affected & NATIVE_BINDING_PACKAGES)
         or unified_client_changed
+        or any(path.startswith((
+            "products/platform/examples/python-composition/",
+            "products/coordinator/examples/reviewed-notice/",
+        )) for path in changed_paths)
     )
 
     evidence_tutorial = integration and (

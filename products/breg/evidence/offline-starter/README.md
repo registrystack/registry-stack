@@ -8,8 +8,9 @@ material; the tracked project contains references only.
 
 `evidence.yaml` owns the SQLite Source, exact selector profile, named extraction
 and derive Functions, and `extract-record-active` definition. `local-target.yaml`
-binds local process resources, while `dev-authority.yaml` supplies a complete
-local caller grant. The 13 synthetic fixtures cover active and retired records,
+binds local process resources and names a placeholder path for the
+`record-status-extract` file, while `dev-authority.yaml` supplies a complete local
+caller grant. The 13 synthetic fixtures cover active and retired records,
 no match and ambiguity, bounded results, stale extracts, statement and output
 refusals, and hostile selector data remaining a bound parameter.
 

@@ -95,9 +95,24 @@
       "reason": "Unknown future Base Registry Engine Problem codes are synthetic test inputs outside the active resolver catalog by design."
     },
     {
+      "glob": "crates/registry-breg-client-node/__test__/action-refusals.test.js",
+      "classification": "fixture",
+      "reason": "The retired idempotency.conflict Problem is a synthetic client decoding fixture that proves unknown-code fallback after the wire rename."
+    },
+    {
       "glob": "crates/registry-breg-client-py/tests/python/test_errors.py",
       "classification": "fixture",
       "reason": "Unknown future Base Registry Engine Problem codes are synthetic test inputs outside the active resolver catalog by design."
+    },
+    {
+      "glob": "crates/registry-breg-client-py/tests/python/test_action_refusals.py",
+      "classification": "fixture",
+      "reason": "The retired idempotency.conflict Problem is a synthetic client decoding fixture that proves unknown-code fallback after the wire rename."
+    },
+    {
+      "glob": "crates/registry-breg/tests/fixtures/native-minimal-package/openapi/openapi.json",
+      "classification": "fixture",
+      "reason": "The hash-covered native package format fixture retains a historical emitted OpenAPI contract for package-envelope conformance, rather than the current Problem inventory."
     },
     {
       "glob": "crates/registry-breg-client/tests/http_boundary.rs",

@@ -1,0 +1,76 @@
+---
+title: Four ways to adopt Registry Stack
+description: Choose and combine configuration, small extensions, an application, and adopter-owned modules.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: unreviewed
+doc_type: explanation
+locale: en
+standards_referenced: []
+---
+
+Choose the parts that fit your institution's systems and team. You can configure a register,
+change a page, write an application in your own language, or run a separate module beside selected
+Registry Stack products. These choices combine; none is a prerequisite for another.
+
+## Configure a register from a starter
+
+Start with an existing registry project when its Records, Actions, and review policies fit your
+work. You own the domain model, access decisions, deployment, data, and acceptance of that project.
+Base Registry Engine (BReg) owns the configured record and transaction behavior; Registry Casework
+owns the human review you explicitly select. Review approval does not itself write a Record.
+
+The starter collection and App Kit are currently private repositories. Request repository access
+from Registry Stack maintainers before following their clone or installation instructions.
+The [reviewed licensing starter guide](https://github.com/registrystack/breg-registry-starters/blob/main/docs/reviewed-licensing.md)
+requires that access. If you want a public first run, use the
+[BReg quickstart](../breg-quickstart/) and [first registry tutorial](../../tutorials/first-breg/).
+
+## Add a small extension
+
+Keep the maintained runtime and add code where its extension contract permits it: a rule, route,
+or ejected page. You own that code and the decision it makes. The host supplies only the session,
+request, or product operation its documented seam promises. A route must still call a product
+with authority that product accepts; moving code into a host does not extend disclosure rights.
+
+For an application UI, follow App Kit's private `project/docs/customization.md` guide after access
+is granted. For registry behavior, follow the maintained
+[BReg extension guidance](../../configure/breg/). Keep an extension small enough to test through
+the actual operation it changes. Choose a separate module when the work needs its own lifecycle.
+
+## Build an application in your language
+
+Use released clients or the public HTTP contracts from your own application. You own the user
+journey, user interface, credentials, correlation state, and recovery after an uncertain response.
+Each selected product owns its own authorization and persisted effects. The
+[client API reference](../../reference/client-api/) describes the maintained namespaces and the
+[access-token guide](../../configure/request-an-access-token/) describes issuer integration.
+
+A direct BReg and Casework application prepares a Proposal, requests review of that exact version,
+then asks BReg to apply it under independently valid source authority. Coordinator is optional.
+Messaging is optional too; use it when the application needs reviewed delivery through a provider.
+The [module conventions](../../configure/module-conventions/) identify the contracts shared across
+language boundaries and the Python composition example.
+
+## Run your own module beside selected products
+
+Use an independently deployed service or worker for behavior your application owns. You choose
+its language, storage, release process, and operational policy. Selected Stack products retain
+their own data and authority; your module reaches them through released clients or HTTP.
+A module need not use BReg, Casework, Messaging, or Coordinator unless its work needs that product.
+
+Use the [module conventions](../../configure/module-conventions/) for authentication, problems,
+retries, tracing, and signed delivery. You may publish a static
+[Manifest description](../../products/registry-manifest/reference/#adopter-owned-modules) to help
+others understand the module. Inclusion is optional metadata; it neither certifies availability
+nor enables the module. Real data services use datasets; workers need no fictional dataset.
+
+## Choose the next step
+
+Combine the smallest set of paths that meets the job. A configured register can have one custom
+route and an independently deployed reminder worker. Add
+[Coordinator](../coordinator/) only when a durable, reviewed sequence across waits is useful.
+Before deployment, use the [operator handoff](../../operate/) to assign credentials, backups,
+retention, and recovery to named operators.

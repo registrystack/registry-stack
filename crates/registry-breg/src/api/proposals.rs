@@ -50,6 +50,7 @@ pub(crate) struct ProposalListQuery {
     pub state: Option<String>,
     pub target: Option<Uuid>,
     pub turn: Option<String>,
+    pub pending_manual_application: bool,
     pub after: Option<Uuid>,
     pub limit: usize,
 }
@@ -338,13 +339,6 @@ fn parse_input(action: &CompiledAction, value: &Value) -> Result<Map<String, Val
             return Err(());
         }
         input.insert(declared.id.clone(), value.clone());
-    }
-    if action
-        .inputs
-        .iter()
-        .any(|declared| declared.required && !input.contains_key(&declared.id))
-    {
-        return Err(());
     }
     Ok(input)
 }
@@ -1277,6 +1271,9 @@ pub(super) async fn list(
                 }
                 "turn" if ["party", "official", "nobody"].contains(&value.as_str()) => {
                     query.turn = Some(value)
+                }
+                "pendingManualApplication" if value == "true" || value == "false" => {
+                    query.pending_manual_application = value == "true";
                 }
                 "target" => match Uuid::parse_str(&value) {
                     Ok(id) => query.target = Some(id),

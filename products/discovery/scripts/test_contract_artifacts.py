@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import subprocess
 import sys
 import unittest
@@ -20,6 +21,41 @@ class ContractArtifactsTest(unittest.TestCase):
     def test_profile_and_security_contracts_are_valid(self) -> None:
         result = subprocess.run([sys.executable, str(SCRIPT)], cwd=ROOT, text=True, capture_output=True, check=False)
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_openapi_problem_variants_pin_runtime_code_and_detail(self) -> None:
+        document = json.loads((ROOT.parents[1] / "crates/registry-discovery/openapi.json").read_text())
+        expected = {
+            "invalid-request": ("request.invalid", "The Discovery request is invalid."),
+            "not-found": ("request.not-found", "The requested Discovery resource was not found."),
+            "result-bound-exceeded": ("request.result-bound-exceeded", "The complete Discovery result exceeds its configured bound."),
+            "unavailable": ("service.unavailable", "Registry Discovery is temporarily unavailable."),
+        }
+        variants = document["components"]["schemas"]["Problem"]["oneOf"]
+        self.assertEqual(len(variants), len(expected))
+        for variant in variants:
+            properties = variant["properties"]
+            suffix = properties["type"]["const"].rsplit("/", 1)[1]
+            with self.subTest(problem=suffix):
+                code, detail = expected[suffix]
+                self.assertEqual(properties["code"].get("const"), code)
+                self.assertEqual(properties["detail"].get("const"), detail)
+
+    def test_openapi_problem_responses_declare_bounded_traceparent(self) -> None:
+        document = json.loads((ROOT.parents[1] / "crates/registry-discovery/openapi.json").read_text())
+        for name, response in document["components"]["responses"].items():
+            with self.subTest(response=name):
+                header = response.get("headers", {}).get("traceparent", {})
+                self.assertTrue(header.get("required"))
+                self.assertEqual(header.get("schema", {}).get("maxLength"), 55)
+                self.assertIn("pattern", header.get("schema", {}))
+                pattern = header["schema"]["pattern"]
+                self.assertRegex("00-11111111111111111111111111111111-2222222222222222-01", pattern)
+                for invalid in [
+                    "00-00000000000000000000000000000000-2222222222222222-01",
+                    "00-11111111111111111111111111111111-0000000000000000-01",
+                    "01-11111111111111111111111111111111-2222222222222222-01",
+                ]:
+                    self.assertNotRegex(invalid, pattern)
 
     def test_executable_binding_without_test_attribute_is_refused(self) -> None:
         source = "#[test]\nfn bound_refusal() {}\n"

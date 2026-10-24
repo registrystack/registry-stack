@@ -1095,14 +1095,7 @@ impl MutationTransaction {
                     // Locations are compiled identifiers and the cause is a
                     // static repair message. Never render Rhai errors, source,
                     // input values, or script-selected unknown identifiers.
-                    tracing::error!(
-                        action_id = %action.id,
-                        slot_id = diagnostic.slot.as_deref(),
-                        field_id = diagnostic.field.as_deref(),
-                        handler_failure = diagnostic.kind.code(),
-                        cause = diagnostic.message,
-                        "action handler produced no effects"
-                    );
+                    diagnostic.log_failure(action, "invoke");
                     MutationError::ActionHandlerFailure(diagnostic.kind)
                 })?;
                 match outcome {

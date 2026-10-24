@@ -238,3 +238,15 @@ cargo run --locked -p registry-casework --features schema \
   --example runtime-schema -- --output products/casework/generated/runtime
 products/casework/scripts/check-schemas.sh
 ```
+
+## Shared access-token profile
+
+See the maintained [per-resource access-token reference](../platform/ACCESS-TOKENS.md)
+for algorithms, token type, audience, scope and actor separation, issuer-network
+policy, lifetime and safe diagnostics.
+
+## Completion receiver contract
+
+The [completion receiver guide](COMPLETION-RECEIVERS.md) defines POST payload,
+headers, bounded retries, acknowledgement and durable receiver deduplication,
+with Python and Node examples. Delivery is at-least-once.

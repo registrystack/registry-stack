@@ -313,6 +313,14 @@ class MutationParityTests(unittest.TestCase):
         lose_next_invocation = self.lose_next_invocation
         self.receipt_ids = {"application": APPLICATION_ID, "record": RECORD_ID}
         receipt_ids = self.receipt_ids
+        self.availability_document = {
+            "available": False,
+            "observedRevision": 3,
+            "reason": "guard-not-satisfied",
+            "guardReason": "legal_name_unchanged",
+            "recovery": "none",
+        }
+        availability_document = self.availability_document
 
         class Handler(BaseHTTPRequestHandler):
             def do_GET(self) -> None:  # noqa: N802
@@ -331,17 +339,7 @@ class MutationParityTests(unittest.TestCase):
                         mutation=True,
                     )
                 elif self.path.startswith("/v1/actions/rename-company/availability"):
-                    self.respond(
-                        {
-                            "availability": {
-                                "available": False,
-                                "observedRevision": 3,
-                                "reason": "guard-not-satisfied",
-                                "recovery": "none",
-                            }
-                        },
-                        mutation=True,
-                    )
+                    self.respond({"availability": availability_document}, mutation=True)
                 elif self.path.startswith("/v1/actions/rename-company"):
                     if lose_next_invocation["value"]:
                         # The engine received the invocation, but its answer
@@ -501,6 +499,7 @@ class MutationParityTests(unittest.TestCase):
                 "available": False,
                 "observedRevision": 3,
                 "reason": "guard-not-satisfied",
+                "guardReason": "legal_name_unchanged",
                 "recovery": "none",
             },
         )
@@ -508,6 +507,25 @@ class MutationParityTests(unittest.TestCase):
             json.loads(self.requests[-1][3]),
             {"targetInput": "targetId", "input": {"targetId": RECORD_ID}},
         )
+        valid_availability = dict(self.availability_document)
+        for malformed in [
+            {**valid_availability, "guardReason": ""},
+            {**valid_availability, "guardReason": "Uppercase"},
+            {**valid_availability, "guardReason": "has.dot"},
+            {**valid_availability, "guardReason": "a" + "b" * 64},
+            {"available": True, "observedRevision": 3, "guardReason": "misplaced"},
+            {"available": None, "observedRevision": 3, "reason": "input-required",
+             "guardReason": "misplaced", "recovery": "correct-input", "missingInputs": ["legalName"]},
+        ]:
+            self.availability_document.clear()
+            self.availability_document.update(malformed)
+            with self.assertRaises(BaseRegistryClientError) as invalid:
+                self.client.action_availability(
+                    binding, "targetId", {"targetId": RECORD_ID}
+                )
+            self.assertEqual(invalid.exception.kind, "protocol")
+        self.availability_document.clear()
+        self.availability_document.update(valid_availability)
         before = len(self.requests)
         with self.assertRaises(BaseRegistryClientError) as invalid:
             self.client.action_availability(

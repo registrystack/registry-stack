@@ -4324,15 +4324,23 @@ class RegistryReleaseTest(TestCase):
         self,
     ) -> None:
         contracts = {
-            "evidence": "/workspace/runtime-root/var/lib/registry-evidence/audit",
+            "evidence": (
+                "/workspace/runtime-root/var/lib/registry-evidence/audit",
+                "/workspace/runtime-root/var/lib/registry-evidence/authority",
+            ),
         }
-        for name, audit_path in contracts.items():
+        for name, state_paths in contracts.items():
             with self.subTest(name=name):
                 dockerfile = (
                     ROOT / f"release/docker/Dockerfile.{name}"
                 ).read_text(encoding="utf-8")
-                self.assertIn(audit_path, dockerfile)
-                self.assertIn(f"chmod 0700 {audit_path}", dockerfile)
+                logical_recipe = " ".join(dockerfile.replace("\\\n", " ").split())
+                for state_path in state_paths:
+                    self.assertIn(state_path, dockerfile)
+                self.assertIn(
+                    f"chmod 0700 {' '.join(state_paths)}",
+                    logical_recipe,
+                )
 
     def test_nightly_security_scans_every_release_dockerfile(self) -> None:
         workflow = (ROOT / ".github/workflows/nightly-security.yml").read_text(

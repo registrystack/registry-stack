@@ -226,3 +226,25 @@ class NativePreparationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ReleasedArchiveTests(unittest.TestCase):
+    def test_released_flat_fips_library_stays_beside_frozen_executable(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            binaries = root / "released"
+            binaries.mkdir()
+            (binaries / "coordinator").write_bytes(b"released executable")
+            library = binaries / "libaws_lc_fips_0_14_2_crypto.dylib"
+            library.write_bytes(b"released runtime library")
+            (binaries / "unrelated.dylib").write_bytes(b"excluded")
+            owned = root / "owned"
+            owned.mkdir()
+            with patch.object(native, "source_digest", return_value="same"), \
+                    patch.object(native.sys, "platform", "darwin"):
+                journey = native.Journey(owned, binaries, 2,
+                    required_binaries=["coordinator"], require_reviewed_notice_starter=False)
+            frozen = owned / "native-binaries" / library.name
+            self.assertEqual(frozen.read_bytes(), library.read_bytes())
+            self.assertEqual(journey.library_digests[library.name], native.file_digest(library))
+            self.assertFalse((owned / "native-binaries/unrelated.dylib").exists())

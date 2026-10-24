@@ -544,19 +544,35 @@ pub(crate) async fn admit_run(
     input_digest: &str,
 ) -> Result<Option<Uuid>, ImportAuthorityError> {
     let (open, _) = settle_open(transaction, pending, package_revision, Some(entity_id)).await?;
-    Ok(open
-        .into_iter()
-        .find(|authority| {
-            authority.profile_id == profile_id
-                && authority.operation == "create"
-                && item_count <= authority.max_items - authority.committed_items
-                && (authority.input_digests.is_empty()
-                    || authority
-                        .input_digests
-                        .iter()
-                        .any(|digest| digest == input_digest))
-        })
-        .map(|authority| authority.authority_id))
+    let authority = open.into_iter().find(|authority| {
+        authority.profile_id == profile_id
+            && authority.operation == "create"
+            && item_count <= authority.max_items - authority.committed_items
+            && (authority.input_digests.is_empty()
+                || authority
+                    .input_digests
+                    .iter()
+                    .any(|digest| digest == input_digest))
+    });
+    let Some(authority) = authority else {
+        return Ok(None);
+    };
+    // `settle_open` holds this authority row `FOR UPDATE`, so two admissions
+    // cannot both observe it as unoccupied. Blocked work remains retained and
+    // occupies the authority until its owner explicitly cancels it.
+    let occupied = transaction
+        .query_opt(
+            "SELECT 1
+               FROM registry_internal.registry_ingestion_runs
+              WHERE import_authority_id = $1
+                AND status IN ('open', 'blocked')
+              LIMIT 1",
+            &[&authority.authority_id],
+        )
+        .await
+        .map_err(|_| ImportAuthorityError::Unavailable)?
+        .is_some();
+    Ok((!occupied).then_some(authority.authority_id))
 }
 
 /// Decide whether one chunk of an import run may commit, inside the chunk

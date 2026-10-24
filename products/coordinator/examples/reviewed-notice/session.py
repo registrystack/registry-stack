@@ -8,6 +8,8 @@ import json
 import os
 from pathlib import Path
 import secrets
+import re
+import shlex
 import subprocess
 import sys
 import time
@@ -138,6 +140,8 @@ def retry_cleanup(session_dir, state):
 def start(args):
     session_dir = args.session_dir.resolve()
     state_path = session_dir / STATE
+    if args.messaging_image and not re.fullmatch(r"ghcr\.io/registrystack/messaging@sha256:[0-9a-f]{64}", args.messaging_image):
+        raise SystemExit("Messaging image must use its exact published GHCR digest")
     if state_path.exists():
         state = read_state(session_dir)
         if alive(state["supervisorPid"]):
@@ -147,6 +151,10 @@ def start(args):
     log = (session_dir / "supervisor.log").open("ab")
     command = [sys.executable, str(Path(__file__).resolve()), "_serve",
                "--session-dir", str(session_dir), "--bin-dir", str(args.bin_dir.resolve())]
+    if args.released_clients:
+        command.append("--released-clients")
+    if args.messaging_image:
+        command.extend(("--messaging-image", args.messaging_image))
     child = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=log, stderr=log,
                              start_new_session=True, close_fds=True)
     log.close()
@@ -205,6 +213,23 @@ def signal_command(args, name):
     raise SystemExit(f"the reviewed-notice supervisor did not complete {name} in time")
 
 
+def messaging_image_tools(journey, image):
+    """Run the released Linux Messaging pair beside native local products."""
+    if not re.fullmatch(r"ghcr\.io/registrystack/messaging@sha256:[0-9a-f]{64}", image):
+        raise ValueError("Messaging image must use its exact published GHCR digest")
+    for tool in ("messaging", "messagingctl"):
+        name = "coordinator-tutorial-" + tool + "-" + uuid.uuid4().hex[:12]
+        command = ["docker", "run", "--rm", "--platform", "linux/amd64", "--name", name,
+                   "--label", "org.registrystack.journey=coordinator-real-services",
+                   "--network", "host", "--user", f"{os.getuid()}:{os.getgid()}",
+                   "--mount", f"type=bind,source={journey.root},target={journey.root}",
+                   "--entrypoint", "/usr/local/bin/" + tool, image]
+        path = journey.bin / tool
+        path.write_text("#!/usr/bin/env bash\nset -euo pipefail\nexec " + shlex.join(command) + ' "$@"\n')
+        path.chmod(0o700)
+        journey.containers.append(name)
+
+
 def serve(args):
     fixture = load_fixture()
     session_dir = args.session_dir.resolve()
@@ -215,10 +240,27 @@ def serve(args):
     try:
         owned = session_dir / "owned"
         owned.mkdir(mode=0o700)
-        journey = fixture.Journey(owned, args.bin_dir.resolve(), 2, required_binaries=[
-            "breg", "bregctl", "casework", "caseworkctl", "messaging", "messagingctl",
-            "coordinator", "coordinatorctl",
-        ])
+        journey_type = fixture.Journey
+        if args.released_clients:
+            from released_client import prepare_input, start_run
+
+            class ClientJourney(fixture.Journey):
+                def reviewed_notice_input(self, owner, application):
+                    report = self.ctl("bregctl", "dev", "token", "application-reader", owner)
+                    return prepare_input(self.urls["breg"], report["headerFile"], application)
+
+                def start(self, owner, url, label, data, flow="deferred-appointment"):
+                    token = self.token("bregctl", owner, "coordinator-producer")
+                    return start_run(url, token, flow, label, data)
+
+            journey_type = ClientJourney
+        binaries = ["breg", "bregctl", "casework", "caseworkctl", "coordinator", "coordinatorctl"]
+        if not args.messaging_image:
+            binaries.extend(("messaging", "messagingctl"))
+        journey = journey_type(owned, args.bin_dir.resolve(), 2,
+            require_reviewed_notice_starter=not args.released_clients, required_binaries=binaries)
+        if args.messaging_image:
+            messaging_image_tools(journey, args.messaging_image)
         checkpoint_cleanup(state_path, journey, status="starting")
         coordinator_database, _ = journey.tls_database("coordinator-database", superuser=True)
         messaging_database, messaging_database_root = journey.tls_database("messaging-database")
@@ -346,6 +388,9 @@ def parser():
         if name in ("start", "_serve"):
             command.add_argument("--bin-dir", type=Path,
                                  default=Path(os.environ.get("COORDINATOR_TUTORIAL_BIN_DIR", REPO / "target/debug")))
+            command.add_argument("--messaging-image", help="exact published Messaging image digest; requires Docker host networking")
+            command.add_argument("--released-clients", action="store_true",
+                                 help="use the installed unified client instead of a Rust input helper")
         if name == "start":
             command.add_argument("--start-timeout", type=int, default=240)
         if name in ("restart-coordinator", "stop"):

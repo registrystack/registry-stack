@@ -160,7 +160,8 @@ configured domain or a compatible additive schema change.
    equal what the database's activation ledger records. Authorized
    bulk operations use `bregctl data validate`, `data import`, and
    `data export`, which reuse the packaged plans and normal authenticated API
-   paths.
+   paths. `bregctl data runs list` and `data runs cancel` expose the maintained
+   client's creator-scoped recovery operations for a Record type API route.
 
 One package is the unit an operator promotes: the same package directory, with
 the same package digest and `registryRevision`, is planned and applied in each
@@ -528,3 +529,7 @@ Declare bounded count datasets for live analysis under ordinary read profiles
 and immutable, disclosure-controlled releases for separate dashboard readers.
 See [Statistical datasets](STATISTICS.md) for the model, HTTP contract,
 publication lifecycle, and accepted disclosure risks.
+
+See the shared [per-resource access-token profile](../platform/ACCESS-TOKENS.md)
+for OIDC interoperability. `registry_actor_kind` is profile-specific, including
+when one OAuth client registration requests separate product tokens.

@@ -6,6 +6,10 @@
 //! authorization endpoints, PKCE, token minting, or refresh flows.
 
 mod authorization_claims;
+mod diagnostics;
+pub use diagnostics::{AuthenticationDiagnostics, AuthenticationStage};
+#[doc(hidden)]
+pub use tracing as __tracing;
 pub mod task_grant;
 
 pub use authorization_claims::{
@@ -1273,6 +1277,7 @@ impl VerifiedToken {
 
 #[derive(Debug)]
 pub struct TokenVerifier {
+    diagnostics: AuthenticationDiagnostics,
     config: TokenVerifierConfig,
     fetcher: Arc<JwksFetcher>,
     allowed_clients: HashSet<String>,
@@ -1296,6 +1301,7 @@ impl TokenVerifier {
         let allowed_id_typ = normalize_typ_set(&config.allowed_id_typ);
         let allowed_userinfo_typ = normalize_typ_set(&config.allowed_userinfo_typ);
         Self {
+            diagnostics: AuthenticationDiagnostics::default(),
             config,
             fetcher,
             allowed_clients,
@@ -1318,6 +1324,12 @@ impl TokenVerifier {
 
     pub async fn verify(&self, token: &str) -> Result<VerifiedToken, OidcError> {
         self.verify_access_token(token, true).await
+    }
+
+    /// One fixed category, at most once per stage per minute. No values from
+    /// the error, token, claims, or operator configuration are returned.
+    pub fn authentication_diagnostic(&self, stage: AuthenticationStage) -> Option<&'static str> {
+        self.diagnostics.admit(stage).then_some(stage.label())
     }
 
     pub async fn verify_related_token(&self, token: &str) -> Result<VerifiedToken, OidcError> {
@@ -1497,15 +1509,15 @@ impl TokenVerifier {
         let Some(max_token_lifetime) = self.config.max_token_lifetime else {
             return Ok(());
         };
-        let iat = claims.iat.ok_or(OidcError::InvalidToken)?;
-        let exp = claims.exp.ok_or(OidcError::InvalidToken)?;
+        let iat = claims.iat.ok_or(OidcError::InvalidTimeClaims)?;
+        let exp = claims.exp.ok_or(OidcError::InvalidTimeClaims)?;
         let lifetime_seconds = exp
             .checked_sub(iat)
             .filter(|seconds| *seconds > 0)
             .and_then(|seconds| u64::try_from(seconds).ok())
-            .ok_or(OidcError::InvalidToken)?;
+            .ok_or(OidcError::InvalidTimeClaims)?;
         if Duration::from_secs(lifetime_seconds) > max_token_lifetime {
-            return Err(OidcError::InvalidToken);
+            return Err(OidcError::InvalidTimeClaims);
         }
 
         Ok(())
@@ -1730,6 +1742,7 @@ fn map_jwt_error(
             actual: issuer_from_untrusted_payload(token).unwrap_or_default(),
         },
         JwtErrorKind::InvalidAudience => OidcError::AudienceMismatch,
+        JwtErrorKind::MissingRequiredClaim(claim) if claim == "exp" => OidcError::InvalidTimeClaims,
         JwtErrorKind::InvalidSignature => OidcError::SignatureInvalid,
         _ => OidcError::InvalidToken,
     }
@@ -1793,6 +1806,8 @@ pub enum OidcError {
     SignatureInvalid,
     #[error("token is invalid")]
     InvalidToken,
+    #[error("token time claims do not satisfy the lifetime requirements")]
+    InvalidTimeClaims,
     #[error("client is not allowed")]
     ClientNotAllowed,
     #[error("client may not exchange this assertion authority")]
@@ -3343,10 +3358,11 @@ mod tests {
         );
         missing_iat_claims.exp = Some(valid_exp);
         let missing_iat = signed_hs256_token("kid", missing_iat_claims, secret, Some("at+jwt"));
-        assert!(matches!(
-            verifier.verify(&missing_iat).await,
-            Err(OidcError::InvalidToken)
-        ));
+        let error = verifier
+            .verify(&missing_iat)
+            .await
+            .expect_err("invalid time bounds are refused");
+        assert_eq!(error.authentication_stage().label(), "time");
 
         let mut missing_exp_claims = test_claims(
             Some("https://issuer.example"),
@@ -3356,10 +3372,11 @@ mod tests {
         missing_exp_claims.iat = Some(valid_exp - 300);
         missing_exp_claims.exp = None;
         let missing_exp = signed_hs256_token("kid", missing_exp_claims, secret, Some("at+jwt"));
-        assert!(matches!(
-            verifier.verify(&missing_exp).await,
-            Err(OidcError::InvalidToken)
-        ));
+        let error = verifier
+            .verify(&missing_exp)
+            .await
+            .expect_err("invalid time bounds are refused");
+        assert_eq!(error.authentication_stage().label(), "time");
 
         let mut non_positive_claims = test_claims(
             Some("https://issuer.example"),
@@ -3369,10 +3386,11 @@ mod tests {
         non_positive_claims.iat = Some(valid_exp);
         non_positive_claims.exp = Some(valid_exp);
         let non_positive = signed_hs256_token("kid", non_positive_claims, secret, Some("at+jwt"));
-        assert!(matches!(
-            verifier.verify(&non_positive).await,
-            Err(OidcError::InvalidToken)
-        ));
+        let error = verifier
+            .verify(&non_positive)
+            .await
+            .expect_err("invalid time bounds are refused");
+        assert_eq!(error.authentication_stage().label(), "time");
 
         let mut overlong_claims = test_claims(
             Some("https://issuer.example"),
@@ -3382,10 +3400,11 @@ mod tests {
         overlong_claims.iat = Some(valid_exp - 301);
         overlong_claims.exp = Some(valid_exp);
         let overlong = signed_hs256_token("kid", overlong_claims, secret, Some("at+jwt"));
-        assert!(matches!(
-            verifier.verify(&overlong).await,
-            Err(OidcError::InvalidToken)
-        ));
+        let error = verifier
+            .verify(&overlong)
+            .await
+            .expect_err("invalid time bounds are refused");
+        assert_eq!(error.authentication_stage().label(), "time");
     }
 
     fn test_claims(issuer: Option<&str>, audience: Option<&str>, subject: Option<&str>) -> Claims {
@@ -3507,7 +3526,7 @@ mod tests {
                     &accepted_audiences,
                 )
                 .await,
-            Err(OidcError::InvalidToken)
+            Err(OidcError::InvalidTimeClaims)
         ));
 
         let missing_issuer = signed_hs256_token(

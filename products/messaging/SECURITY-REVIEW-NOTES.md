@@ -29,6 +29,24 @@ challenge and no detail that distinguishes one cause from another. Refusals
 are counted on the private metrics listener under a closed reason label and
 are not written to the audit journal (recorded decision MESSAGING-DEC-02).
 
+Refusal diagnostics emit fixed stage labels, admitted at most once per stage
+per minute by the verifier's bounded limiter. HTTP bearer parsing and compact
+JWT admission failures use `header`; required time claims and the configured
+maximum lifetime use `time`. No credential, submitted claim, scope value,
+issuer URL, or underlying error text enters these diagnostics. Static
+remediation keys remain safe to log. The diagnostic does not change the
+existing generic credential 401, profile 403, or verifier-outage 503, and
+creates no audit entry or caller authority.
+
+The auth regression
+`compact_token_admission_logs_one_value_free_header_diagnostic` covers empty,
+oversized, malformed-base64 and duplicate-member credentials, repeated under
+one verifier. `separate_resource_rs256_and_es256_profiles_refuse_cross_resource_reuse`
+covers ordinary asymmetric tokens and resource/profile refusals.
+`only_a_verifier_that_reached_no_verdict_is_unavailable` keeps credential time
+failures separate from infrastructure outages. These are maintained test
+references, not claims of execution in this document.
+
 `allowedClients` is required and lists at least one distinct client. The
 shared reader also accepts the keyword `unrestricted`, which admits every
 client the issuer verifies, and each runtime decides whether to take it:

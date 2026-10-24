@@ -2169,6 +2169,8 @@ jobs:
             --include-casework \
             --include-messaging \
             --include-scheduling \
+            --include-render \
+            --include-coordinator \
             --python-profile ci \
             --output-dir "${out_dir}" \
             --work-dir "${RUNNER_TEMP}/client-assembly" \
@@ -2198,6 +2200,13 @@ jobs:
           cargo test --locked \
             -p registry-evidencectl --test dev_lifecycle -- \
             --ignored --test-threads=1
+          # The generated SQLite starter target must pass the offline target
+          # check, which runs the binding checks of the runtime built above.
+          cargo test --locked -p registry-evidencectl --test scaffold \
+            the_generated_sqlite_starter_target_binds_its_extract_profile \
+            -- --ignored --exact \
+            | tee "${RUNNER_TEMP}/evidence-sqlite-starter-target.log"
+          grep -q 'test result: ok\. 1 passed' "${RUNNER_TEMP}/evidence-sqlite-starter-target.log" || { echo "::error::expected exactly one passing test for the_generated_sqlite_starter_target_binds_its_extract_profile"; exit 1; }
           # Current authoring checks are offline. Fixture evaluation is a
           # separate compiled-target proof against the runtime built above.
           # Exact filters and one-pass guards refuse a renamed empty proof.
@@ -2945,6 +2954,7 @@ jobs:
             crates/registry-messaging-client-node/package-lock.json
             crates/registry-scheduling-client-node/package-lock.json
             crates/registry-coordinator-client-node/package-lock.json
+            crates/registry-render-client-node/package-lock.json
             crates/registry-stack-client-node/package-lock.json
 
       - name: Cache Cargo registry
@@ -2958,7 +2968,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for client in registry-discovery-client-node registry-evidence-client-node registry-breg-client-node registry-casework-client-node registry-messaging-client-node registry-scheduling-client-node registry-coordinator-client-node; do
+          for client in registry-discovery-client-node registry-evidence-client-node registry-breg-client-node registry-casework-client-node registry-messaging-client-node registry-scheduling-client-node registry-coordinator-client-node registry-render-client-node; do
             (
               cd "crates/${client}"
               npm ci
@@ -2980,7 +2990,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for client in registry-discovery-client-py registry-evidence-client-py registry-breg-client-py registry-casework-client-py registry-messaging-client-py registry-scheduling-client-py registry-coordinator-client-py; do
+          for client in registry-discovery-client-py registry-evidence-client-py registry-breg-client-py registry-casework-client-py registry-messaging-client-py registry-scheduling-client-py registry-coordinator-client-py registry-render-client-py; do
             cargo build --locked -p "${client}" --lib --features "${client}/extension-module"
             (
               cd "crates/${client}"
@@ -2988,6 +2998,19 @@ jobs:
               cmp ../../LICENSE LICENSE
             )
           done
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          version: "0.11.16"
+
+      - name: Test direct Python composition
+        working-directory: products/platform/examples/python-composition
+        run: uv run --locked python -m unittest discover -s tests -v
+
+      - name: Test released-client Coordinator example
+        working-directory: products/coordinator/examples/reviewed-notice
+        run: uv run --locked python -m unittest discover -s tests -v
 
   release-linux-node-clients:
     name: Release Linux native clients (${{ matrix.asset }})
@@ -3037,6 +3060,7 @@ jobs:
             crates/registry-messaging-client-node/package-lock.json
             crates/registry-scheduling-client-node/package-lock.json
             crates/registry-coordinator-client-node/package-lock.json
+            crates/registry-render-client-node/package-lock.json
             crates/registry-stack-client-node/package-lock.json
 
       - name: Install pinned Linux client build tools
@@ -3053,7 +3077,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for client in discovery evidence breg casework messaging scheduling coordinator; do
+          for client in discovery evidence breg casework messaging scheduling coordinator render; do
             client_dir="${GITHUB_WORKSPACE}/crates/registry-${client}-client-node"
             (cd "${client_dir}" && npm ci)
             release/scripts/build-linux-node-client \
@@ -3061,7 +3085,7 @@ jobs:
               --target "${{ matrix.target }}" \
               --napi-platform "${{ matrix.napi_platform }}" \
               --zig-python "${RUNNER_TEMP}/maturin/bin/python"
-            if [[ "${client}" == breg || "${client}" == casework || "${client}" == messaging || "${client}" == scheduling || "${client}" == coordinator ]]; then
+            if [[ "${client}" == breg || "${client}" == casework || "${client}" == messaging || "${client}" == scheduling || "${client}" == coordinator || "${client}" == render ]]; then
               class_name=BaseRegistryClient
               base_url=https://registry.invalid
               if [[ "${client}" == casework ]]; then
@@ -3073,6 +3097,9 @@ jobs:
               elif [[ "${client}" == scheduling ]]; then
                 class_name=SchedulingClient
                 base_url=https://scheduling.invalid
+              elif [[ "${client}" == render ]]; then
+                class_name=RenderClient
+                base_url=https://render.invalid
               elif [[ "${client}" == coordinator ]]; then
                 class_name=CoordinatorClient
                 base_url=https://coordinator.invalid
@@ -3090,7 +3117,7 @@ jobs:
           done
           client_dir="${GITHUB_WORKSPACE}/crates/registry-stack-client-node"
           platform_dir="${client_dir}/npm/${{ matrix.napi_platform }}"
-          for client in discovery evidence breg casework messaging scheduling coordinator; do
+          for client in discovery evidence breg casework messaging scheduling coordinator render; do
             cp "${GITHUB_WORKSPACE}/crates/registry-${client}-client-node/${client}-client.${{ matrix.napi_platform }}.node" \
               "${platform_dir}/"
           done

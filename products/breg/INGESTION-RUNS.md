@@ -73,6 +73,14 @@ open, close, or reopen one. Each transition appends a
 `breg-import-authority-audit/v2` record, and every run audit record under an
 authority carries `importAuthorityId`.
 
+One import authority admits at most one non-terminal run. Admission checks
+`open` and `blocked` runs while holding that authority row's lock, so concurrent
+announcements cannot both enter and a blocked run keeps occupying the authority.
+Completion or an authorized cancellation releases that occupancy. A competing
+announcement is a new creation, not an exact replay, and is refused with
+`precondition.failed`; the refusal does not depend on a database uniqueness
+error.
+
 ## Chunk protocol
 
 A submission names the run, the expected chunk index, the chunk digest, and the
@@ -124,7 +132,8 @@ receives `service.unavailable` without the run id. Recovery is operational:
 once the audit writer is restored and the runtime serves again, list the
 caller's runs with `status=open` and the input's `inputDigest`, then resume or
 cancel the run that listing returns. Creating the run again opens a second
-run.
+run only when no import authority occupancy prevents it; creation itself is
+never an idempotent replay.
 
 ## States
 
@@ -139,8 +148,49 @@ same way the successor does. The blocking transition verifies it changed the
 run row before it records anything: a cancellation that commits while a block
 is parked leaves the run cancelled, answered as `run_not_open` with the
 cancellation's refused marker and no blocked audit record. A blocked run is
-retained and inspectable,
-and a successor run created under the new binding carries the work forward. A
+retained and inspectable. When it is bound to an import authority, it continues
+to occupy that authority until its creator cancels it. Cancellation preserves
+the committed rows, counts, retained receipts, and audit trail. A successor
+run can then be admitted under a still-valid authority when its remaining
+volume covers the new announcement.
+
+A creator can inspect and cancel retained work without package metadata
+resolution. `--record-route` is the Record type's authored API route, not its
+Record type id:
+
+```sh
+bregctl data runs list \
+  --breg-url https://registry.example \
+  --access-token-file /absolute/path/to/token \
+  --record-route households \
+  --profile importer \
+  --status blocked
+
+bregctl data runs cancel \
+  --breg-url https://registry.example \
+  --access-token-file /absolute/path/to/token \
+  --record-route households \
+  --profile importer \
+  --run-id 00000000-0000-4000-8000-000000000001
+```
+
+Both commands use the ordinary authenticated run routes. Listing remains
+creator- and bound-context-scoped; cancellation applies the same creator,
+profile, claim-context, and task-grant checks as the runtime API.
+
+An upgrade from a release that allowed several non-terminal runs on one live
+import authority refuses both plan and apply before maintenance begins. A live
+authority is open, unexpired, and belongs to the current activation. Plan writes
+no activation audit. Apply keeps its normal request and refused-response audit,
+while the active runtime remains available for each creator to list and cancel
+their duplicate work. After every live authority has at most one `open` or
+`blocked` run, plan and apply can proceed without deleting or rewriting retained
+work. Runs under terminal, expired, or superseded authorities remain retained
+as history and do not block an upgrade because those authorities
+cannot admit more work. If maintenance already started, apply may resume only
+the validated exact target recorded for that migration.
+
+A successor run created under the new binding carries the work forward. A
 committed chunk replays its receipt in any run status, including blocked: the
 binding governs only chunks the checkpoint has not covered, and the replay is
 compared against the run's own stored bounds, so a successor package that
@@ -197,6 +247,8 @@ refusals.
 | Authorization lost | Refuse progress. |
 | Package or schema binding changed | Block the run; continue in a successor run. |
 | Import authority closed, expired, exhausted, or superseded | Block the run; open a new authority and continue the uncommitted remainder in a successor run. |
+| Another non-terminal run occupies the import authority | List runs with `bregctl data runs list`; the creator cancels the duplicate, then retries the announcement. |
+| Upgrade finds legacy duplicate non-terminal runs under a live authority | Keep the active runtime serving; each creator lists and cancels its duplicate, then the operator retries plan and apply. Historical runs under terminal, expired, or superseded authorities require no upgrade recovery. |
 | Operator stop | Explicit cancel, preserving counts and audit. |
 
 ## Retention
@@ -259,7 +311,8 @@ receipt the committed prefix retains.
 The delivery row is `BREG-V1-INGESTION-RUNS` in
 `contracts/definition-of-done.yaml`, the acceptance scenarios are journey
 `BREG-J21` in `contracts/acceptance-scenario-matrix.yaml`, and the security
-rows are `BREG-SEC-75` through `BREG-SEC-82` and `BREG-SEC-167` in
+rows are `BREG-SEC-75` through `BREG-SEC-82`, `BREG-SEC-167`, and
+`BREG-SEC-190` through `BREG-SEC-191` in
 `contracts/security-invariant-matrix.yaml`. The published HTTP reference is
 `docs/site/src/content/docs/reference/breg-api.mdx`; the operator procedure is
 `docs/site/src/content/docs/operate/breg-data.mdx`.

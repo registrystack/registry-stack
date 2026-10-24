@@ -8,6 +8,7 @@ import base64
 import email.parser
 import hashlib
 import json
+import re
 import sys
 import tarfile
 import urllib.error
@@ -139,6 +140,14 @@ def includes_scheduling(version: str, *, include_scheduling: bool = False) -> bo
     )
 
 
+def includes_render(version: str, *, include_render: bool = False) -> bool:
+    return include_render or release_roster.render_client_in_release(release_version(version))
+
+
+def includes_coordinator(version: str, *, include_coordinator: bool = False) -> bool:
+    return include_coordinator or release_roster.coordinator_client_in_release(release_version(version))
+
+
 def includes_relay(version: str) -> bool:
     """Keep Relay only when validating an immutable historical client release."""
 
@@ -159,6 +168,8 @@ def native_binary_stems(
     include_casework: bool = False,
     include_messaging: bool = False,
     include_scheduling: bool = False,
+    include_render: bool = False,
+    include_coordinator: bool = False,
 ) -> tuple[str, ...]:
     definition = client_definition(client)
     stems = definition.native_binary_stems
@@ -176,6 +187,10 @@ def native_binary_stems(
         version, include_scheduling=include_scheduling
     ):
         stems += ("scheduling-client",)
+    if client == "stack" and includes_render(version, include_render=include_render):
+        stems += ("render-client",)
+    if client == "stack" and includes_coordinator(version, include_coordinator=include_coordinator):
+        stems += ("coordinator-client",)
     return stems
 
 
@@ -185,6 +200,8 @@ def stack_python_namespaces(
     include_casework: bool = False,
     include_messaging: bool = False,
     include_scheduling: bool = False,
+    include_render: bool = False,
+    include_coordinator: bool = False,
 ) -> tuple[str, ...]:
     namespaces = STACK_PYTHON_NAMESPACES
     if includes_relay(version):
@@ -195,6 +212,10 @@ def stack_python_namespaces(
         namespaces += ("messaging",)
     if includes_scheduling(version, include_scheduling=include_scheduling):
         namespaces += ("scheduling",)
+    if includes_render(version, include_render=include_render):
+        namespaces += ("render",)
+    if includes_coordinator(version, include_coordinator=include_coordinator):
+        namespaces += ("coordinator",)
     return tuple(sorted(namespaces))
 
 
@@ -205,6 +226,8 @@ def npm_platforms(
     include_casework: bool = False,
     include_messaging: bool = False,
     include_scheduling: bool = False,
+    include_render: bool = False,
+    include_coordinator: bool = False,
 ) -> tuple[tuple[str, tuple[str, ...]], ...]:
     return tuple(
         (
@@ -217,6 +240,8 @@ def npm_platforms(
                     include_casework=include_casework,
                     include_messaging=include_messaging,
                     include_scheduling=include_scheduling,
+                    include_render=include_render,
+                    include_coordinator=include_coordinator,
                 )
             ),
         )
@@ -232,7 +257,57 @@ def expected_optional_dependencies(client: str, version: str) -> dict[str, str]:
     }
 
 
-def bind_optional_dependencies(package_json: Path, version: str, client: str) -> None:
+def stage_node_product_roster(root: Path, metadata: dict, products: tuple[str, ...]) -> None:
+    """Project a staged source facade onto its version-selected native roster."""
+    index_path = root / "index.js"
+    index = index_path.read_text(encoding="utf-8")
+    source_products = set(re.findall(r"^exports\.(\w+) = require\(", index, re.MULTILINE))
+    missing = set(products) - source_products
+    if missing:
+        raise ClientRegistryError(
+            "staged facade lacks selected namespaces; stage the source again: "
+            + ", ".join(sorted(missing))
+        )
+    omitted = source_products - set(products)
+    metadata["files"] = [name for name in metadata["files"] if name not in omitted]
+    metadata["exports"] = {
+        name: target for name, target in metadata.get("exports", {}).items()
+        if name.removeprefix("./").split("/", 1)[0] not in omitted
+    }
+    for product in omitted:
+        index = re.sub(rf"^exports\.{re.escape(product)} = require[^\n]*\n", "", index, flags=re.MULTILINE)
+    index_path.write_text(index, encoding="utf-8")
+    declaration_path = root / "index.d.ts"
+    declaration = declaration_path.read_text(encoding="utf-8")
+    for product in omitted:
+        declaration = re.sub(rf"^import \* as {re.escape(product)} from[^\n]*\n", "", declaration, flags=re.MULTILINE)
+    def exports(match):
+        names = [name.strip() for name in match[1].split(",") if name.strip() not in omitted]
+        return "export { " + ", ".join(names) + " }"
+    declaration = re.sub(r"export \{ ([^}]+) \}", exports, declaration)
+    declaration_path.write_text(declaration, encoding="utf-8")
+    native_path = root / "native.js"
+    native = native_path.read_text(encoding="utf-8")
+    native, count = re.subn(r"const PRODUCTS = new Set\(\[[^\n]*\]\);", "const PRODUCTS = new Set(" + json.dumps(list(products)) + ");", native)
+    if count != 1:
+        raise ClientRegistryError(f"cannot locate the source product loader in {native_path}")
+    native_path.write_text(native, encoding="utf-8")
+    for platform in NPM_PLATFORM_NAMES:
+        directory = root / "npm" / platform
+        (directory / "index.js").write_text("'use strict';\nmodule.exports = {\n" + "".join(f"  {product}: require('./{product}-client.{platform}.node'),\n" for product in products) + "};\n", encoding="utf-8")
+        manifest_path = directory / "package.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["files"] = [name for name in manifest["files"] if name != "*.node" and not name.endswith(".node")]
+        manifest["files"] += [f"{product}-client.{platform}.node" for product in products]
+        manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+
+
+def bind_optional_dependencies(
+    package_json: Path, version: str, client: str, *,
+    include_casework: bool = False, include_messaging: bool = False,
+    include_scheduling: bool = False, include_render: bool = False,
+    include_coordinator: bool = False,
+) -> None:
     """Bind a root manifest to its exact platform packages before it is packed.
 
     The checked-in manifest cannot carry these versions. At preparation time
@@ -290,6 +365,11 @@ def bind_optional_dependencies(package_json: Path, version: str, client: str) ->
                 f"stack compatibility metadata {compatibility_path} is malformed"
             )
         package["version"] = version
+    if client == "stack" and "index.js" in metadata.get("files", []):
+        products = stack_python_namespaces(version, include_casework=include_casework,
+            include_messaging=include_messaging, include_scheduling=include_scheduling,
+            include_render=include_render, include_coordinator=include_coordinator)
+        stage_node_product_roster(package_json.parent, metadata, products)
     metadata["optionalDependencies"] = expected_optional_dependencies(client, version)
     if compatibility is not None:
         compatibility_path.write_text(
@@ -387,6 +467,8 @@ def validate_npm_packages(
     include_casework: bool = False,
     include_messaging: bool = False,
     include_scheduling: bool = False,
+    include_render: bool = False,
+    include_coordinator: bool = False,
 ) -> list[Path]:
     require_supported_client(client, version)
     definition = client_definition(client)
@@ -402,6 +484,8 @@ def validate_npm_packages(
             include_casework=include_casework,
             include_messaging=include_messaging,
             include_scheduling=include_scheduling,
+            include_render=include_render,
+            include_coordinator=include_coordinator,
         ):
             if path.name == f"{definition.npm_tarball_stem}-{platform}-{version}.tgz":
                 expected_name = f"{definition.npm_root_package}-{platform}"
@@ -486,6 +570,13 @@ def validate_npm_packages(
                     raise ClientRegistryError(
                         f"root npm package {path.name} unexpectedly exposes the scheduling facade"
                     )
+                for product, expected in [("render", includes_render(version, include_render=include_render)), ("coordinator", includes_coordinator(version, include_coordinator=include_coordinator))]:
+                    members = {f"package/{product}/{name}" for name in ("client.js", "client.d.ts", "index.js", "index.d.ts")}
+                    exposed = any(name.startswith(f"package/{product}/") for name in names)
+                    if expected and members - names:
+                        raise ClientRegistryError(f"root npm package has an incomplete {product} facade")
+                    if not expected and exposed:
+                        raise ClientRegistryError(f"root npm package unexpectedly exposes {product}")
             if metadata.get("optionalDependencies") != expected_optional:
                 raise ClientRegistryError(
                     "root npm package does not bind the exact platform versions"
@@ -507,6 +598,8 @@ def validate_wheels(
     include_casework: bool = False,
     include_messaging: bool = False,
     include_scheduling: bool = False,
+    include_render: bool = False,
+    include_coordinator: bool = False,
 ) -> list[Path]:
     require_supported_client(client, version)
     definition = client_definition(client)
@@ -541,6 +634,8 @@ def validate_wheels(
                 include_casework=include_casework,
                 include_messaging=include_messaging,
                 include_scheduling=include_scheduling,
+                include_render=include_render,
+                include_coordinator=include_coordinator,
             )
             for namespace in expected_namespaces:
                 prefix = f"registry_client/{namespace}/"
@@ -548,24 +643,13 @@ def validate_wheels(
                     raise ClientRegistryError(
                         f"Python wheel {path.name} has no {namespace} namespace"
                     )
-            if "casework" not in expected_namespaces and any(
-                name.startswith("registry_client/casework/") for name in names
-            ):
-                raise ClientRegistryError(
-                    f"Python wheel {path.name} unexpectedly contains the casework namespace"
-                )
-            if "messaging" not in expected_namespaces and any(
-                name.startswith("registry_client/messaging/") for name in names
-            ):
-                raise ClientRegistryError(
-                    f"Python wheel {path.name} unexpectedly contains the messaging namespace"
-                )
-            if "scheduling" not in expected_namespaces and any(
-                name.startswith("registry_client/scheduling/") for name in names
-            ):
-                raise ClientRegistryError(
-                    f"Python wheel {path.name} unexpectedly contains the scheduling namespace"
-                )
+            for namespace in ("casework", "messaging", "scheduling", "render", "coordinator"):
+                if namespace not in expected_namespaces and any(
+                    name.startswith(f"registry_client/{namespace}/") for name in names
+                ):
+                    raise ClientRegistryError(
+                        f"Python wheel {path.name} unexpectedly contains the {namespace} namespace"
+                    )
         metadata_names = [
             name for name in names if name.endswith(".dist-info/METADATA")
         ]
@@ -601,6 +685,8 @@ def validate_distribution(
     include_casework: bool = False,
     include_messaging: bool = False,
     include_scheduling: bool = False,
+    include_render: bool = False,
+    include_coordinator: bool = False,
 ) -> None:
     require_supported_client(client, version)
     validate_npm_packages(
@@ -610,6 +696,8 @@ def validate_distribution(
         include_casework=include_casework,
         include_messaging=include_messaging,
         include_scheduling=include_scheduling,
+        include_render=include_render,
+        include_coordinator=include_coordinator,
     )
     validate_wheels(
         directory,
@@ -618,6 +706,8 @@ def validate_distribution(
         include_casework=include_casework,
         include_messaging=include_messaging,
         include_scheduling=include_scheduling,
+        include_render=include_render,
+        include_coordinator=include_coordinator,
     )
 
 
@@ -741,10 +831,14 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     validate.add_argument("--include-casework", action="store_true")
     validate.add_argument("--include-messaging", action="store_true")
     validate.add_argument("--include-scheduling", action="store_true")
+    validate.add_argument("--include-render", action="store_true")
+    validate.add_argument("--include-coordinator", action="store_true")
     bind = subparsers.add_parser("bind-optional-deps")
     bind.add_argument("--package-json", type=Path, required=True)
     bind.add_argument("--version", required=True)
     bind.add_argument("--client", choices=sorted(CLIENTS), required=True)
+    for product in ("casework", "messaging", "scheduling", "render", "coordinator"):
+        bind.add_argument(f"--include-{product}", action="store_true")
     npm = subparsers.add_parser("npm-state")
     npm.add_argument("--tarball", type=Path, required=True)
     pypi = subparsers.add_parser("pypi-state")
@@ -754,6 +848,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     pypi.add_argument("--include-casework", action="store_true")
     pypi.add_argument("--include-messaging", action="store_true")
     pypi.add_argument("--include-scheduling", action="store_true")
+    pypi.add_argument("--include-render", action="store_true")
+    pypi.add_argument("--include-coordinator", action="store_true")
     return parser.parse_args(argv)
 
 
@@ -768,10 +864,15 @@ def main(argv: list[str] | None = None) -> int:
                 include_casework=args.include_casework,
                 include_messaging=args.include_messaging,
                 include_scheduling=args.include_scheduling,
+                include_render=args.include_render,
+                include_coordinator=args.include_coordinator,
             )
             print("validated")
         elif args.command == "bind-optional-deps":
-            bind_optional_dependencies(args.package_json, args.version, args.client)
+            bind_optional_dependencies(args.package_json, args.version, args.client,
+                include_casework=args.include_casework, include_messaging=args.include_messaging,
+                include_scheduling=args.include_scheduling, include_render=args.include_render,
+                include_coordinator=args.include_coordinator)
             print("bound")
         elif args.command == "npm-state":
             print(npm_registry_state(args.tarball, npm_metadata(args.tarball)))
@@ -783,6 +884,8 @@ def main(argv: list[str] | None = None) -> int:
                 include_casework=args.include_casework,
                 include_messaging=args.include_messaging,
                 include_scheduling=args.include_scheduling,
+                include_render=args.include_render,
+                include_coordinator=args.include_coordinator,
             )
             print(
                 pypi_registry_state(

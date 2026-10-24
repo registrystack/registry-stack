@@ -15,10 +15,10 @@
 //! products/casework/scripts/check-review-journeys.sh
 //! ```
 //!
-//! The script supplies only the candidate Casework native artifact to each
-//! exact unified Casework facade. Inert sibling namespace stubs stand in for
-//! the other five product bindings, whose package assembly has a separate
-//! release gate. This is real HTTP/native-facade proof, not installed tarball
+//! The script supplies the candidate Casework native artifacts and the real
+//! BReg Python provider behind the shared authentication facade. Other product
+//! namespaces use inert stubs; their package assembly has a separate release
+//! gate. This is real HTTP/native-facade proof, not installed tarball
 //! or wheel proof.
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
@@ -216,6 +216,8 @@ impl NativeClients {
         let python_facade_root = required_path("CASEWORK_PYTHON_FACADE_ROOT");
         let python_product_root = required_path("CASEWORK_PYTHON_PRODUCT_ROOT");
         let python_native = required_path("CASEWORK_PYTHON_NATIVE");
+        let python_breg_root = required_path("CASEWORK_PYTHON_BREG_PRODUCT_ROOT");
+        let python_breg_native = required_path("CASEWORK_PYTHON_BREG_NATIVE");
         let python_path = native_root.join("python");
         let unified_package = python_path.join("registry_client");
         fs::create_dir_all(&unified_package).expect("the Python facade directory is writable");
@@ -224,8 +226,24 @@ impl NativeClients {
             unified_package.join("__init__.py"),
         )
         .expect("the exact unified Python facade is copied");
+        for name in ["auth.py", "auth.pyi"] {
+            fs::copy(python_facade_root.join(name), unified_package.join(name))
+                .expect("the exact shared authentication facade is copied");
+        }
+        let breg_package = unified_package.join("breg");
+        fs::create_dir_all(&breg_package).expect("the BReg provider package is writable");
+        fs::copy(
+            python_breg_root.join("__init__.py"),
+            breg_package.join("__init__.py"),
+        )
+        .expect("the exact BReg provider facade is copied");
+        fs::copy(
+            python_breg_native,
+            breg_package.join("registry_breg_client.so"),
+        )
+        .expect("the canonical Python authentication provider is copied");
         for sibling in [
-            "breg",
+            "render",
             "coordinator",
             "discovery",
             "evidence",
@@ -396,6 +414,31 @@ impl Session {
             format!("http://127.0.0.1:{issuer_port}/oauth2/token")
         );
         report
+    }
+
+    /// Start without naming ports, as an installed tutorial reader does.
+    fn start_with_allocated_ports(&self) -> Value {
+        let project = self.project.to_str().expect("a UTF-8 project path");
+        let report = self.success(&[
+            "dev",
+            project,
+            "--casework-bin",
+            self.casework_bin.to_str().expect("a UTF-8 casework path"),
+        ]);
+        assert_eq!(report["state"], "ready", "{report:#}");
+        report
+    }
+
+    fn retained_ports(&self) -> [u16; 3] {
+        let state: Value = serde_json::from_slice(
+            &fs::read(self.project.join(".casework/dev/state.json"))
+                .expect("the retained dev state is readable"),
+        )
+        .expect("the retained dev state is JSON");
+        ["caseworkPort", "issuerPort", "databasePort"].map(|member| {
+            u16::try_from(state[member].as_u64().expect("a retained port"))
+                .expect("a retained loopback port")
+        })
     }
 
     fn stop(&self, args: &[&str]) -> Value {
@@ -687,6 +730,74 @@ fn inbox(session: &Session, report: &Value) -> Vec<Value> {
         .as_array()
         .expect("a review task page")
         .clone()
+}
+
+#[test]
+#[ignore = "requires Docker and candidate Casework service and CLI binaries"]
+fn dev_allocates_ports_for_parallel_fresh_projects_and_retains_them() {
+    let first_workspace = tempfile::tempdir().expect("a work directory");
+    let second_workspace = tempfile::tempdir().expect("a work directory");
+    let casework_bin = prerequisite("casework");
+    let first = Session {
+        project: first_workspace.path().join("casework"),
+        casework_bin: casework_bin.clone(),
+        ports: free_ports(),
+        _workspace: first_workspace,
+    };
+    let second = Session {
+        project: second_workspace.path().join("casework"),
+        casework_bin,
+        ports: free_ports(),
+        _workspace: second_workspace,
+    };
+    for session in [&first, &second] {
+        session.success(&[
+            "init",
+            session.project.to_str().expect("a UTF-8 project path"),
+            "--template",
+            "standalone-decision",
+        ]);
+    }
+
+    let (first_report, second_report) = std::thread::scope(|scope| {
+        let first_start = scope.spawn(|| first.start_with_allocated_ports());
+        let second_start = scope.spawn(|| second.start_with_allocated_ports());
+        (
+            first_start.join().expect("the first start completes"),
+            second_start.join().expect("the second start completes"),
+        )
+    });
+    let first_ports = first.retained_ports();
+    let second_ports = second.retained_ports();
+    assert!(
+        first_ports
+            .into_iter()
+            .all(|port| !second_ports.contains(&port)),
+        "parallel sessions must own distinct ports: {first_ports:?} {second_ports:?}"
+    );
+    assert_ne!(first_report["caseworkUrl"], second_report["caseworkUrl"]);
+    assert_ne!(
+        first_report["tokenEndpoint"],
+        second_report["tokenEndpoint"]
+    );
+
+    assert_eq!(first.stop(&[])["state"], "stopped");
+    assert_eq!(second.stop(&[])["state"], "stopped");
+    let (first_restart, second_restart) = std::thread::scope(|scope| {
+        let first_start = scope.spawn(|| first.start_with_allocated_ports());
+        let second_start = scope.spawn(|| second.start_with_allocated_ports());
+        (
+            first_start.join().expect("the first restart completes"),
+            second_start.join().expect("the second restart completes"),
+        )
+    });
+    assert_eq!(first.retained_ports(), first_ports);
+    assert_eq!(second.retained_ports(), second_ports);
+    assert_eq!(first_restart["caseworkUrl"], first_report["caseworkUrl"]);
+    assert_eq!(second_restart["caseworkUrl"], second_report["caseworkUrl"]);
+
+    first.stop(&["--remove"]);
+    second.stop(&["--remove"]);
 }
 
 #[test]

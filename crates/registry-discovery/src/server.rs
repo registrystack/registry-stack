@@ -692,10 +692,22 @@ mod tests {
             .unwrap();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
         assert_eq!(response.headers()[CONTENT_TYPE], "application/problem+json");
+        let traceparent = response.headers()["traceparent"]
+            .to_str()
+            .unwrap()
+            .to_owned();
+        assert!(response.headers().get("retry-after").is_none());
         let body = to_bytes(response.into_body(), 4096).await.unwrap();
         let problem: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(problem["type"], ProblemCode::InvalidRequest.type_uri());
         assert_eq!(problem["status"], 400);
+        assert_eq!(problem["code"], "request.invalid");
+        assert!(problem["detail"].as_str().is_some());
+        assert_eq!(problem["traceId"].as_str().unwrap().len(), 32);
+        assert_eq!(
+            problem["traceId"].as_str().unwrap(),
+            traceparent.split('-').nth(1).unwrap()
+        );
     }
 
     #[tokio::test]

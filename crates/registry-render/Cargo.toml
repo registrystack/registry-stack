@@ -14,6 +14,8 @@ registry-platform-authcommon = { workspace = true }
 registry-platform-buildinfo = { workspace = true }
 registry-platform-canonical-json = { workspace = true }
 registry-platform-config = { workspace = true }
+registry-platform-oidc = { workspace = true }
+jsonwebtoken = { workspace = true }
 registry-platform-crypto = { workspace = true }
 registry-platform-httpsec = { workspace = true, features = ["server"] }
 registry-platform-yaml = { workspace = true }
@@ -41,6 +43,7 @@ tracing-subscriber = { workspace = true }
 uuid = { workspace = true }
 
 [dev-dependencies]
+registry-render-client.workspace = true
 tempfile = { workspace = true }
 tower = { workspace = true }
 

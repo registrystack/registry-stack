@@ -412,7 +412,7 @@ pub(crate) fn resolve(selection: &Selection, model: &Model) -> Result<Plan, Diag
                 "init.selection.concept-unknown",
                 &format!("{path}/concept"),
                 &format!(
-                    "the concept is not one of {} {}; name a concept the model defines",
+                    "the concept is not one of {} {}; list valid concepts offline with bregctl project concepts --from publicschema, then name one the model defines",
                     facts.display_name, facts.version
                 ),
             )

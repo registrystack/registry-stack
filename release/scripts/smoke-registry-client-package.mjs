@@ -58,4 +58,16 @@ if (Object.hasOwn(client, 'scheduling')) {
   assert.ok(new client.scheduling.SchedulingClient({ baseUrl: 'https://scheduling.invalid' }));
 }
 
+// Coordinator joins published unified clients in v0.44.0.
+if (Object.hasOwn(client, 'coordinator')) {
+  assert.strictEqual(typeof client.coordinator.CoordinatorClient, 'function');
+  assert.ok(new client.coordinator.CoordinatorClient({ baseUrl: 'https://coordinator.invalid' }));
+}
+
+// Held Render is exercised when explicitly assembled into a local candidate.
+if (Object.hasOwn(client, 'render')) {
+  assert.strictEqual(typeof client.render.RenderClient, 'function');
+  assert.ok(new client.render.RenderClient({ baseUrl: 'https://render.invalid' }));
+}
+
 console.log('Unified Node Registry client package ESM smoke passed');

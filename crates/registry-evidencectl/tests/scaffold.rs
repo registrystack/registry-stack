@@ -340,6 +340,32 @@ fn project_only_check_accepts_a_requirement_validity_above_the_local_signing_max
     );
 }
 
+/// The offline target check requires the target to bind every extract profile
+/// a Source uses, so the generated starter target must bind `record-status`.
+/// The binding check lives in the real Evidence binary, so this exact gate
+/// needs `EVIDENCE_BIN`.
+#[test]
+#[ignore = "exact gate: needs the real Evidence binary in EVIDENCE_BIN"]
+fn the_generated_sqlite_starter_target_binds_its_extract_profile() {
+    let workspace = TempDir::new().expect("temporary directory");
+    let root = fs::canonicalize(workspace.path()).expect("canonical temporary directory");
+    let project = root.join("project");
+    let output = sqlite_new(&project, &[]);
+    assert!(output.status.success(), "{}", stderr(&output));
+
+    let evidence = std::env::var_os("EVIDENCE_BIN")
+        .expect("set EVIDENCE_BIN to the Evidence binary built from this source");
+    let checked = Command::new(env!("CARGO_BIN_EXE_evidencectl"))
+        .args(["check", path(&project), "--target"])
+        .arg(project.join("local-target.yaml"))
+        .env("EVIDENCE_BIN", evidence)
+        .output()
+        .expect("check the starter against its local target");
+    let printed = format!("{}{}", stdout(&checked), stderr(&checked));
+    assert!(checked.status.success(), "{printed}");
+    assert!(!printed.contains("source-extract-unbound"), "{printed}");
+}
+
 /// `check --target` refuses a complete target authority grant that exceeds its
 /// AssertionDefinition ceiling, then accepts the exact generated grant again.
 #[test]

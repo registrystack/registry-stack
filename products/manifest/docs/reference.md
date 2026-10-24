@@ -669,3 +669,29 @@ These golden files live under `crates/registry-manifest-core/tests/fixtures/gold
 | `example-civil-registration.shacl.json` | `render_shacl()` | `example-civil-registration` |
 | `example-social-benefits.enrollment.schema.json` | `render_entity_schema_draft_2020_12()` | `example-social-benefits` |
 | `example-benefits-sync.ogc-records-items.json` | `render_ogc_records_items()` | `example-benefits-sync` |
+
+## Adopter-owned modules
+
+Describe a real data service through existing `data_services` and its actual
+`serves_datasets` references. A worker or another non-data module can use
+optional static `modules` metadata instead:
+
+```yaml
+modules:
+  - id: renewal-worker
+    title: Renewal reminder worker
+    description: Prepares reminder requests for the licensing application.
+    documentation_url: https://example.org/renewal-worker
+```
+
+Each module has an `id` unique within `modules` and a non-empty `title`.
+`description` and the absolute HTTP(S) `documentation_url` are optional.
+Titles and descriptions use the existing localized-text form. The catalog
+JSON renders these descriptions separately under `modules`; they do not
+become DCAT data services or introduce datasets.
+
+Manifest inclusion is optional descriptive metadata. Generation is offline:
+it performs no health probe, registration, authentication, outbound request,
+or runtime capability enforcement. An entry neither certifies availability
+nor grants access, and a module remains usable without one. Omit operational
+URLs, live status, credentials, and claimed capability enforcement.

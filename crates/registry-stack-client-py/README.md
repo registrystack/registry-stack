@@ -1,7 +1,12 @@
 # registry-stack-client
 
 One versioned Python package for the Discovery, Evidence, Base Registry
-Engine, Casework, Messaging, and Scheduling client APIs in Registry Stack.
+Engine, Casework, Messaging, Scheduling, and Coordinator client APIs in Registry Stack.
+
+Coordinator joins the client roster at v0.44.0. Its imports below require a
+Coordinator-enabled v0.44.0 candidate or published package; published v0.43.0
+contains the earlier six products. Check the version-specific release assets
+before installing. Source integration does not establish publication.
 
 The distribution installs as `registry-stack-client` and imports as
 `registry_client`. The two spellings differ, so `import registry_stack_client`
@@ -12,18 +17,19 @@ python -m pip install "registry-stack-client==<version>"
 ```
 
 ```python
-from registry_client import breg, casework, discovery, evidence, messaging, scheduling
+from registry_client import breg, casework, coordinator, discovery, evidence, messaging, scheduling
 
 registry = breg.BaseRegistryClient("https://registry.example.invalid/")
 inbox = casework.CaseworkClient("https://casework.example.invalid/")
 messages = messaging.MessagingClient("https://messaging.example.invalid/")
 appointments = scheduling.SchedulingClient("https://scheduling.example.invalid/")
+workflows = coordinator.CoordinatorClient("https://coordinator.example.invalid/")
 ```
 
 Each product remains in its own module namespace, `registry_client.breg`,
 `registry_client.casework`, `registry_client.discovery`,
-`registry_client.evidence`, `registry_client.messaging`, and
-`registry_client.scheduling`, because each product's routing, authentication,
+`registry_client.evidence`, `registry_client.messaging`,
+`registry_client.scheduling`, and `registry_client.coordinator`, because each product's routing, authentication,
 errors, and verification rules are different. These namespaces
 also keep the unified distribution's files disjoint from earlier standalone
 client distributions, so installing or uninstalling either package cannot
@@ -32,7 +38,8 @@ with Registry Stack v0.26.1. The `casework` namespace is part of the unified
 package beginning with Registry Stack v0.30.0.
 The `messaging` namespace is part of the unified package beginning with
 Registry Stack v0.38.0. The `scheduling` namespace is part of the unified
-package beginning with Registry Stack v0.40.0.
+package beginning with Registry Stack v0.40.0. Coordinator is selected from
+v0.44.0; earlier published wheels do not contain that namespace.
 Existing standalone client packages remain available for earlier versions, but
 later releases use this unified entry point.
 
@@ -80,6 +87,20 @@ targets or advance pagination.
 
 The `crates/registry-stack-client-py` directory in the Registry Stack
 repository holds this public metadata and the Python facade. It is not built
-directly. `release/scripts/assemble-registry-client-wheel.py` combines the six
+directly. `release/scripts/assemble-registry-client-wheel.py` combines the version-selected
 version-matched internal native wheels with the facade and emits the only
 publishable Python distribution, using this file as the PyPI description.
+
+Coordinator joins the seven-product roster at v0.44.0. The source facade also
+contains held `registry_client.render`. Default assembly omits Render;
+`--include-render` adds it to an explicit local candidate and does not authorize
+publication.
+Render accepts a resource-specific token or `registry_client.auth.PrivateKeyJwt`
+provider and returns the checked JSON PDF representation. Errors expose
+`outcome_unknown` and `transport_kind`; provider failures keep their own class.
+Coordinator remains
+optional for direct BReg and Casework applications.
+
+`from registry_client.auth import PrivateKeyJwt` selects the identical canonical
+class exposed by the legacy `registry_client.breg.PrivateKeyJwt` spelling.
+Configure a separate instance for each resource, audience, and scope set.

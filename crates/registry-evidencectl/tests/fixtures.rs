@@ -1200,6 +1200,12 @@ fn a_non_executable_evidence_on_path_is_skipped_with_a_clear_resolution_error() 
     let dir = tempfile::tempdir().expect("tempdir");
     let project = write_project(dir.path(), &["fixtures/a.yaml"]);
 
+    // Isolate PATH fallback from an installed sibling in Cargo's binary directory.
+    let installed = dir.path().join("isolated-bin");
+    fs::create_dir(&installed).expect("create isolated binary directory");
+    let ctl = installed.join("evidencectl");
+    fs::copy(env!("CARGO_BIN_EXE_evidencectl"), &ctl).expect("copy evidencectl");
+
     let path_dir = dir.path().join("path-entry");
     fs::create_dir(&path_dir).expect("create path entry dir");
     let candidate = path_dir.join("evidence");
@@ -1210,7 +1216,7 @@ fn a_non_executable_evidence_on_path_is_skipped_with_a_clear_resolution_error() 
     permissions.set_mode(0o644);
     fs::set_permissions(&candidate, permissions).expect("chmod candidate non-executable");
 
-    let output = evidencectl()
+    let output = Command::new(ctl)
         .args(["fixtures", "run"])
         .arg(&project)
         .env("PATH", &path_dir)
