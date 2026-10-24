@@ -71,6 +71,7 @@ products/coordinator/scripts/check-schemas.sh
 cargo test --locked -p registry-coordinator-client -p registry-stack-client
 COORDINATOR_TEST_DATABASE_URL=<disposable database> \
 COORDINATOR_MESSAGING_TEST_DATABASE_URL=<separate disposable database> \
+COORDINATOR_SCHEDULING_TEST_DATABASE_URL=<separate Scheduling database> \
   products/coordinator/scripts/test-postgres.sh
 ```
 

@@ -24,6 +24,24 @@ macro_rules! example {
 /// write order. The first entry is always the authored policy.
 pub(super) fn template_files(template: &str) -> Option<Vec<(&'static str, &'static str)>> {
     match template {
+        "resource-reservations" => Some(vec![
+            (
+                "scheduling.yaml",
+                example!("resource-reservations", "scheduling.yaml"),
+            ),
+            (
+                "runtime.example.yaml",
+                example!("resource-reservations", "runtime.example.yaml"),
+            ),
+            (
+                "records.yaml",
+                example!("resource-reservations", "records.yaml"),
+            ),
+            (
+                "fixtures/named-intervals.yaml",
+                example!("resource-reservations", "fixtures/named-intervals.yaml"),
+            ),
+        ]),
         "standalone-exact-time" => Some(vec![
             (
                 "scheduling.yaml",
@@ -87,7 +105,11 @@ mod tests {
         SCHEDULING_FIXTURE_KIND, SCHEDULING_POLICY_API_VERSION, SCHEDULING_POLICY_KIND,
     };
 
-    const TEMPLATE_NAMES: [&str; 2] = ["standalone-exact-time", "standalone-arrival-window"];
+    const TEMPLATE_NAMES: [&str; 3] = [
+        "standalone-exact-time",
+        "standalone-arrival-window",
+        "resource-reservations",
+    ];
 
     fn policy_of(files: &[(&'static str, &'static str)]) -> SchedulingPolicy {
         SchedulingPolicy::read(files[0].0, files[0].1.as_bytes())
@@ -104,7 +126,7 @@ mod tests {
     }
 
     #[test]
-    fn the_templates_are_exactly_the_two_standalone_projects() {
+    fn the_templates_include_appointments_and_resource_reservations() {
         for template in TEMPLATE_NAMES {
             assert!(template_files(template).is_some(), "{template}");
         }
@@ -194,7 +216,7 @@ mod tests {
         }
     }
 
-    /// The acceptance proof for both templates: every fixture replays
+    /// The acceptance proof for the templates: every fixture replays
     /// all-Pass against its own template policy.
     #[test]
     fn every_template_fixture_replays_all_pass() {

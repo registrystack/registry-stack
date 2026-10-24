@@ -274,7 +274,7 @@ pub struct BRegProposalReviewDocument {
     pub result: Option<BRegProposalReviewResult>,
 }
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BRegProposalReviewSubject {
     pub source: String,
@@ -295,12 +295,101 @@ pub struct BRegProposalReviewContext {
 }
 /// Exact local interface exported by the governed producer, independent of a review policy pin.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BRegProposalReviewContextContract {
     pub id: String,
     pub revision: String,
     pub schema_digest: String,
+}
+
+/// Expected frozen source identity for one field-limited service projection.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BRegProposalTaskContextIdentity {
+    pub action_id: String,
+    pub subject: BRegProposalReviewSubject,
+    pub contract: BRegProposalReviewContextContract,
+}
+
+/// Correlation and exact frozen identity for a source-authorized task projection.
+/// The task members are correlation data; the selected BReg access profile is authority.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BRegProposalTaskContextRequest {
+    pub expected: BRegProposalTaskContextIdentity,
+    pub request_id: uuid::Uuid,
+    pub task_id: uuid::Uuid,
+    pub task_revision: i64,
+    pub policy: registry_review_protocol::PolicyBinding,
+    pub purpose: String,
+    pub fields: Vec<String>,
+}
+
+impl BRegProposalTaskContextRequest {
+    pub(crate) fn validate(&self) -> Result<(), BaseRegistryClientError> {
+        let unique = self
+            .fields
+            .iter()
+            .collect::<std::collections::BTreeSet<_>>();
+        if !identifier(&self.expected.action_id)
+            || !canonical_proposal_id(&self.expected.subject.id)
+            || self.expected.subject.subject_type != "proposal"
+            || self.expected.subject.source.is_empty()
+            || self.expected.subject.source.len() > 512
+            || self.expected.subject.source.chars().any(char::is_control)
+            || self.expected.subject.version.is_empty()
+            || self.expected.subject.version.len() > 128
+            || self.expected.subject.version.chars().any(char::is_control)
+            || !digest(&self.expected.subject.digest)
+            || !self
+                .expected
+                .contract
+                .id
+                .starts_with("urn:registry:breg:review-context:")
+            || self.expected.contract.id.len() > 2048
+            || self.expected.contract.id.chars().any(char::is_control)
+            || !digest(&self.expected.contract.revision)
+            || !digest(&self.expected.contract.schema_digest)
+            || self.request_id.is_nil()
+            || self.task_id.is_nil()
+            || self.task_revision < 1
+            || self.policy.check().is_err()
+            || self.purpose.is_empty()
+            || self.purpose.len() > 128
+            || self.purpose.chars().any(char::is_control)
+            || self.fields.is_empty()
+            || self.fields.len() > 128
+            || unique.len() != self.fields.len()
+            || self.fields.iter().any(|field| !task_context_field(field))
+        {
+            return Err(refusal());
+        }
+        Ok(())
+    }
+}
+
+fn task_context_field(value: &str) -> bool {
+    value.len() <= 64
+        && value
+            .chars()
+            .next()
+            .is_some_and(|first| first.is_ascii_lowercase())
+        && value
+            .chars()
+            .skip(1)
+            .all(|character| character.is_ascii_alphanumeric())
+}
+
+/// Exact request echo and its deliberately partial source context document.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BRegProposalTaskContextDocument {
+    pub request: BRegProposalTaskContextRequest,
+    pub proposal: BRegProposalReviewDocument,
 }
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Serialize, Deserialize)]
@@ -740,6 +829,71 @@ pub struct BRegProposalReviewBinding {
     operation: &'static str,
     suffix: &'static str,
 }
+/// Dedicated source-bound authority for a field-limited task projection.
+#[derive(Clone)]
+pub struct BRegProposalTaskContextBinding {
+    source: String,
+    profile: String,
+    action: String,
+    readable_context_fields: std::collections::BTreeSet<String>,
+}
+impl BRegProposalTaskContextBinding {
+    pub(crate) fn from_metadata(
+        actions: &Value,
+        source: &str,
+        profile: &str,
+        action: &str,
+    ) -> Result<Self, BaseRegistryClientError> {
+        let entry = actions.as_array().and_then(|entries| {
+            entries.iter().find(|entry| {
+                entry["actionId"].as_str() == Some(action)
+                    && entry["accessProfile"].as_str() == Some(profile)
+                    && entry["operations"].as_array().is_some_and(|operations| {
+                        operations
+                            .iter()
+                            .any(|value| value.as_str() == Some("get-task-grant-context"))
+                    })
+            })
+        });
+        let fields = entry.and_then(|entry| {
+            entry["readableContextFields"]
+                .as_array()
+                .and_then(|fields| {
+                    fields
+                        .iter()
+                        .map(|field| field.as_str().filter(|field| task_context_field(field)))
+                        .collect::<Option<std::collections::BTreeSet<_>>>()
+                })
+        });
+        if !identifier(profile)
+            || !identifier(action)
+            || fields
+                .as_ref()
+                .is_none_or(std::collections::BTreeSet::is_empty)
+        {
+            return Err(refusal());
+        }
+        Ok(Self {
+            source: source.to_owned(),
+            profile: profile.to_owned(),
+            action: action.to_owned(),
+            readable_context_fields: fields
+                .expect("checked field inventory")
+                .into_iter()
+                .map(str::to_owned)
+                .collect(),
+        })
+    }
+
+    pub fn readable_context_fields(&self) -> &std::collections::BTreeSet<String> {
+        &self.readable_context_fields
+    }
+}
+impl fmt::Debug for BRegProposalTaskContextBinding {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("BRegProposalTaskContextBinding(<bound>)")
+    }
+}
 impl BRegProposalReviewBinding {
     pub(crate) fn from_metadata(
         actions: &Value,
@@ -939,6 +1093,70 @@ impl fmt::Debug for BRegPreparedProposal {
     }
 }
 impl BaseRegistryClient {
+    /// Read only the selected source fields under a dedicated task-context grant.
+    pub async fn read_proposal_task_grant_context(
+        &self,
+        binding: &BRegProposalTaskContextBinding,
+        request: &BRegProposalTaskContextRequest,
+    ) -> Result<BRegComplete<BRegProposalTaskContextDocument>, BaseRegistryClientError> {
+        request.validate()?;
+        let requested = request
+            .fields
+            .iter()
+            .cloned()
+            .collect::<std::collections::BTreeSet<_>>();
+        if binding.source != self.source_binding()
+            || binding.action != request.expected.action_id
+            || request.expected.subject.id.is_empty()
+            || !requested.is_subset(&binding.readable_context_fields)
+        {
+            return Err(refusal());
+        }
+        let link = BRegProposalLink {
+            method: "POST".to_owned(),
+            path: format!(
+                "/v1/proposals/{}/task-grant-context",
+                request.expected.subject.id
+            ),
+            access_profile: binding.profile.clone(),
+            operation: "get-task-grant-context".to_owned(),
+            if_match: None,
+            availability: None,
+        };
+        let body = serde_json::to_vec(request).map_err(|_| refusal())?;
+        let response = self.proposal_exchange(&link, Some(body), None).await?;
+        let value =
+            crate::strict_json::from_slice(response.value.as_bytes()).map_err(|_| refusal())?;
+        let document: BRegProposalTaskContextDocument =
+            serde_json::from_value(value).map_err(|_| refusal())?;
+        let fields = document.proposal.context.fields.as_ref().map(|fields| {
+            fields
+                .keys()
+                .cloned()
+                .collect::<std::collections::BTreeSet<_>>()
+        });
+        if document.request != *request
+            || document.proposal.id != request.expected.subject.id
+            || document.proposal.action_id != request.expected.action_id
+            || document.proposal.subject != request.expected.subject
+            || document.proposal.context.contract.as_ref() != Some(&request.expected.contract)
+            || !document.proposal.policy.as_ref().is_some_and(|policy| {
+                policy.id == request.policy.id
+                    && policy.version.as_deref() == Some(request.policy.version.as_str())
+                    && policy.digest.as_ref() == Some(&request.policy.digest)
+            })
+            || document.proposal.authority.is_none()
+            || fields.as_ref() != Some(&requested)
+            || !valid_review_document(&document.proposal, true)
+        {
+            return Err(refusal());
+        }
+        Ok(BRegComplete {
+            value: document,
+            metadata: response.metadata,
+        })
+    }
+
     /// Read the native review endpoint using only its advertised purpose grant.
     /// The caller need not hold the broader Proposal Get permission.
     pub async fn read_proposal_review_by_id(
@@ -2054,6 +2272,99 @@ mod tests {
     const REVISION: &str =
         "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const ID: &str = "00000000-0000-4000-8000-000000000001";
+
+    #[test]
+    fn task_context_request_is_closed_bounded_and_exact() {
+        let request: BRegProposalTaskContextRequest = serde_json::from_value(json!({
+            "expected":{"actionId":"book-visit","subject":{"source":"invitation-source","subjectType":"proposal","id":ID,"version":"1","digest":REVISION},"contract":{"id":"urn:registry:breg:review-context:invitation-source:book-visit:booking-context","revision":REVISION,"schemaDigest":REVISION}},
+            "requestId":"00000000-0000-4000-8000-000000000010",
+            "taskId":"00000000-0000-4000-8000-000000000011",
+            "taskRevision":3,
+            "policy":{"id":"booking-review","version":"1","digest":REVISION},
+            "purpose":"task-grant",
+            "fields":["applicationId"]
+        })).unwrap();
+        assert_eq!(request.validate(), Ok(()));
+        for nil_field in ["requestId", "taskId"] {
+            let mut invalid = serde_json::to_value(&request).unwrap();
+            invalid[nil_field] = json!(Uuid::nil());
+            let parsed: BRegProposalTaskContextRequest = serde_json::from_value(invalid).unwrap();
+            assert!(parsed.validate().is_err());
+        }
+        for invalid in [
+            json!({"expected":{"actionId":"book-visit","subject":{"source":"invitation-source","subjectType":"proposal","id":ID,"version":"1","digest":REVISION},"contract":{"id":"urn:registry:breg:review-context:invitation-source:book-visit:booking-context","revision":REVISION,"schemaDigest":REVISION}},"requestId":"00000000-0000-4000-8000-000000000010","taskId":"00000000-0000-4000-8000-000000000011","taskRevision":0,"policy":{"id":"booking-review","version":"1","digest":REVISION},"purpose":"task-grant","fields":["applicationId"]}),
+            json!({"expected":{"actionId":"book-visit","subject":{"source":"invitation-source","subjectType":"proposal","id":ID,"version":"1","digest":REVISION},"contract":{"id":"urn:registry:breg:review-context:invitation-source:book-visit:booking-context","revision":REVISION,"schemaDigest":REVISION}},"requestId":"00000000-0000-4000-8000-000000000010","taskId":"00000000-0000-4000-8000-000000000011","taskRevision":3,"policy":{"id":"booking-review","version":"1","digest":REVISION},"purpose":"task-grant","fields":[]}),
+            json!({"expected":{"actionId":"book-visit","subject":{"source":"invitation-source","subjectType":"proposal","id":ID,"version":"1","digest":REVISION},"contract":{"id":"urn:registry:breg:review-context:invitation-source:book-visit:booking-context","revision":REVISION,"schemaDigest":REVISION}},"requestId":"00000000-0000-4000-8000-000000000010","taskId":"00000000-0000-4000-8000-000000000011","taskRevision":3,"policy":{"id":"booking-review","version":"1","digest":REVISION},"purpose":"task-grant","fields":["applicationId","applicationId"]}),
+        ] {
+            let parsed: BRegProposalTaskContextRequest = serde_json::from_value(invalid).unwrap();
+            assert!(parsed.validate().is_err());
+        }
+        let with_extra = json!({"expected":{"actionId":"book-visit","subject":{"source":"invitation-source","subjectType":"proposal","id":ID,"version":"1","digest":REVISION},"contract":{"id":"urn:registry:breg:review-context:invitation-source:book-visit:booking-context","revision":REVISION,"schemaDigest":REVISION}},"requestId":"00000000-0000-4000-8000-000000000010","taskId":"00000000-0000-4000-8000-000000000011","taskRevision":3,"policy":{"id":"booking-review","version":"1","digest":REVISION},"purpose":"task-grant","fields":["applicationId"],"actor":"substituted"});
+        assert!(serde_json::from_value::<BRegProposalTaskContextRequest>(with_extra).is_err());
+    }
+
+    #[tokio::test]
+    async fn task_context_refuses_invalid_or_cross_source_authority_before_credentials() {
+        use async_trait::async_trait;
+        use std::sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc,
+        };
+
+        #[derive(Debug, Default)]
+        struct CountingToken(AtomicUsize);
+        #[async_trait]
+        impl TokenProvider for CountingToken {
+            async fn bearer_token(&self) -> Result<BearerToken, TokenError> {
+                self.0.fetch_add(1, Ordering::SeqCst);
+                BearerToken::new("synthetic-task-context-token")
+            }
+        }
+
+        let token = Arc::new(CountingToken::default());
+        let client = BaseRegistryClient::new(
+            BaseRegistryClientConfig::new("http://127.0.0.1:9/tenant/".parse().unwrap())
+                .with_token_provider(token.clone()),
+        )
+        .unwrap();
+        let binding = BRegProposalTaskContextBinding::from_metadata(
+            &json!([{"actionId":"book-visit","accessProfile":"task-context","operations":["get-task-grant-context"],"readableContextFields":["applicationId"]}]),
+            &client.source_binding(),
+            "task-context",
+            "book-visit",
+        )
+        .unwrap();
+        let mut request: BRegProposalTaskContextRequest = serde_json::from_value(json!({
+            "expected":{"actionId":"book-visit","subject":{"source":"invitation-source","subjectType":"proposal","id":ID,"version":"1","digest":REVISION},"contract":{"id":"urn:registry:breg:review-context:invitation-source:book-visit:booking-context","revision":REVISION,"schemaDigest":REVISION}},
+            "requestId":"00000000-0000-4000-8000-000000000010",
+            "taskId":"00000000-0000-4000-8000-000000000011",
+            "taskRevision":3,
+            "policy":{"id":"booking-review","version":"1","digest":REVISION},
+            "purpose":"task-grant",
+            "fields":["otherField"]
+        })).unwrap();
+        assert!(client
+            .read_proposal_task_grant_context(&binding, &request)
+            .await
+            .is_err());
+        request.fields = vec!["applicationId".into()];
+        request.request_id = Uuid::nil();
+        assert!(client
+            .read_proposal_task_grant_context(&binding, &request)
+            .await
+            .is_err());
+        request.request_id = Uuid::from_u128(10);
+        let foreign = BaseRegistryClient::new(
+            BaseRegistryClientConfig::new("http://127.0.0.1:9/other/".parse().unwrap())
+                .with_token_provider(token.clone()),
+        )
+        .unwrap();
+        assert!(foreign
+            .read_proposal_task_grant_context(&binding, &request)
+            .await
+            .is_err());
+        assert_eq!(token.0.load(Ordering::SeqCst), 0);
+    }
 
     async fn proposal_response_client(
         initial: Value,

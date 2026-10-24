@@ -1,0 +1,40 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/breg/journeys/journeys.v1.schema.json
+apiVersion: id.registrystack.org/formats/breg/journeys/v1
+kind: BRegJourneys
+journeys:
+  - id: source-creates-one-bounded-subscription
+    steps:
+      - id: create-subscription
+        action: create-alert-subscription
+        accessProfile: alert-administration
+        claims:
+          principal: $localClientSubject
+          scopes: [alerts:manage]
+          actorKind: service
+          requesterClient: alert-administrator
+          directClaims: {alert_source: earlier-alert-source}
+        request:
+          type: invoke
+          idempotencyKey: create-bounded-alert
+          input:
+            conditionId: condition-journey
+            consent: true
+            expiresAt: '2099-01-02T12:00:00Z'
+            expiresOn: '2099-01-02'
+            destination: person@example.invalid
+            appointmentId: appointment-journey
+            appointmentRevision: 1
+            appointmentStart: '2099-01-02T11:00:00Z'
+            appointmentEnd: '2099-01-02T11:30:00Z'
+            desiredStart: '2099-01-02T09:00:00Z'
+            durationMinutes: 30
+            offering: application-review
+            resource: fixture-one
+            resourceUnits: 1
+            partyRecipients: 1
+            partyAttendees: 1
+            additionalOffering: projector-use
+            additionalResource: projector-one
+            additionalUnits: 1
+        expect: {outcome: success, status: 200}
+        captureResults: {subscription: active-subscription}

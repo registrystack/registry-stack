@@ -3631,7 +3631,7 @@ fn explicit_local_integrations_render_only_governed_authority_and_bind_the_provi
     let mut clients = accepted(STANDALONE_DEV_CLIENTS.as_bytes());
     let integrations: integrations::Integrations = serde_json::from_value(json!({
         "resource":"urn:casework:source-group",
-        "contextProviders":{"deployment":{"baseUrl":"http://127.0.0.1:8800","statusProfile":"reader",
+        "contextProviders":{"deployment":{"baseUrl":"http://127.0.0.1:8800","statusProfile":"review-status",
             "tokenEndpoint":"http://127.0.0.1:8093/oauth2/token","clientAssertionAudience":"http://127.0.0.1:8093",
             "resource":"urn:casework:source-group","scopes":["records:get"],
             "clientIdRef":"secret:file/service-reader-id","clientAssertionKeyRef":"secret:file/service-reader-key"}},
@@ -3642,6 +3642,18 @@ fn explicit_local_integrations_render_only_governed_authority_and_bind_the_provi
         "taskAuthority":{"issuer":"https://casework.local.example","jwksPort":8801,"statusClients":{"status":"urn:casework:source-group"}}
     })).unwrap();
     clients.integrations = Some(integrations.clone());
+    let mut stale_profile = integrations.clone();
+    stale_profile
+        .context_providers
+        .get_mut("deployment")
+        .unwrap()
+        .status_profile = "reader".into();
+    let findings = stale_profile.validate(&clients, &policy).unwrap_err();
+    let finding = findings
+        .iter()
+        .find(|finding| finding.code == "casework.dev-clients.provider-profile-mismatch")
+        .expect("the stale provider profile is refused at its deployment binding");
+    assert_eq!(finding.pointer, "/integrations/contextProviders/deployment");
     integrations.validate(&clients, &policy).unwrap();
     let mut state = session(&project);
     state.resource = Some(integrations.resource.clone());
@@ -3704,6 +3716,13 @@ fn explicit_local_integrations_render_only_governed_authority_and_bind_the_provi
         operator["contextProviders"]["deployment"]["resource"],
         state.audience()
     );
+    assert_eq!(
+        operator["contextProviders"]["deployment"]["statusProfile"],
+        "review-status"
+    );
+    assert!(operator["contextProviders"]["deployment"]
+        .get("taskGrantProfile")
+        .is_none());
     assert_eq!(description.exchange_issuers.len(), 1);
     let mut wrong = integrations.clone();
     wrong.resource = "private-preflight-canary".into();
@@ -4788,7 +4807,7 @@ fn invalid_source_bindings_have_specific_safe_diagnostics() {
 }
 
 fn provider_policy() -> registry_casework_core::ReviewContextProviderPolicy {
-    serde_json::from_value(json!({"id":"source","deploymentRef":"deployment","sourceNamespace":"urn:source","capabilities":["human-display","service-status"]})).unwrap()
+    serde_json::from_value(json!({"id":"source","deploymentRef":"deployment","sourceNamespace":"urn:source","capabilities":["human-display","service-status"],"serviceProfiles":{"service-status":"review-status"}})).unwrap()
 }
 
 #[test]
@@ -4829,6 +4848,52 @@ fn provider_connections_are_optional_and_use_declared_deployment_references() {
     assert!(operator["contextProviders"].get("deployment").is_some());
     assert!(operator.get("sources").is_none());
     assert!(!format!("{integrations:?}").contains("127.0.0.1:8801"));
+}
+
+#[test]
+fn task_context_provider_connection_requires_the_exact_distinct_authored_profile() {
+    let workspace = crate::canonical_tempdir();
+    let project = standalone(workspace.path());
+    let mut policy = crate::project::load_and_check_policy(&project).unwrap();
+    policy.context_providers.push(
+        serde_json::from_value(json!({
+            "id":"source","deploymentRef":"deployment","sourceNamespace":"urn:source",
+            "capabilities":["human-display","service-status","task-grant-context"],
+            "serviceProfiles":{"service-status":"review-status","task-grant-context":"task-context"}
+        }))
+        .unwrap(),
+    );
+    let clients = accepted(STANDALONE_DEV_CLIENTS.as_bytes());
+    let binding = |task_profile: Option<&str>| {
+        let mut value = json!({
+            "baseUrl":"http://127.0.0.1:8800","statusProfile":"review-status",
+            "tokenEndpoint":"http://127.0.0.1:8801/oauth2/token",
+            "clientIdRef":"secret:file/provider-id",
+            "clientAssertionKeyRef":"secret:file/provider-key"
+        });
+        if let Some(profile) = task_profile {
+            value["taskGrantProfile"] = json!(profile);
+        }
+        serde_json::from_value(value).unwrap()
+    };
+    for profile in [None, Some("other-task-context"), Some("review-status")] {
+        let mut integrations: integrations::Integrations =
+            serde_json::from_value(json!({"resource":"urn:casework:dev"})).unwrap();
+        integrations
+            .context_providers
+            .insert("deployment".into(), binding(profile));
+        let findings = integrations.validate(&clients, &policy).unwrap_err();
+        assert!(findings.iter().any(|finding| {
+            finding.code == "casework.dev-clients.provider-profile-mismatch"
+                && finding.pointer == "/integrations/contextProviders/deployment"
+        }));
+    }
+    let mut integrations: integrations::Integrations =
+        serde_json::from_value(json!({"resource":"urn:casework:dev"})).unwrap();
+    integrations
+        .context_providers
+        .insert("deployment".into(), binding(Some("task-context")));
+    integrations.validate(&clients, &policy).unwrap();
 }
 
 #[test]

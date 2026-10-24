@@ -78,6 +78,8 @@ pub enum PolicyCheckReason {
     UnknownLocation,
     /// A referenced resource pool does not exist.
     UnknownPool,
+    /// A referenced resource is not a member of the pool it must come from.
+    UnknownResource,
     /// A location names a timezone outside the IANA database.
     UnknownTimezone,
     /// A resource is a member of more than one pool.
@@ -98,6 +100,9 @@ pub enum PolicyCheckReason {
     MalformedValue,
     /// A number is zero where at least one is required.
     InvalidBound,
+    /// The selectable duration range does not contain the offering default,
+    /// or its maximum/default does not lie on the increment lattice.
+    InvalidDurationSelection,
     /// The end of a range does not come after its start.
     InvertedRange,
     /// A lead time is longer than the booking horizon it sits in.
@@ -149,6 +154,7 @@ impl PolicyCheckReason {
             Self::UnknownWindow => "unknown-window",
             Self::UnknownLocation => "unknown-location",
             Self::UnknownPool => "unknown-pool",
+            Self::UnknownResource => "unknown-resource",
             Self::UnknownTimezone => "unknown-timezone",
             Self::ResourceInManyPools => "resource-in-many-pools",
             Self::MismatchedReference => "mismatched-reference",
@@ -158,6 +164,7 @@ impl PolicyCheckReason {
             Self::WrongModeField => "wrong-mode-field",
             Self::MalformedValue => "malformed-value",
             Self::InvalidBound => "invalid-bound",
+            Self::InvalidDurationSelection => "invalid-duration-selection",
             Self::InvertedRange => "inverted-range",
             Self::LeadTimeBeyondHorizon => "lead-time-beyond-horizon",
             Self::PatternSpanTooLarge => "pattern-span-too-large",
@@ -199,6 +206,7 @@ impl PolicyCheckReason {
             Self::UnknownWindow => "no window under windows has this id",
             Self::UnknownLocation => "no location under locations has this id",
             Self::UnknownPool => "no resource pool under pools has this id",
+            Self::UnknownResource => "no member of the pool this must come from has this id",
             Self::UnknownTimezone => "this is not an IANA timezone name",
             Self::ResourceInManyPools => "this resource is already a member of another pool",
             Self::MismatchedReference => {
@@ -213,6 +221,10 @@ impl PolicyCheckReason {
             }
             Self::MalformedValue => "expected a clock as HH:MM or a date as YYYY-MM-DD",
             Self::InvalidBound => "expected a whole number of at least 1",
+            Self::InvalidDurationSelection => {
+                "minimumMinutes must not exceed maximumMinutes, and durationMinutes and \
+                 maximumMinutes must be increments from minimumMinutes"
+            }
             Self::InvertedRange => "the end does not come after the start",
             Self::LeadTimeBeyondHorizon => "the lead time is longer than the booking horizon",
             Self::PatternSpanTooLarge => {
@@ -272,6 +284,9 @@ impl PolicyCheckReason {
             Self::UnknownPool => {
                 "Name a resource pool declared under pools in the records, or declare it."
             }
+            Self::UnknownResource => {
+                "Name a member of the pool the requirement's offering sells, or omit resource."
+            }
             Self::UnknownTimezone => "Write an IANA timezone name, such as Europe/Paris.",
             Self::ResourceInManyPools => {
                 "List each resource in one pool only; give a second resource its own id."
@@ -295,6 +310,10 @@ impl PolicyCheckReason {
                  2026-03-02."
             }
             Self::InvalidBound => "Write a whole number of at least 1.",
+            Self::InvalidDurationSelection => {
+                "Put durationMinutes and maximumMinutes on the incrementMinutes lattice starting \
+                 at minimumMinutes."
+            }
             Self::InvertedRange => "Make the end later than the start.",
             Self::LeadTimeBeyondHorizon => "Shorten leadTimeMinutes or lengthen horizonDays.",
             Self::PatternSpanTooLarge => {
@@ -464,7 +483,7 @@ mod tests {
 
     use super::*;
 
-    const ALL_REASONS: [PolicyCheckReason; 35] = [
+    const ALL_REASONS: [PolicyCheckReason; 37] = [
         PolicyCheckReason::UnsupportedApiVersion,
         PolicyCheckReason::UnsupportedKind,
         PolicyCheckReason::InvalidIdentifier,
@@ -479,6 +498,7 @@ mod tests {
         PolicyCheckReason::UnknownWindow,
         PolicyCheckReason::UnknownLocation,
         PolicyCheckReason::UnknownPool,
+        PolicyCheckReason::UnknownResource,
         PolicyCheckReason::UnknownTimezone,
         PolicyCheckReason::ResourceInManyPools,
         PolicyCheckReason::MismatchedReference,
@@ -488,6 +508,7 @@ mod tests {
         PolicyCheckReason::WrongModeField,
         PolicyCheckReason::MalformedValue,
         PolicyCheckReason::InvalidBound,
+        PolicyCheckReason::InvalidDurationSelection,
         PolicyCheckReason::InvertedRange,
         PolicyCheckReason::LeadTimeBeyondHorizon,
         PolicyCheckReason::PatternSpanTooLarge,

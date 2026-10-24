@@ -12,6 +12,7 @@ pub(super) async fn fields(
     authority: &ProposalAuthority,
     records: &BTreeMap<String, ProposalRecordReadAuthority>,
     frozen: &ProposalSnapshot,
+    selected_fields: Option<&BTreeSet<String>>,
 ) -> Result<Map<String, Value>, MutationError> {
     let action = proposal_action(registry, &document.action_id)?;
     let CompiledActionExecution::Proposal { proposal } = &action.execution else {
@@ -26,14 +27,17 @@ pub(super) async fn fields(
         .iter()
         .find(|permission| {
             permission.profile_id == authority.common.access_profile()
-                && permission
-                    .operations
-                    .contains(&ProposalOperation::GetReviewContext)
+                && permission.operations.contains(&match authority.operation {
+                    ProposalAuthorityOperation::Lifecycle(operation) => operation,
+                    ProposalAuthorityOperation::Start => return false,
+                })
         })
         .ok_or(MutationError::PreconditionFailed)?;
     let document_contract = if mapping
         .fields
-        .values()
+        .iter()
+        .filter(|(field, _)| selected_fields.is_none_or(|selected| selected.contains(*field)))
+        .map(|(_, source)| source)
         .any(|source| matches!(source, ProposalContextValueSource::Document { .. }))
     {
         Some(
@@ -57,7 +61,9 @@ pub(super) async fn fields(
     }
     let targets = if mapping
         .fields
-        .values()
+        .iter()
+        .filter(|(field, _)| selected_fields.is_none_or(|selected| selected.contains(*field)))
+        .map(|(_, source)| source)
         .any(|source| matches!(source, ProposalContextValueSource::Changes { .. }))
     {
         frozen
@@ -80,6 +86,9 @@ pub(super) async fn fields(
     };
     let mut projected = Map::new();
     for (field, source) in &mapping.fields {
+        if selected_fields.is_some_and(|selected| !selected.contains(field)) {
+            continue;
+        }
         if !permission.readable_context_fields.contains(field) {
             return Err(MutationError::PreconditionFailed);
         }

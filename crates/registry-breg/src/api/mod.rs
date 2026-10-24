@@ -216,6 +216,10 @@ fn route_set(service: Arc<HttpService>) -> Router {
                 get(proposals::review_status),
             )
             .route(
+                "/v1/proposals/{proposal_id}/task-grant-context",
+                post(proposals::task_grant_context),
+            )
+            .route(
                 "/v1/proposals/{proposal_id}/{operation}",
                 post(proposals::transition),
             );
@@ -740,6 +744,14 @@ async fn registry_metadata(
                             .find(|grant| grant.profile_id == profile),
                         _ => None,
                     }).map(|grant| grant.readable_inputs.clone()).expect("visible Proposal grant")
+                } else { BTreeSet::new() },
+                "readableContextFields":if operations.contains(&"get-review-context") || operations.contains(&"get-task-grant-context") { service.registry.actions().actions.iter()
+                    .find(|candidate| candidate.id == action)
+                    .and_then(|candidate| match &candidate.execution {
+                        crate::model::CompiledActionExecution::Proposal { proposal } => proposal.permissions.iter()
+                            .find(|grant| grant.profile_id == profile),
+                        _ => None,
+                    }).map(|grant| grant.readable_context_fields.clone()).expect("visible Proposal task-context grant")
                 } else { BTreeSet::new() }
             })).collect::<Vec<_>>()});
     }

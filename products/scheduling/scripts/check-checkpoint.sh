@@ -155,10 +155,12 @@ fi
 
 # The committed examples are the starter templates' output, so neither can
 # drift from what an adopter initializes, including its live records document.
-for template in standalone-exact-time standalone-arrival-window; do
+# The resource-reservations example also carries a README, which the template
+# does not write, so the comparison excludes that one file.
+for template in standalone-exact-time standalone-arrival-window resource-reservations; do
   example="$repo_root/products/scheduling/examples/$template"
   "$schedulingctl_bin" init "$work/example-$template" --template "$template" >/dev/null
-  diff -r "$work/example-$template" "$example" >/dev/null
+  diff -r -x README.md "$work/example-$template" "$example" >/dev/null
   "$schedulingctl_bin" check "$example" >/dev/null
   "$schedulingctl_bin" test "$example" >/dev/null
 done

@@ -26,11 +26,16 @@ use crate::diagnostics::{FindingArea, PolicyCheckReason, SchedulingDiagnostic};
 use crate::naming::{
     RETIRED_SCHEDULING_POLICY_API_VERSION, SCHEDULING_POLICY_API_VERSION, SCHEDULING_POLICY_KIND,
 };
+use crate::party::PartyCountsRequirement;
 use crate::typed::{
-    MAXIMUM_HORIZON_DAYS, MAXIMUM_HORIZON_MINUTES, MAXIMUM_POOL_MEMBERS, MAXIMUM_REVISION,
-    MAXIMUM_UNITS, MINUTES_PER_DAY,
+    MAXIMUM_BOOKING_DURATION_MINUTES, MAXIMUM_HORIZON_DAYS, MAXIMUM_HORIZON_MINUTES,
+    MAXIMUM_POOL_MEMBERS, MAXIMUM_RESOURCE_UNITS, MAXIMUM_REVISION, MAXIMUM_UNITS, MINUTES_PER_DAY,
 };
 use crate::units::{check_because, RequiredUnitsPolicy};
+
+/// Longest explicitly authored capacity commitment. Booking duration has a
+/// separate bound because service length and decision time are independent.
+pub const MAXIMUM_HOLD_TTL_MINUTES: u32 = 7 * MINUTES_PER_DAY;
 
 /// The maximum number of entries one policy collection may carry.
 pub const MAXIMUM_COLLECTION_ENTRIES: usize = 256;
@@ -135,18 +140,111 @@ pub enum SchedulingMode {
     ArrivalWindow,
 }
 
+/// Which interval must stay inside published openings and outside closures.
+/// Buffers always occupy ledger capacity regardless of this choice.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "kebab-case")]
+pub enum OpeningCoverage {
+    /// Published openings constrain the caller-visible service interval.
+    #[default]
+    ServiceInterval,
+    /// Published openings constrain service plus setup and cleanup buffers.
+    OccupiedInterval,
+}
+
+impl OpeningCoverage {
+    pub(crate) fn is_service_interval(&self) -> bool {
+        matches!(self, Self::ServiceInterval)
+    }
+}
+
+/// A bounded lattice of caller-selectable service durations.
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DurationSelectionPolicy {
+    #[serde(
+        deserialize_with = "crate::typed::bounded_u32::<_, 1, MAXIMUM_BOOKING_DURATION_MINUTES>"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "registry_platform_yaml::BoundedU32<1, MAXIMUM_BOOKING_DURATION_MINUTES>")
+    )]
+    pub minimum_minutes: u32,
+    #[serde(
+        deserialize_with = "crate::typed::bounded_u32::<_, 1, MAXIMUM_BOOKING_DURATION_MINUTES>"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "registry_platform_yaml::BoundedU32<1, MAXIMUM_BOOKING_DURATION_MINUTES>")
+    )]
+    pub maximum_minutes: u32,
+    #[serde(
+        deserialize_with = "crate::typed::bounded_u32::<_, 1, MAXIMUM_BOOKING_DURATION_MINUTES>"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "registry_platform_yaml::BoundedU32<1, MAXIMUM_BOOKING_DURATION_MINUTES>")
+    )]
+    pub increment_minutes: u32,
+}
+
+impl DurationSelectionPolicy {
+    /// Whether `duration_minutes` is one of the bounded values this policy
+    /// publishes. The lattice is anchored at the minimum, so its meaning is
+    /// stable when the offering's default changes.
+    #[must_use]
+    pub const fn allows(&self, duration_minutes: u32) -> bool {
+        duration_minutes >= self.minimum_minutes
+            && duration_minutes <= self.maximum_minutes
+            && self.increment_minutes != 0
+            && (duration_minutes - self.minimum_minutes).is_multiple_of(self.increment_minutes)
+    }
+
+    #[must_use]
+    const fn is_valid_for_default(&self, default_minutes: u32) -> bool {
+        self.minimum_minutes > 0
+            && self.maximum_minutes <= MAXIMUM_BOOKING_DURATION_MINUTES
+            && self.increment_minutes <= MAXIMUM_BOOKING_DURATION_MINUTES
+            && self.minimum_minutes <= self.maximum_minutes
+            && self.allows(default_minutes)
+            && self.allows(self.maximum_minutes)
+    }
+}
+
 /// The exact-time block of an offering: appointment length, protections, and
-/// the interchangeable pool that backs it.
+/// the pool that backs it.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ExactTimeOffering {
-    #[serde(deserialize_with = "crate::typed::bounded_u32::<_, 1, MINUTES_PER_DAY>")]
+    #[serde(
+        deserialize_with = "crate::typed::bounded_u32::<_, 1, MAXIMUM_BOOKING_DURATION_MINUTES>"
+    )]
     #[cfg_attr(
         feature = "schema",
-        schemars(with = "registry_platform_yaml::BoundedU32<1, MINUTES_PER_DAY>")
+        schemars(with = "registry_platform_yaml::BoundedU32<1, MAXIMUM_BOOKING_DURATION_MINUTES>")
     )]
     pub duration_minutes: u32,
+    /// The request-selectable duration lattice. Omitted, the offering accepts
+    /// only `durationMinutes`; a request that omits its duration always uses
+    /// `durationMinutes` in either form.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_selection: Option<DurationSelectionPolicy>,
+    /// The interval published openings and closures constrain. Omitted, only
+    /// the displayed service interval must be covered; buffers still consume
+    /// ledger capacity outside it.
+    #[serde(default, skip_serializing_if = "OpeningCoverage::is_service_interval")]
+    pub opening_coverage: OpeningCoverage,
+    /// Whether a request may constrain allocation to one exact pool member.
+    /// Omitted or false, every exact-time request uses fungible selection.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub allow_resource_selection: bool,
+    /// Whether a request must declare human party counts. Omitted, counts are
+    /// required. Only exact-time offerings may opt out for resource bookings.
+    #[serde(default, skip_serializing_if = "PartyCountsRequirement::is_required")]
+    pub party_counts: PartyCountsRequirement,
     /// Setup time occupied before the displayed start.
     #[serde(deserialize_with = "crate::typed::bounded_u32::<_, 0, MINUTES_PER_DAY>")]
     #[cfg_attr(
@@ -196,15 +294,39 @@ pub struct ExactTimeOffering {
     pub maximum_recipients: u32,
 }
 
+impl ExactTimeOffering {
+    /// Resolve an omitted default or an explicitly permitted duration. Reads
+    /// and admission use the same policy decision; invalid choices never
+    /// silently fall back to the default.
+    #[must_use]
+    pub fn selected_duration_minutes(&self, requested: Option<u32>) -> Option<u32> {
+        match (requested, &self.duration_selection) {
+            (None, _) => Some(self.duration_minutes),
+            (Some(value), Some(selection)) if selection.allows(value) => Some(value),
+            (Some(value), None) if value == self.duration_minutes => Some(value),
+            (Some(_), _) => None,
+        }
+    }
+}
+
 /// The arrival-window block of an offering.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ArrivalOffering {
-    /// The published window this offering serves arrivals in.
-    #[serde(deserialize_with = "crate::typed::local_id")]
-    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
-    pub window: String,
+    /// The published window this offering serves arrivals in. An offering
+    /// that omits it serves every records-published window whose `offering`
+    /// names it, and a request picks one of those windows by its start.
+    #[serde(
+        default,
+        deserialize_with = "crate::typed::optional_local_id",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Option<registry_platform_yaml::LocalId>")
+    )]
+    pub window: Option<String>,
     /// The earliest lead time a caller may book the window at.
     #[serde(deserialize_with = "crate::typed::bounded_u32::<_, 1, MAXIMUM_HORIZON_MINUTES>")]
     #[cfg_attr(
@@ -337,6 +459,128 @@ impl Identified for OfferingPolicy {
     fn id(&self) -> &str {
         &self.id
     }
+}
+
+impl OfferingPolicy {
+    /// The published windows an arrival-window offering serves, in records
+    /// order: the window it names, or every window naming it when it names
+    /// none. Any other offering serves no window.
+    pub fn served_windows<'a>(
+        &'a self,
+        windows: &'a [PublishedWindow],
+    ) -> impl Iterator<Item = &'a PublishedWindow> + 'a {
+        let named = self
+            .arrival
+            .as_ref()
+            .map(|arrival| arrival.window.as_deref());
+        windows.iter().filter(move |window| match named {
+            None => false,
+            Some(Some(named)) => window.id == named,
+            Some(None) => window.offering == self.id,
+        })
+    }
+
+    /// The window a request starting at `start` occupies. A named window
+    /// answers every start, so admission refuses a start that is not its
+    /// own as it always has; an offering that names no window answers with
+    /// the served window opening at `start`, if one does.
+    #[must_use]
+    pub fn arrival_window<'a>(
+        &'a self,
+        windows: &'a [PublishedWindow],
+        start: DateTime<Utc>,
+    ) -> Option<&'a PublishedWindow> {
+        let names_one = self
+            .arrival
+            .as_ref()
+            .is_some_and(|arrival| arrival.window.is_some());
+        self.served_windows(windows)
+            .find(|window| names_one || window.start == start)
+    }
+}
+
+/// Why an offering cannot serve as a secondary allocation under a primary
+/// offering in the bounded first bundle form.
+#[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
+pub enum AdditionalAllocationPolicyError {
+    #[error("primary offering {offering} is not exact-time")]
+    PrimaryNotExactTime { offering: String },
+    #[error("additional offering {offering} is not exact-time")]
+    AdditionalNotExactTime { offering: String },
+    #[error("additional offering {offering} belongs to another service")]
+    ServiceMismatch { offering: String },
+    #[error("additional offering {offering} belongs to another location")]
+    LocationMismatch { offering: String },
+    #[error("additional offering {offering} does not allow the primary displayed duration")]
+    DurationMismatch { offering: String },
+    #[error("additional offering {offering} declares reminders; only the primary may do so")]
+    SecondaryReminders { offering: String },
+    #[error("additional offering {offering} has a different cancellation cutoff")]
+    CancellationCutoffMismatch { offering: String },
+    #[error("additional offering {offering} has an incompatible duplicate-active key")]
+    DuplicateKeyMismatch { offering: String },
+}
+
+/// Check the policy-only invariants for one secondary allocation. Schedule,
+/// party, capability, prerequisite and concrete resource checks remain
+/// per-line admission decisions against the same displayed interval.
+pub fn check_additional_allocation_policy(
+    primary: &OfferingPolicy,
+    additional: &OfferingPolicy,
+    displayed_duration_minutes: u32,
+) -> Result<(), AdditionalAllocationPolicyError> {
+    if primary.mode != SchedulingMode::ExactTime || primary.exact_time.is_none() {
+        return Err(AdditionalAllocationPolicyError::PrimaryNotExactTime {
+            offering: primary.id.clone(),
+        });
+    }
+    let Some(exact) = additional
+        .exact_time
+        .as_ref()
+        .filter(|_| additional.mode == SchedulingMode::ExactTime)
+    else {
+        return Err(AdditionalAllocationPolicyError::AdditionalNotExactTime {
+            offering: additional.id.clone(),
+        });
+    };
+    if additional.service != primary.service {
+        return Err(AdditionalAllocationPolicyError::ServiceMismatch {
+            offering: additional.id.clone(),
+        });
+    }
+    if additional.location != primary.location {
+        return Err(AdditionalAllocationPolicyError::LocationMismatch {
+            offering: additional.id.clone(),
+        });
+    }
+    if exact
+        .selected_duration_minutes(Some(displayed_duration_minutes))
+        .is_none()
+    {
+        return Err(AdditionalAllocationPolicyError::DurationMismatch {
+            offering: additional.id.clone(),
+        });
+    }
+    if !additional.reminders.is_empty() {
+        return Err(AdditionalAllocationPolicyError::SecondaryReminders {
+            offering: additional.id.clone(),
+        });
+    }
+    if additional.cancellation_cutoff_minutes != primary.cancellation_cutoff_minutes {
+        return Err(
+            AdditionalAllocationPolicyError::CancellationCutoffMismatch {
+                offering: additional.id.clone(),
+            },
+        );
+    }
+    if additional.duplicate_active_key.is_some()
+        && additional.duplicate_active_key != primary.duplicate_active_key
+    {
+        return Err(AdditionalAllocationPolicyError::DuplicateKeyMismatch {
+            offering: additional.id.clone(),
+        });
+    }
+    Ok(())
 }
 
 /// A bounded weekly opening pattern over local wall-clock time. The timezone
@@ -537,6 +781,46 @@ pub struct WindowStaffing {
     pub because: String,
 }
 
+/// One physical requirement a window reserves once for its whole span, such
+/// as a room, a facilitator or equipment. The window's parent reservation
+/// holds it through the same allocation ledger an exact-time booking writes,
+/// so it conflicts with exact bookings of the same resource. `units` are
+/// resource units of the requirement offering's pool, not window capacity:
+/// bookings in the window consume only the window's own `units`.
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WindowResourceRequirement {
+    /// The requirement's own id, unique within the window.
+    #[serde(deserialize_with = "crate::typed::local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
+    pub requirement: String,
+    /// The exact-time offering at the window's location whose pool supplies
+    /// the requirement. It must sell the window's span with optional party
+    /// counts.
+    #[serde(deserialize_with = "crate::typed::local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
+    pub offering: String,
+    /// The pool member to reserve. Omitted, the runtime picks one at
+    /// publication and keeps it while the window and the policy stand.
+    #[serde(
+        default,
+        deserialize_with = "crate::typed::optional_local_id",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Option<registry_platform_yaml::LocalId>")
+    )]
+    pub resource: Option<String>,
+    #[serde(deserialize_with = "crate::typed::bounded_u32::<_, 1, MAXIMUM_RESOURCE_UNITS>")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "registry_platform_yaml::BoundedU32<1, MAXIMUM_RESOURCE_UNITS>")
+    )]
+    pub units: u32,
+}
+
 /// A published arrival window with its capacity.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -583,6 +867,18 @@ pub struct PublishedWindow {
     pub leftover: Option<LeftoverCapacityPolicy>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub staffing: Option<WindowStaffing>,
+    /// Physical requirements reserved once for the window's span. A window
+    /// that reserves nothing omits the member.
+    #[serde(
+        default,
+        deserialize_with = "crate::typed::non_empty_list",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(length(min = 1, max = crate::typed::MAXIMUM_ALLOCATION_REQUIREMENTS))
+    )]
+    pub resources: Vec<WindowResourceRequirement>,
     #[serde(deserialize_with = "registry_platform_yaml::display_text")]
     #[cfg_attr(
         feature = "schema",
@@ -602,11 +898,11 @@ impl Identified for PublishedWindow {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct HoldPolicy {
-    /// How long a hold keeps its capacity: at most one day.
-    #[serde(deserialize_with = "crate::typed::bounded_u32::<_, 1, MINUTES_PER_DAY>")]
+    /// How long a hold keeps its capacity under an explicitly authored policy.
+    #[serde(deserialize_with = "crate::typed::bounded_u32::<_, 1, MAXIMUM_HOLD_TTL_MINUTES>")]
     #[cfg_attr(
         feature = "schema",
-        schemars(with = "registry_platform_yaml::BoundedU32<1, MINUTES_PER_DAY>")
+        schemars(with = "registry_platform_yaml::BoundedU32<1, MAXIMUM_HOLD_TTL_MINUTES>")
     )]
     pub ttl_minutes: u32,
     /// The most live holds one caller may keep at once.
@@ -627,6 +923,7 @@ pub struct HoldPolicy {
 pub const APPOINTMENT_CONFIRMED_TRIGGER: &str = "appointment.confirmed";
 pub const APPOINTMENT_RESCHEDULED_TRIGGER: &str = "appointment.rescheduled";
 pub const APPOINTMENT_CANCELLED_TRIGGER: &str = "appointment.cancelled";
+pub const APPOINTMENT_ATTENDANCE_OBSERVED_TRIGGER: &str = "appointment.attendance-observed";
 
 /// The closed projection `appointment.confirmed` and `appointment.rescheduled`
 /// publish to an observer, shared by the authoring check and the runtime.
@@ -641,6 +938,16 @@ pub const APPOINTMENT_OBSERVER_FIELDS: &[&str] = &[
 ];
 /// The closed projection `appointment.cancelled` publishes to an observer.
 pub const CANCELLATION_OBSERVER_FIELDS: &[&str] = &["appointmentId", "revision", "state"];
+/// The closed projection published after an attendance observation commits.
+pub const ATTENDANCE_OBSERVER_FIELDS: &[&str] = &[
+    "appointmentId",
+    "appointmentRevision",
+    "attendanceRevision",
+    "attendanceState",
+    "observedAt",
+    "recordedAt",
+    "policyRevision",
+];
 
 /// When an observer hook runs. Scheduling runs every hook after the
 /// appointment transaction commits, never inside its capacity transaction.
@@ -651,7 +958,7 @@ pub enum ObserverPhase {
     After,
 }
 
-/// The appointment lifecycle transition an observer hook follows.
+/// The appointment event an observer hook follows.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ObserverTrigger {
@@ -661,6 +968,8 @@ pub enum ObserverTrigger {
     AppointmentRescheduled,
     #[serde(rename = "appointment.cancelled")]
     AppointmentCancelled,
+    #[serde(rename = "appointment.attendance-observed")]
+    AppointmentAttendanceObserved,
 }
 
 impl ObserverTrigger {
@@ -670,6 +979,7 @@ impl ObserverTrigger {
             Self::AppointmentConfirmed => APPOINTMENT_CONFIRMED_TRIGGER,
             Self::AppointmentRescheduled => APPOINTMENT_RESCHEDULED_TRIGGER,
             Self::AppointmentCancelled => APPOINTMENT_CANCELLED_TRIGGER,
+            Self::AppointmentAttendanceObserved => APPOINTMENT_ATTENDANCE_OBSERVED_TRIGGER,
         }
     }
 
@@ -680,6 +990,7 @@ impl ObserverTrigger {
                 APPOINTMENT_OBSERVER_FIELDS
             }
             Self::AppointmentCancelled => CANCELLATION_OBSERVER_FIELDS,
+            Self::AppointmentAttendanceObserved => ATTENDANCE_OBSERVER_FIELDS,
         }
     }
 }
@@ -726,8 +1037,8 @@ impl Serialize for ObserverHandler {
 }
 
 /// One observer hook: the shared Registry Stack hook declaration narrowed to
-/// the closed Scheduling contract. It runs after commit, follows one of three
-/// appointment lifecycle triggers, delivers to a URL destination, and takes
+/// the closed Scheduling contract. It runs after commit, follows one of four
+/// appointment event triggers, delivers to a URL destination, and takes
 /// no condition and no proposal principal.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -1011,7 +1322,11 @@ impl SchedulingPolicy {
                 ("startTime", &opening.start_time),
                 ("endTime", &opening.end_time),
             ] {
-                if !valid_hh_mm(value) {
+                if !(if field == "endTime" {
+                    valid_interval_end(value)
+                } else {
+                    valid_hh_mm(value)
+                }) {
                     findings.push(SchedulingDiagnostic::new(
                         format!("{path}/{field}"),
                         PolicyCheckReason::MalformedValue,
@@ -1019,7 +1334,7 @@ impl SchedulingPolicy {
                 }
             }
             let clocks_are_clocks =
-                valid_hh_mm(&opening.start_time) && valid_hh_mm(&opening.end_time);
+                valid_hh_mm(&opening.start_time) && valid_interval_end(&opening.end_time);
             if clocks_are_clocks && opening.start_time >= opening.end_time {
                 findings.push(SchedulingDiagnostic::new(
                     format!("{path}/endTime"),
@@ -1067,8 +1382,12 @@ impl SchedulingPolicy {
             self.check_offering(offering, index, &mut findings);
         }
         for (index, offering) in self.offerings.iter().enumerate() {
-            if let Some(arrival) = &offering.arrival {
-                if self.sells_pool(&arrival.window) {
+            if let Some(window) = offering
+                .arrival
+                .as_ref()
+                .and_then(|arrival| arrival.window.as_deref())
+            {
+                if self.sells_pool(window) {
                     findings.push(SchedulingDiagnostic::new(
                         format!("/offerings/{index}/arrival/window"),
                         PolicyCheckReason::SupplyIdentifierCollision,
@@ -1166,6 +1485,14 @@ impl SchedulingPolicy {
                             ));
                         }
                     }
+                    if exact.duration_selection.as_ref().is_some_and(|selection| {
+                        !selection.is_valid_for_default(exact.duration_minutes)
+                    }) {
+                        findings.push(SchedulingDiagnostic::new(
+                            format!("{block_path}/durationSelection"),
+                            PolicyCheckReason::InvalidDurationSelection,
+                        ));
+                    }
                     check_identifier(&exact.pool, &format!("{block_path}/pool"), findings);
                     let horizon_minutes = u64::from(exact.horizon_days) * 24 * 60;
                     if u64::from(exact.lead_time_minutes) > horizon_minutes {
@@ -1185,7 +1512,9 @@ impl SchedulingPolicy {
                 }
                 if let Some(arrival) = &offering.arrival {
                     let block_path = format!("{path}/arrival");
-                    check_identifier(&arrival.window, &format!("{block_path}/window"), findings);
+                    if let Some(window) = &arrival.window {
+                        check_identifier(window, &format!("{block_path}/window"), findings);
+                    }
                     for (member, value) in [
                         ("leadTimeMinutes", arrival.lead_time_minutes),
                         ("horizonDays", arrival.horizon_days),
@@ -1285,8 +1614,12 @@ impl SchedulingPolicy {
             ));
         }
         for (index, offering) in self.offerings.iter().enumerate() {
-            if let Some(arrival) = &offering.arrival {
-                match windows.iter().find(|window| window.id == arrival.window) {
+            if let Some(named) = offering
+                .arrival
+                .as_ref()
+                .and_then(|arrival| arrival.window.as_deref())
+            {
+                match windows.iter().find(|window| window.id == named) {
                     None => findings.push(SchedulingDiagnostic::new(
                         format!("/offerings/{index}/arrival/window"),
                         PolicyCheckReason::UnknownWindow,
@@ -1302,6 +1635,19 @@ impl SchedulingPolicy {
                     }
                     Some(_) => {}
                 }
+            }
+        }
+        // A request on an offering that names no window picks its window by
+        // start, so two windows of one offering may not open together.
+        for (index, window) in windows.iter().enumerate() {
+            if windows[..index]
+                .iter()
+                .any(|other| other.offering == window.offering && other.start == window.start)
+            {
+                findings.push(SchedulingDiagnostic::records(
+                    format!("/windows/{index}/start"),
+                    PolicyCheckReason::DuplicateIdentifier,
+                ));
             }
         }
         for (index, window) in windows.iter().enumerate() {
@@ -1373,10 +1719,12 @@ impl SchedulingPolicy {
             )),
             Some(offering) => {
                 if offering.mode != SchedulingMode::ArrivalWindow
-                    || offering
-                        .arrival
-                        .as_ref()
-                        .is_none_or(|arrival| arrival.window != window.id)
+                    || offering.arrival.as_ref().is_none_or(|arrival| {
+                        arrival
+                            .window
+                            .as_ref()
+                            .is_some_and(|named| *named != window.id)
+                    })
                     || offering.location != window.location
                 {
                     findings.push(SchedulingDiagnostic::new(
@@ -1472,6 +1820,74 @@ impl SchedulingPolicy {
                 ));
             }
         }
+
+        self.check_window_resources(window, &path, findings);
+    }
+
+    /// The checks on a window's physical `resources` that the policy alone
+    /// answers. The runtime reserves them once for the whole window through
+    /// an exact-time offering, so each requirement must name one that
+    /// `window_resource_supply` accepts. Whether a named resource belongs to
+    /// that offering's pool is for the records that carry the pools.
+    fn check_window_resources(
+        &self,
+        window: &PublishedWindow,
+        path: &str,
+        findings: &mut Vec<SchedulingDiagnostic>,
+    ) {
+        let path = format!("{path}/resources");
+        if window.resources.len() > crate::MAXIMUM_ALLOCATION_REQUIREMENTS {
+            findings.push(SchedulingDiagnostic::new(
+                path.clone(),
+                PolicyCheckReason::TooManyEntries,
+            ));
+        }
+        let mut requirements = BTreeSet::new();
+        for (requirement_index, requirement) in window.resources.iter().enumerate() {
+            let requirement_path = format!("{path}/{requirement_index}");
+            if !requirements.insert(requirement.requirement.as_str()) {
+                findings.push(SchedulingDiagnostic::new(
+                    format!("{requirement_path}/requirement"),
+                    PolicyCheckReason::DuplicateIdentifier,
+                ));
+            }
+            if self.offering(&requirement.offering).is_none() {
+                findings.push(SchedulingDiagnostic::new(
+                    format!("{requirement_path}/offering"),
+                    PolicyCheckReason::UnknownOffering,
+                ));
+            } else if self.window_resource_supply(window, requirement).is_none() {
+                findings.push(SchedulingDiagnostic::new(
+                    format!("{requirement_path}/offering"),
+                    PolicyCheckReason::MismatchedReference,
+                ));
+            }
+        }
+    }
+
+    /// The exact-time terms a window's resource `requirement` is reserved
+    /// through: its offering's, when that offering is exact-time at the
+    /// window's location, accepts a request without human counts, and sells
+    /// the window's whole span. `None` when the requirement cannot be
+    /// reserved that way.
+    pub(crate) fn window_resource_supply(
+        &self,
+        window: &PublishedWindow,
+        requirement: &WindowResourceRequirement,
+    ) -> Option<&ExactTimeOffering> {
+        let offering = self.offering(&requirement.offering)?;
+        let duration_seconds = window.end.signed_duration_since(window.start).num_seconds();
+        let duration_minutes = (duration_seconds > 0 && duration_seconds % 60 == 0)
+            .then(|| u32::try_from(duration_seconds / 60).ok())
+            .flatten()?;
+        offering.exact_time.as_ref().filter(|exact| {
+            offering.mode == SchedulingMode::ExactTime
+                && offering.location == window.location
+                && exact.party_counts == PartyCountsRequirement::Optional
+                && exact
+                    .selected_duration_minutes(Some(duration_minutes))
+                    .is_some()
+        })
     }
 
     /// Whether any exact-time offering draws on the pool named `id`. Those
@@ -1898,6 +2314,10 @@ pub(crate) fn valid_hh_mm(value: &str) -> bool {
         && value[3..].parse::<u32>().is_ok_and(|minute| minute < 60)
 }
 
+pub(crate) fn valid_interval_end(value: &str) -> bool {
+    value == "24:00" || valid_hh_mm(value)
+}
+
 pub(crate) fn valid_iso_date(value: &str) -> bool {
     let bytes = value.as_bytes();
     bytes.len() == 10
@@ -1920,11 +2340,16 @@ fn hex(bytes: &[u8]) -> String {
     rendered
 }
 
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{LedgerClaim, LedgerKind, PartyCounts};
+    use crate::model::{LedgerClaim, LedgerKind};
     use crate::naming::AUTHORED_POLICY_FILE;
+    use crate::PartyCounts;
     use chrono::TimeZone as _;
 
     fn utc(hour: u32, minute: u32) -> DateTime<Utc> {
@@ -2204,6 +2629,10 @@ holdPolicy:
             because: "Urgent matters get exact five-minute slots.".to_owned(),
             exact_time: Some(ExactTimeOffering {
                 duration_minutes: 5,
+                duration_selection: None,
+                opening_coverage: OpeningCoverage::ServiceInterval,
+                allow_resource_selection: false,
+                party_counts: PartyCountsRequirement::Required,
                 buffer_before_minutes: 0,
                 buffer_after_minutes: 0,
                 lead_time_minutes: 30,
@@ -2222,6 +2651,50 @@ holdPolicy:
     }
 
     #[test]
+    fn additional_allocation_policy_keeps_one_lifecycle_and_per_line_buffers() {
+        let mut primary = exact_time_offering("rooms");
+        primary.id = "room".to_owned();
+        primary.duplicate_active_key = Some("subject".to_owned());
+        primary.reminders = vec![ReminderOffsetPolicy {
+            offset_minutes: 60,
+            because: "The room reservation owns the reminder.".to_owned(),
+        }];
+        let mut additional = exact_time_offering("projectors");
+        additional.id = "projector".to_owned();
+        additional.duplicate_active_key = Some("subject".to_owned());
+        additional
+            .exact_time
+            .as_mut()
+            .unwrap()
+            .buffer_before_minutes = 15;
+
+        assert_eq!(
+            check_additional_allocation_policy(&primary, &additional, 5),
+            Ok(()),
+            "different occupied buffers are evaluated per line"
+        );
+
+        additional.location = "south-counter".to_owned();
+        assert_eq!(
+            check_additional_allocation_policy(&primary, &additional, 5),
+            Err(AdditionalAllocationPolicyError::LocationMismatch {
+                offering: "projector".to_owned(),
+            })
+        );
+        additional.location = primary.location.clone();
+        additional.reminders = vec![ReminderOffsetPolicy {
+            offset_minutes: 30,
+            because: "A secondary reminder would duplicate lifecycle.".to_owned(),
+        }];
+        assert_eq!(
+            check_additional_allocation_policy(&primary, &additional, 5),
+            Err(AdditionalAllocationPolicyError::SecondaryReminders {
+                offering: "projector".to_owned(),
+            })
+        );
+    }
+
+    #[test]
     fn the_minimal_policies_carry_no_findings() {
         assert_eq!(
             rendered(&minimal_exact_time_policy().check()),
@@ -2232,6 +2705,234 @@ holdPolicy:
             Vec::<String>::new()
         );
         assert_eq!(refusals(MINIMAL_EXACT_TIME_PROJECT), Vec::<String>::new());
+    }
+
+    #[test]
+    fn multi_day_reservations_use_elapsed_minutes_and_continuous_local_openings() {
+        let mut document = serde_json::to_value(minimal_exact_time_policy()).unwrap();
+        document["offerings"][0]["exactTime"]["durationSelection"] = serde_json::json!({
+            "minimumMinutes": 30, "maximumMinutes": 10080, "incrementMinutes": 30
+        });
+        document["offerings"][0]["exactTime"]["allowResourceSelection"] = true.into();
+        document["openings"][0]["startTime"] = "00:00".into();
+        document["openings"][0]["endTime"] = "24:00".into();
+        document["openings"][0]["weekdays"] =
+            serde_json::json!(["mon", "tue", "wed", "thu", "fri", "sat", "sun"]);
+        document["openings"][0]["effectiveFrom"] = "2026-01-01".into();
+        let policy: SchedulingPolicy =
+            serde_json::from_value(document.clone()).expect("bounded multi-day duration policy");
+        assert!(policy.check().is_empty(), "{:?}", policy.check());
+        let offering = &policy.offerings[0];
+        let exact = offering.exact_time.as_ref().unwrap();
+        let open =
+            crate::location_open_intervals(&policy, "north-counter", "America/New_York", &[])
+                .unwrap();
+        let members = [crate::PoolMember {
+            resource_id: "station-1".to_owned(),
+            capabilities: vec![],
+            available: true,
+            capacity_units: 1,
+            availability: None,
+        }];
+        let snapshot = crate::LedgerSnapshot::default();
+        let request_at = |start: DateTime<Utc>, minutes: i64| -> crate::AdmissionRequest {
+            serde_json::from_value(serde_json::json!({
+                "offering": offering.id, "start": start, "durationMinutes": minutes,
+                "resource": "station-1", "party": {"recipients": 1, "attendees": 1},
+                "channel": null, "duplicateKey": null, "policyRevision": 1,
+                "windowRevision": null, "capabilities": [], "prerequisites": [], "externalReferences": []
+            })).expect("positive elapsed interval inside the global bound")
+        };
+        for (start, end, minutes) in [
+            ("2026-03-08T05:00:00Z", "2026-03-09T04:00:00Z", 1380),
+            ("2026-11-01T04:00:00Z", "2026-11-02T05:00:00Z", 1500),
+            ("2026-11-01T04:00:00Z", "2026-11-04T05:00:00Z", 4380),
+        ] {
+            let start: DateTime<Utc> = start.parse().unwrap();
+            let request = request_at(start, minutes);
+            let context = crate::ExactTimeContext {
+                offering,
+                exact,
+                members: &members,
+                open: &open,
+                closures: &[],
+                snapshot: &snapshot,
+                policy_revision: 1,
+                now: start - chrono::Duration::hours(2),
+            };
+            let allocation = crate::evaluate_exact_time_admission(&context, &request, None)
+                .expect("continuous local dates admit");
+            assert_eq!(allocation.end, end.parse::<DateTime<Utc>>().unwrap());
+            assert_eq!(
+                (allocation.occupied_end - allocation.occupied_start).num_minutes(),
+                minutes + 10
+            );
+        }
+
+        let exception = registry_platform_calendar::CalendarException {
+            id: "maintenance-day",
+            kind: registry_platform_calendar::CalendarExceptionKind::Closure,
+            date: "2026-11-02",
+            start_time: "00:00",
+            end_time: "24:00",
+            reopens: None,
+            authority: None,
+        };
+        let interrupted = crate::location_open_intervals(
+            &policy,
+            "north-counter",
+            "America/New_York",
+            &[exception],
+        )
+        .unwrap();
+        let closures = [registry_platform_calendar::local_interval(
+            "2026-11-02",
+            "00:00",
+            "24:00",
+            "America/New_York",
+        )
+        .unwrap()];
+        let start = "2026-11-01T04:00:00Z".parse().unwrap();
+        let context = crate::ExactTimeContext {
+            offering,
+            exact,
+            members: &members,
+            open: &interrupted,
+            closures: &closures,
+            snapshot: &snapshot,
+            policy_revision: 1,
+            now: start - chrono::Duration::hours(2),
+        };
+        assert_eq!(
+            crate::evaluate_exact_time_admission(&context, &request_at(start, 4380), None)
+                .unwrap_err(),
+            crate::AdmissionRefusal::LocationClosed
+        );
+
+        let request = serde_json::to_value(request_at(start, 1500)).unwrap();
+        for invalid in [
+            serde_json::json!(0),
+            serde_json::json!(-1),
+            serde_json::json!(10081),
+        ] {
+            let mut invalid_request = request.clone();
+            invalid_request["durationMinutes"] = invalid;
+            assert!(serde_json::from_value::<crate::AdmissionRequest>(invalid_request).is_err());
+        }
+        document["offerings"][0]["exactTime"]["durationMinutes"] = 2880.into();
+        document["offerings"][0]["exactTime"]
+            .as_object_mut()
+            .unwrap()
+            .remove("durationSelection");
+        let fixed: SchedulingPolicy = serde_json::from_value(document)
+            .expect("fixed multi-day reservations share the same interval contract");
+        assert!(fixed.check().is_empty());
+    }
+
+    #[test]
+    fn duration_and_resource_choice_are_explicit_opt_ins() {
+        let baseline = minimal_exact_time_policy();
+        let baseline_digest = baseline.policy_digest();
+        let legacy = crate::typed::decode_fragment::<ExactTimeOffering>(
+            r#"
+durationMinutes: 30
+bufferBeforeMinutes: 5
+bufferAfterMinutes: 5
+leadTimeMinutes: 60
+horizonDays: 30
+pool: update-stations
+startIncrementMinutes: 30
+maximumRecipients: 1
+"#,
+        )
+        .expect("the legacy exact-time block still reads");
+        assert_eq!(legacy.duration_selection, None);
+        assert_eq!(legacy.opening_coverage, OpeningCoverage::ServiceInterval);
+        assert!(!legacy.allow_resource_selection);
+        assert_eq!(legacy.party_counts, PartyCountsRequirement::Required);
+        let legacy_json = serde_json::to_value(&legacy).expect("serializes");
+        assert!(legacy_json.get("durationSelection").is_none());
+        assert!(legacy_json.get("openingCoverage").is_none());
+        assert!(legacy_json.get("allowResourceSelection").is_none());
+        assert!(legacy_json.get("partyCounts").is_none());
+
+        let selectable = crate::typed::decode_fragment::<ExactTimeOffering>(
+            r#"
+durationMinutes: 30
+durationSelection:
+  minimumMinutes: 15
+  maximumMinutes: 60
+  incrementMinutes: 15
+openingCoverage: occupied-interval
+allowResourceSelection: true
+partyCounts: optional
+bufferBeforeMinutes: 5
+bufferAfterMinutes: 5
+leadTimeMinutes: 60
+horizonDays: 30
+pool: update-stations
+startIncrementMinutes: 30
+maximumRecipients: 1
+"#,
+        )
+        .expect("the opt-in exact-time block reads");
+        assert_eq!(
+            selectable.duration_selection,
+            Some(DurationSelectionPolicy {
+                minimum_minutes: 15,
+                maximum_minutes: 60,
+                increment_minutes: 15,
+            })
+        );
+        assert_eq!(
+            selectable.opening_coverage,
+            OpeningCoverage::OccupiedInterval
+        );
+        assert!(selectable.allow_resource_selection);
+        assert_eq!(selectable.party_counts, PartyCountsRequirement::Optional);
+
+        let mut duration_enabled = baseline.clone();
+        duration_enabled.offerings[0]
+            .exact_time
+            .as_mut()
+            .expect("exact-time policy")
+            .duration_selection = selectable.duration_selection.clone();
+        assert_ne!(baseline_digest, duration_enabled.policy_digest());
+
+        let mut resource_enabled = baseline.clone();
+        resource_enabled.offerings[0]
+            .exact_time
+            .as_mut()
+            .expect("exact-time policy")
+            .allow_resource_selection = true;
+        assert_ne!(baseline_digest, resource_enabled.policy_digest());
+
+        let mut occupied_coverage = baseline;
+        occupied_coverage.offerings[0]
+            .exact_time
+            .as_mut()
+            .expect("exact-time policy")
+            .opening_coverage = OpeningCoverage::OccupiedInterval;
+        assert_ne!(baseline_digest, occupied_coverage.policy_digest());
+    }
+
+    #[test]
+    fn duration_selection_must_bound_the_default_on_its_increment_lattice() {
+        let mut policy = minimal_exact_time_policy();
+        let exact = policy.offerings[0]
+            .exact_time
+            .as_mut()
+            .expect("exact-time policy");
+        exact.duration_selection = Some(DurationSelectionPolicy {
+            minimum_minutes: 20,
+            maximum_minutes: 60,
+            increment_minutes: 15,
+        });
+        assert!(rendered(&policy.check()).iter().any(|finding| {
+            finding.contains(
+                "/offerings/0/exactTime/durationSelection: scheduling.project.invalid-duration-selection",
+            )
+        }));
     }
 
     #[test]
@@ -2403,7 +3104,7 @@ holdPolicy:
         let mut policy = minimal_exact_time_policy();
         policy.offerings[0].exact_time = None;
         policy.offerings[0].arrival = Some(ArrivalOffering {
-            window: "no-such-window".to_owned(),
+            window: Some("no-such-window".to_owned()),
             lead_time_minutes: 60,
             horizon_days: 45,
         });
@@ -2458,6 +3159,85 @@ holdPolicy:
         assert!(rendered.contains(
             &"/offerings/1/arrival/window: scheduling.project.mismatched-reference".to_owned()
         ));
+    }
+
+    /// A household morning offering that names no window, served by two
+    /// published Saturday windows a week apart.
+    fn multi_window_household() -> (SchedulingPolicy, Vec<PublishedWindow>) {
+        let mut policy = household_window_policy();
+        policy.offerings[0].arrival = Some(
+            crate::typed::decode_fragment::<ArrivalOffering>(
+                "leadTimeMinutes: 60\nhorizonDays: 45\n",
+            )
+            .expect("an arrival block without a window reads"),
+        );
+        let mut windows = household_windows();
+        let mut second = windows[0].clone();
+        second.id = "household-morning-17".to_owned();
+        second.start = Utc.with_ymd_and_hms(2026, 10, 17, 8, 0, 0).unwrap();
+        second.end = Utc.with_ymd_and_hms(2026, 10, 17, 10, 0, 0).unwrap();
+        windows.push(second);
+        (policy, windows)
+    }
+
+    #[test]
+    fn an_arrival_offering_without_a_window_serves_every_window_naming_it() {
+        let (policy, windows) = multi_window_household();
+        assert_eq!(rendered(&policy.check()), Vec::<String>::new());
+        assert_eq!(
+            rendered(&policy.check_window_records(&windows)),
+            Vec::<String>::new()
+        );
+        let offering = &policy.offerings[0];
+        let served: Vec<&str> = offering
+            .served_windows(&windows)
+            .map(|window| window.id.as_str())
+            .collect();
+        assert_eq!(served, ["household-morning-window", "household-morning-17"]);
+    }
+
+    #[test]
+    fn two_windows_of_one_offering_may_not_share_a_start() {
+        let (policy, mut windows) = multi_window_household();
+        windows[1].start = windows[0].start;
+        windows[1].end = windows[0].end;
+        let rendered = rendered(&policy.check_window_records(&windows));
+        assert!(
+            rendered
+                .contains(&"/windows/1/start: scheduling.records.duplicate-identifier".to_owned()),
+            "{rendered:?}"
+        );
+    }
+
+    #[test]
+    fn a_multi_window_offering_picks_its_window_by_start() {
+        let (policy, windows) = multi_window_household();
+        let offering = &policy.offerings[0];
+        let second = Utc.with_ymd_and_hms(2026, 10, 17, 8, 0, 0).unwrap();
+        assert_eq!(
+            offering
+                .arrival_window(&windows, second)
+                .map(|window| window.id.as_str()),
+            Some("household-morning-17")
+        );
+        assert_eq!(
+            offering
+                .arrival_window(&windows, utc(8, 0))
+                .map(|window| window.id.as_str()),
+            Some("household-morning-window")
+        );
+        assert_eq!(offering.arrival_window(&windows, utc(9, 0)), None);
+
+        // An offering that names its window keeps the released behaviour:
+        // the named window answers whatever start the request carries, and
+        // admission then refuses a start that is not the window's.
+        let named = household_window_policy();
+        assert_eq!(
+            named.offerings[0]
+                .arrival_window(&windows, utc(9, 0))
+                .map(|window| window.id.as_str()),
+            Some("household-morning-window")
+        );
     }
 
     /// The weekly expansion serves at most MAXIMUM_PATTERN_SPAN_DAYS days, and
@@ -2763,6 +3543,7 @@ holdPolicy:
                 reserved_members: None,
                 because: "The noon block claims the same officers.".to_owned(),
             }),
+            resources: Vec::new(),
             because: "A second block in the same hall.".to_owned(),
         });
         let shared_count = |windows: &[PublishedWindow]| {
@@ -2794,6 +3575,88 @@ holdPolicy:
         };
         windows[1] = disjoint;
         assert_eq!(shared_count(&windows), 0);
+    }
+
+    /// A window's physical `resources` answer to the policy wherever the
+    /// policy meets the records, so a publication or a records apply refuses
+    /// a requirement the runtime cannot reserve the window's span through.
+    /// Whether a named resource belongs to the pool is left to the records
+    /// that carry the pools.
+    #[test]
+    fn window_resource_requirements_answer_to_the_policy() {
+        let mut policy = household_window_policy();
+        let mut room = exact_time_offering("hall-rooms");
+        room.id = "hall-room".to_owned();
+        let exact = room.exact_time.as_mut().expect("an exact-time offering");
+        exact.duration_minutes = 120;
+        exact.party_counts = PartyCountsRequirement::Optional;
+        policy.offerings.push(room);
+        let mut windows = household_windows();
+        windows[0].resources = vec![WindowResourceRequirement {
+            requirement: "hall".to_owned(),
+            offering: "hall-room".to_owned(),
+            resource: Some("hall-a".to_owned()),
+            units: 1,
+        }];
+        assert_eq!(
+            rendered(&policy.check_window_records(&windows)),
+            Vec::<String>::new()
+        );
+
+        let mismatched = "/windows/0/resources/0/offering: scheduling.records.mismatched-reference";
+        // A requirement whose offering needs party counts cannot back a
+        // reservation no party makes.
+        let mut counted = policy.clone();
+        counted.offerings[1]
+            .exact_time
+            .as_mut()
+            .expect("an exact-time offering")
+            .party_counts = PartyCountsRequirement::Required;
+        assert_eq!(
+            rendered(&counted.check_window_records(&windows)),
+            vec![mismatched.to_owned()]
+        );
+        // The offering must sell the window's whole span.
+        let mut shorter = policy.clone();
+        shorter.offerings[1]
+            .exact_time
+            .as_mut()
+            .expect("an exact-time offering")
+            .duration_minutes = 60;
+        assert_eq!(
+            rendered(&shorter.check_window_records(&windows)),
+            vec![mismatched.to_owned()]
+        );
+        // An arrival offering reserves nothing physical.
+        let mut arrival = windows.clone();
+        arrival[0].resources[0].offering = "household-morning".to_owned();
+        assert_eq!(
+            rendered(&policy.check_window_records(&arrival)),
+            vec![mismatched.to_owned()]
+        );
+
+        let mut repeated = windows.clone();
+        let again = repeated[0].resources[0].clone();
+        repeated[0].resources.push(again);
+        assert!(rendered(&policy.check_window_records(&repeated)).contains(
+            &"/windows/0/resources/1/requirement: scheduling.records.duplicate-identifier"
+                .to_owned()
+        ));
+        let mut unknown = windows.clone();
+        unknown[0].resources[0].offering = "hall-rental".to_owned();
+        assert_eq!(
+            rendered(&policy.check_window_records(&unknown)),
+            vec!["/windows/0/resources/0/offering: scheduling.records.unknown-offering".to_owned()]
+        );
+        let mut crowded = windows;
+        crowded[0].resources = (0..=crate::MAXIMUM_ALLOCATION_REQUIREMENTS)
+            .map(|index| WindowResourceRequirement {
+                requirement: format!("hall-{index}"),
+                ..crowded[0].resources[0].clone()
+            })
+            .collect();
+        assert!(rendered(&policy.check_window_records(&crowded))
+            .contains(&"/windows/0/resources: scheduling.records.too-many-entries".to_owned()));
     }
 
     /// AT-10, pure half: a normal reduction below standing commitments is
@@ -3091,7 +3954,7 @@ holdPolicy:
 ";
 
     /// SEC-17 / SEC-24: an observer hook runs after commit, follows one of
-    /// three appointment lifecycle triggers, receives only that trigger's
+    /// four appointment event triggers, receives only that trigger's
     /// closed projection, and delivers to a URL destination the runtime
     /// configuration binds. The reader refuses every other phase, trigger,
     /// and handler, and any condition or principal, each at its position;
@@ -3352,7 +4215,7 @@ holdPolicy:
         for (from, to, pointer) in [
             (
                 "ttlMinutes: 5",
-                "ttlMinutes: 1441",
+                "ttlMinutes: 10081",
                 "/holdPolicy/ttlMinutes",
             ),
             (

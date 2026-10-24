@@ -38,25 +38,38 @@
 
 #![deny(unsafe_code)]
 
+mod calendar;
 mod client;
 mod config;
 mod error;
 mod model;
 
+pub use calendar::{render_icalendar, CalendarEvent, CalendarExportError, MAXIMUM_CALENDAR_EVENTS};
 pub use client::SchedulingClient;
 pub use config::SchedulingClientConfig;
 pub use error::{SchedulingClientError, SchedulingProtocolFailure};
 pub use model::{SchedulingAuth, SchedulingComplete};
 pub use registry_platform_httputil::client::{BearerToken, TransportKind};
 pub use registry_scheduling_core::{
-    type_uri, AdmissionRequest, AppointmentDocument, AppointmentHistoryEntryDocument,
-    AppointmentStateDocument, AvailabilityEntry, CancelAppointmentRequest,
-    CreateAppointmentRequest, ExplainDocument, ExternalReference, HoldDocument, LocationDocument,
-    OfferingDocument, PageDocument, PartyCounts, ProblemCode, ReminderDocument,
+    type_uri, AdditionalAllocationRequest, AdmissionRequest, AllocationDocument,
+    AllocationRequirementDocument, AppointmentDocument, AppointmentHistoryEntryDocument,
+    AppointmentStateDocument, AttendanceDocument, AttendanceState, AvailabilityEntry,
+    AvailabilityPreviewDocument, AvailabilityPreviewRequest, AvailabilitySelection,
+    CancelAppointmentRequest, CreateAppointmentRequest, ExplainDocument, ExternalReference,
+    HoldDocument, LocationDocument, ManagerSelection, OfferingDocument,
+    OperationalAllocationDocument, OperationalAppointmentDocument, OperationalAppointmentQuery,
+    OperationalTimeBasis, PageDocument, PartyCounts, PartyCountsRequirement, PartyReference,
+    PartyReferenceRole, ProblemCode, RecordAttendanceRequest, ReminderDocument,
     RescheduleAppointmentRequest, ResourceDocument, SchedulingModeDocument,
     SchedulingServiceDocument, ServiceDocument, WindowDocument, APPOINTMENTS_PATH,
-    APPOINTMENT_RECEIPT_PATH, AVAILABILITY_EXPLAIN_PATH, AVAILABILITY_PATH, CURSOR_QUERY_PARAMETER,
-    HOLDS_PATH, IDEMPOTENCY_KEY_HEADER, LIMIT_QUERY_PARAMETER, LOCATIONS_PATH,
-    MAXIMUM_IDEMPOTENCY_KEY_BYTES, OFFERINGS_PATH, RESOURCES_PATH, SCHEDULING_PATH,
-    SCHEDULING_PROBLEM_TYPE_BASE, SERVICES_PATH,
+    APPOINTMENT_RECEIPT_PATH, AVAILABILITY_EXPLAIN_PATH, AVAILABILITY_PATH,
+    AVAILABILITY_PREVIEW_PATH, CURSOR_QUERY_PARAMETER, HOLDS_PATH, IDEMPOTENCY_KEY_HEADER,
+    LIMIT_QUERY_PARAMETER, LOCATIONS_PATH, MAXIMUM_BOOKING_DURATION_MINUTES,
+    MAXIMUM_IDEMPOTENCY_KEY_BYTES, OFFERINGS_PATH, OPERATIONAL_APPOINTMENTS_PATH, RESOURCES_PATH,
+    SCHEDULING_PATH, SCHEDULING_PROBLEM_TYPE_BASE, SERVICES_PATH,
+};
+pub use registry_scheduling_core::{
+    BusyApplyOutcome, BusyApplyOutcomeKind, BusyCommitmentImpact, BusyCoverage, BusyImpactSummary,
+    BusyIntervalInput, BusyReconciliationPreview, BusyReconciliationRequest,
+    BusyRequestValidationError, BusySourceStatus, BUSY_SOURCE_APPLY_PATH, BUSY_SOURCE_PREVIEW_PATH,
 };

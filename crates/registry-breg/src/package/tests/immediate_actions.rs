@@ -710,6 +710,54 @@ fn proposal_permission(registry: &CompiledRegistry) -> crate::model::CompiledPro
 }
 
 #[test]
+fn proposal_task_context_requires_service_authority_and_a_declared_field_subset() {
+    let mut value = proposal_source(&["get-task-grant-context"], &[]);
+    value["actions"][0]["execution"]["proposal"]["reviewContext"] = json!({
+        "id":"booking-context",
+        "fields":{"applicationId":{"type":"input","input":"label"}}
+    });
+    value["accessProfiles"][0]["actorKind"] = json!("service");
+    value["accessProfiles"][0]["requesterClients"] = json!(["casework-service"]);
+    value["accessProfiles"][0]["permissions"]["proposals"][0]["readableContextFields"] =
+        json!(["applicationId"]);
+    let permission = proposal_permission(&compile(&value));
+    assert!(permission
+        .operations
+        .contains(&crate::model::ProposalOperation::GetTaskGrantContext));
+    assert_eq!(
+        permission.readable_context_fields,
+        std::collections::BTreeSet::from(["applicationId".to_owned()])
+    );
+
+    for invalid in [
+        {
+            let mut invalid = value.clone();
+            invalid["accessProfiles"][0]["actorKind"] = json!("human");
+            invalid
+        },
+        {
+            let mut invalid = value.clone();
+            invalid["accessProfiles"][0]["permissions"]["proposals"][0]["readableContextFields"] =
+                json!([]);
+            invalid
+        },
+        {
+            let mut invalid = value.clone();
+            invalid["accessProfiles"][0]["permissions"]["proposals"][0]["readableContextFields"] =
+                json!(["missing"]);
+            invalid
+        },
+    ] {
+        let diagnostics = compile_diagnostics(&invalid);
+        assert!(
+            diagnostics.contains("breg.proposal.task-context-grant-invalid")
+                || diagnostics.contains("breg.proposal.context-field-unknown"),
+            "{diagnostics}"
+        );
+    }
+}
+
+#[test]
 fn proposal_writable_inputs_compile_to_the_named_input_ids() {
     let mut value = proposal_source(&["get", "edit", "submit"], &["item", "label"]);
     value["accessProfiles"][0]["permissions"]["proposals"][0]["writableInputs"] = json!(["label"]);

@@ -4530,3 +4530,58 @@ malformed, and duplicate HTTP credentials, the fixed diagnostic, generic 401,
 and zero record reads. The shared OIDC lifetime test covers missing, nonpositive,
 and overlong time bounds. These are operational diagnostics, with no new audit
 release condition or authentication authority.
+
+## Proposal task-grant context disclosure and audited request parsing
+
+### Threat
+
+- A service substitutes another Review request, subject, policy or context
+  contract, or asks for fields outside the source-authored projection.
+- A context read survives withdrawal or a change in current Record, row or
+  consent authority.
+- An authenticated caller sends a malformed body or unsupported media type
+  after the route and authority are known, but receives a refusal that bypasses
+  the Proposal refusal journal or remains available when that journal fails.
+
+### Enforcement and defaults
+
+`get-task-grant-context` is a separate Proposal operation. Its selected
+profile must admit the verified service actor, requester client, scope,
+purpose, Action and target boundaries. The read then requires the exact
+accepted Review request, concrete policy and subject binding, intersects the
+requested fields with `readableContextFields`, resolves current Record
+authority, and holds the Review row lock through disclosure. It neither
+borrows human review-context authority nor grants another Proposal operation.
+
+`task_grant_context` in `crates/registry-breg/src/api/proposals.rs` resolves the
+known Proposal, Action and selected authority before it validates the request
+media and body. It accepts one `application/json` Content-Type, reads a bounded
+body, applies strict JSON and typed request decoding, and routes every admitted
+media or body refusal through `admitted_http_refusal`. The audit record carries
+the fixed Action, operation and method, not request values. If the refusal
+append fails, the route returns service unavailable instead of releasing the
+ordinary refusal. An unknown Proposal remains concealed before Action
+attribution.
+
+### Tests
+
+`review_status_service_reads_only_its_exact_frozen_review_binding` in
+`crates/registry-breg/tests/postgres_proposal_security.rs` exercises the exact
+accepted request and policy, field projection, current authority and both
+withdrawal race orders. `task_grant_context_malformed_requests_are_audited_and_fail_closed`
+uses the real router for malformed JSON and an unsupported Content-Type,
+checks one minimized refusal record for each, and refuses the HTTP answer when
+the audit writer rejects that record. The public-client test
+`task_context_refuses_invalid_or_cross_source_authority_before_credentials`
+holds the earlier client-side binding and validation boundary. The product
+traceability catalog records these proofs without claiming an execution run.
+
+### Accepted residuals
+
+- A valid selected profile authorizes the service for the configured Action
+  and target boundaries, not for one caller-supplied Review request. Exact
+  accepted Review correlation and current disclosure checks remain runtime
+  conditions on every read.
+- The route reads the known Proposal's Action identifier before body parsing so
+  it can attribute an admitted refusal. It releases no Proposal or context
+  values during that lookup or refusal.

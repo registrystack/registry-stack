@@ -180,6 +180,10 @@ mod tests {
         reads_block, DestinationsConfig, RetentionConfig, MAX_HOOK_DESTINATIONS,
         MAX_RECEIPT_RETENTION_DAYS,
     };
+    use crate::operational::{OperationalProjectionConfig, OperationalResourceScope};
+    use crate::source_busy::{
+        BusyImportProfileConfig, MAX_BUSY_IMPORT_FRESHNESS_MINUTES, MAX_BUSY_IMPORT_SPAN_DAYS,
+    };
 
     #[test]
     fn runtime_schema_is_deterministic_and_versioned() {
@@ -341,6 +345,94 @@ mod tests {
         assert!(audit["properties"].get("retainDays").is_none());
         assert_eq!(audit["if"]["properties"]["destination"]["const"], "stdout");
         assert_eq!(audit["else"]["required"], serde_json::json!(["path"]));
+    }
+
+    #[test]
+    fn runtime_profile_schema_matches_the_reader_contract() {
+        let documents = runtime_documents().unwrap();
+        let document: Value = serde_json::from_str(&documents[RUNTIME_SCHEMA_FILE]).unwrap();
+        let oidc = &document["$defs"]["OidcConfig"]["properties"];
+        for member in ["appointmentReadProfiles", "busyImportProfiles"] {
+            assert_eq!(
+                oidc[member]["propertyNames"]["$ref"], "#/$defs/LocalId",
+                "{member} keys are local identifiers"
+            );
+        }
+
+        let projection = &document["$defs"]["OperationalProjectionConfig"]["properties"]["fields"];
+        assert_eq!(projection["uniqueItems"], true);
+        assert!(!reads_block::<OperationalProjectionConfig>(
+            &serde_json::json!({"fields": ["resource", "resource"]})
+        ));
+
+        let projection_products = &document["$defs"]["OperationalProjectionConfig"]["properties"]
+            ["externalReferenceProducts"];
+        assert_eq!(projection_products["uniqueItems"], true);
+        assert_eq!(projection_products["items"]["$ref"], "#/$defs/LocalId");
+        assert!(!reads_block::<OperationalProjectionConfig>(
+            &serde_json::json!({
+                "fields": ["resource"],
+                "externalReferenceProducts": ["casework", "casework"]
+            })
+        ));
+
+        let exact_resource_scope = document["$defs"]["OperationalResourceScope"]["oneOf"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|variant| variant["properties"]["type"]["const"] == "exact")
+            .unwrap();
+        let exact_ids = &exact_resource_scope["properties"]["ids"];
+        assert_eq!(exact_ids["uniqueItems"], true);
+        assert_eq!(exact_ids["items"]["$ref"], "#/$defs/LocalId");
+        assert!(!reads_block::<OperationalResourceScope>(
+            &serde_json::json!({"type": "exact", "ids": ["station-1", "station-1"]})
+        ));
+
+        let busy = &document["$defs"]["BusyImportProfileConfig"]["properties"];
+        assert_eq!(busy["resources"]["uniqueItems"], true);
+        assert_eq!(busy["resources"]["items"]["$ref"], "#/$defs/LocalId");
+        for (member, minimum, maximum) in [
+            (
+                "maximumPastDays",
+                0,
+                registry_scheduling_core::MAXIMUM_HORIZON_DAYS,
+            ),
+            (
+                "maximumFutureDays",
+                0,
+                registry_scheduling_core::MAXIMUM_HORIZON_DAYS,
+            ),
+            ("maximumSpanDays", 1, MAX_BUSY_IMPORT_SPAN_DAYS),
+            (
+                "maximumFreshnessMinutes",
+                1,
+                MAX_BUSY_IMPORT_FRESHNESS_MINUTES,
+            ),
+        ] {
+            assert_eq!(busy[member]["minimum"], minimum);
+            assert_eq!(busy[member]["maximum"], maximum);
+        }
+        let valid_busy = serde_json::json!({
+            "scope": "scheduling:busy:staff",
+            "sourceId": "staff-calendar",
+            "resources": ["staff-a"],
+            "maximumPastDays": 0,
+            "maximumFutureDays": registry_scheduling_core::MAXIMUM_HORIZON_DAYS,
+            "maximumSpanDays": MAX_BUSY_IMPORT_SPAN_DAYS,
+            "maximumFreshnessMinutes": MAX_BUSY_IMPORT_FRESHNESS_MINUTES
+        });
+        assert!(reads_block::<BusyImportProfileConfig>(&valid_busy));
+        let mut duplicate_busy = valid_busy.clone();
+        duplicate_busy["resources"] = serde_json::json!(["staff-a", "staff-a"]);
+        assert!(!reads_block::<BusyImportProfileConfig>(&duplicate_busy));
+
+        assert!(reads_block::<OperationalResourceScope>(
+            &serde_json::json!({"type": "unrestricted"})
+        ));
+        assert!(!reads_block::<OperationalResourceScope>(
+            &serde_json::json!({"type": "unrestricted", "ids": ["station-1"]})
+        ));
     }
 
     #[test]

@@ -59,6 +59,8 @@ pub struct PostgresRecordMutationService {
     automatic_proposal_lease_for_test: Option<Duration>,
     #[cfg(feature = "postgres-test")]
     proposal_read_barrier_for_test: Option<ProposalReadBarrier>,
+    #[cfg(feature = "postgres-test")]
+    task_context_barrier_for_test: Option<ProposalReadBarrier>,
     evidence_timeout: Duration,
     evidence_evaluator: Option<Arc<crate::action_evidence::ActionEvidenceEvaluator>>,
     review_result_source: Option<Arc<dyn crate::review_store::ReviewResultSource>>,
@@ -516,6 +518,8 @@ impl PostgresRecordMutationService {
             automatic_proposal_lease_for_test: None,
             #[cfg(feature = "postgres-test")]
             proposal_read_barrier_for_test: None,
+            #[cfg(feature = "postgres-test")]
+            task_context_barrier_for_test: None,
             evidence_timeout: REQUEST_ACTION_TIMEOUT,
             evidence_evaluator: None,
             review_result_source: None,
@@ -547,6 +551,18 @@ impl PostgresRecordMutationService {
         resume: Arc<tokio::sync::Notify>,
     ) -> Self {
         self.proposal_read_barrier_for_test = Some(ProposalReadBarrier { loaded, resume });
+        self
+    }
+
+    #[cfg(feature = "postgres-test")]
+    #[must_use]
+    #[doc(hidden)]
+    pub fn with_task_context_barrier_for_test(
+        mut self,
+        loaded: Arc<tokio::sync::Notify>,
+        resume: Arc<tokio::sync::Notify>,
+    ) -> Self {
+        self.task_context_barrier_for_test = Some(ProposalReadBarrier { loaded, resume });
         self
     }
 

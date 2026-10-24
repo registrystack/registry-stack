@@ -1562,6 +1562,8 @@ fn review_binding() -> Arc<registry_breg::review_store::ReviewAuthorityRegistry>
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn review_status_service_reads_only_its_exact_frozen_review_binding() {
     let mut source = source(false);
+    let proposal_targets =
+        source["accessProfiles"][0]["permissions"]["proposals"][0]["targets"].clone();
     source["accessProfiles"][0]["permissions"]["proposals"][0]["operations"] = json!([
         "get",
         "edit",
@@ -1580,6 +1582,10 @@ async fn review_status_service_reads_only_its_exact_frozen_review_binding() {
         "actorKind":"service","requesterClients":["agent-client"],"requiredScopes":["proposal:review-status"],
         "requiredPurposes":["registry-administration"],"permissions":{"proposals":[{"action":"correct-name",
             "reviewAuthority":"casework","operations":["get-review-status"]}]}}));
+    source["accessProfiles"].as_array_mut().unwrap().push(json!({"id":"task-context","principalClaim":"registry_principal",
+        "actorKind":"service","requesterClients":["agent-client"],"requiredScopes":["proposal:task-context"],
+        "requiredPurposes":["registry-administration"],"permissions":{"proposals":[{"action":"correct-name",
+            "operations":["get-task-grant-context"],"readableContextFields":["proposedName"],"targets":proposal_targets}]}}));
     let fixture =
         client_http::ClientFixture::start_with_mutations(compile(source), clerk(), |service| {
             service.with_review_result_source(review_binding())
@@ -1618,6 +1624,14 @@ async fn review_status_service_reads_only_its_exact_frozen_review_binding() {
                 .unwrap(),
         )
         .await;
+    let mut task_token = token.clone();
+    task_token["scope"] = json!("proposal:task-context");
+    task_token["jurisdiction"] = json!("zone-a");
+    let task_claims = auth
+        .authenticate(&idp.mint_token(task_token))
+        .await
+        .unwrap();
+    let task_service = fixture.client_for(task_claims.clone()).await;
     let path = format!("/v1/proposals/{id}/review-status?accessProfile=review-status");
     let (code, value, _) = send(&service, Method::GET, &path, Value::Null, None, None).await;
     assert_eq!(
@@ -1633,6 +1647,27 @@ async fn review_status_service_reads_only_its_exact_frozen_review_binding() {
         "no correlation before acceptance"
     );
     assert_review_contract(&fixture.registry, &value);
+    let mut task_request = json!({
+        "expected":{"actionId":"correct-name","subject":value["subject"],"contract":value["context"]["contract"]},
+        "requestId":uuid::Uuid::new_v4(),"taskId":uuid::Uuid::new_v4(),"taskRevision":3,
+        "policy":{"id":"name-correction","version":"1","digest":format!("sha256:{}","b".repeat(64))},
+        "purpose":"task-grant","fields":["proposedName"]
+    });
+    let task_path = format!("/v1/proposals/{id}/task-grant-context?accessProfile=task-context");
+    assert_eq!(
+        send(
+            &task_service,
+            Method::POST,
+            &task_path,
+            task_request.clone(),
+            None,
+            None,
+        )
+        .await
+        .0,
+        StatusCode::NOT_FOUND,
+        "task context must not precede the source's accepted review binding"
+    );
     assert!(value["context"].get("fields").is_none());
     assert!(!value.to_string().contains("current-name-canary"));
     let metadata = service
@@ -1746,6 +1781,136 @@ async fn review_status_service_reads_only_its_exact_frozen_review_binding() {
     };
     fixture.database.admin.execute("UPDATE registry_internal.registry_proposal_review_submissions SET state='accepted',accepted_binding=$1",&[&serde_json::to_value(&accepted).unwrap()]).await.unwrap();
     let accepted_value = serde_json::to_value(&accepted).unwrap();
+    task_request["requestId"] = json!(accepted.request_id);
+    let metadata = task_service
+        .client
+        .registry_contract(Some("task-context"))
+        .await
+        .unwrap()
+        .value;
+    let task_binding = metadata
+        .select_proposal_task_grant_context("task-context", "correct-name")
+        .unwrap();
+    let typed_task_request: registry_breg_client::BRegProposalTaskContextRequest =
+        serde_json::from_value(task_request.clone()).unwrap();
+    let task_document = task_service
+        .client
+        .read_proposal_task_grant_context(&task_binding, &typed_task_request)
+        .await
+        .unwrap()
+        .value;
+    assert_eq!(task_document.request, typed_task_request);
+    assert_eq!(
+        task_document.proposal.context.fields.unwrap(),
+        BTreeMap::from([("proposedName".into(), json!("Proposed"))])
+    );
+    let mut substituted_request = task_request.clone();
+    substituted_request["requestId"] = json!(uuid::Uuid::new_v4());
+    let (code, value, _) = send(
+        &task_service,
+        Method::POST,
+        &task_path,
+        substituted_request,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(code, StatusCode::NOT_FOUND, "substituted request: {value}");
+    assert!(!value.to_string().contains("Proposed"));
+    let loaded = Arc::new(tokio::sync::Notify::new());
+    let resume = Arc::new(tokio::sync::Notify::new());
+    let concurrent_task_service = fixture
+        .client_with_mutations(
+            task_claims.clone(),
+            (*fixture.mutations)
+                .clone()
+                .with_task_context_barrier_for_test(loaded.clone(), resume.clone()),
+        )
+        .await;
+    let (task_read, withdrawal) = tokio::join!(
+        async {
+            send(
+                &concurrent_task_service,
+                Method::POST,
+                &task_path,
+                task_request.clone(),
+                None,
+                None,
+            )
+            .await
+        },
+        async {
+            tokio::time::timeout(std::time::Duration::from_secs(1), loaded.notified())
+                .await
+                .expect("task context resolved the current accepted source binding");
+            let withdrawal = fixture.database.admin.execute(
+                "UPDATE registry_internal.registry_proposal_review_submissions SET state='cancelling',withdrawn=true",
+                &[],
+            );
+            tokio::pin!(withdrawal);
+            assert!(
+                tokio::time::timeout(std::time::Duration::from_millis(100), withdrawal.as_mut(),)
+                    .await
+                    .is_err(),
+                "source withdrawal must wait for an admitted task context read"
+            );
+            resume.notify_one();
+            withdrawal.await
+        }
+    );
+    assert_eq!(
+        task_read.0,
+        StatusCode::OK,
+        "task read won race: {}",
+        task_read.1
+    );
+    assert_eq!(withdrawal.unwrap(), 1);
+    fixture.database.admin.execute(
+        "UPDATE registry_internal.registry_proposal_review_submissions SET state='accepted',withdrawn=false",
+        &[],
+    ).await.unwrap();
+    let loaded = Arc::new(tokio::sync::Notify::new());
+    let resume = Arc::new(tokio::sync::Notify::new());
+    let concurrent_task_service = fixture
+        .client_with_mutations(
+            task_claims,
+            (*fixture.mutations)
+                .clone()
+                .with_proposal_read_barrier_for_test(loaded.clone(), resume.clone()),
+        )
+        .await;
+    let (task_read, withdrawal) = tokio::join!(
+        async {
+            send(
+                &concurrent_task_service,
+                Method::POST,
+                &task_path,
+                task_request.clone(),
+                None,
+                None,
+            )
+            .await
+        },
+        async {
+            tokio::time::timeout(std::time::Duration::from_secs(1), loaded.notified())
+                .await
+                .expect("task context loaded the frozen proposal");
+            let withdrawal = fixture.database.admin.execute(
+                "UPDATE registry_internal.registry_proposal_review_submissions SET state='cancelling',withdrawn=true",
+                &[],
+            ).await;
+            resume.notify_one();
+            withdrawal
+        }
+    );
+    assert_eq!(withdrawal.unwrap(), 1);
+    assert_eq!(
+        task_read.0,
+        StatusCode::NOT_FOUND,
+        "withdrawal won race: {}",
+        task_read.1
+    );
+    assert!(!task_read.1.to_string().contains("Proposed"));
     for state in ["accepted", "cancelling", "cancelled"] {
         fixture.database.admin.execute("UPDATE registry_internal.registry_proposal_review_submissions SET state=$1,withdrawn=($1<>'accepted')", &[&state]).await.unwrap();
         for (http, selected) in [(&service, "review-status"), (&fixture.http, "clerk")] {
@@ -1771,6 +1936,27 @@ async fn review_status_service_reads_only_its_exact_frozen_review_binding() {
             purpose_read.request_id.as_deref(),
             Some(accepted.request_id.to_string().as_str())
         );
+        let (task_code, task_value, _) = send(
+            &task_service,
+            Method::POST,
+            &task_path,
+            task_request.clone(),
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(
+            task_code,
+            if state == "accepted" {
+                StatusCode::OK
+            } else {
+                StatusCode::NOT_FOUND
+            },
+            "{state} task context: {task_value}"
+        );
+        if state != "accepted" {
+            assert!(!task_value.to_string().contains("Proposed"));
+        }
     }
     let (code, context, _) = send(
         &fixture.http,
@@ -1863,6 +2049,121 @@ async fn review_status_service_reads_only_its_exact_frozen_review_binding() {
     );
     drop(service);
     drop(human);
+    fixture.finish().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn task_grant_context_malformed_requests_are_audited_and_fail_closed() {
+    let mut source = source(false);
+    let proposal_targets =
+        source["accessProfiles"][0]["permissions"]["proposals"][0]["targets"].clone();
+    source["accessProfiles"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "id":"task-context",
+            "principalClaim":"registry_principal",
+            "actorKind":"service",
+            "requesterClients":["agent-client"],
+            "requiredScopes":["proposal:task-context"],
+            "requiredPurposes":["registry-administration"],
+            "permissions":{"proposals":[{
+                "action":"correct-name",
+                "operations":["get-task-grant-context"],
+                "readableContextFields":["proposedName"],
+                "targets":proposal_targets
+            }]}
+        }));
+    let fixture = client_http::ClientFixture::start(compile(source), clerk()).await;
+    let (_, target) = seed(&fixture).await;
+    let (code, draft, _) = send(
+        &fixture.http,
+        Method::POST,
+        "/v1/actions/correct-name/proposals?accessProfile=clerk",
+        json!({"input":{"target":target,"value":"Proposed"}}),
+        Some("malformed-context-start"),
+        None,
+    )
+    .await;
+    assert_eq!(code, StatusCode::CREATED, "{draft}");
+    let id = draft["id"].as_str().unwrap();
+
+    let idp = MockIdp::start().await;
+    let auth = authenticator(&fixture.registry, &idp).await;
+    let task_service = fixture
+        .client_for(
+            auth.authenticate(&idp.mint_token(json!({
+                "aud":"urn:example:breg",
+                "sub":"review-service",
+                "azp":"agent-client",
+                "registry_principal":"review-service",
+                "registry_actor_kind":"service",
+                "registry_purpose":"registry-administration",
+                "scope":"proposal:task-context",
+                "jurisdiction":"zone-a"
+            })))
+            .await
+            .unwrap(),
+        )
+        .await;
+    let path = format!(
+        "{}/v1/proposals/{id}/task-grant-context?accessProfile=task-context",
+        task_service.base_url
+    );
+    for (content_type, body, expected) in [
+        (
+            "application/json",
+            r#"{"expected":"malformed-body-canary"#,
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            "text/plain",
+            r#"{"malformed-media-canary":true}"#,
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+        ),
+    ] {
+        let before = fixture.audit_capture.entries().len();
+        let response = reqwest::Client::new()
+            .post(&path)
+            .header("content-type", content_type)
+            .body(body)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected, "{content_type}");
+        let entries = fixture.audit_capture.entries();
+        let refusals = entries[before..]
+            .iter()
+            .filter(|entry| entry["record"]["phase"] == "refusal")
+            .collect::<Vec<_>>();
+        assert_eq!(refusals.len(), 1, "{content_type} has one refusal audit");
+        assert_eq!(refusals[0]["record"]["actionId"], "correct-name");
+        assert_eq!(
+            refusals[0]["record"]["operationId"],
+            "proposals.correct-name.get-task-grant-context"
+        );
+        assert_eq!(refusals[0]["record"]["method"], "POST");
+        let journal = serde_json::to_string(&entries[before..]).unwrap();
+        assert!(!journal.contains("malformed-body-canary"));
+        assert!(!journal.contains("malformed-media-canary"));
+    }
+
+    fixture
+        .audit_capture
+        .fail_on(registry_breg::audit::AUDIT_SCHEMA, "refusal");
+    let response = reqwest::Client::new()
+        .post(path)
+        .header("content-type", "application/json")
+        .body("{")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        response.status(),
+        StatusCode::SERVICE_UNAVAILABLE,
+        "an unaudited malformed request must not receive the ordinary refusal"
+    );
+    drop(task_service);
     fixture.finish().await;
 }
 

@@ -380,6 +380,8 @@ payload!(ProviderPairData {
     contract: ReviewContextContract,
     registry_revision: String,
     reader_authority: ReaderAuthority,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    task_grant_authority: Option<ReaderAuthority>,
     next: String
 });
 payload!(LifecycleData {#[cfg_attr(feature="schema",schemars(with="Vec<registry_casework_core::LifecycleDescription>"))]lifecycles:Vec<Value>});
@@ -640,6 +642,32 @@ mod typed_report_tests {
             (
                 "lifecycle",
                 serde_json::json!({"ok":true,"lifecycles":[review_lifecycle()]}),
+            ),
+            (
+                "provider-pair",
+                serde_json::json!({
+                    "ok": true,
+                    "applied": true,
+                    "providerId": "applications",
+                    "description": "context-providers/applications.json",
+                    "contract": {
+                        "id": "urn:example:review-context",
+                        "revision": format!("sha256:{}", "a".repeat(64)),
+                        "schemaDigest": format!("sha256:{}", "b".repeat(64)),
+                    },
+                    "registryRevision": format!("sha256:{}", "c".repeat(64)),
+                    "readerAuthority": {
+                        "profile": "review-status",
+                        "operation": "get-review-status",
+                        "sourceWrites": false,
+                    },
+                    "taskGrantAuthority": {
+                        "profile": "task-context",
+                        "operation": "get-task-grant-context",
+                        "sourceWrites": false,
+                    },
+                    "next": "Bind the provider endpoint.",
+                }),
             ),
         ];
         for (command, raw) in reports {

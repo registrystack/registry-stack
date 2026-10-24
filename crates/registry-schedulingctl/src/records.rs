@@ -45,7 +45,8 @@ pub fn apply(config_path: &Path, records_path: &Path) -> Result<Value> {
     let counts = counts(&facts);
     let resolver = secret_resolver(&config)?;
     let store = PostgresStore::connect_migration(&config.database, &resolver)
-        .context("the Scheduling migration database configuration is invalid")?;
+        .context("the Scheduling migration database configuration is invalid")?
+        .with_busy_source_profiles(&config.authentication.oidc.busy_import_profiles);
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -116,12 +117,16 @@ pub fn apply(config_path: &Path, records_path: &Path) -> Result<Value> {
         }
     }
     record_applied(&runtime, &audit, correlation, &counts)?;
+    let resource_impacts = runtime
+        .block_on(store.resource_supply_impacts())
+        .context("records were applied, but their current resource impact could not be read")?;
     Ok(json!({
         "ok": true,
         "command": "records apply",
         "config": config_path,
         "records": records_path,
         "applied": counts,
+        "resourceImpacts": resource_impacts,
     }))
 }
 

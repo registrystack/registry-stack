@@ -1,0 +1,52 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/scheduling/project/project.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/scheduling/project/v1alpha1
+kind: SchedulingProject
+project:
+  id: shared-facilities
+  version: "1"
+services:
+  - id: room-reservation
+    label: Shared room reservation
+offerings:
+  - id: meeting-room
+    service: room-reservation
+    label: Meeting room
+    mode: exact-time
+    location: community-hall
+    because: Choose an eligible room and a bounded interval for its use.
+    exactTime:
+      durationMinutes: 60
+      durationSelection:
+        minimumMinutes: 60
+        maximumMinutes: 10080
+        incrementMinutes: 60
+      allowResourceSelection: true
+      partyCounts: optional
+      openingCoverage: occupied-interval
+      bufferBeforeMinutes: 15
+      bufferAfterMinutes: 15
+      leadTimeMinutes: 120
+      horizonDays: 60
+      pool: meeting-rooms
+      startIncrementMinutes: 30
+      maximumRecipients: 1
+    cancellationCutoffMinutes: 120
+holidaySets:
+  - id: hall-holidays
+    revision: 1
+    because: The facility calendar is reviewed by its operator.
+openings:
+  - id: hall-hours
+    location: community-hall
+    holidaySet: hall-holidays
+    weekdays: [mon, tue, wed, thu, fri, sat, sun]
+    startTime: "00:00"
+    endTime: "24:00"
+    effectiveFrom: "2026-01-01"
+    effectiveUntil: "2026-12-31"
+    because: Overnight use is permitted while the whole occupied interval remains open.
+channels: [public, assisted]
+holdPolicy:
+  ttlMinutes: 5
+  maximumPerCaller: 3
+  because: A multi-day reservation still uses a short confirmation hold.

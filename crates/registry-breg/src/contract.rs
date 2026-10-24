@@ -560,6 +560,7 @@ pub enum ProposalOperation {
     Retry,
     GetReviewStatus,
     GetReviewContext,
+    GetTaskGrantContext,
     GetApplicationActor,
 }
 impl ProposalOperation {
@@ -576,6 +577,7 @@ impl ProposalOperation {
             Self::Retry => "retry",
             Self::GetReviewStatus => "get-review-status",
             Self::GetReviewContext => "get-review-context",
+            Self::GetTaskGrantContext => "get-task-grant-context",
             Self::GetApplicationActor => "get-application-actor",
         }
     }

@@ -24,18 +24,22 @@ use crate::admission::{
 };
 use crate::diagnostics::{FindingArea, PolicyCheckReason, SchedulingDiagnostic};
 use crate::model::{
-    facts_id_collision, facts_integrity_diagnostics, AdmissionRequest, LedgerClaim, LedgerKind,
-    LedgerSnapshot, PartyCounts, SchedulingFacts,
+    facts_id_collision, facts_integrity_diagnostics, AdditionalAllocationRequest, AdmissionRequest,
+    LedgerClaim, LedgerKind, LedgerSnapshot, SchedulingFacts,
 };
 use crate::naming::{
     RETIRED_SCHEDULING_FIXTURE_API_VERSION, SCHEDULING_FIXTURE_API_VERSION, SCHEDULING_FIXTURE_KIND,
 };
+use crate::party::PartyCounts;
 use crate::policy::{SchedulingMode, SchedulingPolicy, MAXIMUM_COLLECTION_ENTRIES};
 use crate::problem::ProblemCode;
 use crate::resolve::{
     covers_span, location_closure_intervals, location_open_intervals, ResolveError,
 };
-use crate::typed::{MAXIMUM_REVISION, MAXIMUM_UNITS};
+use crate::typed::{
+    MAXIMUM_ADDITIONAL_ALLOCATIONS, MAXIMUM_BOOKING_DURATION_MINUTES, MAXIMUM_RESOURCE_UNITS,
+    MAXIMUM_REVISION, MAXIMUM_UNITS,
+};
 
 /// The policy revision replay runs every case under. A case resolves its
 /// offering at this revision; a case naming another exercises the
@@ -187,7 +191,51 @@ pub struct FixtureAdmissionRequest {
     #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub offering: String,
     pub start: DateTime<Utc>,
-    pub party: FixtureParty,
+    #[serde(
+        default,
+        deserialize_with = "crate::typed::optional_bounded_u32::<_, 1, MAXIMUM_BOOKING_DURATION_MINUTES>",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(
+            with = "Option<registry_platform_yaml::BoundedU32<1, MAXIMUM_BOOKING_DURATION_MINUTES>>"
+        )
+    )]
+    pub duration_minutes: Option<u32>,
+    #[serde(
+        default,
+        deserialize_with = "crate::typed::optional_local_id",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Option<registry_platform_yaml::LocalId>")
+    )]
+    pub resource: Option<String>,
+    #[serde(
+        default = "one_resource_unit",
+        deserialize_with = "crate::typed::bounded_u32::<_, 1, MAXIMUM_RESOURCE_UNITS>"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "registry_platform_yaml::BoundedU32<1, MAXIMUM_RESOURCE_UNITS>")
+    )]
+    pub resource_units: u32,
+    #[serde(
+        default,
+        deserialize_with = "crate::typed::bounded_list::<_, _, MAXIMUM_ADDITIONAL_ALLOCATIONS>",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(length(max = MAXIMUM_ADDITIONAL_ALLOCATIONS))
+    )]
+    pub additional_allocations: Vec<AdditionalAllocationRequest>,
+    /// Omit only for an exact-time offering whose policy explicitly makes
+    /// human counts optional, such as a room or equipment reservation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub party: Option<FixtureParty>,
     /// The channel the caller books through. It is free text so a fixture
     /// can exercise the refusal of a channel outside the vocabulary.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -259,6 +307,10 @@ impl FixtureAdmissionRequest {
         let Self {
             offering,
             start,
+            duration_minutes,
+            resource,
+            resource_units,
+            additional_allocations,
             party,
             channel,
             duplicate_key,
@@ -271,10 +323,15 @@ impl FixtureAdmissionRequest {
         AdmissionRequest {
             offering: offering.clone(),
             start: *start,
-            party: PartyCounts {
+            duration_minutes: *duration_minutes,
+            resource: resource.clone(),
+            resource_units: *resource_units,
+            additional_allocations: additional_allocations.clone(),
+            party: party.map(|party| PartyCounts {
                 recipients: party.recipients,
                 attendees: party.attendees,
-            },
+            }),
+            manager: None,
             channel: channel.clone(),
             duplicate_key: duplicate_key.clone(),
             policy_revision: *policy_revision,
@@ -282,8 +339,13 @@ impl FixtureAdmissionRequest {
             capabilities: capabilities.clone(),
             prerequisites: prerequisites.clone(),
             external_references: Vec::new(),
+            party_references: Vec::new(),
         }
     }
+}
+
+const fn one_resource_unit() -> u32 {
+    1
 }
 
 /// One replayed request and its expectation.
@@ -650,13 +712,25 @@ impl SchedulingFixture {
                             offering: offering.id.clone(),
                         });
                     };
-                    let window_id = arrival.window.clone();
-                    let Some(window) = self.facts.window(&window_id) else {
-                        return Err(ReplayError::UnknownWindow {
-                            case: case.name.clone(),
-                            window: window_id,
-                        });
+                    // A named window must exist. An offering that names no
+                    // window serves every window naming it, and a start that
+                    // matches none of them is a case outcome
+                    // (`schedule.unpublished`), not a fixture defect.
+                    let window = match &arrival.window {
+                        Some(window_id) => self.facts.window(window_id).ok_or_else(|| {
+                            ReplayError::UnknownWindow {
+                                case: case.name.clone(),
+                                window: window_id.clone(),
+                            }
+                        })?,
+                        None => {
+                            match offering.arrival_window(&self.facts.windows, case.request.start) {
+                                Some(window) => window,
+                                None => continue,
+                            }
+                        }
                     };
+                    let window_id = window.id.clone();
                     // The window must sit inside the location's published
                     // openings; a window floating outside every opening is a
                     // fixture telling a story the schedule never publishes.
@@ -846,13 +920,22 @@ fn replay_case(
                     offering: offering.id.clone(),
                 },
             ))?;
-            let window = fixture
-                .facts
-                .window(&arrival.window)
-                .ok_or(CaseStoppage::Replay(ReplayError::UnknownWindow {
-                    case: case.name.clone(),
-                    window: arrival.window.clone(),
-                }))?;
+            // A named window that is missing is an authoring error; a start
+            // that matches no window of a multi-window offering is the
+            // caller's refusal, as the runtime returns it.
+            let window = match &arrival.window {
+                Some(window_id) => fixture.facts.window(window_id).ok_or(CaseStoppage::Replay(
+                    ReplayError::UnknownWindow {
+                        case: case.name.clone(),
+                        window: window_id.clone(),
+                    },
+                ))?,
+                None => offering
+                    .arrival_window(&fixture.facts.windows, request.start)
+                    .ok_or(CaseStoppage::Refusal(
+                        crate::admission::AdmissionRefusal::ScheduleUnpublished,
+                    ))?,
+            };
             let exceptions: Vec<_> = fixture
                 .facts
                 .exceptions
@@ -1041,6 +1124,21 @@ holdPolicy:
 
     fn policy_for_fixture() -> SchedulingPolicy {
         read_policy(EXACT_TIME_PROJECT)
+    }
+
+    #[test]
+    fn maintained_resource_reservations_replay_the_complete_interval() {
+        let policy = read_policy(include_str!(
+            "../../../products/scheduling/examples/resource-reservations/scheduling.yaml"
+        ));
+        let fixture = read_fixture(include_str!("../../../products/scheduling/examples/resource-reservations/fixtures/named-intervals.yaml"), &policy);
+        let outcomes = fixture
+            .replay(&policy)
+            .expect("the maintained reservation journey replays");
+        assert_eq!(outcomes.len(), 11);
+        for outcome in outcomes {
+            assert_eq!(outcome.status, CaseStatus::Pass, "{outcome:?}");
+        }
     }
 
     fn read_fixture(yaml: &str, policy: &SchedulingPolicy) -> SchedulingFixture {
@@ -1673,16 +1771,152 @@ holdPolicy:
         assert_eq!(outcomes[0].status, CaseStatus::Pass, "{outcomes:?}");
     }
 
+    /// An offering that names no window is served by every window naming
+    /// it. Each case picks its window by start, depletes only that window,
+    /// and a start no window opens at is unpublished.
+    #[test]
+    fn window_cases_pick_their_window_by_start() {
+        let window = |id: &str, day: u32| {
+            format!(
+                "    - id: {id}\n      revision: 1\n      offering: household-morning\n\
+                 \x20     location: civic-hall\n      start: 2026-10-{day}T01:00:00Z\n\
+                 \x20     end: 2026-10-{day}T03:00:00Z\n      units: 1\n      unitsPolicy:\n\
+                 \x20       type: fixed\n        units: 1\n        because: One household, one unit.\n\
+                 \x20     because: A Saturday morning household block.\n"
+            )
+        };
+        let case = |name: &str, day: u32, hour: u32, expect: &str| {
+            format!(
+                "  - name: {name}\n    request:\n      offering: household-morning\n\
+                 \x20     start: 2026-10-{day}T{hour:02}:00:00Z\n      party:\n\
+                 \x20       recipients: 1\n        attendees: 1\n      channel: public\n\
+                 \x20     policyRevision: 1\n      windowRevision: 1\n    expect:\n{expect}"
+            )
+        };
+        let admitted = "      type: admitted\n      units: 1\n";
+        let yaml = format!(
+            "apiVersion: id.registrystack.org/formats/scheduling/fixture/v1alpha1\n\
+             kind: SchedulingFixture\nname: household-saturdays\nnow: 2026-10-09T20:00:00Z\n\
+             facts:\n  locations:\n    - id: civic-hall\n      timezone: Asia/Bangkok\n  windows:\n\
+             {}{}cases:\n{}{}{}{}",
+            window("household-morning-10", 10),
+            window("household-morning-17", 17),
+            case("first-saturday", 10, 1, admitted),
+            case(
+                "first-saturday-is-full",
+                10,
+                1,
+                "      type: refused\n      code: capacity.exhausted\n"
+            ),
+            case("second-saturday-has-its-own-units", 17, 1, admitted),
+            case(
+                "no-window-opens-then",
+                10,
+                2,
+                "      type: refused\n      code: schedule.unpublished\n"
+            ),
+        );
+        let policy = read_policy(
+            r#"
+apiVersion: id.registrystack.org/formats/scheduling/project/v1alpha1
+kind: SchedulingProject
+project:
+  id: household-days
+  version: "3"
+services:
+  - id: household-day
+    label: Household registration day
+offerings:
+  - id: household-morning
+    service: household-day
+    label: Morning household block
+    mode: arrival-window
+    location: civic-hall
+    because: Households arrive in a served morning block.
+    arrival:
+      leadTimeMinutes: 60
+      horizonDays: 45
+    cancellationCutoffMinutes: 1440
+holidaySets:
+  - id: office-holidays
+    revision: 1
+    because: Public holidays observed by the registry office.
+openings:
+  - id: hall-hours
+    location: civic-hall
+    holidaySet: office-holidays
+    weekdays: [sat]
+    startTime: "08:00"
+    endTime: "12:00"
+    effectiveFrom: "2026-10-01"
+    effectiveUntil: "2026-12-31"
+    because: The hall opens on Saturday mornings.
+channels: [public, assisted]
+holdPolicy:
+  ttlMinutes: 10
+  maximumPerCaller: 2
+  because: Households need a few minutes to gather documents.
+"#,
+        );
+
+        let fixture = read_fixture(&yaml, &policy);
+        let outcomes = fixture.replay(&policy).expect("replays");
+        assert_eq!(outcomes.len(), 4);
+        assert!(
+            outcomes
+                .iter()
+                .all(|outcome| outcome.status == CaseStatus::Pass),
+            "{outcomes:?}"
+        );
+    }
+
     #[test]
     fn party_counts_read_from_the_fixture_surface() {
         let policy = policy_for_fixture();
         let fixture = read_fixture(EXACT_TIME_FIXTURE, &policy);
         assert_eq!(
             fixture.cases[0].request.admission().party,
-            PartyCounts {
+            Some(PartyCounts {
                 recipients: 1,
                 attendees: 1,
-            }
+            })
+        );
+    }
+
+    #[test]
+    fn fixture_can_omit_people_only_when_exact_time_policy_allows_it() {
+        let fixture_without_party = EXACT_TIME_FIXTURE.replacen(
+            "      party:\n        recipients: 1\n        attendees: 1\n",
+            "",
+            1,
+        );
+
+        let required_policy = policy_for_fixture();
+        let required_fixture = fixture_without_party.replacen(
+            "      type: admitted\n      units: 1",
+            "      type: refused\n      code: party.capacity-inadequate",
+            1,
+        );
+        let outcomes = read_fixture(&required_fixture, &required_policy)
+            .replay(&required_policy)
+            .expect("required-count fixture reaches admission");
+        assert_eq!(outcomes[0].status, CaseStatus::Pass, "{outcomes:?}");
+
+        let optional_policy = read_policy(&EXACT_TIME_PROJECT.replacen(
+            "      maximumRecipients: 1",
+            "      partyCounts: optional\n      maximumRecipients: 1",
+            1,
+        ));
+        let outcomes = read_fixture(&fixture_without_party, &optional_policy)
+            .replay(&optional_policy)
+            .expect("party-optional fixture replays");
+        assert_eq!(outcomes[0].status, CaseStatus::Pass, "{outcomes:?}");
+        assert_eq!(
+            read_fixture(&fixture_without_party, &optional_policy).cases[0]
+                .request
+                .admission()
+                .party,
+            None
         );
     }
 

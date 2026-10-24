@@ -222,6 +222,116 @@ mod tests {
     }
 
     #[test]
+    fn interval_and_resource_choice_are_optional_and_bounded_in_authoring_schemas() {
+        let project = schema(PROJECT_SCHEMA_PATH);
+        let exact = &project["$defs"]["ExactTimeOffering"];
+        let required = exact["required"].as_array().unwrap();
+        assert!(exact["properties"].get("durationSelection").is_some());
+        assert!(exact["properties"].get("openingCoverage").is_some());
+        assert!(exact["properties"].get("allowResourceSelection").is_some());
+        assert!(!required.contains(&Value::from("durationSelection")));
+        assert!(!required.contains(&Value::from("openingCoverage")));
+        assert!(!required.contains(&Value::from("allowResourceSelection")));
+        for member in ["minimumMinutes", "maximumMinutes", "incrementMinutes"] {
+            let bound = &project["$defs"]["DurationSelectionPolicy"]["properties"][member];
+            assert_eq!(bound["minimum"], 1, "{member}");
+            assert_eq!(
+                bound["maximum"],
+                crate::typed::MAXIMUM_BOOKING_DURATION_MINUTES,
+                "{member}"
+            );
+        }
+
+        let fixture = schema(FIXTURE_SCHEMA_PATH);
+        let request = &fixture["$defs"]["FixtureAdmissionRequest"];
+        let required = request["required"].as_array().unwrap();
+        assert!(!required.contains(&Value::from("durationMinutes")));
+        assert!(!required.contains(&Value::from("resource")));
+        assert!(!required.contains(&Value::from("party")));
+        assert_eq!(request["properties"]["durationMinutes"]["minimum"], 1);
+        assert_eq!(
+            request["properties"]["durationMinutes"]["maximum"],
+            crate::typed::MAXIMUM_BOOKING_DURATION_MINUTES
+        );
+    }
+
+    #[test]
+    fn physical_allocation_schemas_bound_stock_and_bundle_size() {
+        let records = schema(RECORDS_SCHEMA_PATH);
+        let member = &records["$defs"]["PoolMember"];
+        assert_eq!(member["properties"]["capacityUnits"]["minimum"], 0);
+        assert_eq!(
+            member["properties"]["capacityUnits"]["maximum"],
+            crate::typed::MAXIMUM_RESOURCE_UNITS
+        );
+        assert!(!member["required"]
+            .as_array()
+            .unwrap()
+            .contains(&Value::from("capacityUnits")));
+
+        let fixture = schema(FIXTURE_SCHEMA_PATH);
+        let request = &fixture["$defs"]["FixtureAdmissionRequest"];
+        assert_eq!(request["properties"]["resourceUnits"]["minimum"], 1);
+        assert_eq!(
+            request["properties"]["resourceUnits"]["maximum"],
+            crate::typed::MAXIMUM_RESOURCE_UNITS
+        );
+        assert_eq!(
+            request["properties"]["additionalAllocations"]["maxItems"],
+            crate::typed::MAXIMUM_ADDITIONAL_ALLOCATIONS
+        );
+        for optional in ["resourceUnits", "additionalAllocations"] {
+            assert!(!request["required"]
+                .as_array()
+                .unwrap()
+                .contains(&Value::from(optional)));
+        }
+
+        let preview =
+            serde_json::to_value(schemars::schema_for!(crate::AvailabilityPreviewRequest)).unwrap();
+        assert_eq!(preview["additionalProperties"], false);
+        let properties = preview["properties"].as_object().unwrap();
+        for private in [
+            "manager",
+            "duplicateKey",
+            "partyReferences",
+            "externalReferences",
+            "capabilities",
+            "prerequisites",
+        ] {
+            assert!(
+                !properties.contains_key(private),
+                "preview admits {private}"
+            );
+        }
+        for physical in [
+            "resource",
+            "resourceUnits",
+            "additionalAllocations",
+            "durationMinutes",
+        ] {
+            assert!(
+                properties.contains_key(physical),
+                "preview omits {physical}"
+            );
+        }
+    }
+
+    #[test]
+    fn window_resource_quantities_match_the_reader_bounds() {
+        for path in [RECORDS_SCHEMA_PATH, FIXTURE_SCHEMA_PATH] {
+            let document = schema(path);
+            let units = &document["$defs"]["WindowResourceRequirement"]["properties"]["units"];
+            assert_eq!(units["minimum"], 1, "{path}");
+            assert_eq!(
+                units["maximum"],
+                crate::typed::MAXIMUM_RESOURCE_UNITS,
+                "{path}"
+            );
+        }
+    }
+
+    #[test]
     fn committed_authoring_schemas_match_generated_bytes() {
         for (path, generated_bytes) in authoring_documents().unwrap() {
             assert_eq!(

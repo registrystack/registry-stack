@@ -1481,6 +1481,7 @@ pub fn openapi() -> Value {
                     P::RunDefinitionIncompatible,
                     P::ReceiptExpired,
                     P::EvaluationUncertain,
+                    P::MutationUncertain,
                 ],
             ]
             .concat(),

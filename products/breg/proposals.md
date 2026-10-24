@@ -501,6 +501,37 @@ replace the frozen submission.
 Display-free review status remains independently authorized for exact retained
 submission correlation.
 
+### Serve field-limited task-grant context
+
+A service profile can grant `get-task-grant-context` for one Proposal Action
+and a nonempty `readableContextFields` subset. Keep this profile distinct from
+human `get-review-context` and service `get-review-status` profiles. The caller
+uses `POST /v1/proposals/{proposal_id}/task-grant-context?accessProfile=<profile>`;
+task identifiers and requested fields stay in the body.
+Distinct here means the caller explicitly selects the separately authored
+task-context operation and profile. It does not require that profile to contain
+no other independently authored permissions.
+
+The request binds the expected Action, frozen subject identity, context contract,
+exact accepted review policy, Casework request and task correlation, purpose,
+and requested field set. Correlation, purpose, and expected identity are not
+grants, and BReg does not infer that Casework has verified a task from them.
+BReg first matches the frozen identity and contract, the provider-issued request
+ID and exact policy from the accepted review binding, and the source's current
+non-withdrawn acceptance. The task ID and purpose remain Casework correlation
+that BReg echoes without treating it as authority. BReg then resolves only the
+requested context fields under their current Record, row-boundary, membership,
+and consent rules. Any mismatch is concealed before those values are resolved.
+The accepted source row is locked through the read, so a concurrent withdrawal
+either wins and conceals the context, or waits for the already admitted read to
+finish.
+
+The response wraps the ordinary Proposal review document with the exact request
+binding. Its `context.fields` member contains only the requested keys. A
+provider validates those selected values against their owning properties in the
+exported review-context schema; the subset is not a complete instance of that
+schema and need not contain its unrelated required properties.
+
 ### Show a supporting document
 
 An Action can project a declared document slot into its review context:

@@ -20,6 +20,7 @@ use chrono::{DateTime, SecondsFormat, TimeDelta, Timelike, Utc};
 use jsonwebtoken::{Algorithm, EncodingKey, Header};
 use registry_platform_audit::{AuditHashSecret, AuditKeyHasher};
 use registry_platform_config::{SecretProvider, SecretReference, SecretResolver};
+use registry_platform_crypto::delivery_signature::{sign_v1, SignatureFields};
 use registry_platform_hooks::delivery::DeliveryOutcome;
 use registry_platform_hooks::{EnvelopeLimits, HookEnvelope, HookHandlerSource};
 use registry_platform_oidc::{
@@ -35,11 +36,16 @@ use registry_scheduling::config::{
 use registry_scheduling::config::{ReminderDestinationConfig, UrlHookDestinationConfig};
 use registry_scheduling::hooks::{ActivatedHooks, HookRuntimeIdentity};
 use registry_scheduling::http::{router, HttpState};
+use registry_scheduling::operational::{
+    OperationalProjectionConfig, OperationalProjectionField, OperationalReadPermissionConfig,
+    OperationalReadProfileConfig, OperationalResourceScope,
+};
 use registry_scheduling::runtime::{
     claim_due_intent_for_test, dispatch_due_intents, finish_intent_for_test, reminder_transport,
     send_claimed_intent_for_test, IntentLeaseForTest, ReminderTransport,
 };
 use registry_scheduling::service::SchedulingService;
+use registry_scheduling::source_busy::{BusyImpactProjection, BusyImportProfileConfig};
 use registry_scheduling::store::{
     activation_layout, attempt_key_reference, ActivationRequest, ActivePackage, CommitError,
     CommitOutcome, Commitment, PostgresStore, RoleMode, StoreError, SupplyContext,
@@ -58,6 +64,31 @@ use tower::ServiceExt;
 use uuid::Uuid;
 use wiremock::matchers::{body_string_contains, header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
+
+#[path = "postgres_commitments/atomic_allocations.rs"]
+mod atomic_allocations;
+#[path = "postgres_commitments/attendance.rs"]
+mod attendance;
+#[path = "postgres_commitments/booking_party.rs"]
+mod booking_party;
+#[path = "postgres_commitments/legacy_allocations.rs"]
+mod legacy_allocations;
+#[path = "postgres_commitments/multi_window.rs"]
+mod multi_window;
+#[path = "postgres_commitments/operational_reads.rs"]
+mod operational_reads;
+#[path = "postgres_commitments/reservation_review.rs"]
+mod reservation_review;
+#[path = "postgres_commitments/resource_availability.rs"]
+mod resource_availability;
+#[path = "postgres_commitments/review_regressions.rs"]
+mod review_regressions;
+#[path = "postgres_commitments/selected_lifecycle.rs"]
+mod selected_lifecycle;
+#[path = "postgres_commitments/service_admission_regressions.rs"]
+mod service_admission_regressions;
+#[path = "postgres_commitments/source_busy.rs"]
+mod source_busy;
 
 const ISSUER: &str = "https://task-token.test";
 
@@ -83,7 +114,7 @@ const OVERLAPPING_OFFERING: &str = "registry-update-60";
 
 fn observer_policy() -> String {
     format!(
-        "{POLICY}hooks:\n  - id: confirmed-observer\n    phase: after\n    trigger: appointment.confirmed\n    projection: [appointmentId, offering, start, end, revision, policyRevision, state]\n    handler: {{type: url, destinationId: appointment-events}}\n  - id: rescheduled-observer\n    phase: after\n    trigger: appointment.rescheduled\n    projection: [appointmentId, offering, start, end, revision, policyRevision, state]\n    handler: {{type: url, destinationId: appointment-events}}\n  - id: cancelled-observer\n    phase: after\n    trigger: appointment.cancelled\n    projection: [appointmentId, revision, state]\n    handler: {{type: url, destinationId: appointment-events}}\n"
+        "{POLICY}hooks:\n  - id: confirmed-observer\n    phase: after\n    trigger: appointment.confirmed\n    projection: [appointmentId, offering, start, end, revision, policyRevision, state]\n    handler: {{type: url, destinationId: appointment-events}}\n  - id: rescheduled-observer\n    phase: after\n    trigger: appointment.rescheduled\n    projection: [appointmentId, offering, start, end, revision, policyRevision, state]\n    handler: {{type: url, destinationId: appointment-events}}\n  - id: cancelled-observer\n    phase: after\n    trigger: appointment.cancelled\n    projection: [appointmentId, revision, state]\n    handler: {{type: url, destinationId: appointment-events}}\n  - id: attendance-observer\n    phase: after\n    trigger: appointment.attendance-observed\n    projection: [appointmentId, appointmentRevision, attendanceRevision, attendanceState, observedAt, recordedAt, policyRevision]\n    handler: {{type: url, destinationId: appointment-events}}\n"
     )
 }
 
@@ -260,6 +291,20 @@ impl Fixture {
     }
 }
 
+async fn begin_current_test_writer(client: &tokio_postgres::Client) {
+    client
+        .batch_execute("BEGIN; SET LOCAL registry_scheduling.allocation_writer = 'v2'")
+        .await
+        .expect("begin a current atomic-allocation test writer");
+}
+
+async fn commit_current_test_writer(client: &tokio_postgres::Client) {
+    client
+        .batch_execute("COMMIT")
+        .await
+        .expect("commit the current test writer");
+}
+
 /// A fresh deployment in its own schema: migrated, adopted, seeded, published
 /// with every pool the policy names, and serving through the same router the
 /// runtime serves.
@@ -318,7 +363,7 @@ async fn fixture_publishing_with_hook_and_status(
     // resolves into it: table creation follows search_path, and the scoped
     // URL every store connection carries points at this schema, so it must
     // exist before the migrations run.
-    let (admin, connection) = tokio_postgres::connect(&base, tokio_postgres::NoTls)
+    let (mut admin, connection) = tokio_postgres::connect(&base, tokio_postgres::NoTls)
         .await
         .expect("connect the scheduling test database");
     tokio::spawn(async move { connection.await.expect("the scheduling admin connection") });
@@ -360,20 +405,30 @@ async fn fixture_publishing_with_hook_and_status(
     // against (the path operator tooling owns), and the store adopts the
     // deployment identity, the same claim `schedulingctl apply` makes on a
     // fresh database.
+    let seed = admin
+        .transaction()
+        .await
+        .expect("the facts seed transaction");
+    seed.batch_execute("SET LOCAL registry_scheduling.allocation_writer = 'v2'")
+        .await
+        .expect("the atomic allocation writer marker");
     for statement in [
         "INSERT INTO scheduling_locations(location_id, timezone) VALUES('north-counter','UTC')",
         "INSERT INTO scheduling_pools(pool_id) VALUES('north-counter')",
         "INSERT INTO scheduling_pools(pool_id) VALUES('two-counter')",
+        "INSERT INTO scheduling_pools(pool_id) VALUES('chairs')",
         "INSERT INTO scheduling_pool_members(resource_id, pool_id, available) \
          VALUES('station-1','north-counter',true)",
         "INSERT INTO scheduling_pool_members(resource_id, pool_id, available) \
          VALUES('station-2','two-counter',true)",
+        "INSERT INTO scheduling_pool_members(resource_id, pool_id, available, capacity_units) \
+         VALUES('chair-stock','chairs',true,30)",
     ] {
-        admin
-            .batch_execute(statement)
+        seed.batch_execute(statement)
             .await
             .expect("seed the scheduling facts");
     }
+    seed.commit().await.expect("commit the scheduling facts");
     store
         .adopt(SCHEDULING_ID)
         .await
@@ -437,7 +492,6 @@ async fn fixture_publishing_with_hook_and_status(
     let http = router(HttpState {
         service,
         authenticator: Arc::new(authenticator()),
-        store: store.clone(),
     });
     Fixture {
         http,
@@ -547,6 +601,38 @@ async fn fixture_with_task_status(status: Arc<TaskGrantStatusRegistry>) -> Fixtu
 }
 
 fn authenticator() -> SchedulingAuthenticator {
+    authenticator_with_busy_profiles(BTreeMap::new())
+}
+
+fn authenticator_with_busy_profiles(
+    busy_import_profiles: BTreeMap<String, BusyImportProfileConfig>,
+) -> SchedulingAuthenticator {
+    let operational_profile = |scope: &str, attendance: bool| OperationalReadProfileConfig {
+        scope: scope.to_owned(),
+        maximum_past_days: 30,
+        maximum_future_days: 90,
+        maximum_span_days: 62,
+        permissions: vec![OperationalReadPermissionConfig {
+            service: "registry-update".to_owned(),
+            location: "north-counter".to_owned(),
+            resources: OperationalResourceScope::Exact {
+                ids: vec!["station-1".to_owned(), "station-2".to_owned()],
+            },
+        }],
+        projection: OperationalProjectionConfig {
+            fields: vec![
+                OperationalProjectionField::OccupiedInterval,
+                OperationalProjectionField::Resource,
+                OperationalProjectionField::Units,
+                OperationalProjectionField::PartyCounts,
+                OperationalProjectionField::Allocations,
+            ]
+            .into_iter()
+            .chain(attendance.then_some(OperationalProjectionField::Attendance))
+            .collect(),
+            external_reference_products: vec!["registry-casework".to_owned()],
+        },
+    };
     let oidc = OidcConfig {
         provider: OidcIssuerConfig {
             issuer: registry_platform_yaml::Url::new(ISSUER).expect("valid issuer URL"),
@@ -561,6 +647,17 @@ fn authenticator() -> SchedulingAuthenticator {
         scope_claim: "registry_scopes".to_owned(),
         reads_scope: "scheduling-read".to_owned(),
         explain_scope: "scheduling-explain".to_owned(),
+        appointment_read_profiles: BTreeMap::from([
+            (
+                "desk".to_owned(),
+                operational_profile("scheduling-appointments-desk", false),
+            ),
+            (
+                "supervisor".to_owned(),
+                operational_profile("scheduling-appointments-supervisor", true),
+            ),
+        ]),
+        busy_import_profiles,
     };
     let verifier = TokenVerifierConfig::access_token_profile(
         ISSUER,
@@ -692,6 +789,15 @@ fn reader_token() -> String {
         "sub": "principal-read",
         "azp": CLIENT,
         "registry_scopes": "scheduling-read",
+        "registry_actor_kind": "service",
+    }))
+}
+
+fn operational_token(subject: &str, scopes: &str) -> String {
+    token(json!({
+        "sub": subject,
+        "azp": CLIENT,
+        "registry_scopes": scopes,
         "registry_actor_kind": "service",
     }))
 }
@@ -844,6 +950,183 @@ fn admission(fx: &Fixture, offering: &str, slot: DateTime<Utc>) -> Value {
         "capabilities": [],
         "prerequisites": [],
     })
+}
+
+async fn selectable_interval_fixture() -> Fixture {
+    let policy = POLICY.replacen(
+        "durationMinutes: 30\n      bufferBeforeMinutes: 0\n      bufferAfterMinutes: 0",
+        "durationMinutes: 30\n      durationSelection: {minimumMinutes: 30, maximumMinutes: 120, incrementMinutes: 30}\n      allowResourceSelection: true\n      openingCoverage: occupied-interval\n      bufferBeforeMinutes: 15\n      bufferAfterMinutes: 15",
+        1,
+    );
+    let fx = fixture_publishing(
+        &policy,
+        &["north-counter".to_owned(), "two-counter".to_owned()],
+    )
+    .await;
+    begin_current_test_writer(&fx.admin).await;
+    fx.admin
+        .execute(
+            "INSERT INTO scheduling_pool_members(resource_id, pool_id, available) \
+             VALUES('station-3','north-counter',true)",
+            &[],
+        )
+        .await
+        .expect("a second independently reservable member");
+    commit_current_test_writer(&fx.admin).await;
+    fx
+}
+
+#[tokio::test]
+async fn selected_availability_binds_duration_resource_and_cursor() {
+    let fx = selectable_interval_fixture().await;
+    let (status, catalogue) = fx.get("/v1/offerings", &fx.reader).await;
+    assert_eq!(status, StatusCode::OK, "{catalogue}");
+    let offering = catalogue["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|offering| offering["id"] == OFFERING)
+        .unwrap();
+    assert_eq!(offering["durationSelection"]["maximumMinutes"], 120);
+    assert_eq!(offering["allowResourceSelection"], true);
+    assert_eq!(offering["pool"], "north-counter");
+    assert_eq!(offering["openingCoverage"], "occupied-interval");
+    let fixed = catalogue["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|offering| offering["id"] == SECOND_OFFERING)
+        .unwrap();
+    assert!(
+        fixed.get("pool").is_none(),
+        "a non-selectable offering does not expose its internal pool"
+    );
+    let uri = format!(
+        "{}&durationMinutes=90&resource=station-3&limit=2",
+        availability_uri(OFFERING, 300, 700)
+    );
+    let (status, first) = fx.get(&uri, &fx.reader).await;
+    assert_eq!(status, StatusCode::OK, "{first}");
+    let items = first["items"].as_array().expect("availability items");
+    assert_eq!(items.len(), 2);
+    for entry in items {
+        assert_eq!(
+            moment(entry, "end") - moment(entry, "start"),
+            TimeDelta::minutes(90)
+        );
+        assert_eq!(entry["free"], 1, "only the selected member is counted");
+    }
+    let cursor = first["nextCursor"].as_str().expect("a continuation");
+    let (status, second) = fx.get(&format!("{uri}&cursor={cursor}"), &fx.reader).await;
+    assert_eq!(status, StatusCode::OK, "{second}");
+    assert!(moment(&second["items"][0], "start") > moment(&items[1], "start"));
+    for altered in [
+        uri.replace("durationMinutes=90", "durationMinutes=60"),
+        uri.replace("station-3", "station-1"),
+    ] {
+        let (status, _) = fx
+            .get(&format!("{altered}&cursor={cursor}"), &fx.reader)
+            .await;
+        assert_eq!(
+            status,
+            StatusCode::BAD_REQUEST,
+            "selection changes cannot reuse a cursor"
+        );
+    }
+    let (status, invalid) = fx
+        .get(
+            &format!(
+                "{}&durationMinutes=45",
+                availability_uri(OFFERING, 300, 700)
+            ),
+            &fx.reader,
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{invalid}");
+    let (status, strict) = fx
+        .get(
+            &format!(
+                "{}&durationMinutes=30&resource=station-3",
+                availability_uri(OFFERING, 750, 810)
+            ),
+            &fx.reader,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{strict}");
+    assert_eq!(
+        strict["items"].as_array().unwrap().len(),
+        1,
+        "cleanup must fit the strict opening"
+    );
+}
+
+#[tokio::test]
+async fn named_interval_commitments_are_atomic_and_replay_the_exact_choices() {
+    let fx = selectable_interval_fixture().await;
+    let start = first_slot(&fx, OFFERING, 300, 700).await;
+    let mut request = admission(&fx, OFFERING, start);
+    request["durationMinutes"] = json!(90);
+    request["resource"] = json!("station-3");
+    let body = json!({"admission": request});
+    let (first, second) = tokio::join!(
+        fx.post(
+            "/v1/appointments",
+            &fx.agent,
+            "selected-first",
+            body.clone()
+        ),
+        fx.post(
+            "/v1/appointments",
+            &fx.agent,
+            "selected-second",
+            body.clone()
+        ),
+    );
+    let (success, success_key, refused) = if first.0 == StatusCode::CREATED {
+        (first, "selected-first", second)
+    } else {
+        (second, "selected-second", first)
+    };
+    assert_eq!(success.0, StatusCode::CREATED, "{:?}", success.1);
+    assert_eq!(refused.0, StatusCode::CONFLICT, "{:?}", refused.1);
+    assert_eq!(refused.1["code"], "capacity.exhausted");
+    assert_eq!(success.1["resource"], "station-3");
+    assert_eq!(
+        moment(&success.1, "end") - moment(&success.1, "start"),
+        TimeDelta::minutes(90)
+    );
+    let replay = fx
+        .post("/v1/appointments", &fx.agent, success_key, body.clone())
+        .await;
+    assert_eq!(replay, success, "same command retains its original outcome");
+    let mut changed = body.clone();
+    changed["admission"]["durationMinutes"] = json!(60);
+    let (status, refusal) = fx
+        .post("/v1/appointments", &fx.agent, success_key, changed)
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{refusal}");
+    assert_eq!(refusal["code"], "idempotency.key-reused");
+    let (status, explanation) = fx.get(
+        &format!("/v1/availability/explain?offering={OFFERING}&start={}&durationMinutes=90&resource=station-3", stamp(start)),
+        &fx.agent,
+    ).await;
+    assert_eq!(status, StatusCode::OK, "{explanation}");
+    assert_eq!(
+        explanation["publicCode"], "capacity.exhausted",
+        "explain must evaluate the chosen member"
+    );
+    let mut independent = body;
+    independent["admission"]["resource"] = json!("station-1");
+    let (status, other) = fx
+        .post(
+            "/v1/appointments",
+            &fx.agent,
+            "selected-independent",
+            independent,
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{other}");
+    assert_eq!(other["resource"], "station-1");
 }
 
 fn stamp(moment: DateTime<Utc>) -> String {
@@ -1377,7 +1660,6 @@ async fn rotating_the_audit_key_keeps_existing_claims_with_their_owner() {
             .with_hooks(fx.hooks.clone()),
         ),
         authenticator: Arc::new(authenticator()),
-        store: fx.store.clone(),
     });
     let through_rotated = |method: &str, uri: String, token: &str, key: Option<&str>, body| {
         send(
@@ -2456,6 +2738,7 @@ async fn an_elapsed_booking_no_longer_holds_the_partys_duplicate_key() {
 
     // What the passage of time does to that booking, with no sweeper and no
     // transition the party could have reached.
+    begin_current_test_writer(&fx.admin).await;
     fx.admin
         .execute(
             "UPDATE scheduling_claims SET \
@@ -2468,6 +2751,18 @@ async fn an_elapsed_booking_no_longer_holds_the_partys_duplicate_key() {
         )
         .await
         .expect("the standing booking elapses");
+    fx.admin
+        .execute(
+            "UPDATE scheduling_claim_allocations AS a SET \
+             occupied_start = $2::timestamptz - interval '2 hours', \
+             occupied_end = $2::timestamptz - interval '1 hour' \
+             FROM scheduling_claims AS c \
+             WHERE a.claim_id = c.claim_id AND c.duplicate_key = $1",
+            &[&"subject:elapsed", &pinned_now()],
+        )
+        .await
+        .expect("every physical allocation of the standing booking elapses");
+    commit_current_test_writer(&fx.admin).await;
 
     let (status, appointment) = fx
         .post(
@@ -2585,7 +2880,6 @@ async fn a_duplicate_active_key_survives_an_opening_shift_on_the_same_pool() {
     fx.http = router(HttpState {
         service,
         authenticator: Arc::new(authenticator()),
-        store: fx.store.clone(),
     });
     fx.revision = u64::try_from(revision).expect("a bounded policy revision");
 
@@ -3338,6 +3632,7 @@ async fn a_delayed_confirmation_cannot_transfer_rebooked_capacity_after_expiry()
             actor: &hold_actor,
             actor_issuer: ISSUER,
             actor_subject: "principal-agent",
+            source_manager: None,
             idempotency_key: "expiry-race-confirm",
             request_hash: "sha256:expiry-race-confirm",
             attempt_expires_at: confirmation_started_at + TimeDelta::days(7),
@@ -3386,6 +3681,7 @@ async fn a_delayed_confirmation_cannot_transfer_rebooked_capacity_after_expiry()
                 actor: "competing-actor",
                 actor_issuer: ISSUER,
                 actor_subject: "competing-principal",
+                source_manager: None,
                 idempotency_key: "expiry-race-booking",
                 request_hash: "sha256:expiry-race-booking",
                 attempt_expires_at: after_expiry + TimeDelta::days(7),
@@ -4416,7 +4712,9 @@ fn transport_to(destination: &MockServer) -> Arc<ReminderTransport> {
         reminder_transport(
             &ReminderDestinationConfig {
                 url: format!("{}/events", destination.uri()),
+                purpose_urls: Default::default(),
                 bearer_token_ref: None,
+                hmac_sha256_key_ref: None,
             },
             &secrets,
         )
@@ -4431,6 +4729,8 @@ fn records_without(retired: &[&str]) -> SchedulingFacts {
         resource_id: resource_id.to_owned(),
         capabilities: Vec::new(),
         available: true,
+        capacity_units: 1,
+        availability: None,
     };
     SchedulingFacts {
         locations: vec![LocationRecord {
@@ -4463,7 +4763,7 @@ fn records_without(retired: &[&str]) -> SchedulingFacts {
 }
 
 #[tokio::test]
-async fn a_records_swap_refuses_to_strand_a_resource_an_active_claim_occupies() {
+async fn a_records_swap_preserves_an_active_allocation_when_physical_inventory_is_lost() {
     let fx = fixture().await;
     let slot = first_slot(&fx, OFFERING, 90, 200).await;
     let (status, _) = fx
@@ -4476,41 +4776,55 @@ async fn a_records_swap_refuses_to_strand_a_resource_an_active_claim_occupies() 
         .await;
     assert_eq!(status, StatusCode::CREATED, "the direct create commits");
 
-    let refusal = fx
-        .store
+    // Model a legacy active claim whose immutable disclosure labels could
+    // not be recovered during migration. Its resource identity remains
+    // capacity truth even while operational allocation detail is unknown.
+    fx.admin.batch_execute(
+        "BEGIN; \
+         SET LOCAL registry_scheduling.allocation_writer = 'v2'; \
+         UPDATE scheduling_claim_allocations SET allocation_scope_version=0, \
+           operational_service=NULL, operational_location=NULL, operational_mode=NULL, anchor_id=NULL \
+         WHERE resource_id='station-1'; \
+         COMMIT",
+    ).await.expect("mark the retained allocation as legacy unknown");
+
+    fx.store
         .replace_facts(SCHEDULING_ID, &records_without(&["station-1"]))
         .await
-        .expect_err("a swap that strands a live booking is refused");
-    assert!(
-        refusal.to_string().contains("station-1"),
-        "{refusal} does not name the occupied resource"
-    );
-
-    // The refusal rolled the whole swap back, so the records stand as they
-    // were and the booking still occupies its slot.
+        .expect("physical inventory loss remains representable");
     let (standing, _) = fx.store.facts().await.expect("the records survive");
     assert_eq!(
         standing
             .pool("north-counter")
             .map(|pool| pool.members.len()),
-        Some(1),
-        "the occupied member is still a member"
+        Some(0),
+        "the lost member is absent from current facts"
     );
+    let retained: i64 = fx
+        .admin
+        .query_one(
+            "SELECT count(*) FROM scheduling_claim_allocations \
+         WHERE resource_id='station-1'",
+            &[],
+        )
+        .await
+        .expect("read the retained allocation")
+        .get(0);
+    assert_eq!(retained, 1, "physical loss does not erase commitment truth");
     assert!(
         !slot_offered(&fx, OFFERING, 90, 200, slot).await,
-        "the booking still consumes its slot"
+        "lost stock cannot accept a new allocation"
     );
 
-    // Retiring an idle station is exactly what the command is for.
+    // Reintroducing the same resource identity restores physical stock, but
+    // the retained allocation still consumes it over its occupied interval.
     fx.store
-        .replace_facts(SCHEDULING_ID, &records_without(&["station-2"]))
+        .replace_facts(SCHEDULING_ID, &records_without(&[]))
         .await
-        .expect("retiring an unoccupied resource commits");
-    let (standing, _) = fx.store.facts().await.expect("the records are readable");
-    assert_eq!(
-        standing.pool("two-counter").map(|pool| pool.members.len()),
-        Some(0),
-        "the idle member is gone"
+        .expect("reintroducing physical stock commits");
+    assert!(
+        !slot_offered(&fx, OFFERING, 90, 200, slot).await,
+        "the reintroduced resource remains occupied by the retained allocation"
     );
 }
 
@@ -5550,16 +5864,28 @@ const DUPLICATE_KEY_CEILING_BYTES: usize = 256;
 /// Write one claim carrying `duplicate_key` straight into the ledger, so the
 /// column's own bound is what decides, not a caller-facing check above it.
 async fn claim_keyed(fx: &Fixture, duplicate_key: &str) -> Result<u64, tokio_postgres::Error> {
-    fx.admin
+    begin_current_test_writer(&fx.admin).await;
+    let result = fx.admin
         .execute(
-            "INSERT INTO scheduling_claims(claim_id, kind, state, offering, supply_id, \
+            "INSERT INTO scheduling_claims(claim_id, kind, state, offering, operational_scope_version, \
+             operational_service, operational_location, operational_mode, supply_id, \
              displayed_start, displayed_end, occupied_start, occupied_end, units, \
              duplicate_key, revision, policy_revision, actor) \
-             VALUES($1,'booking','active','registry-update-30','station-1', \
+             VALUES($1,'booking','active','registry-update-30',1, \
+             'registry-update','north-counter','exact-time','station-1', \
              $3, $3, $3, $3, 1, $2, 1, 1, 'actor-pseudonym')",
             &[&Uuid::new_v4(), &duplicate_key, &pinned_now()],
         )
-        .await
+        .await;
+    if result.is_ok() {
+        commit_current_test_writer(&fx.admin).await;
+    } else {
+        fx.admin
+            .batch_execute("ROLLBACK")
+            .await
+            .expect("roll back the refused claim");
+    }
+    result
 }
 
 #[tokio::test]
@@ -6257,6 +6583,92 @@ async fn a_dispatch_pass_delivers_retries_and_holds_by_what_the_destination_answ
     );
 }
 
+#[tokio::test]
+async fn a_signed_reminder_uses_the_shared_event_delivery_contract() {
+    const SIGNING_KEY: &str = "reminder-delivery-signing-key-0123456789abcdef";
+
+    let destination = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/events"))
+        .respond_with(ResponseTemplate::new(202))
+        .mount(&destination)
+        .await;
+    let fx = fixture().await;
+    let (appointment, _) = booked(&fx, 90, 200, "dispatch-signed").await;
+    let secret_name =
+        format!("SCHEDULING_REMINDER_{}", Uuid::new_v4().simple()).to_ascii_uppercase();
+    let bearer_name =
+        format!("SCHEDULING_REMINDER_BEARER_{}", Uuid::new_v4().simple()).to_ascii_uppercase();
+    std::env::set_var(&secret_name, SIGNING_KEY);
+    std::env::set_var(&bearer_name, "synthetic-reminder-token");
+    let secrets = SecretResolver::new([SecretProvider::Environment], "/private/tmp")
+        .expect("the scheduling reminder secret resolver");
+    let destination_config: ReminderDestinationConfig = serde_json::from_value(json!({
+        "url": format!("{}/events", destination.uri()),
+        "hmacSha256KeyRef": format!("secret:env/{secret_name}"),
+        "bearerTokenRef": format!("secret:env/{bearer_name}")
+    }))
+    .expect("the signed reminder destination configuration");
+    let transport = reminder_transport(&destination_config, &secrets)
+        .expect("the signed destination compiles into a frozen transport");
+
+    bring_intents_due(&fx, pinned_now()).await;
+    dispatch_due_intents(&fx.store, SCHEDULING_ID, Some(Arc::new(transport)))
+        .await
+        .expect("the signed dispatch pass runs");
+
+    let requests = destination
+        .received_requests()
+        .await
+        .expect("the signed reminder request");
+    let request = requests
+        .iter()
+        .find(|request| String::from_utf8_lossy(&request.body).contains(appointment.as_str()))
+        .expect("the appointment's signed reminder");
+    let event: Value = serde_json::from_slice(&request.body).expect("the canonical reminder event");
+    let header = |name: &str| {
+        request
+            .headers
+            .get(name)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_else(|| panic!("missing valid {name} header"))
+    };
+    assert_eq!(header("ce-specversion"), "1.0");
+    assert_eq!(header("ce-id"), event["id"]);
+    assert_eq!(header("ce-source"), event["source"]);
+    assert_eq!(header("ce-type"), event["type"]);
+    assert_eq!(header("ce-time"), event["time"]);
+    assert_eq!(header("ce-dataschema"), event["dataschema"]);
+    assert_eq!(header("x-registry-event-generation"), "1");
+    assert_eq!(header("x-registry-delivery-attempt"), "1");
+    assert!(!header("x-registry-delivery-time").is_empty());
+    assert!(header("idempotency-key").starts_with("sha256:"));
+    assert_eq!(header("authorization"), "Bearer synthetic-reminder-token");
+    let fields = |request_target| SignatureFields {
+        id: header("ce-id"),
+        source: header("ce-source"),
+        event_type: header("ce-type"),
+        time: header("ce-time"),
+        data_schema: header("ce-dataschema"),
+        generation: header("x-registry-event-generation"),
+        attempt: header("x-registry-delivery-attempt"),
+        delivery_time: header("x-registry-delivery-time"),
+        method: "POST",
+        request_target,
+        content_type: "application/json",
+        idempotency_key: header("idempotency-key"),
+        body: &request.body,
+    };
+    let expected =
+        sign_v1(SIGNING_KEY.as_bytes(), fields("/events")).expect("the shared signature");
+    assert_eq!(header("x-registry-signature"), expected);
+    assert_ne!(
+        sign_v1(SIGNING_KEY.as_bytes(), fields("/other")).expect("the target-bound signature"),
+        expected,
+        "the exact request target is covered"
+    );
+}
+
 /// The arrival-window offering and the window it serves, added to the test
 /// policy. Both are only in the policies that ask for them: the exact-time
 /// fixtures publish no window, so no test pays for supply it never reads.
@@ -6387,6 +6799,7 @@ fn records_with_window(start: DateTime<Utc>) -> SchedulingFacts {
         }],
         leftover: None,
         staffing: None,
+        resources: Vec::new(),
         because: "test".to_owned(),
     });
     facts
@@ -6534,7 +6947,7 @@ fn window_on_north_counter() -> SchedulingPolicy {
         .iter_mut()
         .find_map(|offering| offering.arrival.as_mut())
         .expect("the arrival offering")
-        .window = "north-counter".to_owned();
+        .window = Some("north-counter".to_owned());
     policy
 }
 
@@ -6570,6 +6983,7 @@ async fn a_supply_identifier_may_not_anchor_both_a_pool_and_a_window() {
     // because both writes now refuse to produce one, and the publication
     // that would claim it as a pool is refused rather than skipping the
     // anchor and stranding the offering that needs it.
+    begin_current_test_writer(&fx.admin).await;
     fx.admin
         .execute(
             "INSERT INTO scheduling_supply(supply_id, kind) VALUES('south-counter','window')",
@@ -6577,6 +6991,7 @@ async fn a_supply_identifier_may_not_anchor_both_a_pool_and_a_window() {
         )
         .await
         .expect("plant a window anchor the policy will collide with");
+    commit_current_test_writer(&fx.admin).await;
     let deployed = fx
         .store
         .scheduling_meta()
@@ -6652,6 +7067,8 @@ async fn policy_publication_refuses_an_exact_time_offering_on_a_deployed_windows
             resource_id: "station-3".to_owned(),
             capabilities: Vec::new(),
             available: true,
+            capacity_units: 1,
+            availability: None,
         }],
     });
     staffed.windows[0].staffing = Some(WindowStaffing {
@@ -6787,6 +7204,7 @@ async fn changed_window_records_must_advance_the_revision_even_after_removal() {
 /// a hand-edited table, can leave behind.
 async fn plant_window(fx: &Fixture, window: &PublishedWindow) {
     let record = serde_json::to_value(window).expect("a serializable window record");
+    begin_current_test_writer(&fx.admin).await;
     fx.admin
         .execute(
             "INSERT INTO scheduling_windows(window_id, window_record) VALUES($1,$2) \
@@ -6803,6 +7221,7 @@ async fn plant_window(fx: &Fixture, window: &PublishedWindow) {
         )
         .await
         .expect("plant the window's supply anchor");
+    commit_current_test_writer(&fx.admin).await;
 }
 
 /// The per-admission check is defense in depth, not the only defense: both
@@ -6967,7 +7386,6 @@ async fn republished(fx: &Fixture, policy: SchedulingPolicy, pool_ids: &[String]
     router(HttpState {
         service,
         authenticator: Arc::new(authenticator()),
-        store: fx.store.clone(),
     })
 }
 
@@ -8282,10 +8700,15 @@ async fn a_records_swap_refuses_a_commitment_resolving_the_old_facts() {
     let request = AdmissionRequest {
         offering: OFFERING.to_owned(),
         start: slot,
-        party: PartyCounts {
+        duration_minutes: None,
+        resource: None,
+        resource_units: 1,
+        additional_allocations: Vec::new(),
+        party: Some(PartyCounts {
             recipients: 1,
             attendees: 1,
-        },
+        }),
+        manager: None,
         channel: None,
         duplicate_key: None,
         policy_revision: fx.revision,
@@ -8293,6 +8716,7 @@ async fn a_records_swap_refuses_a_commitment_resolving_the_old_facts() {
         capabilities: Vec::new(),
         prerequisites: Vec::new(),
         external_references: Vec::new(),
+        party_references: Vec::new(),
     };
     let commitment = Commitment {
         now: pinned_now(),
@@ -8301,6 +8725,7 @@ async fn a_records_swap_refuses_a_commitment_resolving_the_old_facts() {
         actor: "actor-pseudonym",
         actor_issuer: ISSUER,
         actor_subject: "principal-agent",
+        source_manager: None,
         idempotency_key: "stale-facts",
         request_hash: "sha256:stale-facts",
         attempt_expires_at: pinned_now() + TimeDelta::days(7),
@@ -9073,6 +9498,133 @@ async fn refuses_a_pre_1_0_ledger_at_migrate_and_readiness(version: i64) {
     ));
 }
 
+#[tokio::test]
+async fn the_atomic_allocation_fence_denies_old_writers_and_the_marker_is_transaction_local() {
+    let mut fx = fixture().await;
+    let denied = fx
+        .admin
+        .execute(
+            "UPDATE scheduling_pool_members SET available=available WHERE resource_id='station-1'",
+            &[],
+        )
+        .await
+        .expect_err("a writer without the v2 marker is denied");
+    assert_eq!(
+        denied.code(),
+        Some(&tokio_postgres::error::SqlState::OBJECT_NOT_IN_PREREQUISITE_STATE)
+    );
+
+    let transaction = fx.admin.transaction().await.expect("begin a marked writer");
+    transaction
+        .batch_execute("SET LOCAL registry_scheduling.allocation_writer = 'v2'")
+        .await
+        .expect("set the transaction-local marker");
+    transaction
+        .execute(
+            "UPDATE scheduling_pool_members SET available=available WHERE resource_id='station-1'",
+            &[],
+        )
+        .await
+        .expect("the current writer is accepted");
+    transaction
+        .rollback()
+        .await
+        .expect("roll back the marked writer");
+
+    let denied = fx
+        .admin
+        .execute(
+            "UPDATE scheduling_pool_members SET available=available WHERE resource_id='station-1'",
+            &[],
+        )
+        .await
+        .expect_err("the marker does not leak after rollback");
+    assert_eq!(
+        denied.code(),
+        Some(&tokio_postgres::error::SqlState::OBJECT_NOT_IN_PREREQUISITE_STATE)
+    );
+}
+
+#[tokio::test]
+async fn activation_trust_rejects_a_same_named_but_altered_allocation_fence() {
+    let fx = fixture().await;
+    fx.admin
+        .batch_execute(
+            "CREATE OR REPLACE FUNCTION scheduling_require_allocation_writer_v2() \
+             RETURNS trigger LANGUAGE plpgsql AS $body$ BEGIN RETURN NEW; END $body$",
+        )
+        .await
+        .expect("alter the fence inside this isolated schema");
+
+    let weakness = fx
+        .store
+        .split_weakness()
+        .await
+        .expect("inspect the altered fence")
+        .expect("the altered fence is a split-role weakness");
+    assert!(
+        weakness
+            .to_string()
+            .contains("differs from the exact migration-owned"),
+        "{weakness}"
+    );
+}
+
+#[tokio::test]
+async fn atomic_allocation_migration_ddl_rolls_back_as_one_transaction() {
+    let base = std::env::var("SCHEDULING_TEST_DATABASE_URL")
+        .expect("SCHEDULING_TEST_DATABASE_URL names a disposable PostgreSQL test server");
+    let schema = format!("scheduling_{}", Uuid::new_v4().simple());
+    let (mut admin, connection) = tokio_postgres::connect(&base, tokio_postgres::NoTls)
+        .await
+        .expect("connect the scheduling test database");
+    tokio::spawn(async move { connection.await.expect("the scheduling admin connection") });
+    admin
+        .batch_execute(&format!(
+            "CREATE SCHEMA {schema}; SET search_path TO {schema}"
+        ))
+        .await
+        .expect("create the isolated rollback schema");
+    for migration in [
+        include_str!("../migrations/0200_scheduling.sql"),
+        include_str!("../migrations/0201_operational_reads.sql"),
+        include_str!("../migrations/0202_resource_availability.sql"),
+        include_str!("../migrations/0203_booking_party.sql"),
+        include_str!("../migrations/0204_source_manager.sql"),
+    ] {
+        admin
+            .batch_execute(migration)
+            .await
+            .expect("apply a prerequisite migration");
+    }
+
+    let transaction = admin.transaction().await.expect("begin migration 205");
+    transaction
+        .batch_execute(include_str!("../migrations/0205_atomic_allocations.sql"))
+        .await
+        .expect("migration 205 applies inside its transaction");
+    transaction
+        .rollback()
+        .await
+        .expect("roll back migration 205");
+
+    let absent: bool = admin
+        .query_one(
+            "SELECT to_regclass(format('%I.scheduling_claim_allocations', current_schema())) IS NULL \
+             AND NOT EXISTS (SELECT 1 FROM information_schema.columns \
+                 WHERE table_schema=current_schema() AND table_name='scheduling_pool_members' \
+                   AND column_name='capacity_units')",
+            &[],
+        )
+        .await
+        .expect("inspect the rolled-back schema")
+        .get(0);
+    assert!(
+        absent,
+        "migration 205 leaves no partial allocation schema after rollback"
+    );
+}
+
 /// The single `response` entry that answers the commitment's `request`
 /// entry among `appended`, after checking the pair shares one correlation
 /// and records a commitment nothing decided.
@@ -9366,6 +9918,9 @@ async fn a_records_swap_under_a_commitment_pairs_its_request_entry() {
         .transaction()
         .await
         .expect("the stand-in records swap opens");
+    swap.batch_execute("SET LOCAL registry_scheduling.allocation_writer = 'v2'")
+        .await
+        .expect("mark the stand-in records writer");
     swap.execute(
         "UPDATE scheduling_meta SET facts_revision = facts_revision + 1 WHERE singleton",
         &[],
@@ -9923,6 +10478,7 @@ async fn a_cleared_claim_owner_cannot_read_list_or_observe_a_retained_receipt() 
     assert_eq!(status, StatusCode::OK);
     // Model the raw owner being cleared while the independent receipt window
     // still permits observation. Neither the receipt nor its digest is authority.
+    begin_current_test_writer(&fx.admin).await;
     fx.admin
         .execute(
             "UPDATE scheduling_claims SET displayed_end=$1 WHERE claim_id=$2",
@@ -9930,6 +10486,7 @@ async fn a_cleared_claim_owner_cannot_read_list_or_observe_a_retained_receipt() 
         )
         .await
         .unwrap();
+    commit_current_test_writer(&fx.admin).await;
     assert_eq!(
         fx.store
             .erase_expired_claim_owners(pinned_now(), 7)
@@ -9989,6 +10546,7 @@ async fn an_erased_hold_owner_cannot_replay_a_retained_release_receipt() {
     let route = format!("/v1/holds/{id}");
     assert_eq!(fx.delete(&route, &fx.agent).await.0, StatusCode::NO_CONTENT);
     assert_eq!(fx.delete(&route, &fx.agent).await.0, StatusCode::NO_CONTENT);
+    begin_current_test_writer(&fx.admin).await;
     fx.admin
         .execute(
             "UPDATE scheduling_claims SET closed_at=$1 WHERE claim_id=$2",
@@ -9996,6 +10554,7 @@ async fn an_erased_hold_owner_cannot_replay_a_retained_release_receipt() {
         )
         .await
         .unwrap();
+    commit_current_test_writer(&fx.admin).await;
     assert_eq!(
         fx.store
             .erase_expired_claim_owners(pinned_now(), 7)
@@ -10103,10 +10662,12 @@ async fn claim_owner_retention_clears_only_elapsed_claims_and_preserves_the_ledg
             .await;
         assert_eq!(status, StatusCode::CREATED, "{original}");
         let id = Uuid::parse_str(original["appointmentId"].as_str().unwrap()).unwrap();
+        begin_current_test_writer(&fx.admin).await;
         fx.admin.execute(
             "UPDATE scheduling_claims SET kind=$1, state=$2, displayed_start=$3, displayed_end=$4, hold_expires_at=$5, closed_at=$6 WHERE claim_id=$7",
             &[&kind, &state, &(end-TimeDelta::minutes(30)), &end, &expiry, &closed, &id],
         ).await.unwrap();
+        commit_current_test_writer(&fx.admin).await;
         let rows_before = committed_row_counts(&fx).await;
         let history_before = fx
             .admin
@@ -10150,7 +10711,12 @@ async fn claim_owner_retention_clears_only_elapsed_claims_and_preserves_the_ledg
                 )
             );
             assert_eq!(row.get::<_, DateTime<Utc>>(3), now);
+            begin_current_test_writer(&fx.admin).await;
             assert!(fx.admin.execute("UPDATE scheduling_claims SET owner_issuer=$1, owner_subject=$2 WHERE claim_id=$3", &[&ISSUER, &"principal-agent", &id]).await.is_err(), "a tombstone cannot retain raw ownership");
+            fx.admin
+                .batch_execute("ROLLBACK")
+                .await
+                .expect("roll back the refused tombstone rewrite");
             assert!(!fx
                 .store
                 .claim(id)
@@ -10238,6 +10804,10 @@ async fn a_mutation_waiting_on_owner_erasure_rechecks_ownership_before_writing()
         );
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
+    eraser
+        .batch_execute("SET LOCAL registry_scheduling.allocation_writer = 'v2'")
+        .await
+        .unwrap();
     eraser.execute("UPDATE scheduling_claims SET owner_issuer=NULL, owner_subject=NULL, owner_reference='sha256:' || repeat('a',64), owner_erased_at=$1 WHERE claim_id=$2", &[&pinned_now(), &claim_id]).await.unwrap();
     eraser.commit().await.unwrap();
     let (status, problem) = mutation.await.unwrap();
@@ -10264,6 +10834,7 @@ async fn erased_hold_owners_do_not_hide_the_callers_remaining_hold_ceiling() {
         assert_eq!(status, StatusCode::CREATED, "{hold}");
         holds.push(Uuid::parse_str(hold["holdId"].as_str().unwrap()).unwrap());
     }
+    begin_current_test_writer(&fx.admin).await;
     fx.admin
         .execute(
             "UPDATE scheduling_claims SET hold_expires_at=$1 WHERE claim_id=$2",
@@ -10271,6 +10842,7 @@ async fn erased_hold_owners_do_not_hide_the_callers_remaining_hold_ceiling() {
         )
         .await
         .unwrap();
+    commit_current_test_writer(&fx.admin).await;
     assert_eq!(
         fx.store
             .erase_expired_claim_owners(pinned_now(), 7)

@@ -9,6 +9,9 @@ First release of Registry Coordinator.
   Operation aliases, and one Workflow graph. Functions take one typed object of named inputs.
 - Runtime bindings use one tagged `connections` map. Caller policies are keyed by exact verified
   client identity and scope run actions through `workflows`.
+- Scheduling operations can read appointments, create and release holds, confirm holds, and
+  reschedule or cancel appointments under task-bound authority. Each operation declares whether
+  exact-command replay, original-result lookup, or a non-repeatable uncertainty hold is available.
 - Starts require an expected computed `workflowRevision`. Workflow discovery and generated
   TypeScript/Python wrappers provide revision-pinned typed `start`, `get`, and `cancel` through
   the source-built Coordinator client bindings. Unknown admission preserves its original revision and key.

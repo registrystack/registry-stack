@@ -1,0 +1,54 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/breg/dev-clients/dev-clients.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/breg/dev-clients/v1alpha1
+kind: BRegDevClients
+clients:
+  - id: reservation-source-agent
+    accessProfiles: [reservation-workflow]
+    scopes: [reservations:workflow]
+    claims: {registry_actor_kind: service, reservation_source: reservation-source-agent}
+  - id: reservation-producer
+    accessProfiles: []
+    scopes: [coordinator:reservation-review]
+    claims: {}
+  - id: reservation-operator
+    accessProfiles: []
+    scopes: [coordinator:operate]
+    claims: {}
+  - id: reservation-review-producer
+    accessProfiles: []
+    scopes: [casework:review]
+    claims: {}
+  - id: reservation-notices
+    accessProfiles: []
+    scopes: [messaging:send]
+    claims: {}
+  - id: reservation-catalogue
+    accessProfiles: []
+    scopes: [scheduling:read]
+    claims: {}
+  - id: reservation-booking-agent
+    accessProfiles: []
+    scopes: [casework:grants:assert]
+    claims: {}
+    grants:
+      - audience: urn:example:scheduling
+        scopes: [scheduling:read]
+issuer:
+  resources:
+    - audience: urn:example:coordinator
+      scopes: [coordinator:reservation-review, coordinator:operate]
+    - audience: urn:example:reservation-source
+      scopes: [reservations:workflow]
+    - audience: urn:example:casework
+      scopes: [casework:review, casework:grants:assert]
+    - audience: urn:example:messaging
+      scopes: [messaging:send]
+    - audience: urn:example:scheduling
+      scopes: [scheduling:read, scheduling:commit]
+  clientResources:
+    reservation-source-agent: urn:example:reservation-source
+    reservation-producer: urn:example:coordinator
+    reservation-operator: urn:example:coordinator
+    reservation-review-producer: urn:example:casework
+    reservation-notices: urn:example:messaging
+    reservation-catalogue: urn:example:scheduling

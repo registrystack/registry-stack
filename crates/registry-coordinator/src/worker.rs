@@ -386,9 +386,14 @@ impl Worker {
                 ..
             } => {
                 // A recovery race or stale queue state cannot turn unknown
-                // inference completion into a second provider evaluation.
+                // non-repeatable work into a second remote effect.
                 if job.job.uncertain && !call.operation.can_retry_after_unknown() {
-                    return Ok(failed("evaluation-uncertain", true));
+                    let code = if call.operation.is_evaluation() {
+                        "evaluation-uncertain"
+                    } else {
+                        "mutation-uncertain"
+                    };
+                    return Ok(failed(code, true));
                 }
                 let command = if let Some(command) = &payload.command {
                     command.clone()

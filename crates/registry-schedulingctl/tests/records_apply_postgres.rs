@@ -447,7 +447,7 @@ async fn records_apply_rejects_a_different_deployment_identity_without_writing()
     // package is refused inside the replacement transaction.
     admin
         .batch_execute(&format!(
-            "UPDATE {schema}.scheduling_meta SET scheduling_id = 'permit-renewals'"
+            "SET registry_scheduling.allocation_writer = 'v2'; UPDATE {schema}.scheduling_meta SET scheduling_id = 'permit-renewals'"
         ))
         .await
         .expect("the deployment row is rebound");

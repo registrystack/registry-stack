@@ -1,0 +1,9 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/scheduling/records/records.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/scheduling/records/v1alpha1
+kind: SchedulingRecords
+locations:
+  - {id: community-hall, timezone: UTC}
+pools:
+  - id: reservable-rooms
+    members:
+      - {resourceId: room-a, available: true}

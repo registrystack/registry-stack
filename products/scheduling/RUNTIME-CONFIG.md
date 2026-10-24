@@ -172,6 +172,102 @@ with `profile.not-authorized`. A rate-limited `info` diagnostic names the fixed
 `scope` stage and the `authentication.oidc.scopeClaim`, `readsScope` and
 `explainScope` remediation keys, without claim or scope values.
 
+### Operational appointment read profiles
+
+`authentication.oidc.appointmentReadProfiles` is an optional map of separately
+authorized operational roles. An absent or empty map grants no cross-owner
+appointment access. Each role selects one distinct OAuth scope and explicit
+service/location permissions. Resource access is either `type: exact` with
+named `ids`, or explicitly `type: unrestricted`. Selecting a profile in a query
+does not grant its scope, and scopes from multiple profiles are not combined.
+
+For example, this entry inside `appointmentReadProfiles` permits one bounded
+room work list:
+
+```yaml
+desk:
+  scope: scheduling:appointments:desk
+  maximumPastDays: 7
+  maximumFutureDays: 30
+  maximumSpanDays: 7
+  permissions:
+    - service: room-reservation
+      location: community-hall
+      resources:
+        type: exact
+        ids: [room-a, room-b]
+  projection:
+    fields: [occupied-interval, resource, units, party-counts]
+```
+
+The response always includes appointment identity, revision, service, location,
+offering, state and displayed interval. Optional fields require an explicit
+projection. `party-counts` returns persisted counts only when known; it never
+derives a headcount from capacity units. `externalReferenceProducts` separately
+permits filtering and returning references from listed source products. No
+profile exposes owner, actor, manager identity, names, contacts or party
+references. Restrict both projection and export storage to the operational need.
+
+`GET /v1/operational/appointments` requires service, location, start, end and
+`timeBasis` (`displayed` or `occupied`). `profile` selects exactly one authorized
+role. Optional offering, state, resource and exact external-reference filters
+only narrow it. A continuation preserves the verified caller, role and query;
+it cannot widen scope. Each request spans at most 62 days and the selected
+profile may impose tighter past, future and span limits. Pages are current
+observations, not an atomic historical snapshot.
+
+Historical rows without verified retained service/location labels are excluded.
+Use the audited operational-scope coverage and rematerialization commands to
+inspect or repair that gap; current policy is never substituted for a missing
+historical policy.
+
+### Calendar busy source profiles
+
+`authentication.oidc.busyImportProfiles` is an optional map of calendar or
+workforce systems that contribute resource availability facts. An absent map
+keeps the existing booking behavior. Each profile binds one unique `sourceId`
+to a write scope and an explicit resource set. Busy profiles may share a write
+scope, but every request must select exactly one profile, and a busy write scope
+cannot reuse the read, explain, or operational appointment scope. A caller
+holding a shared write scope can select any profile bound to it, and so rewrite
+the busy facts of every resource those profiles cover; operators who need
+per-source isolation give each profile its own scope.
+
+```yaml
+staff-calendar:
+  scope: scheduling:busy:write
+  sourceId: staff-calendar
+  resources: [staff-a, staff-b]
+  maximumPastDays: 7
+  maximumFutureDays: 62
+  maximumSpanDays: 31
+  maximumFreshnessMinutes: 240
+  impactProjection: count-only
+```
+
+`POST /v1/source-busy/preview?profile=staff-calendar` compares a bounded source
+snapshot without changing it. `POST /v1/source-busy/apply?profile=staff-calendar`
+uses the same body and an exact source revision. An exact retry after a lost
+success response returns `already-applied` with the request digest; a different
+request at a stale revision is refused as HTTP 412 `revision.mismatch`. Callers
+should preview and resolve the revision rather than automatically retry a
+changed body.
+
+Every request states its covered resources and interval, `observedAt`, and
+either a bounded `freshUntil` or `status: unavailable`. Fresh omission deletes
+only that source's contained rows. An unavailable or expired feed, missing
+coverage, and the uncovered part of a future query all block new allocations
+for configured resources. Existing holds and appointments remain unchanged.
+Rows outside the selected coverage or the profile's current authority remain
+effective and are reported as retained.
+
+Responses always include the exact number of impacted commitments and whether
+details were truncated. The default `count-only` projection returns no impact
+items. `commitment-intervals` permits resource, kind, and occupied interval
+items, up to the response bound. Neither projection returns appointment or
+hold identifiers, parties, external references, source references, calendar
+descriptions, attendees, or absence reasons.
+
 `assertionIssuers` maps a client id to the assertion authorities that client may
 exchange a subject token from. A deployment that performs no token exchange
 leaves it empty, and an exchanged token whose authority no entry declares is
@@ -309,9 +405,30 @@ audit entry.
 `destinations` is optional. `destinations.reminders` is the one place due
 reminder intents are delivered, as the shared hook envelope with
 `content-type: application/json` over HTTPS POST (see the README Events
-section), with `bearerTokenRef` as the optional bearer secret. The URL is one reviewed
-absolute endpoint without userinfo, query, or fragment; plain `http` is
-accepted only for an explicit loopback host, so a plaintext destination can
+section), with `bearerTokenRef` as the optional bearer secret. The independent
+optional `hmacSha256KeyRef` enables the shared signed CloudEvents delivery
+contract and must resolve to a key of at least 32 bytes. Existing destinations
+without this key retain their unsigned behavior. Signed destinations can also
+use bearer authentication; receiving an event does not authorize downstream
+capacity changes or message delivery. `url` is the fallback endpoint. An
+optional closed `purposeUrls` block may override it for any of
+`confirmation`, `change`, `cancellation`, and `reminder`; omitted purposes keep
+using `url`. Every override must use the fallback's scheme, host, and effective
+port. For example:
+
+```yaml
+destinations:
+  reminders:
+    url: https://events.example.org/scheduling
+    purposeUrls:
+      confirmation: https://events.example.org/scheduling/confirmed
+      reminder: https://events.example.org/scheduling/reminder
+    hmacSha256KeyRef: secret:file/reminder-signing-key
+```
+
+Each URL is one reviewed absolute endpoint without userinfo, query, or
+fragment and with a safe parsed path. Plain `http` is accepted only for an
+explicit loopback host, so a plaintext destination can
 never silently point at another machine. Delivery is attempted once per claim
 on the shared dispatch core, with a five-second attempt timeout and a fixed
 back-off of thirty seconds doubling to 1920 seconds; a transport failure

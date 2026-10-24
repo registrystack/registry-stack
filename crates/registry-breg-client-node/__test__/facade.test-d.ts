@@ -84,6 +84,7 @@ metadata.proposalActions[0]?.actionId.toUpperCase()
 metadata.proposalActions[0]?.accessProfile.toUpperCase()
 metadata.proposalActions[0]?.operations[0]?.toUpperCase()
 metadata.proposalActions[0]?.readableInputs[0]?.toUpperCase()
+metadata.proposalActions[0]?.readableContextFields[0]?.toUpperCase()
 // @ts-expect-error Inventory is descriptive and read-only.
 metadata.proposalActions[0].operations.push('apply')
 

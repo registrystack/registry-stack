@@ -53,6 +53,162 @@ def documented_codes(openapi: dict, key: tuple[str, str]) -> set[str]:
     return set().union(*by_status.values()) if by_status else set()
 
 
+class BusySchemasTests(unittest.TestCase):
+    def test_busy_snapshot_is_bounded_and_contains_only_source_facts(self) -> None:
+        schemas = GENERATOR.schemas([])
+        request = schemas["BusyReconciliationRequest"]
+        self.assertFalse(request["additionalProperties"])
+        self.assertNotIn("sourceId", request["properties"])
+        self.assertEqual(4096, request["properties"]["records"]["maxItems"])
+        self.assertNotIn("freshUntil", request["required"])
+        coverage = schemas["BusyCoverage"]["properties"]["resources"]
+        self.assertEqual((1, 256, True), (coverage["minItems"], coverage["maxItems"], coverage["uniqueItems"]))
+        record = schemas["BusyIntervalInput"]
+        self.assertFalse(record["additionalProperties"])
+        self.assertEqual({"externalUid", "externalRevision", "resource", "start", "end"}, set(record["properties"]))
+
+    def test_busy_impact_is_optional_minimized_projection(self) -> None:
+        schemas = GENERATOR.schemas([])
+        summary = schemas["BusyImpactSummary"]
+        self.assertNotIn("items", summary["required"])
+        self.assertEqual(256, summary["properties"]["items"]["maxItems"])
+        self.assertEqual({"kind", "resource", "occupiedStart", "occupiedEnd"}, set(schemas["BusyCommitmentImpact"]["properties"]))
+        self.assertTrue(schemas["BusyApplyOutcome"]["additionalProperties"])
+        self.assertEqual(["applied", "already-applied"], schemas["BusyApplyOutcome"]["properties"]["kind"]["enum"])
+
+    def test_busy_routes_select_one_profile_and_need_no_idempotency_header(self) -> None:
+        http_source = GENERATOR.production_source(ROOT, GENERATOR.HTTP_SOURCE)
+        inventory = GENERATOR.route_inventory(
+            http_source,
+            GENERATOR.production_source(ROOT, GENERATOR.NAMING_SOURCE),
+            GENERATOR.production_source(ROOT, GENERATOR.OPERATIONAL_SOURCE),
+            GENERATOR.production_source(ROOT, GENERATOR.BUSY_SOURCE),
+        )
+        selected = {key: handler for key, handler in inventory.items() if "/source-busy/" in key[1]}
+        wiring = GENERATOR.handler_wiring(http_source, GENERATOR.production_source(ROOT, GENERATOR.SERVICE_SOURCE), selected, {})
+        self.assertEqual(2, len(wiring))
+        for route in wiring.values():
+            self.assertEqual("busy-import-profile", route["authority"])
+            self.assertEqual("BusyReconciliationRequest", route["body"])
+            self.assertFalse(route["idempotency_key"])
+
+
+class PartySchemasTests(unittest.TestCase):
+    def test_bookings_count_people_and_physical_units_but_no_seats(self) -> None:
+        schemas = GENERATOR.schemas([])
+        for name in ["AdmissionRequest", "HoldDocument", "AppointmentDocument"]:
+            for field in ["occurrenceId", "occurrenceRevision", "seats"]:
+                self.assertNotIn(field, schemas[name]["properties"])
+        self.assertNotIn("occurrences", schemas["OfferingDocument"]["properties"])
+        self.assertNotIn("CollectiveOccurrenceDocument", schemas)
+        self.assertNotIn("AvailabilityOccurrence", schemas)
+
+    def test_atomic_allocation_shapes_preserve_optional_legacy_fields(self) -> None:
+        schemas = GENERATOR.schemas([])
+        admission = schemas["AdmissionRequest"]
+        self.assertEqual(admission["properties"]["resourceUnits"]["minimum"], 1)
+        self.assertEqual(admission["properties"]["additionalAllocations"]["maxItems"], 15)
+        self.assertNotIn("resourceUnits", admission["required"])
+        self.assertNotIn("additionalAllocations", admission["required"])
+        self.assertEqual(schemas["ResourceDocument"]["properties"]["capacityUnits"]["minimum"], 0)
+        for name in ("HoldDocument", "AppointmentDocument", "OperationalAppointmentDocument"):
+            self.assertIn("allocations", schemas[name]["properties"])
+            self.assertNotIn("allocations", schemas[name]["required"])
+        self.assertIn("resource", schemas["AllocationDocument"]["required"])
+        self.assertNotIn("resource", schemas["OperationalAllocationDocument"]["required"])
+
+    def test_capacity_preview_accepts_physical_inputs_without_identity_assertions(self) -> None:
+        schemas = GENERATOR.schemas([])
+        request = schemas["AvailabilityPreviewRequest"]
+        self.assertFalse(request["additionalProperties"])
+        self.assertEqual(request["required"], ["offering", "start"])
+        self.assertIn("additionalAllocations", request["properties"])
+        for forbidden in ("manager", "partyReferences", "externalReferences", "duplicateKey", "capabilities", "prerequisites"):
+            self.assertNotIn(forbidden, request["properties"])
+        response = schemas["AvailabilityPreviewDocument"]
+        self.assertIn("capacityAvailable", response["required"])
+        self.assertNotIn("allocations", response["properties"])
+
+    def test_appointment_detail_has_its_own_narrow_authority(self) -> None:
+        http_source = GENERATOR.production_source(ROOT, GENERATOR.HTTP_SOURCE)
+        inventory = GENERATOR.route_inventory(
+            http_source,
+            GENERATOR.production_source(ROOT, GENERATOR.NAMING_SOURCE),
+            GENERATOR.production_source(ROOT, GENERATOR.OPERATIONAL_SOURCE),
+            GENERATOR.production_source(ROOT, GENERATOR.BUSY_SOURCE),
+        )
+        wiring = GENERATOR.handler_wiring(
+            http_source,
+            GENERATOR.production_source(ROOT, GENERATOR.SERVICE_SOURCE),
+            {key: value for key, value in inventory.items() if value == "get_appointment"},
+            {},
+        )
+        self.assertEqual(
+            wiring[("GET", "/v1/appointments/{appointment_id}")]["authority"],
+            "appointment-detail",
+        )
+
+    def test_party_counts_are_optional_and_separate_from_manager_authority(self) -> None:
+        schemas = GENERATOR.schemas([])
+        admission = schemas["AdmissionRequest"]
+        self.assertNotIn("party", admission["required"])
+        self.assertEqual(admission["properties"]["manager"], {"type": "string", "enum": ["schedulingManager"]})
+        self.assertIn("partyReferences", admission["properties"])
+        self.assertEqual(admission["properties"]["partyReferences"]["maxItems"], 16)
+        self.assertEqual(schemas["PartyReference"]["properties"]["role"]["enum"], ["beneficiary", "organization"])
+        for name in ("HoldDocument", "AppointmentDocument"):
+            with self.subTest(document=name):
+                self.assertNotIn("party", schemas[name]["required"])
+                self.assertIn("party", schemas[name]["properties"])
+                self.assertIn("partyReferences", schemas[name]["properties"])
+                self.assertEqual(schemas[name]["properties"]["manager"], admission["properties"]["manager"])
+
+
+class AttendanceSchemasTests(unittest.TestCase):
+    def test_attendance_state_drift_is_rejected_against_its_owning_enum(self) -> None:
+        document = {"components": {"schemas": GENERATOR.schemas([])}}
+        document["components"]["schemas"]["AttendanceState"]["enum"].append("cancelled")
+        with self.assertRaisesRegex(ValueError, "attendance state values drifted"):
+            GENERATOR.verify_dto_schemas(ROOT, document)
+
+    def test_attendance_route_is_a_keyed_task_grant_put_with_revision_refusals(self) -> None:
+        key = ("PUT", "/v1/appointments/{appointment_id}/attendance")
+        self.assertEqual("record_attendance", GENERATOR.ROUTE_HANDLERS[key])
+        self.assertEqual("recordAttendance", GENERATOR.OPERATION_IDS[key])
+        codes = GENERATOR.OPERATION_PROBLEMS[key]
+        for code in ("revision.mismatch", "operation.not-authorized", "idempotency.expired", "idempotency.key-reused"):
+            self.assertIn(code, codes)
+        for code in ("capacity.exhausted", "policy.changed", "cancellation.cutoff-passed"):
+            self.assertNotIn(code, codes)
+        http = GENERATOR.production_source(ROOT, GENERATOR.HTTP_SOURCE)
+        wiring = GENERATOR.handler_wiring(http, GENERATOR.production_source(ROOT, GENERATOR.SERVICE_SOURCE),
+                                         {key: "record_attendance"}, {})[key]
+        self.assertEqual("task-grant", wiring["authority"])
+        self.assertEqual("RecordAttendanceRequest", wiring["body"])
+        self.assertTrue(wiring["idempotency_key"])
+        self.assertEqual(200, wiring["success_status"])
+
+    def test_observation_is_closed_and_has_separate_booking_and_attendance_revisions(self) -> None:
+        schemas = GENERATOR.schemas([])
+        request = schemas["RecordAttendanceRequest"]
+        fields = {"observedAppointmentRevision", "observedRevision", "state", "observedAt"}
+        self.assertEqual(fields, set(request["properties"]))
+        self.assertEqual(fields, set(request["required"]))
+        self.assertFalse(request["additionalProperties"])
+        self.assertEqual(0, request["properties"]["observedRevision"]["minimum"])
+        self.assertEqual(["arrived", "completed", "no-show"], schemas["AttendanceState"]["enum"])
+
+    def test_minimized_attendance_is_optional_in_detail_and_operational_reads(self) -> None:
+        schemas = GENERATOR.schemas([])
+        expected = {"appointmentId", "appointmentRevision", "revision", "state", "observedAt", "recordedAt"}
+        self.assertEqual(expected, set(schemas["AttendanceDocument"]["properties"]))
+        self.assertEqual(expected, set(schemas["AttendanceDocument"]["required"]))
+        for name in ("AppointmentDocument", "OperationalAppointmentDocument"):
+            self.assertEqual({"$ref": "#/components/schemas/AttendanceDocument"},
+                             schemas[name]["properties"]["attendance"])
+            self.assertNotIn("attendance", schemas[name]["required"])
+
+
 class GeneratedOpenApiTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
@@ -76,7 +232,7 @@ class GeneratedOpenApiTests(unittest.TestCase):
             self.assertEqual(entry["description"], properties["detail"]["const"])
             self.assertEqual(entry["httpStatuses"][0], properties["status"]["const"])
         self.assertEqual(33, len(self.contract["entries"]))
-        self.assertEqual(62, len(self.openapi["components"]["schemas"]))
+        self.assertEqual(82, len(self.openapi["components"]["schemas"]))
 
     def test_every_operation_answers_exactly_the_problems_it_was_mapped(self) -> None:
         for key, expected in GENERATOR.OPERATION_PROBLEMS.items():
@@ -147,8 +303,6 @@ class GeneratedOpenApiTests(unittest.TestCase):
             {
                 "eligibility.unavailable",
                 "hook.unavailable",
-                "precondition.failed",
-                "resource.unavailable",
             },
             set(self.openapi["x-registry-scheduling-reserved-problems"]),
         )
@@ -194,15 +348,20 @@ class GeneratedOpenApiTests(unittest.TestCase):
             ("GET", "/v1/resources"): "reads-scope",
             ("GET", "/v1/locations"): "reads-scope",
             ("GET", "/v1/availability"): "reads-scope",
+            ("POST", "/v1/availability/preview"): "reads-scope",
+            ("POST", "/v1/source-busy/preview"): "busy-import-profile",
+            ("POST", "/v1/source-busy/apply"): "busy-import-profile",
             ("GET", "/v1/availability/explain"): "explain-scope",
+            ("GET", "/v1/operational/appointments"): "operational-profile",
             ("POST", "/v1/holds"): "task-grant",
             ("DELETE", "/v1/holds/{hold_id}"): "task-grant",
             ("POST", "/v1/appointments"): "task-grant",
             ("POST", "/v1/appointments/receipt"): "reads-scope",
             ("GET", "/v1/appointments"): "reads-scope",
-            ("GET", "/v1/appointments/{appointment_id}"): "reads-scope",
+            ("GET", "/v1/appointments/{appointment_id}"): "appointment-detail",
             ("POST", "/v1/appointments/{appointment_id}/reschedule"): "task-grant",
             ("POST", "/v1/appointments/{appointment_id}/cancel"): "task-grant",
+            ("PUT", "/v1/appointments/{appointment_id}/attendance"): "task-grant",
             ("GET", "/v1/appointments/{appointment_id}/history"): "reads-scope",
         }
         self.assertEqual(set(GENERATOR.ROUTE_HANDLERS), set(expected))
@@ -220,8 +379,77 @@ class GeneratedOpenApiTests(unittest.TestCase):
         ]
         self.assertEqual(1, authorities.count("explain-scope"))
         self.assertEqual(2, authorities.count("unauthenticated"))
-        self.assertEqual(5, authorities.count("task-grant"))
+        self.assertEqual(6, authorities.count("task-grant"))
         self.assertEqual(10, authorities.count("reads-scope"))
+        self.assertEqual(2, authorities.count("busy-import-profile"))
+        self.assertEqual(1, authorities.count("appointment-detail"))
+        self.assertEqual(1, authorities.count("operational-profile"))
+
+    def test_operational_work_page_uses_the_profile_bounded_query_and_projection(self) -> None:
+        key = ("GET", "/v1/operational/appointments")
+        documented = operation(self.openapi, key)
+        parameters = {item["name"]: item for item in documented["parameters"]}
+        self.assertEqual(
+            {
+                "service",
+                "location",
+                "start",
+                "end",
+                "timeBasis",
+                "offering",
+                "state",
+                "resource",
+                "externalReferenceProduct",
+                "externalReferenceRecordType",
+                "externalReferenceIdentifier",
+                "profile",
+                "cursor",
+                "limit",
+            },
+            set(parameters) - {"traceparent"},
+        )
+        for name in ("service", "location", "start", "end", "timeBasis"):
+            self.assertTrue(parameters[name]["required"], name)
+        for name in set(parameters) - {"service", "location", "start", "end", "timeBasis", "traceparent"}:
+            self.assertFalse(parameters[name]["required"], name)
+        self.assertEqual(["displayed", "occupied"], parameters["timeBasis"]["schema"]["enum"])
+        self.assertEqual(["confirmed", "cancelled"], parameters["state"]["schema"]["enum"])
+        self.assertEqual("operational-profile", documented["x-scheduling-authority"])
+        self.assertIn(
+            "catalogue scopes and task grants never authorize it",
+            self.openapi["components"]["securitySchemes"]["bearerAuth"]["description"],
+        )
+        self.assertEqual(
+            "#/components/schemas/OperationalAppointmentPage",
+            documented["responses"]["200"]["content"]["application/json"]["schema"]["$ref"],
+        )
+        projection = self.openapi["components"]["schemas"]["OperationalAppointmentDocument"]
+        self.assertEqual(
+            {
+                "appointmentId",
+                "revision",
+                "service",
+                "location",
+                "offering",
+                "state",
+                "displayedStart",
+                "displayedEnd",
+            },
+            set(projection["required"]),
+        )
+        self.assertEqual(
+            {
+                "occupiedStart",
+                "occupiedEnd",
+                "resource",
+                "units",
+                "party",
+                "externalReferences",
+                "allocations",
+                "attendance",
+            },
+            set(projection["properties"]) - set(projection["required"]),
+        )
 
     def test_an_idempotency_key_is_demanded_exactly_where_the_handler_reads_it(self) -> None:
         expected = {
@@ -230,6 +458,7 @@ class GeneratedOpenApiTests(unittest.TestCase):
             ("POST", "/v1/appointments/receipt"),
             ("POST", "/v1/appointments/{appointment_id}/reschedule"),
             ("POST", "/v1/appointments/{appointment_id}/cancel"),
+            ("PUT", "/v1/appointments/{appointment_id}/attendance"),
         }
         schema = {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[!-~]+$"}
         for key in GENERATOR.ROUTE_HANDLERS:
@@ -255,6 +484,13 @@ class GeneratedOpenApiTests(unittest.TestCase):
         self.assertIn("never creates or replays a capacity command", observed["description"])
         self.assertIn("not evidence that no effect occurred", observed["description"])
 
+    def test_confirmation_distinguishes_reserved_capacity_from_current_physical_supply(self) -> None:
+        description = operation(self.openapi, ("POST", "/v1/appointments"))["description"]
+        self.assertIn("current physical supply", description)
+        self.assertIn("capabilities", description)
+        self.assertIn("opening coverage", description)
+        self.assertNotIn("only for identity", description)
+
     def test_a_release_uses_the_hold_itself_as_its_idempotency_key(self) -> None:
         """No caller key means a reused key is unreachable on this route."""
         key = ("DELETE", "/v1/holds/{hold_id}")
@@ -268,11 +504,15 @@ class GeneratedOpenApiTests(unittest.TestCase):
 
     def test_a_request_body_is_demanded_exactly_where_the_handler_extracts_one(self) -> None:
         expected = {
+            ("POST", "/v1/availability/preview"): "AvailabilityPreviewRequest",
+            ("POST", "/v1/source-busy/preview"): "BusyReconciliationRequest",
+            ("POST", "/v1/source-busy/apply"): "BusyReconciliationRequest",
             ("POST", "/v1/holds"): "AdmissionRequest",
             ("POST", "/v1/appointments"): "CreateAppointmentRequest",
             ("POST", "/v1/appointments/receipt"): "CreateAppointmentRequest",
             ("POST", "/v1/appointments/{appointment_id}/reschedule"): "RescheduleAppointmentRequest",
             ("POST", "/v1/appointments/{appointment_id}/cancel"): "CancelAppointmentRequest",
+            ("PUT", "/v1/appointments/{appointment_id}/attendance"): "RecordAttendanceRequest",
         }
         for key in GENERATOR.ROUTE_HANDLERS:
             documented = operation(self.openapi, key)
@@ -289,7 +529,9 @@ class GeneratedOpenApiTests(unittest.TestCase):
         http = GENERATOR.production_source(ROOT, GENERATOR.HTTP_SOURCE)
         service = GENERATOR.production_source(ROOT, GENERATOR.SERVICE_SOURCE)
         naming = GENERATOR.production_source(ROOT, GENERATOR.NAMING_SOURCE)
-        inventory = GENERATOR.route_inventory(http, naming)
+        operational = GENERATOR.production_source(ROOT, GENERATOR.OPERATIONAL_SOURCE)
+        busy = GENERATOR.production_source(ROOT, GENERATOR.BUSY_SOURCE)
+        inventory = GENERATOR.route_inventory(http, naming, operational, busy)
         wiring = GENERATOR.handler_wiring(http, service, inventory, self.variants)
         key = ("POST", "/v1/appointments/receipt")
         self.assertEqual("CreateAppointmentRequest", wiring[key]["body"])
@@ -304,7 +546,9 @@ class GeneratedOpenApiTests(unittest.TestCase):
         http = GENERATOR.production_source(ROOT, GENERATOR.HTTP_SOURCE)
         service = GENERATOR.production_source(ROOT, GENERATOR.SERVICE_SOURCE)
         naming = GENERATOR.production_source(ROOT, GENERATOR.NAMING_SOURCE)
-        inventory = GENERATOR.route_inventory(http, naming)
+        operational = GENERATOR.production_source(ROOT, GENERATOR.OPERATIONAL_SOURCE)
+        busy = GENERATOR.production_source(ROOT, GENERATOR.BUSY_SOURCE)
+        inventory = GENERATOR.route_inventory(http, naming, operational, busy)
         extraction = "Json::<CreateAppointmentRequest>::from_request("
         self.assertIn(extraction, http)
         for unrelated in (
@@ -419,12 +663,13 @@ class GeneratedOpenApiTests(unittest.TestCase):
             )
 
     def test_only_an_offering_the_caller_names_can_be_answered_as_absent(self) -> None:
-        # The four operations that resolve a caller-named offering against the
+        # The operations that resolve a caller-named offering against the
         # deployed policy. Everywhere else request.not-found would conceal an
         # owned record rather than name an absence the offering listing
         # already discloses.
         expected = {
             ("GET", "/v1/availability"),
+            ("POST", "/v1/availability/preview"),
             ("GET", "/v1/availability/explain"),
             ("POST", "/v1/holds"),
             ("POST", "/v1/appointments"),
@@ -458,15 +703,17 @@ class GeneratedOpenApiTests(unittest.TestCase):
             codes = documented_codes(self.openapi, key)
             self.assertEqual(key in commitments, bool(admission & codes), key)
 
-    def test_resource_unavailability_is_disclosed_by_the_explain_path_only(self) -> None:
+    def test_resource_unavailability_requires_explain_or_source_busy_authority(self) -> None:
         explain = operation(self.openapi, ("GET", "/v1/availability/explain"))
         self.assertIn("resource.unavailable is disclosed here", explain["description"])
         self.assertIn("capacity.exhausted", explain["description"])
-        documented = {
-            code for codes in GENERATOR.OPERATION_PROBLEMS.values() for code in codes
+        detailed_operations = {
+            key for key, codes in GENERATOR.OPERATION_PROBLEMS.items()
+            if "resource.unavailable" in codes
         }
-        self.assertNotIn("resource.unavailable", documented)
-        self.assertIn("resource.unavailable", self.openapi["x-registry-scheduling-reserved-problems"])
+        self.assertEqual({("POST", "/v1/source-busy/preview"),
+                          ("POST", "/v1/source-busy/apply")}, detailed_operations)
+        self.assertNotIn("resource.unavailable", self.openapi["x-registry-scheduling-reserved-problems"])
 
     def test_the_catalogue_and_availability_reads_are_cursor_bound(self) -> None:
         for key in (
@@ -490,7 +737,7 @@ class GeneratedOpenApiTests(unittest.TestCase):
             self.assertEqual({"type": "integer", "minimum": 1, "maximum": 200, "default": 50},
                              names["limit"]["schema"])
 
-    def test_the_security_scheme_tells_the_three_profiles_apart(self) -> None:
+    def test_the_security_scheme_tells_the_route_authorities_apart(self) -> None:
         scheme = self.openapi["components"]["securitySchemes"]["bearerAuth"]
         self.assertEqual({"type": "http", "scheme": "bearer", "bearerFormat": "JWT"},
                          {key: scheme[key] for key in ("type", "scheme", "bearerFormat")})
@@ -500,7 +747,7 @@ class GeneratedOpenApiTests(unittest.TestCase):
         self.assertIn("complete task grant", scheme["description"])
         self.assertIn("partial grant claims", scheme["description"])
 
-    def test_mutating_routes_name_the_five_task_grant_actions(self) -> None:
+    def test_mutating_routes_name_ordinary_and_assisted_task_grant_actions(self) -> None:
         described = " ".join(
             operation(self.openapi, key)["description"]
             for key in GENERATOR.ROUTE_HANDLERS
@@ -508,8 +755,10 @@ class GeneratedOpenApiTests(unittest.TestCase):
         )
         for action in (
             "hold.create",
+            "hold.create-for",
             "hold.release",
             "appointment.create",
+            "appointment.create-for",
             "appointment.reschedule",
             "appointment.cancel",
         ):
@@ -605,6 +854,41 @@ class GeneratedOpenApiTests(unittest.TestCase):
             self.assertNotIn(field, offering["required"], field)
             self.assertEqual({"type": "null"}, offering["properties"][field]["anyOf"][1], field)
         self.assertIn("null, never zero", self.openapi["paths"]["/v1/offerings"]["get"]["description"])
+
+    def test_selectable_exact_time_contract_is_documented_end_to_end(self) -> None:
+        schemas = self.openapi["components"]["schemas"]
+        admission = schemas["AdmissionRequest"]
+        self.assertEqual({"type": "integer", "minimum": 1, "maximum": 10_080},
+                         admission["properties"]["durationMinutes"])
+        self.assertEqual({"type": "string", "minLength": 1},
+                         admission["properties"]["resource"])
+        self.assertNotIn("durationMinutes", admission["required"])
+        self.assertNotIn("resource", admission["required"])
+
+        offering = schemas["OfferingDocument"]
+        for field in ("pool", "durationSelection", "openingCoverage", "allowResourceSelection"):
+            self.assertIn(field, offering["properties"])
+            self.assertNotIn(field, offering["required"])
+        self.assertEqual({"type": "string"}, offering["properties"]["pool"])
+        self.assertEqual({"type": "boolean"}, offering["properties"]["allowResourceSelection"])
+        self.assertEqual({"service-interval", "occupied-interval"},
+                         set(offering["properties"]["openingCoverage"]["enum"]))
+        self.assertEqual("#/components/schemas/DurationSelectionDocument",
+                         offering["properties"]["durationSelection"]["$ref"])
+        duration_selection = schemas["DurationSelectionDocument"]
+        self.assertEqual({"minimumMinutes", "maximumMinutes", "incrementMinutes"},
+                         set(duration_selection["required"]))
+        self.assertEqual(10_080,
+                         duration_selection["properties"]["maximumMinutes"]["maximum"])
+
+        for path in ("/v1/availability", "/v1/availability/explain"):
+            duration = parameter(self.openapi, "get", path, "durationMinutes")
+            resource = parameter(self.openapi, "get", path, "resource")
+            self.assertFalse(duration["required"])
+            self.assertEqual({"type": "integer", "minimum": 1, "maximum": 10_080},
+                             duration["schema"])
+            self.assertFalse(resource["required"])
+            self.assertEqual({"type": "string", "minLength": 1}, resource["schema"])
 
     def test_an_appointment_state_is_the_closed_vocabulary_the_wire_names(self) -> None:
         schemas = self.openapi["components"]["schemas"]

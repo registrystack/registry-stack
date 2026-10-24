@@ -191,7 +191,7 @@ const CANONICAL_SCHEMA: &str = include_str!(
 );
 
 #[test]
-fn a_task_template_needing_task_grant_context_from_breg_is_refused_by_name() {
+fn a_breg_task_grant_context_provider_without_runtime_profile_is_refused_by_name() {
     let directory = tempfile::tempdir().expect("temporary directory");
     let root = std::fs::canonicalize(directory.path()).expect("canonical root");
     let package = root.join("package");
@@ -276,6 +276,8 @@ taskTemplates:
   facility-registry:
     baseUrl: https://registry.example.test
     statusProfile: casework-review-status
+    # The provider declares a distinct task-grant-context service profile, so
+    # startup must refuse this binding while taskGrantProfile is absent.
     tokenEndpoint: https://identity.example.test/oauth2/token
     clientAssertionAudience: https://identity.example.test
     resource: urn:breg:facility-registry
@@ -296,14 +298,15 @@ taskAuthority:
     let secrets = registry_casework::secret_resolver(&config).expect("secrets");
     let error = registry_casework::build_context_providers(&config, &package, &secrets)
         .err()
-        .expect("BReg does not serve task-grant context");
+        .expect("runtime binding omits the required task-grant profile");
 
+    assert!(matches!(
+        &error,
+        registry_casework::RuntimeError::ContextProviderConfiguration(provider)
+            if provider == "facility-proposal-context"
+    ));
     assert_eq!(
         error.to_string(),
-        "the Casework project needs review context its BReg source does not serve
-  task template address-summary declares subjects, which need the task-grant-context capability, and BReg, the source behind context provider facility-proposal-context, does not serve task-grant context yet; see https://github.com/registrystack/registry-stack/issues/2062
-  next: Remove `subjects` from task template address-summary, or bind the template to review policies whose source serves task-grant context.
-  context provider facility-proposal-context declares task-grant-context, which its BReg source does not serve; BReg serves human-display and service-status
-  next: Remove task-grant-context from the capabilities and serviceProfiles of context provider facility-proposal-context."
+        "the Casework review-context provider facility-proposal-context is not configured for its declared capability and export"
     );
 }

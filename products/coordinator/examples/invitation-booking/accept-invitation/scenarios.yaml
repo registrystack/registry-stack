@@ -1,0 +1,884 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/coordinator/scenarios/scenarios.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/coordinator/scenarios/v1alpha1
+kind: CoordinatorScenarios
+cases:
+- id: appointment-accepted
+  admittedAt: '2026-10-23T09:00:00Z'
+  input:
+    invitationId: 00000000-0000-4000-8000-000000000001
+    grant:
+      id: 00000000-0000-4000-8000-000000000002
+      expiresAt: 1792828800
+  replies:
+    read-invitation:
+    - type: success
+      value:
+        meta:
+          registryIdentifier: invitation-source
+          datasetIdentifier: invitations
+          entityTypeIdentifier: invitation
+        data:
+          recordIdentifier: 00000000-0000-4000-8000-000000000001
+          revisionIdentifier: revision-1
+          domainData:
+            acceptanceId: acceptance-one
+            beneficiaryReference: beneficiary-one
+            notificationDestination: person@example.invalid
+            offering: consultation
+            location: service-centre
+            searchStart: '2026-10-24T09:00:00Z'
+            searchEnd: '2026-10-24T12:00:00Z'
+            durationMinutes: 30
+            resourceRequired: false
+            resourceId: null
+            acceptanceAuthorized: true
+            relationshipValidThrough: '2026-10-31'
+            expiresOn: '2026-10-31'
+            state: issued
+            appointmentId: null
+    claim:
+    - type: success
+      value:
+        action: claim-invitation
+        applicationId: 00000000-0000-4000-8000-000000000010
+        results:
+          invitation:
+            recordType: invitation
+            recordId: 00000000-0000-4000-8000-000000000001
+            revision: 2
+    read-claimed-invitation:
+    - type: success
+      value:
+        meta:
+          registryIdentifier: invitation-source
+          datasetIdentifier: invitations
+          entityTypeIdentifier: invitation
+        data:
+          recordIdentifier: 00000000-0000-4000-8000-000000000001
+          revisionIdentifier: revision-2
+          domainData:
+            acceptanceId: acceptance-one
+            beneficiaryReference: beneficiary-one
+            notificationDestination: person@example.invalid
+            offering: consultation
+            location: service-centre
+            searchStart: '2026-10-24T09:00:00Z'
+            searchEnd: '2026-10-24T12:00:00Z'
+            durationMinutes: 30
+            resourceRequired: false
+            resourceId: null
+            acceptanceAuthorized: true
+            relationshipValidThrough: '2026-10-31'
+            expiresOn: '2026-10-31'
+            state: accepting
+            appointmentId: null
+    metadata:
+    - type: success
+      value:
+        schedulingId: appointments
+        policyRevision: 7
+        policyDigest: sha256:policy
+    availability:
+    - type: success
+      value:
+        items:
+        - kind: slot
+          start: '2026-10-24T10:00:00Z'
+          end: '2026-10-24T10:30:00Z'
+          free: 1
+        nextCursor: null
+    book:
+    - type: success
+      value:
+        appointmentId: appointment-one
+        offering: consultation
+        start: '2026-10-24T10:00:00Z'
+        end: '2026-10-24T10:30:00Z'
+        resource: null
+        units: 1
+        channel: null
+        revision: 1
+        state: confirmed
+        policyRevision: 7
+        createdAt: '2026-10-23T09:00:00Z'
+        cancelledAt: null
+        externalReferences: []
+    record-result:
+    - type: success
+      value:
+        action: record-booking-result
+        applicationId: 00000000-0000-4000-8000-000000000011
+        results:
+          invitation:
+            recordType: invitation
+            recordId: 00000000-0000-4000-8000-000000000001
+            revision: 3
+    notify:
+    - type: success
+      value:
+        id: 00000000-0000-4000-8000-000000000012
+        status: queued
+        links:
+          self: /v1/messages/00000000-0000-4000-8000-000000000012
+          cancel: /v1/messages/00000000-0000-4000-8000-000000000012/cancel
+  expect:
+    path:
+    - read-invitation
+    - current-state
+    - claim
+    - read-claimed-invitation
+    - metadata
+    - availability
+    - capacity
+    - book
+    - record-result
+    - notify
+    - accepted
+    state: completed
+    outcome:
+      type: named
+      value: appointment-and-message-accepted
+    output:
+      acceptanceId: acceptance-one
+      appointmentId: appointment-one
+      messageId: 00000000-0000-4000-8000-000000000012
+- id: assigned-resource-accepted
+  admittedAt: '2026-10-23T09:00:00Z'
+  input:
+    invitationId: 00000000-0000-4000-8000-000000000001
+    grant:
+      id: 00000000-0000-4000-8000-000000000002
+      expiresAt: 1792828800
+  replies:
+    read-invitation:
+    - type: success
+      value:
+        meta:
+          registryIdentifier: invitation-source
+          datasetIdentifier: invitations
+          entityTypeIdentifier: invitation
+        data:
+          recordIdentifier: 00000000-0000-4000-8000-000000000001
+          revisionIdentifier: revision-1
+          domainData:
+            acceptanceId: acceptance-one
+            beneficiaryReference: beneficiary-one
+            notificationDestination: person@example.invalid
+            offering: consultation
+            location: service-centre
+            searchStart: '2026-10-24T09:00:00Z'
+            searchEnd: '2026-10-24T12:00:00Z'
+            durationMinutes: 60
+            resourceRequired: true
+            resourceId: professional-one
+            acceptanceAuthorized: true
+            relationshipValidThrough: '2026-10-31'
+            expiresOn: '2026-10-31'
+            state: issued
+            appointmentId: null
+    claim:
+    - type: success
+      value:
+        action: claim-invitation
+        applicationId: 00000000-0000-4000-8000-000000000010
+        results:
+          invitation:
+            recordType: invitation
+            recordId: 00000000-0000-4000-8000-000000000001
+            revision: 2
+    read-claimed-invitation:
+    - type: success
+      value:
+        meta:
+          registryIdentifier: invitation-source
+          datasetIdentifier: invitations
+          entityTypeIdentifier: invitation
+        data:
+          recordIdentifier: 00000000-0000-4000-8000-000000000001
+          revisionIdentifier: revision-2
+          domainData:
+            acceptanceId: acceptance-one
+            beneficiaryReference: beneficiary-one
+            notificationDestination: person@example.invalid
+            offering: consultation
+            location: service-centre
+            searchStart: '2026-10-24T09:00:00Z'
+            searchEnd: '2026-10-24T12:00:00Z'
+            durationMinutes: 60
+            resourceRequired: true
+            resourceId: professional-one
+            acceptanceAuthorized: true
+            relationshipValidThrough: '2026-10-31'
+            expiresOn: '2026-10-31'
+            state: accepting
+            appointmentId: null
+    metadata:
+    - type: success
+      value:
+        schedulingId: appointments
+        policyRevision: 7
+        policyDigest: sha256:policy
+    availability:
+    - type: success
+      value:
+        items:
+        - kind: slot
+          start: '2026-10-24T10:00:00Z'
+          end: '2026-10-24T11:00:00Z'
+          free: 1
+        nextCursor: null
+    book:
+    - type: success
+      value:
+        appointmentId: appointment-resource-one
+        offering: consultation
+        start: '2026-10-24T10:00:00Z'
+        end: '2026-10-24T11:00:00Z'
+        resource: professional-one
+        units: 1
+        channel: null
+        revision: 1
+        state: confirmed
+        policyRevision: 7
+        createdAt: '2026-10-23T09:00:00Z'
+        cancelledAt: null
+        externalReferences: []
+    record-result:
+    - type: success
+      value:
+        action: record-booking-result
+        applicationId: 00000000-0000-4000-8000-000000000011
+        results:
+          invitation:
+            recordType: invitation
+            recordId: 00000000-0000-4000-8000-000000000001
+            revision: 3
+    notify:
+    - type: success
+      value:
+        id: 00000000-0000-4000-8000-000000000012
+        status: queued
+        links:
+          self: /v1/messages/00000000-0000-4000-8000-000000000012
+          cancel: /v1/messages/00000000-0000-4000-8000-000000000012/cancel
+  expect:
+    path:
+    - read-invitation
+    - current-state
+    - claim
+    - read-claimed-invitation
+    - metadata
+    - availability
+    - capacity
+    - book
+    - record-result
+    - notify
+    - accepted
+    state: completed
+    outcome:
+      type: named
+      value: appointment-and-message-accepted
+    output:
+      acceptanceId: acceptance-one
+      appointmentId: appointment-resource-one
+      messageId: 00000000-0000-4000-8000-000000000012
+- id: no-current-capacity
+  admittedAt: '2026-10-23T09:00:00Z'
+  input:
+    invitationId: 00000000-0000-4000-8000-000000000001
+    grant:
+      id: 00000000-0000-4000-8000-000000000002
+      expiresAt: 1792828800
+  replies:
+    read-invitation:
+    - type: success
+      value:
+        meta:
+          registryIdentifier: invitation-source
+          datasetIdentifier: invitations
+          entityTypeIdentifier: invitation
+        data:
+          recordIdentifier: 00000000-0000-4000-8000-000000000001
+          revisionIdentifier: revision-1
+          domainData:
+            acceptanceId: acceptance-one
+            beneficiaryReference: beneficiary-one
+            notificationDestination: person@example.invalid
+            offering: consultation
+            location: service-centre
+            searchStart: '2026-10-24T09:00:00Z'
+            searchEnd: '2026-10-24T12:00:00Z'
+            durationMinutes: 30
+            resourceRequired: false
+            resourceId: null
+            acceptanceAuthorized: true
+            relationshipValidThrough: '2026-10-31'
+            expiresOn: '2026-10-31'
+            state: issued
+            appointmentId: null
+    claim:
+    - type: success
+      value:
+        action: claim-invitation
+        applicationId: 00000000-0000-4000-8000-000000000010
+        results:
+          invitation:
+            recordType: invitation
+            recordId: 00000000-0000-4000-8000-000000000001
+            revision: 2
+    read-claimed-invitation:
+    - type: success
+      value:
+        meta:
+          registryIdentifier: invitation-source
+          datasetIdentifier: invitations
+          entityTypeIdentifier: invitation
+        data:
+          recordIdentifier: 00000000-0000-4000-8000-000000000001
+          revisionIdentifier: revision-2
+          domainData:
+            acceptanceId: acceptance-one
+            beneficiaryReference: beneficiary-one
+            notificationDestination: person@example.invalid
+            offering: consultation
+            location: service-centre
+            searchStart: '2026-10-24T09:00:00Z'
+            searchEnd: '2026-10-24T12:00:00Z'
+            durationMinutes: 30
+            resourceRequired: false
+            resourceId: null
+            acceptanceAuthorized: true
+            relationshipValidThrough: '2026-10-31'
+            expiresOn: '2026-10-31'
+            state: accepting
+            appointmentId: null
+    metadata:
+    - type: success
+      value:
+        schedulingId: appointments
+        policyRevision: 7
+        policyDigest: sha256:policy
+    availability:
+    - type: success
+      value:
+        items: []
+        nextCursor: null
+    record-no-capacity:
+    - type: success
+      value:
+        action: record-no-capacity
+        applicationId: 00000000-0000-4000-8000-000000000013
+        results:
+          invitation:
+            recordType: invitation
+            recordId: 00000000-0000-4000-8000-000000000001
+            revision: 3
+  expect:
+    path:
+    - read-invitation
+    - current-state
+    - claim
+    - read-claimed-invitation
+    - metadata
+    - availability
+    - capacity
+    - record-no-capacity
+    - no-capacity
+    state: completed
+    outcome:
+      type: named
+      value: no-current-capacity
+    output:
+      acceptanceId: acceptance-one
+- id: invitation-expired
+  admittedAt: '2026-10-23T09:00:00Z'
+  input:
+    invitationId: 00000000-0000-4000-8000-000000000001
+    grant:
+      id: 00000000-0000-4000-8000-000000000002
+      expiresAt: 1792828800
+  replies:
+    read-invitation:
+    - type: success
+      value:
+        meta:
+          registryIdentifier: invitation-source
+          datasetIdentifier: invitations
+          entityTypeIdentifier: invitation
+        data:
+          recordIdentifier: 00000000-0000-4000-8000-000000000001
+          revisionIdentifier: revision-2
+          domainData:
+            state: expired
+            acceptanceAuthorized: true
+  expect:
+    path:
+    - read-invitation
+    - current-state
+    - expired
+    state: completed
+    outcome:
+      type: named
+      value: invitation-expired
+    output: null
+- id: invitation-revoked
+  admittedAt: '2026-10-23T09:00:00Z'
+  input:
+    invitationId: 00000000-0000-4000-8000-000000000001
+    grant:
+      id: 00000000-0000-4000-8000-000000000002
+      expiresAt: 1792828800
+  replies:
+    read-invitation:
+    - type: success
+      value:
+        meta:
+          registryIdentifier: invitation-source
+          datasetIdentifier: invitations
+          entityTypeIdentifier: invitation
+        data:
+          recordIdentifier: 00000000-0000-4000-8000-000000000001
+          revisionIdentifier: revision-2
+          domainData:
+            state: revoked
+            acceptanceAuthorized: true
+  expect:
+    path:
+    - read-invitation
+    - current-state
+    - revoked
+    state: completed
+    outcome:
+      type: named
+      value: invitation-revoked
+    output: null
+- id: invitation-ineligible
+  admittedAt: '2026-10-23T09:00:00Z'
+  input:
+    invitationId: 00000000-0000-4000-8000-000000000001
+    grant:
+      id: 00000000-0000-4000-8000-000000000002
+      expiresAt: 1792828800
+  replies:
+    read-invitation:
+    - type: success
+      value:
+        meta:
+          registryIdentifier: invitation-source
+          datasetIdentifier: invitations
+          entityTypeIdentifier: invitation
+        data:
+          recordIdentifier: 00000000-0000-4000-8000-000000000001
+          revisionIdentifier: revision-2
+          domainData:
+            state: issued
+            acceptanceAuthorized: false
+  expect:
+    path:
+    - read-invitation
+    - current-state
+    - ineligible
+    state: completed
+    outcome:
+      type: named
+      value: invitation-ineligible
+    output: null
+- id: already-accepted
+  admittedAt: '2026-10-23T09:00:00Z'
+  input:
+    invitationId: 00000000-0000-4000-8000-000000000001
+    grant:
+      id: 00000000-0000-4000-8000-000000000002
+      expiresAt: 1792828800
+  replies:
+    read-invitation:
+    - type: success
+      value:
+        meta:
+          registryIdentifier: invitation-source
+          datasetIdentifier: invitations
+          entityTypeIdentifier: invitation
+        data:
+          recordIdentifier: 00000000-0000-4000-8000-000000000001
+          revisionIdentifier: revision-3
+          domainData:
+            state: booked
+            acceptanceAuthorized: true
+            appointmentId: appointment-one
+  expect:
+    path:
+    - read-invitation
+    - current-state
+    - already-booked
+    state: completed
+    outcome:
+      type: named
+      value: already-accepted
+    output:
+      appointmentId: appointment-one
+- id: acceptance-in-progress
+  admittedAt: '2026-10-23T09:00:00Z'
+  input:
+    invitationId: 00000000-0000-4000-8000-000000000001
+    grant:
+      id: 00000000-0000-4000-8000-000000000002
+      expiresAt: 1792828800
+  replies:
+    read-invitation:
+    - type: success
+      value:
+        meta:
+          registryIdentifier: invitation-source
+          datasetIdentifier: invitations
+          entityTypeIdentifier: invitation
+        data:
+          recordIdentifier: 00000000-0000-4000-8000-000000000001
+          revisionIdentifier: revision-2
+          domainData:
+            state: accepting
+            acceptanceAuthorized: true
+            acceptanceId: acceptance-one
+  expect:
+    path:
+    - read-invitation
+    - current-state
+    - acceptance-in-progress
+    state: completed
+    outcome:
+      type: named
+      value: acceptance-in-progress
+    output:
+      acceptanceId: acceptance-one
+- id: simultaneous-acceptance-source-claim-refused
+  admittedAt: '2026-10-23T09:00:00Z'
+  input:
+    invitationId: 00000000-0000-4000-8000-000000000001
+    grant:
+      id: 00000000-0000-4000-8000-000000000002
+      expiresAt: 1792828800
+  replies:
+    read-invitation:
+    - type: success
+      value:
+        meta:
+          registryIdentifier: invitation-source
+          datasetIdentifier: invitations
+          entityTypeIdentifier: invitation
+        data:
+          recordIdentifier: 00000000-0000-4000-8000-000000000001
+          revisionIdentifier: revision-1
+          domainData:
+            acceptanceId: acceptance-one
+            beneficiaryReference: beneficiary-one
+            notificationDestination: person@example.invalid
+            offering: consultation
+            location: service-centre
+            searchStart: '2026-10-24T09:00:00Z'
+            searchEnd: '2026-10-24T12:00:00Z'
+            durationMinutes: 30
+            resourceRequired: false
+            resourceId: null
+            acceptanceAuthorized: true
+            relationshipValidThrough: '2026-10-31'
+            expiresOn: '2026-10-31'
+            state: issued
+            appointmentId: null
+    claim:
+    - type: refused
+      code: product-precondition-failed
+  expect:
+    path:
+    - read-invitation
+    - current-state
+    - claim
+    state: refused
+    outcome:
+      type: none
+- id: booking-response-loss-reconciled
+  admittedAt: '2026-10-23T09:00:00Z'
+  input:
+    invitationId: 00000000-0000-4000-8000-000000000001
+    grant:
+      id: 00000000-0000-4000-8000-000000000002
+      expiresAt: 1792828800
+  replies:
+    read-invitation:
+    - type: success
+      value:
+        meta:
+          registryIdentifier: invitation-source
+          datasetIdentifier: invitations
+          entityTypeIdentifier: invitation
+        data:
+          recordIdentifier: 00000000-0000-4000-8000-000000000001
+          revisionIdentifier: revision-1
+          domainData:
+            acceptanceId: acceptance-one
+            beneficiaryReference: beneficiary-one
+            notificationDestination: person@example.invalid
+            offering: consultation
+            location: service-centre
+            searchStart: '2026-10-24T09:00:00Z'
+            searchEnd: '2026-10-24T12:00:00Z'
+            durationMinutes: 30
+            resourceRequired: false
+            resourceId: null
+            acceptanceAuthorized: true
+            relationshipValidThrough: '2026-10-31'
+            expiresOn: '2026-10-31'
+            state: issued
+            appointmentId: null
+    claim:
+    - type: success
+      value:
+        action: claim-invitation
+        applicationId: 00000000-0000-4000-8000-000000000010
+        results:
+          invitation:
+            recordType: invitation
+            recordId: 00000000-0000-4000-8000-000000000001
+            revision: 2
+    read-claimed-invitation:
+    - type: success
+      value:
+        meta:
+          registryIdentifier: invitation-source
+          datasetIdentifier: invitations
+          entityTypeIdentifier: invitation
+        data:
+          recordIdentifier: 00000000-0000-4000-8000-000000000001
+          revisionIdentifier: revision-2
+          domainData:
+            acceptanceId: acceptance-one
+            beneficiaryReference: beneficiary-one
+            notificationDestination: person@example.invalid
+            offering: consultation
+            location: service-centre
+            searchStart: '2026-10-24T09:00:00Z'
+            searchEnd: '2026-10-24T12:00:00Z'
+            durationMinutes: 30
+            resourceRequired: false
+            resourceId: null
+            acceptanceAuthorized: true
+            relationshipValidThrough: '2026-10-31'
+            expiresOn: '2026-10-31'
+            state: accepting
+            appointmentId: null
+    metadata:
+    - type: success
+      value:
+        schedulingId: appointments
+        policyRevision: 7
+        policyDigest: sha256:policy
+    availability:
+    - type: success
+      value:
+        items:
+        - kind: slot
+          start: '2026-10-24T10:00:00Z'
+          end: '2026-10-24T10:30:00Z'
+          free: 1
+        nextCursor: null
+    book:
+    - type: uncertain
+      code: transport-uncertain
+    - type: success
+      value:
+        appointmentId: appointment-one
+        offering: consultation
+        start: '2026-10-24T10:00:00Z'
+        end: '2026-10-24T10:30:00Z'
+        resource: null
+        units: 1
+        channel: null
+        revision: 1
+        state: confirmed
+        policyRevision: 7
+        createdAt: '2026-10-23T09:00:00Z'
+        cancelledAt: null
+        externalReferences: []
+    record-result:
+    - type: success
+      value:
+        action: record-booking-result
+        applicationId: 00000000-0000-4000-8000-000000000011
+        results:
+          invitation:
+            recordType: invitation
+            recordId: 00000000-0000-4000-8000-000000000001
+            revision: 3
+    notify:
+    - type: success
+      value:
+        id: 00000000-0000-4000-8000-000000000012
+        status: queued
+        links:
+          self: /v1/messages/00000000-0000-4000-8000-000000000012
+          cancel: /v1/messages/00000000-0000-4000-8000-000000000012/cancel
+  recovery:
+    book: reconcile
+  expect:
+    path:
+    - read-invitation
+    - current-state
+    - claim
+    - read-claimed-invitation
+    - metadata
+    - availability
+    - capacity
+    - book
+    - record-result
+    - notify
+    - accepted
+    state: completed
+    outcome:
+      type: named
+      value: appointment-and-message-accepted
+    output:
+      acceptanceId: acceptance-one
+      appointmentId: appointment-one
+      messageId: 00000000-0000-4000-8000-000000000012
+- id: source-result-response-loss-retried-same
+  admittedAt: '2026-10-23T09:00:00Z'
+  input:
+    invitationId: 00000000-0000-4000-8000-000000000001
+    grant:
+      id: 00000000-0000-4000-8000-000000000002
+      expiresAt: 1792828800
+  replies:
+    read-invitation:
+    - type: success
+      value:
+        meta:
+          registryIdentifier: invitation-source
+          datasetIdentifier: invitations
+          entityTypeIdentifier: invitation
+        data:
+          recordIdentifier: 00000000-0000-4000-8000-000000000001
+          revisionIdentifier: revision-1
+          domainData:
+            acceptanceId: acceptance-one
+            beneficiaryReference: beneficiary-one
+            notificationDestination: person@example.invalid
+            offering: consultation
+            location: service-centre
+            searchStart: '2026-10-24T09:00:00Z'
+            searchEnd: '2026-10-24T12:00:00Z'
+            durationMinutes: 30
+            resourceRequired: false
+            resourceId: null
+            acceptanceAuthorized: true
+            relationshipValidThrough: '2026-10-31'
+            expiresOn: '2026-10-31'
+            state: issued
+            appointmentId: null
+    claim:
+    - type: success
+      value:
+        action: claim-invitation
+        applicationId: 00000000-0000-4000-8000-000000000010
+        results:
+          invitation:
+            recordType: invitation
+            recordId: 00000000-0000-4000-8000-000000000001
+            revision: 2
+    read-claimed-invitation:
+    - type: success
+      value:
+        meta:
+          registryIdentifier: invitation-source
+          datasetIdentifier: invitations
+          entityTypeIdentifier: invitation
+        data:
+          recordIdentifier: 00000000-0000-4000-8000-000000000001
+          revisionIdentifier: revision-2
+          domainData:
+            acceptanceId: acceptance-one
+            beneficiaryReference: beneficiary-one
+            notificationDestination: person@example.invalid
+            offering: consultation
+            location: service-centre
+            searchStart: '2026-10-24T09:00:00Z'
+            searchEnd: '2026-10-24T12:00:00Z'
+            durationMinutes: 30
+            resourceRequired: false
+            resourceId: null
+            acceptanceAuthorized: true
+            relationshipValidThrough: '2026-10-31'
+            expiresOn: '2026-10-31'
+            state: accepting
+            appointmentId: null
+    metadata:
+    - type: success
+      value:
+        schedulingId: appointments
+        policyRevision: 7
+        policyDigest: sha256:policy
+    availability:
+    - type: success
+      value:
+        items:
+        - kind: slot
+          start: '2026-10-24T10:00:00Z'
+          end: '2026-10-24T10:30:00Z'
+          free: 1
+        nextCursor: null
+    book:
+    - type: success
+      value:
+        appointmentId: appointment-one
+        offering: consultation
+        start: '2026-10-24T10:00:00Z'
+        end: '2026-10-24T10:30:00Z'
+        resource: null
+        units: 1
+        channel: null
+        revision: 1
+        state: confirmed
+        policyRevision: 7
+        createdAt: '2026-10-23T09:00:00Z'
+        cancelledAt: null
+        externalReferences: []
+    record-result:
+    - type: uncertain
+      code: transport-uncertain
+    - type: success
+      value:
+        action: record-booking-result
+        applicationId: 00000000-0000-4000-8000-000000000011
+        results:
+          invitation:
+            recordType: invitation
+            recordId: 00000000-0000-4000-8000-000000000001
+            revision: 3
+    notify:
+    - type: success
+      value:
+        id: 00000000-0000-4000-8000-000000000012
+        status: queued
+        links:
+          self: /v1/messages/00000000-0000-4000-8000-000000000012
+          cancel: /v1/messages/00000000-0000-4000-8000-000000000012/cancel
+  recovery:
+    record-result: retry-same
+  expect:
+    path:
+    - read-invitation
+    - current-state
+    - claim
+    - read-claimed-invitation
+    - metadata
+    - availability
+    - capacity
+    - book
+    - record-result
+    - notify
+    - accepted
+    state: completed
+    outcome:
+      type: named
+      value: appointment-and-message-accepted
+    output:
+      acceptanceId: acceptance-one
+      appointmentId: appointment-one
+      messageId: 00000000-0000-4000-8000-000000000012

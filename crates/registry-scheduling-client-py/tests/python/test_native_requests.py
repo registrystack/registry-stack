@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import threading
 import unittest
+from unittest.mock import patch
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qsl, urlsplit
 
@@ -25,6 +26,8 @@ REFERENCE = {"product": "casework", "recordType": "review-task", "identifier": "
 ADMISSION = {
     "offering": "registry-update-30",
     "start": "2026-10-05T09:00:00Z",
+    "durationMinutes": 1500,
+    "resource": "clerk-2",
     "party": {"recipients": 1, "attendees": 1},
     "policyRevision": 3,
     "capabilities": [],
@@ -41,6 +44,21 @@ RESOURCES = {
     "nextCursor": None,
 }
 LOCATIONS = {"items": [{"locationId": "office-1", "timezone": "Africa/Nairobi"}], "nextCursor": None}
+OPERATIONAL = {
+    "items": [{
+        "appointmentId": "appointment-1",
+        "revision": 2,
+        "service": "registry-update",
+        "location": "office-1",
+        "offering": "registry-update-30",
+        "state": "confirmed",
+        "displayedStart": "2026-10-05T09:00:00Z",
+        "displayedEnd": "2026-10-06T10:00:00Z",
+        "resource": "clerk-2",
+        "units": 1,
+    }],
+    "nextCursor": "next",
+}
 OFFERINGS = {
     "items": [{
         "id": "registry-update-30",
@@ -48,10 +66,14 @@ OFFERINGS = {
         "label": "Registry update, 30 minutes",
         "mode": "exact-time",
         "location": "office-1",
+        "pool": "clerks",
         "leadTimeMinutes": 60,
         "horizonDays": 30,
         "cancellationCutoffMinutes": 120,
         "durationMinutes": 30,
+        "durationSelection": {"minimumMinutes": 15, "maximumMinutes": 60, "incrementMinutes": 15},
+        "openingCoverage": "occupied-interval",
+        "allowResourceSelection": True,
         "bufferBeforeMinutes": None,
         "bufferAfterMinutes": 5,
         "startIncrementMinutes": 30,
@@ -83,6 +105,11 @@ EXPLANATION = {
     "publicCode": "capacity.exhausted",
     "explanation": "Every clerk is booked.",
 }
+PREVIEW = {
+    "offering": "room", "start": "2026-10-05T09:00:00Z",
+    "end": "2026-10-05T10:00:00Z", "capacityAvailable": True,
+}
+
 HOLD = {
     "holdId": HOLD_ID,
     "offering": "registry-update-30",
@@ -122,12 +149,39 @@ HISTORY = {
     "nextCursor": None,
 }
 APPOINTMENTS = {"items": [APPOINTMENT], "nextCursor": None}
+BUSY_REQUEST = {
+    "expectedRevision": 0, "observedAt": "2026-10-05T08:00:00Z",
+    "freshUntil": "2026-10-05T09:00:00Z", "status": "fresh",
+    "coverage": {"start": "2026-10-05T00:00:00Z", "end": "2026-10-06T00:00:00Z", "resources": ["room-a"]},
+    "records": [{"externalUid": "event-1", "externalRevision": "v1", "resource": "room-a", "start": "2026-10-05T10:00:00Z", "end": "2026-10-05T11:00:00Z"}],
+}
+BUSY_COUNTS = {
+    "sourceId": "calendar-a", "requestDigest": "sha256:abc",
+    "added": 1, "changed": 0, "deleted": 0,
+    "retainedOutsideAuthority": 0, "retainedAcrossCoverageBoundary": 0,
+    "impacts": {"total": 1, "detailsAvailable": False, "truncated": True},
+}
+BUSY_PREVIEW = {**BUSY_COUNTS, "expectedRevision": 0, "currentRevision": 0}
+BUSY_APPLIED = {**BUSY_COUNTS, "kind": "applied", "revision": 1}
+
+ATTENDANCE_REQUEST = {
+    "observedAppointmentRevision": 7, "observedRevision": 0,
+    "state": "arrived", "observedAt": "2026-10-05T09:05:00Z",
+}
+ATTENDANCE = {
+    "appointmentId": APPOINTMENT_ID, "appointmentRevision": 7, "revision": 3,
+    "state": "arrived", "observedAt": ATTENDANCE_REQUEST["observedAt"],
+    "recordedAt": "2026-10-05T09:06:00Z",
+}
+
 ANSWERS = {
+    ("PUT", f"/tenant/v1/appointments/{APPOINTMENT_ID}/attendance"): ATTENDANCE,
     ("GET", "/tenant/v1/scheduling"): SERVICE,
     ("GET", "/tenant/v1/services"): SERVICES,
     ("GET", "/tenant/v1/offerings"): OFFERINGS,
     ("GET", "/tenant/v1/resources"): RESOURCES,
     ("GET", "/tenant/v1/locations"): LOCATIONS,
+    ("GET", "/tenant/v1/operational/appointments"): OPERATIONAL,
     ("GET", "/tenant/v1/availability"): AVAILABILITY,
     ("GET", "/tenant/v1/availability/explain"): EXPLANATION,
     ("GET", f"/tenant/v1/appointments/{APPOINTMENT_ID}"): APPOINTMENT,
@@ -162,6 +216,11 @@ class _Handler(BaseHTTPRequestHandler):
             return
         self.answer("GET", path)
 
+    def do_PUT(self) -> None:  # noqa: N802
+        length = int(self.headers.get("content-length", "0"))
+        path, _ = self.observe(self.rfile.read(length).decode("utf-8"))
+        self.answer("PUT", path)
+
     def do_DELETE(self) -> None:  # noqa: N802
         path, _ = self.observe()
         if path == f"/tenant/v1/holds/{HOLD_ID}":
@@ -179,8 +238,14 @@ class _Handler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802
         length = int(self.headers.get("content-length", "0"))
         body = self.rfile.read(length).decode("utf-8")
-        path, _ = self.observe(body)
+        path, query = self.observe(body)
         key = self.headers.get("idempotency-key")
+        if path.startswith("/tenant/v1/source-busy/"):
+            if query.get("profile") == "failing":
+                self.respond_problem("service.unavailable", 503, "Service unavailable", "server-detail-canary")
+            else:
+                self.respond(200, BUSY_PREVIEW if path.endswith("/preview") else BUSY_APPLIED)
+            return
         if path == "/tenant/v1/appointments/receipt":
             failures = {
                 "unresolved-key-canary": ("receipt.unresolved", 409, "Original receipt unresolved", "No retained success receipt matches this caller, key, and original request. The original outcome remains unknown; this is not evidence that no effect occurred."),
@@ -215,11 +280,14 @@ class _Handler(BaseHTTPRequestHandler):
                 "revision.mismatch",
                 412,
                 "Revision mismatch",
-                "The window revision changed before the request committed. Reload the catalogue and try again.",
+                "The observed revision is no longer current.",
             )
             return
         if path == "/tenant/v1/holds":
             self.respond(201, HOLD)
+            return
+        if path == "/tenant/v1/availability/preview":
+            self.respond(200, PREVIEW)
             return
         if path == "/tenant/v1/appointments":
             self.respond(201, APPOINTMENT)
@@ -263,6 +331,45 @@ class _Handler(BaseHTTPRequestHandler):
 
 
 class NativeRequestTests(unittest.TestCase):
+    def test_attendance_preserves_observed_visit_revision_and_caller_key(self) -> None:
+        result = self.client.record_attendance("token", APPOINTMENT_ID, "observation-1", ATTENDANCE_REQUEST)
+        self.assertEqual(result["value"], ATTENDANCE)
+        self.assertEqual(len(_Handler.observations), 1)
+        sent = _Handler.observations[0]
+        self.assertEqual(sent["method"], "PUT")
+        self.assertEqual(sent["path"], f"/tenant/v1/appointments/{APPOINTMENT_ID}/attendance")
+        self.assertEqual(sent["idempotency_key"], "observation-1")
+        self.assertEqual(json.loads(sent["body"]), ATTENDANCE_REQUEST)
+
+    def test_attendance_refuses_unknown_fields_invalid_states_and_invalid_revisions_before_io(self) -> None:
+        for request in (
+            {**ATTENDANCE_REQUEST, "attendees": ["person-1"]},
+            {**ATTENDANCE_REQUEST, "state": "withdrawn"},
+            {**ATTENDANCE_REQUEST, "observedRevision": -1},
+        ):
+            with self.subTest(request=request), self.assertRaises(SchedulingClientError) as raised:
+                self.client.record_attendance("token", APPOINTMENT_ID, "observation-1", request)
+            self.assertEqual(raised.exception.kind, "invalid-request")
+        self.assertEqual(_Handler.observations, [])
+
+    def test_appointment_detail_preserves_minimized_attendance(self) -> None:
+        with patch.dict(APPOINTMENT, {"revision": 7, "attendance": ATTENDANCE}):
+            self.assertEqual(self.client.get_appointment("token", APPOINTMENT_ID)["value"], APPOINTMENT)
+
+    def test_arrival_catalogue_preserves_every_window_an_offering_serves(self) -> None:
+        windows = [
+            {"id": "day-one", "revision": 1, "start": "2026-10-05T09:00:00Z",
+             "end": "2026-10-05T11:00:00Z", "units": 12},
+            {"id": "day-two", "revision": 2, "start": "2026-10-12T09:00:00Z",
+             "end": "2026-10-12T11:00:00Z", "units": 8},
+        ]
+        offering = {**OFFERINGS["items"][0], "mode": "arrival-window", "window": None,
+                    "windows": windows}
+        offering.pop("pool", None)
+        page = {"items": [offering], "nextCursor": None}
+        with patch.dict(ANSWERS, {("GET", "/tenant/v1/offerings"): page}):
+            self.assertEqual(self.client.list_offerings("token")["value"], page)
+
     @classmethod
     def setUpClass(cls) -> None:
         cls.server = HTTPServer(("127.0.0.1", 0), _Handler)
@@ -322,6 +429,8 @@ class NativeRequestTests(unittest.TestCase):
             end="2026-10-05T15:00:00+03:00",
             cursor="cursor-1",
             limit=25,
+            duration_minutes=1500,
+            resource="clerk-2",
         )
 
         self.assertEqual(outcome, self.complete(AVAILABILITY))
@@ -332,6 +441,8 @@ class NativeRequestTests(unittest.TestCase):
             "end": "2026-10-05T12:00:00Z",
             "cursor": "cursor-1",
             "limit": "25",
+            "durationMinutes": "1500",
+            "resource": "clerk-2",
         })
         self.client.availability("one-call-token", "registry-update-30")
         self.assertEqual(_Handler.observations[-1]["query"], {"offering": "registry-update-30"})
@@ -346,6 +457,12 @@ class NativeRequestTests(unittest.TestCase):
             lambda: self.client.availability("one-call-token", "registry-update-30", limit=0),
             lambda: self.client.availability("one-call-token", "registry-update-30", limit=-1),
             lambda: self.client.availability("one-call-token", "registry-update-30", limit=2**32),
+            lambda: self.client.availability("one-call-token", "registry-update-30", duration_minutes=0),
+            lambda: self.client.availability("one-call-token", "registry-update-30", duration_minutes=10081),
+            lambda: self.client.availability("one-call-token", "registry-update-30", duration_minutes=-1),
+            lambda: self.client.availability("one-call-token", "registry-update-30", duration_minutes=1.5),
+            lambda: self.client.availability("one-call-token", "registry-update-30", duration_minutes=True),
+            lambda: self.client.availability("one-call-token", "registry-update-30", resource="clerk/2"),
         )
 
     def test_explain_carries_the_offering_and_start(self) -> None:
@@ -357,6 +474,47 @@ class NativeRequestTests(unittest.TestCase):
             _Handler.observations[-1]["query"],
             {"offering": "registry-update-30", "start": "2026-10-05T09:00:00Z"},
         )
+        self.client.explain(
+            "one-call-token",
+            "registry-update-30",
+            "2026-10-05T12:00:00+03:00",
+            duration_minutes=45,
+            resource="clerk-2",
+        )
+        self.assertEqual(
+            _Handler.observations[-1]["query"],
+            {
+                "offering": "registry-update-30",
+                "start": "2026-10-05T09:00:00Z",
+                "durationMinutes": "45",
+                "resource": "clerk-2",
+            },
+        )
+
+        count = len(_Handler.observations)
+        for call in (
+            lambda: self.client.explain(
+                "one-call-token", "registry-update-30", "2026-10-05T09:00:00Z", duration_minutes=0,
+            ),
+            lambda: self.client.explain(
+                "one-call-token", "registry-update-30", "2026-10-05T09:00:00Z", duration_minutes=10081,
+            ),
+            lambda: self.client.explain(
+                "one-call-token", "registry-update-30", "2026-10-05T09:00:00Z", duration_minutes=-1,
+            ),
+            lambda: self.client.explain(
+                "one-call-token", "registry-update-30", "2026-10-05T09:00:00Z", duration_minutes=1.5,
+            ),
+            lambda: self.client.explain(
+                "one-call-token", "registry-update-30", "2026-10-05T09:00:00Z", duration_minutes=True,
+            ),
+            lambda: self.client.explain(
+                "one-call-token", "registry-update-30", "2026-10-05T09:00:00Z", resource="clerk/2",
+            ),
+        ):
+            with self.assertRaises(SchedulingClientError):
+                call()
+        self.assertEqual(len(_Handler.observations), count)
 
     def test_create_hold_carries_the_idempotency_key_and_answers_the_hold(self) -> None:
         outcome = self.client.create_hold("one-call-token", "hold-2026-10-05-0001", ADMISSION)
@@ -382,6 +540,80 @@ class NativeRequestTests(unittest.TestCase):
                 "one-call-token", APPOINTMENT_ID, key, {"observedRevision": 1},
             ))
         self.assert_refused_before_io(*calls)
+
+    def test_resource_hold_preserves_party_references_without_invented_counts(self) -> None:
+        request = {**ADMISSION, "manager": "schedulingManager", "partyReferences": [
+            {"role": "organization", "reference": REFERENCE},
+        ]}
+        del request["party"]
+        self.assertEqual(self.client.create_hold("synthetic-token", "resource-hold", request), self.complete(HOLD))
+        observed = _Handler.observations[-1]
+        body = json.loads(observed["body"])
+        self.assertEqual(body, {
+            **request, "channel": None, "duplicateKey": None, "windowRevision": None,
+        })
+        self.assertNotIn("party", body)
+
+    def test_capacity_preview_uses_the_closed_physical_shape_without_mutation_key(self) -> None:
+        request = {"offering": "room", "start": PREVIEW["start"],
+                   "additionalAllocations": [{"offering": "chairs", "units": 30}]}
+        self.assertEqual(self.client.preview_availability("synthetic-token", request), self.complete(PREVIEW))
+        observed = _Handler.observations[-1]
+        self.assertEqual(observed["path"], "/tenant/v1/availability/preview")
+        self.assertEqual(json.loads(observed["body"]), request)
+        self.assertEqual(observed["idempotency_key"], "")
+
+    def test_capacity_preview_refuses_identity_and_invalid_quantity_before_io(self) -> None:
+        request = {"offering": "room", "start": PREVIEW["start"]}
+        self.assert_refused_before_io(
+            lambda: self.client.preview_availability("synthetic-token", {**request, "manager": "schedulingManager"}),
+            lambda: self.client.preview_availability("synthetic-token", {**request, "resourceUnits": 0}),
+            lambda: self.client.preview_availability("synthetic-token", {**request, "additionalAllocations": [{"offering": "chairs"}] * 16}),
+        )
+
+    def test_source_busy_selects_one_profile_and_preserves_cas_and_minimized_impacts(self) -> None:
+        self.assertEqual(self.client.preview_source_busy("synthetic-token", "calendar-main", BUSY_REQUEST), self.complete(BUSY_PREVIEW))
+        self.assertEqual(self.client.apply_source_busy("synthetic-token", "calendar-main", BUSY_REQUEST), self.complete(BUSY_APPLIED))
+        for observed in _Handler.observations:
+            self.assertEqual(observed["query"], {"profile": "calendar-main"})
+            self.assertEqual(json.loads(observed["body"]), BUSY_REQUEST)
+            self.assertEqual(observed["idempotency_key"], "")
+        self.assertEqual([row["path"] for row in _Handler.observations], [
+            "/tenant/v1/source-busy/preview", "/tenant/v1/source-busy/apply",
+        ])
+
+    def test_source_busy_rejects_private_data_and_invalid_coverage_before_io(self) -> None:
+        self.assert_refused_before_io(
+            lambda: self.client.preview_source_busy("synthetic-token", "../other", BUSY_REQUEST),
+            lambda: self.client.apply_source_busy("synthetic-token", "calendar-main", {**BUSY_REQUEST, "sourceId": "other"}),
+            lambda: self.client.apply_source_busy("synthetic-token", "calendar-main", {**BUSY_REQUEST, "records": [{**BUSY_REQUEST["records"][0], "description": "private"}]}),
+            lambda: self.client.apply_source_busy("synthetic-token", "calendar-main", {**BUSY_REQUEST, "coverage": {**BUSY_REQUEST["coverage"], "resources": []}}),
+            lambda: self.client.apply_source_busy("synthetic-token", "calendar-main", {**BUSY_REQUEST, "records": BUSY_REQUEST["records"] * 4097}),
+            lambda: self.client.apply_source_busy("synthetic-token", "calendar-main", {**BUSY_REQUEST, "status": "unavailable"}),
+        )
+
+    def test_source_busy_uncertain_apply_is_not_automatically_resent(self) -> None:
+        with self.assertRaises(SchedulingClientError) as caught:
+            self.client.apply_source_busy("synthetic-token", "failing", BUSY_REQUEST)
+        self.assertTrue(caught.exception.outcome_unknown)
+        self.assertEqual(len(_Handler.observations), 1)
+
+    def test_counted_bundle_hold_roundtrips_allocation_rows(self) -> None:
+        allocations = [{
+            "requirement": {"kind": "additional", "index": 0},
+            "offering": "chairs", "resource": "chairs-a", "units": 30,
+            "occupiedStart": HOLD["start"], "occupiedEnd": HOLD["end"],
+        }]
+        request = {**ADMISSION, "resourceUnits": 2, "additionalAllocations": [
+            {"offering": "chairs", "resource": "chairs-a", "units": 30},
+        ]}
+        del request["party"]
+        with patch.dict(HOLD, {"allocations": allocations, "units": 2}):
+            outcome = self.client.create_hold("synthetic-token", "bundle-hold", request)
+            self.assertEqual(outcome, self.complete(HOLD))
+        self.assertEqual(json.loads(_Handler.observations[-1]["body"]), {
+            **request, "channel": None, "duplicateKey": None, "windowRevision": None,
+        })
 
     def test_release_hold_deletes_the_hold_and_completes_without_a_value(self) -> None:
         self.assertEqual(self.client.release_hold("one-call-token", HOLD_ID), self.complete(None))
@@ -435,6 +667,65 @@ class NativeRequestTests(unittest.TestCase):
             "cursor": "cursor-1",
             "limit": "10",
         })
+
+    def test_operational_listing_carries_one_role_bounded_query(self) -> None:
+        query = {
+            "service": "registry-update",
+            "location": "office-1",
+            "start": "2026-10-05T09:00:00Z",
+            "end": "2026-10-07T09:00:00Z",
+            "timeBasis": "occupied",
+            "offering": "registry-update-30",
+            "state": "confirmed",
+            "resource": "clerk-2",
+            "externalReference": REFERENCE,
+            "profile": "desk",
+            "cursor": "next",
+            "limit": 25,
+        }
+        self.assertEqual(
+            self.client.list_operational_appointments("one-call-token", query),
+            self.complete(OPERATIONAL),
+        )
+        self.assertEqual(_Handler.observations[-1]["query"], {
+            "service": "registry-update",
+            "location": "office-1",
+            "start": "2026-10-05T09:00:00Z",
+            "end": "2026-10-07T09:00:00Z",
+            "timeBasis": "occupied",
+            "offering": "registry-update-30",
+            "state": "confirmed",
+            "resource": "clerk-2",
+            "externalReferenceProduct": "casework",
+            "externalReferenceRecordType": "review-task",
+            "externalReferenceIdentifier": "case:1234",
+            "profile": "desk",
+            "cursor": "next",
+            "limit": "25",
+        })
+
+    def test_operational_listing_refuses_an_invalid_role_query_before_io(self) -> None:
+        query = {
+            "service": "registry-update",
+            "location": "office-1",
+            "start": "2026-10-05T09:00:00Z",
+            "end": "2026-10-07T09:00:00Z",
+            "timeBasis": "occupied",
+        }
+        self.assert_refused_before_io(
+            lambda: self.client.list_operational_appointments(
+                "one-call-token", {**query, "resource": "clerk/2"}
+            ),
+            lambda: self.client.list_operational_appointments(
+                "one-call-token", {**query, "end": query["start"]}
+            ),
+            lambda: self.client.list_operational_appointments(
+                "one-call-token", {**query, "limit": 0}
+            ),
+            lambda: self.client.list_operational_appointments(
+                "one-call-token", {**query, "extra": "x"}
+            ),
+        )
 
     def test_list_appointments_refuses_a_reference_or_bound_outside_its_grammar_before_io(self) -> None:
         self.assert_refused_before_io(

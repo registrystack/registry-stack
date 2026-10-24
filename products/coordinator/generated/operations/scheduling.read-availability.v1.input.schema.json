@@ -29,6 +29,15 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {
+    "durationMinutes": {
+      "default": null,
+      "maximum": 10080,
+      "minimum": 1,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
     "end": {
       "format": "date-time",
       "type": "string"
@@ -50,6 +59,17 @@
     },
     "offering": {
       "$ref": "#/$defs/LocalId"
+    },
+    "resource": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/LocalId"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
     },
     "start": {
       "format": "date-time",

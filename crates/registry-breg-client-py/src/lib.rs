@@ -1493,6 +1493,7 @@ impl Metadata {
         json_to_python(py, &Value::Array(self.inner.proposal_actions().iter().map(|entry| json!({
             "action_id": entry.action_identifier(), "access_profile": entry.access_profile(),
             "operations": entry.operations(), "readable_inputs": entry.readable_inputs(),
+            "readable_context_fields": entry.readable_context_fields(),
         })).collect()))
     }
 
@@ -1532,6 +1533,7 @@ impl Metadata {
             .map(|inner| ProposalReviewBinding { inner })
             .map_err(|error| selection_error(py, error))
     }
+
     #[getter]
     fn operations<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         json_to_python(

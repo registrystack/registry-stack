@@ -20,11 +20,77 @@ use wiremock::{
 const GRANT: &str = "00000000-0000-4000-8000-000000000003";
 const APPOINTMENT: &str = "appt-accepted";
 
+#[test]
+fn lifecycle_contracts_accept_native_uuid_identifiers() {
+    let id = "00000000-0000-4000-8000-000000000001";
+    let grant = json!({"id": GRANT, "expiresAt": 2_000_000_000});
+    let cases = [
+        (Operation::ReadAppointment, json!({"appointmentId": id})),
+        (
+            Operation::ReleaseHold,
+            json!({"holdId": id, "grant": grant}),
+        ),
+        (
+            Operation::ConfirmHold,
+            json!({"appointment": {"hold": id}, "grant": grant}),
+        ),
+        (
+            Operation::RescheduleAppointment,
+            json!({
+                "appointmentId": id, "grant": grant,
+                "reschedule": {"observedRevision": 1, "admission": admission()["admission"]}
+            }),
+        ),
+        (
+            Operation::CancelAppointment,
+            json!({
+                "appointmentId": id, "grant": grant,
+                "cancellation": {"observedRevision": 1, "reason": "withdrawn"}
+            }),
+        ),
+    ];
+    for (operation, input) in cases {
+        assert_eq!(
+            contract(operation).check_input(&input),
+            Ok(()),
+            "{operation:?}"
+        );
+    }
+}
+
+#[test]
+fn hold_lifecycle_contracts_reject_non_uuid_identifiers() {
+    let grant = json!({"id": GRANT, "expiresAt": 2_000_000_000});
+    for (operation, input) in [
+        (
+            Operation::ReleaseHold,
+            json!({"holdId": "hold-one", "grant": grant}),
+        ),
+        (
+            Operation::ConfirmHold,
+            json!({"appointment": {"hold": "hold-one"}, "grant": grant}),
+        ),
+    ] {
+        assert!(
+            contract(operation).check_input(&input).is_err(),
+            "{operation:?} accepted a hold identifier Scheduling cannot issue"
+        );
+    }
+}
+
 fn admission() -> Value {
     json!({"hold":null,"admission":{"offering":"application-review","start":"2026-10-10T10:00:00Z",
         "party":{"recipients":1,"attendees":1},"channel":null,"duplicateKey":support::RECORD,
         "policyRevision":1,"windowRevision":null,"capabilities":[],"prerequisites":[],
         "externalReferences":[{"product":"breg","recordType":"applications","identifier":support::RECORD}]}})
+}
+
+fn admission_request() -> Value {
+    admission()["admission"].clone()
+}
+
+fn grant(deadline: i64) -> Value {
+    json!({"id":GRANT,"expiresAt":deadline})
 }
 
 #[tokio::test]
@@ -223,6 +289,18 @@ fn command(deadline: i64) -> CallRequest {
     }
 }
 
+fn scheduling_command(operation: Operation, _deadline: i64, input: Value) -> CallRequest {
+    CallRequest {
+        operation_contract: None,
+        connection: "bookings".into(),
+        operation,
+        input,
+        idempotency_key: operation
+            .requires_key()
+            .then(|| "original-lifecycle-command".into()),
+    }
+}
+
 fn grant_assertion(deadline: i64, subject: &str, resource: &str) -> (String, i64) {
     let now = chrono::Utc::now().timestamp();
     let header =
@@ -334,25 +412,234 @@ async fn fixture(
     adapters
 }
 
-#[test]
-fn operation_metadata_classifies_every_supported_effect() {
-    for operation in [
-        Operation::ReadRecord,
-        Operation::ReadScheduling,
-        Operation::ReadAvailability,
+#[tokio::test]
+async fn lifecycle_operations_use_exact_public_client_routes_bodies_and_keys() {
+    let token = MockServer::start().await;
+    let authority = MockServer::start().await;
+    let product = MockServer::start().await;
+    let root = tempfile::tempdir().unwrap();
+    let deadline = chrono::Utc::now().timestamp() + 120;
+    let adapters = fixture(
+        root.path(),
+        &token,
+        &authority,
+        &product,
+        deadline,
+        FixtureBinding::default(),
+    )
+    .await;
+
+    let hold = json!({"holdId":"hold-one","offering":"application-review",
+        "start":"2026-10-10T10:00:00Z","end":"2026-10-10T10:30:00Z",
+        "resource":"room-one","units":1,"expiresAt":"2026-10-10T09:55:00Z",
+        "policyRevision":1,"externalReferences":[]});
+    Mock::given(method("GET"))
+        .and(path(format!("/v1/appointments/{APPOINTMENT}")))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("traceparent", support::TRACE)
+                .set_body_json(appointment()),
+        )
+        .expect(1)
+        .mount(&product)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/holds"))
+        .and(header("idempotency-key", "original-lifecycle-command"))
+        .and(body_json(admission_request()))
+        .respond_with(
+            ResponseTemplate::new(201)
+                .insert_header("traceparent", support::TRACE)
+                .set_body_json(&hold),
+        )
+        .expect(1)
+        .mount(&product)
+        .await;
+    Mock::given(method("DELETE"))
+        .and(path("/v1/holds/hold-one"))
+        .respond_with(ResponseTemplate::new(204).insert_header("traceparent", support::TRACE))
+        .expect(1)
+        .mount(&product)
+        .await;
+    let confirmation = json!({"hold":"hold-one","admission":null});
+    Mock::given(method("POST"))
+        .and(path("/v1/appointments"))
+        .and(header("idempotency-key", "original-lifecycle-command"))
+        .and(body_json(&confirmation))
+        .respond_with(
+            ResponseTemplate::new(201)
+                .insert_header("traceparent", support::TRACE)
+                .set_body_json(appointment()),
+        )
+        .expect(1)
+        .mount(&product)
+        .await;
+    let reschedule = json!({"observedRevision":1,"admission":admission_request()});
+    Mock::given(method("POST"))
+        .and(path(format!("/v1/appointments/{APPOINTMENT}/reschedule")))
+        .and(header("idempotency-key", "original-lifecycle-command"))
+        .and(body_json(&reschedule))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("traceparent", support::TRACE)
+                .set_body_json(appointment()),
+        )
+        .expect(1)
+        .mount(&product)
+        .await;
+    let cancellation = json!({"observedRevision":1,"reason":"request-withdrawn"});
+    Mock::given(method("POST"))
+        .and(path(format!("/v1/appointments/{APPOINTMENT}/cancel")))
+        .and(header("idempotency-key", "original-lifecycle-command"))
+        .and(body_json(&cancellation))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("traceparent", support::TRACE)
+                .set_body_json(appointment()),
+        )
+        .expect(1)
+        .mount(&product)
+        .await;
+
+    let cases = [
+        (
+            Operation::ReadAppointment,
+            json!({"grant":grant(deadline),"appointmentId":APPOINTMENT}),
+            appointment(),
+        ),
+        (
+            Operation::CreateHold,
+            json!({"grant":grant(deadline),"admission":admission_request()}),
+            hold,
+        ),
+        (
+            Operation::ReleaseHold,
+            json!({"grant":grant(deadline),"holdId":"hold-one"}),
+            Value::Null,
+        ),
+        (
+            Operation::ConfirmHold,
+            json!({"grant":grant(deadline),"appointment":confirmation}),
+            appointment(),
+        ),
+        (
+            Operation::RescheduleAppointment,
+            json!({"grant":grant(deadline),"appointmentId":APPOINTMENT,"reschedule":reschedule}),
+            appointment(),
+        ),
+        (
+            Operation::CancelAppointment,
+            json!({"grant":grant(deadline),"appointmentId":APPOINTMENT,"cancellation":cancellation}),
+            appointment(),
+        ),
+    ];
+    for (operation, input, expected) in cases {
+        let CallOutcome::Success(value) = adapters
+            .call(&scheduling_command(operation, deadline, input))
+            .await
+        else {
+            panic!("{operation:?} did not succeed");
+        };
+        assert_eq!(value, expected, "{operation:?}");
+        assert_eq!(contract(operation).check_output(&value), Ok(()));
+    }
+    product.verify().await;
+}
+
+#[tokio::test]
+async fn unkeyed_hold_release_holds_an_ambiguous_dispatch_without_replay() {
+    let token = MockServer::start().await;
+    let authority = MockServer::start().await;
+    let product = MockServer::start().await;
+    let root = tempfile::tempdir().unwrap();
+    let deadline = chrono::Utc::now().timestamp() + 120;
+    let adapters = fixture(
+        root.path(),
+        &token,
+        &authority,
+        &product,
+        deadline,
+        FixtureBinding::default(),
+    )
+    .await;
+    Mock::given(method("DELETE"))
+        .and(path("/v1/holds/hold-one"))
+        .respond_with(ResponseTemplate::new(500).insert_header("traceparent", support::TRACE))
+        .expect(1)
+        .mount(&product)
+        .await;
+    let request = scheduling_command(
+        Operation::ReleaseHold,
+        deadline,
+        json!({"grant":grant(deadline),"holdId":"hold-one"}),
+    );
+    assert!(request.idempotency_key.is_none());
+    assert!(matches!(adapters.call(&request).await,
+        CallOutcome::Uncertain { code } if code == "transport-uncertain"));
+    assert_eq!(product.received_requests().await.unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn only_appointment_creation_and_confirmation_have_original_result_receipts() {
+    let token = MockServer::start().await;
+    let authority = MockServer::start().await;
+    let product = MockServer::start().await;
+    let root = tempfile::tempdir().unwrap();
+    let deadline = chrono::Utc::now().timestamp() + 120;
+    let adapters = fixture(
+        root.path(),
+        &token,
+        &authority,
+        &product,
+        deadline,
+        FixtureBinding::default(),
+    )
+    .await;
+    let confirmation = json!({"hold":"hold-one","admission":null});
+    Mock::given(method("POST"))
+        .and(path("/v1/appointments/receipt"))
+        .and(header("idempotency-key", "original-lifecycle-command"))
+        .and(body_json(&confirmation))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("traceparent", support::TRACE)
+                .set_body_json(appointment()),
+        )
+        .expect(1)
+        .mount(&product)
+        .await;
+    let confirm = scheduling_command(
+        Operation::ConfirmHold,
+        deadline,
+        json!({"grant":grant(deadline),"appointment":confirmation}),
+    );
+    assert!(matches!(adapters.reconcile(&confirm, None).await,
+        ReconciliationOutcome::Confirmed(value) if value == appointment()));
+    for request in [
+        scheduling_command(
+            Operation::CreateHold,
+            deadline,
+            json!({"grant":grant(deadline),"admission":admission_request()}),
+        ),
+        scheduling_command(
+            Operation::RescheduleAppointment,
+            deadline,
+            json!({"grant":grant(deadline),"appointmentId":APPOINTMENT,"reschedule":{"observedRevision":1,"admission":admission_request()}}),
+        ),
+        scheduling_command(
+            Operation::CancelAppointment,
+            deadline,
+            json!({"grant":grant(deadline),"appointmentId":APPOINTMENT,"cancellation":{"observedRevision":1,"reason":null}}),
+        ),
     ] {
-        assert!(operation.is_read());
-        assert!(!operation.is_mutating());
+        assert!(matches!(adapters.reconcile(&request, None).await,
+            ReconciliationOutcome::Unresolved { code } if code == "operation-unbound"));
     }
-    for operation in [Operation::SubmitMessage, Operation::CreateAppointment] {
-        assert!(operation.is_mutating());
-        assert!(!operation.is_read());
-        assert_eq!(
-            operation.recovery(),
-            registry_coordinator::protocol::RecoverySemantics::SameCommandAndReceipt
-        );
-    }
-    assert_eq!(Operation::CreateAppointment.product(), "scheduling");
+    assert_eq!(
+        product.received_requests().await.unwrap().len(),
+        1,
+        "current appointment reads must not be used as command receipts"
+    );
 }
 
 #[tokio::test]
@@ -385,10 +672,22 @@ async fn standing_reads_are_bounded_and_never_authorize_a_commitment() {
         .and(query_param("limit", "20"))
         .and(query_param("start", "2026-10-10T10:00:00Z"))
         .and(query_param("end", "2026-10-10T11:00:00Z"))
+        .and(query_param("resource", "room-a"))
+        .and(query_param("durationMinutes", "120"))
         .respond_with(
             ResponseTemplate::new(200)
                 .insert_header("traceparent", support::TRACE)
                 .set_body_json(json!({"items":[],"nextCursor":null})),
+        )
+        .expect(1)
+        .mount(&product)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/v1/appointments/{APPOINTMENT}")))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("traceparent", support::TRACE)
+                .set_body_json(appointment()),
         )
         .expect(1)
         .mount(&product)
@@ -411,9 +710,13 @@ async fn standing_reads_are_bounded_and_never_authorize_a_commitment() {
         operation_contract: None,
         connection: "bookings".into(),
         operation: Operation::ReadAvailability,
-        input: json!({"offering":"application-review","start":"2026-10-10T10:00:00Z","end":"2026-10-10T11:00:00Z","limit":20}),
+        input: json!({"offering":"application-review","start":"2026-10-10T10:00:00Z","end":"2026-10-10T11:00:00Z","limit":20,"resource":"room-a","durationMinutes":120}),
         idempotency_key: None,
     };
+    assert_eq!(
+        contract(Operation::ReadAvailability).check_input(&read.input),
+        Ok(())
+    );
     let CallOutcome::Success(page) = adapters.call(&read).await else {
         panic!("the availability read succeeds");
     };
@@ -421,17 +724,120 @@ async fn standing_reads_are_bounded_and_never_authorize_a_commitment() {
         contract(Operation::ReadAvailability).check_output(&page),
         Ok(())
     );
+    let preview_operation = Operation::parse("scheduling.preview-availability/v1")
+        .expect("physical preview is a registered read");
+    let preview_body = json!({"offering":"application-review","start":"2026-10-10T10:00:00Z","additionalAllocations":[{"offering":"chairs","units":30}]});
+    let preview_answer = json!({"offering":"application-review","start":"2026-10-10T10:00:00Z","end":"2026-10-10T11:00:00Z","capacityAvailable":true});
+    Mock::given(method("POST"))
+        .and(path("/v1/availability/preview"))
+        .and(body_json(&preview_body))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("traceparent", support::TRACE)
+                .set_body_json(&preview_answer),
+        )
+        .expect(1)
+        .mount(&product)
+        .await;
+    let preview = CallRequest {
+        operation_contract: None,
+        connection: "bookings".into(),
+        operation: preview_operation,
+        input: json!({"preview":preview_body}),
+        idempotency_key: None,
+    };
+    assert_eq!(
+        contract(preview_operation).check_input(&preview.input),
+        Ok(())
+    );
+    assert!(matches!(adapters.call(&preview).await,
+        CallOutcome::Success(value) if value == preview_answer));
+    for forbidden in [
+        "manager",
+        "duplicateKey",
+        "externalReferences",
+        "capabilities",
+    ] {
+        let mut bad = preview.clone();
+        bad.input["preview"][forbidden] = json!("not-authority");
+        assert!(contract(preview_operation).check_input(&bad.input).is_err());
+        assert!(matches!(adapters.call(&bad).await,
+            CallOutcome::Refused { code } if code == "invalid-command"));
+    }
+    let appointment_read = scheduling_command(
+        Operation::ReadAppointment,
+        deadline,
+        json!({"appointmentId":APPOINTMENT}),
+    );
+    let CallOutcome::Success(appointment) = adapters.call(&appointment_read).await else {
+        panic!("the appointment read succeeds");
+    };
+    assert_eq!(
+        contract(Operation::ReadAppointment).check_output(&appointment),
+        Ok(())
+    );
+    for bad in [
+        0,
+        registry_scheduling_client::MAXIMUM_BOOKING_DURATION_MINUTES + 1,
+    ] {
+        read.input["durationMinutes"] = json!(bad);
+        assert!(contract(Operation::ReadAvailability)
+            .check_input(&read.input)
+            .is_err());
+        assert!(
+            matches!(adapters.call(&read).await,CallOutcome::Refused{code} if code=="invalid-command")
+        );
+    }
+    read.input["durationMinutes"] = json!(120);
+    let mut invalid_resource = read.input.clone();
+    invalid_resource["resource"] = json!("../room-a");
+    assert!(contract(Operation::ReadAvailability)
+        .check_input(&invalid_resource)
+        .is_err());
     for bad in [json!(0), json!(101)] {
         read.input["limit"] = bad;
         assert!(
             matches!(adapters.call(&read).await,CallOutcome::Refused{code} if code=="invalid-command")
         );
     }
-    assert!(
-        matches!(adapters.call(&command(deadline)).await,CallOutcome::Refused{code} if code=="invalid-command")
-    );
+    for request in [
+        command(deadline),
+        scheduling_command(
+            Operation::CreateHold,
+            deadline,
+            json!({"grant":grant(deadline),"admission":admission_request()}),
+        ),
+        scheduling_command(
+            Operation::ReleaseHold,
+            deadline,
+            json!({"grant":grant(deadline),"holdId":"hold-one"}),
+        ),
+        scheduling_command(
+            Operation::ConfirmHold,
+            deadline,
+            json!({"grant":grant(deadline),"appointment":{"hold":"hold-one","admission":null}}),
+        ),
+        scheduling_command(
+            Operation::RescheduleAppointment,
+            deadline,
+            json!({"grant":grant(deadline),"appointmentId":APPOINTMENT,
+                "reschedule":{"observedRevision":1,"admission":admission_request()}}),
+        ),
+        scheduling_command(
+            Operation::CancelAppointment,
+            deadline,
+            json!({"grant":grant(deadline),"appointmentId":APPOINTMENT,
+                "cancellation":{"observedRevision":1,"reason":null}}),
+        ),
+    ] {
+        assert!(
+            matches!(adapters.call(&request).await,CallOutcome::Refused{code} if code=="invalid-command"),
+            "{:?}",
+            request.operation,
+        );
+    }
     assert!(authority.received_requests().await.unwrap().is_empty());
-    assert_eq!(product.received_requests().await.unwrap().len(), 2);
+    assert_eq!(product.received_requests().await.unwrap().len(), 4);
 }
 
 #[tokio::test]

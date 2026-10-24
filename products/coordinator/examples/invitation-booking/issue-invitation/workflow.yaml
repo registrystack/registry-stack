@@ -1,0 +1,103 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/coordinator/project/project.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/coordinator/project/v1alpha1
+kind: CoordinatorProject
+project:
+  id: issue-invitation
+  version: '1'
+types:
+  workflow-input:
+    type: object
+    additionalProperties: false
+    required: [acceptanceId, beneficiaryReference, notificationDestination, offering, location, searchStart, searchEnd, durationMinutes, resourceRequired, acceptanceAuthorized, relationshipValidThrough, expiresOn]
+    properties:
+      acceptanceId: {type: string, minLength: 1, maxLength: 120}
+      beneficiaryReference: {type: string, minLength: 1, maxLength: 200}
+      notificationDestination: {type: string, minLength: 3, maxLength: 254}
+      offering: {type: string, minLength: 1, maxLength: 120}
+      location: {type: string, minLength: 1, maxLength: 120}
+      searchStart: {type: string, format: date-time}
+      searchEnd: {type: string, format: date-time}
+      durationMinutes: {type: integer, minimum: 1, maximum: 10080}
+      resourceRequired: {type: boolean}
+      resourceId: {type: string, minLength: 1, maxLength: 120}
+      acceptanceAuthorized: {type: boolean}
+      relationshipValidThrough: {type: string, format: date}
+      expiresOn: {type: string, format: date}
+contracts:
+  invitations:
+    type: breg
+    source: generated/invitations.contract.json
+functions:
+  issue-request:
+    runtime: rhai
+    source: functions.rhai
+    entrypoint: issue_request
+    inputs:
+      input: {typeRef: workflow-input}
+    output: {operationInput: invitations-issue}
+  notice-request:
+    runtime: rhai
+    source: functions.rhai
+    entrypoint: notice_request
+    inputs:
+      invitation: {operationOutput: invitations-read-record}
+    output: {operationInput: notices-submit-message}
+operations:
+  invitations-issue:
+    uses: breg.invoke-action/v1
+    connection: invitations
+    action: {contract: invitations, id: issue-invitation}
+  invitations-read-record:
+    uses: breg.read-record/v1
+    connection: invitations
+  notices-submit-message:
+    uses: messaging.submit-message/v1
+    connection: notices
+workflow:
+  input: {typeRef: workflow-input}
+  deadlineSeconds: 300
+  start: issue
+  steps:
+    issue:
+      type: call
+      operation: invitations-issue
+      input:
+        type: function
+        function: issue-request
+        inputs:
+          input: {type: input}
+      next: read-invitation
+    read-invitation:
+      type: call
+      operation: invitations-read-record
+      input:
+        type: fields
+        fields:
+          collection: {type: literal, value: invitations}
+          recordId: {type: step, step: issue, path: /results/invitation/recordId}
+      next: notify
+    notify:
+      type: call
+      operation: notices-submit-message
+      input:
+        type: function
+        function: notice-request
+        inputs:
+          invitation: {type: step, step: read-invitation}
+      next: accepted
+    accepted:
+      type: finish
+      outcome: invitation-and-message-accepted
+      output:
+        type: fields
+        fields:
+          invitationId: {type: step, step: issue, path: /results/invitation/recordId}
+          messageId: {type: step, step: notify, path: /id}
+  outcomes:
+    invitation-and-message-accepted:
+      type: object
+      additionalProperties: false
+      required: [invitationId, messageId]
+      properties:
+        invitationId: {type: string, format: uuid}
+        messageId: {type: string, format: uuid}

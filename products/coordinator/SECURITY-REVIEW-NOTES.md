@@ -5,6 +5,45 @@ material because commit messages do not survive a squash. Each section names
 the threat it answers, the defaults the product ships, where Rust enforces it,
 the tests that pin it, and the residual risk it accepts.
 
+## Scheduling lifecycle recovery
+
+### Threat
+
+Coordinator can lose the response after Scheduling has committed capacity. A
+fresh command, an ordinary current-state read, or replay of an unkeyed release
+could duplicate or misstate that effect.
+
+### Enforcement and defaults
+
+Each Scheduling lifecycle operation declares its own recovery behavior in the
+Coordinator operation catalog. Reads can run again. Appointment creation and
+hold confirmation retain the exact key and request and may use Scheduling's
+original-result receipt. Hold creation, rescheduling, and cancellation retain
+the exact keyed command but expose no receipt lookup; current appointment state
+does not settle them. Hold release carries no key, so an ambiguous dispatch is
+held and cannot be sent again. Every commitment obtains fresh task-bound
+Scheduling authority for each durable attempt. The Scheduling client performs
+no hidden mutation retry inside Coordinator.
+
+### Tests
+
+- `crates/registry-coordinator/tests/scheduling_adapter.rs`:
+  `lifecycle_operations_use_exact_public_client_routes_bodies_and_keys`,
+  `unkeyed_hold_release_holds_an_ambiguous_dispatch_without_replay`,
+  `only_appointment_creation_and_confirmation_have_original_result_receipts`,
+  and `standing_reads_are_bounded_and_never_authorize_a_commitment`.
+- `crates/registry-coordinator/src/operations.rs`:
+  `operations_use_registered_execution_semantics`.
+
+### Accepted residuals
+
+- Scheduling exposes no original-result receipt for hold creation,
+  rescheduling, or cancellation. Idempotency expiry leaves the run held for
+  investigation; Coordinator does not infer an outcome from later state.
+- Scheduling hold release is deliberately unkeyed. A timeout, broken exchange,
+  invalid response, or server failure after dispatch remains uncertain until an
+  operator resolves or cancels the held run.
+
 ## Coordinatorctl access-token files
 
 ### Threat

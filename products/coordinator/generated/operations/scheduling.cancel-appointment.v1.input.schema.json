@@ -1,0 +1,67 @@
+{
+  "$defs": {
+    "CancelAppointmentRequest": {
+      "additionalProperties": false,
+      "description": "The request behind `POST /v1/appointments/{id}/cancel`.",
+      "properties": {
+        "observedRevision": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "reason": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "observedRevision"
+      ],
+      "type": "object"
+    },
+    "GrantReference": {
+      "additionalProperties": false,
+      "description": "An approval reference, never an assertion or bearer credential. The shared\nCasework source requires the signed authority's original deadline to match.",
+      "properties": {
+        "expiresAt": {
+          "maximum": 9007199254740991,
+          "minimum": -9007199254740991,
+          "type": "integer"
+        },
+        "id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "expiresAt"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "appointmentId": {
+      "format": "uuid",
+      "type": "string"
+    },
+    "cancellation": {
+      "$ref": "#/$defs/CancelAppointmentRequest"
+    },
+    "grant": {
+      "$ref": "#/$defs/GrantReference"
+    }
+  },
+  "required": [
+    "grant",
+    "appointmentId",
+    "cancellation"
+  ],
+  "title": "scheduling.cancel-appointment/v1 input",
+  "type": "object"
+}

@@ -13,8 +13,12 @@ use registry_platform_yaml::{
 };
 use serde::{de, Deserialize, Deserializer};
 
-/// Minutes in one day: the bound of an appointment, a buffer, and a grid.
+/// Minutes in one elapsed day: the bound of a buffer and a start grid.
 pub const MINUTES_PER_DAY: u32 = 1_440;
+
+/// The longest displayed booking interval, in elapsed minutes. A local
+/// calendar day may contain 23 or 25 hours around daylight-saving changes.
+pub const MAXIMUM_BOOKING_DURATION_MINUTES: u32 = 7 * MINUTES_PER_DAY;
 
 /// The furthest ahead, in days, an offering may open booking.
 pub const MAXIMUM_HORIZON_DAYS: u32 = 3_650;
@@ -26,6 +30,18 @@ pub const MAXIMUM_HORIZON_MINUTES: u32 = MAXIMUM_HORIZON_DAYS * MINUTES_PER_DAY;
 /// The most recipient units one window, subquota, band, or claim may count.
 /// The ledger stores units as a signed 32-bit integer.
 pub const MAXIMUM_UNITS: u32 = i32::MAX as u32;
+
+/// The most physical units one allocation requirement may request or one
+/// counted resource may publish. The ledger stores units as a signed 32-bit
+/// integer; snapshot row counts, not this stock value, bound database work.
+pub const MAXIMUM_RESOURCE_UNITS: u32 = MAXIMUM_UNITS;
+
+/// One primary requirement plus this many additional requirements is the
+/// largest atomic bundle accepted at the boundary.
+pub const MAXIMUM_ADDITIONAL_ALLOCATIONS: usize = 15;
+
+/// The total number of allocation requirements in one logical reservation.
+pub const MAXIMUM_ALLOCATION_REQUIREMENTS: usize = MAXIMUM_ADDITIONAL_ALLOCATIONS + 1;
 
 /// The highest revision of a published record. The ledger stores revisions
 /// as a signed 64-bit integer.
@@ -179,6 +195,21 @@ where
     let items = Vec::<T>::deserialize(deserializer)?;
     if items.is_empty() {
         return Err(de::Error::custom(EMPTY_LIST));
+    }
+    Ok(items)
+}
+
+/// A list whose maximum cardinality is part of the wire contract.
+pub fn bounded_list<'de, D, T, const MAX: usize>(deserializer: D) -> Result<Vec<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    let items = Vec::<T>::deserialize(deserializer)?;
+    if items.len() > MAX {
+        return Err(de::Error::custom(format!(
+            "expected at most {MAX} list entries"
+        )));
     }
     Ok(items)
 }

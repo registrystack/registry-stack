@@ -431,7 +431,7 @@ invariants:
       change it describes.
     enforcementPoint: >-
       A closed policy compiler admitting only after-phase URL handlers for
-      three appointment lifecycle triggers, with the url-only hook capability
+      four appointment event triggers, with the url-only hook capability
       set re-checked when the runtime compiles the declarations; product-owned projections that
       cannot name actor, credential, capacity, duplicate-key, or cancellation
       reason fields; outbox capture in the appointment transaction; an
@@ -725,6 +725,200 @@ invariants:
     negativeTest:
       path: crates/registry-scheduling/tests/postgres_commitments.rs
       name: rotating_the_audit_key_keeps_existing_claims_with_their_owner
+  - id: SCHEDULING-SEC-35
+    state: enforced
+    threat: >-
+      A booking ignores a resource absence during setup or cleanup, or a live
+      hold confirms after its resource becomes physically unavailable.
+    enforcementPoint: >-
+      Availability and admission share the complete occupied-interval supply
+      predicate. Facts replacement validates bounded dated intervals and
+      advances the facts revision while holding supply anchors. Exact-time
+      confirmation rechecks current member capabilities, static and dated
+      availability, and required opening coverage without reallocating the
+      held capacity or re-running new-request grid and lead-time rules.
+    refusal: >-
+      Refuse new commitments and affected hold confirmation. Preserve existing
+      claims for authorized remediation and expose only a bounded current
+      operator impact result for dated and static resource unavailability,
+      removed resources and stock below simultaneous physical commitments.
+      Impacts include secondary allocations and each window's resource
+      reservation once, without treating window units or individual window
+      bookings as physical resources.
+    negativeTest:
+      path: crates/registry-scheduling/tests/postgres_commitments/resource_availability.rs
+      name: dated_resource_supply_persists_blocks_new_capacity_and_reports_existing_bookings
+  - id: SCHEDULING-SEC-36
+    state: enforced
+    threat: >-
+      An assisted booking confuses the submitting actor with its manager,
+      accepts a caller-supplied manager identifier, or treats party metadata
+      or a broad read scope as management authority.
+    enforcementPoint: >-
+      The explicit selector names only identity.schedulingManager in verified
+      signed claims. Creation requires its exact create-for action. Every
+      assisted operation binds the retained source issuer and manager, exact
+      service/location permission and fresh online grant status. Detail-only
+      authority opens no catalogue, list, history or operational route.
+      Original command recovery remains actor-bound and requires retained
+      claim ownership; erasure closes both management and success replay.
+    refusal: >-
+      Refuse missing, mismatched, offline or expired manager authority and
+      refuse source-manager changes through rescheduling. Typed beneficiary
+      and organization references grant no authority. Source issuers must
+      guarantee stable manager identifiers that are never reassigned.
+    negativeTest:
+      path: crates/registry-scheduling/tests/postgres_commitments/booking_party.rs
+      name: an_assisted_manager_is_selected_only_from_fresh_exact_source_authority
+  - id: SCHEDULING-SEC-37
+    state: enforced
+    threat: >-
+      A staff work list expands from one authorized resource or historical
+      service to another, combines unrelated role scopes, or discloses
+      identities and fields the selected operational role did not permit.
+    enforcementPoint: >-
+      One explicitly configured profile bounds each verified caller's
+      service, location, resources, time span and projection. Its continuation
+      binds the caller, profile and normalized query. Retained scope labels
+      follow the recorded policy revision; unverified legacy labels are
+      excluded until audited rematerialization proves them.
+    refusal: >-
+      Refuse unselected or missing role authority and altered continuations.
+      Omit unpermitted projections and unknown historical party counts; never
+      derive people counts from capacity units. Catalogue and task authority
+      confer no operational work-list access.
+    negativeTest:
+      path: crates/registry-scheduling/tests/postgres_commitments/operational_reads.rs
+      name: operational_pages_require_one_profile_and_bind_every_authority_dimension
+  - id: SCHEDULING-SEC-38
+    state: enforced
+    threat: >-
+      A signed reminder is accepted under a different request target or loses
+      its event identity on retry, causing forged or duplicate downstream work.
+      A purpose override sends shared delivery credentials to another origin.
+    enforcementPoint: >-
+      When reminder HMAC is configured, the shared delivery signature binds
+      method, target, content type, event metadata and canonical body. The
+      closed purpose routing selects one same-origin fixed request template
+      before rendering and signing, with the configured URL as fallback. The
+      event identity and dispatch idempotency key remain stable while attempt
+      number and canonical RFC 3339 signature time advance. Bearer authentication
+      is independent.
+    refusal: >-
+      Refuse unsupported key providers, undersized keys, unknown purposes,
+      cross-origin overrides and URLs outside the existing destination rules. A downstream
+      event receiver verifies its exact configured source and signature;
+      accepting an event never grants authority for a capacity mutation.
+    negativeTest:
+      path: crates/registry-scheduling/tests/postgres_commitments.rs
+      name: a_signed_reminder_uses_the_shared_event_delivery_contract
+  - id: SCHEDULING-SEC-39
+    state: enforced
+    threat: >-
+      A multi-resource booking commits only part of its requested capacity,
+      a failed move releases the original allocation, or a work-list role
+      learns a secondary resource outside its projection authority.
+    enforcementPoint: >-
+      One capacity transaction evaluates and commits the complete allocation
+      bundle under ordered supply locks. Operational reads use one revision
+      snapshot and attenuate each allocation under the selected profile. Occupied
+      interval membership and pagination order use only selected authorized resources.
+      Split activation and startup require the exact migration-owned allocation and
+      attendance writer functions and unconditional triggers for the applied schema.
+    refusal: >-
+      Refuse the whole request if any required allocation cannot fit. Preserve
+      every original allocation after a failed move and omit resource identity
+      that the operational profile does not permit.
+    negativeTest:
+      path: crates/registry-scheduling/tests/postgres_commitments/atomic_allocations.rs
+      name: failed_bundle_reschedule_keeps_every_prior_allocation
+  - id: SCHEDULING-SEC-40
+    state: enforced
+    threat: >-
+      A busy-time importer changes another source's facts, applies a stale
+      snapshot, discloses external calendar content, or silently restores
+      capacity when required coverage becomes unavailable.
+    enforcementPoint: >-
+      One configured import profile binds source and resource scope, and a
+      caller reaches a profile only by holding its write scope. Profiles that
+      share a write scope are not isolated from one another; per-source
+      isolation requires a distinct scope for each profile. Bounded
+      closed requests, coverage containment, source revision CAS and canonical
+      replay digest control reconciliation. New revisions require strictly increasing
+      source-global observation times. Exact replay uses the original stored bounded
+      outcome, including its original impact summary. Capacity requires fresh coverage
+      for every source configured as mandatory.
+    refusal: >-
+      Refuse a profile whose write scope the caller does not hold, resources
+      outside the selected profile, inconsistent coverage and stale differing
+      writes.
+      Retain known busy intervals during source outages; block new capacity
+      outside fresh required coverage without cancelling existing commitments.
+      Return only the profile's minimized impact projection. A missing or invalid
+      original outcome refuses with service.unavailable rather than reconstructing
+      a receipt from later state.
+    negativeTest:
+      path: crates/registry-scheduling/tests/postgres_commitments/source_busy.rs
+      name: source_owned_reconciliation_is_cas_bounded_private_and_capacity_effective
+  - id: SCHEDULING-SEC-41
+    state: enforced
+    threat: >-
+      Window bookings multiply a window's physical allocations, a window takes
+      a resource an exact booking or another window already holds, or a
+      records change moves a window out from under its bookings.
+    enforcementPoint: >-
+      One parent claim per window owns the physical resources its record
+      declares, written by records apply while it holds every supply anchor.
+      Bookings in the window consume only the window's own units. A parent is
+      recomputed only when its window record changes, so a policy publication
+      never moves or re-refuses a standing reservation.
+    refusal: >-
+      Refuse the whole records apply when a window's reservation conflicts with
+      exact bookings, another window, unavailable resources or busy-source
+      time, or when it moves, removes or reduces a window below standing
+      commitments. Refuse a records apply or policy publication that leaves a
+      window's resource requirement without an exact-time offering able to
+      reserve it. Count each parent's allocations once in resource and source
+      busy impacts; never modify bookings implicitly.
+    negativeTest:
+      path: crates/registry-scheduling/tests/postgres_commitments/multi_window.rs
+      name: a_window_cannot_reserve_a_resource_an_exact_booking_holds
+  - id: SCHEDULING-SEC-42
+    state: enforced
+    threat: >-
+      Read or ownership authority records attendance, a correction targets an
+      obsolete visit, or a replay changes observation history, capacity or
+      downstream event identity.
+    enforcementPoint: >-
+      attendance.record must name the stored service and location. The locked
+      booking revision and current visit's attendance revision guard each
+      append-only observation. A post-lock recording time, original receipt,
+      minimized history and signed after-event are written atomically.
+    refusal: >-
+      Refuse missing task authority, stale revisions and future observations.
+      Rescheduling starts a new visit; cancellation preserves the current visit.
+      Exact replay returns the original receipt without another event. Current
+      detail and explicitly selected operational projections omit staff identity
+      and never derive people counts or capacity changes from attendance.
+    negativeTest:
+      path: crates/registry-scheduling/tests/postgres_commitments/attendance.rs
+      name: only_the_exact_task_action_records_and_corrects_an_observation_idempotently
+  - id: SCHEDULING-SEC-43
+    state: enforced
+    threat: >-
+      Calendar export bypasses appointment read authority, reveals operational
+      or personal fields by default, or silently truncates an incomplete feed.
+    enforcementPoint: >-
+      Export consumes authorized current appointment or explicitly projected
+      operational documents. The default calendar projection contains only a
+      stable opaque identity, revision, state and authoritative displayed time.
+    refusal: >-
+      Reject conflicting same-revision input and bounds violations. Never
+      silently truncate, invent a timezone or include references, people counts,
+      attendance or resource identities in the default projection.
+    negativeTest:
+      path: crates/registry-scheduling-client/tests/calendar_export.rs
+      name: default_projection_omits_private_and_operational_details
 deferred:
   - id: SCHEDULING-DEF-04
     subject: Channel bound to the verified caller

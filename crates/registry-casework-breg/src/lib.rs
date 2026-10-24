@@ -5,17 +5,19 @@ mod served;
 use async_trait::async_trait;
 pub use config::*;
 use registry_breg_client::{
-    BRegProposalReviewBinding, BRegProposalReviewDocument, BaseRegistryClient,
-    BaseRegistryClientError, BearerToken,
+    BRegProposalReviewBinding, BRegProposalReviewContextContract, BRegProposalReviewDocument,
+    BRegProposalReviewSubject, BRegProposalTaskContextIdentity, BRegProposalTaskContextRequest,
+    BaseRegistryClient, BaseRegistryClientError, BearerToken,
 };
 use registry_casework_core::*;
-pub use served::{unserved_capabilities, SERVED_CAPABILITIES, TASK_GRANT_CONTEXT_ISSUE};
+pub use served::{unserved_capabilities, SERVED_CAPABILITIES};
 
 pub struct BregContextProvider {
     id: String,
     export: BregContextExport,
     client: BaseRegistryClient,
     status_profile: String,
+    task_grant_profile: Option<String>,
 }
 impl BregContextProvider {
     pub fn new(
@@ -33,7 +35,17 @@ impl BregContextProvider {
             export,
             client,
             status_profile,
+            task_grant_profile: None,
         })
+    }
+    pub fn with_task_grant_profile(mut self, profile: String) -> Result<Self, ReviewContextError> {
+        if !registry_casework_core::valid_profile_identifier(&profile)
+            || profile == self.status_profile
+        {
+            return Err(ReviewContextError::Invalid);
+        }
+        self.task_grant_profile = Some(profile);
+        Ok(self)
     }
     async fn read(
         &self,
@@ -136,6 +148,81 @@ impl BregContextProvider {
             return Err(ReviewContextError::ContractChanged);
         }
         Ok(document)
+    }
+
+    fn task_projection_schema(
+        &self,
+        fields: &[String],
+    ) -> Result<serde_json::Value, ReviewContextError> {
+        let source = self
+            .export
+            .schema
+            .as_object()
+            .ok_or(ReviewContextError::Invalid)?;
+        let properties = source
+            .get("properties")
+            .and_then(serde_json::Value::as_object)
+            .ok_or(ReviewContextError::Invalid)?;
+        let selected = fields
+            .iter()
+            .map(|field| {
+                properties
+                    .get(field)
+                    .cloned()
+                    .map(|definition| (field.clone(), definition))
+                    .ok_or(ReviewContextError::ContractChanged)
+            })
+            .collect::<Result<serde_json::Map<_, _>, _>>()?;
+        if selected.len() != fields.len() {
+            return Err(ReviewContextError::ContractChanged);
+        }
+        let mut pending = std::collections::BTreeSet::new();
+        collect_definition_references(&serde_json::Value::Object(selected.clone()), &mut pending)?;
+        let mut processed = std::collections::BTreeSet::new();
+        let mut retained: std::collections::BTreeMap<
+            &str,
+            serde_json::Map<String, serde_json::Value>,
+        > = std::collections::BTreeMap::new();
+        while let Some((container, name)) = pending.iter().next().cloned() {
+            pending.remove(&(container, name.clone()));
+            if !processed.insert((container, name.clone())) {
+                continue;
+            }
+            let definition = source
+                .get(container)
+                .and_then(serde_json::Value::as_object)
+                .and_then(|definitions| definitions.get(&name))
+                .cloned()
+                .ok_or(ReviewContextError::ContractChanged)?;
+            let mut nested = std::collections::BTreeSet::new();
+            collect_definition_references(&definition, &mut nested)?;
+            pending.extend(
+                nested
+                    .into_iter()
+                    .filter(|reference| !processed.contains(reference)),
+            );
+            retained
+                .entry(container)
+                .or_default()
+                .insert(name, definition);
+        }
+        let mut reduced = serde_json::Map::new();
+        for keyword in ["$schema", "$id"] {
+            if let Some(value) = source.get(keyword) {
+                reduced.insert(keyword.to_owned(), value.clone());
+            }
+        }
+        reduced.insert("type".into(), serde_json::json!("object"));
+        reduced.insert(
+            "additionalProperties".into(),
+            serde_json::Value::Bool(false),
+        );
+        reduced.insert("required".into(), serde_json::json!(fields));
+        reduced.insert("properties".into(), serde_json::Value::Object(selected));
+        for (container, definitions) in retained {
+            reduced.insert(container.to_owned(), serde_json::Value::Object(definitions));
+        }
+        Ok(serde_json::Value::Object(reduced))
     }
 }
 impl BregContextProvider {
@@ -268,6 +355,175 @@ impl ReviewContextProvider for BregContextProvider {
             reviewable: document.reviewable,
         })
     }
+
+    async fn task_grant_context(
+        &self,
+        request: &ServiceContextRequest,
+    ) -> Result<ServiceContextObservation, ReviewContextError> {
+        let profile = self
+            .task_grant_profile
+            .as_deref()
+            .ok_or(ReviewContextError::Unsupported)?;
+        if request.identity.subject.check().is_err()
+            || request.request_id.is_nil()
+            || request.task_id.is_nil()
+            || request.task_revision < 1
+            || request.policy.check().is_err()
+            || request.purpose.is_empty()
+            || request.purpose.len() > 128
+            || request.purpose.chars().any(char::is_control)
+            || request.fields.is_empty()
+            || request.fields.len() > 128
+            || request
+                .fields
+                .iter()
+                .collect::<std::collections::BTreeSet<_>>()
+                .len()
+                != request.fields.len()
+        {
+            return Err(ReviewContextError::Invalid);
+        }
+        if request.identity.contract != self.export.contract
+            || request.identity.subject.source != self.export.source_namespace
+            || request.identity.subject.subject_type != "proposal"
+        {
+            return Err(ReviewContextError::ContractChanged);
+        }
+        let schema = self.task_projection_schema(&request.fields)?;
+        let (version, metadata) = self
+            .client
+            .registry_contract_and_engine_version(Some(profile))
+            .await;
+        if version.is_some() || metadata.is_ok() {
+            check_peer_version(
+                version.as_deref(),
+                registry_platform_buildinfo::DISPLAY_VERSION,
+            )?;
+        } else if matches!(
+            metadata,
+            Err(BaseRegistryClientError::Protocol { status: 200, .. })
+        ) {
+            return Err(ReviewContextError::VersionUnavailable);
+        }
+        let metadata = metadata.map_err(map_error)?.value;
+        let binding = metadata
+            .select_proposal_task_grant_context(profile, &self.export.action_id)
+            .map_err(|_| ReviewContextError::Concealed)?;
+        if !request
+            .fields
+            .iter()
+            .all(|field| binding.readable_context_fields().contains(field))
+        {
+            return Err(ReviewContextError::Denied);
+        }
+        let wire_request = BRegProposalTaskContextRequest {
+            expected: BRegProposalTaskContextIdentity {
+                action_id: self.export.action_id.clone(),
+                subject: BRegProposalReviewSubject {
+                    source: request.identity.subject.source.clone(),
+                    subject_type: request.identity.subject.subject_type.clone(),
+                    id: request.identity.subject.id.clone(),
+                    version: request.identity.subject.version.clone(),
+                    digest: request.identity.subject.digest.as_str().to_owned(),
+                },
+                contract: BRegProposalReviewContextContract {
+                    id: request.identity.contract.id.clone(),
+                    revision: request.identity.contract.revision.as_str().to_owned(),
+                    schema_digest: request.identity.contract.schema_digest.as_str().to_owned(),
+                },
+            },
+            request_id: request.request_id,
+            task_id: request.task_id,
+            task_revision: request.task_revision,
+            policy: request.policy.clone(),
+            purpose: request.purpose.clone(),
+            fields: request.fields.clone(),
+        };
+        let document = self
+            .client
+            .read_proposal_task_grant_context(&binding, &wire_request)
+            .await
+            .map_err(map_error)?
+            .value
+            .proposal;
+        let document = self.validate_bound(&request.identity, document)?;
+        let fields = document.context.fields.ok_or(ReviewContextError::Invalid)?;
+        let validator = jsonschema::JSONSchema::options()
+            .with_draft(jsonschema::Draft::Draft202012)
+            .compile(&schema)
+            .map_err(|_| ReviewContextError::Invalid)?;
+        if !validator
+            .is_valid(&serde_json::to_value(&fields).map_err(|_| ReviewContextError::Invalid)?)
+        {
+            return Err(ReviewContextError::Invalid);
+        }
+        let observed = ServiceContextObservation {
+            request: request.clone(),
+            reviewable: document.reviewable,
+            fields,
+        };
+        observed.check(request)?;
+        Ok(observed)
+    }
+}
+
+fn collect_definition_references(
+    value: &serde_json::Value,
+    references: &mut std::collections::BTreeSet<(&'static str, String)>,
+) -> Result<(), ReviewContextError> {
+    match value {
+        serde_json::Value::Object(object) => {
+            for member in ["$ref", "$dynamicRef", "$recursiveRef"] {
+                if let Some(reference) = object.get(member) {
+                    let reference = reference
+                        .as_str()
+                        .ok_or(ReviewContextError::ContractChanged)?;
+                    let (container, tail) = ["$defs", "definitions"]
+                        .into_iter()
+                        .find_map(|container| {
+                            reference
+                                .strip_prefix(&format!("#/{container}/"))
+                                .map(|tail| (container, tail))
+                        })
+                        .ok_or(ReviewContextError::ContractChanged)?;
+                    let name = tail
+                        .split('/')
+                        .next()
+                        .filter(|name| !name.is_empty())
+                        .ok_or(ReviewContextError::ContractChanged)?;
+                    let name = decode_json_pointer_segment(name)?;
+                    references.insert((container, name));
+                }
+            }
+            for nested in object.values() {
+                collect_definition_references(nested, references)?;
+            }
+        }
+        serde_json::Value::Array(values) => {
+            for nested in values {
+                collect_definition_references(nested, references)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn decode_json_pointer_segment(value: &str) -> Result<String, ReviewContextError> {
+    let mut decoded = String::with_capacity(value.len());
+    let mut characters = value.chars();
+    while let Some(character) = characters.next() {
+        if character != '~' {
+            decoded.push(character);
+            continue;
+        }
+        decoded.push(match characters.next() {
+            Some('0') => '~',
+            Some('1') => '/',
+            _ => return Err(ReviewContextError::ContractChanged),
+        });
+    }
+    Ok(decoded)
 }
 fn map_error(error: BaseRegistryClientError) -> ReviewContextError {
     match error {
@@ -307,6 +563,34 @@ fn check_peer_version(actual: Option<&str>, expected: &str) -> Result<(), Review
 mod version_tests {
     use super::*;
 
+    const DIGEST: &str = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+    fn projection_provider(schema: serde_json::Value) -> BregContextProvider {
+        BregContextProvider {
+            id: "provider".into(),
+            export: BregContextExport {
+                api_version: DESCRIPTION_API_VERSION.into(),
+                kind: DESCRIPTION_KIND.into(),
+                source_namespace: "source".into(),
+                action_id: "action".into(),
+                context_id: "context".into(),
+                contract: ReviewContextContract {
+                    id: "urn:registry:breg:review-context:source:action:context".into(),
+                    revision: ContentDigest::parse(DIGEST).unwrap(),
+                    schema_digest: ContentDigest::parse(DIGEST).unwrap(),
+                },
+                schema,
+                schema_bytes: "{}".into(),
+            },
+            client: BaseRegistryClient::new(registry_breg_client::BaseRegistryClientConfig::new(
+                "http://127.0.0.1/".parse().unwrap(),
+            ))
+            .unwrap(),
+            status_profile: "status".into(),
+            task_grant_profile: None,
+        }
+    }
+
     #[test]
     fn lockstep_accepts_exact_release_and_dev_identity_without_normalization() {
         for version in ["1.2.3", "1.2.3-dev"] {
@@ -322,5 +606,34 @@ mod version_tests {
             check_peer_version(None, "1.2.3"),
             Err(ReviewContextError::VersionUnavailable)
         );
+    }
+
+    #[test]
+    fn task_projection_keeps_only_definitions_reachable_from_selected_properties() {
+        let provider = projection_provider(serde_json::json!({
+            "$schema":"https://json-schema.org/draft/2020-12/schema",
+            "$id":"urn:source-context",
+            "type":"object",
+            "required":["selected","ignored"],
+            "properties":{
+                "selected":{"$ref":"#/$defs/Zed"},
+                "ignored":{"$ref":"https://untrusted.invalid/schema"}
+            },
+            "$defs":{
+                "Zed":{"type":"object","required":["value"],"properties":{"value":{"$ref":"#/$defs/Alpha"}}},
+                "Alpha":{"type":"string","maxLength":8},
+                "Ignored":{"$ref":"https://untrusted.invalid/schema"}
+            }
+        }));
+        let projected = provider
+            .task_projection_schema(&["selected".into()])
+            .unwrap();
+        assert!(projected["$defs"].get("Zed").is_some());
+        assert!(projected["$defs"].get("Alpha").is_some());
+        assert!(projected["$defs"].get("Ignored").is_none());
+        assert_eq!(projected["required"], serde_json::json!(["selected"]));
+        assert!(provider
+            .task_projection_schema(&["ignored".into()])
+            .is_err());
     }
 }

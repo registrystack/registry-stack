@@ -10,7 +10,7 @@ const maximum = 3 * 1024 * 1024;
 const metadata = {id: 'proposal-input', version: '1', revision, metadataVersion: '2',
   recordTypes: [], operations: [], actions: [], proposals: {
     get: {method: 'GET', path: '/v1/proposals/{proposal_id}', accessProfiles: ['writer']},
-    actions: [{actionId: 'correct', accessProfile: 'writer', operations: ['get'], readableInputs: []}],
+    actions: [{actionId: 'correct', accessProfile: 'writer', operations: ['get'], readableInputs: [], readableContextFields: []}],
   }};
 
 // JCS expands exponent-form 1e20 literals to twenty-one digits.

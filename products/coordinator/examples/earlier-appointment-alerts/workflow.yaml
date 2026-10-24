@@ -1,0 +1,327 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/coordinator/project/project.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/coordinator/project/v1alpha1
+kind: CoordinatorProject
+project:
+  id: earlier-appointment-alert
+  version: '1'
+types:
+  workflow-input:
+    type: object
+    additionalProperties: false
+    required: [subscriptionId, detailGrant]
+    properties:
+      subscriptionId: {type: string, format: uuid}
+      detailGrant:
+        type: object
+        additionalProperties: false
+        required: [id, expiresAt]
+        properties:
+          id: {type: string, format: uuid}
+          expiresAt: {type: integer, minimum: 1}
+contracts:
+  alerts:
+    type: breg
+    source: generated/alerts.contract.json
+functions:
+  source-route:
+    runtime: rhai
+    source: functions.rhai
+    entrypoint: source_route
+    inputs: {subscription: {operationOutput: alerts-read-record}}
+    output: {type: string, enum: [inspect, already-notified, suppressed, dispatch-owned]}
+  appointment-route:
+    runtime: rhai
+    source: functions.rhai
+    entrypoint: appointment_route
+    inputs:
+      subscription: {operationOutput: alerts-read-record}
+      appointment: {operationOutput: scheduling-read-appointment}
+    output: {type: string, enum: [match, changed]}
+  appointment-request:
+    runtime: rhai
+    source: functions.rhai
+    entrypoint: appointment_request
+    inputs:
+      input: {typeRef: workflow-input}
+      subscription: {operationOutput: alerts-read-record}
+    output: {operationInput: scheduling-read-appointment}
+  preview-request:
+    runtime: rhai
+    source: functions.rhai
+    entrypoint: preview_request
+    inputs: {subscription: {operationOutput: alerts-read-record}}
+    output: {operationInput: scheduling-preview-availability}
+  capacity-route:
+    runtime: rhai
+    source: functions.rhai
+    entrypoint: capacity_route
+    inputs: {preview: {operationOutput: scheduling-preview-availability}}
+    output: {type: string, enum: [available, unavailable]}
+  claim-route:
+    runtime: rhai
+    source: functions.rhai
+    entrypoint: claim_route
+    inputs: {subscription: {operationOutput: alerts-read-record}}
+    output: {type: string, enum: [claim, resume]}
+  claim-request:
+    runtime: rhai
+    source: functions.rhai
+    entrypoint: claim_request
+    inputs: {subscription: {operationOutput: alerts-read-record}}
+    output: {operationInput: alerts-claim}
+  final-route:
+    runtime: rhai
+    source: functions.rhai
+    entrypoint: final_route
+    inputs:
+      subscription: {operationOutput: alerts-read-record}
+      appointment: {operationOutput: scheduling-read-appointment}
+    output: {type: string, enum: [dispatch, suppressed]}
+  authorize-request:
+    runtime: rhai
+    source: functions.rhai
+    entrypoint: authorize_request
+    inputs: {subscription: {operationOutput: alerts-read-record}}
+    output: {operationInput: alerts-authorize-dispatch}
+  dispatch-route:
+    runtime: rhai
+    source: functions.rhai
+    entrypoint: dispatch_route
+    inputs:
+      subscription: {operationOutput: alerts-read-record}
+      appointment: {operationOutput: scheduling-read-appointment}
+    output: {type: string, enum: [send, suppressed]}
+  notice-request:
+    runtime: rhai
+    source: functions.rhai
+    entrypoint: notice_request
+    inputs: {subscription: {operationOutput: alerts-read-record}}
+    output: {operationInput: notices-submit-message}
+  completion-request:
+    runtime: rhai
+    source: functions.rhai
+    entrypoint: completion_request
+    inputs:
+      subscription: {operationOutput: alerts-read-record}
+      message: {operationOutput: notices-submit-message}
+    output: {operationInput: alerts-record-submission}
+operations:
+  alerts-read-record:
+    uses: breg.read-record/v1
+    connection: alerts
+  alerts-claim:
+    uses: breg.invoke-action/v1
+    connection: alerts
+    action: {contract: alerts, id: claim-alert}
+  alerts-authorize-dispatch:
+    uses: breg.invoke-action/v1
+    connection: alerts
+    action: {contract: alerts, id: authorize-alert-dispatch}
+  alerts-record-submission:
+    uses: breg.invoke-action/v1
+    connection: alerts
+    action: {contract: alerts, id: record-alert-submission}
+  scheduling-read-appointment:
+    uses: scheduling.read-appointment/v1
+    connection: appointment-detail
+  scheduling-preview-availability:
+    uses: scheduling.preview-availability/v1
+    connection: catalogue
+  notices-submit-message:
+    uses: messaging.submit-message/v1
+    connection: notices
+workflow:
+  input: {typeRef: workflow-input}
+  deadlineSeconds: 600
+  start: read-subscription
+  steps:
+    read-subscription:
+      type: call
+      operation: alerts-read-record
+      input:
+        type: fields
+        fields:
+          collection: {type: literal, value: alert-subscriptions}
+          recordId: {type: input, path: /subscriptionId}
+      next: source-state
+    source-state:
+      type: choose
+      choose:
+        type: function
+        function: source-route
+        inputs: {subscription: {type: step, step: read-subscription}}
+      cases:
+        inspect: read-appointment
+        already-notified: already-notified
+        suppressed: suppressed
+        dispatch-owned: dispatch-owned
+    read-appointment:
+      type: call
+      operation: scheduling-read-appointment
+      input:
+        type: function
+        function: appointment-request
+        inputs:
+          input: {type: input}
+          subscription: {type: step, step: read-subscription}
+      next: appointment-state
+    appointment-state:
+      type: choose
+      choose:
+        type: function
+        function: appointment-route
+        inputs:
+          subscription: {type: step, step: read-subscription}
+          appointment: {type: step, step: read-appointment}
+      cases: {match: preview, changed: appointment-changed}
+    preview:
+      type: call
+      operation: scheduling-preview-availability
+      input:
+        type: function
+        function: preview-request
+        inputs: {subscription: {type: step, step: read-subscription}}
+      next: capacity
+    capacity:
+      type: choose
+      choose:
+        type: function
+        function: capacity-route
+        inputs: {preview: {type: step, step: preview}}
+      cases: {available: claim-state, unavailable: no-capacity}
+    claim-state:
+      type: choose
+      choose:
+        type: function
+        function: claim-route
+        inputs: {subscription: {type: step, step: read-subscription}}
+      cases: {claim: claim, resume: read-current-subscription}
+    claim:
+      type: call
+      operation: alerts-claim
+      input:
+        type: function
+        function: claim-request
+        inputs: {subscription: {type: step, step: read-subscription}}
+      next: read-current-subscription
+    read-current-subscription:
+      type: call
+      operation: alerts-read-record
+      input:
+        type: fields
+        fields:
+          collection: {type: literal, value: alert-subscriptions}
+          recordId: {type: input, path: /subscriptionId}
+      next: read-current-appointment
+    read-current-appointment:
+      type: call
+      operation: scheduling-read-appointment
+      input:
+        type: function
+        function: appointment-request
+        inputs:
+          input: {type: input}
+          subscription: {type: step, step: read-current-subscription}
+      next: final-state
+    final-state:
+      type: choose
+      choose:
+        type: function
+        function: final-route
+        inputs:
+          subscription: {type: step, step: read-current-subscription}
+          appointment: {type: step, step: read-current-appointment}
+      cases: {dispatch: final-preview, suppressed: suppressed}
+    final-preview:
+      type: call
+      operation: scheduling-preview-availability
+      input:
+        type: function
+        function: preview-request
+        inputs: {subscription: {type: step, step: read-current-subscription}}
+      next: final-capacity
+    final-capacity:
+      type: choose
+      choose:
+        type: function
+        function: capacity-route
+        inputs: {preview: {type: step, step: final-preview}}
+      cases: {available: authorize-dispatch, unavailable: capacity-changed}
+    authorize-dispatch:
+      type: call
+      operation: alerts-authorize-dispatch
+      input:
+        type: function
+        function: authorize-request
+        inputs: {subscription: {type: step, step: read-current-subscription}}
+      next: read-dispatching-subscription
+    read-dispatching-subscription:
+      type: call
+      operation: alerts-read-record
+      input:
+        type: fields
+        fields:
+          collection: {type: literal, value: alert-subscriptions}
+          recordId: {type: input, path: /subscriptionId}
+      next: read-dispatching-appointment
+    read-dispatching-appointment:
+      type: call
+      operation: scheduling-read-appointment
+      input:
+        type: function
+        function: appointment-request
+        inputs:
+          input: {type: input}
+          subscription: {type: step, step: read-dispatching-subscription}
+      next: dispatch-state
+    dispatch-state:
+      type: choose
+      choose:
+        type: function
+        function: dispatch-route
+        inputs:
+          subscription: {type: step, step: read-dispatching-subscription}
+          appointment: {type: step, step: read-dispatching-appointment}
+      cases: {send: notify, suppressed: suppressed}
+    notify:
+      type: call
+      operation: notices-submit-message
+      input:
+        type: function
+        function: notice-request
+        inputs: {subscription: {type: step, step: read-dispatching-subscription}}
+      next: record-submission
+    record-submission:
+      type: call
+      operation: alerts-record-submission
+      input:
+        type: function
+        function: completion-request
+        inputs:
+          subscription: {type: step, step: read-dispatching-subscription}
+          message: {type: step, step: notify}
+      next: accepted
+    accepted:
+      type: finish
+      outcome: message-accepted
+      output:
+        type: fields
+        fields: {messageId: {type: step, step: notify, path: /id}}
+    already-notified: {type: finish, outcome: already-notified}
+    suppressed: {type: finish, outcome: source-suppressed}
+    dispatch-owned: {type: finish, outcome: existing-run-owns-dispatch}
+    appointment-changed: {type: finish, outcome: appointment-changed}
+    no-capacity: {type: finish, outcome: no-current-capacity}
+    capacity-changed: {type: finish, outcome: capacity-changed}
+  outcomes:
+    message-accepted:
+      type: object
+      additionalProperties: false
+      required: [messageId]
+      properties: {messageId: {type: string, format: uuid}}
+    already-notified: {type: 'null'}
+    source-suppressed: {type: 'null'}
+    existing-run-owns-dispatch: {type: 'null'}
+    appointment-changed: {type: 'null'}
+    no-current-capacity: {type: 'null'}
+    capacity-changed: {type: 'null'}

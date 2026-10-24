@@ -15,15 +15,20 @@ export declare class SchedulingClient {
   listServices(token: string, cursor?: string | undefined | null): Promise<SchedulingOutcome>
   listOfferings(token: string, cursor?: string | undefined | null): Promise<SchedulingOutcome>
   availability(token: string, offering: string, query?: any | undefined | null): Promise<SchedulingOutcome>
-  explain(token: string, offering: string, start: string): Promise<SchedulingOutcome>
+  previewAvailability(token: string, request: any): Promise<SchedulingOutcome>
+  previewSourceBusy(token: string, profile: string, request: any): Promise<SchedulingOutcome>
+  applySourceBusy(token: string, profile: string, request: any): Promise<SchedulingOutcome>
+  explain(token: string, offering: string, start: string, selection?: any | undefined | null): Promise<SchedulingOutcome>
   createHold(token: string, idempotencyKey: string, request: any): Promise<SchedulingOutcome>
   releaseHold(token: string, holdId: string): Promise<SchedulingOutcome>
   createAppointment(token: string, idempotencyKey: string, request: any): Promise<SchedulingOutcome>
   appointmentReceipt(token: string, idempotencyKey: string, request: any): Promise<SchedulingOutcome>
   getAppointment(token: string, appointmentId: string): Promise<SchedulingOutcome>
   listAppointments(token: string, reference: any, page?: any | undefined | null): Promise<SchedulingOutcome>
+  listOperationalAppointments(token: string, query: any): Promise<SchedulingOutcome>
   rescheduleAppointment(token: string, appointmentId: string, idempotencyKey: string, request: any): Promise<SchedulingOutcome>
   cancelAppointment(token: string, appointmentId: string, idempotencyKey: string, request: any): Promise<SchedulingOutcome>
+  recordAttendance(token: string, appointmentId: string, idempotencyKey: string, request: any): Promise<SchedulingOutcome>
   appointmentHistory(token: string, appointmentId: string, cursor?: string | undefined | null): Promise<SchedulingOutcome>
   listResources(token: string, cursor?: string | undefined | null): Promise<SchedulingOutcome>
   listLocations(token: string, cursor?: string | undefined | null): Promise<SchedulingOutcome>

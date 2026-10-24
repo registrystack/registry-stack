@@ -17,7 +17,130 @@ class PartyCounts(TypedDict):
     recipients: int
     attendees: int
 
+class _AdditionalAllocationRequestOptional(TypedDict, total=False):
+    resource: str
+    units: int
+
+class AdditionalAllocationRequest(_AdditionalAllocationRequestOptional):
+    offering: str
+
+class PrimaryAllocationRequirement(TypedDict):
+    kind: Literal["primary"]
+
+class AdditionalAllocationRequirement(TypedDict):
+    kind: Literal["additional"]
+    index: int
+
+AllocationRequirementDocument: TypeAlias = PrimaryAllocationRequirement | AdditionalAllocationRequirement
+
+class AllocationDocument(TypedDict):
+    requirement: AllocationRequirementDocument
+    offering: str
+    resource: str
+    units: int
+    occupiedStart: Instant
+    occupiedEnd: Instant
+
+class _OperationalAllocationOptional(TypedDict, total=False):
+    resource: str
+
+class OperationalAllocationDocument(_OperationalAllocationOptional):
+    requirement: AllocationRequirementDocument
+    offering: str
+    units: int
+    occupiedStart: Instant
+    occupiedEnd: Instant
+
+class _AvailabilityPreviewOptional(TypedDict, total=False):
+    durationMinutes: int
+    resource: str
+    resourceUnits: int
+    additionalAllocations: list[AdditionalAllocationRequest]
+    party: PartyCounts
+
+class AvailabilityPreviewRequest(_AvailabilityPreviewOptional):
+    offering: str
+    start: Instant
+
+class _AvailabilityPreviewDocumentOptional(TypedDict, total=False):
+    publicCode: str
+
+class AvailabilityPreviewDocument(_AvailabilityPreviewDocumentOptional):
+    offering: str
+    start: Instant
+    end: Instant
+    capacityAvailable: bool
+
+ManagerSelection: TypeAlias = Literal["schedulingManager"]
+
+class BusyCoverage(TypedDict):
+    start: Instant
+    end: Instant
+    resources: list[str]
+
+class BusyIntervalInput(TypedDict):
+    externalUid: str
+    externalRevision: str
+    resource: str
+    start: Instant
+    end: Instant
+
+class _BusyRequestOptional(TypedDict, total=False):
+    freshUntil: Instant | None
+
+class BusyReconciliationRequest(_BusyRequestOptional):
+    expectedRevision: int
+    observedAt: Instant
+    coverage: BusyCoverage
+    status: Literal["fresh", "unavailable"]
+    records: list[BusyIntervalInput]
+
+class BusyCommitmentImpact(TypedDict):
+    kind: str
+    resource: str
+    occupiedStart: Instant
+    occupiedEnd: Instant
+
+class _BusyImpactOptional(TypedDict, total=False):
+    items: list[BusyCommitmentImpact]
+
+class BusyImpactSummary(_BusyImpactOptional):
+    total: int
+    detailsAvailable: bool
+    truncated: bool
+
+class BusyReconciliationCounts(TypedDict):
+    sourceId: str
+    requestDigest: str
+    added: int
+    changed: int
+    deleted: int
+    retainedOutsideAuthority: int
+    retainedAcrossCoverageBoundary: int
+    impacts: BusyImpactSummary
+
+class BusyReconciliationPreview(BusyReconciliationCounts):
+    expectedRevision: int
+    currentRevision: int
+
+class BusyApplyOutcome(BusyReconciliationCounts):
+    kind: Literal["applied", "already-applied"]
+    revision: int
+
+class PartyReference(TypedDict):
+    """Source-owned booking data, not authority or proof of a relationship."""
+
+    role: Literal["beneficiary", "organization"]
+    reference: ExternalReference
+
 class _AdmissionRequestOptional(TypedDict, total=False):
+    party: PartyCounts
+    manager: ManagerSelection
+    partyReferences: list[PartyReference]
+    durationMinutes: int
+    resource: str
+    resourceUnits: int
+    additionalAllocations: list[AdditionalAllocationRequest]
     channel: str | None
     duplicateKey: str | None
     windowRevision: int | None
@@ -28,7 +151,6 @@ class AdmissionRequest(_AdmissionRequestOptional):
 
     offering: str
     start: Instant
-    party: PartyCounts
     policyRevision: int
     capabilities: list[str]
     prerequisites: list[str]
@@ -47,6 +169,22 @@ class DirectBooking(_DirectBookingOptional):
 
 # Exactly one of `hold` (confirm a held claim) or `admission` (book directly).
 CreateAppointmentRequest: TypeAlias = HoldConfirmation | DirectBooking
+
+AttendanceState: TypeAlias = Literal["arrived", "completed", "no-show"]
+
+class RecordAttendanceRequest(TypedDict):
+    observedAppointmentRevision: int
+    observedRevision: int
+    state: AttendanceState
+    observedAt: Instant
+
+class AttendanceDocument(TypedDict):
+    appointmentId: str
+    appointmentRevision: int
+    revision: int
+    state: AttendanceState
+    observedAt: Instant
+    recordedAt: Instant
 
 class RescheduleAppointmentRequest(TypedDict):
     observedRevision: int
@@ -68,6 +206,7 @@ class ServiceDocument(TypedDict):
     label: str
 
 SchedulingMode: TypeAlias = Literal["exact-time", "arrival-window"]
+OpeningCoverage: TypeAlias = Literal["service-interval", "occupied-interval"]
 
 class ReminderDocument(TypedDict):
     minutesBefore: int
@@ -79,7 +218,20 @@ class WindowDocument(TypedDict):
     end: Instant
     units: int
 
-class OfferingDocument(TypedDict):
+class DurationSelectionDocument(TypedDict):
+    minimumMinutes: int
+    maximumMinutes: int
+    incrementMinutes: int
+
+class _OfferingDocumentOptional(TypedDict, total=False):
+    windows: list[WindowDocument]
+    pool: str
+    durationSelection: DurationSelectionDocument
+    openingCoverage: OpeningCoverage
+    allowResourceSelection: bool
+    partyCounts: Literal["required", "optional"]
+
+class OfferingDocument(_OfferingDocumentOptional):
     id: str
     service: str
     label: str
@@ -98,7 +250,10 @@ class OfferingDocument(TypedDict):
     requiresCapabilities: list[str]
     prerequisites: list[str]
 
-class ResourceDocument(TypedDict):
+class _ResourceDocumentOptional(TypedDict, total=False):
+    capacityUnits: int
+
+class ResourceDocument(_ResourceDocumentOptional):
     resourceId: str
     pool: str
     capabilities: list[str]
@@ -108,7 +263,10 @@ class LocationDocument(TypedDict):
     locationId: str
     timezone: str
 
-class SlotEntry(TypedDict):
+class _SlotEntryOptional(TypedDict, total=False):
+    availableUnits: int
+
+class SlotEntry(_SlotEntryOptional):
     kind: Literal["slot"]
     start: Instant
     end: Instant
@@ -131,7 +289,13 @@ class PageDocument(TypedDict, Generic[T]):
     items: list[T]
     nextCursor: str | None
 
-class HoldDocument(TypedDict):
+class _BookingPartyOptional(TypedDict, total=False):
+    allocations: list[AllocationDocument]
+    party: PartyCounts
+    manager: ManagerSelection
+    partyReferences: list[PartyReference]
+
+class HoldDocument(_BookingPartyOptional):
     holdId: str
     offering: str
     start: Instant
@@ -144,7 +308,10 @@ class HoldDocument(TypedDict):
 
 AppointmentState: TypeAlias = Literal["confirmed", "cancelled"]
 
-class AppointmentDocument(TypedDict):
+class _AppointmentDocumentOptional(_BookingPartyOptional, total=False):
+    attendance: AttendanceDocument
+
+class AppointmentDocument(_AppointmentDocumentOptional):
     appointmentId: str
     offering: str
     start: Instant
@@ -158,6 +325,44 @@ class AppointmentDocument(TypedDict):
     createdAt: Instant
     cancelledAt: Instant | None
     externalReferences: list[ExternalReference]
+
+OperationalTimeBasis: TypeAlias = Literal["displayed", "occupied"]
+
+class _OperationalAppointmentQueryOptional(TypedDict, total=False):
+    offering: str
+    state: AppointmentState
+    resource: str
+    externalReference: ExternalReference
+    profile: str
+    cursor: str
+    limit: int
+
+class OperationalAppointmentQuery(_OperationalAppointmentQueryOptional):
+    service: str
+    location: str
+    start: Instant
+    end: Instant
+    timeBasis: OperationalTimeBasis
+
+class _OperationalAppointmentDocumentOptional(TypedDict, total=False):
+    attendance: AttendanceDocument
+    allocations: list[OperationalAllocationDocument]
+    occupiedStart: Instant
+    occupiedEnd: Instant
+    resource: str
+    units: int
+    party: PartyCounts
+    externalReferences: list[ExternalReference]
+
+class OperationalAppointmentDocument(_OperationalAppointmentDocumentOptional):
+    appointmentId: str
+    revision: int
+    service: str
+    location: str
+    offering: str
+    state: AppointmentState
+    displayedStart: Instant
+    displayedEnd: Instant
 
 class AppointmentHistoryEntryDocument(TypedDict):
     eventId: str
@@ -251,8 +456,11 @@ class SchedulingClient:
     def get_scheduling(self, token: str) -> Complete[SchedulingServiceDocument]: ...
     def list_services(self, token: str, cursor: str | None = None) -> Complete[PageDocument[ServiceDocument]]: ...
     def list_offerings(self, token: str, cursor: str | None = None) -> Complete[PageDocument[OfferingDocument]]: ...
-    def availability(self, token: str, offering: str, *, start: Instant | None = None, end: Instant | None = None, cursor: str | None = None, limit: int | None = None) -> Complete[PageDocument[AvailabilityEntry]]: ...
-    def explain(self, token: str, offering: str, start: Instant) -> Complete[ExplainDocument]: ...
+    def availability(self, token: str, offering: str, *, start: Instant | None = None, end: Instant | None = None, cursor: str | None = None, limit: int | None = None, duration_minutes: int | None = None, resource: str | None = None) -> Complete[PageDocument[AvailabilityEntry]]: ...
+    def preview_availability(self, token: str, request: AvailabilityPreviewRequest) -> Complete[AvailabilityPreviewDocument]: ...
+    def preview_source_busy(self, token: str, profile: str, request: BusyReconciliationRequest) -> Complete[BusyReconciliationPreview]: ...
+    def apply_source_busy(self, token: str, profile: str, request: BusyReconciliationRequest) -> Complete[BusyApplyOutcome]: ...
+    def explain(self, token: str, offering: str, start: Instant, *, duration_minutes: int | None = None, resource: str | None = None) -> Complete[ExplainDocument]: ...
     def create_hold(self, token: str, idempotency_key: str, request: AdmissionRequest) -> Complete[HoldDocument]: ...
     def release_hold(self, token: str, hold_id: str) -> Complete[None]: ...
     def create_appointment(self, token: str, idempotency_key: str, request: CreateAppointmentRequest) -> Complete[AppointmentDocument]: ...
@@ -260,8 +468,10 @@ class SchedulingClient:
     def appointment_receipt(self, token: str, idempotency_key: str, request: CreateAppointmentRequest) -> Complete[AppointmentDocument]: ...
     def get_appointment(self, token: str, appointment_id: str) -> Complete[AppointmentDocument]: ...
     def list_appointments(self, token: str, reference: ExternalReference, *, cursor: str | None = None, limit: int | None = None) -> Complete[PageDocument[AppointmentDocument]]: ...
+    def list_operational_appointments(self, token: str, query: OperationalAppointmentQuery) -> Complete[PageDocument[OperationalAppointmentDocument]]: ...
     def reschedule_appointment(self, token: str, appointment_id: str, idempotency_key: str, request: RescheduleAppointmentRequest) -> Complete[AppointmentDocument]: ...
     def cancel_appointment(self, token: str, appointment_id: str, idempotency_key: str, request: CancelAppointmentRequest) -> Complete[AppointmentDocument]: ...
+    def record_attendance(self, token: str, appointment_id: str, idempotency_key: str, request: RecordAttendanceRequest) -> Complete[AttendanceDocument]: ...
     def appointment_history(self, token: str, appointment_id: str, cursor: str | None = None) -> Complete[PageDocument[AppointmentHistoryEntryDocument]]: ...
     def list_resources(self, token: str, cursor: str | None = None) -> Complete[PageDocument[ResourceDocument]]: ...
     def list_locations(self, token: str, cursor: str | None = None) -> Complete[PageDocument[LocationDocument]]: ...

@@ -44,6 +44,11 @@ CONFIG_SOURCE = "crates/registry-scheduling/src/config.rs"
 NAMING_SOURCE = "crates/registry-scheduling-core/src/naming.rs"
 WIRE_SOURCE = "crates/registry-scheduling-core/src/wire.rs"
 MODEL_SOURCE = "crates/registry-scheduling-core/src/model.rs"
+PARTY_SOURCE = "crates/registry-scheduling-core/src/party.rs"
+TYPED_SOURCE = "crates/registry-scheduling-core/src/typed.rs"
+OPERATIONAL_SOURCE = "crates/registry-scheduling-core/src/operational.rs"
+BUSY_SOURCE = "crates/registry-scheduling-core/src/source_busy.rs"
+ATTENDANCE_SOURCE = "crates/registry-scheduling-core/src/attendance.rs"
 ADMISSION_SOURCE = "crates/registry-scheduling-core/src/admission.rs"
 PROBLEM_SOURCE = "crates/registry-scheduling-core/src/problem.rs"
 HTTPSEC_SOURCE = "crates/registry-platform-httpsec/src/server.rs"
@@ -63,7 +68,11 @@ ROUTES = {
     "/v1/resources",
     "/v1/locations",
     "/v1/availability",
+    "/v1/availability/preview",
     "/v1/availability/explain",
+    "/v1/source-busy/preview",
+    "/v1/source-busy/apply",
+    "/v1/operational/appointments",
     "/v1/holds",
     "/v1/holds/{hold_id}",
     "/v1/appointments",
@@ -71,6 +80,7 @@ ROUTES = {
     "/v1/appointments/{appointment_id}",
     "/v1/appointments/{appointment_id}/reschedule",
     "/v1/appointments/{appointment_id}/cancel",
+    "/v1/appointments/{appointment_id}/attendance",
     "/v1/appointments/{appointment_id}/history",
 }
 
@@ -93,28 +103,39 @@ EDGE_PROBLEMS = [
 ]
 
 # Vocabulary entries the runtime never reaches: there is no hook engine yet,
-# no eligibility source yet, and the four refusals `precondition.failed` once
-# carried are each answered by the code that names them.
+# no eligibility source yet.
 UNPRODUCED_PROBLEMS = [
     "eligibility.unavailable",
     "hook.unavailable",
-    "precondition.failed",
 ]
-# `resource.unavailable` is produced, but only as the detailed code inside the
-# explain document, so it is never a public problem either.
-DETAILED_ONLY_PROBLEMS = ["resource.unavailable"]
+# Source-busy reconciliation can disclose an unavailable resource within its
+# selected import authority; public availability still minimizes that detail.
+DETAILED_ONLY_PROBLEMS = []
 # Vocabulary entries no documented operation answers.
 RESERVED_PROBLEMS = UNPRODUCED_PROBLEMS + DETAILED_ONLY_PROBLEMS
 
 # The wire documents, verified field by field against the Rust structs.
 SCHEMA_STRUCTS = {
+    ATTENDANCE_SOURCE: {
+        "RecordAttendanceRequest": "RecordAttendanceRequest",
+        "AttendanceDocument": "AttendanceDocument",
+    },
+    BUSY_SOURCE: {name: name for name in (
+        "BusyCoverage", "BusyIntervalInput", "BusyReconciliationRequest",
+        "BusyCommitmentImpact", "BusyImpactSummary", "BusyReconciliationPreview",
+        "BusyApplyOutcome",
+    )},
     WIRE_SOURCE: {
         "SchedulingServiceDocument": "SchedulingServiceDocument",
         "ServiceDocument": "ServiceDocument",
         "OfferingDocument": "OfferingDocument",
+        "DurationSelectionDocument": "DurationSelectionDocument",
         "ReminderDocument": "ReminderDocument",
         "WindowDocument": "WindowDocument",
         "ResourceDocument": "ResourceDocument",
+        "AllocationDocument": "AllocationDocument",
+        "AvailabilityPreviewRequest": "AvailabilityPreviewRequest",
+        "AvailabilityPreviewDocument": "AvailabilityPreviewDocument",
         "LocationDocument": "LocationDocument",
         "ExternalReference": "ExternalReference",
         "HoldDocument": "HoldDocument",
@@ -125,9 +146,17 @@ SCHEMA_STRUCTS = {
         "AppointmentHistoryEntryDocument": "AppointmentHistoryEntryDocument",
         "ExplainDocument": "ExplainDocument",
     },
+    OPERATIONAL_SOURCE: {
+        "OperationalAppointmentDocument": "OperationalAppointmentDocument",
+        "OperationalAllocationDocument": "OperationalAllocationDocument",
+    },
     MODEL_SOURCE: {
         "AdmissionRequest": "AdmissionRequest",
+        "AdditionalAllocationRequest": "AdditionalAllocationRequest",
+    },
+    PARTY_SOURCE: {
         "PartyCounts": "PartyCounts",
+        "PartyReference": "PartyReference",
     },
 }
 
@@ -142,7 +171,11 @@ ROUTE_HANDLERS = {
     ("GET", "/v1/resources"): "list_resources",
     ("GET", "/v1/locations"): "list_locations",
     ("GET", "/v1/availability"): "availability",
+    ("POST", "/v1/availability/preview"): "preview_availability",
+    ("POST", "/v1/source-busy/preview"): "preview_source_busy",
+    ("POST", "/v1/source-busy/apply"): "apply_source_busy",
     ("GET", "/v1/availability/explain"): "explain",
+    ("GET", "/v1/operational/appointments"): "list_operational_appointments",
     ("POST", "/v1/holds"): "create_hold",
     ("DELETE", "/v1/holds/{hold_id}"): "release_hold",
     ("POST", "/v1/appointments"): "create_appointment",
@@ -151,6 +184,7 @@ ROUTE_HANDLERS = {
     ("GET", "/v1/appointments/{appointment_id}"): "get_appointment",
     ("POST", "/v1/appointments/{appointment_id}/reschedule"): "reschedule_appointment",
     ("POST", "/v1/appointments/{appointment_id}/cancel"): "cancel_appointment",
+    ("PUT", "/v1/appointments/{appointment_id}/attendance"): "record_attendance",
     ("GET", "/v1/appointments/{appointment_id}/history"): "appointment_history",
 }
 
@@ -163,7 +197,11 @@ OPERATION_IDS = {
     ("GET", "/v1/resources"): "listResources",
     ("GET", "/v1/locations"): "listLocations",
     ("GET", "/v1/availability"): "searchAvailability",
+    ("POST", "/v1/availability/preview"): "previewAvailability",
+    ("POST", "/v1/source-busy/preview"): "previewSourceBusy",
+    ("POST", "/v1/source-busy/apply"): "applySourceBusy",
     ("GET", "/v1/availability/explain"): "explainAvailability",
+    ("GET", "/v1/operational/appointments"): "listOperationalAppointments",
     ("POST", "/v1/holds"): "createHold",
     ("DELETE", "/v1/holds/{hold_id}"): "releaseHold",
     ("POST", "/v1/appointments"): "createAppointment",
@@ -172,6 +210,7 @@ OPERATION_IDS = {
     ("GET", "/v1/appointments/{appointment_id}"): "getAppointment",
     ("POST", "/v1/appointments/{appointment_id}/reschedule"): "rescheduleAppointment",
     ("POST", "/v1/appointments/{appointment_id}/cancel"): "cancelAppointment",
+    ("PUT", "/v1/appointments/{appointment_id}/attendance"): "recordAttendance",
     ("GET", "/v1/appointments/{appointment_id}/history"): "listAppointmentHistory",
 }
 
@@ -232,7 +271,13 @@ OPERATION_PROBLEMS = {
     ("GET", "/v1/resources"): EDGE + AUTHENTICATION + QUERY + CURSOR + STORAGE,
     ("GET", "/v1/locations"): EDGE + AUTHENTICATION + QUERY + CURSOR + STORAGE,
     ("GET", "/v1/availability"): EDGE + AUTHENTICATION + QUERY + CURSOR + STORAGE + OFFERING,
+    ("POST", "/v1/availability/preview"): EDGE + AUTHENTICATION + JSON_BODY + STORAGE + OFFERING,
+    ("POST", "/v1/source-busy/preview"): EDGE + AUTHENTICATION + QUERY + JSON_BODY + STORAGE
+    + ["revision.mismatch", "precondition.failed", "resource.unavailable"],
+    ("POST", "/v1/source-busy/apply"): EDGE + AUTHENTICATION + QUERY + JSON_BODY + STORAGE
+    + ["revision.mismatch", "precondition.failed", "resource.unavailable"],
     ("GET", "/v1/availability/explain"): EDGE + AUTHENTICATION + QUERY + STORAGE + OFFERING,
+    ("GET", "/v1/operational/appointments"): EDGE + AUTHENTICATION + QUERY + CURSOR + STORAGE,
     ("POST", "/v1/holds"): EDGE + AUTHENTICATION + JSON_BODY + ADMISSION + IDEMPOTENCY + AUTHORITY
     + OFFERING + ["service.unavailable"],
     # A release carries no caller-chosen key, so `idempotency.key-reused` is
@@ -254,6 +299,8 @@ OPERATION_PROBLEMS = {
     ("POST", "/v1/appointments/{appointment_id}/cancel"): EDGE + AUTHENTICATION + PATH + JSON_BODY
     + IDEMPOTENCY + AUTHORITY
     + ["cancellation.cutoff-passed", "hold.released", "revision.mismatch", "service.unavailable"],
+    ("PUT", "/v1/appointments/{appointment_id}/attendance"): EDGE + AUTHENTICATION + PATH + JSON_BODY
+    + IDEMPOTENCY + AUTHORITY + ["revision.mismatch", "service.unavailable"],
     ("GET", "/v1/appointments/{appointment_id}/history"): EDGE + AUTHENTICATION + PATH + AUTHORITY + QUERY
     + CURSOR + STORAGE,
 }
@@ -312,6 +359,13 @@ INSTANT_SCHEMA = {"type": "string", "format": "date-time"}
 UUID_SCHEMA = {"type": "string", "format": "uuid"}
 # The router's request body limit, as `registry-platform-httpsec` pins it.
 MAXIMUM_BODY_BYTES = 1_048_576
+MAXIMUM_BOOKING_DURATION_MINUTES = 7 * 1_440
+DURATION_MINUTES_SCHEMA = {
+    "type": "integer",
+    "minimum": 1,
+    "maximum": MAXIMUM_BOOKING_DURATION_MINUTES,
+}
+RESOURCE_SELECTOR_SCHEMA = {"type": "string", "minLength": 1}
 
 
 def parameter(name: str, where: str, description: str, schema: dict | None = None, required: bool = True) -> dict:
@@ -351,6 +405,20 @@ OFFERING_QUERY = parameter(
     "query",
     "Required offering identifier. An offering the deployed policy does not publish is request.not-found.",
     {"type": "string", "minLength": 1},
+)
+DURATION_MINUTES_QUERY = parameter(
+    "durationMinutes",
+    "query",
+    "Requested exact-time service duration in minutes. It is a hard constraint and must satisfy the offering's published duration selection policy.",
+    DURATION_MINUTES_SCHEMA,
+    required=False,
+)
+RESOURCE_QUERY = parameter(
+    "resource",
+    "query",
+    "Requested exact resource identifier. It is a hard constraint and is accepted only when the offering permits resource selection.",
+    RESOURCE_SELECTOR_SCHEMA,
+    required=False,
 )
 
 
@@ -491,6 +559,15 @@ def schemas(problem_entries: list[dict]) -> dict:
     mode = {"type": "string", "enum": ["exact-time", "arrival-window"]}
     appointment_state = {"type": "string", "enum": ["confirmed", "cancelled"]}
     party = obj({"recipients": count, "attendees": count}, ["recipients", "attendees"])
+    manager = {"type": "string", "enum": ["schedulingManager"]}
+    party_references = {**array(ref("PartyReference")), "maxItems": 16}
+    physical_units = {"type": "integer", "minimum": 1, "maximum": 2_147_483_647}
+    additional_allocations = {**array(ref("AdditionalAllocationRequest")), "maxItems": 15}
+    allocation_fields = {
+        "requirement": ref("AllocationRequirementDocument"),
+        "offering": text, "resource": text, "units": physical_units,
+        "occupiedStart": instant, "occupiedEnd": instant,
+    }
     external_reference = obj(
         {"product": text, "recordType": text, "identifier": text},
         ["product", "recordType", "identifier"],
@@ -499,7 +576,13 @@ def schemas(problem_entries: list[dict]) -> dict:
         {
             "offering": text,
             "start": instant,
+            "durationMinutes": DURATION_MINUTES_SCHEMA,
+            "resource": RESOURCE_SELECTOR_SCHEMA,
+            "resourceUnits": physical_units,
+            "additionalAllocations": additional_allocations,
             "party": ref("PartyCounts"),
+            "manager": manager,
+            "partyReferences": party_references,
             "channel": nullable(text),
             "duplicateKey": nullable(text),
             "policyRevision": revision,
@@ -508,9 +591,47 @@ def schemas(problem_entries: list[dict]) -> dict:
             "prerequisites": array(text),
             "externalReferences": array(ref("ExternalReference")),
         },
-        ["offering", "start", "party", "policyRevision", "capabilities", "prerequisites"],
+        ["offering", "start", "policyRevision", "capabilities", "prerequisites"],
     )
+    busy_counts = {
+        "sourceId": text, "requestDigest": text, "added": revision, "changed": revision,
+        "deleted": revision, "retainedOutsideAuthority": revision,
+        "retainedAcrossCoverageBoundary": revision, "impacts": ref("BusyImpactSummary"),
+    }
     result = {
+        "BusyCoverage": obj(
+            {"start": instant, "end": instant, "resources": {**array(text), "minItems": 1, "maxItems": 256, "uniqueItems": True}},
+            ["start", "end", "resources"],
+        ),
+        "BusyIntervalInput": obj(
+            {"externalUid": {**text, "minLength": 1, "maxLength": 512},
+             "externalRevision": {**text, "minLength": 1, "maxLength": 256},
+             "resource": text, "start": instant, "end": instant},
+            ["externalUid", "externalRevision", "resource", "start", "end"],
+        ),
+        "BusyReconciliationRequest": obj(
+            {"expectedRevision": revision, "observedAt": instant, "freshUntil": instant,
+             "coverage": ref("BusyCoverage"), "status": {**text, "enum": ["fresh", "unavailable"]},
+             "records": {**array(ref("BusyIntervalInput")), "maxItems": 4096}},
+            ["expectedRevision", "observedAt", "coverage", "status", "records"],
+        ),
+        "BusyCommitmentImpact": answer(
+            {"kind": text, "resource": text, "occupiedStart": instant, "occupiedEnd": instant},
+            ["kind", "resource", "occupiedStart", "occupiedEnd"],
+        ),
+        "BusyImpactSummary": answer(
+            {"total": revision, "detailsAvailable": {"type": "boolean"}, "truncated": {"type": "boolean"},
+             "items": {**array(ref("BusyCommitmentImpact")), "maxItems": 256}},
+            ["total", "detailsAvailable", "truncated"],
+        ),
+        "BusyReconciliationPreview": answer(
+            {**busy_counts, "expectedRevision": revision, "currentRevision": revision},
+            [*busy_counts, "expectedRevision", "currentRevision"],
+        ),
+        "BusyApplyOutcome": answer(
+            {**busy_counts, "kind": {**text, "enum": ["applied", "already-applied"]}, "revision": revision},
+            [*busy_counts, "kind", "revision"],
+        ),
         "SchedulingServiceDocument": answer(
             {"schedulingId": text, "policyRevision": revision, "policyDigest": text},
             ["schedulingId", "policyRevision", "policyDigest"],
@@ -529,15 +650,24 @@ def schemas(problem_entries: list[dict]) -> dict:
                 "label": text,
                 "mode": mode,
                 "location": text,
+                "pool": text,
                 "leadTimeMinutes": count,
                 "horizonDays": count,
                 "cancellationCutoffMinutes": count,
                 "durationMinutes": nullable(count),
+                "durationSelection": ref("DurationSelectionDocument"),
+                "openingCoverage": {
+                    "type": "string",
+                    "enum": ["service-interval", "occupied-interval"],
+                },
+                "allowResourceSelection": {"type": "boolean"},
+                "partyCounts": {"type": "string", "enum": ["required", "optional"]},
                 "bufferBeforeMinutes": nullable(count),
                 "bufferAfterMinutes": nullable(count),
                 "startIncrementMinutes": nullable(count),
                 "maxRecipients": nullable(count),
                 "window": nullable(ref("WindowDocument")),
+                "windows": array(ref("WindowDocument")),
                 "reminders": array(ref("ReminderDocument")),
                 "requiresCapabilities": array(text),
                 "prerequisites": array(text),
@@ -556,6 +686,14 @@ def schemas(problem_entries: list[dict]) -> dict:
                 "prerequisites",
             ],
         ),
+        "DurationSelectionDocument": answer(
+            {
+                "minimumMinutes": DURATION_MINUTES_SCHEMA,
+                "maximumMinutes": DURATION_MINUTES_SCHEMA,
+                "incrementMinutes": {"type": "integer", "minimum": 1, "maximum": 1_440},
+            },
+            ["minimumMinutes", "maximumMinutes", "incrementMinutes"],
+        ),
         "OfferingPage": page("OfferingDocument"),
         "ResourceDocument": answer(
             {
@@ -563,6 +701,7 @@ def schemas(problem_entries: list[dict]) -> dict:
                 "pool": text,
                 "capabilities": array(text),
                 "available": {"type": "boolean"},
+                "capacityUnits": {**physical_units, "minimum": 0},
             },
             ["resourceId", "pool", "capabilities", "available"],
         ),
@@ -570,8 +709,35 @@ def schemas(problem_entries: list[dict]) -> dict:
         "LocationDocument": answer({"locationId": text, "timezone": text}, ["locationId", "timezone"]),
         "LocationPage": page("LocationDocument"),
         "ExternalReference": external_reference,
+        "AdditionalAllocationRequest": obj(
+            {"offering": RESOURCE_SELECTOR_SCHEMA, "resource": RESOURCE_SELECTOR_SCHEMA, "units": physical_units},
+            ["offering"],
+        ),
+        "AllocationRequirementDocument": {
+            "oneOf": [
+                obj({"kind": {"const": "primary"}}, ["kind"]),
+                obj({"kind": {"const": "additional"}, "index": {"type": "integer", "minimum": 0, "maximum": 255}}, ["kind", "index"]),
+            ],
+            "discriminator": {"propertyName": "kind"},
+        },
+        "AllocationDocument": answer(allocation_fields, list(allocation_fields)),
+        "OperationalAllocationDocument": answer(
+            allocation_fields, [name for name in allocation_fields if name != "resource"],
+        ),
+        "AvailabilityPreviewRequest": obj(
+            {"offering": RESOURCE_SELECTOR_SCHEMA, "start": instant,
+             "durationMinutes": DURATION_MINUTES_SCHEMA, "resource": RESOURCE_SELECTOR_SCHEMA,
+             "resourceUnits": physical_units, "additionalAllocations": additional_allocations,
+             "party": ref("PartyCounts")},
+            ["offering", "start"],
+        ),
+        "AvailabilityPreviewDocument": answer(
+            {"offering": text, "start": instant, "end": instant,
+             "capacityAvailable": {"type": "boolean"}, "publicCode": text},
+            ["offering", "start", "end", "capacityAvailable"],
+        ),
         "AvailabilitySlot": answer(
-            {"kind": {"const": "slot"}, "start": instant, "end": instant, "free": count},
+            {"kind": {"const": "slot"}, "start": instant, "end": instant, "free": count, "availableUnits": count},
             ["kind", "start", "end", "free"],
         ),
         "AvailabilityWindow": answer(
@@ -593,11 +759,15 @@ def schemas(problem_entries: list[dict]) -> dict:
         "HoldDocument": answer(
             {
                 "holdId": text,
+                "allocations": array(ref("AllocationDocument")),
                 "offering": text,
                 "start": instant,
                 "end": instant,
                 "resource": nullable(text),
                 "units": count,
+                "party": ref("PartyCounts"),
+                "manager": manager,
+                "partyReferences": party_references,
                 "expiresAt": instant,
                 "policyRevision": revision,
                 "externalReferences": array(ref("ExternalReference")),
@@ -605,6 +775,11 @@ def schemas(problem_entries: list[dict]) -> dict:
             ["holdId", "offering", "start", "end", "units", "expiresAt", "policyRevision", "externalReferences"],
         ),
         "PartyCounts": party,
+        "PartyReference": obj(
+            {"role": {"type": "string", "enum": ["beneficiary", "organization"]},
+             "reference": ref("ExternalReference")},
+            ["role", "reference"],
+        ),
         "AdmissionRequest": admission,
         "CreateAppointmentRequest": {
             "type": "object",
@@ -625,14 +800,30 @@ def schemas(problem_entries: list[dict]) -> dict:
             ["observedRevision"],
         ),
         "AppointmentState": appointment_state,
+        "AttendanceState": {"type": "string", "enum": ["arrived", "completed", "no-show"]},
+        "RecordAttendanceRequest": obj(
+            {"observedAppointmentRevision": revision, "observedRevision": revision,
+             "state": ref("AttendanceState"), "observedAt": instant},
+            ["observedAppointmentRevision", "observedRevision", "state", "observedAt"],
+        ),
+        "AttendanceDocument": answer(
+            {"appointmentId": text, "appointmentRevision": revision, "revision": revision,
+             "state": ref("AttendanceState"), "observedAt": instant, "recordedAt": instant},
+            ["appointmentId", "appointmentRevision", "revision", "state", "observedAt", "recordedAt"],
+        ),
         "AppointmentDocument": answer(
             {
+                "attendance": ref("AttendanceDocument"),
                 "appointmentId": text,
+                "allocations": array(ref("AllocationDocument")),
                 "offering": text,
                 "start": instant,
                 "end": instant,
                 "resource": nullable(text),
                 "units": count,
+                "party": ref("PartyCounts"),
+                "manager": manager,
+                "partyReferences": party_references,
                 "channel": nullable(text),
                 "revision": revision,
                 "state": ref("AppointmentState"),
@@ -669,6 +860,37 @@ def schemas(problem_entries: list[dict]) -> dict:
             },
             ["eventId", "kind", "revision", "occurredAt", "detail"],
         ),
+        "OperationalAppointmentDocument": answer(
+            {
+                "attendance": ref("AttendanceDocument"),
+                "allocations": array(ref("OperationalAllocationDocument")),
+                "appointmentId": text,
+                "revision": revision,
+                "service": text,
+                "location": text,
+                "offering": text,
+                "state": ref("AppointmentState"),
+                "displayedStart": instant,
+                "displayedEnd": instant,
+                "occupiedStart": instant,
+                "occupiedEnd": instant,
+                "resource": text,
+                "units": count,
+                "party": ref("PartyCounts"),
+                "externalReferences": array(ref("ExternalReference")),
+            },
+            [
+                "appointmentId",
+                "revision",
+                "service",
+                "location",
+                "offering",
+                "state",
+                "displayedStart",
+                "displayedEnd",
+            ],
+        ),
+        "OperationalAppointmentPage": page("OperationalAppointmentDocument"),
         "AppointmentHistoryPage": page("AppointmentHistoryEntryDocument"),
         "ExplainDocument": answer(
             {
@@ -728,7 +950,7 @@ def document(contract: dict) -> dict:
             "List the published offering catalogue",
             "OfferingPage",
             parameters=[CURSOR_QUERY, LIMIT_QUERY],
-            description="The public view of the authored policy, sorted by identifier. Exact-time offerings carry durationMinutes, bufferBeforeMinutes, bufferAfterMinutes, startIncrementMinutes, and maxRecipients; arrival-window offerings carry window. A field the offering's mode does not use is null, never zero.",
+            description="The public view of the authored policy, sorted by identifier. Exact-time offerings carry durationMinutes, bufferBeforeMinutes, bufferAfterMinutes, startIncrementMinutes, and maxRecipients. An offering that accepts caller-selected durations publishes durationSelection; one that accepts a named resource publishes its pool and allowResourceSelection. Non-default occupied-interval opening coverage is explicit. An arrival-window offering that names its window carries window; one that names none carries windows, every records-published window it serves in start order, and a request, hold or reschedule picks one of them by its start. A field the offering's mode does not use is null, never zero.",
         )},
         "/v1/resources": {"get": operation(
             "List the backing resource pool members",
@@ -754,6 +976,8 @@ def document(contract: dict) -> dict:
                     INSTANT_SCHEMA,
                     required=False,
                 ),
+                DURATION_MINUTES_QUERY,
+                RESOURCE_QUERY,
                 parameter(
                     "end",
                     "query",
@@ -770,7 +994,25 @@ def document(contract: dict) -> dict:
                 ),
                 LIMIT_QUERY,
             ],
-            description="Bounded availability. Exact-time offerings answer in grid slots and arrival-window offerings answer in published windows; only entries with capacity left are listed, so a slot nobody can serve is not availability. A search spans at most 62 days from start, and a wider ask continues by cursor.",
+            description="Bounded availability. Exact-time offerings answer in grid slots and arrival-window offerings answer in published windows; only entries with capacity left are listed, so a slot nobody can serve is not availability. Optional durationMinutes and resource values are hard constraints with no fallback. A search spans at most 62 days from start, and a wider ask continues by cursor.",
+        )},
+        "/v1/availability/preview": {"post": operation(
+            "Preview physical capacity for a complete resource bundle",
+            "AvailabilityPreviewDocument",
+            body="AvailabilityPreviewRequest",
+            description="Read-scope advice for one exact-time start and every requested resource allocation. A positive answer is neither authorization nor a reservation. No manager, references, duplicate key, or eligibility assertions are accepted. Unavailability exposes only capacity.exhausted; an unavailable store or oversized snapshot remains service.unavailable. No idempotency key is needed because this operation has no capacity effect.",
+        )},
+        "/v1/source-busy/preview": {"post": operation(
+            "Preview a bounded source-owned busy snapshot",
+            "BusyReconciliationPreview", body="BusyReconciliationRequest", authority="busy-import-profile",
+            parameters=[parameter("profile", "query", "One explicit configured import profile; profiles are never combined.")],
+            description="Reports replacement effects within the selected source, resources and coverage. Coverage is bounded to 62 days, 256 resources and 4096 records; each interval must lie inside coverage. Identifiers are bounded in UTF-8 bytes (512 for externalUid, 256 for externalRevision) and cannot contain control characters. Fresh snapshots require freshUntil after observedAt within the configured freshness bound; unavailable snapshots have no records or freshUntil and preserve known busy intervals. Existing commitments remain unchanged. Impact detail is absent by default; an explicitly enabled profile can expose only kind, resource and occupied interval. This read reserves no capacity.",
+        )},
+        "/v1/source-busy/apply": {"post": operation(
+            "Reconcile a bounded source-owned busy snapshot",
+            "BusyApplyOutcome", body="BusyReconciliationRequest", authority="busy-import-profile",
+            parameters=[parameter("profile", "query", "One explicit configured import profile; profiles are never combined.")],
+            description="Atomically applies a bounded snapshot under expectedRevision and a canonical request digest, preserving facts outside the source authority and coverage. After an uncertain reply, replay the exact body and expectedRevision: retained exact replay returns already-applied. A different stale request returns HTTP 412 revision.mismatch. A later conflict does not establish that an earlier attempt failed. There is no Idempotency-Key header and clients do not retry automatically. Unavailable or expired required-source coverage prevents new allocations without cancelling existing commitments. Input bounds and minimized impact projection match preview.",
         )},
         "/v1/availability/explain": {"get": operation(
             "Explain one start's refusal",
@@ -779,8 +1021,43 @@ def document(contract: dict) -> dict:
             parameters=[
                 OFFERING_QUERY,
                 parameter("start", "query", "The start to explain.", INSTANT_SCHEMA),
+                DURATION_MINUTES_QUERY,
+                RESOURCE_QUERY,
             ],
-            description="The separately authorized explanation of one start: the problem code every caller may see, the detailed code only this path discloses, and the refusal in words. A start that admits as things stand answers with no codes at all. The probe is a minimal party, so the answer explains the calendar and the capacity, never another caller's booking. resource.unavailable is disclosed here and never on the public path, whose answer is capacity.exhausted.",
+            description="The separately authorized explanation of one start under the same optional durationMinutes and resource constraints as availability: the problem code every caller may see, the detailed code only this path discloses, and the refusal in words. A start that admits as things stand answers with no codes at all. The probe is a minimal party, so the answer explains the calendar and the capacity, never another caller's booking. resource.unavailable is disclosed here and never on the public path, whose answer is capacity.exhausted.",
+        )},
+        "/v1/operational/appointments": {"get": operation(
+            "List an operational appointment work page",
+            "OperationalAppointmentPage",
+            authority="operational-profile",
+            parameters=[
+                parameter("service", "query", "Service fixed by the selected operational role."),
+                parameter("location", "query", "Location fixed by the selected operational role."),
+                parameter("start", "query", "Inclusive interval start.", INSTANT_SCHEMA),
+                parameter("end", "query", "Exclusive interval end.", INSTANT_SCHEMA),
+                parameter(
+                    "timeBasis",
+                    "query",
+                    "Whether overlap is evaluated against displayed or occupied time.",
+                    {"type": "string", "enum": ["displayed", "occupied"]},
+                ),
+                parameter("offering", "query", "Optional offering filter.", required=False),
+                parameter(
+                    "state",
+                    "query",
+                    "Optional appointment state filter.",
+                    {"type": "string", "enum": ["confirmed", "cancelled"]},
+                    required=False,
+                ),
+                parameter("resource", "query", "Optional authorized resource filter.", required=False),
+                parameter("externalReferenceProduct", "query", "External reference product; all three external-reference parameters must be supplied together.", required=False),
+                parameter("externalReferenceRecordType", "query", "External reference record type; all three external-reference parameters must be supplied together.", required=False),
+                parameter("externalReferenceIdentifier", "query", "External reference identifier; all three external-reference parameters must be supplied together.", required=False),
+                parameter("profile", "query", "Optional operational profile selector; the profile is not grant material.", required=False),
+                CURSOR_QUERY,
+                LIMIT_QUERY,
+            ],
+            description="Lists a bounded appointment work page for an explicitly configured operational role. The selected role limits service, location, resources, time range, filters, and returned fields; continuations are bound to the same verified caller and authority.",
         )},
         "/v1/holds": {"post": operation(
             "Reserve an admission",
@@ -789,7 +1066,7 @@ def document(contract: dict) -> dict:
             status="201",
             body="AdmissionRequest",
             idempotency=True,
-            description="Reserves supply instead of committing it and answers the hold with its expiry. The caller must carry a complete task grant whose scheduling permission names the offering's service, its location, and hold.create; readable availability is not authority to book. The hold expires on its own, so its capacity returns without a release.",
+            description="Reserves supply instead of committing it and answers the hold with its expiry. The caller must carry a complete task grant whose scheduling permission names the offering's service, its location, and hold.create; readable availability is not authority to book. Explicit manager selection instead requires hold.create-for, a verified source-manager binding and fresh online grant status. The hold expires on its own, so its capacity returns without a release.",
         )},
         "/v1/holds/{hold_id}": {"delete": operation(
             "Release a hold",
@@ -816,7 +1093,7 @@ def document(contract: dict) -> dict:
             status="201",
             body="CreateAppointmentRequest",
             idempotency=True,
-            description="Carries exactly one of hold or admission. Confirming transfers the hold's own reservation, so capacity is re-checked only for identity: the hold must still be active and unexpired, its policy revision still current, and its holder still the caller. A direct create is evaluated against the live ledger like a hold, and commits instead of reserving. Both branches demand a complete task grant naming the offering's service, location, and appointment.create.",
+            description="Carries exactly one of hold or admission. Confirming transfers the hold's own reservation: the hold must still be active and unexpired, its policy revision still current, and its owner or source-manager binding must match. Exact-time confirmation also checks current physical supply: the selected resource still exists, carries the required capabilities, is available over the entire occupied interval, and satisfies the offering's current opening coverage. It does not re-run new-request start-grid, lead-time or horizon rules for an already admitted hold. A direct create is evaluated against the live ledger like a hold, and commits instead of reserving. Both branches demand a complete task grant naming the offering's service, location, and appointment.create. Source-managed creation or confirmation instead requires appointment.create-for, the same verified manager binding and fresh online grant status.",
         )},
         "/v1/appointments/receipt": {"post": operation(
             "Read the original appointment receipt",
@@ -826,10 +1103,11 @@ def document(contract: dict) -> dict:
             description="Reads only a retained success receipt matching the verified caller's issuer and subject, the original key, and the original request. It requires current ordinary read authority and current claim ownership, can observe work after task authority ends, and never creates or replays a capacity command. Missing, expired, changed, or refused receipts, and claims whose owner was erased, are receipt.unresolved; this is not evidence that no effect occurred.",
         )},
         "/v1/appointments/{appointment_id}": {"get": operation(
-            "Read one owned appointment",
+            "Read one appointment under owner or detail authority",
             "AppointmentDocument",
+            authority="appointment-detail",
             parameters=[APPOINTMENT_ID],
-            description="Answers only to the caller that owns the booking. Another caller's appointment, a hold, and an unknown identifier are all operation.not-authorized, so existence is never disclosed.",
+            description="An ordinary booking requires its retained actor owner and reads scope, or a current appointment.read task grant for its retained service/location. A source-managed booking additionally requires the signed source-manager binding to match its retained manager. Both grant paths require fresh online grant status, need no general reads scope, and grant no catalogue, list or history access. The grant is scoped to service/location (and manager where applicable), not to an appointment identifier. A booking outside that authority, a hold, and an unknown identifier are all operation.not-authorized, so existence outside the caller's authority is never disclosed.",
         )},
         "/v1/appointments/{appointment_id}/reschedule": {"post": operation(
             "Move an owned appointment",
@@ -849,11 +1127,20 @@ def document(contract: dict) -> dict:
             parameters=[APPOINTMENT_ID],
             description="Releases the appointment's capacity and records the reason, under the task grant that names appointment.cancel. It is guarded by observedRevision and the offering's cancellation cutoff, never by the policy revision, so an appointment is always cancellable under the policy that currently governs its offering.",
         )},
+        "/v1/appointments/{appointment_id}/attendance": {"put": operation(
+            "Record or correct an appointment attendance observation",
+            "AttendanceDocument",
+            authority="task-grant",
+            body="RecordAttendanceRequest",
+            idempotency=True,
+            parameters=[APPOINTMENT_ID],
+            description="Requires attendance.record for the appointment's stored service and location. Both observedAppointmentRevision and observedRevision must match the locked current visit; observedRevision is zero before that visit's first observation. Corrections advance the attendance revision without changing the booking revision or capacity. Rescheduling starts a new visit; cancellation preserves the existing visit and permits later observations. observedAt cannot be in the future. The observation applies to the appointment, including a resource-only booking, and never invents a person count. Neither ownership, a read scope, nor an operational profile authorizes this write. Exact idempotent replay returns the original observation.",
+        )},
         "/v1/appointments/{appointment_id}/history": {"get": operation(
             "Read an owned appointment's history",
             "AppointmentHistoryPage",
             parameters=[APPOINTMENT_ID, CURSOR_QUERY, LIMIT_QUERY],
-            description="Newest first, one bounded page at a time. Each step carries the revision it produced, the pseudonymized actor reference when it had one, and the detail the store recorded. Existence is never disclosed: another caller's appointment answers operation.not-authorized.",
+            description="Newest first, one bounded page at a time. Each step carries the booking revision, the pseudonymized actor reference when it had one, and the detail the store recorded. An attendance-observed entry retains that booking revision and carries attendanceRevision, state, observedAt and recordedAt in detail. Earlier visit observations remain in history after a reschedule. Existence is never disclosed: another caller's appointment answers operation.not-authorized.",
         )},
     }
     for key, codes in OPERATION_PROBLEMS.items():
@@ -889,7 +1176,7 @@ def document(contract: dict) -> dict:
                     "type": "http",
                     "scheme": "bearer",
                     "bearerFormat": "JWT",
-                    "description": "A fresh access token from the configured issuer, for this deployment's audience, signed by a key the issuer published. Catalogue, availability, and owned-record reads demand the configured reads scope (scheduling:read by default); the explain path demands the configured explain scope (scheduling:explain by default), which is never the reads scope. A mutating route demands no scope at all: its authority is the complete task grant the token carries, whose scheduling permissions the service checks against the offering's service and location and the action the route performs (hold.create, hold.release, appointment.create, appointment.reschedule, appointment.cancel). A token with partial grant claims is refused rather than half-trusted.",
+                    "description": "A fresh access token from the configured issuer, for this deployment's audience, signed by a key the issuer published. Catalogue, availability, and ordinary owned-record reads demand the configured reads scope (scheduling:read by default); the explain path demands the configured explain scope (scheduling:explain by default), which is never the reads scope. Source-manager detail accepts appointment.read with the exact retained manager and service/location binding and fresh online status, without a general reads scope. The operational work list demands exactly one explicitly configured operational profile; catalogue scopes and task grants never authorize it. A mutating route demands no scope at all: its authority is the complete task grant the token carries, whose scheduling permissions the service checks against the offering's service and location and the action the route performs (hold.create, hold.release, appointment.create, appointment.reschedule, appointment.cancel, attendance.record). Source-managed creation instead uses hold.create-for or appointment.create-for and always checks fresh online status. A token with partial grant claims is refused rather than half-trusted.",
                 },
             },
             "schemas": schemas(entries),
@@ -921,11 +1208,13 @@ def rust_function(source: str, name: str) -> tuple[str, str]:
     return signature, body
 
 
-def route_inventory(http_source: str, naming_source: str) -> dict[tuple[str, str], str]:
+def route_inventory(
+    http_source: str, naming_source: str, operational_source: str = "", busy_source: str = ""
+) -> dict[tuple[str, str], str]:
     """The (method, path) -> handler table, read back out of the axum router."""
     signature, body = rust_function(http_source, "router")
     constants: dict[str, str] = {}
-    for source in (naming_source, http_source):
+    for source in (naming_source, operational_source, busy_source, http_source):
         constants.update(
             {
                 name: value
@@ -936,7 +1225,7 @@ def route_inventory(http_source: str, naming_source: str) -> dict[tuple[str, str
         )
     inventory: dict[tuple[str, str], str] = {}
     for expression, method, handler in re.findall(
-        r'\.route\(\s*("[^"]+"|[A-Z_][A-Z0-9_]*),\s*(get|post|put|delete)\(([a-z_][a-z0-9_]*)\)\)',
+        r'\.route\(\s*("[^"]+"|[A-Z_][A-Z0-9_]*),\s*(get|post|put|delete)\(([a-z_][a-z0-9_]*)\)\s*,?\s*\)',
         body,
     ):
         path = expression[1:-1] if expression.startswith('"') else constants[expression]
@@ -984,10 +1273,13 @@ def handler_wiring(
         authority = "unauthenticated"
         for function, value in (
             ("authenticate_read", "reads-scope"),
+            ("authenticate_appointment_detail", "appointment-detail"),
             ("authenticate_explain", "explain-scope"),
+            ("authenticate_operational_read", "operational-profile"),
+            ("authenticate_busy_source", "busy-import-profile"),
             ("authenticate_mutate", "task-grant"),
         ):
-            if f"{function}(&state" in body:
+            if f"{function}(&state" in body or f".{function}(" in body:
                 authority = value
         service = re.search(r"state\.service\.([a-z_]+)\(", body)
         method_name = service.group(1) if service else None
@@ -1033,7 +1325,10 @@ def verify_handler_wiring(
     http_source = production_source(repository_root, HTTP_SOURCE)
     service_source = production_source(repository_root, SERVICE_SOURCE)
     naming_source = production_source(repository_root, NAMING_SOURCE)
-    inventory = route_inventory(http_source, naming_source)
+    inventory = route_inventory(
+        http_source, naming_source, production_source(repository_root, OPERATIONAL_SOURCE),
+        production_source(repository_root, BUSY_SOURCE),
+    )
     if set(inventory) != set(ROUTE_HANDLERS):
         raise ValueError(
             "OpenAPI route inventory drifted from the router; "
@@ -1362,6 +1657,7 @@ def verify_dto_schemas(repository_root: Path, openapi: dict) -> None:
         "AvailabilityPage",
         "AppointmentPage",
         "AppointmentHistoryPage",
+        "OperationalAppointmentPage",
     ):
         if set(openapi_schemas[schema_name]["properties"]) != page_fields:
             raise ValueError(f"OpenAPI page shape drifted for {schema_name}")
@@ -1379,6 +1675,10 @@ def verify_dto_schemas(repository_root: Path, openapi: dict) -> None:
         rust_kebab_case_unit_enum_values(wire, "AppointmentStateDocument")
     ):
         raise ValueError("OpenAPI appointment state values drifted from Rust")
+    if set(openapi_schemas["AttendanceState"]["enum"]) != set(
+        rust_kebab_case_unit_enum_values(production_source(repository_root, ATTENDANCE_SOURCE), "AttendanceState")
+    ):
+        raise ValueError("OpenAPI attendance state values drifted from Rust")
     entry_match = re.search(
         r"#\[serde\((?P<attributes>[^\)]*)\)\]\s*pub enum AvailabilityEntry\s*\{(?P<body>.*?)^\}",
         wire,
@@ -1391,7 +1691,7 @@ def verify_dto_schemas(repository_root: Path, openapi: dict) -> None:
     for text in ('tag = "kind"', 'rename_all_fields = "camelCase"'):
         if text not in attributes:
             raise ValueError(f"OpenAPI availability entries drifted from Rust: {text}")
-    # An availability entry is an answer, so both variants stay open.
+    # An availability entry is an answer, so every variant stays open.
     if "deny_unknown_fields" in attributes:
         raise ValueError("Rust availability entries refuse a member a later deployment added")
     variants = re.findall(r"^\s*([A-Z][A-Za-z0-9]*)\s*\{", body, re.M)
@@ -1418,7 +1718,12 @@ def verify_dto_schemas(repository_root: Path, openapi: dict) -> None:
     for field in ("publicCode", "detailedCode", "explanation"):
         if field in explain["required"] or "anyOf" in explain["properties"][field]:
             raise ValueError(f"OpenAPI explain projection drifted for {field}")
-    if wire.count('skip_serializing_if = "Option::is_none"') != 3:
+    explain_match = re.search(
+        r"pub struct ExplainDocument\s*\{(?P<body>.*?)^\}", wire, re.S | re.M
+    )
+    if not explain_match or explain_match.group("body").count(
+        'skip_serializing_if = "Option::is_none"'
+    ) != 3:
         raise ValueError("OpenAPI explain optionality drifted from Rust")
     create = openapi_schemas["CreateAppointmentRequest"]
     if set(create["properties"]) != {"hold", "admission"} or create["minProperties"] != 1:
@@ -1441,9 +1746,13 @@ def verify_source(repository_root: Path) -> None:
     config_source = production_source(repository_root, CONFIG_SOURCE)
     admission_source = production_source(repository_root, ADMISSION_SOURCE)
     problem_source = production_source(repository_root, PROBLEM_SOURCE)
+    typed_source = production_source(repository_root, TYPED_SOURCE)
     httpsec_source = production_source(repository_root, HTTPSEC_SOURCE)
 
-    inventory = route_inventory(http_source, naming_source)
+    inventory = route_inventory(
+        http_source, naming_source, production_source(repository_root, OPERATIONAL_SOURCE),
+        production_source(repository_root, BUSY_SOURCE),
+    )
     paths = {path for _, path in inventory}
     if paths != ROUTES:
         raise ValueError(
@@ -1461,12 +1770,23 @@ def verify_source(repository_root: Path) -> None:
     marker(service_source, "pub const DEFAULT_PAGE_LIMIT: usize = 50;", "service")
     marker(service_source, "pub const MAXIMUM_PAGE_LIMIT: usize = 200;", "service")
     marker(service_source, "const MAXIMUM_AVAILABILITY_SPAN_DAYS: i64 = 62;", "service")
+    marker(
+        production_source(repository_root, PARTY_SOURCE),
+        "pub const MAXIMUM_PARTY_REFERENCES: usize = 16;",
+        "party",
+    )
+    marker(
+        typed_source,
+        "pub const MAXIMUM_BOOKING_DURATION_MINUTES: u32 = 7 * MINUTES_PER_DAY;",
+        "typed",
+    )
     for action in (
         "HOLD_CREATE_ACTION",
         "HOLD_RELEASE_ACTION",
         "APPOINTMENT_CREATE_ACTION",
         "APPOINTMENT_RESCHEDULE_ACTION",
         "APPOINTMENT_CANCEL_ACTION",
+        "ATTENDANCE_RECORD_ACTION",
     ):
         marker(service_source, f"pub const {action}: &str = ", "service")
     marker(config_source, 'fn default_reads_scope() -> String {\n    "scheduling:read".to_owned()', "config")

@@ -60,6 +60,7 @@ pub const WORKFLOW_REVISION_MISMATCH_PROBLEM: &str = "workflow.revision-mismatch
 pub const IDEMPOTENCY_KEY_INVALID_PROBLEM: &str = "idempotency.key-invalid";
 pub const IDEMPOTENCY_KEY_REUSED_PROBLEM: &str = "idempotency.key-reused";
 pub const INPUT_INVALID_PROBLEM: &str = "input.invalid";
+pub const MUTATION_UNCERTAIN_PROBLEM: &str = "mutation.uncertain";
 pub const OPERATION_NOT_AUTHORIZED_PROBLEM: &str = "operation.not-authorized";
 pub const RECEIPT_EXPIRED_PROBLEM: &str = "receipt.expired";
 pub const RECONCILE_RACED_PROBLEM: &str = "reconcile.raced";
@@ -106,6 +107,7 @@ pub enum ProblemCode {
     IdempotencyKeyInvalid,
     IdempotencyKeyReused,
     InputInvalid,
+    MutationUncertain,
     OperationNotAuthorized,
     ReceiptExpired,
     ReconcileRaced,
@@ -155,6 +157,7 @@ impl ProblemCode {
         Self::IdempotencyKeyInvalid,
         Self::IdempotencyKeyReused,
         Self::InputInvalid,
+        Self::MutationUncertain,
         Self::OperationNotAuthorized,
         Self::ReceiptExpired,
         Self::ReconcileRaced,
@@ -206,6 +209,7 @@ impl ProblemCode {
             Self::IdempotencyKeyInvalid => IDEMPOTENCY_KEY_INVALID_PROBLEM,
             Self::IdempotencyKeyReused => IDEMPOTENCY_KEY_REUSED_PROBLEM,
             Self::InputInvalid => INPUT_INVALID_PROBLEM,
+            Self::MutationUncertain => MUTATION_UNCERTAIN_PROBLEM,
             Self::OperationNotAuthorized => OPERATION_NOT_AUTHORIZED_PROBLEM,
             Self::ReceiptExpired => RECEIPT_EXPIRED_PROBLEM,
             Self::ReconcileRaced => RECONCILE_RACED_PROBLEM,
@@ -270,6 +274,7 @@ impl ProblemCode {
             | Self::ExecutionHeld
             | Self::WorkflowRevisionMismatch
             | Self::IdempotencyKeyReused
+            | Self::MutationUncertain
             | Self::ReceiptExpired
             | Self::ReconcileRaced
             | Self::ReconcileRefused
@@ -316,6 +321,7 @@ impl ProblemCode {
             Self::IdempotencyKeyInvalid => "Idempotency key invalid",
             Self::IdempotencyKeyReused => "Idempotency key reused",
             Self::InputInvalid => "Start input invalid",
+            Self::MutationUncertain => "Mutation outcome uncertain",
             Self::OperationNotAuthorized => "Operation not authorized",
             Self::ReceiptExpired => "Original receipt expired",
             Self::ReconcileRaced => "Run changed during reconciliation",
@@ -396,6 +402,9 @@ impl ProblemCode {
             }
             Self::InputInvalid => {
                 "The start input does not satisfy the workflow's declared input schema and value bounds."
+            }
+            Self::MutationUncertain => {
+                "An unkeyed mutation may have completed at its provider, so the run never sends it again."
             }
             Self::OperationNotAuthorized => {
                 "The caller's policy does not allow this operation."
@@ -504,6 +513,7 @@ pub(crate) fn for_error(code: &str) -> Option<ProblemCode> {
         "definition-incompatible" => ProblemCode::RunDefinitionIncompatible,
         "receipt-expired" => ProblemCode::ReceiptExpired,
         "evaluation-uncertain" => ProblemCode::EvaluationUncertain,
+        "mutation-uncertain" => ProblemCode::MutationUncertain,
         "payload-erased" => ProblemCode::RunPayloadErased,
         "binding-conflict" | "workflow-binding" => ProblemCode::BindingConflict,
         "live-binding-conflict" => ProblemCode::BindingLiveConflict,
@@ -701,6 +711,7 @@ mod tests {
             ("state-key-custody", ProblemCode::DeploymentRefused),
             ("mapping.branch", ProblemCode::DefinitionRefused),
             ("function.arity", ProblemCode::DefinitionRefused),
+            ("mutation-uncertain", ProblemCode::MutationUncertain),
         ] {
             assert_eq!(for_error(internal), Some(public), "{internal}");
         }
@@ -709,7 +720,7 @@ mod tests {
 
     #[test]
     fn the_vocabulary_is_complete_and_closed() {
-        assert_eq!(ProblemCode::ALL.len(), 44);
+        assert_eq!(ProblemCode::ALL.len(), 45);
         for code in ProblemCode::ALL {
             assert_eq!(ProblemCode::from_code(code.code()), Some(*code));
         }

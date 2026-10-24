@@ -6,7 +6,7 @@ use registry_platform_config::sha256_uri;
 use serde_json::{json, Value};
 use std::sync::Arc;
 use wiremock::{
-    matchers::{header, method, path, query_param},
+    matchers::{body_json, header, method, path, query_param},
     Mock, MockServer, ResponseTemplate,
 };
 const ID: &str = "00000000-0000-4000-8000-000000000001";
@@ -31,6 +31,119 @@ fn export() -> BregContextExport {
         schema,
         schema_bytes,
     }
+}
+
+#[tokio::test]
+async fn task_context_uses_only_its_distinct_profile_and_echoes_the_exact_request() {
+    let server = MockServer::start().await;
+    let export = export();
+    let identity = identity(&export);
+    let provider = provider(&server, export.clone())
+        .with_task_grant_profile("task-context".into())
+        .unwrap();
+    Mock::given(method("GET"))
+        .and(path("/v1/registry"))
+        .and(query_param("accessProfile", "task-context"))
+        .and(header("authorization", "Bearer status-bearer"))
+        .respond_with(response(json!({"metadataVersion":"2","id":"registry","version":"1","revision":DIGEST,"recordTypes":[],"operations":[],"proposals":{"method":"GET","path":"/v1/proposals","accessProfiles":[],"get":{"method":"GET","path":"/v1/proposals/{proposal_id}","accessProfiles":[]},"actions":[{"actionId":"correct-address","accessProfile":"task-context","operations":["get-task-grant-context"],"readableInputs":[],"readableContextFields":["reference"]}]}})))
+        .mount(&server)
+        .await;
+    let request = ServiceContextRequest {
+        identity: identity.clone(),
+        request_id: uuid::Uuid::from_u128(10),
+        task_id: uuid::Uuid::from_u128(11),
+        task_revision: 2,
+        policy: PolicyBinding {
+            id: "booking-review".into(),
+            version: "1".into(),
+            digest: ContentDigest::parse(DIGEST).unwrap(),
+        },
+        purpose: "task-grant".into(),
+        fields: vec!["reference".into()],
+    };
+    let wire_request = json!({
+        "expected":{"actionId":"correct-address","subject":{"source":"source","subjectType":"proposal","id":ID,"version":"1","digest":DIGEST},"contract":export.contract},
+        "requestId":request.request_id,"taskId":request.task_id,"taskRevision":2,
+        "policy":request.policy,"purpose":"task-grant","fields":["reference"]
+    });
+    Mock::given(method("POST"))
+        .and(path(format!("/v1/proposals/{ID}/task-grant-context")))
+        .and(query_param("accessProfile", "task-context"))
+        .and(header("authorization", "Bearer status-bearer"))
+        .and(body_json(wire_request.clone()))
+        .respond_with(response(json!({"request":wire_request,"proposal":{"id":ID,"actionId":"correct-address","actionRevision":DIGEST,"submissionVersion":1,"revision":1,"effectDigest":DIGEST,"authority":"casework","policy":request.policy,"subject":{"source":"source","subjectType":"proposal","id":ID,"version":"1","digest":DIGEST},"context":{"reference":"native-proposal","contract":export.contract,"fields":{"reference":"REF-42"}},"reviewable":true}})))
+        .mount(&server)
+        .await;
+    let observation = provider.task_grant_context(&request).await.unwrap();
+    assert_eq!(observation.request, request);
+    assert_eq!(
+        observation.fields,
+        std::collections::BTreeMap::from([("reference".into(), json!("REF-42"))])
+    );
+    assert!(observation.reviewable);
+}
+
+#[tokio::test]
+async fn task_context_has_no_status_profile_fallback() {
+    let server = MockServer::start().await;
+    let export = export();
+    let request = ServiceContextRequest {
+        identity: identity(&export),
+        request_id: uuid::Uuid::from_u128(10),
+        task_id: uuid::Uuid::from_u128(11),
+        task_revision: 2,
+        policy: PolicyBinding {
+            id: "booking-review".into(),
+            version: "1".into(),
+            digest: ContentDigest::parse(DIGEST).unwrap(),
+        },
+        purpose: "task-grant".into(),
+        fields: vec!["reference".into()],
+    };
+    let provider = provider(&server, export);
+    assert_eq!(
+        provider.task_grant_context(&request).await,
+        Err(ReviewContextError::Unsupported)
+    );
+    assert_eq!(
+        provider.with_task_grant_profile("status".into()).err(),
+        Some(ReviewContextError::Invalid)
+    );
+    assert!(server.received_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn task_context_refuses_invalid_and_unknown_fields_before_credentials_or_io() {
+    let server = MockServer::start().await;
+    let export = export();
+    let provider = provider(&server, export.clone())
+        .with_task_grant_profile("task-context".into())
+        .unwrap();
+    let request = ServiceContextRequest {
+        identity: identity(&export),
+        request_id: uuid::Uuid::nil(),
+        task_id: uuid::Uuid::from_u128(11),
+        task_revision: 2,
+        policy: PolicyBinding {
+            id: "booking-review".into(),
+            version: "1".into(),
+            digest: ContentDigest::parse(DIGEST).unwrap(),
+        },
+        purpose: "task-grant".into(),
+        fields: vec!["reference".into()],
+    };
+    assert_eq!(
+        provider.task_grant_context(&request).await,
+        Err(ReviewContextError::Invalid)
+    );
+    let mut unknown = request;
+    unknown.request_id = uuid::Uuid::from_u128(10);
+    unknown.fields = vec!["unknownField".into()];
+    assert_eq!(
+        provider.task_grant_context(&unknown).await,
+        Err(ReviewContextError::ContractChanged)
+    );
+    assert!(server.received_requests().await.unwrap().is_empty());
 }
 fn identity(export: &BregContextExport) -> ReviewContextIdentity {
     ReviewContextIdentity {
@@ -165,7 +278,8 @@ async fn native_provider_does_not_advertise_unminimized_service_fields() {
         provider.capabilities(),
         &[
             ReviewContextCapability::HumanDisplay,
-            ReviewContextCapability::ServiceStatus
+            ReviewContextCapability::ServiceStatus,
+            ReviewContextCapability::TaskGrantContext
         ]
     );
     let request = ServiceContextRequest {

@@ -12,10 +12,12 @@ use pyo3::{
     types::{PyBool, PyDict, PyFloat, PyInt},
 };
 use scheduling_client_sdk::{
-    AdmissionRequest, BearerToken, CancelAppointmentRequest, CreateAppointmentRequest,
-    ExternalReference, ProblemCode, RescheduleAppointmentRequest, SchedulingAuth,
-    SchedulingClient as RustClient, SchedulingClientConfig,
-    SchedulingClientError as RustClientError, SchedulingComplete, SchedulingProtocolFailure,
+    AdmissionRequest, AvailabilityPreviewRequest, AvailabilitySelection, BearerToken,
+    BusyReconciliationRequest, CancelAppointmentRequest, CreateAppointmentRequest,
+    ExternalReference, OperationalAppointmentQuery, ProblemCode, RecordAttendanceRequest,
+    RescheduleAppointmentRequest, SchedulingAuth, SchedulingClient as RustClient,
+    SchedulingClientConfig, SchedulingClientError as RustClientError, SchedulingComplete,
+    SchedulingProtocolFailure, MAXIMUM_BOOKING_DURATION_MINUTES,
 };
 use serde::{de::DeserializeOwned, Serialize};
 use url::Url;
@@ -195,6 +197,25 @@ fn page_limit(py: Python<'_>, value: Option<&Bound<'_, PyAny>>) -> PyResult<Opti
                 .map_err(|_| binding_error(py, "invalid-request", INVALID_ARGUMENTS))
         })
         .transpose()
+}
+
+fn availability_duration(
+    py: Python<'_>,
+    value: Option<&Bound<'_, PyAny>>,
+) -> PyResult<Option<u32>> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    if value.is_instance_of::<PyBool>() {
+        return Err(binding_error(py, "invalid-request", INVALID_ARGUMENTS));
+    }
+    value
+        .extract::<i64>()
+        .ok()
+        .and_then(|value| u32::try_from(value).ok())
+        .filter(|value| (1..=MAXIMUM_BOOKING_DURATION_MINUTES).contains(value))
+        .map(Some)
+        .ok_or_else(|| binding_error(py, "invalid-request", INVALID_ARGUMENTS))
 }
 
 /// The retry ceiling as a Python integer. Only an `int` in the `u8` range
@@ -404,7 +425,7 @@ impl SchedulingClient {
         )
     }
 
-    #[pyo3(signature = (token, offering, *, start=None, end=None, cursor=None, limit=None))]
+    #[pyo3(signature = (token, offering, *, start=None, end=None, cursor=None, limit=None, duration_minutes=None, resource=None))]
     #[allow(clippy::too_many_arguments)]
     fn availability<'py>(
         &self,
@@ -415,42 +436,120 @@ impl SchedulingClient {
         end: Option<&str>,
         cursor: Option<&str>,
         limit: Option<&Bound<'_, PyAny>>,
+        duration_minutes: Option<&Bound<'_, PyAny>>,
+        resource: Option<&str>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let token = bearer(py, token)?;
         let start = optional_instant(py, start)?;
         let end = optional_instant(py, end)?;
         let limit = page_limit(py, limit)?;
+        let duration_minutes = availability_duration(py, duration_minutes)?;
+        let selection = AvailabilitySelection {
+            duration_minutes,
+            resource: resource.map(str::to_owned),
+        };
         complete(
             py,
             py.detach(|| {
-                self.runtime.block_on(self.inner.availability(
+                self.runtime
+                    .block_on(self.inner.availability_with_selection(
+                        SchedulingAuth::new(&token),
+                        offering,
+                        start,
+                        end,
+                        cursor,
+                        limit,
+                        &selection,
+                    ))
+            }),
+        )
+    }
+
+    fn preview_availability<'py>(
+        &self,
+        py: Python<'py>,
+        token: &str,
+        request: &Bound<'_, PyAny>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let token = bearer(py, token)?;
+        let request: AvailabilityPreviewRequest = input(py, request)?;
+        complete(
+            py,
+            py.detach(|| {
+                self.runtime.block_on(
+                    self.inner
+                        .preview_availability(SchedulingAuth::new(&token), &request),
+                )
+            }),
+        )
+    }
+
+    fn preview_source_busy<'py>(
+        &self,
+        py: Python<'py>,
+        token: &str,
+        profile: &str,
+        request: &Bound<'_, PyAny>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let token = bearer(py, token)?;
+        let request: BusyReconciliationRequest = input(py, request)?;
+        complete(
+            py,
+            py.detach(|| {
+                self.runtime.block_on(self.inner.preview_source_busy(
                     SchedulingAuth::new(&token),
-                    offering,
-                    start,
-                    end,
-                    cursor,
-                    limit,
+                    profile,
+                    &request,
                 ))
             }),
         )
     }
 
+    fn apply_source_busy<'py>(
+        &self,
+        py: Python<'py>,
+        token: &str,
+        profile: &str,
+        request: &Bound<'_, PyAny>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let token = bearer(py, token)?;
+        let request: BusyReconciliationRequest = input(py, request)?;
+        complete(
+            py,
+            py.detach(|| {
+                self.runtime.block_on(self.inner.apply_source_busy(
+                    SchedulingAuth::new(&token),
+                    profile,
+                    &request,
+                ))
+            }),
+        )
+    }
+
+    #[pyo3(signature = (token, offering, start, *, duration_minutes=None, resource=None))]
     fn explain<'py>(
         &self,
         py: Python<'py>,
         token: &str,
         offering: &str,
         start: &str,
+        duration_minutes: Option<&Bound<'_, PyAny>>,
+        resource: Option<&str>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let token = bearer(py, token)?;
         let start = instant(py, start)?;
+        let selection = AvailabilitySelection {
+            duration_minutes: availability_duration(py, duration_minutes)?,
+            resource: resource.map(str::to_owned),
+        };
         complete(
             py,
             py.detach(|| {
-                self.runtime.block_on(self.inner.explain(
+                self.runtime.block_on(self.inner.explain_with_selection(
                     SchedulingAuth::new(&token),
                     offering,
                     start,
+                    &selection,
                 ))
             }),
         )
@@ -580,6 +679,25 @@ impl SchedulingClient {
         )
     }
 
+    fn list_operational_appointments<'py>(
+        &self,
+        py: Python<'py>,
+        token: &str,
+        query: &Bound<'_, PyAny>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let token = bearer(py, token)?;
+        let query: OperationalAppointmentQuery = input(py, query)?;
+        complete(
+            py,
+            py.detach(|| {
+                self.runtime.block_on(
+                    self.inner
+                        .list_operational_appointments(SchedulingAuth::new(&token), &query),
+                )
+            }),
+        )
+    }
+
     fn reschedule_appointment<'py>(
         &self,
         py: Python<'py>,
@@ -617,6 +735,29 @@ impl SchedulingClient {
             py,
             py.detach(|| {
                 self.runtime.block_on(self.inner.cancel_appointment(
+                    SchedulingAuth::new(&token),
+                    appointment_id,
+                    idempotency_key,
+                    &request,
+                ))
+            }),
+        )
+    }
+
+    fn record_attendance<'py>(
+        &self,
+        py: Python<'py>,
+        token: &str,
+        appointment_id: &str,
+        idempotency_key: &str,
+        request: &Bound<'_, PyAny>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let token = bearer(py, token)?;
+        let request: RecordAttendanceRequest = input(py, request)?;
+        complete(
+            py,
+            py.detach(|| {
+                self.runtime.block_on(self.inner.record_attendance(
                     SchedulingAuth::new(&token),
                     appointment_id,
                     idempotency_key,

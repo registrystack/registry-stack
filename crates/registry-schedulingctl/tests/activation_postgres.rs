@@ -398,7 +398,10 @@ async fn plan_on_an_empty_database_reports_the_initial_activation_and_writes_not
     assert!(report["activePackage"].is_null(), "{report}");
     assert_eq!(report["databaseIdCheck"], "initial");
     assert_eq!(report["schemaVersion"], 0);
-    assert_eq!(report["pendingSchemaVersions"], serde_json::json!([200]));
+    assert_eq!(
+        report["pendingSchemaVersions"],
+        serde_json::json!([200, 201, 202, 203, 204, 205, 206, 207, 208, 209])
+    );
     assert_eq!(report["policy"]["revisionAdvances"], true);
     assert_eq!(report["policy"]["revision"], 2);
     assert_eq!(report["retainedHookBindings"], "none-retained");
@@ -490,7 +493,10 @@ async fn apply_records_one_row_per_activation_and_a_previous_package_is_a_new_ro
         .as_str()
         .unwrap()
         .starts_with("single-role mode"));
-    assert_eq!(initial["schemaVersionsApplied"], serde_json::json!([200]));
+    assert_eq!(
+        initial["schemaVersionsApplied"],
+        serde_json::json!([200, 201, 202, 203, 204, 205, 206, 207, 208, 209])
+    );
     assert_eq!(initial["effects"]["schedulingIdAdopted"], true);
     assert_eq!(initial["effects"]["policyRevision"], 2);
     assert_eq!(initial["effects"]["policyRevisionAdvanced"], true);
@@ -586,7 +592,7 @@ async fn apply_records_one_row_per_activation_and_a_previous_package_is_a_new_ro
     assert_eq!(history[2]["planKind"], "successor");
     assert_eq!(history[0]["roleMode"], "single");
     assert!(history[0]["runtimeRole"].is_string(), "{report}");
-    assert_eq!(report["schemaVersion"], 200);
+    assert_eq!(report["schemaVersion"], 209);
     assert_eq!(report["roleMode"], "single");
     assert!(report["roleModeStatement"].is_string());
     deployment.drop().await;
@@ -633,7 +639,10 @@ async fn successor_activation_checks_retained_hook_bindings_on_the_version_100_b
     );
 
     let initial = apply(&initial_config).expect("the initial package activates");
-    assert_eq!(initial["schemaVersionsApplied"], serde_json::json!([200]));
+    assert_eq!(
+        initial["schemaVersionsApplied"],
+        serde_json::json!([200, 201, 202, 203, 204, 205, 206, 207, 208, 209])
+    );
     assert_eq!(initial["applyOrder"], 1);
 
     let config = RuntimeConfig::load(&initial_config).expect("the runtime configuration loads");
@@ -681,6 +690,10 @@ async fn successor_activation_checks_retained_hook_bindings_on_the_version_100_b
         occupied_start: start - TimeDelta::minutes(5),
         occupied_end: start + TimeDelta::minutes(35),
         units: 1,
+        allocations: Vec::new(),
+        party: None,
+        party_references: Vec::new(),
+        source_manager: None,
         duplicate_key: None,
         external_references: Vec::new(),
         hold_expires_at: None,
@@ -940,13 +953,14 @@ async fn fresh_claim_storage_refuses_a_partial_owner() {
     deployment
         .admin
         .batch_execute(&format!(
-            "INSERT INTO {schema}.scheduling_claims
+            "SET registry_scheduling.allocation_writer = 'v2';
+             INSERT INTO {schema}.scheduling_claims
                 (claim_id, kind, state, offering, supply_id, displayed_start,
                  displayed_end, occupied_start, occupied_end, units, revision,
-                 policy_revision, actor)
+                 policy_revision, actor, operational_service, operational_location, operational_mode)
              VALUES ('00000000-0000-4000-8000-000000001930', 'booking', 'active',
                      'registry-update-30', 'update-stations', now(), now() + interval '30 minutes',
-                     now(), now() + interval '30 minutes', 1, 1, 1, 'ownerless-actor');",
+                     now(), now() + interval '30 minutes', 1, 1, 1, 'ownerless-actor', 'registry-update', 'main-office', 'exact-time');",
             schema = deployment.schema
         ))
         .await
@@ -2226,5 +2240,83 @@ async fn an_apply_whose_response_audit_entry_is_refused_reports_it_applied_unaud
         "{message}"
     );
     assert_eq!(deployment.ledger_rows().await, 1, "the activation stands");
+    deployment.drop().await;
+}
+
+#[tokio::test]
+async fn writer_fences_require_unconditional_triggers_and_unconfigured_functions() {
+    async fn assert_refused(config: &Path, runtime_config: &Path) {
+        let report = plan(config);
+        assert_eq!(
+            report["refusals"][0]["code"], "schedulingctl.activation.split-role-weakened",
+            "{report}"
+        );
+        let error = apply(config).expect_err("apply refuses an altered writer fence");
+        assert!(format!("{error:#}").contains("writer fence"), "{error:#}");
+        let error = startup_refusal(runtime_config).await;
+        assert!(error.contains("writer fence"), "{error}");
+    }
+    let deployment = Deployment::split("activation_exact_fences").await;
+    let package = deployment.package("package", POLICY);
+    let config = deployment.config("runtime.yaml", &package, ConfigOptions::default());
+    apply(&config).expect("all migration-owned fences permit split activation");
+    let runtime_config = config.clone();
+    let package = deployment.package("successor", &successor_policy());
+    let config = deployment.config("successor.yaml", &package, ConfigOptions::default());
+    let schema = &deployment.schema;
+    let clean = plan(&config);
+    assert_eq!(clean["refusals"], serde_json::json!([]));
+
+    for (relation, trigger) in [
+        (
+            "scheduling_claim_allocations",
+            "scheduling_claim_allocations_writer_v2",
+        ),
+        (
+            "scheduling_attendance_observations",
+            "scheduling_attendance_observations_writer_v1",
+        ),
+    ] {
+        deployment
+            .admin
+            .batch_execute(&format!(
+                "ALTER TABLE {schema}.{relation} DISABLE TRIGGER {trigger}"
+            ))
+            .await
+            .expect("disable a fixture fence");
+        assert_refused(&config, &runtime_config).await;
+        deployment
+            .admin
+            .batch_execute(&format!(
+                "ALTER TABLE {schema}.{relation} ENABLE TRIGGER {trigger}"
+            ))
+            .await
+            .expect("restore a fixture fence");
+    }
+
+    deployment.admin.batch_execute(&format!(
+        "ALTER FUNCTION {schema}.scheduling_require_allocation_writer_v2() SET registry_scheduling.allocation_writer TO 'v2'"
+    )).await.expect("configure the fixture function to bypass its writer check");
+    assert_refused(&config, &runtime_config).await;
+    deployment.admin.batch_execute(&format!(
+        "ALTER FUNCTION {schema}.scheduling_require_allocation_writer_v2() RESET ALL; \
+         DROP TRIGGER scheduling_claim_allocations_writer_v2 ON {schema}.scheduling_claim_allocations; \
+         CREATE TRIGGER scheduling_claim_allocations_writer_v2 BEFORE INSERT OR UPDATE OR DELETE \
+         ON {schema}.scheduling_claim_allocations FOR EACH ROW WHEN (false) \
+         EXECUTE FUNCTION {schema}.scheduling_require_allocation_writer_v2()"
+    )).await.expect("install a conditional fixture fence");
+    assert_refused(&config, &runtime_config).await;
+    deployment.admin.batch_execute(&format!(
+        "DROP TRIGGER scheduling_claim_allocations_writer_v2 ON {schema}.scheduling_claim_allocations; \
+         CREATE TRIGGER scheduling_claim_allocations_writer_v2 BEFORE INSERT OR UPDATE OF units OR DELETE \
+         ON {schema}.scheduling_claim_allocations FOR EACH ROW \
+         EXECUTE FUNCTION {schema}.scheduling_require_allocation_writer_v2()"
+    )).await.expect("install a column-restricted fixture fence");
+    assert_refused(&config, &runtime_config).await;
+    assert_eq!(
+        deployment.ledger_rows().await,
+        1,
+        "refused operations never activate"
+    );
     deployment.drop().await;
 }

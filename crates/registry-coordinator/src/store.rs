@@ -219,6 +219,7 @@ pub enum RetryBlockReason {
     RestoreReviewRequired,
     PayloadErased,
     EvaluationUncertain,
+    MutationUncertain,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -1490,7 +1491,15 @@ impl Store {
                 operation.recovery == crate::protocol::RecoverySemantics::HoldAfterDispatch
             })
         {
-            Some(RetryBlockReason::EvaluationUncertain)
+            Some(
+                if operation.as_ref().is_some_and(|operation| {
+                    operation.effect == crate::operations::EffectKind::Evaluation
+                }) {
+                    RetryBlockReason::EvaluationUncertain
+                } else {
+                    RetryBlockReason::MutationUncertain
+                },
+            )
         } else if !row.get::<_, bool>(8)
             && definition.as_ref().is_some_and(|definition| {
                 matches!(
@@ -1568,10 +1577,16 @@ impl Store {
             })?,
         )?;
         let definition = self.definition(&snapshot).map_err(|_| refused("definition-incompatible", "this binary cannot safely interpret the pinned run snapshot; retain its compatible worker"))?;
-        if row.get::<_, bool>(3)
-            && matches!(definition.workflow.steps.get(&status.step), Some(Step::Call {call, ..}) if !call.operation.can_retry_after_unknown())
-        {
-            return Err(refused("evaluation-uncertain", "the evaluation may have completed remotely; preserve its original request and inspect or cancel the held run without reevaluating"));
+        if row.get::<_, bool>(3) {
+            if let Some(Step::Call { call, .. }) = definition.workflow.steps.get(&status.step) {
+                if !call.operation.can_retry_after_unknown() {
+                    return Err(if call.operation.is_evaluation() {
+                        refused("evaluation-uncertain", "the evaluation may have completed remotely; preserve its original request and inspect or cancel the held run without reevaluating")
+                    } else {
+                        refused("mutation-uncertain", "the unkeyed mutation may have completed remotely; preserve the held run and inspect or cancel it without replaying the effect")
+                    });
+                }
+            }
         }
         let generation: i64 = row.get(1);
         tx.commit().await.map_err(unavailable)?;
