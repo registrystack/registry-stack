@@ -212,13 +212,25 @@ stage() {
   staged_executable="${temporary}/platform/${destination}"
 }
 
+# Compare the staged executable's version line with the release identity and
+# name both when they differ, so a failed check says which binary and why.
+check_version() {
+  local expected="$1"
+  local observed
+  observed="$("${staged_executable}" --version)"
+  if [[ "${observed}" != "${expected}" ]]; then
+    printf '%s reports "%s"; the release identity expects "%s"\n' \
+      "$(basename -- "${staged_executable}")" "${observed}" "${expected}" >&2
+    return 1
+  fi
+}
+
 build_core() {
   if [[ "${include_rstack}" -eq 1 ]]; then
     "${cargo_bin}" build --release --locked \
       -p registry-rstack --bin rstack --target "${target}"
     stage rstack "rstack-${tag}-${asset}"
-    test "$("${staged_executable}" --version)" = \
-      "rstack ${display_version}"
+    check_version "rstack ${display_version}"
   fi
   "${cargo_bin}" build --release --locked \
     -p registry-evidence -p registry-evidencectl \
@@ -228,8 +240,7 @@ build_core() {
   local binary
   for binary in evidence evidencectl evidence-oid4vci; do
     stage "${binary}" "${binary}-${tag}-${asset}"
-    test "$("${staged_executable}" --version)" = \
-      "${binary} ${display_version}"
+    check_version "${binary} ${display_version}"
   done
 }
 
@@ -242,8 +253,7 @@ build_breg() {
     --target "${target}"
 
   stage breg "breg-${tag}-${asset}"
-  test "$("${staged_executable}" --version)" = \
-    "breg ${display_version}"
+  check_version "breg ${display_version}"
 }
 
 build_bregctl() {
@@ -255,8 +265,7 @@ build_bregctl() {
     --target "${target}"
 
   stage bregctl "bregctl-${tag}-${asset}"
-  test "$("${staged_executable}" --version)" = \
-    "bregctl ${display_version}"
+  check_version "bregctl ${display_version}"
 
   if [[ "${include_breg_services}" -ne 1 ]]; then
     return
@@ -271,8 +280,7 @@ build_bregctl() {
   local binary
   for binary in breg-mcp breg-review; do
     stage "${binary}" "${binary}-${tag}-${asset}"
-    test "$("${staged_executable}" --version)" = \
-      "${binary} ${display_version}"
+    check_version "${binary} ${display_version}"
   done
 }
 
@@ -290,8 +298,7 @@ build_casework() {
   local binary
   for binary in casework caseworkctl; do
     stage "${binary}" "${binary}-${tag}-${asset}"
-    test "$("${staged_executable}" --version)" = \
-      "${binary} ${display_version}"
+    check_version "${binary} ${display_version}"
   done
 }
 
@@ -303,15 +310,14 @@ build_scheduling() {
     "${cargo_bin}" build --release --locked \
       -p registry-scheduling --bin scheduling --target "${target}"
     stage scheduling "scheduling-${tag}-${asset}"
-    test "$("${staged_executable}" --version)" = "scheduling ${display_version}"
+    check_version "scheduling ${display_version}"
   fi
   "${cargo_bin}" build --release --locked \
     -p registry-schedulingctl --bin schedulingctl \
     --target "${target}"
 
   stage schedulingctl "schedulingctl-${tag}-${asset}"
-  test "$("${staged_executable}" --version)" = \
-    "schedulingctl ${display_version}"
+  check_version "schedulingctl ${display_version}"
 }
 
 additional_platform_builds="$(python3 "${repo_root}/release/scripts/release_roster.py" additional-platform-builds "${version}")"
@@ -326,7 +332,7 @@ if [[ "${exclude_discovery}" -eq 1 ]]; then
   additional_platform_builds="${filtered_platform_builds%$'\n'}"
 fi
 build_additional_platforms() {
-  local package binary expected observed typst_pin
+  local package binary expected typst_pin
   [[ -n "${additional_platform_builds}" ]] || return 0
   while read -r package binary; do
     [[ "${binary}" != scheduling ]] || continue
@@ -338,11 +344,7 @@ build_additional_platforms() {
       test -n "${typst_pin}"
       expected+=" (typst ${typst_pin})"
     fi
-    observed="$("${staged_executable}" --version)"
-    if [[ "${observed}" != "${expected}" ]]; then
-      printf '%s reports "%s"; the release identity expects "%s"\n' "${binary}" "${observed}" "${expected}" >&2
-      exit 1
-    fi
+    check_version "${expected}"
   done <<<"${additional_platform_builds}"
 }
 
