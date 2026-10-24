@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Name one `ALTER .. OWNER TO <migration>` statement for each registry object
+  a split-role runtime role owns when apply refuses that ownership, in place
+  of `REASSIGN OWNED BY`, which also moved what the runtime role owns outside
+  the registry schemas. Run them as a database administrator, then
+  `bregctl apply --package DIR` to reissue the runtime grants.
 - Serialize import-run admission so one authority has at most one open or
   blocked run. Successor plan and apply refuse legacy duplicates under a live
   current authority before maintenance while the existing runtime remains

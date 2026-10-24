@@ -438,30 +438,33 @@ state, and the instance claim.
    (before readiness) refuse a runtime role that could write the ledger or the
    registry state, each naming its exact fix: a superuser (`ALTER ROLE ..
    NOSUPERUSER`), a member of the migration role (`REVOKE <migration> FROM
-   <runtime>`), the owner of a registry table, sequence, view, or function,
-   or a member of that owner (`REASSIGN OWNED BY <runtime> TO <migration>`
-   followed by `bregctl apply`, or `REVOKE <owner> FROM <runtime>`), a holder
-   of a write privilege or of `CREATE` on a registry schema, directly or
-   through `PUBLIC` (`REVOKE .. FROM <grantee>`), and a trigger on a product
-   table that no compiled migration creates (`DROP TRIGGER`). The `REVOKE`
-   and `DROP` fixes end with "then rerun the refused command". The reason for
-   the ownership check: an owner of a table apply touches can add a deferred
-   constraint trigger that runs as the migration role when apply commits and
-   writes the ledger. Apply issues the runtime grants the active package
-   gives and treats missing split grants as a change pending, so a
-   reassignment that strips them is repaired by the next apply; split startup
-   refuses missing grants, naming `bregctl apply`. A change of runtime role or
-   role mode over the active package is recorded as its own successor
-   activation (`metadata-only`, a fresh activation id), and apply revokes
-   every privilege of a runtime role the activation stops serving with. A
-   one-role runtime file is refused against a database last activated for a
-   separate runtime role. In either mode, a runtime role with superuser,
-   `BYPASSRLS`, `CREATEDB`, `CREATEROLE`, or database `CREATE` is refused at
-   startup. `bregctl doctor` and the startup log
+   <runtime>`), the owner of a registry schema, relation, or routine (one
+   `ALTER .. OWNER TO <migration>` for each object the runtime role owns in a
+   registry schema, run as a database administrator and followed by `bregctl
+   apply`, so the fix leaves what the runtime role owns elsewhere in the
+   database alone), a member of such an owner (`REVOKE <owner> FROM
+   <runtime>`), a holder of a write privilege or of `CREATE` on a registry
+   schema, directly or through `PUBLIC` (`REVOKE .. FROM <grantee>`), and a
+   trigger on a product table that no compiled migration creates (`DROP
+   TRIGGER`). The `REVOKE` and `DROP` fixes end with "then rerun the refused
+   command". The reason for the ownership check: an owner of a table apply
+   touches can add a deferred constraint trigger that runs as the migration
+   role when apply commits and writes the ledger. Apply issues the runtime
+   grants the active package gives and treats missing split grants as a change
+   pending, so an ownership change that strips them is repaired by the next
+   apply; split startup refuses missing grants, naming `bregctl apply`. A
+   change of runtime role or role mode over the active package is recorded as
+   its own successor activation (`metadata-only`, a fresh activation id), and
+   apply revokes every privilege of a runtime role the activation stops
+   serving with. A one-role runtime file is refused against a database last
+   activated for a separate runtime role. In either mode, a runtime role with
+   superuser, `BYPASSRLS`, `CREATEDB`, `CREATEROLE`, or database `CREATE` is
+   refused at startup. `bregctl doctor` and the startup log
    (`startup.role_mode.single`) say that single mode catches mistakes but not
    someone holding the credential. Tests:
    `crates/registry-breg/tests/postgres_migration.rs`:
    `real_postgres_split_apply_refuses_a_runtime_role_that_owns_a_model_table`,
+   `real_postgres_split_apply_names_an_ownership_change_for_every_kind_of_owned_object`,
    `real_postgres_split_apply_refuses_a_runtime_role_that_holds_schema_create`,
    `real_postgres_split_apply_names_the_fix_for_every_runtime_write_authority`,
    `real_postgres_a_role_change_reapply_of_the_active_package_is_its_own_activation`.
