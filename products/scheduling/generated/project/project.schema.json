@@ -20,11 +20,10 @@
         },
         "window": {
           "$ref": "#/$defs/LocalId",
-          "description": "The published window this offering serves arrivals in."
+          "description": "The published window this offering serves arrivals in. An offering\nthat omits it serves every records-published window whose `offering`\nnames it, and a request picks one of those windows by its start."
         }
       },
       "required": [
-        "window",
         "leadTimeMinutes",
         "horizonDays"
       ],
@@ -47,10 +46,44 @@
       },
       "type": "string"
     },
+    "DurationSelectionPolicy": {
+      "additionalProperties": false,
+      "description": "A bounded lattice of caller-selectable service durations.",
+      "properties": {
+        "incrementMinutes": {
+          "format": "uint32",
+          "maximum": 10080,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "maximumMinutes": {
+          "format": "uint32",
+          "maximum": 10080,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "minimumMinutes": {
+          "format": "uint32",
+          "maximum": 10080,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "minimumMinutes",
+        "maximumMinutes",
+        "incrementMinutes"
+      ],
+      "type": "object"
+    },
     "ExactTimeOffering": {
       "additionalProperties": false,
-      "description": "The exact-time block of an offering: appointment length, protections, and\nthe interchangeable pool that backs it.",
+      "description": "The exact-time block of an offering: appointment length, protections, and\nthe pool that backs it.",
       "properties": {
+        "allowResourceSelection": {
+          "description": "Whether a request may constrain allocation to one exact pool member.\nOmitted or false, every exact-time request uses fungible selection.",
+          "type": "boolean"
+        },
         "bufferAfterMinutes": {
           "description": "Cleanup time occupied after the displayed end.",
           "format": "uint32",
@@ -67,9 +100,13 @@
         },
         "durationMinutes": {
           "format": "uint32",
-          "maximum": 1440,
+          "maximum": 10080,
           "minimum": 1,
           "type": "integer"
+        },
+        "durationSelection": {
+          "$ref": "#/$defs/DurationSelectionPolicy",
+          "description": "The request-selectable duration lattice. Omitted, the offering accepts\nonly `durationMinutes`; a request that omits its duration always uses\n`durationMinutes` in either form."
         },
         "horizonDays": {
           "description": "How far ahead booking is open.",
@@ -91,6 +128,14 @@
           "maximum": 2147483647,
           "minimum": 1,
           "type": "integer"
+        },
+        "openingCoverage": {
+          "$ref": "#/$defs/OpeningCoverage",
+          "description": "The interval published openings and closures constrain. Omitted, only\nthe displayed service interval must be covered; buffers still consume\nledger capacity outside it."
+        },
+        "partyCounts": {
+          "$ref": "#/$defs/PartyCountsRequirement",
+          "description": "Whether a request must declare human party counts. Omitted, counts are\nrequired. Only exact-time offerings may opt out for resource bookings."
         },
         "pool": {
           "$ref": "#/$defs/LocalId",
@@ -131,9 +176,9 @@
           "type": "integer"
         },
         "ttlMinutes": {
-          "description": "How long a hold keeps its capacity: at most one day.",
+          "description": "How long a hold keeps its capacity under an explicitly authored policy.",
           "format": "uint32",
-          "maximum": 1440,
+          "maximum": 10080,
           "minimum": 1,
           "type": "integer"
         }
@@ -181,7 +226,7 @@
     },
     "HookPolicy": {
       "additionalProperties": false,
-      "description": "One observer hook: the shared Registry Stack hook declaration narrowed to\nthe closed Scheduling contract. It runs after commit, follows one of three\nappointment lifecycle triggers, delivers to a URL destination, and takes\nno condition and no proposal principal.",
+      "description": "One observer hook: the shared Registry Stack hook declaration narrowed to\nthe closed Scheduling contract. It runs after commit, follows one of four\nappointment event triggers, delivers to a URL destination, and takes\nno condition and no proposal principal.",
       "properties": {
         "handler": {
           "$ref": "#/$defs/ObserverHandler"
@@ -248,11 +293,12 @@
       "type": "string"
     },
     "ObserverTrigger": {
-      "description": "The appointment lifecycle transition an observer hook follows.",
+      "description": "The appointment event an observer hook follows.",
       "enum": [
         "appointment.confirmed",
         "appointment.rescheduled",
-        "appointment.cancelled"
+        "appointment.cancelled",
+        "appointment.attendance-observed"
       ],
       "type": "string"
     },
@@ -337,6 +383,21 @@
       ],
       "type": "object"
     },
+    "OpeningCoverage": {
+      "description": "Which interval must stay inside published openings and outside closures.\nBuffers always occupy ledger capacity regardless of this choice.",
+      "oneOf": [
+        {
+          "const": "service-interval",
+          "description": "Published openings constrain the caller-visible service interval.",
+          "type": "string"
+        },
+        {
+          "const": "occupied-interval",
+          "description": "Published openings constrain service plus setup and cleanup buffers.",
+          "type": "string"
+        }
+      ]
+    },
     "OpeningPatternPolicy": {
       "additionalProperties": false,
       "description": "A bounded weekly opening pattern over local wall-clock time. The timezone\ncomes from the location record the pattern references.",
@@ -386,6 +447,14 @@
         "because"
       ],
       "type": "object"
+    },
+    "PartyCountsRequirement": {
+      "description": "Whether an exact-time offering requires declared human party counts.\nArrival-window offerings always require them because recipient counts drive\ntheir capacity units.",
+      "enum": [
+        "required",
+        "optional"
+      ],
+      "type": "string"
     },
     "PolicyWeekday": {
       "description": "One weekday of an opening pattern.",

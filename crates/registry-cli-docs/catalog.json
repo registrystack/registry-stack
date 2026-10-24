@@ -18599,7 +18599,7 @@
           "options": [
             {
               "display": "--template <NAME>",
-              "description": "Project template: standalone-exact-time or standalone-arrival-window",
+              "description": "Project template: standalone-exact-time, standalone-arrival-window, or resource-reservations",
               "always_required": true,
               "repeatable": false,
               "default_values": [],
@@ -19186,6 +19186,86 @@
           ],
           "constraints": [],
           "subcommands": []
+        },
+        {
+          "name": "operational-scopes",
+          "invocation": "schedulingctl operational-scopes",
+          "about": "Inspect or repair immutable labels used by operational appointment reads",
+          "long_about": null,
+          "usage": "schedulingctl operational-scopes [OPTIONS] <COMMAND>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--format <FORMAT>",
+              "description": "Emit the selected command's report in this format",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": [
+            {
+              "name": "rematerialize",
+              "invocation": "schedulingctl operational-scopes rematerialize",
+              "about": "Retry labels after restoring retained policy revision documents",
+              "long_about": null,
+              "usage": "schedulingctl operational-scopes rematerialize [OPTIONS] --runtime-config <FILE>",
+              "arguments": [],
+              "options": [
+                {
+                  "display": "--runtime-config <FILE>",
+                  "description": "Runtime configuration file",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Emit the selected command's report in this format",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            }
+          ]
         }
       ]
     }

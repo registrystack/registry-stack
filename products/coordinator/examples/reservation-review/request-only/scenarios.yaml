@@ -1,0 +1,250 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/coordinator/scenarios/scenarios.v1alpha1.schema.json
+# Deterministic agreement outcome and product replies. No credentials or live I/O.
+apiVersion: id.registrystack.org/formats/coordinator/scenarios/v1alpha1
+kind: CoordinatorScenarios
+cases:
+- id: approved-agreement-completed-and-capacity-admitted
+  admittedAt: '2026-10-23T09:00:00Z'
+  input:
+    reservationId: 00000000-0000-4000-8000-000000000235
+    sourceVersion: '1'
+    sourceDigest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    agreementCompleteAt: '2026-10-25T09:00:00Z'
+    agreementCallbackId: agreement-callback-1
+    agreementOutcome: completed
+    grant: {id: 00000000-0000-4000-8000-000000000250, expiresAt: 1792918860}
+  replies:
+    read-source:
+    - type: success
+      value:
+        "@context": https://id.registrystack.org/contexts/registry-record/v1
+        data:
+          recordIdentifier: 00000000-0000-4000-8000-000000000235
+          revisionIdentifier: '1'
+          domainData:
+            requestKey: test-request-0000000000000000
+            requesterReference: organization-42
+            notificationDestination: requester@example.invalid
+            offering: room-reservation
+            start: '2026-11-03T09:00:00Z'
+            durationMinutes: 240
+            resourceId: room-a
+            attendees: 12
+            agreementRequired: true
+            capacityPolicy: request-only
+            reviewState: pending
+            agreementState: not-started
+            capacityState: uncommitted
+            reservationOutcome: pending
+        meta: {registryIdentifier: reservation-source, datasetIdentifier: reservation-requests, entityTypeIdentifier: reservation-request}
+    submit-review:
+    - type: success
+      value:
+        requestId: 00000000-0000-4000-8000-000000000240
+        subject: {source: reservations, type: reservation-request, id: 00000000-0000-4000-8000-000000000235, version: '1', digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}
+        policy: {id: reservation-review, version: '1', digest: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb}
+        submissionDigest: sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+    record-approved:
+    - type: success
+      value: {action: record-review-approved, applicationId: 00000000-0000-4000-8000-000000000241, results: {reservation: {recordType: reservation-request, recordId: 00000000-0000-4000-8000-000000000235, revision: 2}}}
+    record-agreement-completed:
+    - type: success
+      value: {action: record-agreement-completed, applicationId: 00000000-0000-4000-8000-000000000242, results: {reservation: {recordType: reservation-request, recordId: 00000000-0000-4000-8000-000000000235, revision: 3}}}
+    read-after-agreement:
+    - type: success
+      value:
+        "@context": https://id.registrystack.org/contexts/registry-record/v1
+        data:
+          recordIdentifier: 00000000-0000-4000-8000-000000000235
+          revisionIdentifier: '3'
+          domainData:
+            requestKey: test-request-0000000000000000
+            requesterReference: organization-42
+            notificationDestination: requester@example.invalid
+            offering: room-reservation
+            start: '2026-11-03T09:00:00Z'
+            durationMinutes: 240
+            resourceId: room-a
+            attendees: 12
+            agreementRequired: true
+            capacityPolicy: request-only
+            reviewState: approved
+            reviewResultId: 00000000-0000-4000-8000-000000000239
+            agreementState: completed
+            agreementCallbackId: agreement-callback-1
+            capacityState: uncommitted
+            reservationOutcome: pending
+        meta: {registryIdentifier: reservation-source, datasetIdentifier: reservation-requests, entityTypeIdentifier: reservation-request}
+    metadata:
+    - type: success
+      value: {schedulingId: reservations, policyRevision: 7, policyDigest: 'sha256:policy'}
+    book:
+    - type: success
+      value:
+        appointmentId: 00000000-0000-4000-8000-000000000237
+        offering: room-reservation
+        start: '2026-11-03T09:00:00Z'
+        end: '2026-11-03T13:00:00Z'
+        resource: room-a
+        units: 1
+        channel: null
+        revision: 1
+        state: confirmed
+        policyRevision: 7
+        createdAt: '2026-10-25T09:00:00Z'
+        cancelledAt: null
+        externalReferences: []
+    record-confirmed:
+    - type: success
+      value: {action: record-direct-confirmed, applicationId: 00000000-0000-4000-8000-000000000243, results: {reservation: {recordType: reservation-request, recordId: 00000000-0000-4000-8000-000000000235, revision: 4}}}
+    notify:
+    - type: success
+      value: {id: 00000000-0000-4000-8000-000000000244, status: queued, links: {self: /v1/messages/00000000-0000-4000-8000-000000000244, cancel: /v1/messages/00000000-0000-4000-8000-000000000244/cancel}}
+  waits:
+    await-review:
+      type: event
+      value:
+        resultId: 00000000-0000-4000-8000-000000000239
+        requestId: 00000000-0000-4000-8000-000000000240
+        subject: {source: reservations, type: reservation-request, id: 00000000-0000-4000-8000-000000000235, version: '1', digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}
+        policy: {id: reservation-review, version: '1', digest: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb}
+        submissionDigest: sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+        status: approved
+        outcome: approved
+        completedAt: '2026-10-24T09:00:00Z'
+        availableUntil: '2026-11-24T09:00:00Z'
+  expect:
+    path: [read-source, submit-review, await-review, decide-review, record-approved, await-agreement-fixture, decide-agreement, record-agreement-completed, read-after-agreement, metadata, book, record-confirmed, notify, confirmed]
+    state: completed
+    outcome: {type: named, value: reservation-confirmed}
+    output: {appointmentId: 00000000-0000-4000-8000-000000000237, messageId: 00000000-0000-4000-8000-000000000244}
+    workflowElapsedSeconds: 172800
+- id: rejected-review-records-no-booking
+  admittedAt: '2026-10-23T09:00:00Z'
+  input:
+    reservationId: 00000000-0000-4000-8000-000000000235
+    sourceVersion: '1'
+    sourceDigest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    agreementCompleteAt: '2026-10-25T09:00:00Z'
+    agreementCallbackId: agreement-callback-rejected
+    agreementOutcome: completed
+    grant: {id: 00000000-0000-4000-8000-000000000250, expiresAt: 1792918860}
+  replies:
+    read-source:
+    - type: success
+      value:
+        "@context": https://id.registrystack.org/contexts/registry-record/v1
+        data:
+          recordIdentifier: 00000000-0000-4000-8000-000000000235
+          revisionIdentifier: '1'
+          domainData: {requestKey: test-request-0000000000000000, requesterReference: organization-42, notificationDestination: requester@example.invalid, offering: room-reservation, start: '2026-11-03T09:00:00Z', durationMinutes: 240, resourceId: room-a, attendees: 12, agreementRequired: true, capacityPolicy: request-only, reviewState: pending, agreementState: not-started, capacityState: uncommitted, reservationOutcome: pending}
+        meta: {registryIdentifier: reservation-source, datasetIdentifier: reservation-requests, entityTypeIdentifier: reservation-request}
+    submit-review:
+    - type: success
+      value: {requestId: 00000000-0000-4000-8000-000000000240, subject: {source: reservations, type: reservation-request, id: 00000000-0000-4000-8000-000000000235, version: '1', digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}, policy: {id: reservation-review, version: '1', digest: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb}, submissionDigest: sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc}
+    record-rejected:
+    - type: success
+      value: {action: record-review-rejected, applicationId: 00000000-0000-4000-8000-000000000245, results: {reservation: {recordType: reservation-request, recordId: 00000000-0000-4000-8000-000000000235, revision: 2}}}
+  waits:
+    await-review:
+      type: event
+      value: {resultId: 00000000-0000-4000-8000-000000000239, requestId: 00000000-0000-4000-8000-000000000240, subject: {source: reservations, type: reservation-request, id: 00000000-0000-4000-8000-000000000235, version: '1', digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}, policy: {id: reservation-review, version: '1', digest: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb}, submissionDigest: sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc, status: rejected, outcome: rejected, completedAt: '2026-10-24T09:00:00Z', availableUntil: '2026-11-24T09:00:00Z'}
+  expect:
+    path: [read-source, submit-review, await-review, decide-review, record-rejected, rejected]
+    state: completed
+    outcome: {type: named, value: review-rejected}
+    output: null
+- id: approved-review-but-agreement-fails
+  admittedAt: '2026-10-23T09:00:00Z'
+  input:
+    reservationId: 00000000-0000-4000-8000-000000000235
+    sourceVersion: '1'
+    sourceDigest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    agreementCompleteAt: '2026-10-25T09:00:00Z'
+    agreementCallbackId: agreement-callback-failed
+    agreementOutcome: failed
+    grant: {id: 00000000-0000-4000-8000-000000000250, expiresAt: 1792918860}
+  replies:
+    read-source:
+    - type: success
+      value:
+        "@context": https://id.registrystack.org/contexts/registry-record/v1
+        data:
+          recordIdentifier: 00000000-0000-4000-8000-000000000235
+          revisionIdentifier: '1'
+          domainData: {requestKey: test-request-0000000000000000, requesterReference: organization-42, notificationDestination: requester@example.invalid, offering: room-reservation, start: '2026-11-03T09:00:00Z', durationMinutes: 240, resourceId: room-a, attendees: 12, agreementRequired: true, capacityPolicy: request-only, reviewState: pending, agreementState: not-started, capacityState: uncommitted, reservationOutcome: pending}
+        meta: {registryIdentifier: reservation-source, datasetIdentifier: reservation-requests, entityTypeIdentifier: reservation-request}
+    submit-review:
+    - type: success
+      value: {requestId: 00000000-0000-4000-8000-000000000240, subject: {source: reservations, type: reservation-request, id: 00000000-0000-4000-8000-000000000235, version: '1', digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}, policy: {id: reservation-review, version: '1', digest: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb}, submissionDigest: sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc}
+    record-approved:
+    - type: success
+      value: {action: record-review-approved, applicationId: 00000000-0000-4000-8000-000000000246, results: {reservation: {recordType: reservation-request, recordId: 00000000-0000-4000-8000-000000000235, revision: 2}}}
+    record-agreement-failed:
+    - type: success
+      value: {action: record-agreement-failed, applicationId: 00000000-0000-4000-8000-000000000247, results: {reservation: {recordType: reservation-request, recordId: 00000000-0000-4000-8000-000000000235, revision: 3}}}
+  waits:
+    await-review:
+      type: event
+      value: {resultId: 00000000-0000-4000-8000-000000000239, requestId: 00000000-0000-4000-8000-000000000240, subject: {source: reservations, type: reservation-request, id: 00000000-0000-4000-8000-000000000235, version: '1', digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}, policy: {id: reservation-review, version: '1', digest: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb}, submissionDigest: sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc, status: approved, outcome: approved, completedAt: '2026-10-24T09:00:00Z', availableUntil: '2026-11-24T09:00:00Z'}
+  expect:
+    path: [read-source, submit-review, await-review, decide-review, record-approved, await-agreement-fixture, decide-agreement, record-agreement-failed, agreement-failed]
+    state: completed
+    outcome: {type: named, value: agreement-failed}
+    output: null
+    workflowElapsedSeconds: 172800
+- id: review-timeout-withdraws-source-request
+  admittedAt: '2026-10-23T09:00:00Z'
+  input:
+    reservationId: 00000000-0000-4000-8000-000000000235
+    sourceVersion: '1'
+    sourceDigest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    agreementCompleteAt: '2026-10-25T09:00:00Z'
+    agreementCallbackId: agreement-callback-timeout
+    agreementOutcome: completed
+    grant: {id: 00000000-0000-4000-8000-000000000250, expiresAt: 1792918860}
+  replies:
+    read-source:
+    - type: success
+      value:
+        "@context": https://id.registrystack.org/contexts/registry-record/v1
+        data:
+          recordIdentifier: 00000000-0000-4000-8000-000000000235
+          revisionIdentifier: '1'
+          domainData: {requestKey: test-request-0000000000000000, requesterReference: organization-42, notificationDestination: requester@example.invalid, offering: room-reservation, start: '2026-11-03T09:00:00Z', durationMinutes: 240, resourceId: room-a, attendees: 12, agreementRequired: true, capacityPolicy: request-only, reviewState: pending, agreementState: not-started, capacityState: uncommitted, reservationOutcome: pending}
+        meta: {registryIdentifier: reservation-source, datasetIdentifier: reservation-requests, entityTypeIdentifier: reservation-request}
+    submit-review:
+    - type: success
+      value: {requestId: 00000000-0000-4000-8000-000000000240, subject: {source: reservations, type: reservation-request, id: 00000000-0000-4000-8000-000000000235, version: '1', digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}, policy: {id: reservation-review, version: '1', digest: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb}, submissionDigest: sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc}
+    cancel-review-timeout:
+    - type: success
+      value:
+        outcome: cancelled
+        result: {resultId: 00000000-0000-4000-8000-000000000248, requestId: 00000000-0000-4000-8000-000000000240, subject: {source: reservations, type: reservation-request, id: 00000000-0000-4000-8000-000000000235, version: '1', digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}, policy: {id: reservation-review, version: '1', digest: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb}, submissionDigest: sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc, status: cancelled, completedAt: '2026-10-26T09:00:00Z', availableUntil: '2026-11-26T09:00:00Z'}
+    record-withdrawal-after-timeout:
+    - type: success
+      value: {action: withdraw-reservation-request, applicationId: 00000000-0000-4000-8000-000000000249, results: {reservation: {recordType: reservation-request, recordId: 00000000-0000-4000-8000-000000000235, revision: 2}}}
+  waits:
+    await-review: {type: timeout}
+  expect:
+    path: [read-source, submit-review, await-review, cancel-review-timeout, record-withdrawal-after-timeout, review-withdrawn]
+    state: completed
+    outcome: {type: named, value: review-withdrawn}
+    output: null
+    workflowElapsedSeconds: 259200
+- id: source-read-refused
+  admittedAt: '2026-10-23T09:00:00Z'
+  input:
+    reservationId: 00000000-0000-4000-8000-000000000235
+    sourceVersion: '1'
+    sourceDigest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    agreementCompleteAt: '2026-10-25T09:00:00Z'
+    agreementCallbackId: agreement-callback-refused
+    agreementOutcome: completed
+    grant: {id: 00000000-0000-4000-8000-000000000250, expiresAt: 1792918860}
+  replies:
+    read-source: [{type: refused, code: product-forbidden}]
+  expect:
+    path: [read-source]
+    state: refused
+    outcome: {type: none}

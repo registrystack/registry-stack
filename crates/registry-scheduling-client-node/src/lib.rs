@@ -9,10 +9,12 @@ use chrono::{DateTime, Utc};
 use napi::{Error as NapiError, Result};
 use napi_derive::napi;
 use registry_scheduling_client::{
-    AdmissionRequest, BearerToken, CancelAppointmentRequest, CreateAppointmentRequest,
-    ExternalReference, RescheduleAppointmentRequest, SchedulingAuth,
-    SchedulingClient as CoreClient, SchedulingClientConfig as CoreConfig, SchedulingClientError,
-    SchedulingComplete, SchedulingProtocolFailure,
+    AdmissionRequest, AvailabilityPreviewRequest, AvailabilitySelection, BearerToken,
+    BusyReconciliationRequest, CancelAppointmentRequest, CreateAppointmentRequest,
+    ExternalReference, OperationalAppointmentQuery, RecordAttendanceRequest,
+    RescheduleAppointmentRequest, SchedulingAuth, SchedulingClient as CoreClient,
+    SchedulingClientConfig as CoreConfig, SchedulingClientError, SchedulingComplete,
+    SchedulingProtocolFailure,
 };
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -52,6 +54,24 @@ struct AvailabilityQuery {
     end: Option<String>,
     cursor: Option<String>,
     limit: Option<u32>,
+    duration_minutes: Option<u32>,
+    resource: Option<String>,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AvailabilitySelectionQuery {
+    duration_minutes: Option<u32>,
+    resource: Option<String>,
+}
+
+impl From<AvailabilitySelectionQuery> for AvailabilitySelection {
+    fn from(value: AvailabilitySelectionQuery) -> Self {
+        Self {
+            duration_minutes: value.duration_minutes,
+            resource: value.resource,
+        }
+    }
 }
 
 /// The optional page bounds of an appointment listing.
@@ -155,14 +175,65 @@ impl SchedulingClient {
         let end = query.end.as_deref().map(instant).transpose()?;
         outcome(
             self.inner
-                .availability(
+                .availability_with_selection(
                     SchedulingAuth::new(&token),
                     &offering,
                     start,
                     end,
                     query.cursor.as_deref(),
                     query.limit,
+                    &AvailabilitySelection {
+                        duration_minutes: query.duration_minutes,
+                        resource: query.resource,
+                    },
                 )
+                .await,
+        )
+    }
+
+    #[napi]
+    pub async fn preview_availability(
+        &self,
+        token: String,
+        request: Value,
+    ) -> Result<SchedulingOutcome> {
+        let token = bearer(token)?;
+        let request: AvailabilityPreviewRequest = input(request)?;
+        outcome(
+            self.inner
+                .preview_availability(SchedulingAuth::new(&token), &request)
+                .await,
+        )
+    }
+
+    #[napi]
+    pub async fn preview_source_busy(
+        &self,
+        token: String,
+        profile: String,
+        request: Value,
+    ) -> Result<SchedulingOutcome> {
+        let token = bearer(token)?;
+        let request: BusyReconciliationRequest = input(request)?;
+        outcome(
+            self.inner
+                .preview_source_busy(SchedulingAuth::new(&token), &profile, &request)
+                .await,
+        )
+    }
+
+    #[napi]
+    pub async fn apply_source_busy(
+        &self,
+        token: String,
+        profile: String,
+        request: Value,
+    ) -> Result<SchedulingOutcome> {
+        let token = bearer(token)?;
+        let request: BusyReconciliationRequest = input(request)?;
+        outcome(
+            self.inner
+                .apply_source_busy(SchedulingAuth::new(&token), &profile, &request)
                 .await,
         )
     }
@@ -173,12 +244,15 @@ impl SchedulingClient {
         token: String,
         offering: String,
         start: String,
+        selection: Option<Value>,
     ) -> Result<SchedulingOutcome> {
         let token = bearer(token)?;
         let start = instant(&start)?;
+        let selection =
+            AvailabilitySelection::from(optional_input::<AvailabilitySelectionQuery>(selection)?);
         outcome(
             self.inner
-                .explain(SchedulingAuth::new(&token), &offering, start)
+                .explain_with_selection(SchedulingAuth::new(&token), &offering, start, &selection)
                 .await,
         )
     }
@@ -278,6 +352,21 @@ impl SchedulingClient {
     }
 
     #[napi]
+    pub async fn list_operational_appointments(
+        &self,
+        token: String,
+        query: Value,
+    ) -> Result<SchedulingOutcome> {
+        let token = bearer(token)?;
+        let query: OperationalAppointmentQuery = input(query)?;
+        outcome(
+            self.inner
+                .list_operational_appointments(SchedulingAuth::new(&token), &query)
+                .await,
+        )
+    }
+
+    #[napi]
     pub async fn reschedule_appointment(
         &self,
         token: String,
@@ -312,6 +401,28 @@ impl SchedulingClient {
         outcome(
             self.inner
                 .cancel_appointment(
+                    SchedulingAuth::new(&token),
+                    &appointment_id,
+                    &idempotency_key,
+                    &request,
+                )
+                .await,
+        )
+    }
+
+    #[napi]
+    pub async fn record_attendance(
+        &self,
+        token: String,
+        appointment_id: String,
+        idempotency_key: String,
+        request: Value,
+    ) -> Result<SchedulingOutcome> {
+        let token = bearer(token)?;
+        let request: RecordAttendanceRequest = input(request)?;
+        outcome(
+            self.inner
+                .record_attendance(
                     SchedulingAuth::new(&token),
                     &appointment_id,
                     &idempotency_key,

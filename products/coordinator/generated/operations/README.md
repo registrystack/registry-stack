@@ -10,11 +10,18 @@ Each catalog operation has an input contract, the type its adapter decodes, and 
 | [`scheduling.read-service/v1`](#scheduling.read-service/v1) | 1 | `scheduling` | read | none | none | read-again | none | none |
 | [`scheduling.read-availability/v1`](#scheduling.read-availability/v1) | 1 | `scheduling` | read | none | none | read-again | none | none |
 | [`scheduling.create-appointment/v1`](#scheduling.create-appointment/v1) | 1 | `scheduling` | mutation | required | none | same-command-and-receipt | read | none |
+| [`scheduling.read-appointment/v1`](#scheduling.read-appointment/v1) | 1 | `scheduling` | read | none | none | read-again | none | none |
+| [`scheduling.create-hold/v1`](#scheduling.create-hold/v1) | 1 | `scheduling` | mutation | required | none | same-command | none | none |
+| [`scheduling.release-hold/v1`](#scheduling.release-hold/v1) | 1 | `scheduling` | mutation | none | none | hold-after-dispatch | none | none |
+| [`scheduling.confirm-hold/v1`](#scheduling.confirm-hold/v1) | 1 | `scheduling` | mutation | required | none | same-command-and-receipt | read | none |
+| [`scheduling.reschedule-appointment/v1`](#scheduling.reschedule-appointment/v1) | 1 | `scheduling` | mutation | required | none | same-command | none | none |
+| [`scheduling.cancel-appointment/v1`](#scheduling.cancel-appointment/v1) | 1 | `scheduling` | mutation | required | none | same-command | none | none |
 | [`breg.invoke-action/v1`](#breg.invoke-action/v1) | 1 | `breg` | mutation | required | required | same-command | none | [`onDeclaredRefusal`](breg.invoke-action.v1.declared-refusal.schema.json) |
 | [`external.get/v1`](#external.get/v1) | 1 | `external-http` | read | none | none | read-again | none | none |
 | [`evaluation.evaluate/v1`](#evaluation.evaluate/v1) | 1 | `evaluation` | evaluation | none | required | hold-after-dispatch | none | none |
 | [`casework.submit-review-request/v1`](#casework.submit-review-request/v1) | 1 | `casework` | mutation | required | none | same-command | none | none |
 | [`casework.cancel-review-request/v1`](#casework.cancel-review-request/v1) | 1 | `casework` | mutation | required | none | same-command | none | none |
+| [`scheduling.preview-availability/v1`](#scheduling.preview-availability/v1) | 1 | `scheduling` | read | none | none | read-again | none | none |
 
 ## breg.read-record/v1
 
@@ -260,10 +267,12 @@ Input ([`scheduling.read-availability.v1.input.schema.json`](scheduling.read-ava
 
 | Member | Type | Required |
 |---|---|---|
+| `durationMinutes` | integer or null | no |
 | `end` | string (date-time) | yes |
 | `grant` | `GrantReference` or null | no |
 | `limit` | integer | yes |
 | `offering` | `LocalId` | yes |
+| `resource` | `LocalId` or null | no |
 | `start` | string (date-time) | yes |
 
 No other members are accepted.
@@ -334,13 +343,462 @@ Output ([`scheduling.create-appointment.v1.output.schema.json`](scheduling.creat
 
 | Member | Type | Required |
 |---|---|---|
+| `allocations` | array | no |
 | `appointmentId` | string | yes |
+| `attendance` | `AttendanceDocument` or null | no |
 | `cancelledAt` | string or null (date-time) | yes |
 | `channel` | string or null | yes |
 | `createdAt` | string (date-time) | yes |
 | `end` | string (date-time) | yes |
 | `externalReferences` | array | yes |
+| `manager` | `ManagerSelection` or null | no |
 | `offering` | string | yes |
+| `party` | `PartyCounts` or null | no |
+| `partyReferences` | array | no |
+| `policyRevision` | integer | yes |
+| `resource` | string or null | yes |
+| `revision` | integer | yes |
+| `start` | string (date-time) | yes |
+| `state` | `AppointmentStateDocument` | yes |
+| `units` | integer | yes |
+
+Other members are tolerated.
+
+## scheduling.read-appointment/v1
+
+Host execution and completion contract:
+
+```json
+{
+  "authority": "current-bound-connection-authority",
+  "completionObservation": null,
+  "connectionInterface": "scheduling",
+  "identity": {
+    "effect": "read",
+    "id": "scheduling.read-appointment/v1",
+    "keyRequirement": "none",
+    "product": "scheduling",
+    "readReceipt": false,
+    "recovery": "read-again",
+    "requiresPreparation": false,
+    "version": 1
+  },
+  "limits": {
+    "attemptTimeoutSeconds": 10,
+    "http": {
+      "attemptTimeoutMilliseconds": 2000,
+      "connectTimeoutMilliseconds": 1000,
+      "maximumMutationRetries": 0,
+      "maximumResponseBytes": 65536
+    },
+    "maximumCallAttempts": 10,
+    "maximumCallRetryDelaySeconds": 300,
+    "maximumConcurrentAttemptsPerRun": 1,
+    "maximumPreparationBytes": 65536,
+    "maximumRunDurationSeconds": 31536000,
+    "value": {
+      "maximumArrayItems": 256,
+      "maximumBytes": 131072,
+      "maximumDepth": 32,
+      "maximumNodes": 4096,
+      "maximumObjectMembers": 256,
+      "maximumStringBytes": 16384
+    }
+  }
+}
+```
+
+Input ([`scheduling.read-appointment.v1.input.schema.json`](scheduling.read-appointment.v1.input.schema.json)):
+
+| Member | Type | Required |
+|---|---|---|
+| `appointmentId` | string (uuid) | yes |
+| `grant` | `GrantReference` or null | no |
+
+No other members are accepted.
+
+Output ([`scheduling.read-appointment.v1.output.schema.json`](scheduling.read-appointment.v1.output.schema.json)):
+
+| Member | Type | Required |
+|---|---|---|
+| `allocations` | array | no |
+| `appointmentId` | string | yes |
+| `attendance` | `AttendanceDocument` or null | no |
+| `cancelledAt` | string or null (date-time) | yes |
+| `channel` | string or null | yes |
+| `createdAt` | string (date-time) | yes |
+| `end` | string (date-time) | yes |
+| `externalReferences` | array | yes |
+| `manager` | `ManagerSelection` or null | no |
+| `offering` | string | yes |
+| `party` | `PartyCounts` or null | no |
+| `partyReferences` | array | no |
+| `policyRevision` | integer | yes |
+| `resource` | string or null | yes |
+| `revision` | integer | yes |
+| `start` | string (date-time) | yes |
+| `state` | `AppointmentStateDocument` | yes |
+| `units` | integer | yes |
+
+Other members are tolerated.
+
+## scheduling.create-hold/v1
+
+Host execution and completion contract:
+
+```json
+{
+  "authority": "current-bound-connection-authority",
+  "completionObservation": null,
+  "connectionInterface": "scheduling",
+  "identity": {
+    "effect": "mutation",
+    "id": "scheduling.create-hold/v1",
+    "keyRequirement": "required",
+    "product": "scheduling",
+    "readReceipt": false,
+    "recovery": "same-command",
+    "requiresPreparation": false,
+    "version": 1
+  },
+  "limits": {
+    "attemptTimeoutSeconds": 10,
+    "http": {
+      "attemptTimeoutMilliseconds": 2000,
+      "connectTimeoutMilliseconds": 1000,
+      "maximumMutationRetries": 0,
+      "maximumResponseBytes": 65536
+    },
+    "maximumCallAttempts": 10,
+    "maximumCallRetryDelaySeconds": 300,
+    "maximumConcurrentAttemptsPerRun": 1,
+    "maximumPreparationBytes": 65536,
+    "maximumRunDurationSeconds": 31536000,
+    "value": {
+      "maximumArrayItems": 256,
+      "maximumBytes": 131072,
+      "maximumDepth": 32,
+      "maximumNodes": 4096,
+      "maximumObjectMembers": 256,
+      "maximumStringBytes": 16384
+    }
+  }
+}
+```
+
+Input ([`scheduling.create-hold.v1.input.schema.json`](scheduling.create-hold.v1.input.schema.json)):
+
+| Member | Type | Required |
+|---|---|---|
+| `admission` | `AdmissionRequest` | yes |
+| `grant` | `GrantReference` | yes |
+
+No other members are accepted.
+
+Output ([`scheduling.create-hold.v1.output.schema.json`](scheduling.create-hold.v1.output.schema.json)):
+
+| Member | Type | Required |
+|---|---|---|
+| `allocations` | array | no |
+| `end` | string (date-time) | yes |
+| `expiresAt` | string (date-time) | yes |
+| `externalReferences` | array | yes |
+| `holdId` | string | yes |
+| `manager` | `ManagerSelection` or null | no |
+| `offering` | string | yes |
+| `party` | `PartyCounts` or null | no |
+| `partyReferences` | array | no |
+| `policyRevision` | integer | yes |
+| `resource` | string or null | yes |
+| `start` | string (date-time) | yes |
+| `units` | integer | yes |
+
+Other members are tolerated.
+
+## scheduling.release-hold/v1
+
+Host execution and completion contract:
+
+```json
+{
+  "authority": "current-bound-connection-authority",
+  "completionObservation": null,
+  "connectionInterface": "scheduling",
+  "identity": {
+    "effect": "mutation",
+    "id": "scheduling.release-hold/v1",
+    "keyRequirement": "none",
+    "product": "scheduling",
+    "readReceipt": false,
+    "recovery": "hold-after-dispatch",
+    "requiresPreparation": false,
+    "version": 1
+  },
+  "limits": {
+    "attemptTimeoutSeconds": 10,
+    "http": {
+      "attemptTimeoutMilliseconds": 2000,
+      "connectTimeoutMilliseconds": 1000,
+      "maximumMutationRetries": 0,
+      "maximumResponseBytes": 65536
+    },
+    "maximumCallAttempts": 10,
+    "maximumCallRetryDelaySeconds": 300,
+    "maximumConcurrentAttemptsPerRun": 1,
+    "maximumPreparationBytes": 65536,
+    "maximumRunDurationSeconds": 31536000,
+    "value": {
+      "maximumArrayItems": 256,
+      "maximumBytes": 131072,
+      "maximumDepth": 32,
+      "maximumNodes": 4096,
+      "maximumObjectMembers": 256,
+      "maximumStringBytes": 16384
+    }
+  }
+}
+```
+
+Input ([`scheduling.release-hold.v1.input.schema.json`](scheduling.release-hold.v1.input.schema.json)):
+
+| Member | Type | Required |
+|---|---|---|
+| `grant` | `GrantReference` | yes |
+| `holdId` | string (uuid) | yes |
+
+No other members are accepted.
+
+Output ([`scheduling.release-hold.v1.output.schema.json`](scheduling.release-hold.v1.output.schema.json)):
+
+Any JSON value.
+
+## scheduling.confirm-hold/v1
+
+Host execution and completion contract:
+
+```json
+{
+  "authority": "current-bound-connection-authority",
+  "completionObservation": null,
+  "connectionInterface": "scheduling",
+  "identity": {
+    "effect": "mutation",
+    "id": "scheduling.confirm-hold/v1",
+    "keyRequirement": "required",
+    "product": "scheduling",
+    "readReceipt": true,
+    "recovery": "same-command-and-receipt",
+    "requiresPreparation": false,
+    "version": 1
+  },
+  "limits": {
+    "attemptTimeoutSeconds": 10,
+    "http": {
+      "attemptTimeoutMilliseconds": 2000,
+      "connectTimeoutMilliseconds": 1000,
+      "maximumMutationRetries": 0,
+      "maximumResponseBytes": 65536
+    },
+    "maximumCallAttempts": 10,
+    "maximumCallRetryDelaySeconds": 300,
+    "maximumConcurrentAttemptsPerRun": 1,
+    "maximumPreparationBytes": 65536,
+    "maximumRunDurationSeconds": 31536000,
+    "value": {
+      "maximumArrayItems": 256,
+      "maximumBytes": 131072,
+      "maximumDepth": 32,
+      "maximumNodes": 4096,
+      "maximumObjectMembers": 256,
+      "maximumStringBytes": 16384
+    }
+  }
+}
+```
+
+Input ([`scheduling.confirm-hold.v1.input.schema.json`](scheduling.confirm-hold.v1.input.schema.json)):
+
+| Member | Type | Required |
+|---|---|---|
+| `appointment` | `CreateAppointmentRequest` | yes |
+| `grant` | `GrantReference` | yes |
+
+No other members are accepted.
+
+Output ([`scheduling.confirm-hold.v1.output.schema.json`](scheduling.confirm-hold.v1.output.schema.json)):
+
+| Member | Type | Required |
+|---|---|---|
+| `allocations` | array | no |
+| `appointmentId` | string | yes |
+| `attendance` | `AttendanceDocument` or null | no |
+| `cancelledAt` | string or null (date-time) | yes |
+| `channel` | string or null | yes |
+| `createdAt` | string (date-time) | yes |
+| `end` | string (date-time) | yes |
+| `externalReferences` | array | yes |
+| `manager` | `ManagerSelection` or null | no |
+| `offering` | string | yes |
+| `party` | `PartyCounts` or null | no |
+| `partyReferences` | array | no |
+| `policyRevision` | integer | yes |
+| `resource` | string or null | yes |
+| `revision` | integer | yes |
+| `start` | string (date-time) | yes |
+| `state` | `AppointmentStateDocument` | yes |
+| `units` | integer | yes |
+
+Other members are tolerated.
+
+## scheduling.reschedule-appointment/v1
+
+Host execution and completion contract:
+
+```json
+{
+  "authority": "current-bound-connection-authority",
+  "completionObservation": null,
+  "connectionInterface": "scheduling",
+  "identity": {
+    "effect": "mutation",
+    "id": "scheduling.reschedule-appointment/v1",
+    "keyRequirement": "required",
+    "product": "scheduling",
+    "readReceipt": false,
+    "recovery": "same-command",
+    "requiresPreparation": false,
+    "version": 1
+  },
+  "limits": {
+    "attemptTimeoutSeconds": 10,
+    "http": {
+      "attemptTimeoutMilliseconds": 2000,
+      "connectTimeoutMilliseconds": 1000,
+      "maximumMutationRetries": 0,
+      "maximumResponseBytes": 65536
+    },
+    "maximumCallAttempts": 10,
+    "maximumCallRetryDelaySeconds": 300,
+    "maximumConcurrentAttemptsPerRun": 1,
+    "maximumPreparationBytes": 65536,
+    "maximumRunDurationSeconds": 31536000,
+    "value": {
+      "maximumArrayItems": 256,
+      "maximumBytes": 131072,
+      "maximumDepth": 32,
+      "maximumNodes": 4096,
+      "maximumObjectMembers": 256,
+      "maximumStringBytes": 16384
+    }
+  }
+}
+```
+
+Input ([`scheduling.reschedule-appointment.v1.input.schema.json`](scheduling.reschedule-appointment.v1.input.schema.json)):
+
+| Member | Type | Required |
+|---|---|---|
+| `appointmentId` | string (uuid) | yes |
+| `grant` | `GrantReference` | yes |
+| `reschedule` | `RescheduleAppointmentRequest` | yes |
+
+No other members are accepted.
+
+Output ([`scheduling.reschedule-appointment.v1.output.schema.json`](scheduling.reschedule-appointment.v1.output.schema.json)):
+
+| Member | Type | Required |
+|---|---|---|
+| `allocations` | array | no |
+| `appointmentId` | string | yes |
+| `attendance` | `AttendanceDocument` or null | no |
+| `cancelledAt` | string or null (date-time) | yes |
+| `channel` | string or null | yes |
+| `createdAt` | string (date-time) | yes |
+| `end` | string (date-time) | yes |
+| `externalReferences` | array | yes |
+| `manager` | `ManagerSelection` or null | no |
+| `offering` | string | yes |
+| `party` | `PartyCounts` or null | no |
+| `partyReferences` | array | no |
+| `policyRevision` | integer | yes |
+| `resource` | string or null | yes |
+| `revision` | integer | yes |
+| `start` | string (date-time) | yes |
+| `state` | `AppointmentStateDocument` | yes |
+| `units` | integer | yes |
+
+Other members are tolerated.
+
+## scheduling.cancel-appointment/v1
+
+Host execution and completion contract:
+
+```json
+{
+  "authority": "current-bound-connection-authority",
+  "completionObservation": null,
+  "connectionInterface": "scheduling",
+  "identity": {
+    "effect": "mutation",
+    "id": "scheduling.cancel-appointment/v1",
+    "keyRequirement": "required",
+    "product": "scheduling",
+    "readReceipt": false,
+    "recovery": "same-command",
+    "requiresPreparation": false,
+    "version": 1
+  },
+  "limits": {
+    "attemptTimeoutSeconds": 10,
+    "http": {
+      "attemptTimeoutMilliseconds": 2000,
+      "connectTimeoutMilliseconds": 1000,
+      "maximumMutationRetries": 0,
+      "maximumResponseBytes": 65536
+    },
+    "maximumCallAttempts": 10,
+    "maximumCallRetryDelaySeconds": 300,
+    "maximumConcurrentAttemptsPerRun": 1,
+    "maximumPreparationBytes": 65536,
+    "maximumRunDurationSeconds": 31536000,
+    "value": {
+      "maximumArrayItems": 256,
+      "maximumBytes": 131072,
+      "maximumDepth": 32,
+      "maximumNodes": 4096,
+      "maximumObjectMembers": 256,
+      "maximumStringBytes": 16384
+    }
+  }
+}
+```
+
+Input ([`scheduling.cancel-appointment.v1.input.schema.json`](scheduling.cancel-appointment.v1.input.schema.json)):
+
+| Member | Type | Required |
+|---|---|---|
+| `appointmentId` | string (uuid) | yes |
+| `cancellation` | `CancelAppointmentRequest` | yes |
+| `grant` | `GrantReference` | yes |
+
+No other members are accepted.
+
+Output ([`scheduling.cancel-appointment.v1.output.schema.json`](scheduling.cancel-appointment.v1.output.schema.json)):
+
+| Member | Type | Required |
+|---|---|---|
+| `allocations` | array | no |
+| `appointmentId` | string | yes |
+| `attendance` | `AttendanceDocument` or null | no |
+| `cancelledAt` | string or null (date-time) | yes |
+| `channel` | string or null | yes |
+| `createdAt` | string (date-time) | yes |
+| `end` | string (date-time) | yes |
+| `externalReferences` | array | yes |
+| `manager` | `ManagerSelection` or null | no |
+| `offering` | string | yes |
+| `party` | `PartyCounts` or null | no |
+| `partyReferences` | array | no |
 | `policyRevision` | integer | yes |
 | `resource` | string or null | yes |
 | `revision` | integer | yes |
@@ -708,6 +1166,71 @@ No other members are accepted.
 Output ([`casework.cancel-review-request.v1.output.schema.json`](casework.cancel-review-request.v1.output.schema.json)):
 
 One of 2 shapes; see the schema.
+
+## scheduling.preview-availability/v1
+
+Host execution and completion contract:
+
+```json
+{
+  "authority": "current-bound-connection-authority",
+  "completionObservation": null,
+  "connectionInterface": "scheduling",
+  "identity": {
+    "effect": "read",
+    "id": "scheduling.preview-availability/v1",
+    "keyRequirement": "none",
+    "product": "scheduling",
+    "readReceipt": false,
+    "recovery": "read-again",
+    "requiresPreparation": false,
+    "version": 1
+  },
+  "limits": {
+    "attemptTimeoutSeconds": 10,
+    "http": {
+      "attemptTimeoutMilliseconds": 2000,
+      "connectTimeoutMilliseconds": 1000,
+      "maximumMutationRetries": 0,
+      "maximumResponseBytes": 65536
+    },
+    "maximumCallAttempts": 10,
+    "maximumCallRetryDelaySeconds": 300,
+    "maximumConcurrentAttemptsPerRun": 1,
+    "maximumPreparationBytes": 65536,
+    "maximumRunDurationSeconds": 31536000,
+    "value": {
+      "maximumArrayItems": 256,
+      "maximumBytes": 131072,
+      "maximumDepth": 32,
+      "maximumNodes": 4096,
+      "maximumObjectMembers": 256,
+      "maximumStringBytes": 16384
+    }
+  }
+}
+```
+
+Input ([`scheduling.preview-availability.v1.input.schema.json`](scheduling.preview-availability.v1.input.schema.json)):
+
+| Member | Type | Required |
+|---|---|---|
+| `grant` | `GrantReference` or null | no |
+| `preview` | `AvailabilityPreviewRequest` | yes |
+
+No other members are accepted.
+
+Output ([`scheduling.preview-availability.v1.output.schema.json`](scheduling.preview-availability.v1.output.schema.json)):
+
+| Member | Type | Required |
+|---|---|---|
+| `capacityAvailable` | boolean | yes |
+| `end` | string (date-time) | yes |
+| `offering` | string | yes |
+| `publicCode` | string or null | no |
+| `start` | string (date-time) | yes |
+
+Other members are tolerated.
 
 ## Completions
 

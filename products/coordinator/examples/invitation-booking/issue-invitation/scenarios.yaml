@@ -1,0 +1,153 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/coordinator/scenarios/scenarios.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/coordinator/scenarios/v1alpha1
+kind: CoordinatorScenarios
+cases:
+- id: invitation-and-message-accepted
+  admittedAt: '2026-10-23T09:00:00Z'
+  input:
+    acceptanceId: acceptance-one
+    beneficiaryReference: beneficiary-one
+    notificationDestination: person@example.invalid
+    offering: consultation
+    location: service-centre
+    searchStart: '2026-10-24T09:00:00Z'
+    searchEnd: '2026-10-24T12:00:00Z'
+    durationMinutes: 30
+    resourceRequired: false
+    acceptanceAuthorized: true
+    relationshipValidThrough: '2026-10-31'
+    expiresOn: '2026-10-31'
+  replies:
+    issue:
+    - type: success
+      value:
+        action: issue-invitation
+        applicationId: 00000000-0000-4000-8000-000000000011
+        results:
+          invitation:
+            recordType: invitation
+            recordId: 00000000-0000-4000-8000-000000000001
+            revision: 1
+    read-invitation:
+    - type: success
+      value:
+        meta:
+          registryIdentifier: invitation-source
+          datasetIdentifier: invitations
+          entityTypeIdentifier: invitation
+        data:
+          recordIdentifier: 00000000-0000-4000-8000-000000000001
+          revisionIdentifier: revision-1
+          domainData:
+            notificationDestination: person@example.invalid
+            expiresOn: '2026-10-31'
+    notify:
+    - type: success
+      value:
+        id: 00000000-0000-4000-8000-000000000012
+        status: queued
+        links:
+          self: /v1/messages/00000000-0000-4000-8000-000000000012
+          cancel: /v1/messages/00000000-0000-4000-8000-000000000012/cancel
+  expect:
+    path:
+    - issue
+    - read-invitation
+    - notify
+    - accepted
+    state: completed
+    outcome:
+      type: named
+      value: invitation-and-message-accepted
+    output:
+      invitationId: 00000000-0000-4000-8000-000000000001
+      messageId: 00000000-0000-4000-8000-000000000012
+- id: issue-response-loss-retried-same
+  admittedAt: '2026-10-23T09:00:00Z'
+  input:
+    acceptanceId: acceptance-one
+    beneficiaryReference: beneficiary-one
+    notificationDestination: person@example.invalid
+    offering: consultation
+    location: service-centre
+    searchStart: '2026-10-24T09:00:00Z'
+    searchEnd: '2026-10-24T12:00:00Z'
+    durationMinutes: 30
+    resourceRequired: false
+    acceptanceAuthorized: true
+    relationshipValidThrough: '2026-10-31'
+    expiresOn: '2026-10-31'
+  replies:
+    issue:
+    - type: uncertain
+      code: transport-uncertain
+    - type: success
+      value:
+        action: issue-invitation
+        applicationId: 00000000-0000-4000-8000-000000000011
+        results:
+          invitation:
+            recordType: invitation
+            recordId: 00000000-0000-4000-8000-000000000001
+            revision: 1
+    read-invitation:
+    - type: success
+      value:
+        meta:
+          registryIdentifier: invitation-source
+          datasetIdentifier: invitations
+          entityTypeIdentifier: invitation
+        data:
+          recordIdentifier: 00000000-0000-4000-8000-000000000001
+          revisionIdentifier: revision-1
+          domainData:
+            notificationDestination: person@example.invalid
+            expiresOn: '2026-10-31'
+    notify:
+    - type: success
+      value:
+        id: 00000000-0000-4000-8000-000000000012
+        status: queued
+        links:
+          self: /v1/messages/00000000-0000-4000-8000-000000000012
+          cancel: /v1/messages/00000000-0000-4000-8000-000000000012/cancel
+  recovery:
+    issue: retry-same
+  expect:
+    path:
+    - issue
+    - read-invitation
+    - notify
+    - accepted
+    state: completed
+    outcome:
+      type: named
+      value: invitation-and-message-accepted
+    output:
+      invitationId: 00000000-0000-4000-8000-000000000001
+      messageId: 00000000-0000-4000-8000-000000000012
+- id: issuer-authority-refused
+  admittedAt: '2026-10-23T09:00:00Z'
+  input:
+    acceptanceId: acceptance-one
+    beneficiaryReference: beneficiary-one
+    notificationDestination: person@example.invalid
+    offering: consultation
+    location: service-centre
+    searchStart: '2026-10-24T09:00:00Z'
+    searchEnd: '2026-10-24T12:00:00Z'
+    durationMinutes: 30
+    resourceRequired: false
+    acceptanceAuthorized: true
+    relationshipValidThrough: '2026-10-31'
+    expiresOn: '2026-10-31'
+  replies:
+    issue:
+    - type: refused
+      code: product-forbidden
+  expect:
+    path:
+    - issue
+    state: refused
+    outcome:
+      type: none

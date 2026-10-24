@@ -150,6 +150,9 @@ pub(crate) fn proposal_operation_name(operation: ProposalAuthorityOperation) -> 
         ProposalAuthorityOperation::Lifecycle(ProposalOperation::GetReviewContext) => {
             "get-review-context"
         }
+        ProposalAuthorityOperation::Lifecycle(ProposalOperation::GetTaskGrantContext) => {
+            "get-task-grant-context"
+        }
         ProposalAuthorityOperation::Lifecycle(ProposalOperation::GetApplicationActor) => {
             "get-application-actor"
         }
@@ -373,6 +376,7 @@ impl MutationTransaction {
     pub(crate) async fn begin_proposal_read_audit(
         &self,
         authority: &ProposalAuthority,
+        method: HttpMethod,
         correlation: &RequestCorrelation,
     ) -> Result<AuditRequest, MutationError> {
         let operation_id = format!(
@@ -386,7 +390,7 @@ impl MutationTransaction {
             &authority.common,
             crate::audit::PreIoAudit {
                 kind: PreIoAuditKind::Attempt,
-                method: HttpMethod::Get,
+                method,
                 operation_id: &operation_id,
                 target_record: None,
                 refusal_reason: None,
@@ -399,6 +403,7 @@ impl MutationTransaction {
     pub(crate) async fn finish_proposal_read_audit(
         &self,
         authority: &ProposalAuthority,
+        method: HttpMethod,
         document: Option<&ProposalDocument>,
         count: usize,
         public_reason_served: bool,
@@ -422,7 +427,7 @@ impl MutationTransaction {
                 } else {
                     TerminalAuditOutcome::Returned
                 },
-                method: HttpMethod::Get,
+                method,
                 operation_id: format!(
                     "proposals.{}.{}",
                     authority.common.action_id(),
@@ -762,6 +767,7 @@ impl MutationTransaction {
                     ProposalOperation::Get
                         | ProposalOperation::List
                         | ProposalOperation::GetReviewContext
+                        | ProposalOperation::GetTaskGrantContext
                         | ProposalOperation::GetReviewStatus
                         | ProposalOperation::GetApplicationActor
                 )
@@ -2607,6 +2613,42 @@ impl MutationTransaction {
             .iter()
             .find(|permission| permission.profile_id == authority.common.access_profile())
             .ok_or(MutationError::PreconditionFailed)?;
+        if authority.operation
+            == ProposalAuthorityOperation::Lifecycle(ProposalOperation::GetTaskGrantContext)
+        {
+            if permission.actor_kind != Some(crate::contract::ActorKindSource::Service)
+                || !permission
+                    .operations
+                    .contains(&ProposalOperation::GetTaskGrantContext)
+                || permission.readable_context_fields.is_empty()
+                || document.action_id != authority.common.action_id()
+                || document.header.current_proposal_erased
+                || authority
+                    .proposal_scope
+                    .as_ref()
+                    .is_some_and(|scope| !scope.contains(&document.proposal_id))
+            {
+                return Err(MutationError::PreconditionFailed);
+            }
+            let workflow =
+                proposal_store::load(tx, &document.action_id, document.proposal_id, false).await?;
+            let frozen = workflow
+                .current_proposal()
+                .ok_or(MutationError::PreconditionFailed)?;
+            frozen
+                .verify_digest(&crate::proposal_workflow::ProposalKey::new(
+                    EntityId::new(&document.action_id).map_err(workflow_error)?,
+                    RecordId::new(document.proposal_id.to_string()).map_err(workflow_error)?,
+                ))
+                .map_err(workflow_error)?;
+            if i64::from(frozen.version().get()) != document.header.submission_version
+                || frozen.contract_fingerprint().as_str() != document.action_revision
+            {
+                return Err(MutationError::PreconditionFailed);
+            }
+            check_current_proposal_grant(authority)?;
+            return Ok(());
+        }
         let Some(expected_authority) = &permission.review_authority else {
             return self
                 .authorize_proposal_document(tx, registry, document, authority)
@@ -2813,6 +2855,7 @@ impl MutationTransaction {
         Ok(Some(value))
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn proposal_review_value(
         &self,
         tx: &Transaction<'_>,
@@ -2820,13 +2863,18 @@ impl MutationTransaction {
         document: &ProposalDocument,
         authority: &ProposalAuthority,
         records: &BTreeMap<String, crate::api::proposals::ProposalRecordReadAuthority>,
+        selected_fields: Option<&BTreeSet<String>>,
+        task_request: Option<&crate::api::proposals::ProposalTaskContextRequest>,
     ) -> Result<Value, MutationError> {
         let action = proposal_action(registry, &document.action_id)?;
         // Current disclosure cannot reinterpret frozen work through a newer
         // Action mapping. Review document downloads use this same projection.
-        if authority.operation
-            == ProposalAuthorityOperation::Lifecycle(ProposalOperation::GetReviewContext)
-            && action.definition_revision != document.action_revision
+        if matches!(
+            authority.operation,
+            ProposalAuthorityOperation::Lifecycle(
+                ProposalOperation::GetReviewContext | ProposalOperation::GetTaskGrantContext
+            )
+        ) && action.definition_revision != document.action_revision
         {
             return Err(MutationError::PreconditionFailed);
         }
@@ -2859,6 +2907,44 @@ impl MutationTransaction {
             value["subject"]["source"] = json!(source);
             value["policy"] = json!(policy);
         }
+        if let Some(request) = task_request {
+            let expected = &request.expected;
+            let matches = expected.action_id == document.action_id
+                && value["subject"]["source"].as_str() == Some(&expected.subject.source)
+                && value["subject"]["subjectType"].as_str() == Some(&expected.subject.subject_type)
+                && value["subject"]["id"].as_str() == Some(&expected.subject.id)
+                && value["subject"]["version"].as_str() == Some(&expected.subject.version)
+                && value["subject"]["digest"].as_str() == Some(&expected.subject.digest)
+                && value["context"]["contract"]["id"].as_str() == Some(&expected.contract.id)
+                && value["context"]["contract"]["revision"].as_str()
+                    == Some(&expected.contract.revision)
+                && value["context"]["contract"]["schemaDigest"].as_str()
+                    == Some(&expected.contract.schema_digest);
+            if !matches {
+                return Err(MutationError::PreconditionFailed);
+            }
+            if !matches!(
+                frozen.review_requirement(),
+                CompiledProposalReview::Required { .. }
+            ) {
+                return Err(MutationError::PreconditionFailed);
+            }
+            // The package may deliberately select a review policy by ID only.
+            // Task grants bind to the concrete policy the review authority
+            // accepted, never reinterpret an omitted selector pin as authority.
+            let accepted = crate::review_store::load_task_context_binding(
+                tx,
+                registry,
+                &document.action_id,
+                document.proposal_id,
+                frozen,
+            )
+            .await?;
+            if accepted.request_id != request.request_id || accepted.policy != request.policy {
+                return Err(MutationError::PreconditionFailed);
+            }
+            value["policy"] = json!(accepted.policy);
+        }
         match authority.operation {
             ProposalAuthorityOperation::Lifecycle(ProposalOperation::GetReviewStatus) => {
                 if matches!(
@@ -2879,7 +2965,9 @@ impl MutationTransaction {
                     value["result"] = proposal_review_result(tx, document).await?;
                 }
             }
-            ProposalAuthorityOperation::Lifecycle(ProposalOperation::GetReviewContext) => {
+            ProposalAuthorityOperation::Lifecycle(
+                ProposalOperation::GetReviewContext | ProposalOperation::GetTaskGrantContext,
+            ) => {
                 if let CompiledActionExecution::Proposal { proposal } = &action.execution {
                     if proposal.review_context.as_ref().is_some_and(|context| {
                         context.fields.values().any(|source| {
@@ -2893,8 +2981,16 @@ impl MutationTransaction {
                     }
                 }
                 value["context"]["fields"] = Value::Object(
-                    context_projection::fields(tx, registry, document, authority, records, frozen)
-                        .await?,
+                    context_projection::fields(
+                        tx,
+                        registry,
+                        document,
+                        authority,
+                        records,
+                        frozen,
+                        selected_fields,
+                    )
+                    .await?,
                 );
             }
             _ => return Err(MutationError::PreconditionFailed),
@@ -3116,6 +3212,7 @@ impl MutationTransaction {
                         && review_available
                 }
                 ProposalOperation::GetReviewContext => document.header.state == "submitted",
+                ProposalOperation::GetTaskGrantContext => document.header.state == "submitted",
                 // The review-status read serves any submission whose frozen
                 // Proposal is retained, decided or not, so the link stays
                 // offered after a rejection or an application.
@@ -3129,6 +3226,7 @@ impl MutationTransaction {
                 && matches!(
                     operation,
                     ProposalOperation::GetReviewContext
+                        | ProposalOperation::GetTaskGrantContext
                         | ProposalOperation::GetReviewStatus
                         | ProposalOperation::List
                 )
@@ -3139,6 +3237,9 @@ impl MutationTransaction {
                 ProposalOperation::Get => format!("/v1/proposals/{}", document.proposal_id),
                 ProposalOperation::GetReviewContext => {
                     format!("/v1/proposals/{}/review-context", document.proposal_id)
+                }
+                ProposalOperation::GetTaskGrantContext => {
+                    format!("/v1/proposals/{}/task-grant-context", document.proposal_id)
                 }
                 ProposalOperation::GetReviewStatus => {
                     format!("/v1/proposals/{}/review-status", document.proposal_id)

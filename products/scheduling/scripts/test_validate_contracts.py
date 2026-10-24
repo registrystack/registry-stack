@@ -12,6 +12,8 @@ import sys
 import unittest
 from pathlib import Path
 import tempfile
+from unittest.mock import patch
+from subprocess import CompletedProcess
 
 import yaml
 
@@ -150,6 +152,29 @@ DEFAULT_FILES = {
 
 
 class RunnerValidation(unittest.TestCase):
+    def test_nested_integration_module_uses_its_declared_runner_and_features(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="scheduling-nested-inventory.") as directory:
+            root = Path(directory)
+            (root / "tests/journey").mkdir(parents=True)
+            (root / "Cargo.toml").write_text(
+                '[package]\nname = "citation-fixture"\nversion = "0.1.0"\n'
+                '[[test]]\nname = "journey"\nrequired-features = ["postgres-test"]\n',
+                encoding="utf-8",
+            )
+            (root / "tests/journey.rs").write_text(
+                '#[path = "journey/supply.rs"]\nmod supply;\n', encoding="utf-8",
+            )
+            (root / "tests/journey/supply.rs").write_text(
+                '#[test]\nfn selectable() {}\n', encoding="utf-8",
+            )
+            with patch.object(validator.subprocess, "run", return_value=CompletedProcess([], 0, "supply::selectable: test\n")) as runner:
+                self.assertEqual(validator.runner_violations(root, [{
+                    "path": "tests/journey/supply.rs", "name": "selectable",
+                }]), [])
+                command = runner.call_args.args[0]
+                self.assertIn("journey", command)
+                self.assertIn("postgres-test", command)
+
     def test_python_discovery_rejects_an_ordinary_method(self) -> None:
         with tempfile.TemporaryDirectory(prefix="scheduling-python-inventory.") as directory:
             root = Path(directory)

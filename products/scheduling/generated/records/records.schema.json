@@ -155,6 +155,9 @@
       "additionalProperties": false,
       "description": "One interchangeable member of a resource pool.\n\n`available` carries no reason. Why a member is unavailable is private staff\ninformation; the public answer to a caller is that capacity is exhausted.",
       "properties": {
+        "availability": {
+          "$ref": "#/$defs/ResourceAvailability"
+        },
         "available": {
           "type": "boolean"
         },
@@ -166,6 +169,13 @@
           "maxItems": 256,
           "type": "array",
           "uniqueItems": true
+        },
+        "capacityUnits": {
+          "description": "Physical units this member contributes. Omitted legacy records carry\none unit. Zero records complete current loss without erasing the\nresource identifier from retained allocations.",
+          "format": "uint32",
+          "maximum": 2147483647,
+          "minimum": 0,
+          "type": "integer"
         },
         "resourceId": {
           "$ref": "#/$defs/LocalId"
@@ -200,6 +210,15 @@
         },
         "offering": {
           "$ref": "#/$defs/LocalId"
+        },
+        "resources": {
+          "description": "Physical requirements reserved once for the window's span. A window\nthat reserves nothing omits the member.",
+          "items": {
+            "$ref": "#/$defs/WindowResourceRequirement"
+          },
+          "maxItems": 16,
+          "minItems": 1,
+          "type": "array"
         },
         "revision": {
           "format": "uint64",
@@ -336,6 +355,46 @@
         }
       ]
     },
+    "ResourceAvailability": {
+      "additionalProperties": false,
+      "description": "Dated constraints intersect the resource's static availability and the\noffering's location openings. Omitted openings impose no additional opening\nconstraint; an explicitly empty list publishes no supply. Closures win.",
+      "properties": {
+        "closures": {
+          "items": {
+            "$ref": "#/$defs/ResourceInterval"
+          },
+          "maxItems": 256,
+          "type": "array"
+        },
+        "openings": {
+          "items": {
+            "$ref": "#/$defs/ResourceInterval"
+          },
+          "maxItems": 256,
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "ResourceInterval": {
+      "additionalProperties": false,
+      "description": "One concrete opening or closure. It carries no personnel information.",
+      "properties": {
+        "end": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "start": {
+          "format": "date-time",
+          "type": "string"
+        }
+      },
+      "required": [
+        "start",
+        "end"
+      ],
+      "type": "object"
+    },
     "ResourcePool": {
       "additionalProperties": false,
       "description": "A pool of interchangeable resources backing exact-time offerings. A pool is\nits concrete members, never an independent counter.",
@@ -381,6 +440,36 @@
         "upTo",
         "units",
         "because"
+      ],
+      "type": "object"
+    },
+    "WindowResourceRequirement": {
+      "additionalProperties": false,
+      "description": "One physical requirement a window reserves once for its whole span, such\nas a room, a facilitator or equipment. The window's parent reservation\nholds it through the same allocation ledger an exact-time booking writes,\nso it conflicts with exact bookings of the same resource. `units` are\nresource units of the requirement offering's pool, not window capacity:\nbookings in the window consume only the window's own `units`.",
+      "properties": {
+        "offering": {
+          "$ref": "#/$defs/LocalId",
+          "description": "The exact-time offering at the window's location whose pool supplies\nthe requirement. It must sell the window's span with optional party\ncounts."
+        },
+        "requirement": {
+          "$ref": "#/$defs/LocalId",
+          "description": "The requirement's own id, unique within the window."
+        },
+        "resource": {
+          "$ref": "#/$defs/LocalId",
+          "description": "The pool member to reserve. Omitted, the runtime picks one at\npublication and keeps it while the window and the policy stand."
+        },
+        "units": {
+          "format": "uint32",
+          "maximum": 2147483647,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "requirement",
+        "offering",
+        "units"
       ],
       "type": "object"
     },

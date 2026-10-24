@@ -6,16 +6,12 @@ use registry_casework_core::{
     ReviewContextProviderPolicy,
 };
 
-/// Every capability a BReg context provider serves. Task-grant context and
-/// routing context are not served yet.
+/// Every capability a BReg context provider serves. Routing context is not served.
 pub const SERVED_CAPABILITIES: &[ReviewContextCapability] = &[
     ReviewContextCapability::HumanDisplay,
     ReviewContextCapability::ServiceStatus,
+    ReviewContextCapability::TaskGrantContext,
 ];
-
-/// Where the BReg task-grant context work is tracked.
-pub const TASK_GRANT_CONTEXT_ISSUE: &str =
-    "https://github.com/registrystack/registry-stack/issues/2062";
 
 fn name(capability: ReviewContextCapability) -> &'static str {
     match capability {
@@ -51,30 +47,6 @@ pub fn unserved_capabilities(
         })
         .collect();
     let mut findings = Vec::new();
-    for template in &project.task_templates {
-        if template.subjects.is_empty()
-            || !bound
-                .iter()
-                .any(|policy| template.review_policies.contains(&policy.id))
-        {
-            continue;
-        }
-        findings.push(ConfigFinding::new(
-            "casework.task-template.unserved-capability",
-            pointer("taskTemplates", &template.id, "subjects"),
-            format!(
-                "task template {} declares subjects, which need the task-grant-context \
-                 capability, and BReg, the source behind context provider {}, does not serve \
-                 task-grant context yet; see {TASK_GRANT_CONTEXT_ISSUE}",
-                template.id, provider.id
-            ),
-            format!(
-                "Remove `subjects` from task template {}, or bind the template to review \
-                 policies whose source serves task-grant context.",
-                template.id
-            ),
-        ));
-    }
     for policy in &bound {
         if policy.routing_fields().is_empty() {
             continue;
@@ -107,7 +79,7 @@ pub fn unserved_capabilities(
             pointer("contextProviders", &provider.id, "capabilities"),
             format!(
                 "context provider {} declares {}, which its BReg source does not serve; BReg \
-                 serves human-display and service-status",
+                 serves human-display, service-status, and task-grant-context",
                 provider.id,
                 unserved.join(" and ")
             ),

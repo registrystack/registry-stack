@@ -730,6 +730,7 @@ fn refusal_advice(problem: ProblemCode) -> Option<&'static str> {
         ProblemCode::EventTooLarge => "Project fewer or smaller fields into the producer's event so it fits the 131072-byte event value profile, then redeliver it.",
         ProblemCode::EventUnauthenticated => "Use the exact configured event source, accepted event type and data schema, and a fresh signature covering the received method, target, headers and canonical body.",
         ProblemCode::EvaluationUncertain => "Inspect the run and cancel it when no further execution is appropriate; retry-same never reevaluates an evaluation that may have completed.",
+        ProblemCode::MutationUncertain => "Inspect the run and cancel it when no further execution is appropriate; retry-same never repeats an unkeyed mutation that may have completed.",
         ProblemCode::RunPayloadErased => "Retention erased this run's payloads; inspect it, but it can no longer be retried or reconciled.",
         ProblemCode::BindingConflict => "Restore the run's original connection settings in the runtime file and restart the service before retrying.",
         ProblemCode::BindingLiveConflict => "Restore the original connection settings live runs use, or start the service with --recovery-only to investigate.",

@@ -17,12 +17,15 @@ use std::collections::BTreeSet;
 
 use chrono::{DateTime, Utc};
 use registry_stack_client::scheduling::{
-    AdmissionRequest, AppointmentDocument, AppointmentHistoryEntryDocument, AvailabilityEntry,
-    BearerToken, CancelAppointmentRequest, CreateAppointmentRequest, ExplainDocument,
-    ExternalReference, HoldDocument, LocationDocument, OfferingDocument, PageDocument,
-    RescheduleAppointmentRequest, ResourceDocument, SchedulingAuth, SchedulingClient,
-    SchedulingClientConfig, SchedulingClientError, SchedulingComplete, SchedulingServiceDocument,
-    ServiceDocument,
+    AdmissionRequest, AppointmentDocument, AppointmentHistoryEntryDocument, AttendanceDocument,
+    AvailabilityEntry, AvailabilityPreviewDocument, AvailabilityPreviewRequest,
+    AvailabilitySelection, BearerToken, BusyApplyOutcome, BusyReconciliationPreview,
+    BusyReconciliationRequest, CancelAppointmentRequest, CreateAppointmentRequest, ExplainDocument,
+    ExternalReference, HoldDocument, LocationDocument, OfferingDocument,
+    OperationalAppointmentDocument, OperationalAppointmentQuery, PageDocument,
+    RecordAttendanceRequest, RescheduleAppointmentRequest, ResourceDocument, SchedulingAuth,
+    SchedulingClient, SchedulingClientConfig, SchedulingClientError, SchedulingComplete,
+    SchedulingServiceDocument, ServiceDocument,
 };
 
 /// The client's public surface, read from the crate that publishes it.
@@ -31,10 +34,15 @@ const CLIENT_SOURCE: &str = include_str!("../../registry-scheduling-client/src/l
 /// The facade's own source, read to compare the two lists as written.
 const FACADE_SOURCE: &str = include_str!("../src/lib.rs");
 
-/// The requests every mutating Scheduling method sends.
+/// Borrowed request values needed to name every Scheduling method signature.
 struct Requests<'a> {
     admission: &'a AdmissionRequest,
+    availability_preview: &'a AvailabilityPreviewRequest,
+    availability_selection: &'a AvailabilitySelection,
+    busy_reconciliation: &'a BusyReconciliationRequest,
     create: &'a CreateAppointmentRequest,
+    operational_appointments: &'a OperationalAppointmentQuery,
+    record_attendance: &'a RecordAttendanceRequest,
     reschedule: &'a RescheduleAppointmentRequest,
     cancel: &'a CancelAppointmentRequest,
     reference: &'a ExternalReference,
@@ -60,7 +68,30 @@ async fn every_scheduling_method_names_its_types(
     let _: SchedulingComplete<PageDocument<AvailabilityEntry>> = client
         .availability(auth(), identifier, Some(start), None, None, Some(25))
         .await?;
+    let _: SchedulingComplete<PageDocument<AvailabilityEntry>> = client
+        .availability_with_selection(
+            auth(),
+            identifier,
+            Some(start),
+            None,
+            None,
+            Some(25),
+            requests.availability_selection,
+        )
+        .await?;
     let _: SchedulingComplete<ExplainDocument> = client.explain(auth(), identifier, start).await?;
+    let _: SchedulingComplete<ExplainDocument> = client
+        .explain_with_selection(auth(), identifier, start, requests.availability_selection)
+        .await?;
+    let _: SchedulingComplete<AvailabilityPreviewDocument> = client
+        .preview_availability(auth(), requests.availability_preview)
+        .await?;
+    let _: SchedulingComplete<BusyReconciliationPreview> = client
+        .preview_source_busy(auth(), identifier, requests.busy_reconciliation)
+        .await?;
+    let _: SchedulingComplete<BusyApplyOutcome> = client
+        .apply_source_busy(auth(), identifier, requests.busy_reconciliation)
+        .await?;
     let _: SchedulingComplete<HoldDocument> = client
         .create_hold(auth(), idempotency_key, requests.admission)
         .await?;
@@ -76,11 +107,22 @@ async fn every_scheduling_method_names_its_types(
     let _: SchedulingComplete<PageDocument<AppointmentDocument>> = client
         .list_appointments(auth(), requests.reference, None, None)
         .await?;
+    let _: SchedulingComplete<PageDocument<OperationalAppointmentDocument>> = client
+        .list_operational_appointments(auth(), requests.operational_appointments)
+        .await?;
     let _: SchedulingComplete<AppointmentDocument> = client
         .reschedule_appointment(auth(), identifier, idempotency_key, requests.reschedule)
         .await?;
     let _: SchedulingComplete<AppointmentDocument> = client
         .cancel_appointment(auth(), identifier, idempotency_key, requests.cancel)
+        .await?;
+    let _: SchedulingComplete<AttendanceDocument> = client
+        .record_attendance(
+            auth(),
+            identifier,
+            idempotency_key,
+            requests.record_attendance,
+        )
         .await?;
     let _: SchedulingComplete<PageDocument<AppointmentHistoryEntryDocument>> =
         client.appointment_history(auth(), identifier, None).await?;

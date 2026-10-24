@@ -274,9 +274,17 @@ pub(super) fn pair(
             staged.persist(project.join("casework.yaml"))?;
         }
     }
-    Ok(
-        json!({"ok":true,"command":"provider pair","applied":apply,"providerId":id,"description":relative,"contract":export.contract,"registryRevision":report["registryRevision"],"readerAuthority":{"profile":provider.service_profiles.get(&registry_casework_core::ReviewContextCapability::ServiceStatus),"operation":"get-review-status","sourceWrites":false},"next":"Bind the provider endpoint and status-reader secret references in runtime.yaml."}),
-    )
+    let task_profile = provider
+        .service_profiles
+        .get(&registry_casework_core::ReviewContextCapability::TaskGrantContext);
+    Ok(json!({
+        "ok":true,"command":"provider pair","applied":apply,"providerId":id,
+        "description":relative,"contract":export.contract,
+        "registryRevision":report["registryRevision"],
+        "readerAuthority":{"profile":provider.service_profiles.get(&registry_casework_core::ReviewContextCapability::ServiceStatus),"operation":"get-review-status","sourceWrites":false},
+        "taskGrantAuthority":task_profile.map(|profile| json!({"profile":profile,"operation":"get-task-grant-context","sourceWrites":false})),
+        "next":if task_profile.is_some() {"Bind the provider endpoint and its distinct statusProfile and taskGrantProfile settings in runtime.yaml."} else {"Bind the provider endpoint and status-reader secret references in runtime.yaml."}
+    }))
 }
 
 #[cfg(test)]

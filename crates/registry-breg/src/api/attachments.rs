@@ -368,6 +368,7 @@ async fn download(
         &claims,
         &authority,
         operation,
+        None,
     ) else {
         return super::proposals::admitted_http_refusal(
             mutations,

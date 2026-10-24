@@ -538,6 +538,14 @@ jobs:
       - name: Test Coordinator dependency gate
         run: python3 -m unittest discover -s products/coordinator/scripts -p 'test_*.py'
 
+      - name: Test Scheduling integrations
+        if: needs.changes.outputs.release_tool != 'true'
+        run: |
+          uv run --locked --directory products/scheduling/integrations/calendar-busy \
+            python -m unittest -v test_calendar_busy.py
+          python3 -m unittest discover -s products/scheduling/integrations/finite-series -p 'test_*.py'
+          python3 -m unittest discover -s products/scheduling/integrations/operational-reporting -p 'test_*.py'
+
       - name: Coordinator dependency direction
         # Runs on every Rust change, so a crate that starts depending on a
         # Coordinator crate is refused wherever it lives.
@@ -980,7 +988,7 @@ jobs:
       - name: Verify offline authoring record application
         env:
           SCHEDULING_TEST_DATABASE_URL: postgresql://scheduling:scheduling_test@localhost:${{ job.services.postgres.ports['5432'] }}/scheduling_records_apply
-        run: cargo test --locked -p registry-schedulingctl --features postgres-test --test records_apply_postgres
+        run: cargo test --locked -p registry-schedulingctl --features postgres-test --test records_apply_postgres --test records_apply_busy_sources
       - name: Create isolated delivery-intent test database
         env:
           POSTGRES_CONTAINER_ID: ${{ job.services.postgres.id }}
@@ -1253,19 +1261,22 @@ jobs:
           cache-targets: false
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
-      # The suite composes with a real Messaging runtime, which needs a
-      # database of its own beside the Coordinator's.
-      - name: Prepare the Messaging test database
+      # The suite composes with real Messaging and Scheduling runtimes, which
+      # each need a database of their own beside the Coordinator's.
+      - name: Prepare the product test databases
         env:
           PGHOST: 127.0.0.1
           PGPORT: ${{ job.services.postgres.ports['5432'] }}
           PGUSER: coordinator
           PGPASSWORD: coordinator_test
-        run: createdb coordinator_messaging
-      - name: Verify coordinator restart, fencing, and real Messaging recovery
+        run: |
+          createdb coordinator_messaging
+          createdb coordinator_scheduling
+      - name: Verify coordinator restart, fencing, and native product recovery
         env:
           COORDINATOR_TEST_DATABASE_URL: postgresql://coordinator:coordinator_test@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/coordinator
           COORDINATOR_MESSAGING_TEST_DATABASE_URL: postgresql://coordinator:coordinator_test@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/coordinator_messaging
+          COORDINATOR_SCHEDULING_TEST_DATABASE_URL: postgresql://coordinator:coordinator_test@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/coordinator_scheduling
         run: products/coordinator/scripts/test-postgres.sh
 
   messaging-smtp:

@@ -250,11 +250,14 @@ ownership and current workflow policy. Operator status reaches other owners only
 workflows. Deployment-wide actions need explicit operator authority.
 
 Same-command recovery preserves the saved body, key, conditions, binding, and original approval
-deadline while obtaining fresh credentials. Messaging and Scheduling offer original-key receipt
-reads. BReg Action and Casework mutations cannot be settled by an ordinary record read or operator
-assertion. A possibly dispatched evaluation stays held and cannot be replayed. Cancellation stops
-future dispatch where possible and never rolls back accepted effects. Messaging acceptance is
-separate from delivery.
+deadline while obtaining fresh credentials. Messaging submission and Scheduling appointment
+creation or hold confirmation offer original-key receipt reads. Scheduling hold creation,
+rescheduling, and cancellation have no original-result receipt; a later appointment read cannot
+prove which command produced current state. Scheduling hold release is unkeyed, so an ambiguous
+release stays held and is never replayed. BReg Action and Casework mutations cannot be settled by
+an ordinary record read or operator assertion. A possibly dispatched evaluation stays held and
+cannot be replayed. Cancellation stops future dispatch where possible and never rolls back
+accepted effects. Messaging acceptance is separate from delivery.
 
 Protected API actions and results require durable audit. Refusals use the generated RFC 9457
 problem vocabulary and never echo submitted values. Retention erases eligible terminal payloads
@@ -278,15 +281,25 @@ The schema check generates temporary outputs and compares them with the committe
 OpenAPI document. It does not rewrite tracked artifacts; regenerate changed artifacts explicitly
 with their owning generators.
 
-With dedicated disposable PostgreSQL 17+ databases configured, use
+With three dedicated disposable PostgreSQL 17+ databases configured, use
 `scripts/test-postgres.sh` for the maintained durable-state, encrypted-custody,
 restart, deployment/router, review waits, standalone review, bounded external waits, and
-Messaging integration checks. That script first
-builds the independent Messaging service and operator executable, then supplies
-`COORDINATOR_MESSAGING_BIN` and `COORDINATOR_MESSAGINGCTL_BIN` to the tests.
-The integration fixtures compose through Messaging's public HTTP contract and
-refuse missing executables; Coordinator does not link its runtime as a test
-dependency. The native-service
+Messaging and Scheduling integration checks. The three URLs must name distinct databases owned
+by the test identity. That script first builds the independent Messaging and Scheduling services
+and operator executables, then supplies `COORDINATOR_MESSAGING_BIN`,
+`COORDINATOR_MESSAGINGCTL_BIN`, `COORDINATOR_SCHEDULING_BIN`, and
+`COORDINATOR_SCHEDULINGCTL_BIN` to the tests. The integration fixtures compose through the
+products' public HTTP contracts and refuse missing executables; Coordinator does not link their
+runtimes as test dependencies.
+
+```sh
+COORDINATOR_TEST_DATABASE_URL=<owned-loopback-coordinator-database-url> \
+COORDINATOR_MESSAGING_TEST_DATABASE_URL=<owned-loopback-messaging-database-url> \
+COORDINATOR_SCHEDULING_TEST_DATABASE_URL=<owned-loopback-scheduling-database-url> \
+  products/coordinator/scripts/test-postgres.sh
+```
+
+The native-service
 fixture script runs the controlled BReg, Casework, Scheduling and Messaging
 journey. It requires Python 3, OpenSSL, PostgreSQL client tools matching the test server,
 Docker, and distinct disposable PostgreSQL databases. Use the explicit preparation command below
@@ -357,6 +370,18 @@ python3 products/coordinator/scripts/test-real-services.py \
 A supplied `--bin-dir` uses existing executables without rebuilding. Without it, the helper uses
 Cargo metadata's `target_directory/debug`; that directory must already contain every required
 executable. Retain the preparation directory until the journey has finished.
+
+The reservation-review example has its own compiled-service proof. It composes BReg, Casework
+(a real task grant and the BReg task-grant context read), Scheduling, Messaging and Coordinator,
+restarts Coordinator while reviews are pending, and recovers lost Scheduling and BReg responses
+as the exact same commands. It is a manual proof that no CI job runs. Prepare the executables as
+above, set the same two database URLs, and run:
+
+```sh
+python3 products/coordinator/examples/reservation-review/test-native-services.py \
+  --bin-dir /absolute/private/native-build/bin \
+  --build-manifest /absolute/private/native-build/build-manifest.json
+```
 
 The real 961-second deferred-appointment wait crosses the immediate approval limit; a wait below
 901 seconds is a smoke check only. Exact original-receipt recovery, expiry and revocation checks,

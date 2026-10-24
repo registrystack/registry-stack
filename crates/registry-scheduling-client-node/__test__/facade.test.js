@@ -16,6 +16,8 @@ const REFERENCE = { product: 'casework', recordType: 'review-task', identifier: 
 const ADMISSION = {
   offering: 'registry-update-30',
   start: '2026-10-05T09:00:00Z',
+  durationMinutes: 1500,
+  resource: 'clerk-2',
   party: { recipients: 1, attendees: 1 },
   policyRevision: 3,
   capabilities: [],
@@ -61,6 +63,66 @@ const CANCELLED = {
   state: 'cancelled',
   cancelledAt: '2026-10-04T09:00:00Z',
 };
+
+const ATTENDANCE_REQUEST = {
+  observedAppointmentRevision: 7,
+  observedRevision: 0,
+  state: 'arrived',
+  observedAt: '2026-10-05T09:05:00Z',
+};
+const ATTENDANCE = {
+  appointmentId: APPOINTMENT_ID,
+  appointmentRevision: 7,
+  revision: 3,
+  state: 'arrived',
+  observedAt: ATTENDANCE_REQUEST.observedAt,
+  recordedAt: '2026-10-05T09:06:00Z',
+};
+
+test('attendance records the observed visit and correction revision under the caller key', async (context) => {
+  const { baseUrl, requests } = await serve(context, () => ({ status: 200, contentType: 'application/json', document: ATTENDANCE }));
+  const { SchedulingClient } = require('../client');
+  const result = await new SchedulingClient({ baseUrl }).recordAttendance('token', APPOINTMENT_ID, 'observation-1', ATTENDANCE_REQUEST);
+  assert.deepEqual(result.value, ATTENDANCE);
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].method, 'PUT');
+  assert.equal(requests[0].path, `/v1/appointments/${APPOINTMENT_ID}/attendance`);
+  assert.equal(requests[0].headers['idempotency-key'], 'observation-1');
+  assert.deepEqual(JSON.parse(requests[0].body), ATTENDANCE_REQUEST);
+});
+
+test('attendance refuses unknown fields, invalid states and unsafe revisions before I/O', async (context) => {
+  const { baseUrl, requests } = await serve(context, () => ({ status: 200, contentType: 'application/json', document: ATTENDANCE }));
+  const { SchedulingClient } = require('../client');
+  const client = new SchedulingClient({ baseUrl });
+  for (const request of [
+    { ...ATTENDANCE_REQUEST, attendees: ['person-1'] },
+    { ...ATTENDANCE_REQUEST, state: 'withdrawn' },
+    { ...ATTENDANCE_REQUEST, observedRevision: Number.MAX_SAFE_INTEGER + 1 },
+  ]) {
+    await assert.rejects(async () => client.recordAttendance('token', APPOINTMENT_ID, 'observation-1', request), error => error.kind === 'invalid-request');
+  }
+  assert.equal(requests.length, 0);
+});
+
+test('appointment detail preserves its minimized attendance observation', async (context) => {
+  const document = { ...APPOINTMENT, revision: 7, attendance: ATTENDANCE };
+  const { baseUrl } = await serve(context, () => ({ status: 200, contentType: 'application/json', document }));
+  const { SchedulingClient } = require('../client');
+  assert.deepEqual((await new SchedulingClient({ baseUrl }).getAppointment('token', APPOINTMENT_ID)).value, document);
+});
+
+test('arrival catalogue publishes every window an offering serves', async (context) => {
+  const windows = [
+    { id: 'day-one', revision: 1, start: '2026-10-05T09:00:00Z', end: '2026-10-05T11:00:00Z', units: 12 },
+    { id: 'day-two', revision: 2, start: '2026-10-12T09:00:00Z', end: '2026-10-12T11:00:00Z', units: 8 },
+  ];
+  const offering = { id: 'distribution', service: 'service', label: 'Distribution', mode: 'arrival-window', location: 'hall', leadTimeMinutes: 1, horizonDays: 30, cancellationCutoffMinutes: 0, durationMinutes: null, bufferBeforeMinutes: null, bufferAfterMinutes: null, startIncrementMinutes: null, maxRecipients: null, window: null, windows, reminders: [], requiresCapabilities: [], prerequisites: [] };
+  const page = { items: [offering], nextCursor: null };
+  const { baseUrl } = await serve(context, () => ({ status: 200, contentType: 'application/json', document: page }));
+  const { SchedulingClient } = require('../client');
+  assert.deepEqual((await new SchedulingClient({ baseUrl }).listOfferings('token')).value, page);
+});
 
 async function serve(context, answer) {
   const requests = [];
@@ -160,10 +222,14 @@ test('catalogue listings carry the caller cursor and answer the page', async (co
         label: 'Registry update, 30 minutes',
         mode: 'exact-time',
         location: 'office-1',
+        pool: 'clerks',
         leadTimeMinutes: 60,
         horizonDays: 30,
         cancellationCutoffMinutes: 120,
         durationMinutes: 30,
+        durationSelection: { minimumMinutes: 15, maximumMinutes: 60, incrementMinutes: 15 },
+        openingCoverage: 'occupied-interval',
+        allowResourceSelection: true,
         bufferBeforeMinutes: null,
         bufferAfterMinutes: 5,
         startIncrementMinutes: 30,
@@ -222,6 +288,8 @@ test('availability carries the offering, interval and page bounds and answers bo
     end: '2026-10-05T12:00:00+00:00',
     cursor: 'cursor-1',
     limit: 25,
+    durationMinutes: 1500,
+    resource: 'clerk-2',
   });
 
   assert.deepEqual(outcome, { kind: 'complete', value: page, traceId: TRACE_ID });
@@ -233,6 +301,8 @@ test('availability carries the offering, interval and page bounds and answers bo
     end: '2026-10-05T12:00:00Z',
     cursor: 'cursor-1',
     limit: '25',
+    durationMinutes: '1500',
+    resource: 'clerk-2',
   });
 
   await scheduling.availability('one-call-secret', 'registry-update-30');
@@ -249,6 +319,12 @@ test('availability refuses a selector, instant, or page bound outside its gramma
     (scheduling) => scheduling.availability('one-call-secret', 'registry-update-30', { limit: 0 }),
     (scheduling) => scheduling.availability('one-call-secret', 'registry-update-30', { limit: -1 }),
     (scheduling) => scheduling.availability('one-call-secret', 'registry-update-30', { limit: 2.5 }),
+    (scheduling) => scheduling.availability('one-call-secret', 'registry-update-30', { durationMinutes: 0 }),
+    (scheduling) => scheduling.availability('one-call-secret', 'registry-update-30', { durationMinutes: 10081 }),
+    (scheduling) => scheduling.availability('one-call-secret', 'registry-update-30', { durationMinutes: -1 }),
+    (scheduling) => scheduling.availability('one-call-secret', 'registry-update-30', { durationMinutes: 1.5 }),
+    (scheduling) => scheduling.availability('one-call-secret', 'registry-update-30', { durationMinutes: true }),
+    (scheduling) => scheduling.availability('one-call-secret', 'registry-update-30', { resource: 'clerk/2' }),
     (scheduling) => scheduling.availability('one-call-secret', 'registry-update-30', { offering: 'other' }),
   ]);
 });
@@ -267,6 +343,16 @@ test('explain carries the offering and start and answers the explanation', async
   assert.deepEqual(outcome, { kind: 'complete', value: explanation, traceId: TRACE_ID });
   assert.equal(requests[0].path, '/v1/availability/explain');
   assert.deepEqual(requests[0].query, { offering: 'registry-update-30', start: '2026-10-05T09:00:00Z' });
+  await scheduling.explain('one-call-secret', 'registry-update-30', '2026-10-05T12:00:00+03:00', {
+    durationMinutes: 45,
+    resource: 'clerk-2',
+  });
+  assert.deepEqual(requests[1].query, {
+    offering: 'registry-update-30',
+    start: '2026-10-05T09:00:00Z',
+    durationMinutes: '45',
+    resource: 'clerk-2',
+  });
 });
 
 test('explain refuses an instant that is not RFC 3339 before any request', async (context) => {
@@ -274,6 +360,12 @@ test('explain refuses an instant that is not RFC 3339 before any request', async
     (scheduling) => scheduling.explain('one-call-secret', 'registry-update-30', '2026-10-05 09:00'),
     (scheduling) => scheduling.explain('one-call-secret', 'registry-update-30', ''),
     (scheduling) => scheduling.explain('one-call-secret', 'Registry', '2026-10-05T09:00:00Z'),
+    (scheduling) => scheduling.explain('one-call-secret', 'registry-update-30', '2026-10-05T09:00:00Z', { durationMinutes: 0 }),
+    (scheduling) => scheduling.explain('one-call-secret', 'registry-update-30', '2026-10-05T09:00:00Z', { durationMinutes: 10081 }),
+    (scheduling) => scheduling.explain('one-call-secret', 'registry-update-30', '2026-10-05T09:00:00Z', { durationMinutes: -1 }),
+    (scheduling) => scheduling.explain('one-call-secret', 'registry-update-30', '2026-10-05T09:00:00Z', { durationMinutes: 1.5 }),
+    (scheduling) => scheduling.explain('one-call-secret', 'registry-update-30', '2026-10-05T09:00:00Z', { durationMinutes: true }),
+    (scheduling) => scheduling.explain('one-call-secret', 'registry-update-30', '2026-10-05T09:00:00Z', { resource: 'clerk/2' }),
   ]);
 });
 
@@ -305,6 +397,103 @@ test('mutations refuse a key outside the header grammar before any request', asy
     ));
   }
   await refusedBeforeAnyRequest(context, calls);
+});
+
+test('resource holds preserve manager and party references without invented people counts', async (context) => {
+  const partyReferences = [{ role: 'organization', reference: REFERENCE }];
+  const answer = { ...HOLD, manager: 'schedulingManager', partyReferences };
+  const { client: scheduling, requests } = await client(context, () => answered(201, answer));
+  const request = { ...ADMISSION, manager: 'schedulingManager', partyReferences };
+  delete request.party;
+  const outcome = await scheduling.createHold('synthetic-token', 'room-hold', request);
+  assert.deepEqual(outcome.value, answer);
+  assert.deepEqual(JSON.parse(requests[0].body), {
+    ...request, channel: null, duplicateKey: null, windowRevision: null,
+  });
+  assert.equal(Object.hasOwn(JSON.parse(requests[0].body), 'party'), false);
+});
+
+test('capacity preview sends only a physical bundle and no mutation key', async (context) => {
+  const request = { offering: 'room', start: ADMISSION.start, additionalAllocations: [{ offering: 'chairs', units: 30 }] };
+  const answer = { offering: 'room', start: ADMISSION.start, end: HOLD.end, capacityAvailable: true };
+  const { client: scheduling, requests } = await client(context, () => answered(200, answer));
+  assert.deepEqual((await scheduling.previewAvailability('synthetic-token', request)).value, answer);
+  assert.equal(requests[0].method, 'POST');
+  assert.equal(requests[0].path, '/v1/availability/preview');
+  assert.equal(requests[0].headers['idempotency-key'], undefined);
+  assert.deepEqual(JSON.parse(requests[0].body), request);
+});
+
+test('capacity preview refuses identity assertions and unbounded physical inputs before I/O', async (context) => {
+  const request = { offering: 'room', start: ADMISSION.start };
+  await refusedBeforeAnyRequest(context, [
+    (scheduling) => scheduling.previewAvailability('synthetic-token', { ...request, manager: 'schedulingManager' }),
+    (scheduling) => scheduling.previewAvailability('synthetic-token', { ...request, resourceUnits: 0 }),
+    (scheduling) => scheduling.previewAvailability('synthetic-token', { ...request, additionalAllocations: Array.from({ length: 16 }, () => ({ offering: 'chairs' })) }),
+  ]);
+});
+
+function busySnapshot() {
+  return {
+    expectedRevision: 0, observedAt: '2026-10-05T08:00:00Z',
+    freshUntil: '2026-10-05T09:00:00Z', status: 'fresh',
+    coverage: { start: '2026-10-05T00:00:00Z', end: '2026-10-06T00:00:00Z', resources: ['room-a'] },
+    records: [{ externalUid: 'event-1', externalRevision: 'v1', resource: 'room-a', start: '2026-10-05T10:00:00Z', end: '2026-10-05T11:00:00Z' }],
+  };
+}
+
+test('source busy preview and apply select one profile and preserve CAS and minimized impacts', async (context) => {
+  const request = busySnapshot();
+  const common = { sourceId: 'calendar-a', requestDigest: 'sha256:abc', added: 1, changed: 0, deleted: 0, retainedOutsideAuthority: 0, retainedAcrossCoverageBoundary: 0, impacts: { total: 1, detailsAvailable: false, truncated: true } };
+  const preview = { ...common, expectedRevision: 0, currentRevision: 0 };
+  const applied = { ...common, kind: 'applied', revision: 1 };
+  const { client: scheduling, requests } = await client(context, (_, url) => answered(200, url.pathname.endsWith('/preview') ? preview : applied));
+  assert.deepEqual((await scheduling.previewSourceBusy('synthetic-token', 'calendar-main', request)).value, preview);
+  assert.deepEqual((await scheduling.applySourceBusy('synthetic-token', 'calendar-main', request)).value, applied);
+  assert.deepEqual(requests.map(({ path }) => path), ['/v1/source-busy/preview', '/v1/source-busy/apply']);
+  for (const sent of requests) {
+    assert.equal(sent.method, 'POST');
+    assert.deepEqual(sent.query, { profile: 'calendar-main' });
+    assert.equal(sent.headers['idempotency-key'], undefined);
+    assert.deepEqual(JSON.parse(sent.body), request);
+  }
+});
+
+test('source busy rejects unbounded, inconsistent and descriptive data before I/O', async (context) => {
+  const request = busySnapshot();
+  await refusedBeforeAnyRequest(context, [
+    (scheduling) => scheduling.previewSourceBusy('synthetic-token', '../other', request),
+    (scheduling) => scheduling.applySourceBusy('synthetic-token', 'calendar-main', { ...request, sourceId: 'other-source' }),
+    (scheduling) => scheduling.applySourceBusy('synthetic-token', 'calendar-main', { ...request, records: [{ ...request.records[0], attendees: ['private'] }] }),
+    (scheduling) => scheduling.applySourceBusy('synthetic-token', 'calendar-main', { ...request, records: Array.from({ length: 4097 }, () => request.records[0]) }),
+    (scheduling) => scheduling.applySourceBusy('synthetic-token', 'calendar-main', { ...request, coverage: { ...request.coverage, resources: [] } }),
+    (scheduling) => scheduling.applySourceBusy('synthetic-token', 'calendar-main', { ...request, status: 'unavailable' }),
+  ]);
+});
+
+test('source busy apply leaves an uncertain outcome for explicit same-body recovery without resending', async (context) => {
+  const { client: scheduling, requests } = await client(context, () => ({ status: 503 }));
+  await assert.rejects(scheduling.applySourceBusy('synthetic-token', 'calendar-main', busySnapshot()), (error) => {
+    assert.equal(error.outcomeUnknown, true);
+    return true;
+  });
+  assert.equal(requests.length, 1);
+});
+
+test('counted bundle holds retain every concrete allocation', async (context) => {
+  const allocations = [
+    { requirement: { kind: 'primary' }, offering: ADMISSION.offering, resource: 'clerk-2', units: 2, occupiedStart: HOLD.start, occupiedEnd: HOLD.end },
+    { requirement: { kind: 'additional', index: 0 }, offering: 'chairs', resource: 'chairs-a', units: 30, occupiedStart: HOLD.start, occupiedEnd: HOLD.end },
+  ];
+  const answer = { ...HOLD, units: 2, allocations };
+  const { client: scheduling, requests } = await client(context, () => answered(201, answer));
+  const request = { ...ADMISSION, resourceUnits: 2, additionalAllocations: [{ offering: 'chairs', resource: 'chairs-a', units: 30 }] };
+  delete request.party;
+  const outcome = await scheduling.createHold('synthetic-token', 'bundle-hold', request);
+  assert.deepEqual(outcome.value, answer);
+  assert.deepEqual(JSON.parse(requests[0].body), {
+    ...request, channel: null, duplicateKey: null, windowRevision: null,
+  });
 });
 
 test('createHold refuses an undeclared admission member or an unsafe integer before any request', async (context) => {
@@ -422,6 +611,74 @@ test('listAppointments selects by external reference and carries the page bounds
     cursor: 'cursor-1',
     limit: '10',
   });
+});
+
+test('listOperationalAppointments carries one role-bounded work-list query', async (context) => {
+  const page = {
+    items: [{
+      appointmentId: APPOINTMENT_ID,
+      revision: 2,
+      service: 'registry-update',
+      location: 'office-1',
+      offering: 'registry-update-30',
+      state: 'confirmed',
+      displayedStart: '2026-10-05T09:00:00Z',
+      displayedEnd: '2026-10-06T10:00:00Z',
+      resource: 'clerk-2',
+      units: 1,
+    }],
+    nextCursor: 'next',
+  };
+  const { client: scheduling, requests } = await client(context, () => answered(200, page));
+  const query = {
+    service: 'registry-update',
+    location: 'office-1',
+    start: '2026-10-05T09:00:00Z',
+    end: '2026-10-07T09:00:00Z',
+    timeBasis: 'occupied',
+    offering: 'registry-update-30',
+    state: 'confirmed',
+    resource: 'clerk-2',
+    externalReference: REFERENCE,
+    profile: 'desk',
+    cursor: 'next',
+    limit: 25,
+  };
+  assert.deepEqual(await scheduling.listOperationalAppointments('one-call-secret', query), {
+    kind: 'complete', value: page, traceId: TRACE_ID,
+  });
+  assert.deepEqual(requests[0].query, {
+    service: 'registry-update',
+    location: 'office-1',
+    start: '2026-10-05T09:00:00Z',
+    end: '2026-10-07T09:00:00Z',
+    timeBasis: 'occupied',
+    offering: 'registry-update-30',
+    state: 'confirmed',
+    resource: 'clerk-2',
+    externalReferenceProduct: 'casework',
+    externalReferenceRecordType: 'review-task',
+    externalReferenceIdentifier: 'case:1234',
+    profile: 'desk',
+    cursor: 'next',
+    limit: '25',
+  });
+});
+
+test('listOperationalAppointments refuses an invalid role query before any request', async (context) => {
+  const query = {
+    service: 'registry-update',
+    location: 'office-1',
+    start: '2026-10-05T09:00:00Z',
+    end: '2026-10-07T09:00:00Z',
+    timeBasis: 'occupied',
+  };
+  await refusedBeforeAnyRequest(context, [
+    (scheduling) => scheduling.listOperationalAppointments('one-call-secret', { ...query, resource: 'clerk/2' }),
+    (scheduling) => scheduling.listOperationalAppointments('one-call-secret', { ...query, end: query.start }),
+    (scheduling) => scheduling.listOperationalAppointments('one-call-secret', { ...query, limit: 0 }),
+    (scheduling) => scheduling.listOperationalAppointments('one-call-secret', { ...query, extra: 'x' }),
+  ]);
 });
 
 test('listAppointments refuses a reference or page bound outside its grammar before any request', async (context) => {
@@ -719,6 +976,8 @@ test('a hold answered 503 is resent once under the same key and succeeds', async
     assert.equal(request.headers['idempotency-key'], 'hold-2026-10-05-0001');
     assert.equal(request.body, requests[0].body);
   }
+  assert.equal(JSON.parse(requests[0].body).durationMinutes, 1500);
+  assert.equal(JSON.parse(requests[0].body).resource, 'clerk-2');
 });
 
 test('a retry ceiling of zero sends a hold once and reports the outcome unknown', async (context) => {

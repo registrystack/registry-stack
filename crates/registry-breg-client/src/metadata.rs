@@ -960,6 +960,7 @@ pub struct BRegProposalActionDescriptor {
     access_profile: String,
     operations: Vec<String>,
     readable_inputs: Vec<String>,
+    readable_context_fields: Vec<String>,
 }
 
 impl BRegProposalActionDescriptor {
@@ -974,6 +975,9 @@ impl BRegProposalActionDescriptor {
     }
     pub fn readable_inputs(&self) -> &[String] {
         &self.readable_inputs
+    }
+    pub fn readable_context_fields(&self) -> &[String] {
+        &self.readable_context_fields
     }
 }
 
@@ -1122,6 +1126,26 @@ impl BRegMetadata {
         action: &str,
     ) -> Result<crate::BRegProposalReviewBinding, BRegMetadataSelectionError> {
         self.select_proposal_review(expected_profile, action, true)
+    }
+
+    /// Select a source-authorized, field-limited Proposal task projection.
+    pub fn select_proposal_task_grant_context(
+        &self,
+        expected_profile: &str,
+        action: &str,
+    ) -> Result<crate::BRegProposalTaskContextBinding, BRegMetadataSelectionError> {
+        if self.proposals.is_none() {
+            return Err(selection_error(BRegMetadataSelectionErrorKind::NotFound));
+        }
+        crate::BRegProposalTaskContextBinding::from_metadata(
+            &serde_json::to_value(&self.proposal_actions).expect("validated Proposal inventory"),
+            self.source_binding
+                .as_ref()
+                .ok_or_else(|| selection_error(BRegMetadataSelectionErrorKind::UnboundSource))?,
+            expected_profile,
+            action,
+        )
+        .map_err(|_| selection_error(BRegMetadataSelectionErrorKind::ContractMismatch))
     }
 
     fn select_proposal_review(
@@ -3376,12 +3400,30 @@ fn parse_proposal_actions(
             {
                 return Err(metadata_error(BRegMetadataErrorKind::Shape));
             }
+            let readable_context_fields = entry
+                .remove("readableContextFields")
+                .map(api_name_array)
+                .transpose()?
+                .unwrap_or_default();
+            ensure_unique(readable_context_fields.iter().map(String::as_str))?;
+            let review_context = operations
+                .iter()
+                .any(|operation| operation == "get-review-context");
+            let task_context = operations
+                .iter()
+                .any(|operation| operation == "get-task-grant-context");
+            if (task_context && readable_context_fields.is_empty())
+                || (!review_context && !task_context && !readable_context_fields.is_empty())
+            {
+                return Err(metadata_error(BRegMetadataErrorKind::Shape));
+            }
             finish(entry)?;
             Ok(BRegProposalActionDescriptor {
                 action_id,
                 access_profile,
                 operations,
                 readable_inputs,
+                readable_context_fields,
             })
         })
         .collect()

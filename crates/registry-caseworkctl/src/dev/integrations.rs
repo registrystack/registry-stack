@@ -134,6 +134,34 @@ impl Integrations {
                 "Use the context provider deploymentRef as its connection key.",
             ));
         }
+        for provider in &policy.context_providers {
+            let Some(binding) = self.context_providers.get(&provider.deployment_ref) else {
+                continue;
+            };
+            let status = provider
+                .service_profiles
+                .get(&registry_casework_core::ReviewContextCapability::ServiceStatus);
+            let task = provider
+                .service_profiles
+                .get(&registry_casework_core::ReviewContextCapability::TaskGrantContext);
+            let declares_task = provider
+                .capabilities
+                .contains(&registry_casework_core::ReviewContextCapability::TaskGrantContext);
+            if status != Some(&binding.status_profile)
+                || task != binding.task_grant_profile.as_ref()
+                || declares_task != binding.task_grant_profile.is_some()
+            {
+                found.push(ConfigFinding::new(
+                    "casework.dev-clients.provider-profile-mismatch",
+                    config::member(
+                        "/integrations/contextProviders",
+                        &provider.deployment_ref,
+                    ),
+                    "provider runtime profiles must exactly match the authored serviceProfiles, including a distinct task-grant-context profile when that capability is declared",
+                    "Set statusProfile and optional taskGrantProfile to the exact serviceProfiles declared for this context provider.",
+                ));
+            }
+        }
         for (key, length, maximum, what) in [
             ("secretFiles", self.secret_files.len(), 64, "secret files"),
             (

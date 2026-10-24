@@ -944,9 +944,9 @@ fn scalar_api_names_and_query_field_identities_remain_strict() {
 fn proposal_inventory_preserves_exact_profile_operations_and_readable_inputs() {
     let mut source = proposal_action_metadata();
     source["proposals"]["actions"] = json!([
-        {"actionId":"correct-address","accessProfile":"reviewer","operations":["get"],"readableInputs":["address"]},
-        {"actionId":"correct-address","accessProfile":"queue","operations":["list"],"readableInputs":[]},
-        {"actionId":"correct-address","accessProfile":"executor","operations":["apply"],"readableInputs":[]}
+        {"actionId":"correct-address","accessProfile":"reviewer","operations":["get"],"readableInputs":["address"],"readableContextFields":[]},
+        {"actionId":"correct-address","accessProfile":"queue","operations":["list"],"readableInputs":[],"readableContextFields":[]},
+        {"actionId":"correct-address","accessProfile":"executor","operations":["apply"],"readableInputs":[],"readableContextFields":[]}
     ]);
     let metadata = parse(&source);
     let entries = metadata.proposal_actions();
@@ -993,6 +993,45 @@ fn proposal_inventory_preserves_exact_profile_operations_and_readable_inputs() {
             .kind(),
         BRegMetadataErrorKind::Shape
     );
+}
+
+#[test]
+fn proposal_inventory_keeps_human_context_fields_and_selects_a_distinct_task_grant() {
+    let mut source = proposal_action_metadata();
+    source["proposals"]["actions"] = json!([
+        {"actionId":"correct-address","accessProfile":"human-reviewer","operations":["get-review-context"],"readableInputs":[],"readableContextFields":["address","reason"]},
+        {"actionId":"correct-address","accessProfile":"task-context","operations":["get-task-grant-context"],"readableInputs":[],"readableContextFields":["address"]}
+    ]);
+    let metadata = parse(&source).bind_source("https://registry.example/v1/".into());
+    assert_eq!(
+        metadata.proposal_actions()[0].readable_context_fields(),
+        ["address", "reason"]
+    );
+    assert!(metadata
+        .select_proposal_review_context("human-reviewer", "correct-address")
+        .is_ok());
+    let task = metadata
+        .select_proposal_task_grant_context("task-context", "correct-address")
+        .unwrap();
+    assert_eq!(
+        task.readable_context_fields(),
+        &std::collections::BTreeSet::from(["address".to_owned()])
+    );
+
+    for (operations, fields) in [
+        (json!(["get-task-grant-context"]), json!([])),
+        (json!(["get"]), json!(["address"])),
+    ] {
+        let mut malformed = source.clone();
+        malformed["proposals"]["actions"][1]["operations"] = operations;
+        malformed["proposals"]["actions"][1]["readableContextFields"] = fields;
+        assert_eq!(
+            BRegMetadata::from_slice(&serde_json::to_vec(&malformed).unwrap())
+                .unwrap_err()
+                .kind(),
+            BRegMetadataErrorKind::Shape
+        );
+    }
 }
 
 #[test]
@@ -1159,7 +1198,7 @@ fn complete_descriptive_metadata_is_retained_and_spatial_is_optional() {
 fn proposal_action_metadata() -> Value {
     let mut value = fixture();
     value["proposals"] = json!({"method":"GET","path":"/v1/proposals","accessProfiles":[],
-        "actions":[{"actionId":"correct-address","accessProfile":"reviewer","operations":["get"],"readableInputs":["address"]}],
+        "actions":[{"actionId":"correct-address","accessProfile":"reviewer","operations":["get"],"readableInputs":["address"],"readableContextFields":[]}],
         "get":{"method":"GET","path":"/v1/proposals/{proposal_id}","accessProfiles":["reviewer"]}});
     value["actions"] = json!([{
         "id":"correct-address","apiName":"correctAddress","revision":REVISION,

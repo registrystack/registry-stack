@@ -6,7 +6,7 @@ human who approved the task, it carries no catalogue or availability read
 authority, and it never decides eligibility: whether a party may hold a
 service remains with the source system that owns the rule.
 
-The three authority profiles are disjoint. A token carrying a product scope
+The route-specific authorities are disjoint. A token carrying a product scope
 does not thereby gain a commitment path, and a task grant does not by itself
 grant a catalogue read. Scopes authorize reads and the separately configured
 explain scope authorizes the diagnostic read; every commitment takes its
@@ -55,6 +55,9 @@ The action vocabulary is closed, and it is the vocabulary the runtime knows:
 
 - `hold.create` and `hold.release`
 - `appointment.create`, `appointment.reschedule`, and `appointment.cancel`
+- `hold.create-for` and `appointment.create-for` for source-managed bookings
+- `appointment.read` for one appointment's current detail, read by id
+- `attendance.record` for recording an attendance observation
 
 The bounds a signed claim may carry are bounded exactly as BREG's are:
 
@@ -123,6 +126,42 @@ left. Because the token does not name its authorization mode, the final 15
 minutes of an originally deferred grant can use the offline path on a
 deployment that writes the keyword. List the task authorities for every
 deployment that accepts deferred grants.
+
+## Source-managed assisted bookings
+
+Omitting `manager` from admission preserves the ordinary verified issuer and
+subject ownership path. An explicit `manager: schedulingManager` selects the
+fixed `schedulingManager` string in the grant's signed `identity` object. The
+request carries no manager identifier. Scheduling binds that value to the
+grant's source issuer and retains it separately from the actor that submitted
+the command. The source issuer must guarantee that its manager identifiers are
+stable and never reassigned. Beneficiary and organization references are
+booking data and never substitute for this verified binding.
+
+Creating an assisted hold requires `hold.create-for`; direct creation and
+confirmation of an assisted hold require `appointment.create-for`. Release,
+reschedule and cancellation use their existing actions. Every assisted
+operation requires an online configured status authority, a fresh exact grant
+status match, and the same source-manager binding as the claim. The offline
+final-fifteen-minutes path cannot authorize it. A hold's manager is retained
+through confirmation; rescheduling cannot transfer management authority.
+
+The existing appointment detail route accepts `appointment.read` under the
+appointment's actual service and location bounds. For a source-managed
+appointment the caller must be the matching source manager. For a self-booked
+appointment, a caller holding a current online `appointment.read` task grant
+for that service and location can read any appointment it names by id; this is
+an accepted residual recorded in `SECURITY-REVIEW-NOTES.md`, so institutions
+grant the action only to services whose workflow already selects the
+appointment. The action grants no list, history, catalogue or unrelated
+appointment authority. The original actor's ordinary read scope does not make it the
+assisted appointment's manager. Separately configured operational readers
+remain governed by their own bounded profile.
+
+Idempotency stays actor-scoped. An exact retry can recover its original receipt
+under the existing fresh-status rules; that receipt is not current-detail
+authority. Identity retention erases the raw source-manager binding alongside
+the ordinary ownership fields, closing this management path after expiry.
 
 ## What the audit records
 

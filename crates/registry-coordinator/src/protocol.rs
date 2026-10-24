@@ -11,15 +11,15 @@ use std::time::Duration;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Operation(&'static str);
 
-/// Recovery distinguishes repeatable calls from evaluations that cannot be repeated.
+/// Recovery distinguishes repeatable calls from effects that cannot be repeated.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum RecoverySemantics {
     ReadAgain,
     SameCommandAndReceipt,
     SameCommand,
-    /// Completion may be billable and nondeterministic. An ambiguous dispatch
-    /// stays held; identical request bytes cannot establish a safe resend.
+    /// An ambiguous dispatch stays held because identical request bytes cannot
+    /// establish a safe resend for this effect.
     HoldAfterDispatch,
 }
 

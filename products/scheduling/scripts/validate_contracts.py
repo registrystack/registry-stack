@@ -246,7 +246,15 @@ def runner_violations(root: Path, citations: list[dict]) -> list[str]:
                     target.get("path", f"tests/{target['name']}.rs") == relative.as_posix()), None)
                 if target is not None or relative.parts[0] == "tests":
                     if target is None and len(relative.parts) != 2:
-                        raise ValueError("cite the integration test target source")
+                        runner_name = relative.parts[1]
+                        runner_path = Path("tests") / f"{runner_name}.rs"
+                        if not (manifest.parent / runner_path).is_file():
+                            runner_path = Path("tests") / runner_name / "main.rs"
+                        if not (manifest.parent / runner_path).is_file():
+                            raise ValueError("no integration runner for the cited module")
+                        target = next((candidate for candidate in targets if
+                            candidate.get("path", f"tests/{candidate['name']}.rs") == runner_path.as_posix()),
+                            {"name": runner_name})
                     target = target or {"name": source.stem}
                     command.extend(["--test", target["name"]])
                     if target.get("required-features"):

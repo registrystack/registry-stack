@@ -10,6 +10,8 @@
 //! ledger, `records apply` performs the one attributable operator write of a
 //! deployment's live environment records, and `intents` reads the delivery
 //! intents a deployment's dispatcher has stopped carrying.
+//! `operational-scopes rematerialize` retries immutable read labels after
+//! retained policy revisions are restored.
 
 pub mod activation;
 pub mod intents;
@@ -25,6 +27,7 @@ use registry_platform_audit::AuditUnavailable;
 use registry_platform_yaml::{Diagnostic, Report};
 use registry_scheduling::config::RuntimeConfigError;
 use registry_scheduling::hooks::HookActivationError;
+use registry_scheduling::operational::OperationalRematerializationError;
 use registry_scheduling::runtime::RuntimeError;
 use registry_scheduling::store::StoreError;
 use registry_scheduling_core::AUTHORED_POLICY_FILE;
@@ -74,6 +77,8 @@ enum Command {
     Records(RecordsArgs),
     /// List delivery intents a deployment's dispatcher has stopped carrying.
     Intents(IntentsArgs),
+    /// Inspect or repair immutable labels used by operational appointment reads.
+    OperationalScopes(OperationalScopesArgs),
 }
 
 #[derive(Debug, Args)]
@@ -92,7 +97,7 @@ struct InitArgs {
     /// New directory for the authored scheduling project.
     #[arg(value_name = "PROJECT")]
     project: PathBuf,
-    /// Project template: standalone-exact-time or standalone-arrival-window.
+    /// Project template: standalone-exact-time, standalone-arrival-window, or resource-reservations.
     #[arg(long, value_name = "NAME")]
     template: String,
 }
@@ -169,6 +174,18 @@ struct RecordsArgs {
 enum RecordsCommand {
     /// Replace the deployment's environment records in one attributable write.
     Apply(RecordsApplyArgs),
+}
+
+#[derive(Debug, Args)]
+struct OperationalScopesArgs {
+    #[command(subcommand)]
+    command: OperationalScopesCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum OperationalScopesCommand {
+    /// Retry labels after restoring retained policy revision documents.
+    Rematerialize(ActivationArgs),
 }
 
 #[derive(Debug, Args)]
@@ -360,6 +377,9 @@ fn command_path(command: &Command) -> &'static str {
             command: RecordsCommand::Apply(_),
         }) => "records apply",
         Command::Intents(_) => "intents",
+        Command::OperationalScopes(OperationalScopesArgs {
+            command: OperationalScopesCommand::Rematerialize(_),
+        }) => "operational-scopes rematerialize",
     }
 }
 
@@ -397,6 +417,11 @@ fn run(cli: Cli) -> Result<Value> {
             RecordsCommand::Apply(apply) => records::apply(&apply.config, &apply.records),
         },
         Command::Intents(args) => intents::undelivered(&args.config, args.limit),
+        Command::OperationalScopes(args) => match args.command {
+            OperationalScopesCommand::Rematerialize(args) => {
+                activation::rematerialize_operational_scopes(&args.runtime_config)
+            }
+        },
     }
 }
 
@@ -670,6 +695,28 @@ fn classify_failure(error: &anyhow::Error) -> (u8, Value) {
             }),
         );
     }
+    if let Some(applied) = error.chain().find_map(|cause| {
+        cause
+            .downcast_ref::<OperationalRematerializationError>()
+            .filter(|error| {
+                matches!(
+                    error,
+                    OperationalRematerializationError::AppliedUnaudited(_)
+                )
+            })
+    }) {
+        return (
+            OPERATIONAL_FAILURE_EXIT,
+            json!({
+                "severity": "error",
+                "code": "schedulingctl.operational-scopes.rematerialized-unaudited",
+                "artifact": "audit",
+                "path": "audit.path",
+                "message": applied.to_string(),
+                "suggestedAction": "Restore the schedulingctl audit destination, then run `schedulingctl status --runtime-config FILE` to inspect the remaining unresolved coverage.",
+            }),
+        );
+    }
     // A runtime configuration that will not load is a defect in an authored
     // document; a store that cannot be reached is a defect in the deployment
     // environment. Both name their own artifact instead of hiding behind the
@@ -861,6 +908,9 @@ fn human_lead(report: &Value) -> String {
         "status" => "Activation status read.".to_owned(),
         "records apply" => "Environment records applied.".to_owned(),
         "intents" => "Undelivered delivery intents listed.".to_owned(),
+        "operational-scopes rematerialize" => {
+            "Operational appointment labels rematerialized.".to_owned()
+        }
         _ => format!("{command} succeeded."),
     }
 }
@@ -1562,6 +1612,23 @@ mod tests {
 
         assert!(Cli::try_parse_from(["schedulingctl", "intents"]).is_err());
 
+        let cli = Cli::try_parse_from([
+            "schedulingctl",
+            "operational-scopes",
+            "rematerialize",
+            "--runtime-config",
+            "/runtime.yaml",
+        ])
+        .unwrap();
+        let Command::OperationalScopes(OperationalScopesArgs {
+            command: OperationalScopesCommand::Rematerialize(args),
+        }) = cli.command
+        else {
+            panic!("expected operational-scopes rematerialize")
+        };
+        assert_eq!(args.runtime_config, PathBuf::from("/runtime.yaml"));
+        assert!(Cli::try_parse_from(["schedulingctl", "operational-scopes"]).is_err());
+
         assert!(Cli::try_parse_from([
             "schedulingctl",
             "init",
@@ -1574,7 +1641,11 @@ mod tests {
 
     #[test]
     fn every_template_initializes_checks_tests_and_explains_green() {
-        for template in ["standalone-exact-time", "standalone-arrival-window"] {
+        for template in [
+            "standalone-exact-time",
+            "standalone-arrival-window",
+            "resource-reservations",
+        ] {
             let root = tempfile::tempdir().unwrap();
             let project = root.path().join("project");
             let project_string = project.to_str().unwrap().to_owned();

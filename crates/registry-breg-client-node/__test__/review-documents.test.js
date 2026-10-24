@@ -14,8 +14,8 @@ test('review-only binding reads context and exact document without Proposal Get'
   const requests = [];
   const metadata = { id: 'review-documents', version: '1', revision, metadataVersion: '2',
     recordTypes: [], operations: [], actions: [], proposals: { actions: [
-      { actionId: 'correct', accessProfile: 'reviewer', operations: ['get-review-context'], readableInputs: [] },
-      { actionId: 'correct', accessProfile: 'status', operations: ['get-review-status'], readableInputs: [] },
+      { actionId: 'correct', accessProfile: 'reviewer', operations: ['get-review-context'], readableInputs: [], readableContextFields: [] },
+      { actionId: 'correct', accessProfile: 'status', operations: ['get-review-status'], readableInputs: [], readableContextFields: [] },
     ] } };
   const query = new URLSearchParams({ submissionVersion: '1', reviewContextField: 'support',
     effectDigest: revision, contextSchemaDigest: revision });

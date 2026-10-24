@@ -23,8 +23,8 @@ class ReviewDocumentTests(unittest.TestCase):
         metadata = {'id': 'review-documents', 'version': '1', 'revision': revision,
                     'metadataVersion': '2', 'recordTypes': [], 'operations': [], 'actions': [],
                     'proposals': {'actions': [
-                        {'actionId': 'correct', 'accessProfile': 'reviewer', 'operations': ['get-review-context'], 'readableInputs': []},
-                        {'actionId': 'correct', 'accessProfile': 'status', 'operations': ['get-review-status'], 'readableInputs': []}]}}
+                        {'actionId': 'correct', 'accessProfile': 'reviewer', 'operations': ['get-review-context'], 'readableInputs': [], 'readableContextFields': []},
+                        {'actionId': 'correct', 'accessProfile': 'status', 'operations': ['get-review-status'], 'readableInputs': [], 'readableContextFields': []}]}}
         query = urlencode({'submissionVersion': '1', 'reviewContextField': 'support',
                            'effectDigest': revision, 'contextSchemaDigest': revision})
         context = {'id': identifier, 'actionId': 'correct', 'actionRevision': revision,

@@ -1,0 +1,153 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/breg/journeys/journeys.v1.schema.json
+apiVersion: id.registrystack.org/formats/breg/journeys/v1
+kind: BRegJourneys
+journeys:
+- id: rejected-temporary-request-releases-source-capacity
+  steps:
+  - id: submit-request
+    action: submit-reservation-request
+    accessProfile: reservation-workflow
+    claims:
+      principal: $localClientSubject
+      scopes: [reservations:workflow]
+      actorKind: service
+      requesterClient: reservation-source-agent
+      directClaims: {reservation_source: reservation-source-agent}
+    request:
+      type: invoke
+      idempotencyKey: source-submit-temporary
+      input:
+        requestKey: request-temporary-rejected
+        requesterReference: organization-2353
+        notificationDestination: person@example.invalid
+        offering: room-reservation
+        start: '2026-11-03T09:00:00Z'
+        durationMinutes: 240
+        resourceId: room-a
+        attendees: 12
+        agreementRequired: true
+        capacityPolicy: temporary-commitment
+    expect: {outcome: success, status: 200}
+    captureResults: {reservation: request}
+  - id: obtain-held-condition
+    action: record-capacity-held
+    accessProfile: reservation-workflow
+    claims:
+      principal: $localClientSubject
+      scopes: [reservations:workflow]
+      actorKind: service
+      requesterClient: reservation-source-agent
+      directClaims: {reservation_source: reservation-source-agent}
+    request:
+      type: target-conditions
+      input: {reservationId: {recordCapture: request}}
+    expect: {outcome: success, status: 200}
+    capture: held-condition
+  - id: record-capacity-held
+    action: record-capacity-held
+    accessProfile: reservation-workflow
+    claims:
+      principal: $localClientSubject
+      scopes: [reservations:workflow]
+      actorKind: service
+      requesterClient: reservation-source-agent
+      directClaims: {reservation_source: reservation-source-agent}
+    request:
+      type: invoke
+      idempotencyKey: source-held-temporary
+      input:
+        reservationId: {recordCapture: request}
+        holdId: 00000000-0000-4000-8000-000000000235
+        decisionDeadline: '2026-10-26T09:00:00Z'
+      preconditions:
+        reservationId: {conditionCapture: held-condition}
+    expect: {outcome: success, status: 200}
+    captureResults: {reservation: held-request}
+  - id: obtain-rejection-condition
+    action: record-review-rejected
+    accessProfile: reservation-workflow
+    claims:
+      principal: $localClientSubject
+      scopes: [reservations:workflow]
+      actorKind: service
+      requesterClient: reservation-source-agent
+      directClaims: {reservation_source: reservation-source-agent}
+    request:
+      type: target-conditions
+      input: {reservationId: {recordCapture: held-request}}
+    expect: {outcome: success, status: 200}
+    capture: rejection-condition
+  - id: record-rejection
+    action: record-review-rejected
+    accessProfile: reservation-workflow
+    claims:
+      principal: $localClientSubject
+      scopes: [reservations:workflow]
+      actorKind: service
+      requesterClient: reservation-source-agent
+      directClaims: {reservation_source: reservation-source-agent}
+    request:
+      type: invoke
+      idempotencyKey: source-reject-temporary
+      input:
+        reservationId: {recordCapture: held-request}
+        reviewResultId: review-rejected
+      preconditions:
+        reservationId: {conditionCapture: rejection-condition}
+    expect: {outcome: success, status: 200}
+    captureResults: {reservation: rejected-request}
+  - id: obtain-release-condition
+    action: record-capacity-released
+    accessProfile: reservation-workflow
+    claims:
+      principal: $localClientSubject
+      scopes: [reservations:workflow]
+      actorKind: service
+      requesterClient: reservation-source-agent
+      directClaims: {reservation_source: reservation-source-agent}
+    request:
+      type: target-conditions
+      input:
+        reservationId: {recordCapture: rejected-request}
+    expect: {outcome: success, status: 200}
+    capture: release-condition
+  - id: record-release
+    action: record-capacity-released
+    accessProfile: reservation-workflow
+    claims:
+      principal: $localClientSubject
+      scopes: [reservations:workflow]
+      actorKind: service
+      requesterClient: reservation-source-agent
+      directClaims: {reservation_source: reservation-source-agent}
+    request:
+      type: invoke
+      idempotencyKey: source-release-temporary
+      input:
+        reservationId: {recordCapture: rejected-request}
+        outcome: rejected
+      preconditions:
+        reservationId: {conditionCapture: release-condition}
+    expect: {outcome: success, status: 200}
+    captureResults: {reservation: released-request}
+  - id: read-terminal-facts
+    recordType: reservation-request
+    accessProfile: reservation-workflow
+    claims:
+      principal: $localClientSubject
+      scopes: [reservations:workflow]
+      actorKind: service
+      requesterClient: reservation-source-agent
+      directClaims: {reservation_source: reservation-source-agent}
+    request: {type: get, recordCapture: released-request}
+    expect:
+      outcome: success
+      status: 200
+      fields:
+        requestState: received
+        reviewState: rejected
+        agreementState: not-started
+        capacityState: released
+        reservationOutcome: rejected
+        decisionDeadline: '2026-10-26T09:00:00+00:00'
+        holdId: 00000000-0000-4000-8000-000000000235

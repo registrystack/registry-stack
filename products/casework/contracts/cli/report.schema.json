@@ -1833,6 +1833,16 @@
         },
         "registryRevision": {
           "type": "string"
+        },
+        "taskGrantAuthority": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReaderAuthority"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [

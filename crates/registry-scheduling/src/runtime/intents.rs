@@ -39,7 +39,10 @@ use registry_platform_httputil::destination::{
 };
 use tokio_postgres::{Row, Transaction};
 
-use super::{delivery_of, reminder_event, Delivery, ReminderTransport};
+use super::{
+    delivery_of, reminder_delivery_time, reminder_event, sign_reminder_event, Delivery,
+    ReminderTransport,
+};
 use crate::store::{OutboxRow, PostgresStore, StoreError};
 
 /// The delivery-intent outbox table.
@@ -416,8 +419,8 @@ fn decode_liveness(row: &Row, first: usize) -> Result<bool, tokio_postgres::Erro
     row.try_get(first)
 }
 
-/// The send half: one intent to the configured reminders destination, or a
-/// local hold when the deployment declares none.
+/// The send half: one intent to the configured reminders destination URL for
+/// its purpose, or a local hold when the deployment declares none.
 pub(crate) struct IntentTransport {
     dispatcher: IntentDispatcher,
     scheduling_id: String,
@@ -483,8 +486,17 @@ impl DispatchTransport for IntentTransport {
             // recorded instead of pretending a delivery happened.
             return refusal(DESTINATION_UNCONFIGURED);
         };
-        let body = match reminder_event(&self.scheduling_id, row) {
-            Ok(body) => body,
+        let Some(target) = destination.target_for_purpose(&row.purpose) else {
+            tracing::error!(
+                outbox_id = %row.outbox_id,
+                "a due delivery intent has an unknown persisted purpose"
+            );
+            // No reviewed request target exists for it, and no amount of
+            // retrying makes one.
+            return refusal(EVENT_UNRENDERABLE);
+        };
+        let event = match reminder_event(&self.scheduling_id, row) {
+            Ok(event) => event,
             Err(error) => {
                 tracing::error!(
                     error = %error,
@@ -501,11 +513,51 @@ impl DispatchTransport for IntentTransport {
             .as_ref()
             .map(|secret| DestinationAuthorizationValue::bearer(secret.expose_secret().to_vec()))
             .transpose();
-        let request = match authorization {
-            Ok(authorization) => destination
-                .template
-                .render(&[], &[], authorization, Some(body)),
-            Err(_) => Err(DestinationRequestError::InvalidAuthorization),
+        let request = match (authorization, &destination.hmac_sha256_key) {
+            (Ok(authorization), None) => {
+                target
+                    .template
+                    .render(&[], &[], authorization, Some(event.body))
+            }
+            // A signed delivery binds the event, this lease's generation and
+            // attempt, the database clock the lease was taken at, and the
+            // selected purpose's exact request target.
+            (Ok(authorization), Some(key)) => reminder_delivery_time(job.attempt_started_at)
+                .map_err(|_| DestinationRequestError::InvalidAuthorization)
+                .and_then(|delivery_time| {
+                    sign_reminder_event(
+                        key.expose_secret(),
+                        &event,
+                        job.generation,
+                        job.attempt,
+                        &target.request_target,
+                        delivery_time,
+                    )
+                    .map_err(|_| DestinationRequestError::InvalidAuthorization)
+                })
+                .and_then(|signed| {
+                    target.template.render(
+                        &[],
+                        &[
+                            b"application/json",
+                            b"application/json",
+                            b"1.0",
+                            event.id.as_bytes(),
+                            event.source.as_bytes(),
+                            event.event_type.as_bytes(),
+                            event.time.as_bytes(),
+                            event.data_schema.as_bytes(),
+                            signed.generation.as_bytes(),
+                            signed.attempt.as_bytes(),
+                            signed.delivery_time.as_bytes(),
+                            signed.idempotency_key.as_bytes(),
+                            signed.signature.as_bytes(),
+                        ],
+                        authorization,
+                        Some(event.body),
+                    )
+                }),
+            (Err(_), _) => Err(DestinationRequestError::InvalidAuthorization),
         };
         let request = match request {
             Ok(request) => request,

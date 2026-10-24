@@ -3,7 +3,7 @@
 //! Scheduling's closed after-commit appointment observer runtime.
 //!
 //! The shared hook crate owns the envelope and delivery state machine. This
-//! module owns Scheduling's policy: three appointment lifecycle triggers,
+//! module owns Scheduling's policy: appointment lifecycle and attendance triggers,
 //! caller-selected projections over a closed set of non-attributable claim
 //! fields, URL handlers only, exact deployment destination activation, and a
 //! worker that can observe an answer but can never apply a proposal.
@@ -31,8 +31,9 @@ use registry_platform_hooks::{
 };
 use registry_platform_httputil::destination::MAX_DESTINATION_REQUEST_BODY_BYTES;
 use registry_scheduling_core::{
-    valid_identifier, APPOINTMENT_CANCELLED_TRIGGER, APPOINTMENT_CONFIRMED_TRIGGER,
-    APPOINTMENT_OBSERVER_FIELDS, APPOINTMENT_RESCHEDULED_TRIGGER, CANCELLATION_OBSERVER_FIELDS,
+    valid_identifier, APPOINTMENT_ATTENDANCE_OBSERVED_TRIGGER, APPOINTMENT_CANCELLED_TRIGGER,
+    APPOINTMENT_CONFIRMED_TRIGGER, APPOINTMENT_OBSERVER_FIELDS, APPOINTMENT_RESCHEDULED_TRIGGER,
+    ATTENDANCE_OBSERVER_FIELDS, CANCELLATION_OBSERVER_FIELDS,
 };
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
@@ -40,6 +41,7 @@ use tokio::sync::watch;
 use tokio_postgres::Transaction;
 use uuid::Uuid;
 
+use crate::attendance::AttendanceObservation;
 use crate::audit::{SchedulingAudit, SCHEDULING_AUDIT_SCHEMA};
 use crate::config::{
     valid_logical_destination_id, MAX_HOOK_ATTEMPTS, MAX_HOOK_ATTEMPT_TIMEOUT_MILLISECONDS,
@@ -323,6 +325,55 @@ impl ActivatedHooks {
         if projection_fields(trigger).is_none() || claim.revision <= 0 {
             return Err(HookCaptureError::InvalidCapture);
         }
+        let record_reference = format!("/v1/appointments/{}", claim.claim_id);
+        self.capture_projected(
+            transaction,
+            trigger,
+            claim.revision,
+            &record_reference,
+            |hook| {
+                projected_claim(
+                    claim,
+                    self.identity.policy_revision,
+                    &hook.trigger,
+                    &hook.projection,
+                )
+            },
+        )
+        .await
+    }
+
+    /// Capture the minimized attendance observation inside the same
+    /// transaction that appends it. Corrections use the same trigger and
+    /// carry their own globally monotonic attendance revision.
+    pub async fn capture_attendance(
+        &self,
+        transaction: &Transaction<'_>,
+        observation: &AttendanceObservation,
+        policy_revision: i64,
+    ) -> Result<usize, HookCaptureError> {
+        if observation.appointment_revision <= 0 || observation.revision <= 0 {
+            return Err(HookCaptureError::InvalidCapture);
+        }
+        let record_reference = format!("/v1/appointments/{}", observation.appointment_id);
+        self.capture_projected(
+            transaction,
+            APPOINTMENT_ATTENDANCE_OBSERVED_TRIGGER,
+            observation.appointment_revision,
+            &record_reference,
+            |hook| projected_attendance(observation, policy_revision, &hook.projection),
+        )
+        .await
+    }
+
+    async fn capture_projected(
+        &self,
+        transaction: &Transaction<'_>,
+        trigger: &str,
+        record_revision: i64,
+        record_reference: &str,
+        project: impl Fn(&CompiledHook) -> Result<Value, HookCaptureError>,
+    ) -> Result<usize, HookCaptureError> {
         let matching = self
             .compiled
             .hooks
@@ -344,25 +395,19 @@ impl ActivatedHooks {
             .map_err(|_| HookCaptureError::Unavailable)?;
         let retention_seconds = i64::try_from(self.payload_retention.as_secs())
             .map_err(|_| HookCaptureError::InvalidCapture)?;
-        let record_reference = format!("/v1/appointments/{}", claim.claim_id);
-
+        let count = matching.len();
         for hook in matching {
             let event_id = Uuid::new_v4();
             let id = event_id.to_string();
-            let data = projected_claim(
-                claim,
-                self.identity.policy_revision,
-                &hook.trigger,
-                &hook.projection,
-            )?;
+            let data = project(hook)?;
             let envelope = HookEnvelope {
                 id: id.clone(),
                 event_type: hook.id.clone(),
                 source: self.delivery_source.clone(),
                 time: created_at.into(),
                 subject: EventSubject {
-                    record_reference: record_reference.clone(),
-                    record_revision: claim.revision,
+                    record_reference: record_reference.to_owned(),
+                    record_revision,
                 },
                 dataschema: hook.data_schema.clone(),
                 data,
@@ -375,8 +420,8 @@ impl ActivatedHooks {
                 transaction,
                 event_id,
                 hook,
-                claim.revision,
-                &record_reference,
+                record_revision,
+                record_reference,
                 &payload,
                 created_at,
                 retention_seconds,
@@ -422,12 +467,7 @@ impl ActivatedHooks {
             .await
             .map_err(|_| HookCaptureError::Unavailable)?;
         }
-        Ok(self
-            .compiled
-            .hooks
-            .iter()
-            .filter(|hook| hook.trigger == trigger)
-            .count())
+        Ok(count)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -754,12 +794,35 @@ fn projected_claim(
     Ok(Value::Object(values))
 }
 
+fn projected_attendance(
+    observation: &AttendanceObservation,
+    policy_revision: i64,
+    projection: &[String],
+) -> Result<Value, HookCaptureError> {
+    let mut values = Map::new();
+    for field in projection {
+        let value = match field.as_str() {
+            "appointmentId" => json!(observation.appointment_id),
+            "appointmentRevision" => json!(observation.appointment_revision),
+            "attendanceRevision" => json!(observation.revision),
+            "attendanceState" => json!(observation.state),
+            "observedAt" => json!(observation.observed_at),
+            "recordedAt" => json!(observation.recorded_at),
+            "policyRevision" => json!(policy_revision),
+            _ => return Err(HookCaptureError::InvalidCapture),
+        };
+        values.insert(field.clone(), value);
+    }
+    Ok(Value::Object(values))
+}
+
 fn projection_fields(trigger: &str) -> Option<&'static [&'static str]> {
     match trigger {
         APPOINTMENT_CONFIRMED_TRIGGER | APPOINTMENT_RESCHEDULED_TRIGGER => {
             Some(APPOINTMENT_OBSERVER_FIELDS)
         }
         APPOINTMENT_CANCELLED_TRIGGER => Some(CANCELLATION_OBSERVER_FIELDS),
+        APPOINTMENT_ATTENDANCE_OBSERVED_TRIGGER => Some(ATTENDANCE_OBSERVER_FIELDS),
         _ => None,
     }
 }
@@ -951,6 +1014,10 @@ mod tests {
             occupied_start: now - TimeDelta::minutes(5),
             occupied_end: now + TimeDelta::minutes(35),
             units: 1,
+            allocations: Vec::new(),
+            party: None,
+            party_references: Vec::new(),
+            source_manager: None,
             duplicate_key: Some("secret-duplicate-key".to_owned()),
             external_references: Vec::new(),
             hold_expires_at: None,
@@ -1010,6 +1077,10 @@ mod tests {
             occupied_start: now,
             occupied_end: now + TimeDelta::minutes(30),
             units: 1,
+            allocations: Vec::new(),
+            party: None,
+            party_references: Vec::new(),
+            source_manager: None,
             duplicate_key: None,
             external_references: Vec::new(),
             hold_expires_at: None,

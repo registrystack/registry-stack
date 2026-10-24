@@ -1,0 +1,308 @@
+{
+  "$defs": {
+    "AdditionalAllocationRequest": {
+      "additionalProperties": false,
+      "description": "One secondary physical allocation in a logical reservation. Its displayed\ninterval is the primary request's interval; its offering supplies its own\noccupied buffers and resource policy.",
+      "properties": {
+        "offering": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "resource": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LocalId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "An exact member selection. Omission requests fungible selection."
+        },
+        "units": {
+          "description": "Physical resource units, independent of party counts.",
+          "maximum": 2147483647,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "offering"
+      ],
+      "type": "object"
+    },
+    "AdmissionRequest": {
+      "additionalProperties": false,
+      "description": "A request for one logical admission decision. The evaluator is pure: it\nresolves nothing, fetches nothing, and reads exactly what it is handed.",
+      "properties": {
+        "additionalAllocations": {
+          "description": "Secondary requirements committed atomically with the primary line.\nTheir order carries no meaning; hashing and resolution canonicalize it.",
+          "items": {
+            "$ref": "#/$defs/AdditionalAllocationRequest"
+          },
+          "maxItems": 15,
+          "type": "array"
+        },
+        "capabilities": {
+          "description": "The party's held capability references, matched against the offering's\nrequirements.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "channel": {
+          "description": "The authenticated channel, when the deployment allocates supply\nthrough channel subquotas.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "duplicateKey": {
+          "description": "The duplicate-active key, derived the same way the offering's policy\nprescribes.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "durationMinutes": {
+          "description": "The displayed interval selected by the caller. Omitted, exact-time\nadmission uses the offering's `durationMinutes`; arrival-window\nadmission refuses this member as out of policy.",
+          "maximum": 10080,
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "externalReferences": {
+          "default": [],
+          "description": "Opaque record links Scheduling retains with the hold or booking. Their\norder is not significant.",
+          "items": {
+            "$ref": "#/$defs/ExternalReference"
+          },
+          "type": "array"
+        },
+        "manager": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ManagerSelection"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Select the fixed signed source manager subject. Omission leaves the\nverified caller as manager."
+        },
+        "offering": {
+          "type": "string"
+        },
+        "party": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PartyCounts"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The declared people whose booking-time counts participate in policy.\nExact-time policy may explicitly allow this to be omitted for a\nresource reservation; arrival-window admission always requires it."
+        },
+        "partyReferences": {
+          "description": "Typed source-owned party links retained as booking data. They prove no\nrelationship and confer no read or mutation authority.",
+          "items": {
+            "$ref": "#/$defs/PartyReference"
+          },
+          "type": "array"
+        },
+        "policyRevision": {
+          "description": "The policy revision the caller resolved the offering under.",
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "prerequisites": {
+          "description": "The party's held prerequisite references, matched against the\noffering's requirements.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "resource": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LocalId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The exact pool member the caller requires. This is a hard constraint\nonly when the offering opts into named selection; omission preserves\nfungible allocation."
+        },
+        "resourceUnits": {
+          "description": "Physical units required from the primary offering's pool. Omitted or\none preserves the legacy single-resource request and idempotency hash.",
+          "maximum": 2147483647,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "start": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "windowRevision": {
+          "description": "The window revision the caller resolved an arrival window under.",
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "offering",
+        "start",
+        "policyRevision",
+        "capabilities",
+        "prerequisites"
+      ],
+      "type": "object"
+    },
+    "ExternalReference": {
+      "additionalProperties": false,
+      "description": "An opaque link to a record owned by another product.\n\nScheduling stores and returns this tuple without resolving it. The\nidentifier names only the referenced record; callers must not put personal\ndata in any field.",
+      "properties": {
+        "identifier": {
+          "type": "string"
+        },
+        "product": {
+          "type": "string"
+        },
+        "recordType": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "product",
+        "recordType",
+        "identifier"
+      ],
+      "type": "object"
+    },
+    "GrantReference": {
+      "additionalProperties": false,
+      "description": "An approval reference, never an assertion or bearer credential. The shared\nCasework source requires the signed authority's original deadline to match.",
+      "properties": {
+        "expiresAt": {
+          "maximum": 9007199254740991,
+          "minimum": -9007199254740991,
+          "type": "integer"
+        },
+        "id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "expiresAt"
+      ],
+      "type": "object"
+    },
+    "LocalId": {
+      "description": "A local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`.",
+      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+      "type": "string"
+    },
+    "ManagerSelection": {
+      "description": "An explicit selector for a source-bound managing authority.\n\nThe selector carries no identity. Scheduling resolves the fixed signed\ntask-grant subject of the same name and verifies its current status.",
+      "enum": [
+        "schedulingManager"
+      ],
+      "type": "string"
+    },
+    "PartyCounts": {
+      "additionalProperties": false,
+      "description": "The declared party counts committed with a hold or appointment.\n\nRecipients are the people the service is delivered to; attendees are\neveryone expected to be present, recipients included. These values explain\na capacity decision. They are not an observation that attendance occurred,\nand neither value is an inventory quantity.",
+      "properties": {
+        "attendees": {
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "recipients": {
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "recipients",
+        "attendees"
+      ],
+      "type": "object"
+    },
+    "PartyReference": {
+      "additionalProperties": false,
+      "description": "A typed reference to a party record owned by another product.\n\nScheduling retains this value as booking data. It proves no relationship\nand grants no read or mutation authority.",
+      "properties": {
+        "reference": {
+          "$ref": "#/$defs/ExternalReference"
+        },
+        "role": {
+          "$ref": "#/$defs/PartyReferenceRole"
+        }
+      },
+      "required": [
+        "role",
+        "reference"
+      ],
+      "type": "object"
+    },
+    "PartyReferenceRole": {
+      "description": "The source-owned meaning of an opaque party reference.",
+      "enum": [
+        "beneficiary",
+        "organization"
+      ],
+      "type": "string"
+    },
+    "RescheduleAppointmentRequest": {
+      "additionalProperties": false,
+      "description": "The request behind `POST /v1/appointments/{id}/reschedule`.",
+      "properties": {
+        "admission": {
+          "$ref": "#/$defs/AdmissionRequest"
+        },
+        "observedRevision": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "observedRevision",
+        "admission"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "appointmentId": {
+      "format": "uuid",
+      "type": "string"
+    },
+    "grant": {
+      "$ref": "#/$defs/GrantReference"
+    },
+    "reschedule": {
+      "$ref": "#/$defs/RescheduleAppointmentRequest"
+    }
+  },
+  "required": [
+    "grant",
+    "appointmentId",
+    "reschedule"
+  ],
+  "title": "scheduling.reschedule-appointment/v1 input",
+  "type": "object"
+}

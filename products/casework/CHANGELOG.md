@@ -61,6 +61,11 @@
   created by an earlier release must be recreated, not upgraded: apply this
   release to a fresh database.
 
+- Support BReg's distinct, field-limited Proposal task-grant context profile
+  for current-source template subjects. Provider pairing, runtime configuration,
+  and development integration require the exact authored profile and do not
+  fall back to human display or review status.
+
 ## 0.43.0 - 2026-10-21
 
 - BREAKING: checked project, runtime, and dev-client definition namespaces reject

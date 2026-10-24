@@ -1,0 +1,685 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/coordinator/scenarios/scenarios.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/coordinator/scenarios/v1alpha1
+kind: CoordinatorScenarios
+cases:
+  - id: complete-bundle-alert-accepted
+    admittedAt: '2026-10-23T09:00:00Z'
+    input:
+      subscriptionId: 00000000-0000-4000-8000-000000000201
+      detailGrant: {id: 00000000-0000-4000-8000-000000000401, expiresAt: 1792749600}
+    replies:
+      read-subscription:
+        - type: success
+          value:
+            meta: {registryIdentifier: earlier-alert-source, datasetIdentifier: alert-subscriptions, entityTypeIdentifier: alert-subscription}
+            data:
+              recordIdentifier: 00000000-0000-4000-8000-000000000201
+              revisionIdentifier: revision-7
+              domainData:
+                conditionId: condition-7
+                scope: appointment
+                state: active
+                consent: true
+                expiresAt: '2026-10-24T09:00:00Z'
+                expiresOn: '2026-10-24'
+                destination: person@example.invalid
+                appointmentId: 00000000-0000-4000-8000-000000000101
+                appointmentRevision: 3
+                appointmentStart: '2026-10-30T10:00:00Z'
+                appointmentEnd: '2026-10-30T10:30:00Z'
+                desiredStart: '2026-10-29T09:00:00Z'
+                durationMinutes: 30
+                offering: consultation
+                resource: clinician-a
+                resourceUnits: 1
+                partyRecipients: 1
+                partyAttendees: 1
+                additionalOffering: consultation-room
+                additionalResource: room-a
+                additionalUnits: 1
+      read-appointment:
+        - type: success
+          value:
+            appointmentId: 00000000-0000-4000-8000-000000000101
+            offering: consultation
+            start: '2026-10-30T10:00:00Z'
+            end: '2026-10-30T10:30:00Z'
+            resource: clinician-a
+            units: 1
+            channel: null
+            manager: schedulingManager
+            revision: 3
+            state: confirmed
+            policyRevision: 1
+            createdAt: '2026-10-20T09:00:00Z'
+            cancelledAt: null
+            externalReferences: []
+      preview:
+        - type: success
+          value:
+            offering: consultation
+            start: '2026-10-29T09:00:00Z'
+            end: '2026-10-29T09:30:00Z'
+            capacityAvailable: true
+            publicCode: null
+      claim:
+        - type: success
+          value:
+            action: claim-alert
+            applicationId: 00000000-0000-4000-8000-000000000501
+            results: {subscription: {recordType: alert-subscription, recordId: 00000000-0000-4000-8000-000000000201, revision: 8}}
+      read-current-subscription:
+        - type: success
+          value:
+            meta: {registryIdentifier: earlier-alert-source, datasetIdentifier: alert-subscriptions, entityTypeIdentifier: alert-subscription}
+            data:
+              recordIdentifier: 00000000-0000-4000-8000-000000000201
+              revisionIdentifier: revision-8
+              domainData:
+                conditionId: condition-7
+                scope: appointment
+                consent: true
+                expiresAt: '2026-10-24T09:00:00Z'
+                expiresOn: '2026-10-24'
+                destination: person@example.invalid
+                appointmentId: 00000000-0000-4000-8000-000000000101
+                appointmentRevision: 3
+                appointmentStart: '2026-10-30T10:00:00Z'
+                appointmentEnd: '2026-10-30T10:30:00Z'
+                desiredStart: '2026-10-29T09:00:00Z'
+                durationMinutes: 30
+                offering: consultation
+                resource: clinician-a
+                resourceUnits: 1
+                partyRecipients: 1
+                partyAttendees: 1
+                additionalOffering: consultation-room
+                additionalResource: room-a
+                additionalUnits: 1
+                state: claimed
+      read-current-appointment:
+        - type: success
+          value:
+            appointmentId: 00000000-0000-4000-8000-000000000101
+            offering: consultation
+            start: '2026-10-30T10:00:00Z'
+            end: '2026-10-30T10:30:00Z'
+            resource: clinician-a
+            units: 1
+            channel: null
+            manager: schedulingManager
+            revision: 3
+            state: confirmed
+            policyRevision: 1
+            createdAt: '2026-10-20T09:00:00Z'
+            cancelledAt: null
+            externalReferences: []
+      final-preview:
+        - type: success
+          value:
+            offering: consultation
+            start: '2026-10-29T09:00:00Z'
+            end: '2026-10-29T09:30:00Z'
+            capacityAvailable: true
+            publicCode: null
+      authorize-dispatch:
+        - type: success
+          value:
+            action: authorize-alert-dispatch
+            applicationId: 00000000-0000-4000-8000-000000000502
+            results: {subscription: {recordType: alert-subscription, recordId: 00000000-0000-4000-8000-000000000201, revision: 9}}
+      read-dispatching-subscription:
+        - type: success
+          value:
+            meta: {registryIdentifier: earlier-alert-source, datasetIdentifier: alert-subscriptions, entityTypeIdentifier: alert-subscription}
+            data:
+              recordIdentifier: 00000000-0000-4000-8000-000000000201
+              revisionIdentifier: revision-9
+              domainData:
+                conditionId: condition-7
+                scope: appointment
+                state: dispatching
+                consent: true
+                expiresAt: '2026-10-24T09:00:00Z'
+                expiresOn: '2026-10-24'
+                destination: person@example.invalid
+                appointmentId: 00000000-0000-4000-8000-000000000101
+                appointmentRevision: 3
+                appointmentStart: '2026-10-30T10:00:00Z'
+                appointmentEnd: '2026-10-30T10:30:00Z'
+                desiredStart: '2026-10-29T09:00:00Z'
+                durationMinutes: 30
+                offering: consultation
+                resource: clinician-a
+                resourceUnits: 1
+                partyRecipients: 1
+                partyAttendees: 1
+                additionalOffering: consultation-room
+                additionalResource: room-a
+                additionalUnits: 1
+      read-dispatching-appointment:
+        - type: success
+          value:
+            appointmentId: 00000000-0000-4000-8000-000000000101
+            offering: consultation
+            start: '2026-10-30T10:00:00Z'
+            end: '2026-10-30T10:30:00Z'
+            resource: clinician-a
+            units: 1
+            channel: null
+            manager: schedulingManager
+            revision: 3
+            state: confirmed
+            policyRevision: 1
+            createdAt: '2026-10-20T09:00:00Z'
+            cancelledAt: null
+            externalReferences: []
+      notify:
+        - type: success
+          value:
+            id: 00000000-0000-4000-8000-000000000301
+            status: queued
+            links:
+              self: /v1/messages/00000000-0000-4000-8000-000000000301
+              cancel: /v1/messages/00000000-0000-4000-8000-000000000301/cancel
+      record-submission:
+        - type: success
+          value:
+            action: record-alert-submission
+            applicationId: 00000000-0000-4000-8000-000000000503
+            results: {subscription: {recordType: alert-subscription, recordId: 00000000-0000-4000-8000-000000000201, revision: 10}}
+    expect:
+      path: [read-subscription, source-state, read-appointment, appointment-state, preview, capacity, claim-state, claim, read-current-subscription, read-current-appointment, final-state, final-preview, final-capacity, authorize-dispatch, read-dispatching-subscription, read-dispatching-appointment, dispatch-state, notify, record-submission, accepted]
+      state: completed
+      outcome: {type: named, value: message-accepted}
+      output: {messageId: 00000000-0000-4000-8000-000000000301}
+  - id: withdrawal-before-dispatch-suppresses
+    admittedAt: '2026-10-23T09:00:00Z'
+    input:
+      subscriptionId: 00000000-0000-4000-8000-000000000201
+      detailGrant: {id: 00000000-0000-4000-8000-000000000401, expiresAt: 1792749600}
+    replies:
+      read-subscription:
+        - type: success
+          value:
+            meta: {registryIdentifier: earlier-alert-source, datasetIdentifier: alert-subscriptions, entityTypeIdentifier: alert-subscription}
+            data:
+              recordIdentifier: 00000000-0000-4000-8000-000000000201
+              revisionIdentifier: revision-7
+              domainData:
+                conditionId: condition-7
+                scope: appointment
+                state: active
+                consent: true
+                expiresAt: '2026-10-24T09:00:00Z'
+                expiresOn: '2026-10-24'
+                destination: person@example.invalid
+                appointmentId: 00000000-0000-4000-8000-000000000101
+                appointmentRevision: 3
+                appointmentStart: '2026-10-30T10:00:00Z'
+                appointmentEnd: '2026-10-30T10:30:00Z'
+                desiredStart: '2026-10-29T09:00:00Z'
+                durationMinutes: 30
+                offering: consultation
+                resource: clinician-a
+                resourceUnits: 1
+                partyRecipients: 1
+                partyAttendees: 1
+                additionalOffering: consultation-room
+                additionalResource: room-a
+                additionalUnits: 1
+      read-appointment: [{type: success, value: {appointmentId: 00000000-0000-4000-8000-000000000101, offering: consultation, start: '2026-10-30T10:00:00Z', end: '2026-10-30T10:30:00Z', resource: clinician-a, units: 1, channel: null, manager: schedulingManager, revision: 3, state: confirmed, policyRevision: 1, createdAt: '2026-10-20T09:00:00Z', cancelledAt: null, externalReferences: []}}]
+      preview: [{type: success, value: {offering: consultation, start: '2026-10-29T09:00:00Z', end: '2026-10-29T09:30:00Z', capacityAvailable: true, publicCode: null}}]
+      claim:
+        - type: success
+          value:
+            action: claim-alert
+            applicationId: 00000000-0000-4000-8000-000000000504
+            results: {subscription: {recordType: alert-subscription, recordId: 00000000-0000-4000-8000-000000000201, revision: 8}}
+      read-current-subscription:
+        - type: success
+          value:
+            meta: {registryIdentifier: earlier-alert-source, datasetIdentifier: alert-subscriptions, entityTypeIdentifier: alert-subscription}
+            data:
+              recordIdentifier: 00000000-0000-4000-8000-000000000201
+              revisionIdentifier: revision-9
+              domainData:
+                conditionId: condition-7
+                scope: appointment
+                expiresAt: '2026-10-24T09:00:00Z'
+                expiresOn: '2026-10-24'
+                destination: person@example.invalid
+                appointmentId: 00000000-0000-4000-8000-000000000101
+                appointmentRevision: 3
+                appointmentStart: '2026-10-30T10:00:00Z'
+                appointmentEnd: '2026-10-30T10:30:00Z'
+                desiredStart: '2026-10-29T09:00:00Z'
+                durationMinutes: 30
+                offering: consultation
+                resource: clinician-a
+                resourceUnits: 1
+                partyRecipients: 1
+                partyAttendees: 1
+                additionalOffering: consultation-room
+                additionalResource: room-a
+                additionalUnits: 1
+                state: withdrawn
+                consent: false
+      read-current-appointment: [{type: success, value: {appointmentId: 00000000-0000-4000-8000-000000000101, offering: consultation, start: '2026-10-30T10:00:00Z', end: '2026-10-30T10:30:00Z', resource: clinician-a, units: 1, channel: null, manager: schedulingManager, revision: 3, state: confirmed, policyRevision: 1, createdAt: '2026-10-20T09:00:00Z', cancelledAt: null, externalReferences: []}}]
+    expect:
+      path: [read-subscription, source-state, read-appointment, appointment-state, preview, capacity, claim-state, claim, read-current-subscription, read-current-appointment, final-state, suppressed]
+      state: completed
+      outcome: {type: named, value: source-suppressed}
+      output: null
+  - id: stale-rescheduled-appointment-suppresses
+    admittedAt: '2026-10-23T09:00:00Z'
+    input:
+      subscriptionId: 00000000-0000-4000-8000-000000000201
+      detailGrant: {id: 00000000-0000-4000-8000-000000000401, expiresAt: 1792749600}
+    replies:
+      read-subscription:
+        - type: success
+          value:
+            meta: {registryIdentifier: earlier-alert-source, datasetIdentifier: alert-subscriptions, entityTypeIdentifier: alert-subscription}
+            data:
+              recordIdentifier: 00000000-0000-4000-8000-000000000201
+              revisionIdentifier: revision-7
+              domainData:
+                conditionId: condition-7
+                scope: appointment
+                state: active
+                consent: true
+                expiresAt: '2026-10-24T09:00:00Z'
+                expiresOn: '2026-10-24'
+                destination: person@example.invalid
+                appointmentId: 00000000-0000-4000-8000-000000000101
+                appointmentRevision: 3
+                appointmentStart: '2026-10-30T10:00:00Z'
+                appointmentEnd: '2026-10-30T10:30:00Z'
+                desiredStart: '2026-10-29T09:00:00Z'
+                durationMinutes: 30
+                offering: consultation
+                resource: clinician-a
+                resourceUnits: 1
+                partyRecipients: 1
+                partyAttendees: 1
+                additionalOffering: consultation-room
+                additionalResource: room-a
+                additionalUnits: 1
+      read-appointment:
+        - type: success
+          value:
+            appointmentId: 00000000-0000-4000-8000-000000000101
+            offering: consultation
+            resource: clinician-a
+            units: 1
+            channel: null
+            manager: schedulingManager
+            state: confirmed
+            policyRevision: 1
+            createdAt: '2026-10-20T09:00:00Z'
+            cancelledAt: null
+            externalReferences: []
+            revision: 4
+            start: '2026-10-30T11:00:00Z'
+            end: '2026-10-30T11:30:00Z'
+    expect:
+      path: [read-subscription, source-state, read-appointment, appointment-state, appointment-changed]
+      state: completed
+      outcome: {type: named, value: appointment-changed}
+      output: null
+  - id: another-run-already-owns-dispatch
+    admittedAt: '2026-10-23T09:00:00Z'
+    input:
+      subscriptionId: 00000000-0000-4000-8000-000000000201
+      detailGrant: {id: 00000000-0000-4000-8000-000000000401, expiresAt: 1792749600}
+    replies:
+      read-subscription:
+        - type: success
+          value:
+            meta: {registryIdentifier: earlier-alert-source, datasetIdentifier: alert-subscriptions, entityTypeIdentifier: alert-subscription}
+            data:
+              recordIdentifier: 00000000-0000-4000-8000-000000000201
+              revisionIdentifier: revision-9
+              domainData:
+                conditionId: condition-7
+                scope: appointment
+                consent: true
+                expiresAt: '2026-10-24T09:00:00Z'
+                expiresOn: '2026-10-24'
+                destination: person@example.invalid
+                appointmentId: 00000000-0000-4000-8000-000000000101
+                appointmentRevision: 3
+                appointmentStart: '2026-10-30T10:00:00Z'
+                appointmentEnd: '2026-10-30T10:30:00Z'
+                desiredStart: '2026-10-29T09:00:00Z'
+                durationMinutes: 30
+                offering: consultation
+                resource: clinician-a
+                resourceUnits: 1
+                partyRecipients: 1
+                partyAttendees: 1
+                additionalOffering: consultation-room
+                additionalResource: room-a
+                additionalUnits: 1
+                state: dispatching
+    expect:
+      path: [read-subscription, source-state, dispatch-owned]
+      state: completed
+      outcome: {type: named, value: existing-run-owns-dispatch}
+      output: null
+  - id: message-response-lost-retry-same
+    admittedAt: '2026-10-23T09:00:00Z'
+    input:
+      subscriptionId: 00000000-0000-4000-8000-000000000201
+      detailGrant: {id: 00000000-0000-4000-8000-000000000401, expiresAt: 1792749600}
+    replies:
+      read-subscription:
+        - type: success
+          value:
+            meta: {registryIdentifier: earlier-alert-source, datasetIdentifier: alert-subscriptions, entityTypeIdentifier: alert-subscription}
+            data:
+              recordIdentifier: 00000000-0000-4000-8000-000000000201
+              revisionIdentifier: revision-7
+              domainData:
+                conditionId: condition-7
+                scope: appointment
+                state: active
+                consent: true
+                expiresAt: '2026-10-24T09:00:00Z'
+                expiresOn: '2026-10-24'
+                destination: person@example.invalid
+                appointmentId: 00000000-0000-4000-8000-000000000101
+                appointmentRevision: 3
+                appointmentStart: '2026-10-30T10:00:00Z'
+                appointmentEnd: '2026-10-30T10:30:00Z'
+                desiredStart: '2026-10-29T09:00:00Z'
+                durationMinutes: 30
+                offering: consultation
+                resource: clinician-a
+                resourceUnits: 1
+                partyRecipients: 1
+                partyAttendees: 1
+                additionalOffering: consultation-room
+                additionalResource: room-a
+                additionalUnits: 1
+      read-appointment:
+        - type: success
+          value:
+            appointmentId: 00000000-0000-4000-8000-000000000101
+            offering: consultation
+            start: '2026-10-30T10:00:00Z'
+            end: '2026-10-30T10:30:00Z'
+            resource: clinician-a
+            units: 1
+            channel: null
+            manager: schedulingManager
+            revision: 3
+            state: confirmed
+            policyRevision: 1
+            createdAt: '2026-10-20T09:00:00Z'
+            cancelledAt: null
+            externalReferences: []
+      preview:
+        - type: success
+          value:
+            offering: consultation
+            start: '2026-10-29T09:00:00Z'
+            end: '2026-10-29T09:30:00Z'
+            capacityAvailable: true
+            publicCode: null
+      claim:
+        - type: success
+          value:
+            action: claim-alert
+            applicationId: 00000000-0000-4000-8000-000000000501
+            results: {subscription: {recordType: alert-subscription, recordId: 00000000-0000-4000-8000-000000000201, revision: 8}}
+      read-current-subscription:
+        - type: success
+          value:
+            meta: {registryIdentifier: earlier-alert-source, datasetIdentifier: alert-subscriptions, entityTypeIdentifier: alert-subscription}
+            data:
+              recordIdentifier: 00000000-0000-4000-8000-000000000201
+              revisionIdentifier: revision-8
+              domainData:
+                conditionId: condition-7
+                scope: appointment
+                consent: true
+                expiresAt: '2026-10-24T09:00:00Z'
+                expiresOn: '2026-10-24'
+                destination: person@example.invalid
+                appointmentId: 00000000-0000-4000-8000-000000000101
+                appointmentRevision: 3
+                appointmentStart: '2026-10-30T10:00:00Z'
+                appointmentEnd: '2026-10-30T10:30:00Z'
+                desiredStart: '2026-10-29T09:00:00Z'
+                durationMinutes: 30
+                offering: consultation
+                resource: clinician-a
+                resourceUnits: 1
+                partyRecipients: 1
+                partyAttendees: 1
+                additionalOffering: consultation-room
+                additionalResource: room-a
+                additionalUnits: 1
+                state: claimed
+      read-current-appointment:
+        - type: success
+          value:
+            appointmentId: 00000000-0000-4000-8000-000000000101
+            offering: consultation
+            start: '2026-10-30T10:00:00Z'
+            end: '2026-10-30T10:30:00Z'
+            resource: clinician-a
+            units: 1
+            channel: null
+            manager: schedulingManager
+            revision: 3
+            state: confirmed
+            policyRevision: 1
+            createdAt: '2026-10-20T09:00:00Z'
+            cancelledAt: null
+            externalReferences: []
+      final-preview:
+        - type: success
+          value:
+            offering: consultation
+            start: '2026-10-29T09:00:00Z'
+            end: '2026-10-29T09:30:00Z'
+            capacityAvailable: true
+            publicCode: null
+      authorize-dispatch:
+        - type: success
+          value:
+            action: authorize-alert-dispatch
+            applicationId: 00000000-0000-4000-8000-000000000502
+            results: {subscription: {recordType: alert-subscription, recordId: 00000000-0000-4000-8000-000000000201, revision: 9}}
+      read-dispatching-subscription:
+        - type: success
+          value:
+            meta: {registryIdentifier: earlier-alert-source, datasetIdentifier: alert-subscriptions, entityTypeIdentifier: alert-subscription}
+            data:
+              recordIdentifier: 00000000-0000-4000-8000-000000000201
+              revisionIdentifier: revision-9
+              domainData:
+                conditionId: condition-7
+                scope: appointment
+                state: dispatching
+                consent: true
+                expiresAt: '2026-10-24T09:00:00Z'
+                expiresOn: '2026-10-24'
+                destination: person@example.invalid
+                appointmentId: 00000000-0000-4000-8000-000000000101
+                appointmentRevision: 3
+                appointmentStart: '2026-10-30T10:00:00Z'
+                appointmentEnd: '2026-10-30T10:30:00Z'
+                desiredStart: '2026-10-29T09:00:00Z'
+                durationMinutes: 30
+                offering: consultation
+                resource: clinician-a
+                resourceUnits: 1
+                partyRecipients: 1
+                partyAttendees: 1
+                additionalOffering: consultation-room
+                additionalResource: room-a
+                additionalUnits: 1
+      read-dispatching-appointment:
+        - type: success
+          value:
+            appointmentId: 00000000-0000-4000-8000-000000000101
+            offering: consultation
+            start: '2026-10-30T10:00:00Z'
+            end: '2026-10-30T10:30:00Z'
+            resource: clinician-a
+            units: 1
+            channel: null
+            manager: schedulingManager
+            revision: 3
+            state: confirmed
+            policyRevision: 1
+            createdAt: '2026-10-20T09:00:00Z'
+            cancelledAt: null
+            externalReferences: []
+      notify:
+        - type: uncertain
+          code: transport-uncertain
+        - type: success
+          value:
+            id: 00000000-0000-4000-8000-000000000301
+            status: queued
+            links:
+              self: /v1/messages/00000000-0000-4000-8000-000000000301
+              cancel: /v1/messages/00000000-0000-4000-8000-000000000301/cancel
+      record-submission:
+        - type: success
+          value:
+            action: record-alert-submission
+            applicationId: 00000000-0000-4000-8000-000000000503
+            results: {subscription: {recordType: alert-subscription, recordId: 00000000-0000-4000-8000-000000000201, revision: 10}}
+    expect:
+      path: [read-subscription, source-state, read-appointment, appointment-state, preview, capacity, claim-state, claim, read-current-subscription, read-current-appointment, final-state, final-preview, final-capacity, authorize-dispatch, read-dispatching-subscription, read-dispatching-appointment, dispatch-state, notify, record-submission, accepted]
+      state: completed
+      outcome: {type: named, value: message-accepted}
+      output: {messageId: 00000000-0000-4000-8000-000000000301}
+    recovery:
+      notify: retry-same
+  - id: already-notified-stops-before-scheduling
+    admittedAt: '2026-10-23T09:00:00Z'
+    input:
+      subscriptionId: 00000000-0000-4000-8000-000000000201
+      detailGrant: {id: 00000000-0000-4000-8000-000000000401, expiresAt: 1792749600}
+    replies:
+      read-subscription:
+        - type: success
+          value:
+            meta: {registryIdentifier: earlier-alert-source, datasetIdentifier: alert-subscriptions, entityTypeIdentifier: alert-subscription}
+            data:
+              recordIdentifier: 00000000-0000-4000-8000-000000000201
+              revisionIdentifier: revision-10
+              domainData:
+                conditionId: condition-7
+                scope: appointment
+                state: notified
+                consent: true
+                expiresAt: '2026-10-24T09:00:00Z'
+                expiresOn: '2026-10-24'
+                destination: person@example.invalid
+                appointmentId: 00000000-0000-4000-8000-000000000101
+                appointmentRevision: 3
+                appointmentStart: '2026-10-30T10:00:00Z'
+                appointmentEnd: '2026-10-30T10:30:00Z'
+                desiredStart: '2026-10-29T09:00:00Z'
+                durationMinutes: 30
+                offering: consultation
+                resource: clinician-a
+                resourceUnits: 1
+                partyRecipients: 1
+                partyAttendees: 1
+                additionalOffering: consultation-room
+                additionalResource: room-a
+                additionalUnits: 1
+    expect:
+      path: [read-subscription, source-state, already-notified]
+      state: completed
+      outcome: {type: named, value: already-notified}
+      output: null
+  - id: initial-preview-finds-no-capacity
+    admittedAt: '2026-10-23T09:00:00Z'
+    input:
+      subscriptionId: 00000000-0000-4000-8000-000000000201
+      detailGrant: {id: 00000000-0000-4000-8000-000000000401, expiresAt: 1792749600}
+    replies:
+      read-subscription:
+        - type: success
+          value:
+            meta: {registryIdentifier: earlier-alert-source, datasetIdentifier: alert-subscriptions, entityTypeIdentifier: alert-subscription}
+            data:
+              recordIdentifier: 00000000-0000-4000-8000-000000000201
+              revisionIdentifier: revision-7
+              domainData: {conditionId: condition-7, scope: appointment, state: active, consent: true, expiresAt: '2026-10-24T09:00:00Z', expiresOn: '2026-10-24', destination: person@example.invalid, appointmentId: 00000000-0000-4000-8000-000000000101, appointmentRevision: 3, appointmentStart: '2026-10-30T10:00:00Z', appointmentEnd: '2026-10-30T10:30:00Z', desiredStart: '2026-10-29T09:00:00Z', durationMinutes: 30, offering: consultation, resource: clinician-a, resourceUnits: 1, partyRecipients: 1, partyAttendees: 1, additionalOffering: consultation-room, additionalResource: room-a, additionalUnits: 1}
+      read-appointment:
+        - type: success
+          value: {appointmentId: 00000000-0000-4000-8000-000000000101, offering: consultation, start: '2026-10-30T10:00:00Z', end: '2026-10-30T10:30:00Z', resource: clinician-a, units: 1, channel: null, manager: schedulingManager, revision: 3, state: confirmed, policyRevision: 1, createdAt: '2026-10-20T09:00:00Z', cancelledAt: null, externalReferences: []}
+      preview:
+        - type: success
+          value: {offering: consultation, start: '2026-10-29T09:00:00Z', end: '2026-10-29T09:30:00Z', capacityAvailable: false, publicCode: null}
+    expect:
+      path: [read-subscription, source-state, read-appointment, appointment-state, preview, capacity, no-capacity]
+      state: completed
+      outcome: {type: named, value: no-current-capacity}
+      output: null
+  - id: capacity-disappears-after-source-claim
+    admittedAt: '2026-10-23T09:00:00Z'
+    input:
+      subscriptionId: 00000000-0000-4000-8000-000000000201
+      detailGrant: {id: 00000000-0000-4000-8000-000000000401, expiresAt: 1792749600}
+    replies:
+      read-subscription:
+        - type: success
+          value:
+            meta: {registryIdentifier: earlier-alert-source, datasetIdentifier: alert-subscriptions, entityTypeIdentifier: alert-subscription}
+            data:
+              recordIdentifier: 00000000-0000-4000-8000-000000000201
+              revisionIdentifier: revision-7
+              domainData: {conditionId: condition-7, scope: appointment, state: active, consent: true, expiresAt: '2026-10-24T09:00:00Z', expiresOn: '2026-10-24', destination: person@example.invalid, appointmentId: 00000000-0000-4000-8000-000000000101, appointmentRevision: 3, appointmentStart: '2026-10-30T10:00:00Z', appointmentEnd: '2026-10-30T10:30:00Z', desiredStart: '2026-10-29T09:00:00Z', durationMinutes: 30, offering: consultation, resource: clinician-a, resourceUnits: 1, partyRecipients: 1, partyAttendees: 1, additionalOffering: consultation-room, additionalResource: room-a, additionalUnits: 1}
+      read-appointment:
+        - type: success
+          value: {appointmentId: 00000000-0000-4000-8000-000000000101, offering: consultation, start: '2026-10-30T10:00:00Z', end: '2026-10-30T10:30:00Z', resource: clinician-a, units: 1, channel: null, manager: schedulingManager, revision: 3, state: confirmed, policyRevision: 1, createdAt: '2026-10-20T09:00:00Z', cancelledAt: null, externalReferences: []}
+      preview:
+        - type: success
+          value: {offering: consultation, start: '2026-10-29T09:00:00Z', end: '2026-10-29T09:30:00Z', capacityAvailable: true, publicCode: null}
+      claim:
+        - type: success
+          value: {action: claim-alert, applicationId: 00000000-0000-4000-8000-000000000504, results: {subscription: {recordType: alert-subscription, recordId: 00000000-0000-4000-8000-000000000201, revision: 8}}}
+      read-current-subscription:
+        - type: success
+          value:
+            meta: {registryIdentifier: earlier-alert-source, datasetIdentifier: alert-subscriptions, entityTypeIdentifier: alert-subscription}
+            data:
+              recordIdentifier: 00000000-0000-4000-8000-000000000201
+              revisionIdentifier: revision-8
+              domainData: {conditionId: condition-7, scope: appointment, state: claimed, consent: true, expiresAt: '2026-10-24T09:00:00Z', expiresOn: '2026-10-24', destination: person@example.invalid, appointmentId: 00000000-0000-4000-8000-000000000101, appointmentRevision: 3, appointmentStart: '2026-10-30T10:00:00Z', appointmentEnd: '2026-10-30T10:30:00Z', desiredStart: '2026-10-29T09:00:00Z', durationMinutes: 30, offering: consultation, resource: clinician-a, resourceUnits: 1, partyRecipients: 1, partyAttendees: 1, additionalOffering: consultation-room, additionalResource: room-a, additionalUnits: 1}
+      read-current-appointment:
+        - type: success
+          value: {appointmentId: 00000000-0000-4000-8000-000000000101, offering: consultation, start: '2026-10-30T10:00:00Z', end: '2026-10-30T10:30:00Z', resource: clinician-a, units: 1, channel: null, manager: schedulingManager, revision: 3, state: confirmed, policyRevision: 1, createdAt: '2026-10-20T09:00:00Z', cancelledAt: null, externalReferences: []}
+      final-preview:
+        - type: success
+          value: {offering: consultation, start: '2026-10-29T09:00:00Z', end: '2026-10-29T09:30:00Z', capacityAvailable: false, publicCode: null}
+    expect:
+      path: [read-subscription, source-state, read-appointment, appointment-state, preview, capacity, claim-state, claim, read-current-subscription, read-current-appointment, final-state, final-preview, final-capacity, capacity-changed]
+      state: completed
+      outcome: {type: named, value: capacity-changed}
+      output: null
+  - id: source-read-refused
+    admittedAt: '2026-10-23T09:00:00Z'
+    input:
+      subscriptionId: 00000000-0000-4000-8000-000000000201
+      detailGrant: {id: 00000000-0000-4000-8000-000000000401, expiresAt: 1792749600}
+    replies:
+      read-subscription:
+        - type: refused
+          code: product-forbidden
+    expect:
+      path: [read-subscription]
+      state: refused
+      outcome: {type: none}

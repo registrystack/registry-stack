@@ -1011,10 +1011,13 @@ pub(crate) fn validate_proposal_permission(
     // Input projections expose only the separately selected frozen input. Other
     // Proposal operations can expose broader input or mutate lifecycle state,
     // so they still need separate authority.
-    let display_only = grant
-        .operations
-        .iter()
-        .all(|operation| *operation == crate::contract::ProposalOperation::GetReviewContext);
+    let display_only = grant.operations.iter().all(|operation| {
+        matches!(
+            operation,
+            crate::contract::ProposalOperation::GetReviewContext
+                | crate::contract::ProposalOperation::GetTaskGrantContext
+        )
+    });
     if !display_only
         && grant.targets.iter().any(|target| {
             entities

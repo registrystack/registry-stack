@@ -1,0 +1,333 @@
+{
+  "$defs": {
+    "AllocationDocument": {
+      "description": "One concrete part of an authorized logical reservation. A counted line\nmay have several rows when capacity is split across members.",
+      "properties": {
+        "occupiedEnd": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "occupiedStart": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "offering": {
+          "type": "string"
+        },
+        "requirement": {
+          "$ref": "#/$defs/AllocationRequirementDocument"
+        },
+        "resource": {
+          "type": "string"
+        },
+        "units": {
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "requirement",
+        "offering",
+        "resource",
+        "units",
+        "occupiedStart",
+        "occupiedEnd"
+      ],
+      "type": "object"
+    },
+    "AllocationRequirementDocument": {
+      "description": "Which canonical request line produced one concrete allocation.",
+      "oneOf": [
+        {
+          "properties": {
+            "kind": {
+              "const": "primary",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "index": {
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "kind": {
+              "const": "additional",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "index"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "AppointmentStateDocument": {
+      "description": "The lifecycle state of an appointment on the wire.",
+      "enum": [
+        "confirmed",
+        "cancelled"
+      ],
+      "type": "string"
+    },
+    "AttendanceDocument": {
+      "description": "The current attendance observation for one appointment visit.",
+      "properties": {
+        "appointmentId": {
+          "type": "string"
+        },
+        "appointmentRevision": {
+          "description": "The booking revision the recorder observed. A later cancellation may\nadvance the current booking revision without changing this fact.",
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "observedAt": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "recordedAt": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "revision": {
+          "description": "Globally monotonic within the appointment, including across visits.",
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "state": {
+          "$ref": "#/$defs/AttendanceState"
+        }
+      },
+      "required": [
+        "appointmentId",
+        "appointmentRevision",
+        "revision",
+        "state",
+        "observedAt",
+        "recordedAt"
+      ],
+      "type": "object"
+    },
+    "AttendanceState": {
+      "description": "One authorized observation about a logical appointment.\n\nThis is deliberately appointment-level. It neither identifies one person\nnor derives a count from the booking party or its reserved units.",
+      "enum": [
+        "arrived",
+        "completed",
+        "no-show"
+      ],
+      "type": "string"
+    },
+    "ExternalReference": {
+      "additionalProperties": false,
+      "description": "An opaque link to a record owned by another product.\n\nScheduling stores and returns this tuple without resolving it. The\nidentifier names only the referenced record; callers must not put personal\ndata in any field.",
+      "properties": {
+        "identifier": {
+          "type": "string"
+        },
+        "product": {
+          "type": "string"
+        },
+        "recordType": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "product",
+        "recordType",
+        "identifier"
+      ],
+      "type": "object"
+    },
+    "ManagerSelection": {
+      "description": "An explicit selector for a source-bound managing authority.\n\nThe selector carries no identity. Scheduling resolves the fixed signed\ntask-grant subject of the same name and verifies its current status.",
+      "enum": [
+        "schedulingManager"
+      ],
+      "type": "string"
+    },
+    "PartyCounts": {
+      "additionalProperties": false,
+      "description": "The declared party counts committed with a hold or appointment.\n\nRecipients are the people the service is delivered to; attendees are\neveryone expected to be present, recipients included. These values explain\na capacity decision. They are not an observation that attendance occurred,\nand neither value is an inventory quantity.",
+      "properties": {
+        "attendees": {
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "recipients": {
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "recipients",
+        "attendees"
+      ],
+      "type": "object"
+    },
+    "PartyReference": {
+      "additionalProperties": false,
+      "description": "A typed reference to a party record owned by another product.\n\nScheduling retains this value as booking data. It proves no relationship\nand grants no read or mutation authority.",
+      "properties": {
+        "reference": {
+          "$ref": "#/$defs/ExternalReference"
+        },
+        "role": {
+          "$ref": "#/$defs/PartyReferenceRole"
+        }
+      },
+      "required": [
+        "role",
+        "reference"
+      ],
+      "type": "object"
+    },
+    "PartyReferenceRole": {
+      "description": "The source-owned meaning of an opaque party reference.",
+      "enum": [
+        "beneficiary",
+        "organization"
+      ],
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "A confirmed appointment.",
+  "properties": {
+    "allocations": {
+      "description": "Present for a quantity or multi-line reservation. Omitted on the\nlegacy single-resource path.",
+      "items": {
+        "$ref": "#/$defs/AllocationDocument"
+      },
+      "type": "array"
+    },
+    "appointmentId": {
+      "type": "string"
+    },
+    "attendance": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/AttendanceDocument"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "The current observation for this appointment's current visit, when an\nexact-detail authority is reading it."
+    },
+    "cancelledAt": {
+      "format": "date-time",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "channel": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "createdAt": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "end": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "externalReferences": {
+      "items": {
+        "$ref": "#/$defs/ExternalReference"
+      },
+      "type": "array"
+    },
+    "manager": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ManagerSelection"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "offering": {
+      "type": "string"
+    },
+    "party": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/PartyCounts"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "partyReferences": {
+      "items": {
+        "$ref": "#/$defs/PartyReference"
+      },
+      "type": "array"
+    },
+    "policyRevision": {
+      "maximum": 9007199254740991,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "resource": {
+      "description": "The pool member serving the appointment, for exact-time offerings.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "revision": {
+      "maximum": 9007199254740991,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "start": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "state": {
+      "$ref": "#/$defs/AppointmentStateDocument"
+    },
+    "units": {
+      "maximum": 4294967295,
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "appointmentId",
+    "offering",
+    "start",
+    "end",
+    "resource",
+    "units",
+    "channel",
+    "revision",
+    "state",
+    "policyRevision",
+    "createdAt",
+    "cancelledAt",
+    "externalReferences"
+  ],
+  "title": "scheduling.confirm-hold/v1 output",
+  "type": "object"
+}

@@ -29,7 +29,7 @@ use axum::http::header::{
 use axum::http::{HeaderMap, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{delete, get, post};
+use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
 use chrono::{DateTime, Utc};
 use registry_platform_authcommon::parse_bearer_token;
@@ -37,11 +37,13 @@ use registry_platform_httpsec::{
     request_body_limit_default, security_headers, CspBuilder, ProblemBody, TraceContext,
 };
 use registry_scheduling_core::{
-    type_uri, valid_identifier, valid_reference, AdmissionRequest, CancelAppointmentRequest,
-    CreateAppointmentRequest, ExternalReference, ProblemCode, RescheduleAppointmentRequest,
-    APPOINTMENTS_PATH, APPOINTMENT_RECEIPT_PATH, AVAILABILITY_EXPLAIN_PATH, AVAILABILITY_PATH,
-    HOLDS_PATH, IDEMPOTENCY_KEY_HEADER, LOCATIONS_PATH, MAXIMUM_COLLECTION_ENTRIES,
-    MAXIMUM_IDEMPOTENCY_KEY_BYTES, OFFERINGS_PATH, RESOURCES_PATH, SCHEDULING_PATH, SERVICES_PATH,
+    type_uri, valid_identifier, valid_reference, AdmissionRequest, AvailabilityPreviewRequest,
+    CancelAppointmentRequest, CreateAppointmentRequest, ExternalReference, ProblemCode,
+    RecordAttendanceRequest, RescheduleAppointmentRequest, APPOINTMENTS_PATH,
+    APPOINTMENT_RECEIPT_PATH, AVAILABILITY_EXPLAIN_PATH, AVAILABILITY_PATH,
+    AVAILABILITY_PREVIEW_PATH, HOLDS_PATH, IDEMPOTENCY_KEY_HEADER, LOCATIONS_PATH,
+    MAXIMUM_COLLECTION_ENTRIES, MAXIMUM_IDEMPOTENCY_KEY_BYTES, OFFERINGS_PATH,
+    OPERATIONAL_APPOINTMENTS_PATH, RESOURCES_PATH, SCHEDULING_PATH, SERVICES_PATH,
 };
 use serde::Deserialize;
 use serde_json::Value;
@@ -49,7 +51,11 @@ use uuid::Uuid;
 
 use crate::auth::{AuthenticationError, SchedulingAuthenticator};
 use crate::service::{Caller, CommitmentAnswer, SchedulingService, ServiceError};
-use crate::store::PostgresStore;
+use crate::source_busy::{
+    validate_busy_reconciliation_request, BusyReconciliationRequest, BusyRequestError,
+    BUSY_SOURCE_APPLY_PATH, BUSY_SOURCE_PREVIEW_PATH,
+};
+use crate::store::BusyStoreError;
 
 tokio::task_local! {
     static REQUEST_TRACE: TraceContext;
@@ -59,7 +65,6 @@ tokio::task_local! {
 pub struct HttpState {
     pub service: Arc<SchedulingService>,
     pub authenticator: Arc<SchedulingAuthenticator>,
-    pub store: PostgresStore,
 }
 
 const HOLD_ROUTE: &str = "/v1/holds/{hold_id}";
@@ -67,7 +72,7 @@ const APPOINTMENT_ROUTE: &str = "/v1/appointments/{appointment_id}";
 const APPOINTMENT_RESCHEDULE_ROUTE: &str = "/v1/appointments/{appointment_id}/reschedule";
 const APPOINTMENT_CANCEL_ROUTE: &str = "/v1/appointments/{appointment_id}/cancel";
 const APPOINTMENT_HISTORY_ROUTE: &str = "/v1/appointments/{appointment_id}/history";
-
+const APPOINTMENT_ATTENDANCE_ROUTE: &str = "/v1/appointments/{appointment_id}/attendance";
 pub fn router(state: HttpState) -> Router {
     http_edge(
         Router::new()
@@ -79,18 +84,107 @@ pub fn router(state: HttpState) -> Router {
             .route(RESOURCES_PATH, get(list_resources))
             .route(LOCATIONS_PATH, get(list_locations))
             .route(AVAILABILITY_PATH, get(availability))
+            .route(AVAILABILITY_PREVIEW_PATH, post(preview_availability))
             .route(AVAILABILITY_EXPLAIN_PATH, get(explain))
+            .route(BUSY_SOURCE_PREVIEW_PATH, post(preview_source_busy))
+            .route(BUSY_SOURCE_APPLY_PATH, post(apply_source_busy))
             .route(HOLDS_PATH, post(create_hold))
             .route(HOLD_ROUTE, delete(release_hold))
+            .route(
+                OPERATIONAL_APPOINTMENTS_PATH,
+                get(list_operational_appointments),
+            )
             .route(APPOINTMENTS_PATH, get(list_appointments))
             .route(APPOINTMENTS_PATH, post(create_appointment))
             .route(APPOINTMENT_RECEIPT_PATH, post(appointment_receipt))
             .route(APPOINTMENT_ROUTE, get(get_appointment))
             .route(APPOINTMENT_RESCHEDULE_ROUTE, post(reschedule_appointment))
             .route(APPOINTMENT_CANCEL_ROUTE, post(cancel_appointment))
-            .route(APPOINTMENT_HISTORY_ROUTE, get(appointment_history)),
+            .route(APPOINTMENT_HISTORY_ROUTE, get(appointment_history))
+            .route(APPOINTMENT_ATTENDANCE_ROUTE, put(record_attendance)),
     )
     .with_state(state)
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BusySourceProfileQuery {
+    profile: String,
+}
+
+async fn preview_source_busy(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Query(query): Query<BusySourceProfileQuery>,
+    Json(request): Json<BusyReconciliationRequest>,
+) -> Result<Json<crate::source_busy::BusyReconciliationPreview>, HttpError> {
+    let authority = authenticate_busy_source(&state, &headers, &query.profile).await?;
+    validate_busy_reconciliation_request(&request, &authority, state.service.observed_now())
+        .map_err(busy_request_problem)?;
+    state
+        .service
+        .preview_source_busy(&authority, &request)
+        .await
+        .map(Json)
+        .map_err(busy_store_problem)
+}
+
+async fn apply_source_busy(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Query(query): Query<BusySourceProfileQuery>,
+    Json(request): Json<BusyReconciliationRequest>,
+) -> Result<Json<crate::source_busy::BusyApplyOutcome>, HttpError> {
+    let authority = authenticate_busy_source(&state, &headers, &query.profile).await?;
+    validate_busy_reconciliation_request(&request, &authority, state.service.observed_now())
+        .map_err(busy_request_problem)?;
+    state
+        .service
+        .apply_source_busy(&authority, &request)
+        .await
+        .map(Json)
+        .map_err(busy_store_problem)
+}
+
+async fn authenticate_busy_source(
+    state: &HttpState,
+    headers: &HeaderMap,
+    profile: &str,
+) -> Result<crate::source_busy::AuthorizedBusySource, HttpError> {
+    if !valid_identifier(profile) {
+        return Err(HttpError(ProblemCode::RequestInvalid));
+    }
+    state
+        .authenticator
+        .authenticate_busy_source(bearer_token(headers)?, profile)
+        .await
+        .map_err(authentication_problem)
+}
+
+fn busy_request_problem(error: BusyRequestError) -> HttpError {
+    match error {
+        BusyRequestError::Authority => HttpError(ProblemCode::ProfileNotAuthorized),
+        BusyRequestError::Invalid | BusyRequestError::Bound => {
+            HttpError(ProblemCode::RequestInvalid)
+        }
+    }
+}
+
+fn busy_store_problem(error: BusyStoreError) -> HttpError {
+    match error {
+        BusyStoreError::RevisionMismatch { .. } => HttpError(ProblemCode::RevisionMismatch),
+        BusyStoreError::CoverageBoundary | BusyStoreError::ObservationConflict => {
+            HttpError(ProblemCode::PreconditionFailed)
+        }
+        BusyStoreError::ResourceMissing => HttpError(ProblemCode::ResourceUnavailable),
+        BusyStoreError::AuditUnavailable
+        | BusyStoreError::RecoveryUnavailable
+        | BusyStoreError::Query(_)
+        | BusyStoreError::Store(_) => {
+            tracing::error!(%error, "the source-busy operation failed");
+            HttpError(ProblemCode::ServiceUnavailable)
+        }
+    }
 }
 
 fn http_edge<S>(router: Router<S>) -> Router<S>
@@ -162,7 +256,7 @@ async fn healthz() -> StatusCode {
 /// destination still accepts entries: a stopped writer refuses every
 /// commitment, so a load balancer must stop routing to this process.
 async fn readyz(State(state): State<HttpState>) -> Result<StatusCode, HttpError> {
-    if state.store.ready().await.is_ok() && state.service.audit_ready().await.is_ok() {
+    if state.service.ready().await.is_ok() {
         Ok(StatusCode::OK)
     } else {
         Err(HttpError(ProblemCode::ServiceUnavailable))
@@ -192,7 +286,7 @@ async fn list_services(
             .list_services(
                 page.cursor.as_deref(),
                 page.limit,
-                state.store.observed_now(),
+                state.service.observed_now(),
             )
             .await?,
     ))
@@ -213,7 +307,7 @@ async fn list_offerings(
             .list_offerings(
                 page.cursor.as_deref(),
                 page.limit,
-                state.store.observed_now(),
+                state.service.observed_now(),
             )
             .await?,
     ))
@@ -234,7 +328,7 @@ async fn list_resources(
             .list_resources(
                 page.cursor.as_deref(),
                 page.limit,
-                state.store.observed_now(),
+                state.service.observed_now(),
             )
             .await?,
     ))
@@ -255,7 +349,7 @@ async fn list_locations(
             .list_locations(
                 page.cursor.as_deref(),
                 page.limit,
-                state.store.observed_now(),
+                state.service.observed_now(),
             )
             .await?,
     ))
@@ -271,16 +365,18 @@ async fn availability(
 > {
     authenticate_read(&state, &headers).await?;
     bounded_identifier(&query.offering)?;
+    let selection = bounded_selection(query.duration_minutes, query.resource)?;
     Ok(Json(
         state
             .service
-            .availability(
+            .availability_with_selection(
                 &query.offering,
                 query.start,
                 query.end,
                 query.cursor.as_deref(),
                 query.limit,
-                state.store.observed_now(),
+                &selection,
+                state.service.observed_now(),
             )
             .await?,
     ))
@@ -293,10 +389,30 @@ async fn explain(
 ) -> Result<Json<registry_scheduling_core::ExplainDocument>, HttpError> {
     authenticate_explain(&state, &headers).await?;
     bounded_identifier(&query.offering)?;
+    let selection = bounded_selection(query.duration_minutes, query.resource)?;
     Ok(Json(
         state
             .service
-            .explain(&query.offering, query.start, state.store.observed_now())
+            .explain_with_selection(
+                &query.offering,
+                query.start,
+                &selection,
+                state.service.observed_now(),
+            )
+            .await?,
+    ))
+}
+
+async fn preview_availability(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Json(request): Json<AvailabilityPreviewRequest>,
+) -> Result<Json<registry_scheduling_core::AvailabilityPreviewDocument>, HttpError> {
+    authenticate_read(&state, &headers).await?;
+    Ok(Json(
+        state
+            .service
+            .preview_availability(&request, state.service.observed_now())
             .await?,
     ))
 }
@@ -311,7 +427,7 @@ async fn create_hold(
     bounded_admission(&request)?;
     let answer = state
         .service
-        .create_hold(&caller, key, &request, state.store.observed_now())
+        .create_hold(&caller, key, &request, state.service.observed_now())
         .await?;
     Ok(match answer {
         CommitmentAnswer::Minted(hold) => (StatusCode::CREATED, Json(hold)).into_response(),
@@ -330,7 +446,7 @@ async fn release_hold(
     let caller = authenticate_mutate(&state, &headers).await?;
     let answer = state
         .service
-        .release_hold(&caller, hold_id, state.store.observed_now())
+        .release_hold(&caller, hold_id, state.service.observed_now())
         .await?;
     Ok(match answer {
         CommitmentAnswer::Minted(()) => StatusCode::NO_CONTENT.into_response(),
@@ -353,7 +469,7 @@ async fn create_appointment(
     }
     let answer = state
         .service
-        .create_appointment(&caller, key, &request, state.store.observed_now())
+        .create_appointment(&caller, key, &request, state.service.observed_now())
         .await?;
     Ok(match answer {
         CommitmentAnswer::Minted(appointment) => {
@@ -386,7 +502,7 @@ async fn appointment_receipt(
     Ok(Json(
         state
             .service
-            .appointment_receipt(&caller, key, &request, state.store.observed_now())
+            .appointment_receipt(&caller, key, &request, state.service.observed_now())
             .await?,
     )
     .into_response())
@@ -397,11 +513,11 @@ async fn get_appointment(
     headers: HeaderMap,
     Path(appointment_id): Path<Uuid>,
 ) -> Result<Json<registry_scheduling_core::AppointmentDocument>, HttpError> {
-    let caller = authenticate_read(&state, &headers).await?;
+    let caller = authenticate_appointment_detail(&state, &headers).await?;
     Ok(Json(
         state
             .service
-            .get_appointment(&caller, appointment_id)
+            .get_appointment(&caller, appointment_id, state.service.observed_now())
             .await?,
     ))
 }
@@ -429,7 +545,90 @@ async fn list_appointments(
                 &reference,
                 query.cursor.as_deref(),
                 query.limit,
-                state.store.observed_now(),
+                state.service.observed_now(),
+            )
+            .await?,
+    ))
+}
+
+async fn list_operational_appointments(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Query(query): Query<OperationalAppointmentHttpQuery>,
+) -> Result<
+    Json<
+        registry_scheduling_core::PageDocument<
+            registry_scheduling_core::OperationalAppointmentDocument,
+        >,
+    >,
+    HttpError,
+> {
+    let OperationalAppointmentHttpQuery {
+        service,
+        location,
+        start,
+        end,
+        time_basis,
+        offering,
+        state: appointment_state,
+        resource,
+        external_reference_product,
+        external_reference_record_type,
+        external_reference_identifier,
+        profile,
+        cursor,
+        limit,
+    } = query;
+    let external_reference = match (
+        external_reference_product,
+        external_reference_record_type,
+        external_reference_identifier,
+    ) {
+        (None, None, None) => None,
+        (Some(product), Some(record_type), Some(identifier)) => Some(ExternalReference {
+            product,
+            record_type,
+            identifier,
+        }),
+        _ => return Err(HttpError(ProblemCode::RequestInvalid)),
+    };
+    if profile
+        .as_deref()
+        .is_some_and(|profile| !valid_identifier(profile))
+    {
+        return Err(HttpError(ProblemCode::RequestInvalid));
+    }
+    let filter = crate::operational::OperationalReadFilter::with_optional_filters(
+        service,
+        location,
+        resource,
+        offering,
+        appointment_state,
+        external_reference,
+        time_basis,
+        start,
+        end,
+    )
+    .map_err(|_| HttpError(ProblemCode::RequestInvalid))?;
+    let token = bearer_token(&headers)?;
+    let authority = state
+        .authenticator
+        .authenticate_operational_read(
+            token,
+            profile.as_deref(),
+            filter,
+            state.service.observed_now(),
+        )
+        .await
+        .map_err(authentication_problem)?;
+    Ok(Json(
+        state
+            .service
+            .list_operational_appointments(
+                &authority,
+                cursor.as_deref(),
+                limit,
+                state.service.observed_now(),
             )
             .await?,
     ))
@@ -451,13 +650,40 @@ async fn reschedule_appointment(
             appointment_id,
             key,
             &request,
-            state.store.observed_now(),
+            state.service.observed_now(),
         )
         .await?;
     Ok(match answer {
         CommitmentAnswer::Minted(appointment) => {
             (StatusCode::OK, Json(appointment)).into_response()
         }
+        CommitmentAnswer::Replay {
+            status_code,
+            receipt,
+        } => replay_response(status_code, receipt),
+    })
+}
+
+async fn record_attendance(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Path(appointment_id): Path<Uuid>,
+    Json(request): Json<RecordAttendanceRequest>,
+) -> Result<Response, HttpError> {
+    let caller = authenticate_mutate(&state, &headers).await?;
+    let key = idempotency_key(&headers)?;
+    let answer = state
+        .service
+        .record_attendance(
+            &caller,
+            appointment_id,
+            key,
+            &request,
+            state.service.observed_now(),
+        )
+        .await?;
+    Ok(match answer {
+        CommitmentAnswer::Minted(attendance) => (StatusCode::OK, Json(attendance)).into_response(),
         CommitmentAnswer::Replay {
             status_code,
             receipt,
@@ -481,7 +707,7 @@ async fn cancel_appointment(
             appointment_id,
             key,
             &request,
-            state.store.observed_now(),
+            state.service.observed_now(),
         )
         .await?;
     Ok(match answer {
@@ -517,7 +743,7 @@ async fn appointment_history(
                 appointment_id,
                 page.cursor.as_deref(),
                 page.limit,
-                state.store.observed_now(),
+                state.service.observed_now(),
             )
             .await?,
     ))
@@ -545,7 +771,35 @@ struct AppointmentListingQuery {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct OperationalAppointmentHttpQuery {
+    service: String,
+    location: String,
+    start: DateTime<Utc>,
+    end: DateTime<Utc>,
+    time_basis: registry_scheduling_core::OperationalTimeBasis,
+    #[serde(default)]
+    offering: Option<String>,
+    #[serde(default)]
+    state: Option<registry_scheduling_core::AppointmentStateDocument>,
+    #[serde(default)]
+    resource: Option<String>,
+    #[serde(default)]
+    external_reference_product: Option<String>,
+    #[serde(default)]
+    external_reference_record_type: Option<String>,
+    #[serde(default)]
+    external_reference_identifier: Option<String>,
+    #[serde(default)]
+    profile: Option<String>,
+    #[serde(default)]
+    cursor: Option<String>,
+    #[serde(default)]
+    limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct AvailabilityQuery {
     offering: String,
     #[serde(default)]
@@ -556,12 +810,37 @@ struct AvailabilityQuery {
     cursor: Option<String>,
     #[serde(default)]
     limit: Option<usize>,
+    #[serde(default)]
+    duration_minutes: Option<u32>,
+    #[serde(default)]
+    resource: Option<String>,
+}
+
+fn bounded_selection(
+    duration_minutes: Option<u32>,
+    resource: Option<String>,
+) -> Result<registry_scheduling_core::AvailabilitySelection, HttpError> {
+    if duration_minutes.is_some_and(|value| {
+        !(1..=registry_scheduling_core::MAXIMUM_BOOKING_DURATION_MINUTES).contains(&value)
+    }) {
+        return Err(HttpError(ProblemCode::RequestInvalid));
+    }
+    if let Some(resource) = &resource {
+        bounded_identifier(resource)?;
+    }
+    Ok(registry_scheduling_core::AvailabilitySelection {
+        duration_minutes,
+        resource,
+    })
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ExplainQuery {
     offering: String,
     start: DateTime<Utc>,
+    duration_minutes: Option<u32>,
+    resource: Option<String>,
 }
 
 async fn authenticate_read(state: &HttpState, headers: &HeaderMap) -> Result<Caller, HttpError> {
@@ -570,6 +849,18 @@ async fn authenticate_read(state: &HttpState, headers: &HeaderMap) -> Result<Cal
     state
         .authenticator
         .authenticate_read(token)
+        .await
+        .map_err(authentication_problem)
+}
+
+async fn authenticate_appointment_detail(
+    state: &HttpState,
+    headers: &HeaderMap,
+) -> Result<Caller, HttpError> {
+    let token = bearer_token(headers)?;
+    state
+        .authenticator
+        .authenticate_appointment_detail(token)
         .await
         .map_err(authentication_problem)
 }
@@ -654,6 +945,21 @@ fn bounded_admission(request: &AdmissionRequest) -> Result<(), HttpError> {
             reference.product.as_str(),
             reference.record_type.as_str(),
             reference.identifier.as_str(),
+        )) {
+            return Err(HttpError(ProblemCode::RequestInvalid));
+        }
+    }
+    if request.party_references.len() > registry_scheduling_core::MAXIMUM_PARTY_REFERENCES {
+        return Err(HttpError(ProblemCode::RequestInvalid));
+    }
+    let mut unique_parties = BTreeSet::new();
+    for party in &request.party_references {
+        bounded_external_reference(&party.reference)?;
+        if !unique_parties.insert((
+            party.role,
+            party.reference.product.as_str(),
+            party.reference.record_type.as_str(),
+            party.reference.identifier.as_str(),
         )) {
             return Err(HttpError(ProblemCode::RequestInvalid));
         }
@@ -877,11 +1183,15 @@ mod tests {
         async fn availability_query(Query(_): Query<AvailabilityQuery>) -> StatusCode {
             StatusCode::OK
         }
+        async fn explain_query(Query(_): Query<ExplainQuery>) -> StatusCode {
+            StatusCode::OK
+        }
         http_edge(
             Router::new()
                 .route("/v1/echo", post(echo))
                 .route("/v1/listing", get(listing))
                 .route("/v1/availability-query", get(availability_query))
+                .route("/v1/explain-query", get(explain_query))
                 .route(HOLD_ROUTE, delete(identified))
                 .route(APPOINTMENT_ROUTE, get(identified)),
         )
@@ -964,6 +1274,9 @@ mod tests {
         for uri in [
             "/v1/listing?limti=10",
             "/v1/availability-query?offering=general&strat=2026-10-23T00%3A00%3A00Z",
+            "/v1/availability-query?offering=general&duration_minutes=60",
+            "/v1/explain-query?offering=general&start=2026-10-23T00%3A00%3A00Z&duration_minutes=60",
+            "/v1/explain-query?offering=general&start=2026-10-23T00%3A00%3A00Z&resorce=room-a",
         ] {
             let response = send(edge_router(), traced_request("GET", uri)).await;
             assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{uri}");
@@ -978,6 +1291,8 @@ mod tests {
         for uri in [
             "/v1/listing?cursor=opaque&limit=10",
             "/v1/availability-query?offering=general&start=2026-10-23T00%3A00%3A00Z&end=2026-10-24T00%3A00%3A00Z&cursor=opaque&limit=10",
+            "/v1/availability-query?offering=general&durationMinutes=60&resource=room-a",
+            "/v1/explain-query?offering=general&start=2026-10-23T00%3A00%3A00Z&durationMinutes=60&resource=room-a",
         ] {
             let response = send(edge_router(), traced_request("GET", uri)).await;
             assert_eq!(response.status(), StatusCode::OK, "{uri}");
@@ -1201,10 +1516,15 @@ mod tests {
         AdmissionRequest {
             offering: "registry-update-30".to_owned(),
             start: Utc::now(),
-            party: PartyCounts {
+            duration_minutes: None,
+            resource: None,
+            resource_units: 1,
+            additional_allocations: Vec::new(),
+            party: Some(PartyCounts {
                 recipients: 1,
                 attendees: 1,
-            },
+            }),
+            manager: None,
             channel: None,
             duplicate_key: None,
             policy_revision: 1,
@@ -1212,6 +1532,7 @@ mod tests {
             capabilities: Vec::new(),
             prerequisites: Vec::new(),
             external_references: Vec::new(),
+            party_references: Vec::new(),
         }
     }
 
@@ -1324,6 +1645,23 @@ mod tests {
         bounded_identifier("registry-update-30").expect("an authored offering reads");
         assert!(matches!(
             bounded_identifier(&"o".repeat(65)),
+            Err(HttpError(ProblemCode::RequestInvalid))
+        ));
+    }
+
+    #[test]
+    fn a_selected_duration_uses_the_booking_bound_across_midnight() {
+        assert_eq!(
+            bounded_selection(Some(1_500), None)
+                .expect("a configured multi-day selection reaches policy evaluation")
+                .duration_minutes,
+            Some(1_500)
+        );
+        assert!(matches!(
+            bounded_selection(
+                Some(registry_scheduling_core::MAXIMUM_BOOKING_DURATION_MINUTES + 1),
+                None
+            ),
             Err(HttpError(ProblemCode::RequestInvalid))
         ));
     }

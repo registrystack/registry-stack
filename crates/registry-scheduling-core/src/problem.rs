@@ -343,7 +343,7 @@ impl ProblemCode {
                 "Every capable member is unavailable for this interval."
             }
             Self::RevisionMismatch => {
-                "The window revision changed before the request committed. Reload the catalogue and try again."
+                "The observed revision is no longer current."
             }
             Self::ScheduleUnpublished => {
                 "No published schedule serves that start. Choose a start on the published grid."
@@ -470,6 +470,14 @@ mod tests {
         assert_eq!(
             ProblemCode::ResourceUnavailable.http_status(),
             ProblemCode::CapacityExhausted.http_status()
+        );
+    }
+
+    #[test]
+    fn revision_mismatch_detail_applies_to_every_revision_guard() {
+        assert_eq!(
+            ProblemCode::RevisionMismatch.detail(),
+            "The observed revision is no longer current."
         );
     }
 }

@@ -1,0 +1,20 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/scheduling/records/records.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/scheduling/records/v1alpha1
+kind: SchedulingRecords
+locations:
+  - id: community-hall
+    timezone: America/New_York
+pools:
+  - id: meeting-rooms
+    members:
+      - resourceId: room-a
+        available: true
+      - resourceId: room-b
+        available: true
+exceptions:
+  - id: maintenance-day
+    location: community-hall
+    kind: closure
+    date: "2026-11-06"
+    startTime: "00:00"
+    endTime: "24:00"

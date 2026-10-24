@@ -38,7 +38,7 @@ const NO_FIXTURES_CODE: &str = "scheduling.fixture.none";
 pub(super) fn init(project: &Path, template: &str) -> Result<Value> {
     let Some(files) = templates::template_files(template) else {
         anyhow::bail!(
-            "unknown template {template:?}; available templates: standalone-exact-time, standalone-arrival-window"
+            "unknown template {template:?}; available templates: standalone-exact-time, standalone-arrival-window, resource-reservations"
         );
     };
     match fs::symlink_metadata(project) {

@@ -9,7 +9,7 @@ const id = '00000000-0000-4000-8000-000000000001';
 const metadata = {
   id: 'proposal-client', version: '1', revision, metadataVersion: '2', recordTypes: [], operations: [],
   proposals: {method: 'GET', path: '/v1/proposals', accessProfiles: ['author'],
-    actions: [{actionId: 'correct', accessProfile: 'author', operations: ['get', 'list', 'submit'], readableInputs: []}],
+    actions: [{actionId: 'correct', accessProfile: 'author', operations: ['get', 'list', 'submit'], readableInputs: [], readableContextFields: []}],
     get: {method: 'GET', path: '/v1/proposals/{proposal_id}', accessProfiles: ['author']}},
   actions: [{id: 'correct', apiName: 'correct', revision, display: {}, execution: {mode: 'proposal'},
     attachments: [{id: 'supporting-file', required: true, contentTypes: ['application/pdf'], maximumBytes: 1024}],
@@ -100,9 +100,9 @@ test('proposal handles preserve base path, selected profile and exact prepared e
 test('metadata inventory preserves profile boundaries and refuses old or malformed contracts', async () => {
   let document = structuredClone(metadata);
   document.proposals.actions = [
-    {actionId: 'correct', accessProfile: 'author', operations: ['get'], readableInputs: ['address']},
-    {actionId: 'correct', accessProfile: 'queue', operations: ['list'], readableInputs: []},
-    {actionId: 'correct', accessProfile: 'executor', operations: ['apply'], readableInputs: []},
+    {actionId: 'correct', accessProfile: 'author', operations: ['get'], readableInputs: ['address'], readableContextFields: []},
+    {actionId: 'correct', accessProfile: 'queue', operations: ['list'], readableInputs: [], readableContextFields: []},
+    {actionId: 'correct', accessProfile: 'executor', operations: ['apply'], readableInputs: [], readableContextFields: []},
   ];
   const server = http.createServer((request, response) => {
     response.setHeader('content-type', 'application/json');

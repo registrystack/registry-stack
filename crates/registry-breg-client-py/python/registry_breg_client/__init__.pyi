@@ -249,6 +249,7 @@ class BRegProposalActionDescriptor(TypedDict):
     access_profile: str
     operations: Sequence[str]
     readable_inputs: Sequence[str]
+    readable_context_fields: Sequence[str]
 
 class BRegMetadata:
     @property

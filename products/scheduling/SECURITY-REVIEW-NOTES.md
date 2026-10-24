@@ -1208,12 +1208,31 @@ A reminder intent is delivered as the shared hook envelope observers receive,
 with `content-type: application/json`. The envelope adds the appointment
 record reference and revision as `subject` and a per-purpose `dataschema`; the
 appointment identifier was already in `data`, so nothing new is disclosed.
-`data` is the payload the runtime committed, unchanged. Authentication is
-unchanged too: the optional bearer credential
-`destinations.reminders.bearerTokenRef` names, and no delivery signature. A
-receiver that needs to authenticate the sender relies on that bearer and on
-TLS. `a_due_intent_renders_as_the_shared_hook_envelope` and the PostgreSQL
-dispatch test pin the shape on the wire.
+`data` is the payload the runtime committed, unchanged. The optional bearer
+credential `destinations.reminders.bearerTokenRef` and optional shared delivery
+signature from `hmacSha256KeyRef` are independent. A receiver that requires
+signed events verifies the exact request target, event metadata and body,
+including the delivery timestamp and attempt. The intent identity and
+idempotency key stay fixed across retries; a fresh attempt does not mint a
+new notification. Event acceptance grants no appointment-read or message-send
+authority.
+
+`destinations.reminders.purposeUrls` may select separate endpoints for the
+closed notification purposes. Every override must retain the fallback URL's
+origin and satisfy the same URL restrictions. The shared bearer and signing
+key therefore stay within one configured receiver origin. The runtime freezes
+the request templates at activation, selects one by purpose, and uses its
+exact target for both delivery and signing. Unknown purposes are refused.
+Omitting the overrides preserves the existing destination; routing changes
+neither dispatch identity nor retry and reminder-suppression rules. Different
+receiver origins need separately authorized delivery arrangements.
+
+`a_due_intent_renders_as_the_shared_hook_envelope` and the PostgreSQL dispatch
+test pin the wire shape. The SEC-38 traceability row also names the URL refusal,
+selected-target signature and stable-idempotency tests, plus native
+confirmation and authored due-reminder journeys through Coordinator and
+Messaging. Those journeys preserve the signed target without a re-signing
+adapter. Messaging acceptance remains distinct from provider delivery.
 
 ## The task-grant status resource is named for what it binds
 
@@ -1403,3 +1422,75 @@ cancel or reschedule that commits between the liveness check and the send
 still sends the stale reminder, and the receiver gets no ordering promise
 across processes: that is inherent to at-least-once delivery. One worker
 serves each runtime process.
+
+## Cross-owner appointment detail and operational projections
+
+### Threat
+
+- A service or source manager uses detail authority for another service,
+  location or retained manager, or turns that narrow grant into catalogue,
+  list, history or operational access.
+- A staff work list combines roles or expands beyond one configured service,
+  location, resource set or time window. A continuation is reused by another
+  caller, profile or query, or a current offering relabels an older booking.
+- A detail, operational or attendance projection discloses contact, manager or
+  staff identity, infers people from capacity units, or includes attendance
+  without the operator selecting it.
+
+### Enforcement and defaults
+
+The ordinary appointment detail route admits retained owners or a verified
+task grant carrying `appointment.read` for the stored appointment's service
+and location. Source-managed appointments additionally require the exact
+retained `identity.schedulingManager` value, the source issuer and fresh grant
+status. This detail action opens no list, history, catalogue or operational
+route. Its service and location authority is intentional and does not claim an
+appointment-id binding.
+
+Cross-owner work lists are off until the operator configures
+`authentication.oidc.appointmentReadProfiles`. `authorize_operational_read` in
+`crates/registry-scheduling/src/operational.rs` selects exactly one verified
+profile scope and binds the caller identity, profile digest, normalized query,
+service, location, effective resource set, time bounds and projection into the
+read context and continuation. The store applies those predicates to every
+page. Retained service and location labels come from the policy revision that
+recorded the booking; unresolved legacy labels remain excluded until the
+audited rematerialization path proves them.
+
+The closed operational projection vocabulary omits identity, contact, manager
+and actor fields. Party counts remain booking facts and are never inferred
+from allocation units. Attendance is absent unless the selected profile names
+it, and then exposes the current visit's current observation without staff
+identity. The separately configured attendance after-event uses the closed
+`appointment.attendance-observed` trigger and its fixed minimized projection.
+
+### Tests
+
+`appointment_detail_accepts_its_explicit_grant_without_opening_other_reads` in
+`crates/registry-scheduling/src/auth.rs` pins the dedicated detail profile.
+`an_assisted_manager_is_selected_only_from_fresh_exact_source_authority` and
+`assisted_manager_authority_is_bound_into_idempotency_and_retention` in
+`crates/registry-scheduling/tests/postgres_commitments/booking_party.rs` pin
+the source-managed boundary. The operational PostgreSQL tests
+`operational_pages_require_one_profile_and_bind_every_authority_dimension`,
+`unresolved_legacy_labels_never_disclose_and_can_be_rematerialized_from_the_recorded_revision`,
+and `a_later_offering_move_does_not_relabel_a_closed_appointment` pin profile,
+continuation and retained-label behavior. The attendance tests
+`attendance_is_off_by_default_and_explicit_in_operational_projection` and
+`attendance_commit_captures_one_minimized_signed_after_event` pin opt-in
+projection and the closed event payload. The traceability catalog records the
+remaining focused proofs and does not assert that they ran.
+
+### Accepted residuals
+
+- A current `appointment.read` grant can read any appointment the caller names
+  at its authorized service and location, subject to the retained manager rule
+  for source-managed bookings. Institutions must grant it only to services
+  whose workflow already selects the appointment.
+- An operational profile intentionally discloses cross-owner bookings within
+  its configured dimensions. An explicit `unrestricted` resource scope covers
+  every resource at that one service and location; bounded time and projection
+  rules still apply.
+- Detail readers receive the current attendance observation with the ordinary
+  appointment document. Operational readers receive it only when their profile
+  explicitly selects attendance.

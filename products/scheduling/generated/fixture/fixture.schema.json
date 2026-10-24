@@ -38,6 +38,30 @@
         }
       ]
     },
+    "AdditionalAllocationRequest": {
+      "additionalProperties": false,
+      "description": "One secondary physical allocation in a logical reservation. Its displayed\ninterval is the primary request's interval; its offering supplies its own\noccupied buffers and resource policy.",
+      "properties": {
+        "offering": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "resource": {
+          "$ref": "#/$defs/LocalId",
+          "description": "An exact member selection. Omission requests fungible selection."
+        },
+        "units": {
+          "description": "Physical resource units, independent of party counts.",
+          "format": "uint32",
+          "maximum": 2147483647,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "offering"
+      ],
+      "type": "object"
+    },
     "BandedInput": {
       "description": "The closed input set a banded table may read. Tier 1 reads exactly one.",
       "enum": [
@@ -117,6 +141,13 @@
       "additionalProperties": false,
       "description": "One replayed request as an author writes it.\n\nThis is the authoring form of an admission request, not the wire form. It\ncarries everything the wire request carries plus `rescheduleOf`, the claim\nthis case replaces: a fixture legitimately says \"this case reschedules that\none\", where an HTTP caller may not, because on the wire the exclusion is\nthe runtime's to supply from inside its own transaction.",
       "properties": {
+        "additionalAllocations": {
+          "items": {
+            "$ref": "#/$defs/AdditionalAllocationRequest"
+          },
+          "maxItems": 15,
+          "type": "array"
+        },
         "capabilities": {
           "description": "The capabilities the party holds. A party holding none omits the\nmember.",
           "items": {
@@ -133,11 +164,18 @@
         "duplicateKey": {
           "type": "string"
         },
+        "durationMinutes": {
+          "format": "uint32",
+          "maximum": 10080,
+          "minimum": 1,
+          "type": "integer"
+        },
         "offering": {
           "$ref": "#/$defs/LocalId"
         },
         "party": {
-          "$ref": "#/$defs/FixtureParty"
+          "$ref": "#/$defs/FixtureParty",
+          "description": "Omit only for an exact-time offering whose policy explicitly makes\nhuman counts optional, such as a room or equipment reservation."
         },
         "policyRevision": {
           "description": "The policy revision the caller resolved the offering under. Replay\nruns the policy at revision 1.",
@@ -159,6 +197,16 @@
           "description": "The claim this case replaces. Its allocation is left out of this\ncase's conflict checks and removed when the case is admitted, so a\nreschedule never competes with what it replaces. A claim an earlier\ncase booked is `case:` followed by that case's name.",
           "type": "string"
         },
+        "resource": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "resourceUnits": {
+          "default": 1,
+          "format": "uint32",
+          "maximum": 2147483647,
+          "minimum": 1,
+          "type": "integer"
+        },
         "start": {
           "format": "date-time",
           "type": "string"
@@ -173,7 +221,6 @@
       "required": [
         "offering",
         "start",
-        "party",
         "policyRevision"
       ],
       "type": "object"
@@ -374,6 +421,11 @@
           "const": "hold",
           "description": "A temporary hold.",
           "type": "string"
+        },
+        {
+          "const": "window",
+          "description": "A published window's own reservation of the physical `resources` it\ndeclares. Its allocations are shared by every booking in the window\nand consume once; it never consumes the window's units.",
+          "type": "string"
         }
       ]
     },
@@ -419,6 +471,9 @@
       "additionalProperties": false,
       "description": "One interchangeable member of a resource pool.\n\n`available` carries no reason. Why a member is unavailable is private staff\ninformation; the public answer to a caller is that capacity is exhausted.",
       "properties": {
+        "availability": {
+          "$ref": "#/$defs/ResourceAvailability"
+        },
         "available": {
           "type": "boolean"
         },
@@ -430,6 +485,13 @@
           "maxItems": 256,
           "type": "array",
           "uniqueItems": true
+        },
+        "capacityUnits": {
+          "description": "Physical units this member contributes. Omitted legacy records carry\none unit. Zero records complete current loss without erasing the\nresource identifier from retained allocations.",
+          "format": "uint32",
+          "maximum": 2147483647,
+          "minimum": 0,
+          "type": "integer"
         },
         "resourceId": {
           "$ref": "#/$defs/LocalId"
@@ -464,6 +526,15 @@
         },
         "offering": {
           "$ref": "#/$defs/LocalId"
+        },
+        "resources": {
+          "description": "Physical requirements reserved once for the window's span. A window\nthat reserves nothing omits the member.",
+          "items": {
+            "$ref": "#/$defs/WindowResourceRequirement"
+          },
+          "maxItems": 16,
+          "minItems": 1,
+          "type": "array"
         },
         "revision": {
           "format": "uint64",
@@ -600,6 +671,46 @@
         }
       ]
     },
+    "ResourceAvailability": {
+      "additionalProperties": false,
+      "description": "Dated constraints intersect the resource's static availability and the\noffering's location openings. Omitted openings impose no additional opening\nconstraint; an explicitly empty list publishes no supply. Closures win.",
+      "properties": {
+        "closures": {
+          "items": {
+            "$ref": "#/$defs/ResourceInterval"
+          },
+          "maxItems": 256,
+          "type": "array"
+        },
+        "openings": {
+          "items": {
+            "$ref": "#/$defs/ResourceInterval"
+          },
+          "maxItems": 256,
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "ResourceInterval": {
+      "additionalProperties": false,
+      "description": "One concrete opening or closure. It carries no personnel information.",
+      "properties": {
+        "end": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "start": {
+          "format": "date-time",
+          "type": "string"
+        }
+      },
+      "required": [
+        "start",
+        "end"
+      ],
+      "type": "object"
+    },
     "ResourcePool": {
       "additionalProperties": false,
       "description": "A pool of interchangeable resources backing exact-time offerings. A pool is\nits concrete members, never an independent counter.",
@@ -681,6 +792,36 @@
         "upTo",
         "units",
         "because"
+      ],
+      "type": "object"
+    },
+    "WindowResourceRequirement": {
+      "additionalProperties": false,
+      "description": "One physical requirement a window reserves once for its whole span, such\nas a room, a facilitator or equipment. The window's parent reservation\nholds it through the same allocation ledger an exact-time booking writes,\nso it conflicts with exact bookings of the same resource. `units` are\nresource units of the requirement offering's pool, not window capacity:\nbookings in the window consume only the window's own `units`.",
+      "properties": {
+        "offering": {
+          "$ref": "#/$defs/LocalId",
+          "description": "The exact-time offering at the window's location whose pool supplies\nthe requirement. It must sell the window's span with optional party\ncounts."
+        },
+        "requirement": {
+          "$ref": "#/$defs/LocalId",
+          "description": "The requirement's own id, unique within the window."
+        },
+        "resource": {
+          "$ref": "#/$defs/LocalId",
+          "description": "The pool member to reserve. Omitted, the runtime picks one at\npublication and keeps it while the window and the policy stand."
+        },
+        "units": {
+          "format": "uint32",
+          "maximum": 2147483647,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "requirement",
+        "offering",
+        "units"
       ],
       "type": "object"
     },

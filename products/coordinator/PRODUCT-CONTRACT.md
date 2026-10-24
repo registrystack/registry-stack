@@ -113,9 +113,12 @@ business decision. A Coordinator timeout means the workflow stopped waiting; sou
 can continue. The timeout and run deadline do not reset during recovery.
 
 Definite retryable effect responses can resend the durable original command under bounded retry
-and deadline rules. An ambiguous mutation stays uncertain. Messaging and Scheduling support
-original-key receipt reads; BReg Action and Casework mutations do not gain receipt evidence from
-record reads or operator assertions. Lost, missing, or expired receipts never establish absence.
+and deadline rules. An ambiguous mutation stays uncertain. Messaging submission and Scheduling
+appointment creation or hold confirmation support original-key receipt reads. Scheduling hold
+creation, rescheduling, and cancellation do not gain receipt evidence from a current appointment
+read. Hold release is unkeyed and cannot be replayed after ambiguous dispatch. BReg Action and
+Casework mutations do not gain receipt evidence from record reads or operator assertions. Lost,
+missing, or expired receipts never establish absence.
 `evaluation.evaluate/v1` freezes one potentially billable request. After possible dispatch,
 automatic retry, same-command retry, and reconciliation cannot replay it. A completed evaluation
 is reused; a pure policy interprets it before a separately authorized effect. Model confidence

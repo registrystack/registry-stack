@@ -22,6 +22,7 @@
     - ['`idempotency.key-invalid`', '400', 'Supply an Idempotency-Key header of 1 to 256 bytes.']
     - ['`idempotency.key-reused`', '409', 'This idempotency key already names a different workflow revision or input.']
     - ['`input.invalid`', '400', 'The start input does not satisfy the workflow''s declared input schema and value bounds.']
+    - ['`mutation.uncertain`', '409', 'An unkeyed mutation may have completed at its provider. Preserve the held run and inspect or cancel it without replaying the effect.']
     - ['`operation.not-authorized`', '403', 'The caller''s policy does not allow this operation.']
     - ['`receipt.expired`', '409', 'The original command''s receipt can no longer be recovered. This is not evidence that the command was not sent.']
     - ['`reconcile.raced`', '409', 'The run''s progress changed while it was being reconciled. Inspect it again.']

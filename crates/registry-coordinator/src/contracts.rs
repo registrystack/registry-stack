@@ -673,7 +673,11 @@ mod derived {
     use std::collections::BTreeMap;
 
     use crate::{
-        adapters::{AvailabilityRequest, ReadRequest, SchedulingReadRequest},
+        adapters::{
+            AppointmentReadRequest, AvailabilityRequest, CancellationRequest,
+            CapacityPreviewRequest, HoldRequest, ReadRequest, ReleaseHoldRequest,
+            RescheduleRequest, SchedulingReadRequest,
+        },
         breg_action::ActionInput,
         decision::DecisionResult,
         external_http::{ExternalResponse, GetRequest},
@@ -684,8 +688,10 @@ mod derived {
         ReviewCancelResponse, ReviewCreateRequest, ReviewRequestAccepted,
     };
     use registry_messaging_core::MessageReceipt;
+    use registry_scheduling_client::HoldDocument;
     use registry_scheduling_core::{
-        AppointmentDocument, AvailabilityEntry, PageDocument, SchedulingServiceDocument,
+        AppointmentDocument, AvailabilityEntry, AvailabilityPreviewDocument, PageDocument,
+        SchedulingServiceDocument,
     };
     use schemars::{generate::SchemaSettings, JsonSchema};
     use serde_json::{json, Value};
@@ -726,8 +732,48 @@ mod derived {
         )
     }
 
+    pub(super) fn preview_availability() -> (Value, Value) {
+        (
+            input::<CapacityPreviewRequest>(),
+            output::<AvailabilityPreviewDocument>(),
+        )
+    }
+
     pub(super) fn create_appointment() -> (Value, Value) {
         (create_appointment_input(), output::<AppointmentDocument>())
+    }
+
+    pub(super) fn read_appointment() -> (Value, Value) {
+        (
+            input::<AppointmentReadRequest>(),
+            output::<AppointmentDocument>(),
+        )
+    }
+
+    pub(super) fn create_hold() -> (Value, Value) {
+        (input::<HoldRequest>(), output::<HoldDocument>())
+    }
+
+    pub(super) fn release_hold() -> (Value, Value) {
+        (input::<ReleaseHoldRequest>(), output::<()>())
+    }
+
+    pub(super) fn confirm_hold() -> (Value, Value) {
+        (confirm_hold_input(), output::<AppointmentDocument>())
+    }
+
+    pub(super) fn reschedule_appointment() -> (Value, Value) {
+        (
+            input::<RescheduleRequest>(),
+            output::<AppointmentDocument>(),
+        )
+    }
+
+    pub(super) fn cancel_appointment() -> (Value, Value) {
+        (
+            input::<CancellationRequest>(),
+            output::<AppointmentDocument>(),
+        )
     }
 
     pub(super) fn invoke_breg_action() -> (Value, Value) {
@@ -772,10 +818,19 @@ mod derived {
         generator.into_root_schema_for::<T>().to_value()
     }
 
-    /// Coordinator books directly under reviewed task authority. Scheduling's
-    /// shared wire type also represents hold confirmation, which this adapter
-    /// deliberately does not offer.
+    /// Direct booking and hold confirmation are separate catalog operations,
+    /// although Scheduling carries both through one maintained wire type.
     pub(super) fn create_appointment_input() -> Value {
+        appointment_input(false)
+    }
+
+    /// Hold confirmation uses the same maintained Scheduling wire request as
+    /// direct creation, while accepting only its other mutually exclusive arm.
+    pub(super) fn confirm_hold_input() -> Value {
+        appointment_input(true)
+    }
+
+    fn appointment_input(confirm: bool) -> Value {
         let mut schema = input::<crate::adapters::AppointmentRequest>();
         let request = schema
             .pointer_mut("/$defs/CreateAppointmentRequest")
@@ -787,17 +842,30 @@ mod derived {
             .or_insert_with(|| json!([]))
             .as_array_mut()
             .expect("the maintained appointment requirements are an array");
-        if !required.iter().any(|member| member == "admission") {
-            required.push(json!("admission"));
+        let required_member = if confirm { "hold" } else { "admission" };
+        if !required.iter().any(|member| member == required_member) {
+            required.push(json!(required_member));
         }
-        request["properties"]["admission"] = json!({
-            "$ref": "#/$defs/AdmissionRequest",
-            "description": "The direct-create admission request."
-        });
-        request["properties"]["hold"] = json!({
-            "description": "Hold confirmation is not offered by Coordinator.",
-            "type": "null"
-        });
+        if confirm {
+            request["properties"]["hold"] = json!({
+                "description": "The Scheduling hold UUID to confirm.",
+                "format": "uuid",
+                "type": "string"
+            });
+            request["properties"]["admission"] = json!({
+                "description": "Direct admission is not accepted by this operation.",
+                "type": "null"
+            });
+        } else {
+            request["properties"]["admission"] = json!({
+                "$ref": "#/$defs/AdmissionRequest",
+                "description": "The direct-create admission request."
+            });
+            request["properties"]["hold"] = json!({
+                "description": "Hold confirmation is not accepted by this operation.",
+                "type": "null"
+            });
+        }
         schema
     }
 
@@ -1516,6 +1584,27 @@ mod tests {
         assert!(!schema.is_valid(&json!({
             "grant": grant,
             "appointment": {"admission": admission, "hold": "held-allocation"},
+        })));
+
+        let confirmation = generated_input(Operation::ConfirmHold);
+        assert!(confirmation.is_valid(&json!({
+            "grant": grant,
+            "appointment": {"hold": "00000000-0000-4000-8000-000000000001"},
+        })));
+        assert!(confirmation.is_valid(&json!({
+            "grant": grant,
+            "appointment": {
+                "hold": "00000000-0000-4000-8000-000000000001",
+                "admission": null
+            },
+        })));
+        assert!(!confirmation.is_valid(&json!({
+            "grant": grant,
+            "appointment": {"hold": "held-allocation"},
+        })));
+        assert!(!confirmation.is_valid(&json!({
+            "grant": grant,
+            "appointment": {"admission": admission},
         })));
     }
 

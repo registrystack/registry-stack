@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Capacity advice for one complete physical bundle. A false answer carries\nonly the public refusal code and never identifies a hidden resource or\nimplies authorization, eligibility, or a durable reservation.",
+  "properties": {
+    "capacityAvailable": {
+      "type": "boolean"
+    },
+    "end": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "offering": {
+      "type": "string"
+    },
+    "publicCode": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "start": {
+      "format": "date-time",
+      "type": "string"
+    }
+  },
+  "required": [
+    "offering",
+    "start",
+    "end",
+    "capacityAvailable"
+  ],
+  "title": "scheduling.preview-availability/v1 output",
+  "type": "object"
+}

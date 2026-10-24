@@ -15,7 +15,7 @@ METADATA = {
     'id': 'proposal-lookup', 'version': '1', 'revision': REVISION,
     'metadataVersion': '2', 'recordTypes': [], 'operations': [], 'actions': [],
     'proposals': {'method': 'GET', 'path': '/v1/proposals', 'accessProfiles': [],
-                  'actions': [{'actionId': 'correct', 'accessProfile': 'reader', 'operations': ['get'], 'readableInputs': ['address-line']}],
+                  'actions': [{'actionId': 'correct', 'accessProfile': 'reader', 'operations': ['get'], 'readableInputs': ['address-line'], 'readableContextFields': []}],
                   'get': {'method': 'GET', 'path': '/v1/proposals/{proposal_id}', 'accessProfiles': ['reader']}},
 }
 PROPOSAL = {
@@ -34,8 +34,8 @@ class ProposalLookupTests(unittest.TestCase):
         document['actions'][0]['attachments'] = [{'id': 'supporting-file', 'required': True,
                                                 'contentTypes': ['application/pdf'], 'maximumBytes': 1024}]
         document['proposals'] = {'actions': [
-            {'actionId': 'correct', 'accessProfile': 'queue', 'operations': ['list'], 'readableInputs': []},
-            {'actionId': 'correct', 'accessProfile': 'executor', 'operations': ['apply'], 'readableInputs': []}]}
+            {'actionId': 'correct', 'accessProfile': 'queue', 'operations': ['list'], 'readableInputs': [], 'readableContextFields': []},
+            {'actionId': 'correct', 'accessProfile': 'executor', 'operations': ['apply'], 'readableInputs': [], 'readableContextFields': []}]}
 
         class Handler(BaseHTTPRequestHandler):
             def do_GET(self):
@@ -58,8 +58,8 @@ class ProposalLookupTests(unittest.TestCase):
             client = BaseRegistryClient(f'http://127.0.0.1:{server.server_port}/')
             metadata = client.registry_contract('writer')
             self.assertEqual(metadata.proposal_actions, [
-                {'action_id': 'correct', 'access_profile': 'queue', 'operations': ['list'], 'readable_inputs': []},
-                {'action_id': 'correct', 'access_profile': 'executor', 'operations': ['apply'], 'readable_inputs': []}])
+                {'action_id': 'correct', 'access_profile': 'queue', 'operations': ['list'], 'readable_inputs': [], 'readable_context_fields': []},
+                {'action_id': 'correct', 'access_profile': 'executor', 'operations': ['apply'], 'readable_inputs': [], 'readable_context_fields': []}])
             self.assertEqual(metadata.actions[0]['attachments'], [{'id': 'supporting-file', 'required': True,
                                                                   'content_types': ['application/pdf'], 'maximum_bytes': 1024}])
             with self.assertRaises(BaseRegistryClientError):
@@ -106,7 +106,7 @@ class ProposalLookupTests(unittest.TestCase):
             client = BaseRegistryClient(f'http://127.0.0.1:{server.server_port}/tenant/')
             metadata = client.registry_contract('reader')
             self.assertEqual(metadata.proposal_actions, [{'action_id': 'correct', 'access_profile': 'reader',
-                                                         'operations': ['get'], 'readable_inputs': ['address-line']}])
+                                                         'operations': ['get'], 'readable_inputs': ['address-line'], 'readable_context_fields': []}])
             with self.assertRaises(BaseRegistryClientError):
                 metadata.select_proposals('reader')
             binding = metadata.select_proposal_get('reader')

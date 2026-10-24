@@ -10,15 +10,20 @@
 
 use std::future::Future;
 
-use registry_platform_activation::{self as platform_activation, Layout, NewActivation};
+use registry_platform_activation::{
+    self as platform_activation, KnownTrigger, Layout, NewActivation,
+};
 use registry_scheduling_core::SchedulingPolicy;
 use tokio_postgres::GenericClient;
 use uuid::Uuid;
 
 use super::{
-    check_policy_publication, current_schema_in, lock_publication, publish_policy,
-    refuse_combined_conflicts, refuse_pre_1_0_schema, PolicyPublication, PostgresStore, StoreError,
-    MIGRATION_LOCK_KEY, SCHEDULING_MIGRATION, SCHEMA_VERSIONS,
+    check_policy_publication, current_schema_in, lock_publication, mark_allocation_writer,
+    publish_policy, refuse_combined_conflicts, refuse_pre_1_0_schema, PolicyPublication,
+    PostgresStore, StoreError, ATOMIC_ALLOCATIONS_MIGRATION, ATTENDANCE_MIGRATION,
+    BOOKING_PARTY_MIGRATION, MIGRATION_LOCK_KEY, OPERATIONAL_READS_MIGRATION,
+    RESOURCE_AVAILABILITY_MIGRATION, SCHEDULING_MIGRATION, SCHEMA_VERSIONS, SOURCE_BUSY_MIGRATION,
+    SOURCE_BUSY_OUTCOME_MIGRATION, SOURCE_MANAGER_MIGRATION, WINDOW_RESOURCES_MIGRATION,
 };
 
 /// Said wherever the effective role mode is `single`.
@@ -28,11 +33,58 @@ pub use registry_platform_activation::{Activation, RoleMode, SINGLE_ROLE_STATEME
 /// identity check and test fixtures read the record through.
 #[must_use]
 pub fn activation_layout() -> Layout {
+    const WRITER_TRIGGERS: &[KnownTrigger] = &[
+        KnownTrigger {
+            relation: "scheduling_claims",
+            trigger: "scheduling_claims_allocation_writer_v2",
+            function: "scheduling_require_allocation_writer_v2",
+        },
+        KnownTrigger {
+            relation: "scheduling_claim_allocations",
+            trigger: "scheduling_claim_allocations_writer_v2",
+            function: "scheduling_require_allocation_writer_v2",
+        },
+        KnownTrigger {
+            relation: "scheduling_pool_members",
+            trigger: "scheduling_pool_members_allocation_writer_v2",
+            function: "scheduling_require_allocation_writer_v2",
+        },
+        KnownTrigger {
+            relation: "scheduling_pools",
+            trigger: "scheduling_pools_allocation_writer_v2",
+            function: "scheduling_require_allocation_writer_v2",
+        },
+        KnownTrigger {
+            relation: "scheduling_supply",
+            trigger: "scheduling_supply_allocation_writer_v2",
+            function: "scheduling_require_allocation_writer_v2",
+        },
+        KnownTrigger {
+            relation: "scheduling_windows",
+            trigger: "scheduling_windows_allocation_writer_v2",
+            function: "scheduling_require_allocation_writer_v2",
+        },
+        KnownTrigger {
+            relation: "scheduling_window_revision_heads",
+            trigger: "scheduling_window_revision_heads_allocation_writer_v2",
+            function: "scheduling_require_allocation_writer_v2",
+        },
+        KnownTrigger {
+            relation: "scheduling_meta",
+            trigger: "scheduling_meta_allocation_writer_v2",
+            function: "scheduling_require_allocation_writer_v2",
+        },
+        KnownTrigger {
+            relation: "scheduling_attendance_observations",
+            trigger: "scheduling_attendance_observations_writer_v1",
+            function: "scheduling_require_attendance_writer_v1",
+        },
+    ];
     Layout::new(
         "scheduling",
         "scheduling_activations",
         "scheduling_schema_migrations",
-        &[],
+        WRITER_TRIGGERS,
         true,
     )
     .expect("the Scheduling activation layout uses static PostgreSQL identifiers")
@@ -256,6 +308,7 @@ impl PostgresStore {
     {
         let mut client = self.client().await?;
         let transaction = client.transaction().await?;
+        mark_allocation_writer(&transaction).await?;
         transaction
             .execute("SELECT pg_advisory_xact_lock($1)", &[&MIGRATION_LOCK_KEY])
             .await?;
@@ -329,6 +382,7 @@ impl PostgresStore {
             lock_publication(&transaction).await?;
         }
         let schema_versions_applied = apply_migrations_in(&transaction).await?;
+        super::operational::rematerialize_operational_scopes_in(&*transaction).await?;
         if !publication_locked {
             lock_publication(&transaction).await?;
         }
@@ -620,14 +674,24 @@ async fn role_mode_in(
 /// the schema. Each lets it attach code that runs as the migration role
 /// inside a later apply, such as a deferred constraint trigger on a table
 /// apply writes. A trigger already attached to a `scheduling_*` table
-/// weakens the split the same way, since no Scheduling migration creates
-/// one and revoking the power that attached it leaves it in place. None
+/// weakens the split the same way unless it is one of the exact
+/// migration-owned writer fences, because revoking the power that
+/// attached it leaves it in place. None
 /// when the ledger does not exist yet, when `role` is or holds the ledger's
 /// owner or is a superuser (single role mode), or when nothing holds.
 async fn split_weakness_in(
     client: &impl GenericClient,
     role: &str,
 ) -> Result<Option<StoreError>, StoreError> {
+    if allocation_fence_installed_in(client).await?
+        && (!allocation_fence_intact_in(client).await?
+            || !attendance_fence_intact_in(client).await?)
+    {
+        return Ok(Some(StoreError::SplitRoleWeakened(
+            "a Scheduling writer fence differs from the exact migration-owned function and trigger definitions; restore those definitions from the release migrations, then rerun the command that refused"
+                .to_owned(),
+        )));
+    }
     let Some(weakness) =
         platform_activation::first_authority_weakness(client, &activation_layout(), role)
             .await
@@ -669,7 +733,7 @@ async fn split_weakness_in(
                 ));
             }
             return Ok(Some(StoreError::SplitRoleWeakened(format!(
-                "the Scheduling tables carry triggers no Scheduling migration creates ({}), which run as the migration role {migration} inside an apply, so the runtime role {runtime} is not separated from it; run `{}` as a database administrator, {THEN_RERUN}",
+                "the Scheduling tables carry triggers outside the exact migration-owned allowlist ({}), which run as the migration role {migration} inside an apply, so the runtime role {runtime} is not separated from it; run `{}` as a database administrator, {THEN_RERUN}",
                 listed.join(", "),
                 drops.join("; ")
             ))));
@@ -678,6 +742,184 @@ async fn split_weakness_in(
     Ok(Some(StoreError::SplitRoleWeakened(format!(
         "the runtime role {runtime} is not separated from the migration role {migration}: {cause}, so it can write the activation ledger indirectly; run `{fix}` as a database administrator, {then}"
     ))))
+}
+
+const ALLOCATION_FENCE_BODY: &str = r#"
+BEGIN
+    IF current_setting('registry_scheduling.allocation_writer', true) IS DISTINCT FROM 'v2' THEN
+        RAISE EXCEPTION 'the Scheduling writer predates atomic allocations'
+            USING ERRCODE = '55000';
+    END IF;
+    IF TG_OP = 'DELETE' THEN
+        RETURN OLD;
+    END IF;
+    RETURN NEW;
+END;
+"#;
+
+async fn allocation_fence_installed_in(client: &impl GenericClient) -> Result<bool, StoreError> {
+    Ok(client
+        .query_one(
+            "SELECT CASE WHEN current_schema() IS NULL THEN false ELSE \
+             to_regclass(format('%I.scheduling_claim_allocations', current_schema())) IS NOT NULL END",
+            &[],
+        )
+        .await?
+        .get(0))
+}
+
+async fn allocation_fence_intact_in(client: &impl GenericClient) -> Result<bool, StoreError> {
+    let expected = [
+        (
+            "scheduling_claims",
+            "scheduling_claims_allocation_writer_v2",
+            31_i16,
+        ),
+        (
+            "scheduling_claim_allocations",
+            "scheduling_claim_allocations_writer_v2",
+            31,
+        ),
+        (
+            "scheduling_pool_members",
+            "scheduling_pool_members_allocation_writer_v2",
+            31,
+        ),
+        (
+            "scheduling_pools",
+            "scheduling_pools_allocation_writer_v2",
+            31,
+        ),
+        (
+            "scheduling_supply",
+            "scheduling_supply_allocation_writer_v2",
+            31,
+        ),
+        (
+            "scheduling_windows",
+            "scheduling_windows_allocation_writer_v2",
+            31,
+        ),
+        (
+            "scheduling_window_revision_heads",
+            "scheduling_window_revision_heads_allocation_writer_v2",
+            31,
+        ),
+        (
+            "scheduling_meta",
+            "scheduling_meta_allocation_writer_v2",
+            27,
+        ),
+    ];
+    writer_fence_intact_in(
+        client,
+        "scheduling_require_allocation_writer_v2",
+        ALLOCATION_FENCE_BODY,
+        &expected,
+    )
+    .await
+}
+
+const ATTENDANCE_FENCE_BODY: &str = r#"
+BEGIN
+    IF current_setting('registry_scheduling.attendance_writer', true) IS DISTINCT FROM 'v1' THEN
+        RAISE EXCEPTION 'attendance observations are owned by the Scheduling attendance transaction';
+    END IF;
+    IF TG_OP <> 'INSERT' THEN
+        RAISE EXCEPTION 'attendance observations are append-only';
+    END IF;
+    RETURN NEW;
+END;
+"#;
+
+async fn attendance_fence_intact_in(client: &impl GenericClient) -> Result<bool, StoreError> {
+    let installed: bool = client
+        .query_one(
+            "SELECT EXISTS (SELECT 1 FROM scheduling_schema_migrations WHERE version=208)",
+            &[],
+        )
+        .await?
+        .get(0);
+    if !installed {
+        return Ok(true);
+    }
+    writer_fence_intact_in(
+        client,
+        "scheduling_require_attendance_writer_v1",
+        ATTENDANCE_FENCE_BODY,
+        &[(
+            "scheduling_attendance_observations",
+            "scheduling_attendance_observations_writer_v1",
+            31,
+        )],
+    )
+    .await
+}
+
+async fn writer_fence_intact_in(
+    client: &impl GenericClient,
+    function_name: &str,
+    expected_body: &str,
+    expected: &[(&str, &str, i16)],
+) -> Result<bool, StoreError> {
+    let function = client
+        .query_opt(
+            "SELECT p.prosrc, l.lanname, p.prosecdef, p.provolatile::text, p.pronargs, \
+                    p.prorettype='trigger'::regtype, r.rolname = tr.rolname, p.proconfig IS NULL, p.oid \
+             FROM pg_proc AS p \
+             JOIN pg_namespace AS n ON n.oid=p.pronamespace \
+             JOIN pg_language AS l ON l.oid=p.prolang \
+             JOIN pg_roles AS r ON r.oid=p.proowner \
+             JOIN pg_class AS t ON t.oid=to_regclass(format('%I.scheduling_claims', current_schema())) \
+             JOIN pg_roles AS tr ON tr.oid=t.relowner \
+             WHERE n.nspname=current_schema() \
+               AND p.proname=$1 AND p.pronargs=0",
+            &[&function_name],
+        )
+        .await?;
+    let Some(function) = function else {
+        return Ok(false);
+    };
+    if function.get::<_, String>(0).trim() != expected_body.trim()
+        || function.get::<_, String>(1) != "plpgsql"
+        || function.get::<_, bool>(2)
+        || function.get::<_, String>(3) != "v"
+        || function.get::<_, i16>(4) != 0
+        || !function.get::<_, bool>(5)
+        || !function.get::<_, bool>(6)
+        || !function.get::<_, bool>(7)
+    {
+        return Ok(false);
+    }
+    let function_oid: u32 = function.get(8);
+    let rows = client
+        .query(
+            "SELECT t.relname, g.tgname, g.tgtype, g.tgenabled::text, g.tgnargs, \
+                    g.tgqual IS NULL, g.tgattr::text = '' \
+             FROM pg_trigger AS g \
+             JOIN pg_class AS t ON t.oid=g.tgrelid \
+             JOIN pg_namespace AS n ON n.oid=t.relnamespace \
+             JOIN pg_proc AS p ON p.oid=g.tgfoid \
+             WHERE n.nspname=current_schema() AND NOT g.tgisinternal \
+               AND g.tgfoid=$1 AND p.pronamespace=n.oid \
+             ORDER BY t.relname, g.tgname",
+            &[&function_oid],
+        )
+        .await?;
+    if rows.len() != expected.len() {
+        return Ok(false);
+    }
+    Ok(expected.iter().all(|(relation, trigger, kind)| {
+        rows.iter().any(|row| {
+            row.get::<_, String>(0) == *relation
+                && row.get::<_, String>(1) == *trigger
+                && row.get::<_, i16>(2) == *kind
+                && row.get::<_, String>(3) == "O"
+                && row.get::<_, i16>(4) == 0
+                && row.get::<_, bool>(5)
+                && row.get::<_, bool>(6)
+        })
+    }))
 }
 
 /// What follows a fix that only takes a privilege or a trigger away.
@@ -858,12 +1100,51 @@ pub(super) async fn apply_migrations_in(
     let state = schema_state_in(&**transaction).await?;
     state.check()?;
     for version in &state.pending {
-        if *version != SCHEMA_VERSIONS[0] {
-            return Err(StoreError::Corrupt);
+        match *version {
+            200 => {
+                transaction.batch_execute(SCHEDULING_MIGRATION).await?;
+                let schema = current_schema_in(&**transaction).await?;
+                registry_platform_hooks::delivery_schema::install(&**transaction, &schema).await?;
+            }
+            201 => {
+                transaction
+                    .batch_execute(OPERATIONAL_READS_MIGRATION)
+                    .await?
+            }
+            202 => {
+                transaction
+                    .batch_execute(RESOURCE_AVAILABILITY_MIGRATION)
+                    .await?;
+            }
+            203 => {
+                transaction.batch_execute(BOOKING_PARTY_MIGRATION).await?;
+            }
+            204 => {
+                transaction.batch_execute(SOURCE_MANAGER_MIGRATION).await?;
+            }
+            205 => {
+                transaction
+                    .batch_execute(ATOMIC_ALLOCATIONS_MIGRATION)
+                    .await?;
+            }
+            206 => {
+                transaction.batch_execute(SOURCE_BUSY_MIGRATION).await?;
+            }
+            207 => {
+                transaction
+                    .batch_execute(WINDOW_RESOURCES_MIGRATION)
+                    .await?;
+            }
+            208 => {
+                transaction.batch_execute(ATTENDANCE_MIGRATION).await?;
+            }
+            209 => {
+                transaction
+                    .batch_execute(SOURCE_BUSY_OUTCOME_MIGRATION)
+                    .await?;
+            }
+            _ => return Err(StoreError::Corrupt),
         }
-        transaction.batch_execute(SCHEDULING_MIGRATION).await?;
-        let schema = current_schema_in(&**transaction).await?;
-        registry_platform_hooks::delivery_schema::install(&**transaction, &schema).await?;
         transaction
             .execute(
                 "INSERT INTO scheduling_schema_migrations(version,applied_at) VALUES($1,now()) ON CONFLICT(version) DO NOTHING",
@@ -965,13 +1246,13 @@ mod tests {
             assert!(message.contains("pre-1.0 schema"), "{message}");
             assert!(message.contains("fresh database"), "{message}");
         }
-        for applied in [vec![], vec![200]] {
+        for applied in [vec![], vec![200, 201]] {
             SchemaState {
                 applied,
                 pending: Vec::new(),
             }
             .check()
-            .expect("an empty or 1.0 baseline ledger is accepted");
+            .expect("an empty or current 1.0 ledger is accepted");
         }
     }
 

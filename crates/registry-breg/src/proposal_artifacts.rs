@@ -135,6 +135,10 @@ pub(crate) fn append_proposal_openapi(
                 "/v1/proposals/{proposal_id}/review-status".to_owned(),
                 "get",
             ),
+            ProposalOperation::GetTaskGrantContext => (
+                "/v1/proposals/{proposal_id}/task-grant-context".to_owned(),
+                "post",
+            ),
             ProposalOperation::GetApplicationActor => continue,
             _ => (
                 format!("/v1/proposals/{{proposal_id}}/{}", operation.as_str()),
@@ -183,6 +187,22 @@ pub(crate) fn append_proposal_openapi(
         ) {
             document["responses"]["200"]["content"]["application/json"]["schema"] =
                 review_document_schema(operation == ProposalOperation::GetReviewContext);
+        } else if operation == ProposalOperation::GetTaskGrantContext {
+            document["parameters"]
+                .as_array_mut()
+                .expect("operation parameters")
+                .retain(|parameter| {
+                    matches!(
+                        parameter["name"].as_str(),
+                        Some("accessProfile" | "proposal_id")
+                    )
+                });
+            document["requestBody"] = json!({"required":true,"content":{"application/json":{"schema":task_context_request_schema()}}});
+            document["responses"]["200"]["content"]["application/json"]["schema"] = json!({"type":"object","additionalProperties":false,"required":["request","proposal"],"properties":{"request":task_context_request_schema(),"proposal":review_document_schema(true)}});
+            document["responses"]
+                .as_object_mut()
+                .expect("operation responses")
+                .remove("409");
         } else if method == "post" {
             let schema = match operation {
                 ProposalOperation::Apply => proposal_apply_input_schema(),
@@ -235,6 +255,25 @@ pub(crate) fn append_proposal_openapi(
         }
         merge_operation(paths, path, method, document);
     }
+}
+
+fn task_context_request_schema() -> Value {
+    let digest = json!({"type":"string","pattern":"^sha256:[0-9a-f]{64}$"});
+    json!({"type":"object","additionalProperties":false,
+    "required":["expected","requestId","taskId","taskRevision","policy","purpose","fields"],
+    "properties":{
+        "expected":{"type":"object","additionalProperties":false,"required":["actionId","subject","contract"],"properties":{
+            "actionId":{"type":"string"},
+            "subject":{"type":"object","additionalProperties":false,"required":["source","subjectType","id","version","digest"],"properties":{
+                "source":{"type":"string","maxLength":512},"subjectType":{"const":"proposal"},"id":{"type":"string","format":"uuid"},"version":{"type":"string","maxLength":128},"digest":digest.clone()}},
+            "contract":{"type":"object","additionalProperties":false,"required":["id","revision","schemaDigest"],"properties":{
+                "id":{"type":"string","pattern":"^urn:registry:breg:review-context:","maxLength":2048},"revision":digest.clone(),"schemaDigest":digest.clone()}}
+        }},
+        "requestId":{"type":"string","format":"uuid"},"taskId":{"type":"string","format":"uuid"},"taskRevision":{"type":"integer","minimum":1},
+        "policy":{"type":"object","additionalProperties":false,"required":["id","version","digest"],"properties":{"id":{"type":"string"},"version":{"type":"string"},"digest":digest}},
+        "purpose":{"type":"string","minLength":1,"maxLength":128},
+        "fields":{"type":"array","minItems":1,"maxItems":128,"uniqueItems":true,"items":{"type":"string","pattern":"^[a-z][a-zA-Z0-9]{0,63}$"}}
+    }})
 }
 
 fn proposal_submission_schema() -> Value {

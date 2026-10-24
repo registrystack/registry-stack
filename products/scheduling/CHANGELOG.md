@@ -57,6 +57,101 @@
   `scheduling.hook-delivery` event, the envelope, and the delivery refusals
   are unchanged.
 
+- Migrations 0201 through 0209 add operational reads, resource availability,
+  booking parties, source managers, atomic allocations, source busy facts,
+  window resource reservations, attendance, and the retained source busy
+  outcome. The runtime refuses to start until `schedulingctl plan` and
+  `schedulingctl apply` run them.
+- Migration, activation, and `schedulingctl operational-scopes rematerialize`
+  relabel legacy allocation rows with their claim's labels and pool or window
+  anchor, so held legacy exact-time capacity carries into the confirmed
+  booking. A live exact-time hold with no scoped allocation (its resource no
+  longer anchored) refuses confirmation with `service.unavailable` instead of
+  booking without counted capacity; release it, or restore the anchor and
+  rematerialize.
+- Reserve named resources for caller-selected intervals. An exact-time offering
+  can opt into `partyCounts: optional`, so a room or equipment booking omits
+  `party`, and availability and explain reads accept a hard `durationMinutes`
+  (up to seven days) and `resource` selection that never silently substitutes
+  another member. Omitting them keeps default-duration, fungible allocation.
+  `schedulingctl init PROJECT --template resource-reservations` writes the
+  matching starter, whose fixtures replay offline.
+- Admit a composed bundle atomically. An exact-time admission accepts
+  `resourceUnits` and up to 15 `additionalAllocations` (offering, optional
+  resource, physical units); the response returns the `allocations`,
+  confirmation preserves them, and rescheduling replaces the bundle in one
+  capacity transaction. `POST /v1/availability/preview` returns
+  `capacityAvailable` for the bundle without reserving it.
+- Pool members accept dated `availability` `openings` and `closures`. A
+  recorded absence blocks new admissions, rescheduling into it, and
+  confirmation of an affected hold, and leaves existing bookings in place.
+  `records apply --format json` reports `resourceImpacts`, the first 256
+  affected allocations with the exact total. A records swap that removes or
+  reduces physical supply is applied as sent; existing allocations survive,
+  and new allocations and hold confirmations recheck actual supply.
+- An arrival offering may omit `arrival.window`. It then serves every
+  records-published window whose `offering` names it, and a hold, appointment,
+  availability, or explain request picks the window by its `start`; a start
+  that matches none of them is refused with `schedule.unpublished`. Records
+  refuse two windows of one offering at the same start. A reschedule may move
+  a booking to another window of the same offering, locking both windows in
+  window id order. The offering catalogue carries `windows`, every window the
+  offering serves in start order, when it names no window. An offering that
+  names its window behaves as before.
+- A records window accepts an optional `resources` list (requirement, offering,
+  optional resource, units). Each requirement names an exact-time offering at
+  the window's location with `partyCounts: optional` that sells the window's
+  whole span; `records apply` and a policy publication both refuse a
+  requirement the deployed policy cannot reserve that way with
+  `mismatched-reference`, and a resource that is not a member of that
+  offering's pool is refused with `unknown-resource`. The window
+  reserves those resources once, through a parent claim in the allocation
+  ledger, while its bookings carry only units. The reservation conflicts with
+  exact-time bookings and other windows that need the same resource,
+  `records apply` refuses it when the resource is unavailable, busy, or not
+  freshly covered by a configured busy source, and it appears once in
+  `resourceImpacts` and source busy impacts. A window whose record is
+  unchanged keeps its reservation across later records applies and policy
+  publications.
+- Add operational appointment reads. `authentication.oidc.appointmentReadProfiles`
+  defines separately scoped roles with explicit service, location, and resource
+  permissions and an opt-in projection, and `GET /v1/operational/appointments`
+  returns a bounded work list without owner, manager, name, or contact data.
+  `schedulingctl status` reports operational label coverage, and
+  `schedulingctl operational-scopes rematerialize` retries labels after retained
+  policy revisions are restored.
+- Add source busy import. `authentication.oidc.busyImportProfiles` binds a
+  `sourceId`, write scope, and resource set;
+  `POST /v1/source-busy/preview` and `POST /v1/source-busy/apply` reconcile a
+  bounded snapshot with an exact `expectedRevision`. An unavailable or expired
+  feed blocks new allocations for its resources and never alters existing
+  appointments. The Rust client gains `preview_source_busy` and
+  `apply_source_busy`.
+- Add source-managed assisted booking. An admission can select
+  `manager: schedulingManager`, a fixed value from the source grant's signed
+  identity, authorized by the `hold.create-for` and `appointment.create-for`
+  task actions with fresh online grant status. `appointment.read` lets that
+  manager, or a current grant for the appointment's service and location, read
+  one appointment's detail by id; it grants no list or history access.
+- Add attendance observations. `PUT /v1/appointments/{appointment_id}/attendance`
+  records `arrived`, `completed`, or `no-show` under the `attendance.record`
+  task action, with revisioned corrections, and emits the
+  `appointment.attendance-observed` event as a fourth appointment trigger.
+  Recording attendance does not confirm, cancel, move, or release capacity.
+- Reminder and appointment events can be signed with
+  `destinations.reminders.hmacSha256KeyRef` (a key of at least 32 bytes),
+  using the shared CloudEvents delivery headers and HMAC-SHA-256 signature.
+  An optional closed `purposeUrls` block selects separate `confirmation`,
+  `change`, `cancellation`, and `reminder` endpoints on the fallback `url`'s
+  origin. Destinations without the key keep their unsigned behavior.
+- Add maintained recipes under `products/scheduling/integrations`:
+  `calendar-busy` (calendar snapshot to source busy intervals),
+  `calendar-export` (on-demand iCalendar snapshot of appointments with a
+  minimal default projection, run through the `calendar-export` example of
+  `registry-scheduling-client`), `finite-series` (bounded weekly reservation
+  series), and `operational-reporting` (JSON or CSV export of the operational
+  appointment list, from which downstream tools build work lists and counts).
+
 ## 0.43.0 - 2026-10-21
 
 - BREAKING: authored display fields reject prohibited Unicode controls, and

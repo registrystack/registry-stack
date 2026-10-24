@@ -1,0 +1,49 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/breg/dev-clients/dev-clients.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/breg/dev-clients/v1alpha1
+kind: BRegDevClients
+clients:
+  - id: invitation-source-agent
+    accessProfiles: [invitation-workflow]
+    scopes: [invitations:workflow]
+    claims: {registry_actor_kind: service, invitation_source: invitation-source-agent}
+  - id: institution-issuer
+    accessProfiles: []
+    scopes: [coordinator:issue-invitation]
+    claims: {}
+  - id: authorized-acceptance-producer
+    accessProfiles: []
+    scopes: [coordinator:accept-invitation]
+    claims: {}
+  - id: institution-operator
+    accessProfiles: []
+    scopes: [coordinator:operate]
+    claims: {}
+  - id: invitation-notices
+    accessProfiles: []
+    scopes: [messaging:send]
+    claims: {}
+  - id: invitation-catalogue
+    accessProfiles: []
+    scopes: [scheduling:read]
+    claims: {}
+  - id: invitation-booking-agent
+    accessProfiles: []
+    scopes: [casework:grants:assert]
+    claims: {}
+    grants:
+      - audience: urn:example:scheduling
+        scopes: [scheduling:read]
+issuer:
+  resources:
+    - audience: urn:example:coordinator
+      scopes: [coordinator:issue-invitation, coordinator:accept-invitation, coordinator:operate]
+    - audience: urn:example:messaging
+      scopes: [messaging:send]
+    - audience: urn:example:scheduling
+      scopes: [scheduling:read, scheduling:commit]
+  clientResources:
+    institution-issuer: urn:example:coordinator
+    authorized-acceptance-producer: urn:example:coordinator
+    institution-operator: urn:example:coordinator
+    invitation-notices: urn:example:messaging
+    invitation-catalogue: urn:example:scheduling

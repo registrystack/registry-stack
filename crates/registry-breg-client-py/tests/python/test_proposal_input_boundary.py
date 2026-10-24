@@ -15,7 +15,7 @@ METADATA = {'id': 'proposal-input', 'version': '1', 'revision': REVISION, 'metad
             'recordTypes': [], 'operations': [], 'actions': [], 'proposals': {
                 'get': {'method': 'GET', 'path': '/v1/proposals/{proposal_id}', 'accessProfiles': ['writer']},
                 'actions': [{'actionId': 'correct', 'accessProfile': 'writer',
-                             'operations': ['get'], 'readableInputs': []}]}}
+                             'operations': ['get'], 'readableInputs': [], 'readableContextFields': []}]}}
 
 
 def input_with_canonical_size(size):

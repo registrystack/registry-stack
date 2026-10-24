@@ -1,0 +1,11 @@
+apiVersion: id.registrystack.org/formats/breg/dev-clients/v1alpha1
+kind: BRegDevClients
+clients:
+  - id: alert-administrator
+    accessProfiles: [alert-administration]
+    scopes: [alerts:manage]
+    claims: {registry_actor_kind: service, alert_source: earlier-alert-source}
+  - id: earlier-alert-coordinator
+    accessProfiles: [alert-workflow]
+    scopes: [alerts:workflow]
+    claims: {registry_actor_kind: service, alert_source: earlier-alert-source}

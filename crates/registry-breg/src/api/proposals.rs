@@ -67,6 +67,91 @@ pub(crate) struct ReviewContextDocumentRead<'a> {
     pub records: &'a BTreeMap<String, ProposalRecordReadAuthority>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct ProposalTaskContextSubject {
+    pub source: String,
+    pub subject_type: String,
+    pub id: String,
+    pub version: String,
+    pub digest: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct ProposalTaskContextContract {
+    pub id: String,
+    pub revision: String,
+    pub schema_digest: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct ProposalTaskContextIdentity {
+    pub action_id: String,
+    pub subject: ProposalTaskContextSubject,
+    pub contract: ProposalTaskContextContract,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct ProposalTaskContextRequest {
+    pub expected: ProposalTaskContextIdentity,
+    pub request_id: Uuid,
+    pub task_id: Uuid,
+    pub task_revision: i64,
+    pub policy: registry_review_protocol::PolicyBinding,
+    pub purpose: String,
+    pub fields: Vec<String>,
+}
+
+impl ProposalTaskContextRequest {
+    fn valid(&self) -> bool {
+        let unique = self.fields.iter().collect::<BTreeSet<_>>();
+        registry_platform_yaml::LocalId::new(&self.expected.action_id).is_ok()
+            && self.expected.subject.subject_type == "proposal"
+            && Uuid::parse_str(&self.expected.subject.id).is_ok()
+            && !self.expected.subject.source.is_empty()
+            && self.expected.subject.source.len() <= 512
+            && !self.expected.subject.source.chars().any(char::is_control)
+            && !self.expected.subject.version.is_empty()
+            && self.expected.subject.version.len() <= 128
+            && !self.expected.subject.version.chars().any(char::is_control)
+            && valid_digest(&self.expected.subject.digest)
+            && self
+                .expected
+                .contract
+                .id
+                .starts_with("urn:registry:breg:review-context:")
+            && self.expected.contract.id.len() <= 2048
+            && !self.expected.contract.id.chars().any(char::is_control)
+            && valid_digest(&self.expected.contract.revision)
+            && valid_digest(&self.expected.contract.schema_digest)
+            && !self.request_id.is_nil()
+            && !self.task_id.is_nil()
+            && self.task_revision >= 1
+            && self.policy.check().is_ok()
+            && !self.purpose.is_empty()
+            && self.purpose.len() <= 128
+            && !self.purpose.chars().any(char::is_control)
+            && (1..=128).contains(&self.fields.len())
+            && unique.len() == self.fields.len()
+            && self
+                .fields
+                .iter()
+                .all(|field| crate::logical_names::valid_api_name(field))
+    }
+}
+
+fn valid_digest(value: &str) -> bool {
+    value.strip_prefix("sha256:").is_some_and(|hex| {
+        hex.len() == 64
+            && hex
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    })
+}
+
 fn permission_matches(
     permission: &CompiledProposalPermission,
     claims: &VerifiedRequestClaims,
@@ -1079,6 +1164,174 @@ pub(super) async fn review_status(
     .await
 }
 
+pub(super) async fn task_grant_context(
+    State(service): State<Arc<HttpService>>,
+    Path(id): Path<String>,
+    Extension(correlation): Extension<RequestCorrelation>,
+    Authenticated(claims): Authenticated,
+    RawQuery(raw): RawQuery,
+    headers: HeaderMap,
+    body: Body,
+) -> Response {
+    let Some(mutations) = &service.mutations else {
+        return concealed();
+    };
+    let Ok(id) = Uuid::parse_str(&id) else {
+        return concealed();
+    };
+    let Ok(selected) = selected_profile(raw.as_deref()) else {
+        return concealed();
+    };
+    let action_id = match mutations.proposal_action_id(id).await {
+        Ok(Some(id)) => id,
+        Ok(None) => return concealed(),
+        Err(error) => return proposal_problem(error),
+    };
+    let Some(action) = service
+        .registry
+        .actions()
+        .actions
+        .iter()
+        .find(|action| action.id == action_id)
+    else {
+        return concealed();
+    };
+    let operation = ProposalOperation::GetTaskGrantContext;
+    let Some(authority) = authorize(
+        &service.registry,
+        action,
+        &claims,
+        selected.as_deref(),
+        ProposalAuthorityOperation::Lifecycle(operation),
+        Some(id),
+    ) else {
+        return known_action_refusal(
+            mutations,
+            action,
+            &claims,
+            selected.as_deref(),
+            ProposalAuthorityOperation::Lifecycle(operation),
+            HttpMethod::Post,
+            &correlation,
+        )
+        .await;
+    };
+    if !single_content_type(&headers, "application/json") {
+        return admitted_http_refusal(
+            mutations,
+            &authority,
+            HttpMethod::Post,
+            &correlation,
+            unsupported_media_type(),
+        )
+        .await;
+    }
+    let Ok(bytes) = bounded_body_to(body, MAX_MUTATION_BODY_BYTES).await else {
+        return admitted_http_refusal(
+            mutations,
+            &authority,
+            HttpMethod::Post,
+            &correlation,
+            invalid_request(),
+        )
+        .await;
+    };
+    let Ok(value) = parse_json_strict(&bytes) else {
+        return admitted_http_refusal(
+            mutations,
+            &authority,
+            HttpMethod::Post,
+            &correlation,
+            invalid_request(),
+        )
+        .await;
+    };
+    let Ok(request) = serde_json::from_value::<ProposalTaskContextRequest>(value) else {
+        return admitted_http_refusal(
+            mutations,
+            &authority,
+            HttpMethod::Post,
+            &correlation,
+            invalid_request(),
+        )
+        .await;
+    };
+    if !request.valid()
+        || request.expected.action_id != action.id
+        || request.expected.subject.id != id.to_string()
+    {
+        return admitted_http_refusal(
+            mutations,
+            &authority,
+            HttpMethod::Post,
+            &correlation,
+            concealed(),
+        )
+        .await;
+    }
+    let selected_fields = request.fields.iter().cloned().collect::<BTreeSet<_>>();
+    let CompiledActionExecution::Proposal { proposal } = &action.execution else {
+        return concealed();
+    };
+    let granted = proposal.permissions.iter().find(|permission| {
+        permission.profile_id == authority.common.access_profile()
+            && permission.operations.contains(&operation)
+    });
+    if !granted.is_some_and(|permission| {
+        !selected_fields.is_empty()
+            && selected_fields.is_subset(&permission.readable_context_fields)
+    }) {
+        return admitted_http_refusal(
+            mutations,
+            &authority,
+            HttpMethod::Post,
+            &correlation,
+            concealed(),
+        )
+        .await;
+    }
+    let Some(records) = review_record_authorities(
+        &service.registry,
+        action,
+        &claims,
+        &authority,
+        operation,
+        Some(&selected_fields),
+    ) else {
+        return admitted_http_refusal(
+            mutations,
+            &authority,
+            HttpMethod::Post,
+            &correlation,
+            concealed(),
+        )
+        .await;
+    };
+    match mutations
+        .proposal_task_context_read(
+            id,
+            &authority,
+            &records,
+            &request,
+            &selected_fields,
+            &correlation,
+        )
+        .await
+    {
+        Ok((proposal, etag)) => {
+            let mut response =
+                json_response(json!({"request":request,"proposal":proposal}), Some(&etag));
+            response.headers_mut().insert(
+                axum::http::header::CACHE_CONTROL,
+                axum::http::HeaderValue::from_static("no-store"),
+            );
+            response
+        }
+        Err(MutationError::PreconditionFailed) => concealed(),
+        Err(error) => proposal_problem(error),
+    }
+}
+
 async fn review_read(
     service: Arc<HttpService>,
     id: String,
@@ -1129,8 +1382,14 @@ async fn review_read(
         )
         .await;
     };
-    let records =
-        review_record_authorities(&service.registry, action, &claims, &authority, operation);
+    let records = review_record_authorities(
+        &service.registry,
+        action,
+        &claims,
+        &authority,
+        operation,
+        None,
+    );
     let Some(records) = records else {
         return admitted_http_refusal(
             mutations,
@@ -1159,16 +1418,23 @@ pub(crate) fn review_record_authorities(
     claims: &VerifiedRequestClaims,
     authority: &ProposalAuthority,
     operation: ProposalOperation,
+    selected_fields: Option<&BTreeSet<String>>,
 ) -> Option<BTreeMap<String, ProposalRecordReadAuthority>> {
     let mut records = BTreeMap::new();
-    if operation == ProposalOperation::GetReviewContext {
+    if matches!(
+        operation,
+        ProposalOperation::GetReviewContext | ProposalOperation::GetTaskGrantContext
+    ) {
         let CompiledActionExecution::Proposal { proposal } = &action.execution else {
             return None;
         };
         let Some(mapping) = &proposal.review_context else {
             return None;
         };
-        for source in mapping.fields.values() {
+        for (field, source) in &mapping.fields {
+            if selected_fields.is_some_and(|selected| !selected.contains(field)) {
+                continue;
+            }
             use crate::contract::ProposalContextValueSource;
             let target = match source {
                 ProposalContextValueSource::Input { .. }

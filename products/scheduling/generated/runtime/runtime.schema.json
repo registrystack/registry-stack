@@ -101,6 +101,70 @@
       ],
       "type": "object"
     },
+    "BusyImpactProjection": {
+      "enum": [
+        "count-only",
+        "commitment-intervals"
+      ],
+      "type": "string"
+    },
+    "BusyImportProfileConfig": {
+      "additionalProperties": false,
+      "description": "One operator-authorized source and its current resource ceiling.",
+      "properties": {
+        "impactProjection": {
+          "$ref": "#/$defs/BusyImpactProjection",
+          "default": "count-only"
+        },
+        "maximumFreshnessMinutes": {
+          "format": "uint32",
+          "maximum": 10080,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "maximumFutureDays": {
+          "format": "uint32",
+          "maximum": 3650,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "maximumPastDays": {
+          "format": "uint32",
+          "maximum": 3650,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "maximumSpanDays": {
+          "format": "uint32",
+          "maximum": 62,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "resources": {
+          "items": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "scope": {
+          "type": "string"
+        },
+        "sourceId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "scope",
+        "sourceId",
+        "resources",
+        "maximumPastDays",
+        "maximumFutureDays",
+        "maximumSpanDays",
+        "maximumFreshnessMinutes"
+      ],
+      "type": "object"
+    },
     "DatabaseConfig": {
       "additionalProperties": false,
       "description": "The PostgreSQL connection a stateful runtime uses. Both URLs are secret\nreferences and may name the same secret.",
@@ -275,6 +339,16 @@
           "type": "array",
           "uniqueItems": true
         },
+        "appointmentReadProfiles": {
+          "additionalProperties": {
+            "$ref": "#/$defs/OperationalReadProfileConfig"
+          },
+          "description": "Opt-in cross-owner operational appointment read roles. An omitted or\nempty map grants no operational appointment authority.",
+          "propertyNames": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "type": "object"
+        },
         "assertionIssuers": {
           "additionalProperties": {
             "items": {
@@ -301,6 +375,16 @@
           "maxLength": 512,
           "minLength": 1,
           "type": "string"
+        },
+        "busyImportProfiles": {
+          "additionalProperties": {
+            "$ref": "#/$defs/BusyImportProfileConfig"
+          },
+          "description": "Opt-in source-owned busy import roles. Each selected profile binds one\nstable source id and an explicit resource ceiling.",
+          "propertyNames": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "type": "object"
         },
         "explainScope": {
           "default": "scheduling:explain",
@@ -335,6 +419,152 @@
         "allowedClients"
       ],
       "type": "object"
+    },
+    "OperationalProjectionConfig": {
+      "additionalProperties": false,
+      "description": "The explicit projection allowed for one role.",
+      "properties": {
+        "externalReferenceProducts": {
+          "description": "Source products whose exact references may be filtered and returned.",
+          "items": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "fields": {
+          "items": {
+            "$ref": "#/$defs/OperationalProjectionField"
+          },
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "fields"
+      ],
+      "type": "object"
+    },
+    "OperationalProjectionField": {
+      "description": "Fields an operational response may contain. Identity, contact, manager,\nParty references and actor fields are deliberately absent from this vocabulary.",
+      "enum": [
+        "occupied-interval",
+        "resource",
+        "units",
+        "party-counts",
+        "allocations",
+        "attendance"
+      ],
+      "type": "string"
+    },
+    "OperationalReadPermissionConfig": {
+      "additionalProperties": false,
+      "description": "One exact service/location authority within a profile.",
+      "properties": {
+        "location": {
+          "type": "string"
+        },
+        "resources": {
+          "$ref": "#/$defs/OperationalResourceScope"
+        },
+        "service": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "service",
+        "location",
+        "resources"
+      ],
+      "type": "object"
+    },
+    "OperationalReadProfileConfig": {
+      "additionalProperties": false,
+      "description": "One opt-in operational role. No profile is synthesized when the map is\nabsent: an empty map grants no appointment read authority.",
+      "properties": {
+        "maximumFutureDays": {
+          "description": "How far ahead of the observed instant a query may end.",
+          "format": "uint32",
+          "maximum": 3650,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "maximumPastDays": {
+          "description": "How far behind the observed instant a query may begin.",
+          "format": "uint32",
+          "maximum": 3650,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "maximumSpanDays": {
+          "description": "The maximum duration of one request's half-open interval.",
+          "format": "uint32",
+          "maximum": 62,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "permissions": {
+          "items": {
+            "$ref": "#/$defs/OperationalReadPermissionConfig"
+          },
+          "type": "array"
+        },
+        "projection": {
+          "$ref": "#/$defs/OperationalProjectionConfig"
+        },
+        "scope": {
+          "description": "The OAuth scope that selects this role after token verification.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "scope",
+        "maximumPastDays",
+        "maximumFutureDays",
+        "maximumSpanDays",
+        "permissions",
+        "projection"
+      ],
+      "type": "object"
+    },
+    "OperationalResourceScope": {
+      "description": "The resource authority at one service/location pair. `Unrestricted` is an\nexplicit operator statement, never an omitted default.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "unrestricted",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "ids": {
+              "items": {
+                "$ref": "#/$defs/LocalId"
+              },
+              "type": "array",
+              "uniqueItems": true
+            },
+            "type": {
+              "const": "exact",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "ids"
+          ],
+          "type": "object"
+        }
+      ]
     },
     "PackageConfig": {
       "additionalProperties": false,
@@ -382,6 +612,14 @@
         "bearerTokenRef": {
           "$ref": "#/$defs/SecretReference"
         },
+        "hmacSha256KeyRef": {
+          "$ref": "#/$defs/SecretReference",
+          "description": "Optional HMAC-SHA-256 key for the shared signed event-delivery\ncontract. Bearer authentication, when configured, remains independent."
+        },
+        "purposeUrls": {
+          "$ref": "#/$defs/ReminderPurposeUrls",
+          "description": "Optional endpoints for individual reminder purposes. Any omitted\npurpose uses `url`; every override must share that URL's origin."
+        },
         "url": {
           "$ref": "#/$defs/Url",
           "description": "An https URL, or http on 127.0.0.1, localhost, or [::1], without a\nquery or fragment."
@@ -390,6 +628,25 @@
       "required": [
         "url"
       ],
+      "type": "object"
+    },
+    "ReminderPurposeUrls": {
+      "additionalProperties": false,
+      "description": "Optional endpoint overrides named for the four reminder intent purposes\nScheduling emits.",
+      "properties": {
+        "cancellation": {
+          "$ref": "#/$defs/Url"
+        },
+        "change": {
+          "$ref": "#/$defs/Url"
+        },
+        "confirmation": {
+          "$ref": "#/$defs/Url"
+        },
+        "reminder": {
+          "$ref": "#/$defs/Url"
+        }
+      },
       "type": "object"
     },
     "RetentionConfig": {

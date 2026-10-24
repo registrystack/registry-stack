@@ -3282,6 +3282,7 @@ impl BaseRegistryClient {
             .map_err(client_error)?;
         complete_value(response.value, response.metadata)
     }
+
     #[napi]
     pub async fn upload_proposal_attachment(
         &self,

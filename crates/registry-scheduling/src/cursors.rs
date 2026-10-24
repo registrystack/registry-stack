@@ -24,9 +24,9 @@
 //! catalogue and availability listings are, in which case a cursor discloses
 //! nothing its holder could not ask for outright; or the listing re-applies
 //! its own authorization on the continuing request before the cursor is
-//! resolved, as appointment history does by re-running the ownership check
-//! against the caller of the page, never against the caller who minted the
-//! token.
+//! resolved. Appointment history re-runs ownership. Operational appointment
+//! pages re-authorize one current profile and bind the verified identity,
+//! profile digest and normalized filters into the stored context.
 //!
 //! The obligation is therefore on the call site, and it is a real one: a
 //! listing that is neither public nor re-authorized on every page must bind
@@ -121,6 +121,11 @@ pub enum ListingPosition {
         to: DateTime<Utc>,
         after: DateTime<Utc>,
     },
+    /// Resume strictly after this instant and id, walking oldest first.
+    OperationalAfter {
+        after: DateTime<Utc>,
+        last_id: String,
+    },
     /// Resume strictly before this instant and id, walking newest first: the
     /// position one history page leaves behind.
     BeforeInstantAndId {
@@ -141,6 +146,9 @@ impl ListingPosition {
                 "to": to.to_rfc3339(),
                 "after": after.to_rfc3339(),
             }),
+            Self::OperationalAfter { after, last_id } => {
+                serde_json::json!({"operationalAfter": after.to_rfc3339(), "lastId": last_id})
+            }
             Self::BeforeInstantAndId { before, last_id } => {
                 serde_json::json!({"before": before.to_rfc3339(), "lastId": last_id})
             }
@@ -167,6 +175,17 @@ impl ListingPosition {
                     last_id: last_id.to_owned(),
                 }
             });
+        }
+        if let (Some(after), Some(last_id)) = (
+            value.get("operationalAfter").and_then(Value::as_str),
+            value.get("lastId").and_then(Value::as_str),
+        ) {
+            return DateTime::parse_from_rfc3339(after)
+                .ok()
+                .map(|after| Self::OperationalAfter {
+                    after: after.with_timezone(&Utc),
+                    last_id: last_id.to_owned(),
+                });
         }
         let instant = |key: &str| {
             value

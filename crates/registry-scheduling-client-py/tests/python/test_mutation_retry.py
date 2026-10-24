@@ -22,6 +22,8 @@ REFERENCE = {"product": "casework", "recordType": "review-task", "identifier": "
 ADMISSION = {
     "offering": "registry-update-30",
     "start": "2026-10-05T09:00:00Z",
+    "durationMinutes": 1500,
+    "resource": "clerk-2",
     "party": {"recipients": 1, "attendees": 1},
     "policyRevision": 3,
     "capabilities": [],
@@ -129,6 +131,8 @@ class MutationRetryTests(unittest.TestCase):
         self.assertEqual(first["path"], "/tenant/v1/holds")
         self.assertEqual(first["idempotency_key"], KEY)
         self.assertEqual(resend, first)
+        self.assertEqual(json.loads(first["body"])["durationMinutes"], 1500)
+        self.assertEqual(json.loads(first["body"])["resource"], "clerk-2")
 
     def test_a_ceiling_of_zero_sends_once_and_reports_the_outcome_unknown(self) -> None:
         self.script(UNAVAILABLE, CREATED)

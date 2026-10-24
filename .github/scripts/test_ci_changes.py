@@ -1265,7 +1265,20 @@ class CiChangesTest(unittest.TestCase):
         self.assertNotIn("coordinator", self.workflow_jobs["messaging-postgres"]["if"])
         self.assertIn("COORDINATOR_TEST_DATABASE_URL", proof["env"])
         self.assertIn("COORDINATOR_MESSAGING_TEST_DATABASE_URL", proof["env"])
-        self.assertNotEqual(proof["env"]["COORDINATOR_TEST_DATABASE_URL"], proof["env"]["COORDINATOR_MESSAGING_TEST_DATABASE_URL"])
+        self.assertIn("COORDINATOR_SCHEDULING_TEST_DATABASE_URL", proof["env"])
+        database_urls = (
+            proof["env"]["COORDINATOR_TEST_DATABASE_URL"],
+            proof["env"]["COORDINATOR_MESSAGING_TEST_DATABASE_URL"],
+            proof["env"]["COORDINATOR_SCHEDULING_TEST_DATABASE_URL"],
+        )
+        self.assertEqual(len(set(database_urls)), 3)
+        database_preparation = "\n".join(
+            step.get("run", "") for step in job["steps"]
+        )
+        self.assertTrue(database_urls[1].endswith("/coordinator_messaging"))
+        self.assertIn("createdb coordinator_messaging", database_preparation)
+        self.assertTrue(database_urls[2].endswith("/coordinator_scheduling"))
+        self.assertIn("createdb coordinator_scheduling", database_preparation)
         script = Path("products/coordinator/scripts/test-postgres.sh").read_text()
         self.assertRegex(script, r"cargo test --locked -p registry-coordinator[^\n]*--lib")
         self.assertIn("--test messaging_integration", script)
