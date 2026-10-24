@@ -13,10 +13,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest as _, Sha256};
 use thiserror::Error;
-use uuid::Uuid;
-
-use crate::audit::{with_event_id, SchedulingAudit};
-use crate::store::{OperationalScopeCoverage, PostgresStore, StoreError};
 
 /// The most separately selectable operational roles one deployment may bind.
 pub const MAX_OPERATIONAL_READ_PROFILES: usize = 64;
@@ -711,117 +707,6 @@ fn canonical_digest(value: &serde_json::Value) -> Result<String, OperationalAuth
         rendered.push(HEX[(byte & 0x0f) as usize] as char);
     }
     Ok(rendered)
-}
-
-/// A failure of the attributable operator workflow that retries immutable
-/// operational-read label materialization.
-#[derive(Debug, Error)]
-pub enum OperationalRematerializationError {
-    #[error("reading operational appointment label coverage failed")]
-    Coverage(#[source] StoreError),
-    #[error(
-        "the operational-scopes.rematerialize request audit entry was not accepted; no labels were changed"
-    )]
-    AuditRequest(#[source] registry_platform_audit::AuditUnavailable),
-    #[error("rematerializing operational appointment labels failed")]
-    Store(#[source] StoreError),
-    #[error(
-        "rematerializing operational appointment labels failed, and its response audit entry could not be written: {audit}"
-    )]
-    StoreAndAudit {
-        #[source]
-        store: StoreError,
-        audit: registry_platform_audit::AuditUnavailable,
-    },
-    #[error(
-        "operational appointment labels were rematerialized, but the operational-scopes.rematerialize response audit entry could not be written; the label changes stand"
-    )]
-    AppliedUnaudited(#[source] registry_platform_audit::AuditUnavailable),
-}
-
-/// Retry immutable operational-read label materialization through the
-/// operator audit boundary. The request entry must be accepted before the
-/// database transaction starts; response records contain aggregate coverage
-/// only, never claim, party, owner or reference identifiers.
-pub async fn rematerialize_operational_scopes(
-    store: &PostgresStore,
-    audit: &SchedulingAudit,
-) -> Result<OperationalScopeCoverage, OperationalRematerializationError> {
-    let before = store
-        .operational_scope_coverage()
-        .await
-        .map_err(OperationalRematerializationError::Coverage)?;
-    let event_id = Uuid::new_v4();
-    let request = json!({
-        "actorKind": "operator",
-        "operation": "operational-scopes.rematerialize",
-        "before": coverage_record(before),
-    });
-    audit
-        .operational_scopes_request(event_id, request.clone())
-        .await
-        .map_err(OperationalRematerializationError::AuditRequest)?;
-
-    let after = match store.rematerialize_operational_scopes().await {
-        Ok(coverage) => coverage,
-        Err(store) => {
-            let response = rematerialization_response(
-                event_id,
-                request,
-                json!({
-                    "outcome": "failed",
-                    "reason": "operational-scopes.rematerialize-failed",
-                }),
-            );
-            return match audit.operational_scopes_response(event_id, response).await {
-                Ok(()) => Err(OperationalRematerializationError::Store(store)),
-                Err(audit) => {
-                    Err(OperationalRematerializationError::StoreAndAudit { store, audit })
-                }
-            };
-        }
-    };
-    let response = rematerialization_response(
-        event_id,
-        request,
-        json!({
-            "outcome": "allowed",
-            "reason": "authorization.allowed",
-            "after": coverage_record(after),
-            "effects": {
-                "rematerializedBookings": before.unresolved_bookings.saturating_sub(after.unresolved_bookings),
-                "rematerializedActiveBookings": before.unresolved_active_bookings.saturating_sub(after.unresolved_active_bookings),
-            },
-        }),
-    );
-    audit
-        .operational_scopes_response(event_id, response)
-        .await
-        .map_err(OperationalRematerializationError::AppliedUnaudited)?;
-    Ok(after)
-}
-
-fn coverage_record(coverage: OperationalScopeCoverage) -> serde_json::Value {
-    json!({
-        "unresolvedBookings": coverage.unresolved_bookings,
-        "unresolvedActiveBookings": coverage.unresolved_active_bookings,
-    })
-}
-
-fn rematerialization_response(
-    event_id: Uuid,
-    mut request: serde_json::Value,
-    outcome: serde_json::Value,
-) -> serde_json::Value {
-    let request_fields = request
-        .as_object_mut()
-        .expect("the closed rematerialization request is an object");
-    let outcome_fields = outcome
-        .as_object()
-        .expect("the closed rematerialization outcome is an object");
-    request_fields.extend(outcome_fields.clone());
-    with_event_id(event_id, request)
-        .expect("the closed rematerialization response has no competing event identity")
 }
 
 #[cfg(test)]

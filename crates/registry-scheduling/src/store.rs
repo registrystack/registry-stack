@@ -83,7 +83,7 @@ pub use activation::{
 };
 use activation::{apply_migrations_in, check_active_package_in, schema_state_in};
 pub use attempt_key::attempt_key_reference;
-pub use operational::{OperationalAppointmentRow, OperationalScopeCoverage};
+pub use operational::OperationalAppointmentRow;
 pub use resource_availability::{ResourceSupplyImpact, ResourceSupplyImpacts};
 pub use source_busy::{resource_interval_is_available, BusyStoreError};
 
@@ -1038,7 +1038,6 @@ impl PostgresStore {
             .execute("SELECT pg_advisory_xact_lock($1)", &[&MIGRATION_LOCK_KEY])
             .await?;
         let applied = apply_migrations_in(&transaction).await?;
-        operational::rematerialize_operational_scopes_in(&*transaction).await?;
         transaction.commit().await?;
         Ok(applied)
     }
@@ -3430,8 +3429,7 @@ async fn load_claim_allocations(
             "SELECT claim_id, requirement_kind, requirement_index, offering, resource_id, \
              units, occupied_start, occupied_end \
              FROM scheduling_claim_allocations \
-             WHERE claim_id = ANY($1) AND allocation_scope_version=1 \
-               AND operational_mode='exact-time' \
+             WHERE claim_id = ANY($1) AND operational_mode='exact-time' \
              ORDER BY claim_id, CASE requirement_kind WHEN 'primary' THEN -1 ELSE requirement_index END, \
                       part_index",
             &[&claim_ids],
@@ -5135,11 +5133,11 @@ async fn replace_window_resource_claims(
         let written = transaction
             .execute(
                 "INSERT INTO scheduling_claims( \
-                    claim_id, kind, state, offering, operational_scope_version, \
+                    claim_id, kind, state, offering, \
                     operational_service, operational_location, operational_mode, supply_id, \
                     displayed_start, displayed_end, occupied_start, occupied_end, units, revision, \
                     policy_revision, actor, external_references, party_references) \
-                 VALUES($1,'window','active',$2,1,$3,$4,'arrival-window',$5,$6,$7,$6,$7,1,$8,$9,'records','[]','[]') \
+                 VALUES($1,'window','active',$2,$3,$4,'arrival-window',$5,$6,$7,$6,$7,1,$8,$9,'records','[]','[]') \
                  ON CONFLICT(claim_id) DO UPDATE SET offering=EXCLUDED.offering, \
                     operational_service=EXCLUDED.operational_service, \
                     operational_location=EXCLUDED.operational_location, \
@@ -5416,13 +5414,13 @@ impl CapacityStatements for deadpool_postgres::Transaction<'_> {
             .map_err(|_| StoreError::Corrupt)?;
         let row = self
             .query_one(
-                "INSERT INTO scheduling_claims(claim_id, kind, state, offering, operational_scope_version, \
+                "INSERT INTO scheduling_claims(claim_id, kind, state, offering, \
                  operational_service, operational_location, operational_mode, supply_id, \
                  channel, displayed_start, displayed_end, occupied_start, occupied_end, units, \
                  duplicate_key, external_references, hold_expires_at, revision, policy_revision, actor, reason, \
                  owner_issuer, owner_subject, recipient_count, attendee_count, party_references, \
                  manager_source_issuer, manager_subject) \
-                 VALUES($1,$2,$3,$4,1,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28) \
+                 VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28) \
                  RETURNING created_at",
                 &[
                     &claim.claim_id,
@@ -5531,9 +5529,9 @@ impl CapacityStatements for deadpool_postgres::Transaction<'_> {
             self.execute(
                 "INSERT INTO scheduling_claim_allocations( \
                  claim_id, requirement_kind, requirement_index, part_index, \
-                 allocation_scope_version, offering, operational_service, operational_location, \
+                 offering, operational_service, operational_location, \
                  operational_mode, anchor_id, resource_id, occupied_start, occupied_end, units) \
-                 VALUES($1,$2,$3,$4,1,$5,$6,$7,'exact-time',$8,$9,$10,$11,$12)",
+                 VALUES($1,$2,$3,$4,$5,$6,$7,'exact-time',$8,$9,$10,$11,$12)",
                 &[
                     &claim_id,
                     &kind,

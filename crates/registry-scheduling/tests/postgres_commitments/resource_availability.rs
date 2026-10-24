@@ -285,17 +285,6 @@ async fn supply_impacts_cover_secondary_removed_and_reduced_stock_without_cancel
             booking["appointmentId"]
         );
     }
-    begin_current_test_writer(&fx.admin).await;
-    fx.admin.execute(
-        "UPDATE scheduling_claim_allocations SET allocation_scope_version=0,operational_service=NULL,operational_location=NULL,operational_mode=NULL,anchor_id=NULL WHERE claim_id=$1 AND resource_id='station-2'",
-        &[&Uuid::parse_str(booking["appointmentId"].as_str().unwrap()).unwrap()],
-    ).await.unwrap();
-    commit_current_test_writer(&fx.admin).await;
-    assert_eq!(
-        fx.store.resource_supply_impacts().await.unwrap().total,
-        1,
-        "unknown legacy scope does not erase physical capacity truth"
-    );
     let (status, current) = fx
         .get(
             &format!(

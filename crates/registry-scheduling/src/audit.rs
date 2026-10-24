@@ -29,10 +29,6 @@ pub const SCHEDULING_AUDIT_SCHEMA: &str = "registry-scheduling-audit/v1";
 /// package activation.
 pub const ACTIVATION_AUDIT_SCHEMA: &str = "scheduling-activation-audit/v1";
 
-/// The schema identifier of the entries an operator writes when retrying
-/// immutable operational-read label materialization.
-pub const OPERATIONAL_SCOPES_AUDIT_SCHEMA: &str = "scheduling-operational-scopes-audit/v1";
-
 /// The process-wide Scheduling audit destination.
 #[derive(Clone, Debug)]
 pub struct SchedulingAudit {
@@ -114,38 +110,6 @@ impl SchedulingAudit {
             .append(AuditEntry::response(
                 ACTIVATION_AUDIT_SCHEMA,
                 activation_id.to_string(),
-                record,
-            ))
-            .await
-    }
-
-    /// Append the `request` entry of one operational-scope rematerialization.
-    /// No label mutation starts unless the destination accepts this entry.
-    pub async fn operational_scopes_request(
-        &self,
-        event_id: Uuid,
-        record: Value,
-    ) -> Result<(), AuditUnavailable> {
-        self.writer
-            .append(AuditEntry::request(
-                OPERATIONAL_SCOPES_AUDIT_SCHEMA,
-                event_id.to_string(),
-                record,
-            ))
-            .await
-    }
-
-    /// Append the `response` entry of one operational-scope
-    /// rematerialization after its database transaction has answered.
-    pub async fn operational_scopes_response(
-        &self,
-        event_id: Uuid,
-        record: Value,
-    ) -> Result<(), AuditUnavailable> {
-        self.writer
-            .append(AuditEntry::response(
-                OPERATIONAL_SCOPES_AUDIT_SCHEMA,
-                event_id.to_string(),
                 record,
             ))
             .await
@@ -349,52 +313,6 @@ mod tests {
         for entry in &entries {
             assert_eq!(entry["schema"], SCHEDULING_AUDIT_SCHEMA);
             assert_eq!(entry["correlation"], correlation.to_string());
-        }
-    }
-
-    #[tokio::test]
-    async fn operational_scope_entries_use_their_dedicated_schema() {
-        let (audit, capture) = SchedulingAudit::capture();
-        let event_id = Uuid::new_v4();
-        audit
-            .operational_scopes_request(
-                event_id,
-                json!({
-                    "actorKind": "operator",
-                    "operation": "operational-scopes.rematerialize",
-                    "before": {"unresolvedBookings": 2, "unresolvedActiveBookings": 1},
-                }),
-            )
-            .await
-            .unwrap();
-        audit
-            .operational_scopes_response(
-                event_id,
-                json!({
-                    "actorKind": "operator",
-                    "operation": "operational-scopes.rematerialize",
-                    "eventId": event_id,
-                    "outcome": "allowed",
-                    "reason": "authorization.allowed",
-                    "after": {"unresolvedBookings": 0, "unresolvedActiveBookings": 0},
-                }),
-            )
-            .await
-            .unwrap();
-
-        let entries = capture.entries();
-        assert_eq!(entries.len(), 2);
-        assert_eq!(entries[0]["phase"], "request");
-        assert_eq!(entries[1]["phase"], "response");
-        for entry in &entries {
-            assert_eq!(entry["schema"], OPERATIONAL_SCOPES_AUDIT_SCHEMA);
-            assert_eq!(entry["correlation"], event_id.to_string());
-            assert_eq!(
-                entry["record"]["operation"],
-                "operational-scopes.rematerialize"
-            );
-            assert!(entry.to_string().find("claimId").is_none());
-            assert!(entry.to_string().find("party").is_none());
         }
     }
 

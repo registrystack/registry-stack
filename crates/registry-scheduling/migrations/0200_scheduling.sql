@@ -113,10 +113,8 @@ CREATE TABLE IF NOT EXISTS scheduling_claims (
     owner_subject text,
     owner_reference text,
     owner_erased_at timestamptz,
-    -- Omitting the scope columns chooses version 1, whose check requires
-    -- every immutable security label, so no writer creates an unlabeled
-    -- claim by omission.
-    operational_scope_version smallint NOT NULL DEFAULT 1,
+    -- The scope check requires every immutable security label, so no writer
+    -- creates an unlabeled claim by omission.
     operational_service text,
     operational_location text,
     operational_mode text,
@@ -139,15 +137,9 @@ CREATE TABLE IF NOT EXISTS scheduling_claims (
             AND owner_issuer IS NULL AND owner_subject IS NULL)
     ),
     CONSTRAINT scheduling_claims_operational_scope_check CHECK (
-        (operational_scope_version = 0
-            AND operational_service IS NULL
-            AND operational_location IS NULL
-            AND operational_mode IS NULL)
-        OR
-        (operational_scope_version = 1
-            AND operational_service IS NOT NULL AND operational_service <> ''
-            AND operational_location IS NOT NULL AND operational_location <> ''
-            AND operational_mode IN ('exact-time', 'arrival-window'))
+        operational_service IS NOT NULL AND operational_service <> ''
+        AND operational_location IS NOT NULL AND operational_location <> ''
+        AND operational_mode IN ('exact-time', 'arrival-window')
     ),
     CONSTRAINT scheduling_claims_party_counts_check CHECK (
         (recipient_count IS NULL AND attendee_count IS NULL)
@@ -188,7 +180,7 @@ CREATE INDEX IF NOT EXISTS scheduling_claims_operational_displayed_idx
         displayed_start,
         claim_id
     )
-    WHERE kind = 'booking' AND operational_scope_version = 1;
+    WHERE kind = 'booking';
 CREATE INDEX IF NOT EXISTS scheduling_claims_operational_occupied_idx
     ON scheduling_claims(
         operational_service,
@@ -196,7 +188,7 @@ CREATE INDEX IF NOT EXISTS scheduling_claims_operational_occupied_idx
         occupied_start,
         claim_id
     )
-    WHERE kind = 'booking' AND operational_scope_version = 1;
+    WHERE kind = 'booking';
 
 -- Published windows reserve physical resources once through the same
 -- claim-allocation ledger as every exact reservation. Window booking claims
@@ -220,7 +212,6 @@ CREATE TABLE IF NOT EXISTS scheduling_claim_allocations (
         CHECK (requirement_kind IN ('primary', 'additional')),
     requirement_index smallint NOT NULL,
     part_index smallint NOT NULL CHECK (part_index BETWEEN 0 AND 255),
-    allocation_scope_version smallint NOT NULL DEFAULT 1,
     offering text NOT NULL CHECK (offering <> ''),
     operational_service text,
     operational_location text,
@@ -241,25 +232,17 @@ CREATE TABLE IF NOT EXISTS scheduling_claim_allocations (
     CONSTRAINT scheduling_claim_allocations_interval_check
         CHECK (occupied_start < occupied_end),
     CONSTRAINT scheduling_claim_allocations_scope_check CHECK (
-        (allocation_scope_version = 0
-            AND operational_service IS NULL
-            AND operational_location IS NULL
-            AND operational_mode IS NULL
-            AND anchor_id IS NULL)
-        OR
-        (allocation_scope_version = 1
-            AND operational_service IS NOT NULL
-            AND operational_service <> ''
-            AND operational_location IS NOT NULL
-            AND operational_location <> ''
-            AND operational_mode IN ('exact-time', 'arrival-window')
-            AND anchor_id IS NOT NULL
-            AND anchor_id <> '')
+        operational_service IS NOT NULL
+        AND operational_service <> ''
+        AND operational_location IS NOT NULL
+        AND operational_location <> ''
+        AND operational_mode IN ('exact-time', 'arrival-window')
+        AND anchor_id IS NOT NULL
+        AND anchor_id <> ''
     )
 );
 CREATE INDEX IF NOT EXISTS scheduling_claim_allocations_anchor_interval_idx
-    ON scheduling_claim_allocations(anchor_id, occupied_start, occupied_end, claim_id)
-    WHERE allocation_scope_version = 1;
+    ON scheduling_claim_allocations(anchor_id, occupied_start, occupied_end, claim_id);
 CREATE INDEX IF NOT EXISTS scheduling_claim_allocations_resource_interval_idx
     ON scheduling_claim_allocations(resource_id, occupied_start, occupied_end, claim_id);
 CREATE INDEX IF NOT EXISTS scheduling_claim_allocations_offering_idx

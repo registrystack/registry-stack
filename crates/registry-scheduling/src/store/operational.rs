@@ -5,10 +5,8 @@
 use chrono::{DateTime, Utc};
 use registry_scheduling_core::{
     AllocationRequirementDocument, AppointmentStateDocument, ExternalReference, PartyCounts,
-    SchedulingMode,
 };
 use serde_json::Value;
-use tokio_postgres::GenericClient;
 use uuid::Uuid;
 
 use crate::attendance::AttendanceObservation;
@@ -17,9 +15,7 @@ use crate::operational::{
     OperationalTimeBasis,
 };
 
-use super::{
-    mark_allocation_writer, retained_policy, PostgresStore, StoreError, MIGRATION_LOCK_KEY,
-};
+use super::{PostgresStore, StoreError};
 
 /// A row whose columns are already limited to the authorized projection.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -52,14 +48,6 @@ pub struct OperationalAllocationRow {
     pub units: i32,
     pub occupied_start: DateTime<Utc>,
     pub occupied_end: DateTime<Utc>,
-}
-
-/// Bounded, aggregate-only evidence that historical rows still lack immutable
-/// operational labels. It exposes no service, owner, reference or time value.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct OperationalScopeCoverage {
-    pub unresolved_bookings: i64,
-    pub unresolved_active_bookings: i64,
 }
 
 impl PostgresStore {
@@ -110,12 +98,12 @@ impl PostgresStore {
             OperationalTimeBasis::Occupied => (
                 "CASE WHEN c.operational_mode='arrival-window' THEN c.occupied_start \
                  ELSE (SELECT min(position.occupied_start) FROM scheduling_claim_allocations AS position \
-                   WHERE position.claim_id=c.claim_id AND position.allocation_scope_version=1 \
+                   WHERE position.claim_id=c.claim_id \
                      AND ($5::text[] IS NULL OR position.resource_id=ANY($5))) END",
                 "(CASE WHEN c.operational_mode='arrival-window' \
                    THEN c.occupied_start < $4 AND c.occupied_end > $3 \
                  ELSE EXISTS (SELECT 1 FROM scheduling_claim_allocations AS occupied \
-                   WHERE occupied.claim_id=c.claim_id AND occupied.allocation_scope_version=1 \
+                   WHERE occupied.claim_id=c.claim_id \
                      AND occupied.occupied_start < $4 AND occupied.occupied_end > $3 \
                      AND ($5::text[] IS NULL OR occupied.resource_id=ANY($5))) END)",
             ),
@@ -134,12 +122,12 @@ impl PostgresStore {
              CASE WHEN $15 THEN c.external_references ELSE '[]'::jsonb END, \
              {position_start_expression} AS position_start \
              FROM scheduling_claims AS c \
-             WHERE c.kind='booking' AND c.operational_scope_version=1 \
+             WHERE c.kind='booking' \
                AND c.operational_service=$1 AND c.operational_location=$2 \
                AND {interval_predicate} \
                AND ($5::text[] IS NULL OR (c.operational_mode='exact-time' AND EXISTS ( \
                     SELECT 1 FROM scheduling_claim_allocations AS resource \
-                    WHERE resource.claim_id=c.claim_id AND resource.allocation_scope_version=1 \
+                    WHERE resource.claim_id=c.claim_id \
                       AND resource.resource_id=ANY($5)))) \
                AND ($6::text IS NULL OR c.offering=$6) \
                AND ($7::text IS NULL OR c.state=$7) \
@@ -237,7 +225,7 @@ impl PostgresStore {
                     "SELECT claim_id, requirement_kind, requirement_index, offering, resource_id, \
                         units, occupied_start, occupied_end \
                  FROM scheduling_claim_allocations \
-                 WHERE claim_id=ANY($1) AND allocation_scope_version=1 AND operational_mode='exact-time' \
+                 WHERE claim_id=ANY($1) AND operational_mode='exact-time' \
                    AND EXISTS (SELECT 1 FROM scheduling_claims c \
                        WHERE c.claim_id=scheduling_claim_allocations.claim_id AND c.operational_mode='exact-time') \
                  ORDER BY claim_id, requirement_kind DESC, requirement_index, part_index",
@@ -282,137 +270,4 @@ impl PostgresStore {
         transaction.commit().await?;
         Ok(appointments)
     }
-
-    /// Count bookings excluded from operational reads because no retained
-    /// policy snapshot has yet supplied their immutable labels.
-    pub async fn operational_scope_coverage(&self) -> Result<OperationalScopeCoverage, StoreError> {
-        let client = self.client().await?;
-        operational_scope_coverage_in(&**client).await
-    }
-
-    /// Retry label materialization after an operator restores missing retained
-    /// policy snapshots. Invalid snapshots remain unresolved as a whole.
-    pub(crate) async fn rematerialize_operational_scopes(
-        &self,
-    ) -> Result<OperationalScopeCoverage, StoreError> {
-        let mut client = self.client().await?;
-        let transaction = client.transaction().await?;
-        mark_allocation_writer(&transaction).await?;
-        transaction
-            .execute("SELECT pg_advisory_xact_lock($1)", &[&MIGRATION_LOCK_KEY])
-            .await?;
-        rematerialize_operational_scopes_in(&*transaction).await?;
-        let coverage = operational_scope_coverage_in(&*transaction).await?;
-        transaction.commit().await?;
-        Ok(coverage)
-    }
-}
-
-pub(super) async fn rematerialize_operational_scopes_in(
-    client: &impl GenericClient,
-) -> Result<u64, StoreError> {
-    let rows = client
-        .query(
-            "SELECT DISTINCT c.policy_revision, c.offering, p.policy_document, p.policy_digest \
-             FROM scheduling_claims c \
-             LEFT JOIN scheduling_policy_revisions p USING(policy_revision) \
-             WHERE c.operational_scope_version=0",
-            &[],
-        )
-        .await?;
-    let mut updated = 0_u64;
-    for row in rows {
-        let policy_revision: i64 = row.get(0);
-        let offering_id: String = row.get(1);
-        let document: Option<Value> = row.get(2);
-        let retained_digest: Option<String> = row.get(3);
-        let Some(document) = document else { continue };
-        let Ok(policy) = retained_policy(document) else {
-            continue;
-        };
-        let decoded_digest = policy.policy_digest();
-        if retained_digest.as_deref() != Some(decoded_digest.as_str()) {
-            continue;
-        }
-        let Some(offering) = policy.offering(&offering_id) else {
-            continue;
-        };
-        let mode = match offering.mode {
-            SchedulingMode::ExactTime => "exact-time",
-            SchedulingMode::ArrivalWindow => "arrival-window",
-        };
-        updated = updated.saturating_add(
-            client
-                .execute(
-                    "UPDATE scheduling_claims SET operational_scope_version=1, \
-                     operational_service=$3, operational_location=$4, operational_mode=$5 \
-                     WHERE operational_scope_version=0 AND policy_revision=$1 AND offering=$2",
-                    &[
-                        &policy_revision,
-                        &offering_id,
-                        &offering.service,
-                        &offering.location,
-                        &mode,
-                    ],
-                )
-                .await?,
-        );
-    }
-    relabel_legacy_allocations_in(client).await?;
-    Ok(updated)
-}
-
-/// Give each version-0 allocation row of a labeled claim the claim's labels
-/// and the anchor its resource has in current facts: the pool of an
-/// exact-time member, or the window itself. The capacity service
-/// loads only scoped rows, so until this runs a legacy exact-time hold has
-/// none to carry into its booking. A row whose resource no current pool or
-/// window anchors stays version 0: it keeps consuming that resource, and the
-/// hold refuses confirmation until an operator restores the anchor and runs
-/// this again.
-async fn relabel_legacy_allocations_in(client: &impl GenericClient) -> Result<(), StoreError> {
-    client
-        .execute(
-            "WITH resolved AS ( \
-                 SELECT a.claim_id, a.requirement_kind, a.requirement_index, a.part_index, \
-                        c.operational_service, c.operational_location, c.operational_mode, \
-                        CASE c.operational_mode WHEN 'exact-time' THEN m.pool_id \
-                             ELSE w.supply_id END AS anchor_id \
-                 FROM scheduling_claim_allocations AS a \
-                 JOIN scheduling_claims AS c ON c.claim_id=a.claim_id AND c.offering=a.offering \
-                 LEFT JOIN scheduling_pool_members AS m ON m.resource_id=a.resource_id \
-                 LEFT JOIN scheduling_supply AS w \
-                        ON w.supply_id=a.resource_id AND w.kind='window' \
-                 WHERE a.allocation_scope_version=0 AND c.operational_scope_version=1 \
-                   AND c.operational_mode IN ('exact-time','arrival-window') \
-             ) \
-             UPDATE scheduling_claim_allocations AS a SET allocation_scope_version=1, \
-                    operational_service=r.operational_service, \
-                    operational_location=r.operational_location, \
-                    operational_mode=r.operational_mode, anchor_id=r.anchor_id \
-             FROM resolved AS r \
-             WHERE a.claim_id=r.claim_id AND a.requirement_kind=r.requirement_kind \
-               AND a.requirement_index=r.requirement_index AND a.part_index=r.part_index \
-               AND a.allocation_scope_version=0 AND r.anchor_id IS NOT NULL",
-            &[],
-        )
-        .await?;
-    Ok(())
-}
-
-async fn operational_scope_coverage_in(
-    client: &impl GenericClient,
-) -> Result<OperationalScopeCoverage, StoreError> {
-    let row = client
-        .query_one(
-            "SELECT count(*) FILTER (WHERE operational_scope_version=0), \
-                    count(*) FILTER (WHERE operational_scope_version=0 AND state='active') \
-             FROM scheduling_claims WHERE kind='booking'",
-            &[],
-        )
-        .await?;
-    Ok(OperationalScopeCoverage {
-        unresolved_bookings: row.get(0),
-        unresolved_active_bookings: row.get(1),
-    })
 }

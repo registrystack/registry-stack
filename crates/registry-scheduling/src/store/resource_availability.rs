@@ -47,8 +47,8 @@ impl PostgresStore {
                 FROM scheduling_claims c JOIN scheduling_claim_allocations a USING(claim_id) \
                 WHERE c.state='active' AND a.occupied_end > now() \
                   AND (c.kind IN ('booking','window') OR (c.kind='hold' AND c.hold_expires_at > now())) \
-                  AND (c.kind='window' OR ((c.operational_mode IS NULL OR c.operational_mode='exact-time') \
-                    AND (a.allocation_scope_version=0 OR a.operational_mode='exact-time'))) \
+                  AND (c.kind='window' OR (c.operational_mode='exact-time' \
+                    AND a.operational_mode='exact-time')) \
             ), events AS ( \
                 SELECT resource_id,occupied_start AS instant,units::bigint AS delta FROM live \
                 UNION ALL SELECT resource_id,occupied_end,-units::bigint FROM live \

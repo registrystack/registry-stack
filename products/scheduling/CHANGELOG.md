@@ -109,9 +109,6 @@
   defines separately scoped roles with explicit service, location, and resource
   permissions and an opt-in projection, and `GET /v1/operational/appointments`
   returns a bounded work list without owner, manager, name, or contact data.
-  `schedulingctl status` reports operational label coverage, and
-  `schedulingctl operational-scopes rematerialize` retries labels after retained
-  policy revisions are restored.
 - Add source busy import. `authentication.oidc.busyImportProfiles` binds a
   `sourceId`, write scope, and resource set;
   `POST /v1/source-busy/preview` and `POST /v1/source-busy/apply` reconcile a
