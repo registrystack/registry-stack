@@ -1323,8 +1323,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Review runs the contracts lane; the merge queue, the nightly sweep
-        # and a ci:full pull request add the PostgreSQL lanes.
+        # Review runs the validator and adopter-journeys lanes; the merge
+        # queue, the nightly sweep and a ci:full pull request add the
+        # parallel PostgreSQL shard lanes.
         lane: ${{ fromJSON(needs.changes.outputs.breg_contracts_lanes) }}
     services:
       postgres:
@@ -1436,16 +1437,18 @@ jobs:
 
       # The transactional harness uses its own roles over the initial local
       # connection. Run it before the TLS proof makes this service TLS-only.
+      # Both steps share the contracts-journeys lane, which owns the
+      # TLS-dependent adopter checks the validator lane does not run.
       - name: Base Registry Engine immediate Action transaction and recovery
-        if: matrix.lane == 'contracts'
+        if: matrix.lane == 'contracts-journeys'
         run: products/breg/scripts/test-immediate-action-examples.sh
 
       - name: Base Registry Engine PostgreSQL TLS proof
-        if: matrix.lane == 'contracts'
+        if: matrix.lane == 'contracts-journeys'
         run: products/breg/scripts/test-postgres-tls.sh
 
       - name: Public bregctl schema-test lifecycles
-        if: matrix.lane == 'contracts'
+        if: matrix.lane == 'contracts-journeys'
         env:
           BREG_TEST_DATABASE_URL: ${{ env.BREG_TEST_TLS_DATABASE_URL }}
           SSL_CERT_FILE: ${{ env.BREG_TEST_TLS_CA_PEM_PATH }}
@@ -1456,33 +1459,33 @@ jobs:
         run: bash products/breg/scripts/test-attachment-s3.sh
 
       - name: Base Registry Engine clean-checkout adopter workflow
-        if: matrix.lane == 'contracts'
+        if: matrix.lane == 'contracts-journeys'
         run: products/breg/scripts/test-adopter-workflow.sh
 
       - name: Base Registry Engine statistical dataset workflow
-        if: matrix.lane == 'contracts'
+        if: matrix.lane == 'contracts-journeys'
         env:
           BREG_SKIP_BUILD: "1"
         run: products/breg/scripts/test-statistics-workflow.sh
 
       - name: Base Registry Engine staging-to-production promotion
-        if: matrix.lane == 'contracts'
+        if: matrix.lane == 'contracts-journeys'
         env:
           BREG_SKIP_BUILD: "1"
         run: products/breg/scripts/test-promotion.sh
 
       - name: Base Registry Engine logical backup and restore
-        if: matrix.lane == 'contracts'
+        if: matrix.lane == 'contracts-journeys'
         env:
           BREG_SKIP_BUILD: "1"
         run: products/breg/scripts/test-backup-restore.sh
 
       - name: Base Registry Engine generic quickstart
-        if: matrix.lane == 'contracts'
+        if: matrix.lane == 'contracts-journeys'
         run: products/breg/quickstart/run.sh --smoke
 
       - name: Base Registry Engine spatial quickstart
-        if: matrix.lane == 'contracts'
+        if: matrix.lane == 'contracts-journeys'
         run: products/breg/quickstart/run.sh --spatial --smoke
 
   breg-postgres-18:

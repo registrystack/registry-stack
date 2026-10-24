@@ -489,14 +489,16 @@ NATIVE_BINDING_PACKAGES = (
     | frozenset({"registry-render-client-node", "registry-render-client-py"})
 )
 
-# The breg-contracts matrix lanes. Review runs the first; the merge queue, the
-# nightly sweep and a `ci:full` pull request run every lane. The PostgreSQL
-# journeys spread across parallel `postgres:i/N` shard lanes — the runner's
-# owned target lists cover every test exactly once across the shard set —
-# because the serial journeys lane was the longest integration job.
+# The breg-contracts matrix lanes. Review runs the first two; the merge
+# queue, the nightly sweep and a `ci:full` pull request run every lane. The
+# validator lane and the adopter-journeys lane split so their wall times run
+# in parallel instead of serially in one job, and the PostgreSQL journeys
+# spread across parallel `postgres:i/N` shard lanes — the runner's owned
+# target lists cover every test exactly once across the shard set.
 BREG_POSTGRES_SHARDS = 3
 BREG_CONTRACTS_LANES = (
     "contracts",
+    "contracts-journeys",
     *(f"postgres:{index}/{BREG_POSTGRES_SHARDS}" for index in range(1, BREG_POSTGRES_SHARDS + 1)),
     "immediate-actions",
 )
@@ -1574,7 +1576,7 @@ def classify(
         # every input of the BReg product gate and of the Scheduling runtime.
         "breg_integration": integration and breg_contracts,
         "breg_contracts_lanes": list(
-            BREG_CONTRACTS_LANES if integration else BREG_CONTRACTS_LANES[:1]
+            BREG_CONTRACTS_LANES if integration else BREG_CONTRACTS_LANES[:2]
         ),
         "casework_postgres": (integration or "registry-platform-activation" in affected)
         and (
