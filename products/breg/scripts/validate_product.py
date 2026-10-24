@@ -526,36 +526,51 @@ def validate_postgres_entrypoint(errors: list[str]) -> None:
     for fragment in required_fragments:
         if fragment not in source:
             errors.append(f"PostgreSQL entrypoint: missing required fail-closed setting {fragment!r}")
-    # Compare the owned feature/target inventory, allowing compatible targets
-    # to share an invocation and the complete action harness to run in a lane.
+    # Compare the owned feature/target inventory. The runner holds the targets
+    # in owned bash lists and selects from them per lane and shard at runtime,
+    # so the lists, not per-invocation command lines, are the inventory.
+    list_prefixes = {
+        "runtime_targets": "cargo test --locked -p registry-breg --features runtime,tooling,schema",
+        "postgres_targets": "cargo test --locked -p registry-breg --features postgres-test,tooling,schema",
+        "evidence_targets": "cargo test --locked -p registry-breg --features postgres-test,tooling,schema",
+        "immediate_action_targets": "cargo test --locked -p registry-breg --features postgres-test,tooling,schema",
+    }
     cargo_commands: list[str] = []
-    for line in source.replace("\\\n", " ").splitlines():
-        prefix = "uv run --no-project --with PyYAML==6.0.2 "
-        line = line.lstrip()
-        if line.startswith(prefix):
-            line = line[len(prefix):]
-        if not line.startswith("cargo "):
+    seen_lists: set[str] = set()
+    lines = source.replace("\\\n", " ").splitlines()
+    index = 0
+    while index < len(lines):
+        line = lines[index].strip()
+        index += 1
+        name = next((n for n in list_prefixes if line.startswith(f"{n}=(")), None)
+        if name is None:
+            # The shared invocation selects through the owned lists at runtime;
+            # a literal `--test` target outside them escapes the inventory.
+            if line.startswith("cargo test") and " --test " in f" {line} ":
+                errors.append(
+                    "PostgreSQL entrypoint: test targets must be selected through the owned lists"
+                )
             continue
+        seen_lists.add(name)
+        entries: list[str] = [line[line.index("(") + 1:]]
+        while index < len(lines) and ")" not in lines[index]:
+            entries.append(lines[index].strip())
+            index += 1
+        if index < len(lines):
+            entries.append(lines[index][: lines[index].index(")")].strip())
+            index += 1
         try:
-            arguments = shlex.split(line)
+            targets = shlex.split(" ".join(entry for entry in entries if entry))
         except ValueError:
-            errors.append("PostgreSQL entrypoint: invalid Cargo command quoting")
+            errors.append(f"PostgreSQL entrypoint: invalid {name} list quoting")
             continue
-        if (
-            len(arguments) < 9
-            or arguments[:4] != ["cargo", "test", "--locked", "-p"]
-            or arguments[4] not in POSTGRES_TEST_PACKAGES
-            or arguments[5] != "--features"
-        ):
-            errors.append("PostgreSQL entrypoint: unsupported Cargo invocation")
+        if not targets:
+            errors.append(f"PostgreSQL entrypoint: {name} list is empty")
             continue
-        # The first --test follows the feature value at argument 6.
-        prefix = arguments[:7]
-        targets = arguments[7:]
-        if len(targets) % 2 or any(flag != "--test" for flag in targets[::2]):
-            errors.append("PostgreSQL entrypoint: targets must be complete test harnesses")
-            continue
-        cargo_commands.extend(" ".join(prefix + ["--test", target]) for target in targets[1::2])
+        cargo_commands.extend(f"{list_prefixes[name]} --test {target}" for target in targets)
+    missing = sorted(set(list_prefixes) - seen_lists)
+    if missing:
+        errors.append(f"PostgreSQL entrypoint: missing owned target lists {missing}")
     if Counter(cargo_commands) != Counter(POSTGRES_TEST_COMMANDS):
         errors.append(
             "PostgreSQL entrypoint: must run exactly the owned locked HTTP, kernel, "

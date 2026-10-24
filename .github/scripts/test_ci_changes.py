@@ -330,8 +330,11 @@ class CiChangesTest(unittest.TestCase):
 
         self.assertEqual(expected, direct)
         slots = sum(self.static_matrix_slots(self.workflow_jobs[name]) for name in direct)
-        self.assertLessEqual(slots, 15)
-        self.assertEqual(15, slots)
+        # The budget admits the parallel PostgreSQL shard lanes: they replace
+        # the longest serial integration job, so the pool trades two extra
+        # directly-eligible slots for the shorter critical path.
+        self.assertLessEqual(slots, 17)
+        self.assertEqual(17, slots)
 
     def test_deferred_ci_work_keeps_its_selector_and_explicit_status_guard(
         self,
@@ -2489,7 +2492,12 @@ class CiChangesTest(unittest.TestCase):
                     self.workspace, (path,), pull_request=True, ci_full=True
                 )
                 self.assertTrue(outputs["breg_contracts"])
-                self.assertIn("postgres", outputs["breg_contracts_lanes"])
+                self.assertTrue(
+                    any(
+                        lane.startswith("postgres:")
+                        for lane in outputs["breg_contracts_lanes"]
+                    )
+                )
 
     def test_native_citizen_journey_runs_with_built_services_and_owned_postgres(self) -> None:
         workflow = Path(".github/workflows/ci.yml").read_text()
@@ -2499,7 +2507,8 @@ class CiChangesTest(unittest.TestCase):
         step = job.split(
             "      - name: Native citizen gateway and review authority journey\n", 1
         )[1].split("\n      # The native worker", 1)[0]
-        self.assertIn("if: matrix.lane == 'postgres'", step)
+        # The journey runs exactly once, on the second PostgreSQL shard.
+        self.assertIn("if: matrix.lane == 'postgres:2/3'", step)
         self.assertIn("shell: bash", step)
         # The fixture reads the job-wide BREG_TEST_DATABASE_URL directly.
         self.assertIn('echo "BREG_TEST_DATABASE_URL=', job)

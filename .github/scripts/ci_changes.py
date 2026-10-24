@@ -490,8 +490,16 @@ NATIVE_BINDING_PACKAGES = (
 )
 
 # The breg-contracts matrix lanes. Review runs the first; the merge queue, the
-# nightly sweep and a `ci:full` pull request run every lane.
-BREG_CONTRACTS_LANES = ("contracts", "postgres", "immediate-actions")
+# nightly sweep and a `ci:full` pull request run every lane. The PostgreSQL
+# journeys spread across parallel `postgres:i/N` shard lanes — the runner's
+# owned target lists cover every test exactly once across the shard set —
+# because the serial journeys lane was the longest integration job.
+BREG_POSTGRES_SHARDS = 3
+BREG_CONTRACTS_LANES = (
+    "contracts",
+    *(f"postgres:{index}/{BREG_POSTGRES_SHARDS}" for index in range(1, BREG_POSTGRES_SHARDS + 1)),
+    "immediate-actions",
+)
 
 # A package is exempt from the tutorial trigger only while no tutorial runs it.
 # The Python binding is what `request-evidence-from-an-application` imports, so

@@ -332,13 +332,57 @@ def unfold(text: str) -> str:
     return "\n".join(unfolded)
 
 
+RUNNER_LIST = re.compile(r"^(\w+)=\($", re.MULTILINE)
+RUNNER_CALL = re.compile(
+    r'^[ \t]*run_sharded_targets ([\w,.-]+) "\$\{(\w+_targets)\[@\]\}"[ \t]*$',
+    re.MULTILINE,
+)
+
+
+def expand_runner_lists(text: str) -> str:
+    """Expand the PostgreSQL runner's owned target lists into literal commands.
+
+    `test-postgres.sh` selects targets at runtime from bash lists (one list per
+    feature set, split across shard lanes), so the gate reads the lists and
+    joins them with their feature set the same way the runner does.
+    """
+    lists: dict[str, list[str]] = {}
+    lines = text.splitlines()
+    index = 0
+    while index < len(lines):
+        match = RUNNER_LIST.match(lines[index].strip())
+        if match is not None:
+            name = match.group(1)
+            targets: list[str] = []
+            index += 1
+            while index < len(lines) and lines[index].strip() != ")":
+                entry = lines[index].strip()
+                if entry:
+                    targets.append(entry)
+                index += 1
+            lists[name] = targets
+        index += 1
+
+    def expand(match: re.Match[str]) -> str:
+        features, name = match.group(1), match.group(2)
+        targets = lists.get(name)
+        if targets is None:
+            raise ValueError(f"test-postgres.sh calls undefined target list {name!r}")
+        return "\n".join(
+            f"cargo test --locked -p {CRATE} --features {features} --test {target}"
+            for target in targets
+        )
+
+    return RUNNER_CALL.sub(expand, text)
+
+
 def source_invocations(
     text: str, source: str, table: Mapping[str, Iterable[str]]
 ) -> tuple[list[Invocation], int]:
     """Return the readable commands in one file and how many were set aside."""
     invocations: list[Invocation] = []
     ignored = 0
-    for line in unfold(text).replace("\\\n", " ").splitlines():
+    for line in expand_runner_lists(unfold(text)).replace("\\\n", " ").splitlines():
         if line.lstrip().startswith("#") or not CARGO_TEST.search(line):
             continue
         if not NAMES_CRATE.search(line):
