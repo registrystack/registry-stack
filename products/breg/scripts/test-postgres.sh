@@ -163,8 +163,12 @@ run_sharded_targets() {
   # $1: the feature set; remaining arguments: the owned target list.
   local features=$1
   shift
-  local flags=()
-  mapfile -t flags < <(sharded_test_flags "$@")
+  local flags=() flag
+  # Read line by line: the bash 3.2 macOS ships has no builtin that loads
+  # lines into an array.
+  while IFS= read -r flag; do
+    flags+=("$flag")
+  done < <(sharded_test_flags "$@")
   if (( ${#flags[@]} == 0 )); then
     printf '%s\n' "Shard ${shard_index}/${shard_count} has no targets in this list; skipping." >&2
     return 0

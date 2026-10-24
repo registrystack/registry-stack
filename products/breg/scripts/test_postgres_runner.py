@@ -28,7 +28,7 @@ ACTION_EXAMPLES_RUNNER = SCRIPT_DIR / "test-immediate-action-examples.sh"
 
 
 class PostgresRunnerTests(unittest.TestCase):
-    def run_lane(self, *arguments: str, database: bool = True, fail: bool = False, fail_build: bool = False, runner: Path = RUNNER):
+    def run_lane(self, *arguments: str, database: bool = True, fail: bool = False, fail_build: bool = False, runner: Path = RUNNER, shell: Path | None = None):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             log = root / "cargo.jsonl"
@@ -76,7 +76,7 @@ class PostgresRunnerTests(unittest.TestCase):
             if database:
                 environment["BREG_TEST_DATABASE_URL"] = "postgresql://fixture.invalid/test"
             result = subprocess.run(
-                [str(runner), *arguments], env=environment,
+                [*([str(shell)] if shell else []), str(runner), *arguments], env=environment,
                 capture_output=True, text=True, check=False,
             )
             calls = [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
@@ -173,6 +173,27 @@ class PostgresRunnerTests(unittest.TestCase):
         for index, inventory in enumerate(inventories):
             for other in inventories[index + 1:]:
                 self.assertFalse(inventory & other)
+
+    def test_runner_runs_under_the_bash_3_macos_ships(self):
+        # A stock macOS `/usr/bin/env bash` finds bash 3.2, so the documented
+        # local gate keeps to constructs it runs.
+        source = RUNNER.read_text(encoding="utf-8")
+        for construct in ("mapfile", "readarray", "declare -A", "local -A"):
+            self.assertFalse(construct in source, f"test-postgres.sh uses {construct}, which bash 3.2 lacks")
+        stock_bash = Path("/bin/bash")
+        version = subprocess.run(
+            [str(stock_bash), "-c", 'printf %s "${BASH_VERSINFO[0]}"'],
+            capture_output=True, text=True, check=False,
+        ).stdout if stock_bash.exists() else ""
+        if version != "3":
+            self.skipTest("/bin/bash is not bash 3, so there is no stock macOS shell to run")
+        for lane in ("all", "postgres:1/3", "postgres:3/3", "immediate-actions"):
+            with self.subTest(lane=lane):
+                stock, stock_calls = self.run_lane("--lane", lane, shell=stock_bash)
+                current, current_calls = self.run_lane("--lane", lane)
+                self.assertEqual(0, stock.returncode, stock.stderr)
+                self.assertEqual(0, current.returncode, current.stderr)
+                self.assertEqual(current_calls, stock_calls)
 
     def test_evidence_build_failure_prevents_proof_instead_of_skipping_real_runtime(self):
         result, calls = self.run_lane("--lane", "postgres", fail_build=True)
