@@ -1953,22 +1953,10 @@ impl PostgresStore {
         let scope = format!("hold:{hold_id}:release");
         let mut client = self.client().await?;
         let transaction = client.transaction().await?;
-        mark_allocation_writer(&transaction).await?;
-        match replay_stored_attempt(&transaction, &commitment, &scope).await? {
-            Some(ReplayOutcome::Replay {
-                status_code,
-                receipt,
-            }) => {
-                transaction.commit().await?;
-                return Ok(CommitOutcome::Replay {
-                    status_code,
-                    receipt,
-                });
-            }
-            Some(ReplayOutcome::Refused(error)) => return Err(error),
-            None => {}
+        if let Some(replay) = open_commitment(&transaction, &commitment, &scope).await? {
+            transaction.commit().await?;
+            return Ok(replay);
         }
-        check_grant_current(&commitment)?;
         let hold = transaction
             .claim_in_transaction(hold_id)
             .await?
@@ -2185,22 +2173,10 @@ impl PostgresStore {
         let scope = format!("appointment:{appointment_id}:cancel");
         let mut client = self.client().await?;
         let transaction = client.transaction().await?;
-        mark_allocation_writer(&transaction).await?;
-        match replay_stored_attempt(&transaction, &commitment, &scope).await? {
-            Some(ReplayOutcome::Replay {
-                status_code,
-                receipt,
-            }) => {
-                transaction.commit().await?;
-                return Ok(CommitOutcome::Replay {
-                    status_code,
-                    receipt,
-                });
-            }
-            Some(ReplayOutcome::Refused(error)) => return Err(error),
-            None => {}
+        if let Some(replay) = open_commitment(&transaction, &commitment, &scope).await? {
+            transaction.commit().await?;
+            return Ok(replay);
         }
-        check_grant_current(&commitment)?;
         let appointment = transaction
             .claim_in_transaction(appointment_id)
             .await?
