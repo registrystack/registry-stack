@@ -819,6 +819,17 @@ pub struct BundleSupplyLine<'p> {
     pub units: u32,
 }
 
+/// The policy-resolved supply one capacity commitment places its claim on:
+/// one window or exact-time offering, or every line of an exact-time bundle.
+#[derive(Clone, Copy)]
+pub enum CommitSupply<'p> {
+    Single {
+        offering: &'p registry_scheduling_core::OfferingPolicy,
+        supply: &'p SupplyContext<'p>,
+    },
+    Bundle(&'p [BundleSupplyLine<'p>]),
+}
+
 const MAXIMUM_CAPACITY_SNAPSHOT_ROWS: usize = 4_096;
 
 struct NewClaimAllocation<'p> {
@@ -1623,313 +1634,31 @@ impl PostgresStore {
     }
 
     /// Mint a hold through the full capacity transaction.
-    pub async fn create_bundle_hold(
-        &self,
-        lines: &[BundleSupplyLine<'_>],
-        request: &registry_scheduling_core::AdmissionRequest,
-        ttl_minutes: u32,
-        max_per_caller: u32,
-        commitment: Commitment<'_>,
-    ) -> Result<CommitOutcome, CommitError> {
-        let primary = lines.first().ok_or(StoreError::Corrupt)?;
-        let mut client = self.client().await?;
-        let transaction = client.transaction().await?;
-        mark_allocation_writer(&transaction).await?;
-        match replay_stored_attempt(&transaction, &commitment, "hold:create").await? {
-            Some(ReplayOutcome::Replay {
-                status_code,
-                receipt,
-            }) => {
-                transaction.commit().await?;
-                return Ok(CommitOutcome::Replay {
-                    status_code,
-                    receipt,
-                });
-            }
-            Some(ReplayOutcome::Refused(error)) => return Err(error),
-            None => {}
-        }
-        check_grant_current(&commitment)?;
-        let mut snapshot = lock_bundle_and_snapshot(
-            &transaction,
-            lines,
-            request,
-            commitment.now,
-            &[],
-            &self.busy_source_bindings,
-        )
-        .await?;
-        include_bundle_active_duplicates(
-            &transaction,
-            &mut snapshot,
-            lines,
-            request.duplicate_key.as_deref(),
-            commitment.now,
-        )
-        .await?;
-        if transaction
-            .lock_caller_and_count_active_holds(
-                commitment.actor_issuer,
-                commitment.actor_subject,
-                commitment.now,
-            )
-            .await?
-            >= i64::from(max_per_caller)
-        {
-            return Err(CommitError::HoldCeiling);
-        }
-        guard_revisions(&transaction, &commitment).await?;
-        let admission = evaluate_bundle(lines, request, &snapshot, &commitment, None, false)?;
-        let primary_allocation = admission
-            .allocations
-            .iter()
-            .find(|allocation| allocation.requirement_id == "primary")
-            .ok_or(StoreError::Corrupt)?;
-        let decided_at = self.observed_now();
-        check_grant_current_at(&commitment, decided_at)?;
-        let expires_at = decided_at
-            .checked_add_signed(TimeDelta::minutes(i64::from(ttl_minutes)))
-            .ok_or(AdmissionRefusal::ScheduleUnpublished)?;
-        let hold_id = Uuid::new_v4();
-        let mut claim = transaction
-            .insert_claim(&NewClaim {
-                claim_id: hold_id,
-                kind: LedgerKind::Hold,
-                state: ClaimState::Active,
-                offering: &admission.offering,
-                operational_service: &primary.offering.service,
-                operational_location: &primary.offering.location,
-                operational_mode: primary.offering.mode,
-                supply_id: &primary_allocation.resource,
-                channel: request.channel.as_deref(),
-                displayed_start: admission.start,
-                displayed_end: admission.end,
-                occupied_start: primary_allocation.occupied_start,
-                occupied_end: primary_allocation.occupied_end,
-                units: i32::try_from(primary_allocation.units).map_err(|_| StoreError::Corrupt)?,
-                party: request.party,
-                party_references: &request.party_references,
-                source_manager: commitment.source_manager.as_ref(),
-                duplicate_key: request.duplicate_key.as_deref(),
-                external_references: &request.external_references,
-                hold_expires_at: Some(expires_at),
-                revision: 1,
-                policy_revision: commitment.policy_revision,
-                actor: commitment.actor,
-                owner_issuer: commitment.actor_issuer,
-                owner_subject: commitment.actor_subject,
-                reason: None,
-            })
-            .await?;
-        let stored = stored_bundle_allocations(&admission, lines)?;
-        transaction
-            .insert_claim_allocations(hold_id, &stored)
-            .await?;
-        claim.allocations = allocation_documents(&admission)?;
-        transaction
-            .insert_history(
-                hold_id,
-                1,
-                "held",
-                commitment.now,
-                commitment.actor,
-                json!({"expiresAt": expires_at, "offering": admission.offering, "allocations": claim.allocations}),
-            )
-            .await?;
-        transaction
-            .insert_attempt(
-                Uuid::new_v4(),
-                &commitment,
-                "hold:create",
-                AttemptState::Completed,
-                201,
-                claim_receipt("hold", &claim, true, commitment.policy_revision),
-            )
-            .await?;
-        self.commit_capacity(transaction, Some(&commitment)).await?;
-        Ok(CommitOutcome::Hold(claim))
-    }
-
-    /// Create an exact-time appointment and every physical allocation in one
-    /// capacity transaction.
-    pub async fn create_bundle_appointment(
-        &self,
-        lines: &[BundleSupplyLine<'_>],
-        request: &registry_scheduling_core::AdmissionRequest,
-        commitment: Commitment<'_>,
-    ) -> Result<CommitOutcome, CommitError> {
-        let primary = lines.first().ok_or(StoreError::Corrupt)?;
-        let mut client = self.client().await?;
-        let transaction = client.transaction().await?;
-        mark_allocation_writer(&transaction).await?;
-        match replay_stored_attempt(&transaction, &commitment, "appointment:create").await? {
-            Some(ReplayOutcome::Replay {
-                status_code,
-                receipt,
-            }) => {
-                transaction.commit().await?;
-                return Ok(CommitOutcome::Replay {
-                    status_code,
-                    receipt,
-                });
-            }
-            Some(ReplayOutcome::Refused(error)) => return Err(error),
-            None => {}
-        }
-        check_grant_current(&commitment)?;
-        let mut snapshot = lock_bundle_and_snapshot(
-            &transaction,
-            lines,
-            request,
-            commitment.now,
-            &[],
-            &self.busy_source_bindings,
-        )
-        .await?;
-        include_bundle_active_duplicates(
-            &transaction,
-            &mut snapshot,
-            lines,
-            request.duplicate_key.as_deref(),
-            commitment.now,
-        )
-        .await?;
-        guard_revisions(&transaction, &commitment).await?;
-        let admission = evaluate_bundle(lines, request, &snapshot, &commitment, None, false)?;
-        self.recheck_grant(&commitment)?;
-        let primary_allocation = admission
-            .allocations
-            .iter()
-            .find(|allocation| allocation.requirement_id == "primary")
-            .ok_or(StoreError::Corrupt)?;
-        let appointment_id = Uuid::new_v4();
-        let mut claim = transaction
-            .insert_claim(&NewClaim {
-                claim_id: appointment_id,
-                kind: LedgerKind::Booking,
-                state: ClaimState::Active,
-                offering: &admission.offering,
-                operational_service: &primary.offering.service,
-                operational_location: &primary.offering.location,
-                operational_mode: primary.offering.mode,
-                supply_id: &primary_allocation.resource,
-                channel: request.channel.as_deref(),
-                displayed_start: admission.start,
-                displayed_end: admission.end,
-                occupied_start: primary_allocation.occupied_start,
-                occupied_end: primary_allocation.occupied_end,
-                units: i32::try_from(primary_allocation.units).map_err(|_| StoreError::Corrupt)?,
-                party: request.party,
-                party_references: &request.party_references,
-                source_manager: commitment.source_manager.as_ref(),
-                duplicate_key: request.duplicate_key.as_deref(),
-                external_references: &request.external_references,
-                hold_expires_at: None,
-                revision: 1,
-                policy_revision: commitment.policy_revision,
-                actor: commitment.actor,
-                owner_issuer: commitment.actor_issuer,
-                owner_subject: commitment.actor_subject,
-                reason: None,
-            })
-            .await?;
-        let stored = stored_bundle_allocations(&admission, lines)?;
-        transaction
-            .insert_claim_allocations(appointment_id, &stored)
-            .await?;
-        claim.allocations = allocation_documents(&admission)?;
-        transaction
-            .insert_history(
-                appointment_id,
-                1,
-                "confirmed",
-                commitment.now,
-                commitment.actor,
-                json!({"offering": admission.offering, "start": admission.start, "allocations": claim.allocations}),
-            )
-            .await?;
-        transaction
-            .insert_outbox(
-                "confirmation",
-                appointment_id,
-                1,
-                commitment.now,
-                confirmation_payload(&claim, commitment.policy_revision),
-            )
-            .await?;
-        mint_reminders(&transaction, &claim, primary.offering, commitment.now).await?;
-        if let Some(hooks) = commitment.hooks {
-            hooks
-                .capture(&transaction, APPOINTMENT_CONFIRMED_TRIGGER, &claim)
-                .await?;
-        }
-        transaction
-            .insert_attempt(
-                Uuid::new_v4(),
-                &commitment,
-                "appointment:create",
-                AttemptState::Completed,
-                201,
-                claim_receipt("booking", &claim, true, commitment.policy_revision),
-            )
-            .await?;
-        self.commit_capacity(transaction, Some(&commitment)).await?;
-        Ok(CommitOutcome::Booking(claim))
-    }
-
-    /// Mint a hold through the full capacity transaction.
     pub async fn create_hold(
         &self,
-        offering: &registry_scheduling_core::OfferingPolicy,
-        supply: &SupplyContext<'_>,
+        supply: &CommitSupply<'_>,
         request: &registry_scheduling_core::AdmissionRequest,
         ttl_minutes: u32,
         max_per_caller: u32,
         commitment: Commitment<'_>,
     ) -> Result<CommitOutcome, CommitError> {
+        let primary = supply.primary()?;
         let mut client = self.client().await?;
         let transaction = client.transaction().await?;
-        mark_allocation_writer(&transaction).await?;
-        match replay_stored_attempt(&transaction, &commitment, "hold:create").await? {
-            Some(ReplayOutcome::Replay {
-                status_code,
-                receipt,
-            }) => {
-                transaction.commit().await?;
-                return Ok(CommitOutcome::Replay {
-                    status_code,
-                    receipt,
-                });
-            }
-            Some(ReplayOutcome::Refused(error)) => return Err(error),
-            None => {}
+        if let Some(replay) = open_commitment(&transaction, &commitment, "hold:create").await? {
+            transaction.commit().await?;
+            return Ok(replay);
         }
-        check_grant_current(&commitment)?;
-        let mut snapshot = lock_and_snapshot(&transaction, supply, commitment.now).await?;
-        include_active_duplicate(
+        let locked = lock_commitment(
             &transaction,
-            &mut snapshot,
-            offering,
-            request.duplicate_key.as_deref(),
-            commitment.now,
+            supply,
+            Some(request),
+            ClaimLock::CallerHolds { max_per_caller },
+            &commitment,
+            &self.busy_source_bindings,
         )
         .await?;
-        // The caller lock is taken after the supply lock, never before: every
-        // hold transaction acquires the two in that one order, so no pair of
-        // them can hold what the other is waiting for.
-        if transaction
-            .lock_caller_and_count_active_holds(
-                commitment.actor_issuer,
-                commitment.actor_subject,
-                commitment.now,
-            )
-            .await?
-            >= i64::from(max_per_caller)
-        {
-            return Err(CommitError::HoldCeiling);
-        }
-        guard_revisions(&transaction, &commitment).await?;
-        let admission = evaluate(offering, supply, request, &snapshot, &commitment, None)?;
+        let placement = supply.evaluate(request, &locked.snapshot, &commitment, None)?;
         // One observation of the store's clock, after the supply and caller
         // locks and immediately before the hold is written: the grant must
         // still stand at the instant this transaction decides, and the hold's
@@ -1940,48 +1669,29 @@ impl PostgresStore {
         let expires_at = decided_at
             .checked_add_signed(TimeDelta::minutes(i64::from(ttl_minutes)))
             .ok_or(AdmissionRefusal::ScheduleUnpublished)?;
-        let hold_id = Uuid::new_v4();
-        let claim = transaction
-            .insert_claim(&NewClaim {
-                claim_id: hold_id,
-                kind: LedgerKind::Hold,
-                state: ClaimState::Active,
-                offering: &admission.offering,
-                operational_service: &offering.service,
-                operational_location: &offering.location,
-                operational_mode: offering.mode,
-                supply_id: admission
-                    .resource
-                    .as_deref()
-                    .unwrap_or(window_supply_id(supply)),
-                channel: request.channel.as_deref(),
-                displayed_start: admission.start,
-                displayed_end: admission.end,
-                occupied_start: admission.occupied_start,
-                occupied_end: admission.occupied_end,
-                units: i32::try_from(admission.units).map_err(|_| StoreError::Corrupt)?,
-                party: request.party,
-                party_references: &request.party_references,
-                source_manager: commitment.source_manager.as_ref(),
-                duplicate_key: request.duplicate_key.as_deref(),
-                external_references: &request.external_references,
-                hold_expires_at: Some(expires_at),
-                revision: 1,
-                policy_revision: commitment.policy_revision,
-                actor: commitment.actor,
-                owner_issuer: commitment.actor_issuer,
-                owner_subject: commitment.actor_subject,
-                reason: None,
-            })
+        let mut claim = transaction
+            .insert_claim(&placement.new_claim(
+                LedgerKind::Hold,
+                primary,
+                request,
+                Some(expires_at),
+                &commitment,
+            ))
+            .await?;
+        placement
+            .insert_allocations(&transaction, &mut claim)
             .await?;
         transaction
             .insert_history(
-                hold_id,
+                claim.claim_id,
                 1,
                 "held",
                 commitment.now,
                 commitment.actor,
-                json!({"expiresAt": expires_at, "offering": admission.offering}),
+                with_allocations(
+                    json!({"expiresAt": expires_at, "offering": placement.offering}),
+                    placement.documents(),
+                ),
             )
             .await?;
         transaction
@@ -1994,7 +1704,7 @@ impl PostgresStore {
                 claim_receipt(
                     "hold",
                     &claim,
-                    matches!(supply, SupplyContext::ExactTime { .. }),
+                    supply.resource_is_member(),
                     commitment.policy_revision,
                 ),
             )
@@ -2003,104 +1713,60 @@ impl PostgresStore {
         Ok(CommitOutcome::Hold(claim))
     }
 
-    /// Create an appointment directly, through the full capacity
-    /// transaction.
+    /// Create an appointment directly, with every physical allocation of a
+    /// bundle, through the full capacity transaction.
     pub async fn create_appointment(
         &self,
-        offering: &registry_scheduling_core::OfferingPolicy,
-        supply: &SupplyContext<'_>,
+        supply: &CommitSupply<'_>,
         request: &registry_scheduling_core::AdmissionRequest,
         commitment: Commitment<'_>,
     ) -> Result<CommitOutcome, CommitError> {
+        let primary = supply.primary()?;
         let mut client = self.client().await?;
         let transaction = client.transaction().await?;
-        mark_allocation_writer(&transaction).await?;
-        match replay_stored_attempt(&transaction, &commitment, "appointment:create").await? {
-            Some(ReplayOutcome::Replay {
-                status_code,
-                receipt,
-            }) => {
-                transaction.commit().await?;
-                return Ok(CommitOutcome::Replay {
-                    status_code,
-                    receipt,
-                });
-            }
-            Some(ReplayOutcome::Refused(error)) => return Err(error),
-            None => {}
+        if let Some(replay) =
+            open_commitment(&transaction, &commitment, "appointment:create").await?
+        {
+            transaction.commit().await?;
+            return Ok(replay);
         }
-        check_grant_current(&commitment)?;
-        let mut snapshot = lock_and_snapshot(&transaction, supply, commitment.now).await?;
-        include_active_duplicate(
+        let locked = lock_commitment(
             &transaction,
-            &mut snapshot,
-            offering,
-            request.duplicate_key.as_deref(),
-            commitment.now,
+            supply,
+            Some(request),
+            ClaimLock::NoClaim,
+            &commitment,
+            &self.busy_source_bindings,
         )
         .await?;
-        guard_revisions(&transaction, &commitment).await?;
-        let admission = evaluate(offering, supply, request, &snapshot, &commitment, None)?;
+        let placement = supply.evaluate(request, &locked.snapshot, &commitment, None)?;
         self.recheck_grant(&commitment)?;
-        let appointment_id = Uuid::new_v4();
-        let claim = transaction
-            .insert_claim(&NewClaim {
-                claim_id: appointment_id,
-                kind: LedgerKind::Booking,
-                state: ClaimState::Active,
-                offering: &admission.offering,
-                operational_service: &offering.service,
-                operational_location: &offering.location,
-                operational_mode: offering.mode,
-                supply_id: admission
-                    .resource
-                    .as_deref()
-                    .unwrap_or(window_supply_id(supply)),
-                channel: request.channel.as_deref(),
-                displayed_start: admission.start,
-                displayed_end: admission.end,
-                occupied_start: admission.occupied_start,
-                occupied_end: admission.occupied_end,
-                units: i32::try_from(admission.units).map_err(|_| StoreError::Corrupt)?,
-                party: request.party,
-                party_references: &request.party_references,
-                source_manager: commitment.source_manager.as_ref(),
-                duplicate_key: request.duplicate_key.as_deref(),
-                external_references: &request.external_references,
-                hold_expires_at: None,
-                revision: 1,
-                policy_revision: commitment.policy_revision,
-                actor: commitment.actor,
-                owner_issuer: commitment.actor_issuer,
-                owner_subject: commitment.actor_subject,
-                reason: None,
-            })
+        let mut claim = transaction
+            .insert_claim(&placement.new_claim(
+                LedgerKind::Booking,
+                primary,
+                request,
+                None,
+                &commitment,
+            ))
+            .await?;
+        placement
+            .insert_allocations(&transaction, &mut claim)
             .await?;
         transaction
             .insert_history(
-                appointment_id,
+                claim.claim_id,
                 1,
                 "confirmed",
                 commitment.now,
                 commitment.actor,
-                json!({"offering": admission.offering, "start": admission.start}),
+                with_allocations(
+                    json!({"offering": placement.offering, "start": placement.start}),
+                    placement.documents(),
+                ),
             )
             .await?;
-        transaction
-            .insert_outbox(
-                "confirmation",
-                appointment_id,
-                1,
-                commitment.now,
-                confirmation_payload(&claim, commitment.policy_revision),
-            )
-            .await?;
-        mint_reminders(&transaction, &claim, offering, commitment.now).await?;
-        if let Some(hooks) = commitment.hooks {
-            hooks
-                .capture(&transaction, APPOINTMENT_CONFIRMED_TRIGGER, &claim)
-                .await?;
-        }
+        announce_booking(&transaction, &claim, primary, &commitment).await?;
         transaction
             .insert_attempt(
                 Uuid::new_v4(),
@@ -2111,7 +1777,7 @@ impl PostgresStore {
                 claim_receipt(
                     "booking",
                     &claim,
-                    matches!(supply, SupplyContext::ExactTime { .. }),
+                    supply.resource_is_member(),
                     commitment.policy_revision,
                 ),
             )
@@ -2121,213 +1787,37 @@ impl PostgresStore {
     }
 
     /// Confirm a held allocation: the hold converts to an appointment in one
-    /// transaction, preserving every exact resource assignment.
-    pub async fn confirm_bundle_hold(
-        &self,
-        hold_id: Uuid,
-        lines: &[BundleSupplyLine<'_>],
-        request: &registry_scheduling_core::AdmissionRequest,
-        commitment: Commitment<'_>,
-    ) -> Result<CommitOutcome, CommitError> {
-        let scope = format!("hold:{hold_id}:confirm");
-        let primary = lines.first().ok_or(StoreError::Corrupt)?;
-        let mut client = self.client().await?;
-        let transaction = client.transaction().await?;
-        mark_allocation_writer(&transaction).await?;
-        match replay_stored_attempt(&transaction, &commitment, &scope).await? {
-            Some(ReplayOutcome::Replay {
-                status_code,
-                receipt,
-            }) => {
-                transaction.commit().await?;
-                return Ok(CommitOutcome::Replay {
-                    status_code,
-                    receipt,
-                });
-            }
-            Some(ReplayOutcome::Refused(error)) => return Err(error),
-            None => {}
-        }
-        check_grant_current(&commitment)?;
-        let mut snapshot = lock_bundle_and_snapshot(
-            &transaction,
-            lines,
-            request,
-            commitment.now,
-            &[],
-            &self.busy_source_bindings,
-        )
-        .await?;
-        include_bundle_active_duplicates(
-            &transaction,
-            &mut snapshot,
-            lines,
-            request.duplicate_key.as_deref(),
-            commitment.now,
-        )
-        .await?;
-        let hold = transaction
-            .claim_in_transaction(hold_id)
-            .await?
-            .ok_or(AdmissionRefusal::HoldReleased)?;
-        if hold.kind != LedgerKind::Hold || hold.state != ClaimState::Active {
-            return Err(AdmissionRefusal::HoldReleased.into());
-        }
-        guard_revisions(&transaction, &commitment).await?;
-        evaluate_hold_state(&hold_ledger_claim(&hold), self.observed_now())?;
-        if hold.policy_revision != commitment.policy_revision {
-            return Err(AdmissionRefusal::PolicyChanged.into());
-        }
-        if !hold.is_managed_by(&commitment) {
-            return Err(CommitError::Unauthorized);
-        }
-        let admission = confirm_stored_bundle(lines, request, &snapshot, &commitment, &hold)?;
-        let documents = allocation_documents(&admission)?;
-        if documents != hold.allocations {
-            return Err(StoreError::Corrupt.into());
-        }
-        self.recheck_grant(&commitment)?;
-        let primary_allocation = admission
-            .allocations
-            .iter()
-            .find(|allocation| allocation.requirement_id == "primary")
-            .ok_or(StoreError::Corrupt)?;
-        let appointment_id = Uuid::new_v4();
-        let mut claim = transaction
-            .insert_claim(&NewClaim {
-                claim_id: appointment_id,
-                kind: LedgerKind::Booking,
-                state: ClaimState::Active,
-                offering: &hold.offering,
-                operational_service: &primary.offering.service,
-                operational_location: &primary.offering.location,
-                operational_mode: primary.offering.mode,
-                supply_id: &primary_allocation.resource,
-                channel: hold.channel.as_deref(),
-                displayed_start: hold.displayed_start,
-                displayed_end: hold.displayed_end,
-                occupied_start: primary_allocation.occupied_start,
-                occupied_end: primary_allocation.occupied_end,
-                units: i32::try_from(primary_allocation.units).map_err(|_| StoreError::Corrupt)?,
-                party: hold.party,
-                party_references: &hold.party_references,
-                source_manager: hold.source_manager.as_ref(),
-                duplicate_key: hold.duplicate_key.as_deref(),
-                external_references: &hold.external_references,
-                hold_expires_at: None,
-                revision: 1,
-                policy_revision: commitment.policy_revision,
-                actor: commitment.actor,
-                owner_issuer: commitment.actor_issuer,
-                owner_subject: commitment.actor_subject,
-                reason: None,
-            })
-            .await?;
-        let stored = stored_bundle_allocations(&admission, lines)?;
-        transaction
-            .insert_claim_allocations(appointment_id, &stored)
-            .await?;
-        claim.allocations = documents;
-        if !transaction
-            .close_claim(hold_id, ClaimState::Consumed, None, hold.revision)
-            .await?
-        {
-            return Err(AdmissionRefusal::HoldReleased.into());
-        }
-        transaction
-            .insert_history(
-                appointment_id,
-                1,
-                "confirmed",
-                commitment.now,
-                commitment.actor,
-                json!({"confirmedFrom": hold_id, "start": claim.displayed_start, "allocations": claim.allocations}),
-            )
-            .await?;
-        transaction
-            .insert_history(
-                hold_id,
-                hold.revision + 1,
-                "consumed",
-                commitment.now,
-                commitment.actor,
-                json!({"appointment": appointment_id}),
-            )
-            .await?;
-        transaction
-            .insert_outbox(
-                "confirmation",
-                appointment_id,
-                1,
-                commitment.now,
-                confirmation_payload(&claim, commitment.policy_revision),
-            )
-            .await?;
-        mint_reminders(&transaction, &claim, primary.offering, commitment.now).await?;
-        if let Some(hooks) = commitment.hooks {
-            hooks
-                .capture(&transaction, APPOINTMENT_CONFIRMED_TRIGGER, &claim)
-                .await?;
-        }
-        transaction
-            .insert_attempt(
-                Uuid::new_v4(),
-                &commitment,
-                &scope,
-                AttemptState::Completed,
-                201,
-                claim_receipt("booking", &claim, true, commitment.policy_revision),
-            )
-            .await?;
-        self.commit_capacity(transaction, Some(&commitment)).await?;
-        Ok(CommitOutcome::Booking(claim))
-    }
-
-    /// Confirm a held allocation: the hold converts to an appointment in one
-    /// transaction. The hold's own allocation is the reservation; the
-    /// confirm re-checks expiry, policy identity, and the grant, then
-    /// consumes the hold and writes the booking beside it.
+    /// transaction, preserving every exact resource assignment. The hold's
+    /// own allocation is the reservation; the confirm re-checks expiry,
+    /// policy identity, and the grant, then consumes the hold and writes the
+    /// booking beside it. A bundle confirmation carries the admission request
+    /// its hold's allocations are checked under; a single-supply
+    /// confirmation carries none.
     pub async fn confirm_hold(
         &self,
         hold_id: Uuid,
-        offering: &registry_scheduling_core::OfferingPolicy,
-        supply: &SupplyContext<'_>,
+        supply: &CommitSupply<'_>,
+        request: Option<&registry_scheduling_core::AdmissionRequest>,
         commitment: Commitment<'_>,
     ) -> Result<CommitOutcome, CommitError> {
         let scope = format!("hold:{hold_id}:confirm");
+        let primary = supply.primary()?;
         let mut client = self.client().await?;
         let transaction = client.transaction().await?;
-        mark_allocation_writer(&transaction).await?;
-        match replay_stored_attempt(&transaction, &commitment, &scope).await? {
-            Some(ReplayOutcome::Replay {
-                status_code,
-                receipt,
-            }) => {
-                transaction.commit().await?;
-                return Ok(CommitOutcome::Replay {
-                    status_code,
-                    receipt,
-                });
-            }
-            Some(ReplayOutcome::Refused(error)) => return Err(error),
-            None => {}
+        if let Some(replay) = open_commitment(&transaction, &commitment, &scope).await? {
+            transaction.commit().await?;
+            return Ok(replay);
         }
-        check_grant_current(&commitment)?;
-        // The snapshot is read under the lock for serialization order, but
-        // admission is not re-evaluated: the hold's own reservation transfers
-        // to the booking in this same transaction, so capacity does not
-        // change. What must hold is identity (the policy revision the hold
-        // was admitted under is still current), checked with the other
-        // revision guards below, under the anchor.
-        let _snapshot = lock_and_snapshot(&transaction, supply, commitment.now).await?;
-        let hold = transaction
-            .claim_in_transaction(hold_id)
-            .await?
-            .ok_or(AdmissionRefusal::HoldReleased)?;
-        if hold.kind != LedgerKind::Hold || hold.state != ClaimState::Active {
-            return Err(AdmissionRefusal::HoldReleased.into());
-        }
-        guard_revisions(&transaction, &commitment).await?;
+        let locked = lock_commitment(
+            &transaction,
+            supply,
+            request,
+            ClaimLock::Hold(hold_id),
+            &commitment,
+            &self.busy_source_bindings,
+        )
+        .await?;
+        let hold = locked.claim.ok_or(StoreError::Corrupt)?;
         // A confirmation request may have entered while the hold was live but
         // reached this anchor after its capacity was reclaimed. Re-read the
         // clock only after taking the anchor: accepting the older request time
@@ -2343,64 +1833,24 @@ impl PostgresStore {
             // an authorization refusal the audit entries record.
             return Err(CommitError::Unauthorized);
         }
-        // A hold reserves capacity, but a subsequently recorded absence must
-        // not turn into a confirmed promise. The facts revision was checked
-        // under the anchor above; keep the hold intact for release or expiry.
-        if let SupplyContext::ExactTime {
-            exact,
-            members,
-            open,
-            closures,
-        } = supply
-        {
-            let member = members
-                .iter()
-                .find(|member| member.resource_id == hold.supply_id)
-                .ok_or(AdmissionRefusal::ResourceUnavailable)?;
-            if !member.serves(&offering.requires_capabilities) {
-                return Err(AdmissionRefusal::CapabilityUnmatched.into());
-            }
-            if !member.available_during(hold.occupied_start, hold.occupied_end) {
-                return Err(AdmissionRefusal::ResourceUnavailable.into());
-            }
-            let (start, end) = match exact.opening_coverage {
-                registry_scheduling_core::OpeningCoverage::ServiceInterval => {
-                    (hold.displayed_start, hold.displayed_end)
-                }
-                registry_scheduling_core::OpeningCoverage::OccupiedInterval => {
-                    (hold.occupied_start, hold.occupied_end)
-                }
-            };
-            if !registry_scheduling_core::covers_span(open, start, end) {
-                return Err(if closures
-                    .iter()
-                    .any(|closed| start < closed.end && closed.start < end)
-                {
-                    AdmissionRefusal::LocationClosed
-                } else {
-                    AdmissionRefusal::ScheduleUnpublished
-                }
-                .into());
-            }
-        }
+        let placement = supply.confirm(&hold, request, &locked.snapshot, &commitment)?;
         self.recheck_grant(&commitment)?;
-        let appointment_id = Uuid::new_v4();
-        let claim = transaction
+        let mut claim = transaction
             .insert_claim(&NewClaim {
-                claim_id: appointment_id,
+                claim_id: Uuid::new_v4(),
                 kind: LedgerKind::Booking,
                 state: ClaimState::Active,
-                offering: &hold.offering,
-                operational_service: &offering.service,
-                operational_location: &offering.location,
-                operational_mode: offering.mode,
-                supply_id: &hold.supply_id,
+                offering: &placement.offering,
+                operational_service: &primary.service,
+                operational_location: &primary.location,
+                operational_mode: primary.mode,
+                supply_id: &placement.supply_id,
                 channel: hold.channel.as_deref(),
-                displayed_start: hold.displayed_start,
-                displayed_end: hold.displayed_end,
-                occupied_start: hold.occupied_start,
-                occupied_end: hold.occupied_end,
-                units: hold.units,
+                displayed_start: placement.start,
+                displayed_end: placement.end,
+                occupied_start: placement.occupied_start,
+                occupied_end: placement.occupied_end,
+                units: placement.units,
                 party: hold.party,
                 party_references: &hold.party_references,
                 source_manager: hold.source_manager.as_ref(),
@@ -2415,6 +1865,9 @@ impl PostgresStore {
                 reason: None,
             })
             .await?;
+        placement
+            .insert_allocations(&transaction, &mut claim)
+            .await?;
         if !transaction
             .close_claim(hold_id, ClaimState::Consumed, None, hold.revision)
             .await?
@@ -2426,12 +1879,15 @@ impl PostgresStore {
         }
         transaction
             .insert_history(
-                appointment_id,
+                claim.claim_id,
                 1,
                 "confirmed",
                 commitment.now,
                 commitment.actor,
-                json!({"confirmedFrom": hold_id, "start": claim.displayed_start}),
+                with_allocations(
+                    json!({"confirmedFrom": hold_id, "start": claim.displayed_start}),
+                    placement.documents(),
+                ),
             )
             .await?;
         transaction
@@ -2441,24 +1897,10 @@ impl PostgresStore {
                 "consumed",
                 commitment.now,
                 commitment.actor,
-                json!({"appointment": appointment_id}),
+                json!({"appointment": claim.claim_id}),
             )
             .await?;
-        transaction
-            .insert_outbox(
-                "confirmation",
-                appointment_id,
-                1,
-                commitment.now,
-                confirmation_payload(&claim, commitment.policy_revision),
-            )
-            .await?;
-        mint_reminders(&transaction, &claim, offering, commitment.now).await?;
-        if let Some(hooks) = commitment.hooks {
-            hooks
-                .capture(&transaction, APPOINTMENT_CONFIRMED_TRIGGER, &claim)
-                .await?;
-        }
+        announce_booking(&transaction, &claim, primary, &commitment).await?;
         transaction
             .insert_attempt(
                 Uuid::new_v4(),
@@ -2469,7 +1911,7 @@ impl PostgresStore {
                 claim_receipt(
                     "booking",
                     &claim,
-                    matches!(supply, SupplyContext::ExactTime { .. }),
+                    supply.resource_is_member(),
                     commitment.policy_revision,
                 ),
             )
@@ -2544,251 +1986,35 @@ impl PostgresStore {
         Ok(CommitOutcome::Released)
     }
 
-    /// Reschedule every exact allocation to a new interval while preserving
-    /// the logical appointment identity. A refusal rolls back both the parent
-    /// movement and the child replacement.
-    pub async fn reschedule_bundle_appointment(
-        &self,
-        appointment_id: Uuid,
-        lines: &[BundleSupplyLine<'_>],
-        request: &registry_scheduling_core::AdmissionRequest,
-        observed_revision: u64,
-        commitment: Commitment<'_>,
-    ) -> Result<CommitOutcome, CommitError> {
-        let scope = format!("appointment:{appointment_id}:reschedule");
-        let primary = lines.first().ok_or(StoreError::Corrupt)?;
-        let mut client = self.client().await?;
-        let transaction = client.transaction().await?;
-        mark_allocation_writer(&transaction).await?;
-        match replay_stored_attempt(&transaction, &commitment, &scope).await? {
-            Some(ReplayOutcome::Replay {
-                status_code,
-                receipt,
-            }) => {
-                transaction.commit().await?;
-                return Ok(CommitOutcome::Replay {
-                    status_code,
-                    receipt,
-                });
-            }
-            Some(ReplayOutcome::Refused(error)) => return Err(error),
-            None => {}
-        }
-        check_grant_current(&commitment)?;
-        let old_anchors = transaction
-            .query(
-                "SELECT DISTINCT anchor_id FROM scheduling_claim_allocations \
-                 WHERE claim_id=$1 AND anchor_id IS NOT NULL ORDER BY anchor_id",
-                &[&appointment_id],
-            )
-            .await?
-            .into_iter()
-            .map(|row| row.get::<_, String>(0))
-            .collect::<Vec<_>>();
-        let mut snapshot = lock_bundle_and_snapshot(
-            &transaction,
-            lines,
-            request,
-            commitment.now,
-            &old_anchors,
-            &self.busy_source_bindings,
-        )
-        .await?;
-        include_bundle_active_duplicates(
-            &transaction,
-            &mut snapshot,
-            lines,
-            request.duplicate_key.as_deref(),
-            commitment.now,
-        )
-        .await?;
-        let appointment = transaction
-            .claim_in_transaction(appointment_id)
-            .await?
-            .ok_or(AdmissionRefusal::HoldReleased)?;
-        if appointment.kind != LedgerKind::Booking || appointment.state != ClaimState::Active {
-            return Err(AdmissionRefusal::HoldReleased.into());
-        }
-        guard_revisions(&transaction, &commitment).await?;
-        if request.policy_revision != u64::try_from(commitment.policy_revision).unwrap_or(u64::MAX)
-        {
-            return Err(AdmissionRefusal::PolicyChanged.into());
-        }
-        if !appointment.is_managed_by(&commitment) {
-            return Err(CommitError::Unauthorized);
-        }
-        if u64::try_from(appointment.revision) != Ok(observed_revision) {
-            return Err(CommitError::RevisionMismatch);
-        }
-        let own_claim_id = appointment.claim_id.to_string();
-        let admission = evaluate_bundle(
-            lines,
-            request,
-            &snapshot,
-            &commitment,
-            Some(&own_claim_id),
-            false,
-        )?;
-        self.recheck_grant(&commitment)?;
-        let primary_allocation = admission
-            .allocations
-            .iter()
-            .find(|allocation| allocation.requirement_id == "primary")
-            .ok_or(StoreError::Corrupt)?;
-        let next_revision = appointment.revision + 1;
-        let next_units =
-            i32::try_from(primary_allocation.units).map_err(|_| StoreError::Corrupt)?;
-        if !transaction
-            .move_claim(
-                &ClaimMove {
-                    claim_id: appointment_id,
-                    supply_id: &primary_allocation.resource,
-                    displayed_start: admission.start,
-                    displayed_end: admission.end,
-                    occupied_start: primary_allocation.occupied_start,
-                    occupied_end: primary_allocation.occupied_end,
-                    channel: request.channel.as_deref(),
-                    units: next_units,
-                    party: request.party,
-                    policy_revision: commitment.policy_revision,
-                    next_revision,
-                },
-                appointment.revision,
-            )
-            .await?
-        {
-            return Err(CommitError::RevisionMismatch);
-        }
-        let stored = stored_bundle_allocations(&admission, lines)?;
-        transaction
-            .replace_claim_allocations(appointment_id, &stored)
-            .await?;
-        let documents = allocation_documents(&admission)?;
-        transaction
-            .insert_history(
-                appointment_id,
-                next_revision,
-                "rescheduled",
-                commitment.now,
-                commitment.actor,
-                json!({
-                    "from": {"start": appointment.displayed_start, "end": appointment.displayed_end, "allocations": appointment.allocations},
-                    "to": {"start": admission.start, "end": admission.end, "allocations": documents},
-                }),
-            )
-            .await?;
-        transaction.cancel_unsent_reminders(appointment_id).await?;
-        let moved = ClaimRow {
-            displayed_start: admission.start,
-            displayed_end: admission.end,
-            occupied_start: primary_allocation.occupied_start,
-            occupied_end: primary_allocation.occupied_end,
-            supply_id: primary_allocation.resource.clone(),
-            channel: request.channel.clone(),
-            units: next_units,
-            allocations: documents,
-            party: request.party,
-            revision: next_revision,
-            policy_revision: commitment.policy_revision,
-            ..appointment.clone()
-        };
-        mint_reminders(&transaction, &moved, primary.offering, commitment.now).await?;
-        transaction
-            .insert_outbox(
-                "change",
-                appointment_id,
-                next_revision,
-                commitment.now,
-                confirmation_payload(&moved, commitment.policy_revision),
-            )
-            .await?;
-        if let Some(hooks) = commitment.hooks {
-            hooks
-                .capture(&transaction, APPOINTMENT_RESCHEDULED_TRIGGER, &moved)
-                .await?;
-        }
-        transaction
-            .insert_attempt(
-                Uuid::new_v4(),
-                &commitment,
-                &scope,
-                AttemptState::Completed,
-                200,
-                claim_receipt("booking", &moved, true, commitment.policy_revision),
-            )
-            .await?;
-        self.commit_capacity(transaction, Some(&commitment)).await?;
-        Ok(CommitOutcome::Booking(moved))
-    }
-
-    /// Reschedule an appointment to a new time, keeping its identity.
+    /// Reschedule an appointment to a new time, keeping its identity. A
+    /// bundle moves every exact allocation to the new interval; a refusal
+    /// rolls back both the parent movement and the child replacement.
     pub async fn reschedule_appointment(
         &self,
         appointment_id: Uuid,
-        offering: &registry_scheduling_core::OfferingPolicy,
-        supply: &SupplyContext<'_>,
+        supply: &CommitSupply<'_>,
         request: &registry_scheduling_core::AdmissionRequest,
         observed_revision: u64,
         commitment: Commitment<'_>,
     ) -> Result<CommitOutcome, CommitError> {
         let scope = format!("appointment:{appointment_id}:reschedule");
+        let primary = supply.primary()?;
         let mut client = self.client().await?;
         let transaction = client.transaction().await?;
-        mark_allocation_writer(&transaction).await?;
-        match replay_stored_attempt(&transaction, &commitment, &scope).await? {
-            Some(ReplayOutcome::Replay {
-                status_code,
-                receipt,
-            }) => {
-                transaction.commit().await?;
-                return Ok(CommitOutcome::Replay {
-                    status_code,
-                    receipt,
-                });
-            }
-            Some(ReplayOutcome::Refused(error)) => return Err(error),
-            None => {}
+        if let Some(replay) = open_commitment(&transaction, &commitment, &scope).await? {
+            transaction.commit().await?;
+            return Ok(replay);
         }
-        check_grant_current(&commitment)?;
-        // A move between two windows of one offering releases units in the
-        // window the appointment leaves and takes them in the one it enters.
-        // Both window anchors are held, in supply-id order (`lock_supply`
-        // sorts them), before the snapshot and before any claim row, so two
-        // moves in opposite directions serialize instead of deadlocking.
-        let left_window = match supply {
-            SupplyContext::Window { window, .. } => transaction
-                .query_opt(
-                    "SELECT supply_id FROM scheduling_claims WHERE claim_id=$1 AND kind='booking'",
-                    &[&appointment_id],
-                )
-                .await
-                .map_err(StoreError::from)?
-                .map(|row| row.get::<_, String>(0))
-                .filter(|current| *current != window.id),
-            SupplyContext::ExactTime { .. } => None,
-        };
-        if let (Some(left), SupplyContext::Window { window, .. }) = (&left_window, supply) {
-            let mut anchors = vec![left.clone(), window.id.clone()];
-            anchors.sort();
-            transaction.lock_supply(&anchors).await?;
-        }
-        let mut snapshot = lock_and_snapshot(&transaction, supply, commitment.now).await?;
-        include_active_duplicate(
+        let locked = lock_commitment(
             &transaction,
-            &mut snapshot,
-            offering,
-            request.duplicate_key.as_deref(),
-            commitment.now,
+            supply,
+            Some(request),
+            ClaimLock::Appointment(appointment_id),
+            &commitment,
+            &self.busy_source_bindings,
         )
         .await?;
-        let appointment = transaction
-            .claim_in_transaction(appointment_id)
-            .await?
-            .ok_or(AdmissionRefusal::HoldReleased)?;
-        if appointment.kind != LedgerKind::Booking || appointment.state != ClaimState::Active {
-            return Err(AdmissionRefusal::HoldReleased.into());
-        }
-        guard_revisions(&transaction, &commitment).await?;
+        let appointment = locked.claim.ok_or(StoreError::Corrupt)?;
         // The policy guard wins over the revision guard: a caller whose
         // observed revision is also stale learns the policy moved first.
         if request.policy_revision != u64::try_from(commitment.policy_revision).unwrap_or(u64::MAX)
@@ -2804,48 +2030,28 @@ impl PostgresStore {
         // The window the appointment occupies now must be one this
         // transaction holds: a concurrent move between the read above and
         // the locks is answered as the revision race it is.
-        let entered = window_supply_id(supply);
-        if !entered.is_empty()
-            && appointment.supply_id != entered
-            && Some(&appointment.supply_id) != left_window.as_ref()
-        {
+        if !supply.holds_claim_anchor(&locked.current_anchors, &appointment) {
             return Err(CommitError::RevisionMismatch);
         }
         // The appointment's own allocation is the exclusion: a reschedule
         // never competes with the booking it moves. It is read from the row
         // this transaction locked, never from the request.
         let own_claim_id = appointment.claim_id.to_string();
-        let admission = evaluate(
-            offering,
-            supply,
-            request,
-            &snapshot,
-            &commitment,
-            Some(&own_claim_id),
-        )?;
+        let placement =
+            supply.evaluate(request, &locked.snapshot, &commitment, Some(&own_claim_id))?;
         self.recheck_grant(&commitment)?;
         let next_revision = appointment.revision + 1;
-        let next_units = i32::try_from(admission.units).map_err(|_| StoreError::Corrupt)?;
-        // A window admission names no resource: the claim occupies the
-        // window it was admitted to, which a reschedule may change.
-        let next_supply = admission.resource.clone().unwrap_or_else(|| {
-            if entered.is_empty() {
-                appointment.supply_id.clone()
-            } else {
-                entered.to_owned()
-            }
-        });
         if !transaction
             .move_claim(
                 &ClaimMove {
                     claim_id: appointment_id,
-                    supply_id: &next_supply,
-                    displayed_start: admission.start,
-                    displayed_end: admission.end,
-                    occupied_start: admission.occupied_start,
-                    occupied_end: admission.occupied_end,
+                    supply_id: &placement.supply_id,
+                    displayed_start: placement.start,
+                    displayed_end: placement.end,
+                    occupied_start: placement.occupied_start,
+                    occupied_end: placement.occupied_end,
                     channel: request.channel.as_deref(),
-                    units: next_units,
+                    units: placement.units,
                     party: request.party,
                     policy_revision: commitment.policy_revision,
                     next_revision,
@@ -2859,32 +2065,53 @@ impl PostgresStore {
             // refusal.
             return Err(CommitError::RevisionMismatch);
         }
+        placement
+            .replace_allocations(&transaction, appointment_id)
+            .await?;
+        let left_allocations = placement
+            .documents()
+            .map(|_| appointment.allocations.as_slice());
         transaction
-            .insert_history(appointment_id, next_revision, "rescheduled", commitment.now,
+            .insert_history(
+                appointment_id,
+                next_revision,
+                "rescheduled",
+                commitment.now,
                 commitment.actor,
                 json!({
-                    "from": {"start": appointment.displayed_start, "end": appointment.displayed_end},
-                    "to": {"start": admission.start, "end": admission.end},
-                }))
+                    "from": with_allocations(
+                        json!({"start": appointment.displayed_start, "end": appointment.displayed_end}),
+                        left_allocations,
+                    ),
+                    "to": with_allocations(
+                        json!({"start": placement.start, "end": placement.end}),
+                        placement.documents(),
+                    ),
+                }),
+            )
             .await?;
         // A stale unsent reminder describes an appointment that no longer
         // exists in this form; it is cancelled here, and one a dispatcher
         // already holds is set aside at its send, never sent (INT-02).
         transaction.cancel_unsent_reminders(appointment_id).await?;
         let moved = ClaimRow {
-            displayed_start: admission.start,
-            displayed_end: admission.end,
-            occupied_start: admission.occupied_start,
-            occupied_end: admission.occupied_end,
-            supply_id: next_supply,
+            displayed_start: placement.start,
+            displayed_end: placement.end,
+            occupied_start: placement.occupied_start,
+            occupied_end: placement.occupied_end,
+            supply_id: placement.supply_id.clone(),
             channel: request.channel.clone(),
-            units: next_units,
+            units: placement.units,
+            allocations: match placement.documents() {
+                Some(documents) => documents.to_vec(),
+                None => appointment.allocations.clone(),
+            },
             party: request.party,
             revision: next_revision,
             policy_revision: commitment.policy_revision,
             ..appointment.clone()
         };
-        mint_reminders(&transaction, &moved, offering, commitment.now).await?;
+        mint_reminders(&transaction, &moved, primary, commitment.now).await?;
         transaction
             .insert_outbox(
                 "change",
@@ -2909,7 +2136,7 @@ impl PostgresStore {
                 claim_receipt(
                     "booking",
                     &moved,
-                    matches!(supply, SupplyContext::ExactTime { .. }),
+                    supply.resource_is_member(),
                     commitment.policy_revision,
                 ),
             )
@@ -3493,9 +2720,636 @@ fn window_supply_id<'a>(supply: &'a SupplyContext<'a>) -> &'a str {
     }
 }
 
-/// Steps 1 and 2: lock the anchor row, then read the ledger snapshot with
-/// expiry evaluated in the query.
-async fn lock_and_snapshot(
+impl<'a> CommitSupply<'a> {
+    /// The offering whose operational labels, reminders, and duplicate rule
+    /// the logical claim carries: a bundle's primary line.
+    fn primary(&self) -> Result<&'a registry_scheduling_core::OfferingPolicy, StoreError> {
+        match *self {
+            Self::Single { offering, .. } => Ok(offering),
+            Self::Bundle(lines) => Ok(lines.first().ok_or(StoreError::Corrupt)?.offering),
+        }
+    }
+
+    /// Whether the claim names a pool member: every placement except a
+    /// window's.
+    fn resource_is_member(&self) -> bool {
+        !matches!(
+            self,
+            Self::Single {
+                supply: SupplyContext::Window { .. },
+                ..
+            }
+        )
+    }
+
+    fn snapshot_plan(
+        &self,
+        request: Option<&'a registry_scheduling_core::AdmissionRequest>,
+    ) -> Result<SnapshotPlan<'a>, CommitError> {
+        match *self {
+            Self::Single { supply, .. } => Ok(SnapshotPlan::Single(supply)),
+            Self::Bundle(lines) => SnapshotPlan::bundle(lines, request.ok_or(StoreError::Corrupt)?),
+        }
+    }
+
+    /// The supply anchors an appointment occupies now and a move may leave,
+    /// read before any lock is taken so the move can hold them with the
+    /// anchors it enters.
+    async fn current_anchors(
+        &self,
+        transaction: &deadpool_postgres::Transaction<'_>,
+        appointment_id: Uuid,
+    ) -> Result<Vec<String>, CommitError> {
+        match *self {
+            Self::Single {
+                supply: SupplyContext::ExactTime { .. },
+                ..
+            } => Ok(Vec::new()),
+            Self::Single {
+                supply: SupplyContext::Window { window, .. },
+                ..
+            } => Ok(transaction
+                .query_opt(
+                    "SELECT supply_id FROM scheduling_claims WHERE claim_id=$1 AND kind='booking'",
+                    &[&appointment_id],
+                )
+                .await
+                .map_err(StoreError::from)?
+                .map(|row| row.get::<_, String>(0))
+                .filter(|current| *current != window.id)
+                .into_iter()
+                .collect()),
+            Self::Bundle(_) => Ok(transaction
+                .query(
+                    "SELECT DISTINCT anchor_id FROM scheduling_claim_allocations \
+                     WHERE claim_id=$1 AND anchor_id IS NOT NULL ORDER BY anchor_id",
+                    &[&appointment_id],
+                )
+                .await?
+                .into_iter()
+                .map(|row| row.get::<_, String>(0))
+                .collect()),
+        }
+    }
+
+    async fn include_duplicates(
+        &self,
+        transaction: &deadpool_postgres::Transaction<'_>,
+        snapshot: &mut LedgerSnapshot,
+        request: &registry_scheduling_core::AdmissionRequest,
+        now: DateTime<Utc>,
+    ) -> Result<(), StoreError> {
+        match *self {
+            Self::Single { offering, .. } => {
+                include_active_duplicate(
+                    transaction,
+                    snapshot,
+                    offering,
+                    request.duplicate_key.as_deref(),
+                    now,
+                )
+                .await
+            }
+            Self::Bundle(lines) => {
+                include_bundle_active_duplicates(
+                    transaction,
+                    snapshot,
+                    lines,
+                    request.duplicate_key.as_deref(),
+                    now,
+                )
+                .await
+            }
+        }
+    }
+
+    /// Admit `request` against the locked snapshot and place its claim.
+    fn evaluate(
+        &self,
+        request: &registry_scheduling_core::AdmissionRequest,
+        snapshot: &LedgerSnapshot,
+        commitment: &Commitment<'_>,
+        exclude: Option<&str>,
+    ) -> Result<Placement<'a>, CommitError> {
+        match *self {
+            Self::Single { offering, supply } => {
+                let admission = evaluate(offering, supply, request, snapshot, commitment, exclude)?;
+                Ok(Placement {
+                    // A window admission names no resource: the claim
+                    // occupies the window it was admitted to, which a
+                    // reschedule may change.
+                    supply_id: admission
+                        .resource
+                        .unwrap_or_else(|| window_supply_id(supply).to_owned()),
+                    units: i32::try_from(admission.units).map_err(|_| StoreError::Corrupt)?,
+                    offering: admission.offering,
+                    start: admission.start,
+                    end: admission.end,
+                    occupied_start: admission.occupied_start,
+                    occupied_end: admission.occupied_end,
+                    allocations: None,
+                })
+            }
+            Self::Bundle(lines) => Placement::bundle(
+                lines,
+                evaluate_bundle(lines, request, snapshot, commitment, exclude, false)?,
+            ),
+        }
+    }
+
+    /// Place the booking a confirmed hold becomes, on the hold's own terms.
+    fn confirm(
+        &self,
+        hold: &ClaimRow,
+        request: Option<&registry_scheduling_core::AdmissionRequest>,
+        snapshot: &LedgerSnapshot,
+        commitment: &Commitment<'_>,
+    ) -> Result<Placement<'a>, CommitError> {
+        match *self {
+            Self::Single { offering, supply } => {
+                // The snapshot is read under the lock for serialization
+                // order, but admission is not re-evaluated: the hold's own
+                // reservation transfers to the booking in this same
+                // transaction, so capacity does not change. What must hold is
+                // identity (the policy revision the hold was admitted under
+                // is still current), checked with the other revision guards
+                // under the anchor.
+                //
+                // A hold reserves capacity, but a subsequently recorded
+                // absence must not turn into a confirmed promise. The facts
+                // revision was checked under the anchor; keep the hold intact
+                // for release or expiry.
+                if let SupplyContext::ExactTime {
+                    exact,
+                    members,
+                    open,
+                    closures,
+                } = supply
+                {
+                    let member = members
+                        .iter()
+                        .find(|member| member.resource_id == hold.supply_id)
+                        .ok_or(AdmissionRefusal::ResourceUnavailable)?;
+                    if !member.serves(&offering.requires_capabilities) {
+                        return Err(AdmissionRefusal::CapabilityUnmatched.into());
+                    }
+                    if !member.available_during(hold.occupied_start, hold.occupied_end) {
+                        return Err(AdmissionRefusal::ResourceUnavailable.into());
+                    }
+                    let (start, end) = match exact.opening_coverage {
+                        registry_scheduling_core::OpeningCoverage::ServiceInterval => {
+                            (hold.displayed_start, hold.displayed_end)
+                        }
+                        registry_scheduling_core::OpeningCoverage::OccupiedInterval => {
+                            (hold.occupied_start, hold.occupied_end)
+                        }
+                    };
+                    if !registry_scheduling_core::covers_span(open, start, end) {
+                        return Err(if closures
+                            .iter()
+                            .any(|closed| start < closed.end && closed.start < end)
+                        {
+                            AdmissionRefusal::LocationClosed
+                        } else {
+                            AdmissionRefusal::ScheduleUnpublished
+                        }
+                        .into());
+                    }
+                }
+                Ok(Placement {
+                    offering: hold.offering.clone(),
+                    start: hold.displayed_start,
+                    end: hold.displayed_end,
+                    supply_id: hold.supply_id.clone(),
+                    occupied_start: hold.occupied_start,
+                    occupied_end: hold.occupied_end,
+                    units: hold.units,
+                    allocations: None,
+                })
+            }
+            Self::Bundle(lines) => {
+                let request = request.ok_or(StoreError::Corrupt)?;
+                let placement = Placement::bundle(
+                    lines,
+                    confirm_stored_bundle(lines, request, snapshot, commitment, hold)?,
+                )?;
+                if placement.documents() != Some(hold.allocations.as_slice()) {
+                    return Err(StoreError::Corrupt.into());
+                }
+                Ok(Placement {
+                    offering: hold.offering.clone(),
+                    start: hold.displayed_start,
+                    end: hold.displayed_end,
+                    ..placement
+                })
+            }
+        }
+    }
+
+    /// Whether the supply an appointment occupies now is one this
+    /// transaction holds. Only a window move can leave its anchor; every
+    /// other placement's anchor is the one it decides against.
+    fn holds_claim_anchor(&self, current_anchors: &[String], claim: &ClaimRow) -> bool {
+        match *self {
+            Self::Single {
+                supply: SupplyContext::Window { window, .. },
+                ..
+            } => claim.supply_id == window.id || current_anchors.contains(&claim.supply_id),
+            Self::Single { .. } | Self::Bundle(_) => true,
+        }
+    }
+}
+
+/// What a commitment's snapshot reads, resolved before any lock is taken so
+/// that a request the policy refuses outright waits on nothing.
+enum SnapshotPlan<'a> {
+    Single(&'a SupplyContext<'a>),
+    Bundle {
+        lines: &'a [BundleSupplyLine<'a>],
+        request: &'a registry_scheduling_core::AdmissionRequest,
+        duration_minutes: u32,
+    },
+}
+
+impl<'a> SnapshotPlan<'a> {
+    fn bundle(
+        lines: &'a [BundleSupplyLine<'a>],
+        request: &'a registry_scheduling_core::AdmissionRequest,
+    ) -> Result<Self, CommitError> {
+        let Some(primary) = lines.first() else {
+            return Err(StoreError::Corrupt.into());
+        };
+        let duration_minutes = primary
+            .exact
+            .selected_duration_minutes(request.duration_minutes)
+            .ok_or(AdmissionRefusal::DurationOutOfPolicy)?;
+        Ok(Self::Bundle {
+            lines,
+            request,
+            duration_minutes,
+        })
+    }
+
+    /// The supply anchors to lock, with `also_held`, in supply-id order and
+    /// without repeats.
+    fn anchors(&self, also_held: &[String]) -> Vec<String> {
+        let mut anchors = match self {
+            // The anchor is the pool, not the members: two offerings on one
+            // pool sell the same members and must serialize against each
+            // other, and `apply_policy` anchors pool ids only.
+            Self::Single(SupplyContext::ExactTime { exact, .. }) => vec![exact.pool.clone()],
+            Self::Single(SupplyContext::Window { window, .. }) => vec![window.id.clone()],
+            Self::Bundle { lines, .. } => {
+                lines.iter().map(|line| line.exact.pool.clone()).collect()
+            }
+        };
+        anchors.extend(also_held.iter().cloned());
+        anchors.sort();
+        anchors.dedup();
+        anchors
+    }
+
+    async fn read(
+        &self,
+        transaction: &deadpool_postgres::Transaction<'_>,
+        now: DateTime<Utc>,
+        busy_source_bindings: &std::collections::BTreeMap<String, Vec<String>>,
+    ) -> Result<LedgerSnapshot, CommitError> {
+        match *self {
+            Self::Single(supply) => Ok(single_snapshot(transaction, supply, now).await?),
+            Self::Bundle {
+                lines,
+                request,
+                duration_minutes,
+            } => {
+                bundle_snapshot(
+                    transaction,
+                    lines,
+                    request,
+                    duration_minutes,
+                    now,
+                    busy_source_bindings,
+                )
+                .await
+            }
+        }
+    }
+}
+
+/// The claim lock a commitment takes after its supply anchors.
+#[derive(Clone, Copy)]
+enum ClaimLock {
+    /// A direct appointment creates its claim and locks none.
+    NoClaim,
+    /// A hold takes the caller's hold-ceiling lock and counts the caller's
+    /// active holds under it.
+    CallerHolds { max_per_caller: u32 },
+    /// A confirmation locks the active hold it consumes.
+    Hold(Uuid),
+    /// A reschedule locks the active appointment it moves.
+    Appointment(Uuid),
+}
+
+/// What a commitment holds once every lock is taken.
+struct Locked {
+    snapshot: LedgerSnapshot,
+    /// The claim the commitment acts on, locked `FOR UPDATE`.
+    claim: Option<ClaimRow>,
+    /// The anchors a moved appointment occupied before this transaction.
+    current_anchors: Vec<String>,
+}
+
+/// Take every lock one capacity commitment needs and read the ledger
+/// snapshot it decides against. This is the one place the commitment lock
+/// order is written:
+///
+/// 1. Every supply anchor, all at once and in supply-id order: the anchors
+///    the commitment decides against and, for a reschedule, the anchors the
+///    appointment occupies now. A move between two windows of one offering
+///    releases units in the window it leaves and takes them in the one it
+///    enters, so both are held before the snapshot and before any claim row,
+///    and two moves in opposite directions serialize instead of
+///    deadlocking.
+/// 2. The claim row the commitment acts on, `FOR UPDATE`, or for a new hold
+///    the caller's hold-ceiling advisory lock. The caller lock is taken after
+///    the supply lock, never before: every hold transaction acquires the two
+///    in that one order, so no pair of them can hold what the other is
+///    waiting for.
+/// 3. The revision guard's share lock on the meta row, matching records
+///    publication's supply-then-meta order.
+///
+/// No commitment takes a supply anchor after a claim lock.
+async fn lock_commitment(
+    transaction: &deadpool_postgres::Transaction<'_>,
+    supply: &CommitSupply<'_>,
+    request: Option<&registry_scheduling_core::AdmissionRequest>,
+    lock: ClaimLock,
+    commitment: &Commitment<'_>,
+    busy_source_bindings: &std::collections::BTreeMap<String, Vec<String>>,
+) -> Result<Locked, CommitError> {
+    let current_anchors = match lock {
+        ClaimLock::Appointment(appointment_id) => {
+            supply.current_anchors(transaction, appointment_id).await?
+        }
+        ClaimLock::NoClaim | ClaimLock::CallerHolds { .. } | ClaimLock::Hold(_) => Vec::new(),
+    };
+    let plan = supply.snapshot_plan(request)?;
+    transaction
+        .lock_supply(&plan.anchors(&current_anchors))
+        .await?;
+    let mut snapshot = plan
+        .read(transaction, commitment.now, busy_source_bindings)
+        .await?;
+    if let Some(request) = request {
+        supply
+            .include_duplicates(transaction, &mut snapshot, request, commitment.now)
+            .await?;
+    }
+    let claim = match lock {
+        ClaimLock::NoClaim => None,
+        ClaimLock::CallerHolds { max_per_caller } => {
+            if transaction
+                .lock_caller_and_count_active_holds(
+                    commitment.actor_issuer,
+                    commitment.actor_subject,
+                    commitment.now,
+                )
+                .await?
+                >= i64::from(max_per_caller)
+            {
+                return Err(CommitError::HoldCeiling);
+            }
+            None
+        }
+        ClaimLock::Hold(hold_id) => {
+            Some(active_claim(transaction, hold_id, LedgerKind::Hold).await?)
+        }
+        ClaimLock::Appointment(appointment_id) => {
+            Some(active_claim(transaction, appointment_id, LedgerKind::Booking).await?)
+        }
+    };
+    guard_revisions(transaction, commitment).await?;
+    Ok(Locked {
+        snapshot,
+        claim,
+        current_anchors,
+    })
+}
+
+/// The active claim of `kind` a commitment acts on, locked. A claim that is
+/// gone, closed, or of another kind is answered as released.
+async fn active_claim(
+    transaction: &deadpool_postgres::Transaction<'_>,
+    claim_id: Uuid,
+    kind: LedgerKind,
+) -> Result<ClaimRow, CommitError> {
+    let claim = transaction
+        .claim_in_transaction(claim_id)
+        .await?
+        .ok_or(AdmissionRefusal::HoldReleased)?;
+    if claim.kind != kind || claim.state != ClaimState::Active {
+        return Err(AdmissionRefusal::HoldReleased.into());
+    }
+    Ok(claim)
+}
+
+/// Open a commitment's capacity transaction: mark it as an allocation
+/// writer, answer a stored attempt under the same key, and refuse a grant
+/// that already lapsed before any lock is taken. `Some` is the stored answer,
+/// which the caller commits and returns.
+async fn open_commitment(
+    transaction: &deadpool_postgres::Transaction<'_>,
+    commitment: &Commitment<'_>,
+    scope: &str,
+) -> Result<Option<CommitOutcome>, CommitError> {
+    mark_allocation_writer(transaction).await?;
+    match replay_stored_attempt(transaction, commitment, scope).await? {
+        Some(ReplayOutcome::Replay {
+            status_code,
+            receipt,
+        }) => {
+            return Ok(Some(CommitOutcome::Replay {
+                status_code,
+                receipt,
+            }))
+        }
+        Some(ReplayOutcome::Refused(error)) => return Err(error),
+        None => {}
+    }
+    check_grant_current(commitment)?;
+    Ok(None)
+}
+
+/// Announce a booking a commitment wrote: its confirmation intent, its
+/// reminders, and its confirmed hook event, in the booking's transaction.
+async fn announce_booking(
+    transaction: &deadpool_postgres::Transaction<'_>,
+    claim: &ClaimRow,
+    offering: &registry_scheduling_core::OfferingPolicy,
+    commitment: &Commitment<'_>,
+) -> Result<(), CommitError> {
+    transaction
+        .insert_outbox(
+            "confirmation",
+            claim.claim_id,
+            1,
+            commitment.now,
+            confirmation_payload(claim, commitment.policy_revision),
+        )
+        .await?;
+    mint_reminders(transaction, claim, offering, commitment.now).await?;
+    if let Some(hooks) = commitment.hooks {
+        hooks
+            .capture(transaction, APPOINTMENT_CONFIRMED_TRIGGER, claim)
+            .await?;
+    }
+    Ok(())
+}
+
+/// Where one commitment places its claim, decided under the commitment's
+/// locks: the claim row's terms and, for a bundle, every physical allocation
+/// beside it.
+struct Placement<'a> {
+    offering: String,
+    start: DateTime<Utc>,
+    end: DateTime<Utc>,
+    supply_id: String,
+    occupied_start: DateTime<Utc>,
+    occupied_end: DateTime<Utc>,
+    units: i32,
+    allocations: Option<PlacedAllocations<'a>>,
+}
+
+/// The physical allocations of a bundle placement.
+struct PlacedAllocations<'a> {
+    lines: &'a [BundleSupplyLine<'a>],
+    admission: BundleAdmission,
+    documents: Vec<AllocationDocument>,
+}
+
+impl<'a> Placement<'a> {
+    /// A bundle's claim row carries its primary allocation.
+    fn bundle(
+        lines: &'a [BundleSupplyLine<'a>],
+        admission: BundleAdmission,
+    ) -> Result<Self, CommitError> {
+        let primary = admission
+            .allocations
+            .iter()
+            .find(|allocation| allocation.requirement_id == "primary")
+            .ok_or(StoreError::Corrupt)?;
+        let supply_id = primary.resource.clone();
+        let occupied_start = primary.occupied_start;
+        let occupied_end = primary.occupied_end;
+        let units = i32::try_from(primary.units).map_err(|_| StoreError::Corrupt)?;
+        let documents = allocation_documents(&admission)?;
+        Ok(Self {
+            offering: admission.offering.clone(),
+            start: admission.start,
+            end: admission.end,
+            supply_id,
+            occupied_start,
+            occupied_end,
+            units,
+            allocations: Some(PlacedAllocations {
+                lines,
+                admission,
+                documents,
+            }),
+        })
+    }
+
+    /// The allocations a bundle placement records; none for a single
+    /// supply.
+    fn documents(&self) -> Option<&[AllocationDocument]> {
+        self.allocations
+            .as_ref()
+            .map(|allocations| allocations.documents.as_slice())
+    }
+
+    /// The claim a create writes from this placement and its request.
+    fn new_claim<'c>(
+        &'c self,
+        kind: LedgerKind,
+        operational: &'c registry_scheduling_core::OfferingPolicy,
+        request: &'c registry_scheduling_core::AdmissionRequest,
+        hold_expires_at: Option<DateTime<Utc>>,
+        commitment: &'c Commitment<'_>,
+    ) -> NewClaim<'c> {
+        NewClaim {
+            claim_id: Uuid::new_v4(),
+            kind,
+            state: ClaimState::Active,
+            offering: &self.offering,
+            operational_service: &operational.service,
+            operational_location: &operational.location,
+            operational_mode: operational.mode,
+            supply_id: &self.supply_id,
+            channel: request.channel.as_deref(),
+            displayed_start: self.start,
+            displayed_end: self.end,
+            occupied_start: self.occupied_start,
+            occupied_end: self.occupied_end,
+            units: self.units,
+            party: request.party,
+            party_references: &request.party_references,
+            source_manager: commitment.source_manager.as_ref(),
+            duplicate_key: request.duplicate_key.as_deref(),
+            external_references: &request.external_references,
+            hold_expires_at,
+            revision: 1,
+            policy_revision: commitment.policy_revision,
+            actor: commitment.actor,
+            owner_issuer: commitment.actor_issuer,
+            owner_subject: commitment.actor_subject,
+            reason: None,
+        }
+    }
+
+    /// Write a bundle's allocation rows beside the claim just inserted.
+    async fn insert_allocations(
+        &self,
+        transaction: &deadpool_postgres::Transaction<'_>,
+        claim: &mut ClaimRow,
+    ) -> Result<(), CommitError> {
+        if let Some(allocations) = &self.allocations {
+            let stored = stored_bundle_allocations(&allocations.admission, allocations.lines)?;
+            transaction
+                .insert_claim_allocations(claim.claim_id, &stored)
+                .await?;
+            claim.allocations = allocations.documents.clone();
+        }
+        Ok(())
+    }
+
+    /// Replace a moved bundle's allocation rows with this placement's.
+    async fn replace_allocations(
+        &self,
+        transaction: &deadpool_postgres::Transaction<'_>,
+        claim_id: Uuid,
+    ) -> Result<(), CommitError> {
+        if let Some(allocations) = &self.allocations {
+            let stored = stored_bundle_allocations(&allocations.admission, allocations.lines)?;
+            transaction
+                .replace_claim_allocations(claim_id, &stored)
+                .await?;
+        }
+        Ok(())
+    }
+}
+
+/// A history entry's detail, with a bundle commitment's allocations recorded
+/// beside it.
+fn with_allocations(mut detail: Value, allocations: Option<&[AllocationDocument]>) -> Value {
+    if let Some(allocations) = allocations {
+        detail["allocations"] = json!(allocations);
+    }
+    detail
+}
+
+/// Step 2: read the ledger snapshot of one single-supply admission, with
+/// expiry evaluated in the query, under the anchor `lock_commitment` holds.
+async fn single_snapshot(
     transaction: &deadpool_postgres::Transaction<'_>,
     supply: &SupplyContext<'_>,
     now: DateTime<Utc>,
@@ -3507,12 +3361,6 @@ async fn lock_and_snapshot(
             open,
             ..
         } => {
-            // The anchor is the pool, not the members: two offerings on one
-            // pool sell the same members and must serialize against each
-            // other, and `apply_policy` anchors pool ids only.
-            transaction
-                .lock_supply(std::slice::from_ref(&exact.pool))
-                .await?;
             // Claims occupy a member, so the snapshot reads member ids even
             // though the lock is the pool's.
             let member_ids: Vec<String> = members
@@ -3545,9 +3393,6 @@ async fn lock_and_snapshot(
             Ok(snapshot_from_rows(rows))
         }
         SupplyContext::Window { window, .. } => {
-            transaction
-                .lock_supply(std::slice::from_ref(&window.id))
-                .await?;
             let rows = transaction
                 .query(
                     "SELECT claim_id, offering, supply_id, kind, channel, occupied_start, occupied_end, \
@@ -3565,27 +3410,29 @@ async fn lock_and_snapshot(
     }
 }
 
+/// Lock a bundle's supply anchors and read its snapshot, for a records swap
+/// that re-places a standing claim's physical allocations.
 async fn lock_bundle_and_snapshot(
     transaction: &deadpool_postgres::Transaction<'_>,
     lines: &[BundleSupplyLine<'_>],
     request: &registry_scheduling_core::AdmissionRequest,
     now: DateTime<Utc>,
-    extra_anchors: &[String],
     busy_source_bindings: &std::collections::BTreeMap<String, Vec<String>>,
 ) -> Result<LedgerSnapshot, CommitError> {
-    let Some(primary) = lines.first() else {
-        return Err(StoreError::Corrupt.into());
-    };
-    let duration_minutes = primary
-        .exact
-        .selected_duration_minutes(request.duration_minutes)
-        .ok_or(AdmissionRefusal::DurationOutOfPolicy)?;
-    let mut anchors: Vec<String> = lines.iter().map(|line| line.exact.pool.clone()).collect();
-    anchors.extend(extra_anchors.iter().cloned());
-    anchors.sort();
-    anchors.dedup();
-    transaction.lock_supply(&anchors).await?;
+    let plan = SnapshotPlan::bundle(lines, request)?;
+    transaction.lock_supply(&plan.anchors(&[])).await?;
+    plan.read(transaction, now, busy_source_bindings).await
+}
 
+/// Read a bundle's ledger snapshot under the anchors its caller holds.
+async fn bundle_snapshot(
+    transaction: &deadpool_postgres::Transaction<'_>,
+    lines: &[BundleSupplyLine<'_>],
+    request: &registry_scheduling_core::AdmissionRequest,
+    duration_minutes: u32,
+    now: DateTime<Utc>,
+    busy_source_bindings: &std::collections::BTreeMap<String, Vec<String>>,
+) -> Result<LedgerSnapshot, CommitError> {
     let mut resources: Vec<String> = lines
         .iter()
         .flat_map(|line| line.members.iter().map(|member| member.resource_id.clone()))
@@ -4999,18 +4846,12 @@ async fn replace_parent_allocations(
         external_references: Vec::new(),
         party_references: Vec::new(),
     };
-    let mut snapshot = lock_bundle_and_snapshot(
-        transaction,
-        &lines,
-        &request,
-        now,
-        &[],
-        busy_source_bindings,
-    )
-    .await
-    .map_err(|error| {
-        StoreError::FactsInUse(format!("{subject} physical allocation refused: {error}"))
-    })?;
+    let mut snapshot =
+        lock_bundle_and_snapshot(transaction, &lines, &request, now, busy_source_bindings)
+            .await
+            .map_err(|error| {
+                StoreError::FactsInUse(format!("{subject} physical allocation refused: {error}"))
+            })?;
     // The parent may already own allocations while its safe source
     // revision is being replaced. Exclude only that stable parent claim.
     let parent_id = parent.claim_id.to_string();

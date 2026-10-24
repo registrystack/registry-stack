@@ -48,7 +48,7 @@ use registry_scheduling::service::SchedulingService;
 use registry_scheduling::source_busy::{BusyImpactProjection, BusyImportProfileConfig};
 use registry_scheduling::store::{
     activation_layout, attempt_key_reference, ActivationRequest, ActivePackage, CommitError,
-    CommitOutcome, Commitment, PostgresStore, RoleMode, StoreError, SupplyContext,
+    CommitOutcome, CommitSupply, Commitment, PostgresStore, RoleMode, StoreError, SupplyContext,
 };
 use registry_scheduling_core::{
     location_closure_intervals, location_open_intervals, AdmissionRefusal, AdmissionRequest,
@@ -3669,7 +3669,15 @@ async fn a_delayed_confirmation_cannot_transfer_rebooked_capacity_after_expiry()
             .expect("the test is waiting for the captured confirmation");
         resume_rx.await.expect("resume the delayed confirmation");
         delayed_store
-            .confirm_hold(hold_id, offering, &supply, commitment)
+            .confirm_hold(
+                hold_id,
+                &CommitSupply::Single {
+                    offering,
+                    supply: &supply,
+                },
+                None,
+                commitment,
+            )
             .await
     });
     started_rx
@@ -3696,8 +3704,10 @@ async fn a_delayed_confirmation_cannot_transfer_rebooked_capacity_after_expiry()
     let competing = fx
         .store
         .create_appointment(
-            offering,
-            &supply,
+            &CommitSupply::Single {
+                offering,
+                supply: &supply,
+            },
             &request,
             Commitment {
                 now: after_expiry,
@@ -8748,7 +8758,14 @@ async fn a_records_swap_refuses_a_commitment_resolving_the_old_facts() {
     };
     let outcome = fx
         .store
-        .create_appointment(offering, &supply, &request, commitment)
+        .create_appointment(
+            &CommitSupply::Single {
+                offering,
+                supply: &supply,
+            },
+            &request,
+            commitment,
+        )
         .await;
     assert!(
         matches!(outcome, Err(CommitError::FactsStale)),

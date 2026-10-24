@@ -61,8 +61,8 @@ use crate::source_busy::{
     BusyReconciliationPreview, BusyReconciliationRequest,
 };
 use crate::store::{
-    BundleSupplyLine, BusyStoreError, ClaimRow, ClaimState, CommitError, CommitOutcome, Commitment,
-    PostgresStore, SourceBoundManager, StoreError, SupplyContext,
+    BundleSupplyLine, BusyStoreError, ClaimRow, ClaimState, CommitError, CommitOutcome,
+    CommitSupply, Commitment, PostgresStore, SourceBoundManager, StoreError, SupplyContext,
 };
 
 /// The closed action vocabulary a task grant's scheduling permissions carry.
@@ -1029,8 +1029,8 @@ impl SchedulingService {
             ResolvedRequestSupply::Exact(bundle) => {
                 let contexts = bundle.contexts()?;
                 self.store
-                    .create_bundle_hold(
-                        &contexts,
+                    .create_hold(
+                        &CommitSupply::Bundle(&contexts),
                         request,
                         self.policy.hold_policy.ttl_minutes,
                         self.policy.hold_policy.maximum_per_caller,
@@ -1043,8 +1043,10 @@ impl SchedulingService {
                     Some(context) => {
                         self.store
                             .create_hold(
-                                offering,
-                                &context,
+                                &CommitSupply::Single {
+                                    offering,
+                                    supply: &context,
+                                },
                                 request,
                                 self.policy.hold_policy.ttl_minutes,
                                 self.policy.hold_policy.maximum_per_caller,
@@ -1240,14 +1242,27 @@ impl SchedulingService {
             (ResolvedRequestSupply::Exact(bundle), Some(request)) => {
                 let contexts = bundle.contexts()?;
                 self.store
-                    .confirm_bundle_hold(hold_id, &contexts, request, commitment)
+                    .confirm_hold(
+                        hold_id,
+                        &CommitSupply::Bundle(&contexts),
+                        Some(request),
+                        commitment,
+                    )
                     .await
             }
             (ResolvedRequestSupply::Window(supply), _) => {
                 match supply.context_for_hold(offering, &hold) {
                     Some(context) => {
                         self.store
-                            .confirm_hold(hold_id, offering, &context, commitment)
+                            .confirm_hold(
+                                hold_id,
+                                &CommitSupply::Single {
+                                    offering,
+                                    supply: &context,
+                                },
+                                None,
+                                commitment,
+                            )
                             .await
                     }
                     None => Err(no_window_at_start()),
@@ -1407,14 +1422,21 @@ impl SchedulingService {
             ResolvedRequestSupply::Exact(bundle) => {
                 let contexts = bundle.contexts()?;
                 self.store
-                    .create_bundle_appointment(&contexts, request, commitment)
+                    .create_appointment(&CommitSupply::Bundle(&contexts), request, commitment)
                     .await
             }
             ResolvedRequestSupply::Window(supply) => {
                 match supply.context_at(offering, request.start) {
                     Some(context) => {
                         self.store
-                            .create_appointment(offering, &context, request, commitment)
+                            .create_appointment(
+                                &CommitSupply::Single {
+                                    offering,
+                                    supply: &context,
+                                },
+                                request,
+                                commitment,
+                            )
                             .await
                     }
                     None => Err(no_window_at_start()),
@@ -1803,9 +1825,9 @@ impl SchedulingService {
             ResolvedRequestSupply::Exact(bundle) => {
                 let contexts = bundle.contexts()?;
                 self.store
-                    .reschedule_bundle_appointment(
+                    .reschedule_appointment(
                         appointment_id,
-                        &contexts,
+                        &CommitSupply::Bundle(&contexts),
                         &request.admission,
                         request.observed_revision,
                         commitment,
@@ -1818,8 +1840,10 @@ impl SchedulingService {
                         self.store
                             .reschedule_appointment(
                                 appointment_id,
-                                offering,
-                                &context,
+                                &CommitSupply::Single {
+                                    offering,
+                                    supply: &context,
+                                },
                                 &request.admission,
                                 request.observed_revision,
                                 commitment,
