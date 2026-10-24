@@ -203,7 +203,8 @@ audit:
 cursor:
   secretRef: secret:file/cursor-key
   maximumAgeSeconds: 300
-eventDestinations: {{}}
+destinations:
+  hooks: {{}}
 operationalTimeouts:
   httpRequestMilliseconds: 10000
   shutdownGraceMilliseconds: 30000
@@ -262,8 +263,8 @@ fn runtime_log_level_refuses_values_outside_the_closed_vocabulary() {
 
 fn runtime_with_event_destinations(fixture: &RuntimeFixture, bindings: &str) -> String {
     valid_runtime(&fixture.secret_root, &fixture.package_root).replace(
-        "eventDestinations: {}\n",
-        &format!("eventDestinations:\n{bindings}"),
+        "destinations:\n  hooks: {}\n",
+        &format!("destinations:\n  hooks:\n{bindings}"),
     )
 }
 
@@ -423,17 +424,17 @@ fn event_destination_binding(
     maximum_attempts: u8,
 ) -> String {
     format!(
-        r#"  {logical_id}:
-    origin: {origin}
-    path: {path}
-    networkProfile: production-https
-    dnsFamily: dual-stack-strict
-    allowedPrivateCidrs: []
-    hmacSha256KeyRef: {key_ref}
-    classificationCeiling: restricted
-    deliveryCeilings:
-      attemptTimeoutMilliseconds: {timeout_ms}
-      maximumAttempts: {maximum_attempts}
+        r#"    {logical_id}:
+      origin: {origin}
+      path: {path}
+      networkProfile: production-https
+      dnsFamily: dual-stack-strict
+      allowedPrivateCidrs: []
+      hmacSha256KeyRef: {key_ref}
+      classificationCeiling: restricted
+      deliveryCeilings:
+        attemptTimeoutMilliseconds: {timeout_ms}
+        maximumAttempts: {maximum_attempts}
 "#
     )
 }
@@ -502,9 +503,9 @@ fn runtime_definition_ids_refuse_separator_collisions_at_both_authored_keys() {
         (
             event_destinations,
             RuntimeConfigError::EventDestinationIdCollision,
-            "breg.runtime.event-destination-id-collision",
-            "/eventDestinations/notify-main",
-            "/eventDestinations/notify_main",
+            "breg.runtime.hook-destination-id-collision",
+            "/destinations/hooks/notify-main",
+            "/destinations/hooks/notify_main",
         ),
         (
             evidence_providers,
@@ -549,9 +550,18 @@ fn runtime_definition_ids_refuse_separator_collisions_at_both_authored_keys() {
             diagnostic.source.as_ref().unwrap().line,
             expected_line(second_key)
         );
-        assert_eq!(diagnostic.source.as_ref().unwrap().column, Some(3));
+        let expected_column = |key: &str| {
+            source
+                .lines()
+                .find(|line| line.trim_start().starts_with(&format!("{key}:")))
+                .map(|line| line.len() - line.trim_start().len() + 1)
+        };
+        assert_eq!(
+            diagnostic.source.as_ref().unwrap().column,
+            expected_column(second_key)
+        );
         assert_eq!(diagnostic.related[0].line, expected_line(first_key));
-        assert_eq!(diagnostic.related[0].column, Some(3));
+        assert_eq!(diagnostic.related[0].column, expected_column(first_key));
     }
 }
 
@@ -643,7 +653,7 @@ fn compiled_webhooks(destinations: &[(&str, u32, u8)]) -> registry_breg::Compile
     });
     let parsed = parse_project_json(&serde_json::to_vec(&project).expect("project serializes"))
         .expect("project parses");
-    compile_project(&parsed, &[], CompileProfile::Authoring).expect("webhooks compile")
+    compile_project(&parsed, &[], CompileProfile::Authoring).expect("hooks compile")
 }
 
 fn event_headers() -> EventDeliveryHeaders<'static> {
@@ -1239,8 +1249,8 @@ fn runtime_config_errors_expose_stable_value_free_metadata() {
         ),
         (
             RuntimeConfigError::InvalidEventDestination,
-            "breg.runtime.invalid-event-destination",
-            "/eventDestinations",
+            "breg.runtime.invalid-hook-destination",
+            "/destinations/hooks",
         ),
         (
             RuntimeConfigError::PlaintextDatabase,
@@ -1399,6 +1409,24 @@ fn retention_windows_outside_the_retention_block_are_refused_naming_the_new_path
         assert!(path.starts_with(pointer), "{document}: {path}");
         let rendered = format!("{error} {}", error.render_human(None));
         assert!(rendered.contains(replacement), "{rendered}");
+    }
+}
+
+#[test]
+fn hook_destinations_outside_the_destinations_block_are_refused_naming_the_new_path() {
+    let fixture = RuntimeFixture::new();
+    let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
+    for document in [
+        "eventDestinations: {}\n",
+        "eventDestinations:\n  notify-main:\n    origin: https://events.example/\n",
+    ] {
+        let error = parse_runtime_config(&format!("{base}\n{document}"))
+            .expect_err("the old hook destination location is refused");
+        let (code, path) = reader_refusal(&error);
+        assert_eq!(code, "config.removed-key", "{document}");
+        assert!(path.starts_with("/eventDestinations"), "{document}: {path}");
+        let rendered = format!("{error} {}", error.render_human(None));
+        assert!(rendered.contains("destinations.hooks"), "{rendered}");
     }
 }
 
@@ -2072,8 +2100,8 @@ fn bounds_timeouts_and_retention_are_read_under_the_shared_spellings() {
     let current = format!(
         "{base}wasmExecution:\n  maximumModuleBytes: 2097152\n  maximumGuestMemoryBytes: 33554432\n\
          fieldEncryption:\n  provider:\n    type: transit\n    unixSocketPath: /run/transit/proxy.sock\n    mount: transit\n    keyName: breg-field-dek\n    attemptTimeoutMilliseconds: 5002\n\
-         attachmentStorage:\n  type: s3\n  endpoint: https://storage.example\n  bucket: test-bucket\n  region: us-east-1\n  accessKeyIdRef: secret:file/access\n  secretAccessKeyRef: secret:file/key\n  attemptTimeoutMilliseconds: 5003\n\
-         attachmentVerification:\n  type: http\n  endpoint: https://scanner.example/verify\n  policyId: scanner-rules-v1\n  authorizationRef: secret:file/verifier-token\n  attemptTimeoutMilliseconds: 5004\n"
+         attachmentStorage:\n  type: s3\n  url: https://storage.example\n  bucket: test-bucket\n  region: us-east-1\n  accessKeyIdRef: secret:file/access\n  secretAccessKeyRef: secret:file/key\n  attemptTimeoutMilliseconds: 5003\n\
+         attachmentVerification:\n  type: http\n  url: https://scanner.example/verify\n  policyId: scanner-rules-v1\n  authorizationRef: secret:file/verifier-token\n  attemptTimeoutMilliseconds: 5004\n"
     );
     parse_runtime_config_with_env(&current, env_lookup).expect("the shared spellings are read");
 
@@ -2193,7 +2221,7 @@ fn a_map_key_is_read_as_the_identifier_its_member_names() {
                 4,
             ),
         )
-        .replace("  case-operations:\n", &format!("  {key}:\n"))
+        .replace("    case-operations:\n", &format!("    {key}:\n"))
     };
 
     // A client identifier another system issues is kept exactly as written.
@@ -2212,7 +2240,7 @@ fn a_map_key_is_read_as_the_identifier_its_member_names() {
             .expect_err("a destination key that is not a local identifier is refused");
         let (code, pointer) = reader_refusal(&error);
         assert_eq!(code, "config.invalid-value", "{key}");
-        assert!(pointer.starts_with("/eventDestinations"), "{pointer}");
+        assert!(pointer.starts_with("/destinations/hooks"), "{pointer}");
     }
 
     // A client key is an external identifier: 1 to 512 characters, none of
@@ -2261,13 +2289,77 @@ fn the_issuer_key_source_names_its_variant_in_a_type_member() {
 }
 
 #[test]
+fn attachment_destinations_are_named_url_and_the_endpoint_key_is_refused() {
+    let fixture = RuntimeFixture::new();
+    let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
+    let current = format!(
+        "{base}\nattachmentStorage:\n  type: s3\n  url: https://storage.example\n  bucket: test-bucket\n  region: us-east-1\n  accessKeyIdRef: secret:file/access\n  secretAccessKeyRef: secret:file/key\n\
+         attachmentVerification:\n  type: http\n  url: https://scanner.example/verify\n  policyId: scanner-rules-v1\n  authorizationRef: secret:file/verifier-token\n"
+    );
+    parse_runtime_config_with_env(&current, env_lookup).expect("the url member is read");
+
+    for (current_line, retired_line, pointer, replacement) in [
+        (
+            "  url: https://storage.example\n",
+            "  endpoint: https://storage.example\n",
+            "/attachmentStorage/endpoint",
+            "attachmentStorage.url",
+        ),
+        (
+            "  url: https://scanner.example/verify\n",
+            "  endpoint: https://scanner.example/verify\n",
+            "/attachmentVerification/endpoint",
+            "attachmentVerification.url",
+        ),
+    ] {
+        assert_eq!(current.matches(current_line).count(), 1, "{current_line}");
+        let retired = current.replace(current_line, retired_line);
+        let error = parse_runtime_config_with_env(&retired, env_lookup)
+            .expect_err("the endpoint member is refused");
+        assert_eq!(
+            reader_refusal(&error),
+            ("config.removed-key", pointer),
+            "{retired_line}"
+        );
+        let rendered = format!("{error} {}", error.render_human(None));
+        assert!(rendered.contains(replacement), "{rendered}");
+    }
+}
+
+#[test]
+fn the_endpoint_key_is_an_ordinary_unknown_key_under_variants_without_a_url() {
+    let fixture = RuntimeFixture::new();
+    let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
+    for (block, pointer) in [
+        (
+            "attachmentStorage:\n  type: database\n  endpoint: https://storage.example\n",
+            "/attachmentStorage/endpoint",
+        ),
+        (
+            "attachmentVerification:\n  type: disabled\n  endpoint: https://scanner.example/verify\n",
+            "/attachmentVerification/endpoint",
+        ),
+    ] {
+        let error = parse_runtime_config_with_env(&format!("{base}\n{block}"), env_lookup)
+            .expect_err("the endpoint member is refused");
+        assert_eq!(
+            reader_refusal(&error),
+            ("config.unknown-key", pointer),
+            "{block}"
+        );
+        let rendered = format!("{error} {}", error.render_human(None));
+        assert!(!rendered.contains(".url"), "{rendered}");
+    }
+}
+
+#[test]
 fn a_runtime_union_names_its_variant_in_a_type_member() {
     let fixture = RuntimeFixture::new();
     let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
     let current = format!(
         "{base}\nfieldEncryption:\n  provider:\n    type: transit\n    unixSocketPath: /run/transit/proxy.sock\n    mount: transit\n    keyName: breg-field-dek\n\
-         attachmentStorage:\n  type: s3\n  endpoint: https://storage.example\n  bucket: test-bucket\n  region: us-east-1\n  accessKeyIdRef: secret:file/access\n  secretAccessKeyRef: secret:file/key\n\
-         attachmentVerification:\n  type: http\n  endpoint: https://scanner.example/verify\n  policyId: scanner-rules-v1\n  authorizationRef: secret:file/verifier-token\n"
+         attachmentStorage:\n  type: s3\n  url: https://storage.example\n  bucket: test-bucket\n  region: us-east-1\n  accessKeyIdRef: secret:file/access\n  secretAccessKeyRef: secret:file/key\n\
+         attachmentVerification:\n  type: http\n  url: https://scanner.example/verify\n  policyId: scanner-rules-v1\n  authorizationRef: secret:file/verifier-token\n"
     );
     parse_runtime_config_with_env(&current, env_lookup).expect("the type member is read");
 
@@ -3643,23 +3735,23 @@ fn event_destination_shape_is_strict_and_governed_webhooks_remain_refused() {
     let valid = runtime_with_event_destinations(&fixture, &binding);
     parse_runtime_config_with_env(&valid, env_lookup).expect("strict event binding parses");
     parse_runtime_config_with_env(
-        &valid.replace("  case-operations:\n", "  events:\n"),
+        &valid.replace("    case-operations:\n", "    events:\n"),
         env_lookup,
     )
     .expect("a compiler-valid logical id is not mistaken for a governed member");
 
     for raw in [
         valid.replace(
-            "    path: /hooks/registry\n",
-            "    path: /hooks/registry\n    headers: {}\n",
+            "      path: /hooks/registry\n",
+            "      path: /hooks/registry\n      headers: {}\n",
         ),
         valid.replace(
-            "      maximumAttempts: 4\n",
-            "      maximumAttempts: 4\n      retryPolicy: caller-controlled\n",
+            "        maximumAttempts: 4\n",
+            "        maximumAttempts: 4\n        retryPolicy: caller-controlled\n",
         ),
         valid.replace(
-            "    deliveryCeilings:\n",
-            "    tls:\n      caBundleRef: secret:file/event-ca\n      privateKey: inline-canary\n    deliveryCeilings:\n",
+            "      deliveryCeilings:\n",
+            "      tls:\n        caBundleRef: secret:file/event-ca\n        privateKey: inline-canary\n      deliveryCeilings:\n",
         ),
     ] {
         assert_eq!(
@@ -3752,26 +3844,26 @@ fn invalid_event_destination_ids_origins_paths_cidrs_refs_and_ceilings_are_refus
         valid
             .replace("https://events.example/", "https://receiver.localhost./")
             .replace(
-                "    allowedPrivateCidrs: []\n",
-                "    allowedPrivateCidrs: [127.0.0.0/8]\n",
+                "      allowedPrivateCidrs: []\n",
+                "      allowedPrivateCidrs: [127.0.0.0/8]\n",
             ),
         valid.replace("/hooks/registry", "//authority-smuggling"),
         valid.replace("/hooks/registry", "/hooks?query=denied"),
         valid.replace(
-            "    allowedPrivateCidrs: []\n",
-            "    allowedPrivateCidrs: [10.1.2.3/8]\n",
+            "      allowedPrivateCidrs: []\n",
+            "      allowedPrivateCidrs: [10.1.2.3/8]\n",
         ),
         valid.replace(
-            "    allowedPrivateCidrs: []\n",
-            "    allowedPrivateCidrs: [203.0.113.0/24]\n",
+            "      allowedPrivateCidrs: []\n",
+            "      allowedPrivateCidrs: [203.0.113.0/24]\n",
         ),
         valid.replace(
-            "    allowedPrivateCidrs: []\n",
-            "    allowedPrivateCidrs: [192.168.0.0/16, 10.0.0.0/8]\n",
+            "      allowedPrivateCidrs: []\n",
+            "      allowedPrivateCidrs: [192.168.0.0/16, 10.0.0.0/8]\n",
         ),
         valid.replace(
-            "    deliveryCeilings:\n",
-            "    tls: {}\n    deliveryCeilings:\n",
+            "      deliveryCeilings:\n",
+            "      tls: {}\n      deliveryCeilings:\n",
         ),
     ];
     for raw in invalid_bindings {
@@ -3783,7 +3875,7 @@ fn invalid_event_destination_ids_origins_paths_cidrs_refs_and_ceilings_are_refus
     }
 
     // The delivery ceilings are bounded at decode, at the member.
-    let ceilings = "/eventDestinations/case-operations/deliveryCeilings";
+    let ceilings = "/destinations/hooks/case-operations/deliveryCeilings";
     for (from, to, member) in [
         (
             "attemptTimeoutMilliseconds: 4000",
@@ -3829,7 +3921,7 @@ fn invalid_event_destination_ids_origins_paths_cidrs_refs_and_ceilings_are_refus
         reader_refusal(&error),
         (
             "config.invalid-value",
-            "/eventDestinations/case-operations/hmacSha256KeyRef"
+            "/destinations/hooks/case-operations/hmacSha256KeyRef"
         )
     );
     let rendered = format!("{error:?} {error} {}", error.render_human(None));
@@ -4235,7 +4327,7 @@ fn event_destination_profiles_are_written_in_kebab_case_and_keep_their_binding_d
         let raw = runtime_with_event_destinations(&fixture, &production.replace(current, retired));
         let error = parse_runtime_config_with_env(&raw, env_lookup)
             .expect_err("a camelCase event profile word is refused");
-        let pointer = format!("/eventDestinations/{DESTINATION}/{member}");
+        let pointer = format!("/destinations/hooks/{DESTINATION}/{member}");
         assert_eq!(
             reader_refusal(&error),
             ("config.unknown-variant", pointer.as_str()),
@@ -4342,7 +4434,7 @@ fn event_destination_missing_oversized_and_unsafe_secrets_fail_value_free() {
         (format!("secret:file/{SECRET_CANARY}"), "".to_owned()),
         (
             "secret:file/event-hmac-key".to_owned(),
-            format!("    tls:\n      caBundleRef: secret:file/{SECRET_CANARY}\n"),
+            format!("      tls:\n        caBundleRef: secret:file/{SECRET_CANARY}\n"),
         ),
     ] {
         if !tls.is_empty() {
@@ -4357,8 +4449,8 @@ fn event_destination_missing_oversized_and_unsafe_secrets_fail_value_free() {
             4,
         )
         .replace(
-            "    deliveryCeilings:\n",
-            &format!("{tls}    deliveryCeilings:\n"),
+            "      deliveryCeilings:\n",
+            &format!("{tls}      deliveryCeilings:\n"),
         );
         let config = parse_runtime_config_with_env(
             &runtime_with_event_destinations(&fixture, &binding),
@@ -4665,7 +4757,7 @@ async fn attachment_storage_defaults_to_database_and_validates_operator_binding(
         AttachmentStorage::Database
     ));
     let invalid = format!(
-        "{base}\nattachmentStorage:\n  type: s3\n  endpoint: http://public.example\n  bucket: test-bucket\n  region: us-east-1\n  accessKeyIdRef: secret:file/access\n  secretAccessKeyRef: secret:file/key\n"
+        "{base}\nattachmentStorage:\n  type: s3\n  url: http://public.example\n  bucket: test-bucket\n  region: us-east-1\n  accessKeyIdRef: secret:file/access\n  secretAccessKeyRef: secret:file/key\n"
     );
     let error = parse_runtime_config(&invalid).unwrap_err();
     assert_eq!(error, RuntimeConfigError::InvalidAttachmentStorage);
@@ -4698,7 +4790,7 @@ fn attachment_verification_defaults_off_and_validates_operator_binding() {
         AttachmentVerification::Disabled
     ));
     let invalid = format!(
-        "{base}\nattachmentVerification:\n  type: http\n  endpoint: http://public.example/verify\n  policyId: scanner-rules-v1\n  authorizationRef: secret:file/verifier-token\n"
+        "{base}\nattachmentVerification:\n  type: http\n  url: http://public.example/verify\n  policyId: scanner-rules-v1\n  authorizationRef: secret:file/verifier-token\n"
     );
     let error = parse_runtime_config(&invalid).unwrap_err();
     assert_eq!(error, RuntimeConfigError::InvalidAttachmentVerification);
@@ -4715,6 +4807,55 @@ fn attachment_verification_defaults_off_and_validates_operator_binding() {
         config.activate_attachment_verification().unwrap(),
         AttachmentVerification::Http(_)
     ));
+}
+
+#[test]
+fn one_attempt_budget_covers_the_storage_read_and_the_verifier_call() {
+    let fixture = RuntimeFixture::new();
+    let base = valid_runtime(&fixture.secret_root, &fixture.package_root);
+    let both = |storage: u32, verifier: u32| {
+        format!(
+            "{base}\nattachmentStorage:\n  type: s3\n  url: https://storage.example\n  bucket: test-bucket\n  region: us-east-1\n  accessKeyIdRef: secret:file/access\n  secretAccessKeyRef: secret:file/key\n  attemptTimeoutMilliseconds: {storage}\n\
+             attachmentVerification:\n  type: http\n  url: https://scanner.example/verify\n  policyId: scanner-rules-v1\n  authorizationRef: secret:file/verifier-token\n  attemptTimeoutMilliseconds: {verifier}\n"
+        )
+    };
+    parse_runtime_config(&both(30_000, 25_000)).expect("the largest pair the budget holds");
+
+    let error = parse_runtime_config(&both(30_000, 25_001)).unwrap_err();
+    assert_eq!(error, RuntimeConfigError::AttachmentAttemptBudgetExceeded);
+    assert_eq!(
+        code_of(&error),
+        "breg.runtime.attachment-attempt-budget-exceeded"
+    );
+    assert_eq!(
+        path_of(&error),
+        "/attachmentVerification/attemptTimeoutMilliseconds"
+    );
+    let [diagnostic] = <[_; 1]>::try_from(error.diagnostics(None)).unwrap();
+    for named in [
+        "attachmentStorage.attemptTimeoutMilliseconds",
+        "attachmentVerification.attemptTimeoutMilliseconds",
+        "55000",
+    ] {
+        assert!(diagnostic.message.contains(named), "{}", diagnostic.message);
+        assert!(
+            diagnostic.suggested_action.contains(named),
+            "{}",
+            diagnostic.suggested_action
+        );
+    }
+
+    // Each timeout alone may reach the shared maximum when the other side
+    // makes no network call.
+    let database_storage = format!(
+        "{base}\nattachmentVerification:\n  type: http\n  url: https://scanner.example/verify\n  policyId: scanner-rules-v1\n  authorizationRef: secret:file/verifier-token\n  attemptTimeoutMilliseconds: 55000\n"
+    );
+    parse_runtime_config(&database_storage).expect("a database read takes no storage budget");
+    let disabled_verification = format!(
+        "{base}\nattachmentStorage:\n  type: s3\n  url: https://storage.example\n  bucket: test-bucket\n  region: us-east-1\n  accessKeyIdRef: secret:file/access\n  secretAccessKeyRef: secret:file/key\n  attemptTimeoutMilliseconds: 60000\n"
+    );
+    parse_runtime_config(&disabled_verification)
+        .expect("storage alone serves requests, not verification attempts");
 }
 
 #[test]

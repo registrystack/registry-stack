@@ -9,6 +9,8 @@ apis:
     root: openapi/registry-messaging.openapi.json
   registry-coordinator:
     root: openapi/registry-coordinator.openapi.json
+  registry-documents:
+    root: openapi/registry-documents.openapi.json
   registry-evidence:
     root: openapi/registry-evidence.openapi.json
   registry-evidence-oid4vci:

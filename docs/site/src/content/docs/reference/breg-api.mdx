@@ -608,7 +608,7 @@ changes with the declaration. `unique` and `temporal-non-overlap` conflicts stay
 Record hooks live under `recordTypes[].hooks`; Proposal hooks under
 `actions[].execution.proposal.hooks`. Capture commits with the source operation and delivery
 follows the commit, so later edits never change a captured event. The deployment's
-`eventDestinations` supplies the URL, network and TLS policy, HMAC key, classification ceiling, and
+`destinations.hooks` supplies the URL, network and TLS policy, HMAC key, classification ceiling, and
 limits; it may narrow the compiled contract but never widen it.
 
 ### HTTP request
@@ -658,7 +658,7 @@ generation; discard stops future attempts and cannot undo an earlier acceptance.
     crates/registry-platform-crypto/src/delivery_signature.rs, signing_input(), sign_v1(), MIN_HMAC_SHA256_KEY_BYTES, MAX_BODY_BYTES, MAX_METADATA_BYTES;
     crates/registry-platform-httputil/src/destination.rs;
     products/breg/generated/event-schemas/proposal-lifecycle.schema.json;
-    crates/registry-bregctl/src/lib.rs, WebhookCommand. */}
+    crates/registry-bregctl/src/lib.rs, HookCommand. */}
 
 ## Spatial adapter
 

@@ -363,6 +363,41 @@ impl Harness {
             .await
             .expect("synthetic test transition");
     }
+    /// Restore the `jobs_shape` a table created before the leased arm required
+    /// a lease expiry still carries, so Coordinator's own refusal to treat an
+    /// unknown expiry as expired stays proven.
+    async fn admit_leases_without_expiry(&self) {
+        let (client, connection) = tokio_postgres::connect(&self.url, tokio_postgres::NoTls)
+            .await
+            .expect("test connection");
+        tokio::spawn(async move {
+            connection.await.expect("test connection finishes");
+        });
+        let definition: String = client
+            .query_one(
+                "SELECT pg_get_constraintdef(k.oid) FROM pg_constraint k
+                   JOIN pg_class t ON t.oid=k.conrelid JOIN pg_namespace n ON n.oid=t.relnamespace
+                  WHERE n.nspname=$1 AND t.relname='jobs' AND k.conname='jobs_shape'",
+                &[&self.namespace],
+            )
+            .await
+            .expect("jobs shape")
+            .get(0);
+        let conjunct = "(lease_expires_at IS NOT NULL) AND ";
+        assert_eq!(
+            definition.matches(conjunct).count(),
+            1,
+            "the leased arm requires a lease expiry exactly once: {definition}"
+        );
+        client
+            .batch_execute(&format!(
+                "ALTER TABLE {0}.jobs DROP CONSTRAINT jobs_shape, ADD CONSTRAINT jobs_shape {1}",
+                self.namespace,
+                definition.replacen(conjunct, "", 1)
+            ))
+            .await
+            .expect("earlier jobs shape");
+    }
     /// A retention cutoff after every completion the database has recorded.
     async fn retention_cutoff(&self) -> chrono::DateTime<Utc> {
         let (client, connection) = tokio_postgres::connect(&self.url, tokio_postgres::NoTls)
@@ -3033,7 +3068,28 @@ async fn unexpired_leased_receipt_reconciliation_is_refused_before_observation()
         .unwrap_err();
     assert_eq!(error.code, "reconcile-refused");
     assert_eq!(*receipt.calls.lock().unwrap(), 0);
+    // A freshly created schema refuses a leased row with unknown expiry.
+    let (client, connection) = tokio_postgres::connect(&h.url, tokio_postgres::NoTls)
+        .await
+        .unwrap();
+    tokio::spawn(async move { connection.await.unwrap() });
+    let error = client
+        .batch_execute(&format!(
+            "UPDATE {}.jobs SET lease_expires_at=NULL WHERE step='message'",
+            h.namespace
+        ))
+        .await
+        .expect_err("refuse a lease without an expiry");
+    assert_eq!(
+        error.code(),
+        Some(&tokio_postgres::error::SqlState::CHECK_VIOLATION)
+    );
+    assert_eq!(
+        error.as_db_error().and_then(|error| error.constraint()),
+        Some("jobs_shape")
+    );
     // A malformed leased row with unknown expiry is not proven expired.
+    h.admit_leases_without_expiry().await;
     h.sql("UPDATE {schema}.jobs SET lease_expires_at=NULL WHERE step='message'")
         .await;
     let error = h
@@ -3058,6 +3114,9 @@ async fn unexpired_leased_receipt_reconciliation_is_refused_before_observation()
 async fn lease_renewal_during_original_receipt_observation_refuses_settlement() {
     for lease_expiry in ["clock_timestamp()+interval '30 minutes'", "NULL"] {
         let (h, run, fake) = restored_leased_mutation().await;
+        if lease_expiry == "NULL" {
+            h.admit_leases_without_expiry().await;
+        }
         h.sql("UPDATE {schema}.jobs SET attempt_started_at=clock_timestamp()-interval '60 seconds',lease_expires_at=clock_timestamp()-interval '1 second' WHERE step='message'").await;
         let operator = actor("operator", true);
         h.store
@@ -4828,7 +4887,10 @@ async fn attested_recovery_preserves_active_mutating_unknown_and_uncertain_lease
         };
         match kind {
             "active-read"=>h.sql("UPDATE {schema}.jobs SET attempt_started_at=clock_timestamp(),lease_expires_at=clock_timestamp()+interval '60 seconds' WHERE state='leased'").await,
-            "unknown-expiry-read"=>h.sql("UPDATE {schema}.jobs SET lease_expires_at=NULL WHERE state='leased'").await,
+            "unknown-expiry-read"=>{
+                h.admit_leases_without_expiry().await;
+                h.sql("UPDATE {schema}.jobs SET lease_expires_at=NULL WHERE state='leased'").await
+            }
             "uncertain-read"=>h.sql("UPDATE {schema}.jobs SET uncertain=true WHERE state='leased'").await,
             "unknown-uncertain-read"=>h.sql("UPDATE {schema}.jobs SET state='unknown',uncertain=true,attempt_started_at=NULL,lease_expires_at=NULL,lease_token=NULL WHERE state='leased'").await,
             "unknown-receipt-expired-read"=>h.sql("UPDATE {schema}.jobs SET state='unknown',receipt_expired=true,attempt_started_at=NULL,lease_expires_at=NULL,lease_token=NULL WHERE state='leased'").await,

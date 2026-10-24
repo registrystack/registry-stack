@@ -94,6 +94,7 @@ PREFIXES = {
     "breg": "BReg",
     "casework": "Casework",
     "coordinator": "Coordinator",
+    "documents": "Documents",
     "scheduling": "Scheduling",
     "messaging": "Messaging",
     "discovery": "Discovery",
@@ -102,7 +103,7 @@ PREFIXES = {
     "manifest": "Manifest",
     "platform": "Platform",
 }
-KIND_RE = re.compile(r"^(BReg|Casework|Coordinator|Scheduling|Messaging|Discovery|Render|Evidence|Manifest|Platform)([A-Z][a-z0-9]+)+$")
+KIND_RE = re.compile(r"^(BReg|Casework|Coordinator|Documents|Scheduling|Messaging|Discovery|Render|Evidence|Manifest|Platform)([A-Z][a-z0-9]+)+$")
 VERSION_RE = re.compile(r"^v[1-9][0-9]*((alpha|beta)[1-9][0-9]*)?$")
 API_VERSION_PREFIX = "id.registrystack.org/formats/"
 SCHEMA_ID_PREFIX = "https://id.registrystack.org/schemas/"
@@ -144,7 +145,8 @@ SHARED_BLOCKS = (
     "ListenerConfig", "PrivateListenerConfig", "DatabaseConfig", "OidcIssuerConfig",
     "OidcClientsConfig", "JwksSource", "AuditKeyConfig", "SecretProvidersConfig",
     "SecretReference", "IdentityConfig", "ProjectIdentity", "Url", "LocalId",
-    "ExternalId", "Digest", "TaskGrantStatusConfig",
+    "ExternalId", "Digest", "TaskGrantStatusConfig", "ObjectStorageConfig",
+    "AttachmentVerifierConfig", "UrlHookDestinationConfig",
 )
 VALUE_TYPES = ("Url", "Digest", "LocalId", "ExternalId", "SecretReference")
 FOREIGN = "x-registry-foreign"
@@ -2008,6 +2010,9 @@ class Lint:
         return None
 
     def schema5(self, fid: str, entry: dict, path: str, document: dict) -> None:
+        # Shared stems enforce the named capability blocks, not every shape
+        # using the same transport. In particular, BReg's full-policy event
+        # destination is outside UrlHookDestinationConfig's fixed-policy scope.
         if not self.applies(entry, "CFG-SCHEMA-5"):
             return
         covered = {row.runtime_schema for row in conformance.ROWS if isinstance(row.runtime_schema, str)}

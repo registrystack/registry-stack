@@ -86,6 +86,11 @@ ENDPOINTS = [
     Endpoint("GET","/v1/directory/holidays/{id}/revisions/{revision}","getHolidayRevision","HolidaySetDocument"),
 ]
 ROUTES = {endpoint.path for endpoint in ENDPOINTS}
+RESULT_LOOKUP_DESCRIPTIONS = {
+    "202": "The review result is pending.",
+    "404": "The review request is concealed or unknown.",
+    "410": "The review result has expired.",
+}
 
 def ref(name: str) -> dict:
     return {"$ref": f"#/components/schemas/{name}"}
@@ -209,6 +214,10 @@ def document(contract: dict, wire: dict) -> dict:
         if endpoint.revision:parameters.append(parameter("If-Match","header",{"type":"string","pattern":'^"[1-9][0-9]*"$' if endpoint.revision=="positive" else '^"(?:0|[1-9][0-9]*)"$'},True,"Quoted current revision."))
         if endpoint.idempotency:parameters.append(parameter("Idempotency-Key","header",{"type":"string","minLength":1,"maxLength":128,"pattern":"^[!-~]+$"},True,"Retain this exact key and request bytes for explicit recovery."))
         responses={str(status):response(endpoint.response if status in (200,201) else None) for status in op["successStatuses"]}
+        if endpoint.path == "/v1/review-requests/{request_id}/result":
+            for status, description in RESULT_LOOKUP_DESCRIPTIONS.items():
+                if status in responses:
+                    responses[status]["description"] = description
         if endpoint.body == "ReviewCreateRequest":
             for status in ("200", "201"):
                 if status in responses:
@@ -258,11 +267,11 @@ def verify_source(repository_root: Path, openapi: dict) -> None:
     for retired in ("/v1/work-items","/events/sources","ReviewerTask","ReviewKindPolicy","TaskProposalIdentity"):
         if retired in rendered:raise ValueError(f"retired Casework contract remains: {retired}")
 
-def cargo_example(repository_root: Path, package: str, example: str, output: Path, features: str | None = None, extra: list[str] | None = None) -> None:
+def cargo_example(repository_root: Path, package: str, example: str, output: Path, features: str | None = None, extra: list[str] | None = None, capture_output: bool = False) -> None:
     command=["cargo","run","--locked","--offline","-q","-j","2","-p",package]
     if features:command += ["--features",features]
     command += ["--example",example,"--",*(extra or ["--output",str(output)])]
-    subprocess.run(command,cwd=repository_root,check=True)
+    subprocess.run(command,cwd=repository_root,check=True,capture_output=capture_output,text=capture_output)
 
 def load_wire_schemas(repository_root: Path) -> dict:
     with tempfile.TemporaryDirectory(prefix="casework-wire-") as directory:
@@ -278,11 +287,11 @@ def load_rust_contract(repository_root: Path) -> dict:
     if codes!=sorted(set(codes)):raise ValueError("runtime problem codes must be sorted and unique")
     return contract
 
-def validate_wire_examples(repository_root: Path, openapi: dict, examples: dict) -> None:
+def validate_wire_examples(repository_root: Path, openapi: dict, examples: dict, capture_output: bool = False) -> None:
     with tempfile.TemporaryDirectory(prefix="casework-wire-validation-") as directory:
         document_path=Path(directory)/"openapi.json";examples_path=Path(directory)/"examples.json"
         document_path.write_text(json.dumps(openapi));examples_path.write_text(json.dumps(examples))
-        cargo_example(repository_root,"registry-casework-core","wire-schemas",document_path,"schema",["--validate-openapi",str(document_path),"--examples",str(examples_path)])
+        cargo_example(repository_root,"registry-casework-core","wire-schemas",document_path,"schema",["--validate-openapi",str(document_path),"--examples",str(examples_path)],capture_output)
 
 def problem_table(existing: str, contract: dict) -> str:
     """Replace only the published problem-code table from its runtime owner."""

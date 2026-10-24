@@ -47,8 +47,10 @@ the v0.44.0 binary roster for all supported platforms and additional installers
 that support nightly builds. The roster includes the `rstack` launcher on Linux
 amd64, Linux arm64, and macOS arm64.
 `registry-stack.nightly-roster.v2.3` adds the Coordinator image to that same
-binary and installer roster when its image release is enabled. An incompatible
-inventory requires a new schema and profile. The reader still accepts frozen
+binary and installer roster when its image release is enabled. No profile
+carries the Registry Document Store, which stays held out while
+`DOCUMENTS_FIRST_RELEASE` is `None`. An incompatible inventory requires a
+new schema and profile. The reader still accepts frozen
 `registry-stack.nightly.v1` manifests, including historical v0.39.0 nightlies
 that carried Relay, so an existing channel head can be reconciled and advanced
 without rewriting published bytes.

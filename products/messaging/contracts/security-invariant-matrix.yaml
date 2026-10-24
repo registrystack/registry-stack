@@ -120,7 +120,8 @@ invariants:
       a newer worker recorded.
     enforcementPoint: >-
       The platform dispatch core's lease token and generation fence on every
-      outcome write.
+      outcome write. The job table CHECK refuses a leased job without a lease
+      expiry, so every lease can be reaped.
     refusal: >-
       Refuse the stale write and leave the newer outcome in place.
     negativeTest:

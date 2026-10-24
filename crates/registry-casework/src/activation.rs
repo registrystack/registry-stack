@@ -20,7 +20,7 @@ use registry_platform_activation::{
 };
 use serde::Serialize;
 use serde_json::{json, Value};
-use tokio_postgres::Transaction;
+use tokio_postgres::{GenericClient, Transaction};
 use uuid::Uuid;
 
 use crate::audit::AuditOutcome;
@@ -376,7 +376,7 @@ impl PostgresStore {
             .isolation_level(tokio_postgres::IsolationLevel::RepeatableRead)
             .start()
             .await?;
-        if let Some(schema) = unreadable_ledger(&transaction).await? {
+        if let Some(schema) = unreadable_ledger(&*transaction).await? {
             return Err(StoreError::LedgerUnreadable { schema });
         }
         let observation = observe_role(&transaction, None).await?;
@@ -1015,8 +1015,10 @@ async fn lock_runtime_order(transaction: &Transaction<'_>) -> Result<(), StoreEr
 /// read as empty, or SELECT on `casework_activations` or
 /// `casework_schema_migrations`, as a rotated runtime role does before apply
 /// grants it. `pg_class` names the ledger whatever the role may use.
-async fn unreadable_ledger(transaction: &Transaction<'_>) -> Result<Option<String>, StoreError> {
-    platform_activation::unreadable_ledger(transaction, &activation_layout())
+pub(crate) async fn unreadable_ledger(
+    client: &impl GenericClient,
+) -> Result<Option<String>, StoreError> {
+    platform_activation::unreadable_ledger(client, &activation_layout())
         .await
         .map_err(platform_error)
 }

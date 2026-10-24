@@ -9,33 +9,27 @@
 //! worker that can observe an answer but can never apply a proposal.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
-use registry_platform_audit::AuditEntry;
 use registry_platform_canonical_json::canonicalize_json;
-use registry_platform_config::{ProtectedSecret, SecretResolver, MAX_SECRET_BYTES};
-use registry_platform_crypto::delivery_signature::{sign_v1, SignatureFields};
+use registry_platform_config::SecretResolver;
+use registry_platform_dispatch::postgres::PooledClient;
 use registry_platform_hooks::delivery::{
-    insert_delivery, DeliveryAuditDisposition, DeliveryAuditOutcome, DeliveryAuditPhase,
-    DeliveryAuditRecord, DeliveryCapture, DeliveryConfig, DeliveryConnection, DeliveryError,
-    DeliveryOperationalEvent, DeliveryOutcome, DeliverySeams, DeliveryService,
-    DeliverySignatureFields, DeliverySignatureRefused, DeliveryWorker, DestinationAnswer,
-    HandlerRunFailure, HookDestination, HookHandler, HookHandlerBinding, ProposalApplication,
-    ProposalOutcome, ProposalReceiptRecovery,
+    activate_url_hook_destinations, hook_audit_entry, insert_delivery, verify_active_package,
+    ActivatedUrlHookDestinations, DeliveryAuditRecord, DeliveryCapture, DeliveryConfig,
+    DeliveryConnection, DeliveryError, DeliveryOperationalEvent, DeliveryOutcome, DeliverySeams,
+    DeliveryService, DeliveryWorker, HookHandlerBinding, NoLocalHandler, ProposalApplication,
+    ProposalOutcome, ProposalReceiptRecovery, SharedUrlDestination, UrlHookActivationError,
+    UrlHookDestinationConfig,
 };
 use registry_platform_hooks::{
-    validate_hooks, BoundedText, Causation, EnvelopeLimits, EventSubject, HookDeclaration,
-    HookEnvelope, HookHandlerKind, HookHandlerSource, HookPhase, MAX_OUTPUT_BYTES,
-    MAX_REFUSAL_CODE_BYTES, MAX_REFUSAL_SUMMARY_BYTES,
+    exponential_retry_delays_ms, validate_hooks, BoundedText, Causation, EnvelopeLimits,
+    EventSubject, HookCapabilities, HookCapability, HookCapabilityError, HookDeclaration,
+    HookEnvelope, HookHandlerKind, HookHandlerSource, HookPhase, MAX_REFUSAL_CODE_BYTES,
+    MAX_REFUSAL_SUMMARY_BYTES,
 };
-use registry_platform_httputil::destination::{
-    DestinationProfile, DestinationRequestError, DestinationResponseError, DestinationSendError,
-    EventDeliveryHeaders, EventDestinationPolicy, EventDestinationRequest,
-    EventDestinationRequestTemplate, MAX_DESTINATION_REQUEST_BODY_BYTES,
-    MAX_DESTINATION_REQUEST_HEADER_BYTES, MAX_DESTINATION_TARGET_BYTES,
-};
+use registry_platform_httputil::destination::MAX_DESTINATION_REQUEST_BODY_BYTES;
 use registry_scheduling_core::{
     valid_identifier, APPOINTMENT_CANCELLED_TRIGGER, APPOINTMENT_CONFIRMED_TRIGGER,
     APPOINTMENT_OBSERVER_FIELDS, APPOINTMENT_RESCHEDULED_TRIGGER, CANCELLATION_OBSERVER_FIELDS,
@@ -44,15 +38,13 @@ use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use tokio::sync::watch;
 use tokio_postgres::Transaction;
-use url::Url;
 use uuid::Uuid;
 
 use crate::audit::{SchedulingAudit, SCHEDULING_AUDIT_SCHEMA};
 use crate::config::{
-    valid_logical_destination_id, HookDestinationConfig, MAX_HOOK_ATTEMPTS,
-    MAX_HOOK_ATTEMPT_TIMEOUT_MILLISECONDS,
+    valid_logical_destination_id, MAX_HOOK_ATTEMPTS, MAX_HOOK_ATTEMPT_TIMEOUT_MILLISECONDS,
 };
-use crate::store::{ClaimRow, PostgresStore};
+use crate::store::{activation_layout, ClaimRow, PostgresStore};
 
 const DESTINATION_BINDING_SCHEMA: &str = "registry.scheduling-hook-destinations/v1";
 const COMPILED_HOOK_SCHEMA: &str = "registry.scheduling-hooks/v1";
@@ -63,24 +55,13 @@ const ENTITY_ID: &str = "appointment";
 /// a proposal. Each dotted segment is lowercase kebab-case.
 const PROPOSAL_UNSUPPORTED_CODE: &str = "scheduling.hook.proposal-unsupported";
 
-const MIN_HMAC_SHA256_KEY_BYTES: usize = 32;
-const INITIAL_BACKOFF_MS: i64 = 30_000;
-const MAXIMUM_BACKOFF_MS: i64 = 3_600_000;
-const BACKOFF_MULTIPLIER: i16 = 2;
+const INITIAL_BACKOFF_MS: u32 = 30_000;
+const MAXIMUM_BACKOFF_MS: u32 = 3_600_000;
+const BACKOFF_MULTIPLIER: u8 = 2;
 const MAXIMUM_PAYLOAD_BYTES: usize = 16 * 1024;
-const MAXIMUM_REQUEST_BYTES: usize =
-    MAX_DESTINATION_TARGET_BYTES + MAX_DESTINATION_REQUEST_HEADER_BYTES + MAXIMUM_PAYLOAD_BYTES;
 const MINIMUM_RETENTION: Duration = Duration::from_secs(24 * 60 * 60);
 const MAXIMUM_RETENTION: Duration = Duration::from_secs(30 * 24 * 60 * 60);
-const IDENTITY_LOCK_TIMEOUT_MS: i32 = 5_000;
-
-// One delay sits between each pair of attempts, so the schedule must grow
-// with the attempt ceiling.
-const RETRY_DELAYS_MS: [i64; MAX_HOOK_ATTEMPTS as usize - 1] = [
-    30_000, 60_000, 120_000, 240_000, 480_000, 960_000, 1_920_000, 3_600_000, 3_600_000, 3_600_000,
-    3_600_000, 3_600_000, 3_600_000, 3_600_000, 3_600_000, 3_600_000, 3_600_000, 3_600_000,
-    3_600_000,
-];
+const IDENTITY_LOCK_TIMEOUT_MS: u32 = 5_000;
 
 const _: () = assert!(MAXIMUM_PAYLOAD_BYTES <= MAX_DESTINATION_REQUEST_BODY_BYTES);
 
@@ -91,6 +72,18 @@ pub enum HookActivationError {
     InvalidDeclaration,
     #[error("the Scheduling hook contract is unsupported")]
     UnsupportedContract,
+    /// A declaration uses a part of the shared hook declaration outside the
+    /// url-only capabilities Scheduling runs. The message leads with the
+    /// shared `hook.capability.unsupported` code.
+    #[error(
+        "{}: Scheduling hook {index} uses `{}`, outside the url-only hook capabilities Scheduling runs",
+        HookCapabilityError::CODE,
+        capability.as_str()
+    )]
+    UnsupportedCapability {
+        index: usize,
+        capability: HookCapability,
+    },
     #[error("the Scheduling hook destination inventory is incomplete")]
     DestinationInventoryMismatch,
     #[error("a Scheduling hook destination binding is invalid")]
@@ -103,6 +96,26 @@ pub enum HookActivationError {
     InvalidIdentity,
 }
 
+impl HookActivationError {
+    /// The shared diagnostic code a refusal carries, when it has one.
+    #[must_use]
+    pub const fn code(&self) -> Option<&'static str> {
+        match self {
+            Self::UnsupportedCapability { .. } => Some(HookCapabilityError::CODE),
+            _ => None,
+        }
+    }
+}
+
+impl From<HookCapabilityError> for HookActivationError {
+    fn from(error: HookCapabilityError) -> Self {
+        Self::UnsupportedCapability {
+            index: error.index,
+            capability: error.capability,
+        }
+    }
+}
+
 /// Value-free refusal while capturing a committed appointment event.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum HookCaptureError {
@@ -112,10 +125,14 @@ pub enum HookCaptureError {
     Unavailable,
 }
 
-/// The immutable Scheduling identity a hook worker must observe in every
-/// transaction before it reads or changes delivery state.
+/// The Scheduling identity a hook worker serves. `database_id` and
+/// `package_digest` are what the activation record must still name in every
+/// transaction before the worker reads or changes delivery state; the
+/// deployment id and policy shape the events a capture writes.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct HookRuntimeIdentity {
+    pub database_id: String,
+    pub package_digest: String,
     pub scheduling_id: String,
     pub policy_revision: i64,
     pub policy_digest: String,
@@ -145,15 +162,12 @@ impl CompiledHooks {
     /// capture.
     pub fn compile(declarations: &[HookDeclaration]) -> Result<Self, HookActivationError> {
         validate_hooks(declarations).map_err(|_| HookActivationError::InvalidDeclaration)?;
+        HookCapabilities::URL_ONLY.check_declarations(declarations)?;
 
         let mut hooks = Vec::with_capacity(declarations.len());
         let mut destination_ids = BTreeSet::new();
         for declaration in declarations {
-            if !valid_identifier(&declaration.id)
-                || declaration.phase != HookPhase::After
-                || declaration.when.is_some()
-                || declaration.principal.is_some()
-            {
+            if !valid_identifier(&declaration.id) || declaration.phase != HookPhase::After {
                 return Err(HookActivationError::UnsupportedContract);
             }
             let destination_id = match &declaration.handler {
@@ -224,6 +238,7 @@ pub struct ActivatedHooks {
     schema: String,
     delivery_source: String,
     payload_retention: Duration,
+    retry_delays_ms: Arc<[i64]>,
 }
 
 impl std::fmt::Debug for ActivatedHooks {
@@ -247,7 +262,7 @@ impl ActivatedHooks {
     #[allow(clippy::too_many_arguments)]
     pub fn activate(
         declarations: &[HookDeclaration],
-        configured: &BTreeMap<String, HookDestinationConfig>,
+        configured: &BTreeMap<String, UrlHookDestinationConfig>,
         secrets: &SecretResolver,
         identity: HookRuntimeIdentity,
         database_schema: String,
@@ -255,7 +270,7 @@ impl ActivatedHooks {
     ) -> Result<Self, HookActivationError> {
         let compiled = Arc::new(CompiledHooks::compile(declarations)?);
         validate_identity(&identity, &database_schema, payload_retention)?;
-        let destinations = Arc::new(ActivatedDestinations::activate(
+        let destinations = Arc::new(activate_destinations(
             &compiled.destination_ids,
             configured,
             secrets,
@@ -268,6 +283,7 @@ impl ActivatedHooks {
             schema: database_schema,
             delivery_source,
             payload_retention,
+            retry_delays_ms: retry_delays_ms().into(),
         })
     }
 
@@ -282,11 +298,11 @@ impl ActivatedHooks {
     /// candidate's hooks cannot run before anything is planned or applied.
     pub fn check_destinations(
         declarations: &[HookDeclaration],
-        configured: &BTreeMap<String, HookDestinationConfig>,
+        configured: &BTreeMap<String, UrlHookDestinationConfig>,
         secrets: &SecretResolver,
     ) -> Result<(), HookActivationError> {
         let compiled = CompiledHooks::compile(declarations)?;
-        ActivatedDestinations::activate(&compiled.destination_ids, configured, secrets)?;
+        activate_destinations(&compiled.destination_ids, configured, secrets)?;
         Ok(())
     }
 
@@ -379,7 +395,7 @@ impl ActivatedHooks {
                     compiled_delivery_id: &hook.id,
                     handler_kind: HookHandlerKind::Url,
                     logical_destination_id: Some(&hook.destination_id),
-                    destination_binding_digest: &destination.binding_digest,
+                    destination_binding_digest: destination.binding_digest(),
                     package_revision: &self.identity.policy_digest,
                     schema_fingerprint: &self.compiled.schema_fingerprint,
                     data_schema: &hook.data_schema,
@@ -387,15 +403,18 @@ impl ActivatedHooks {
                     authentication_profile: "hmac-sha256-v1",
                     delivery_mode: "after-commit",
                     attempt_timeout_ms: i64::from(MAX_HOOK_ATTEMPT_TIMEOUT_MILLISECONDS),
-                    initial_backoff_ms: INITIAL_BACKOFF_MS,
-                    maximum_backoff_ms: MAXIMUM_BACKOFF_MS,
-                    exponential_backoff_multiplier: BACKOFF_MULTIPLIER,
+                    initial_backoff_ms: i64::from(INITIAL_BACKOFF_MS),
+                    maximum_backoff_ms: i64::from(MAXIMUM_BACKOFF_MS),
+                    exponential_backoff_multiplier: i16::from(BACKOFF_MULTIPLIER),
                     maximum_attempts: i16::from(MAX_HOOK_ATTEMPTS),
-                    retry_delays_ms: &RETRY_DELAYS_MS,
+                    retry_delays_ms: &self.retry_delays_ms,
                     maximum_payload_bytes: MAXIMUM_PAYLOAD_BYTES as i64,
                     payload: &payload,
-                    deployed_attempt_timeout_ms: i64::from(destination.attempt_timeout_ms),
-                    deployed_maximum_attempts: i16::from(destination.maximum_attempts),
+                    deployed_attempt_timeout_ms: i64::try_from(
+                        destination.attempt_timeout().as_millis(),
+                    )
+                    .map_err(|_| HookCaptureError::InvalidCapture)?,
+                    deployed_maximum_attempts: i16::from(destination.maximum_attempts()),
                     dead_letter: "required",
                     operator_replay: false,
                 },
@@ -471,7 +490,6 @@ impl ActivatedHooks {
             audit,
             destinations: Arc::clone(&self.destinations),
             identity: self.identity.clone(),
-            schema: self.schema.clone(),
         };
         HookDeliveryService {
             inner: DeliveryService::new(
@@ -486,196 +504,54 @@ impl ActivatedHooks {
     }
 }
 
-#[derive(Clone)]
-struct ActivatedDestinations {
-    bindings: BTreeMap<String, Arc<ActivatedDestination>>,
-    binding_digest: String,
-}
+/// Scheduling's activated destinations: the shared URL hook destination
+/// block, activated under Scheduling's binding schema.
+type ActivatedDestinations = ActivatedUrlHookDestinations;
 
-impl ActivatedDestinations {
-    fn activate(
-        expected: &BTreeSet<String>,
-        configured: &BTreeMap<String, HookDestinationConfig>,
-        secrets: &SecretResolver,
-    ) -> Result<Self, HookActivationError> {
-        let configured_ids = configured.keys().cloned().collect::<BTreeSet<_>>();
-        if !expected.is_subset(&configured_ids) {
-            return Err(HookActivationError::DestinationInventoryMismatch);
-        }
-        let mut bindings = BTreeMap::new();
-        let mut digest_values = Vec::with_capacity(configured.len());
-        for (logical_id, config) in configured {
-            let destination = ActivatedDestination::activate(logical_id, config, secrets)?;
-            digest_values.push(destination.digest_value.clone());
-            bindings.insert(logical_id.clone(), Arc::new(destination));
-        }
-        let binding_digest = canonical_digest(&json!({
-            "schemaVersion": DESTINATION_BINDING_SCHEMA,
-            "destinations": digest_values,
-        }))
-        .map_err(|_| HookActivationError::InvalidDestination)?;
-        Ok(Self {
-            bindings,
-            binding_digest,
-        })
+/// Activate the configured destination inventory, which must cover every
+/// destination `expected` names.
+fn activate_destinations(
+    expected: &BTreeSet<String>,
+    configured: &BTreeMap<String, UrlHookDestinationConfig>,
+    secrets: &SecretResolver,
+) -> Result<ActivatedDestinations, HookActivationError> {
+    let configured_ids = configured.keys().cloned().collect::<BTreeSet<_>>();
+    if !expected.is_subset(&configured_ids) {
+        return Err(HookActivationError::DestinationInventoryMismatch);
     }
+    activate_url_hook_destinations(
+        DESTINATION_BINDING_SCHEMA,
+        configured,
+        secrets,
+        MAXIMUM_PAYLOAD_BYTES,
+    )
+    .map_err(activation_error)
 }
 
-struct ActivatedDestination {
-    binding_digest: String,
-    digest_value: Value,
-    request_target: String,
-    policy: Arc<EventDestinationPolicy>,
-    request_template: EventDestinationRequestTemplate,
-    hmac_sha256_key: ProtectedSecret,
-    attempt_timeout_ms: u32,
-    maximum_attempts: u8,
-}
-
-impl ActivatedDestination {
-    fn activate(
-        logical_id: &str,
-        config: &HookDestinationConfig,
-        secrets: &SecretResolver,
-    ) -> Result<Self, HookActivationError> {
-        if !valid_logical_destination_id(logical_id) || !config.within_delivery_budget() {
-            return Err(HookActivationError::DeliveryBudgetWidening);
+fn activation_error(error: UrlHookActivationError) -> HookActivationError {
+    match error {
+        UrlHookActivationError::DeliveryBudgetWidening => {
+            HookActivationError::DeliveryBudgetWidening
         }
-        let (origin, request_target, profile) = destination_parts(&config.url)?;
-        let policy = EventDestinationPolicy::new(logical_id, &origin, profile, &[])
-            .map_err(|_| HookActivationError::InvalidDestination)?;
-        let request_template = EventDestinationRequestTemplate::event_delivery(
-            &request_target,
-            MAXIMUM_PAYLOAD_BYTES,
-            MAXIMUM_REQUEST_BYTES,
-        )
-        .map_err(|_| HookActivationError::InvalidDestination)?;
-        let hmac_sha256_key = secrets
-            .resolve(&config.hmac_sha256_key_ref)
-            .map_err(|_| HookActivationError::InvalidSigningMaterial)?;
-        if !(MIN_HMAC_SHA256_KEY_BYTES..=MAX_SECRET_BYTES).contains(&hmac_sha256_key.len()) {
-            return Err(HookActivationError::InvalidSigningMaterial);
+        UrlHookActivationError::InvalidDestination => HookActivationError::InvalidDestination,
+        UrlHookActivationError::InvalidSigningMaterial => {
+            HookActivationError::InvalidSigningMaterial
         }
-        let digest_value = json!({
-            "logicalId": logical_id,
-            "url": config.url,
-            "hmacSha256KeyRef": config.hmac_sha256_key_ref,
-            "attemptTimeoutMilliseconds": config.attempt_timeout_milliseconds,
-            "maximumAttempts": config.maximum_attempts,
-        });
-        let binding_digest = canonical_digest(&json!({
-            "schemaVersion": DESTINATION_BINDING_SCHEMA,
-            "destination": digest_value,
-        }))
-        .map_err(|_| HookActivationError::InvalidDestination)?;
-        Ok(Self {
-            binding_digest,
-            digest_value,
-            request_target,
-            policy: Arc::new(policy),
-            request_template,
-            hmac_sha256_key,
-            attempt_timeout_ms: config.attempt_timeout_milliseconds,
-            maximum_attempts: config.maximum_attempts,
-        })
     }
 }
 
-impl std::fmt::Debug for ActivatedDestination {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("ActivatedDestination")
-            .field("binding_digest", &self.binding_digest)
-            .field("request_target", &"[REDACTED]")
-            .field("policy", &self.policy)
-            .field("request_template", &self.request_template)
-            .field("hmac_sha256_key", &"[REDACTED]")
-            .field("attempt_timeout_ms", &self.attempt_timeout_ms)
-            .field("maximum_attempts", &self.maximum_attempts)
-            .finish()
-    }
-}
-
-#[derive(Clone)]
-struct DestinationBinding(Arc<ActivatedDestination>);
-
-#[async_trait::async_trait]
-impl HookDestination for DestinationBinding {
-    fn binding_digest(&self) -> &str {
-        &self.0.binding_digest
-    }
-
-    fn attempt_timeout(&self) -> Duration {
-        Duration::from_millis(u64::from(self.0.attempt_timeout_ms))
-    }
-
-    fn maximum_attempts(&self) -> u8 {
-        self.0.maximum_attempts
-    }
-
-    fn sign_delivery(
-        &self,
-        fields: DeliverySignatureFields<'_>,
-    ) -> Result<String, DeliverySignatureRefused> {
-        sign_v1(
-            self.0.hmac_sha256_key.expose_secret(),
-            SignatureFields {
-                id: fields.id,
-                source: fields.source,
-                event_type: fields.event_type,
-                time: fields.time,
-                data_schema: fields.data_schema,
-                generation: fields.generation,
-                attempt: fields.attempt,
-                delivery_time: fields.delivery_time,
-                method: "POST",
-                request_target: &self.0.request_target,
-                content_type: "application/json",
-                idempotency_key: fields.idempotency_key,
-                body: fields.body,
-            },
-        )
-        .map_err(|_| DeliverySignatureRefused)
-    }
-
-    fn render_delivery(
-        &self,
-        headers: EventDeliveryHeaders<'_>,
-        body: Vec<u8>,
-    ) -> Result<EventDestinationRequest, DestinationRequestError> {
-        self.0.request_template.render_event(headers, body)
-    }
-
-    async fn send_delivery(
-        &self,
-        request: EventDestinationRequest,
-        remaining: Duration,
-    ) -> Result<DestinationAnswer, DestinationSendError> {
-        let response = self.0.policy.send(request, remaining).await?;
-        let status = response.status().as_u16();
-        if !response.status().is_success() {
-            return Ok(DestinationAnswer::NonSuccess { status });
-        }
-        match response.read_bounded(MAX_OUTPUT_BYTES).await {
-            Ok(body) => Ok(DestinationAnswer::Delivered {
-                body: body.to_event_answer(),
-            }),
-            Err(error) => Ok(DestinationAnswer::AnswerRefused(HandlerRunFailure::new(
-                match error {
-                    DestinationResponseError::BodyTooLarge
-                    | DestinationResponseError::BodyLimitTooHigh => {
-                        registry_platform_hooks::ErrorCategory::Resource
-                    }
-                    DestinationResponseError::DeadlineExceeded => {
-                        registry_platform_hooks::ErrorCategory::Deadline
-                    }
-                    DestinationResponseError::BodyReadFailed => {
-                        registry_platform_hooks::ErrorCategory::Unavailable
-                    }
-                },
-            ))),
-        }
-    }
+/// The delays between attempts: from 30 seconds, doubling, capped at one
+/// hour, one delay between each pair of the attempt ceiling's attempts.
+fn retry_delays_ms() -> Vec<i64> {
+    exponential_retry_delays_ms(
+        INITIAL_BACKOFF_MS,
+        MAXIMUM_BACKOFF_MS,
+        u32::from(BACKOFF_MULTIPLIER),
+        MAX_HOOK_ATTEMPTS,
+    )
+    .into_iter()
+    .map(i64::from)
+    .collect()
 }
 
 #[derive(Clone)]
@@ -684,12 +560,11 @@ struct SchedulingDeliverySeams {
     audit: SchedulingAudit,
     destinations: Arc<ActivatedDestinations>,
     identity: HookRuntimeIdentity,
-    schema: String,
 }
 
 #[async_trait::async_trait]
 impl DeliverySeams for SchedulingDeliverySeams {
-    type Destination = DestinationBinding;
+    type Destination = SharedUrlDestination;
     type Handler = NoLocalHandler;
 
     async fn connection(&self) -> Result<DeliveryConnection, DeliveryError> {
@@ -698,33 +573,20 @@ impl DeliverySeams for SchedulingDeliverySeams {
             .hook_delivery_client()
             .await
             .map_err(|_| DeliveryError::Unavailable)?;
-        Ok(Box::new(PooledClient(client)))
+        Ok(PooledClient::boxed(client))
     }
 
+    /// The activation record must still name the package this worker was
+    /// started with, for this database.
     async fn verify_transaction(&self, transaction: &Transaction<'_>) -> Result<(), DeliveryError> {
-        transaction
-            .execute(
-                "SELECT set_config('lock_timeout', $1::text, true)",
-                &[&format!("{IDENTITY_LOCK_TIMEOUT_MS}ms")],
-            )
-            .await
-            .map_err(|_| DeliveryError::Unavailable)?;
-        let identity_query = format!(
-            "SELECT scheduling_id, policy_revision, policy_digest
-               FROM {}.scheduling_meta WHERE singleton FOR SHARE",
-            self.schema
-        );
-        let row = transaction
-            .query_opt(&identity_query, &[])
-            .await
-            .map_err(|_| DeliveryError::Unavailable)?
-            .ok_or(DeliveryError::Unavailable)?;
-        let matches = row.try_get::<_, String>(0).ok().as_deref()
-            == Some(self.identity.scheduling_id.as_str())
-            && row.try_get::<_, i64>(1).ok() == Some(self.identity.policy_revision)
-            && row.try_get::<_, String>(2).ok().as_deref()
-                == Some(self.identity.policy_digest.as_str());
-        matches.then_some(()).ok_or(DeliveryError::Unavailable)
+        verify_active_package(
+            transaction,
+            &activation_layout(),
+            &self.identity.database_id,
+            &self.identity.package_digest,
+            IDENTITY_LOCK_TIMEOUT_MS,
+        )
+        .await
     }
 
     fn destination(&self, logical_destination_id: &str) -> Option<Self::Destination> {
@@ -732,7 +594,7 @@ impl DeliverySeams for SchedulingDeliverySeams {
             .bindings
             .get(logical_destination_id)
             .cloned()
-            .map(DestinationBinding)
+            .map(SharedUrlDestination)
     }
 
     fn handler(&self, _binding: HookHandlerBinding<'_>) -> Option<Self::Handler> {
@@ -780,39 +642,25 @@ impl DeliverySeams for SchedulingDeliverySeams {
     /// correlation built from the hook event, the compiled delivery, the
     /// generation, and the attempt.
     async fn record_audit(&self, record: DeliveryAuditRecord<'_>) -> Result<(), DeliveryError> {
-        let audit = json!({
-            "event": "scheduling.hook-delivery",
-            "hookEventId": record.event_id,
-            "compiledDeliveryId": record.compiled_delivery_id,
-            "policyDigest": record.package_revision,
-            "generation": record.generation,
-            "attempt": record.attempt,
-            "phase": audit_phase(record.phase),
-            "outcome": audit_outcome(record.outcome),
-            "disposition": audit_disposition(record.disposition),
-        });
-        let correlation = format!(
+        let mut fields = Map::new();
+        fields.insert("hookEventId".to_owned(), json!(record.event_id));
+        fields.insert(
+            "compiledDeliveryId".to_owned(),
+            json!(record.compiled_delivery_id),
+        );
+        fields.insert("policyDigest".to_owned(), json!(record.package_revision));
+        let correlation_base = format!(
             "{}/{}/{}/{}",
             record.event_id, record.compiled_delivery_id, record.generation, record.attempt
         );
-        let correlation = if record.phase == DeliveryAuditPhase::Discard {
-            format!("{correlation}.discard")
-        } else {
-            correlation
-        };
-        let entry = match (record.phase, record.outcome) {
-            (DeliveryAuditPhase::Attempt, _)
-            | (DeliveryAuditPhase::Replay, DeliveryAuditOutcome::ReplayRequested)
-            | (DeliveryAuditPhase::Discard, DeliveryAuditOutcome::DiscardRequested) => {
-                AuditEntry::request(SCHEDULING_AUDIT_SCHEMA, correlation, audit)
-            }
-            (
-                DeliveryAuditPhase::Terminal
-                | DeliveryAuditPhase::Replay
-                | DeliveryAuditPhase::Discard,
-                _,
-            ) => AuditEntry::response(SCHEDULING_AUDIT_SCHEMA, correlation, audit),
-        };
+        let entry = hook_audit_entry(
+            SCHEDULING_AUDIT_SCHEMA,
+            "scheduling.hook-delivery",
+            &correlation_base,
+            fields,
+            &record,
+        )
+        .map_err(|_| DeliveryError::Unavailable)?;
         self.audit
             .append(entry)
             .await
@@ -827,52 +675,10 @@ impl DeliverySeams for SchedulingDeliverySeams {
             DeliveryOperationalEvent::TransitionFailed(code) => {
                 tracing::warn!(
                     event = "scheduling_hook_delivery_transition_failed",
-                    code = transition_code(code)
+                    code = code.as_str()
                 );
             }
         }
-    }
-}
-
-#[derive(Clone, Copy)]
-enum NoLocalHandler {}
-
-#[async_trait::async_trait]
-impl HookHandler for NoLocalHandler {
-    fn handler_digest(&self) -> &str {
-        match *self {}
-    }
-
-    fn attempt_timeout(&self) -> Duration {
-        match *self {}
-    }
-
-    fn maximum_attempts(&self) -> u8 {
-        match *self {}
-    }
-
-    async fn run(
-        &self,
-        _envelope: &[u8],
-        _remaining: Duration,
-    ) -> Result<Vec<u8>, HandlerRunFailure> {
-        match *self {}
-    }
-}
-
-struct PooledClient(deadpool_postgres::Client);
-
-impl Deref for PooledClient {
-    type Target = tokio_postgres::Client;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl DerefMut for PooledClient {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
     }
 }
 
@@ -968,48 +774,14 @@ fn data_schema(trigger: &str, projection: &[String]) -> Result<String, HookActiv
     Ok(format!("urn:registrystack:scheduling:hook-data:{digest}"))
 }
 
-fn destination_parts(
-    configured: &str,
-) -> Result<(String, String, DestinationProfile), HookActivationError> {
-    let parsed = Url::parse(configured).map_err(|_| HookActivationError::InvalidDestination)?;
-    if !parsed.username().is_empty()
-        || parsed.password().is_some()
-        || parsed.host().is_none()
-        || parsed.query().is_some()
-        || parsed.fragment().is_some()
-    {
-        return Err(HookActivationError::InvalidDestination);
-    }
-    let profile = match parsed.scheme() {
-        "https" => DestinationProfile::ProductionHttps,
-        "http"
-            if matches!(
-                parsed.host_str(),
-                Some("127.0.0.1") | Some("localhost") | Some("[::1]")
-            ) =>
-        {
-            DestinationProfile::LoopbackDevelopmentHttp
-        }
-        _ => return Err(HookActivationError::InvalidDestination),
-    };
-    let request_target = if parsed.path().is_empty() {
-        "/".to_owned()
-    } else {
-        parsed.path().to_owned()
-    };
-    let mut origin = parsed;
-    origin.set_path("");
-    origin.set_query(None);
-    origin.set_fragment(None);
-    Ok((origin.to_string(), request_target, profile))
-}
-
 fn validate_identity(
     identity: &HookRuntimeIdentity,
     schema: &str,
     payload_retention: Duration,
 ) -> Result<(), HookActivationError> {
-    if !valid_identifier(&identity.scheduling_id)
+    if identity.database_id.is_empty()
+        || identity.package_digest.is_empty()
+        || !valid_identifier(&identity.scheduling_id)
         || identity.policy_revision <= 0
         || !valid_sha256_digest(&identity.policy_digest)
         || !valid_schema_name(schema)
@@ -1065,87 +837,15 @@ fn bounded_proposal_summary(value: &'static str) -> BoundedText<MAX_REFUSAL_SUMM
     BoundedText::new(value.to_owned()).expect("static proposal summary fits its bound")
 }
 
-fn audit_phase(value: DeliveryAuditPhase) -> &'static str {
-    match value {
-        DeliveryAuditPhase::Attempt => "attempt",
-        DeliveryAuditPhase::Terminal => "terminal",
-        DeliveryAuditPhase::Replay => "replay",
-        DeliveryAuditPhase::Discard => "discard",
-    }
-}
-
-/// The audit word for one delivery outcome. An outcome that repeats a
-/// dead-letter reason is spelled exactly as `DeliveryFailureReason` spells the
-/// stored reason; every other word is Scheduling's own.
-fn audit_outcome(value: DeliveryAuditOutcome) -> &'static str {
-    match value {
-        DeliveryAuditOutcome::AttemptStarted => "attempt-started",
-        DeliveryAuditOutcome::Delivered => "delivered",
-        DeliveryAuditOutcome::HttpNonSuccess => "http-non-success",
-        DeliveryAuditOutcome::DestinationTimeout => "destination-timeout",
-        DeliveryAuditOutcome::DestinationResolutionRefused => "destination-resolution-refused",
-        DeliveryAuditOutcome::DestinationTransportUnavailable => {
-            "destination-transport-unavailable"
-        }
-        DeliveryAuditOutcome::DestinationPolicyRefused => "destination-policy-refused",
-        DeliveryAuditOutcome::DestinationBindingRefused => "destination-binding-refused",
-        DeliveryAuditOutcome::HandlerBindingRefused => "handler-binding-refused",
-        DeliveryAuditOutcome::HandlerDeadline => "handler-deadline",
-        DeliveryAuditOutcome::HandlerResource => "handler-resource",
-        DeliveryAuditOutcome::HandlerExecution => "handler-execution",
-        DeliveryAuditOutcome::HandlerSource => "handler-source",
-        DeliveryAuditOutcome::HandlerUnavailable => "handler-unavailable",
-        DeliveryAuditOutcome::PayloadRefused => "payload-refused",
-        DeliveryAuditOutcome::PayloadExpired => "payload-expired",
-        DeliveryAuditOutcome::WorkerInterrupted => "worker-interrupted",
-        DeliveryAuditOutcome::ReplayRequested => "replay-requested",
-        DeliveryAuditOutcome::ReplayCommitted => "replay-committed",
-        DeliveryAuditOutcome::ReplayRefused => "replay-refused",
-        DeliveryAuditOutcome::ReplayUnfinished => "replay-unfinished",
-        DeliveryAuditOutcome::DiscardRequested => "discard-requested",
-        DeliveryAuditOutcome::DiscardCommitted => "discard-committed",
-        DeliveryAuditOutcome::DiscardRefused => "discard-refused",
-        DeliveryAuditOutcome::DiscardUnfinished => "discard-unfinished",
-    }
-}
-
-/// The audit word for where a delivery stands. `retry-pending`,
-/// `dead-lettered`, and `replay-pending` repeat the words the shared delivery
-/// crates store; every other word is Scheduling's own.
-fn audit_disposition(value: DeliveryAuditDisposition) -> &'static str {
-    match value {
-        DeliveryAuditDisposition::Leased => "leased",
-        DeliveryAuditDisposition::Delivered => "delivered",
-        DeliveryAuditDisposition::RetryPending => "retry-pending",
-        DeliveryAuditDisposition::DeadLettered => "dead-lettered",
-        DeliveryAuditDisposition::Expired => "expired",
-        DeliveryAuditDisposition::ReplayPending => "replay-pending",
-        DeliveryAuditDisposition::DiscardPending => "discard-pending",
-        DeliveryAuditDisposition::Discarded => "discarded",
-        DeliveryAuditDisposition::Unknown => "unknown",
-    }
-}
-
-fn transition_code(
-    value: registry_platform_hooks::delivery::DeliveryTransitionCode,
-) -> &'static str {
-    use registry_platform_hooks::delivery::DeliveryTransitionCode;
-    match value {
-        DeliveryTransitionCode::ClaimIdentityRefused => "claim_identity_refused",
-        DeliveryTransitionCode::ClaimRecoveryFailed => "claim_recovery_failed",
-        DeliveryTransitionCode::ClaimSelectFailed => "claim_select_failed",
-        DeliveryTransitionCode::ClaimPolicyRefused => "claim_policy_refused",
-        DeliveryTransitionCode::ClaimUpdateFailed => "claim_update_failed",
-        DeliveryTransitionCode::ClaimAuditFailed => "claim_audit_failed",
-        DeliveryTransitionCode::ClaimCommitFailed => "claim_commit_failed",
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use chrono::{TimeDelta, Utc};
-    use registry_platform_config::SecretProvider;
-    use registry_platform_hooks::delivery::DeliveryFailureReason;
+    use registry_platform_config::{SecretProvider, SecretReference};
+    use registry_platform_hooks::delivery::{
+        activate_url_hook_destination, url_destination_address,
+    };
+    use registry_platform_hooks::HOOK_HANDLER_ABI_V1;
+    use registry_platform_yaml::Url;
     use registry_scheduling_core::LedgerKind;
 
     use super::*;
@@ -1164,125 +864,67 @@ mod tests {
             && word.starts_with(|character: char| character.is_ascii_lowercase())
     }
 
-    #[test]
-    fn hook_delivery_audit_outcomes_scheduling_names_are_written_in_kebab_case() {
-        let outcomes = [
-            (DeliveryAuditOutcome::AttemptStarted, "attempt-started"),
-            (DeliveryAuditOutcome::Delivered, "delivered"),
-            (
-                DeliveryAuditOutcome::DestinationResolutionRefused,
-                "destination-resolution-refused",
-            ),
-            (
-                DeliveryAuditOutcome::DestinationTransportUnavailable,
-                "destination-transport-unavailable",
-            ),
-            (DeliveryAuditOutcome::PayloadExpired, "payload-expired"),
-            (DeliveryAuditOutcome::ReplayRequested, "replay-requested"),
-            (DeliveryAuditOutcome::ReplayCommitted, "replay-committed"),
-            (DeliveryAuditOutcome::ReplayRefused, "replay-refused"),
-            (DeliveryAuditOutcome::ReplayUnfinished, "replay-unfinished"),
-            (DeliveryAuditOutcome::DiscardRequested, "discard-requested"),
-            (DeliveryAuditOutcome::DiscardCommitted, "discard-committed"),
-            (DeliveryAuditOutcome::DiscardRefused, "discard-refused"),
-            (
-                DeliveryAuditOutcome::DiscardUnfinished,
-                "discard-unfinished",
-            ),
-        ];
-        for (outcome, word) in outcomes {
-            assert!(is_kebab_case(word), "{word}");
-            assert_eq!(audit_outcome(outcome), word);
+    fn confirmed_observer() -> HookDeclaration {
+        HookDeclaration {
+            id: "notify".to_owned(),
+            phase: HookPhase::After,
+            trigger: APPOINTMENT_CONFIRMED_TRIGGER.to_owned(),
+            when: None,
+            principal: None,
+            projection: ["appointmentId".to_owned()].into_iter().collect(),
+            handler: HookHandlerSource::Url {
+                destination_id: "receiver".to_owned(),
+            },
         }
     }
 
-    /// An outcome that repeats a dead-letter reason is spelled exactly as the
-    /// hook delivery schema stores that reason.
-    #[test]
-    fn hook_delivery_audit_outcomes_repeat_the_stored_dead_letter_reason() {
-        let repeated = [
-            (
-                DeliveryAuditOutcome::HttpNonSuccess,
-                DeliveryFailureReason::HttpNonSuccess,
-            ),
-            (
-                DeliveryAuditOutcome::DestinationTimeout,
-                DeliveryFailureReason::DestinationTimeout,
-            ),
-            (
-                DeliveryAuditOutcome::DestinationPolicyRefused,
-                DeliveryFailureReason::DestinationPolicyRefused,
-            ),
-            (
-                DeliveryAuditOutcome::DestinationBindingRefused,
-                DeliveryFailureReason::DestinationBindingRefused,
-            ),
-            (
-                DeliveryAuditOutcome::HandlerBindingRefused,
-                DeliveryFailureReason::HandlerBindingRefused,
-            ),
-            (
-                DeliveryAuditOutcome::HandlerDeadline,
-                DeliveryFailureReason::HandlerDeadline,
-            ),
-            (
-                DeliveryAuditOutcome::HandlerResource,
-                DeliveryFailureReason::HandlerResource,
-            ),
-            (
-                DeliveryAuditOutcome::HandlerExecution,
-                DeliveryFailureReason::HandlerExecution,
-            ),
-            (
-                DeliveryAuditOutcome::HandlerSource,
-                DeliveryFailureReason::HandlerSource,
-            ),
-            (
-                DeliveryAuditOutcome::HandlerUnavailable,
-                DeliveryFailureReason::HandlerUnavailable,
-            ),
-            (
-                DeliveryAuditOutcome::PayloadRefused,
-                DeliveryFailureReason::PayloadRefused,
-            ),
-            (
-                DeliveryAuditOutcome::WorkerInterrupted,
-                DeliveryFailureReason::WorkerInterrupted,
-            ),
-        ];
-        for (outcome, reason) in repeated {
-            let word = audit_outcome(outcome);
-            assert!(is_kebab_case(word), "{word}");
-            assert_eq!(word, reason.as_str());
-        }
+    fn assert_capability_refused(mut declaration: HookDeclaration, capability: HookCapability) {
+        declaration.id = "refused".to_owned();
+        let error = CompiledHooks::compile(&[confirmed_observer(), declaration])
+            .expect_err("a declaration outside the url-only capabilities is refused");
+        assert_eq!(
+            error,
+            HookActivationError::UnsupportedCapability {
+                index: 1,
+                capability,
+            }
+        );
+        assert_eq!(error.code(), Some("hook.capability.unsupported"));
+        assert!(
+            error
+                .to_string()
+                .starts_with("hook.capability.unsupported: "),
+            "{error}"
+        );
     }
 
     #[test]
-    fn hook_delivery_audit_dispositions_and_phases_scheduling_names_are_written_in_kebab_case() {
-        let dispositions = [
-            (DeliveryAuditDisposition::Leased, "leased"),
-            (DeliveryAuditDisposition::Delivered, "delivered"),
-            (DeliveryAuditDisposition::RetryPending, "retry-pending"),
-            (DeliveryAuditDisposition::DeadLettered, "dead-lettered"),
-            (DeliveryAuditDisposition::Expired, "expired"),
-            (DeliveryAuditDisposition::ReplayPending, "replay-pending"),
-            (DeliveryAuditDisposition::DiscardPending, "discard-pending"),
-            (DeliveryAuditDisposition::Discarded, "discarded"),
-            (DeliveryAuditDisposition::Unknown, "unknown"),
-        ];
-        for (disposition, word) in dispositions {
-            assert!(is_kebab_case(word), "{word}");
-            assert_eq!(audit_disposition(disposition), word);
-        }
-        for phase in [
-            DeliveryAuditPhase::Attempt,
-            DeliveryAuditPhase::Terminal,
-            DeliveryAuditPhase::Replay,
-            DeliveryAuditPhase::Discard,
-        ] {
-            let word = audit_phase(phase);
-            assert!(is_kebab_case(word), "{word}");
-        }
+    fn compile_accepts_a_url_observer() {
+        CompiledHooks::compile(&[confirmed_observer()]).expect("a url observer compiles");
+    }
+
+    #[test]
+    fn compile_refuses_a_when_condition_as_an_unsupported_capability() {
+        let mut declaration = confirmed_observer();
+        declaration.when = Some(json!({"type": "fields"}));
+        assert_capability_refused(declaration, HookCapability::When);
+    }
+
+    #[test]
+    fn compile_refuses_a_principal_as_an_unsupported_capability() {
+        let mut declaration = confirmed_observer();
+        declaration.principal = Some("clerk".to_owned());
+        assert_capability_refused(declaration, HookCapability::Principal);
+    }
+
+    #[test]
+    fn compile_refuses_a_local_rhai_handler_as_an_unsupported_capability() {
+        let mut declaration = confirmed_observer();
+        declaration.handler = HookHandlerSource::Rhai {
+            script: "hooks/notify.rhai".to_owned(),
+            abi: Some(HOOK_HANDLER_ABI_V1.to_owned()),
+        };
+        assert_capability_refused(declaration, HookCapability::RhaiHandler);
     }
 
     #[test]
@@ -1396,15 +1038,74 @@ mod tests {
             "http://[::1]:8080/hooks",
             "https://receiver.example/hooks",
         ] {
-            destination_parts(url).expect("the reviewed destination is valid");
+            url_destination_address(url).expect("the reviewed destination is valid");
         }
-        assert!(destination_parts("http://receiver.example/hooks").is_err());
-        assert!(destination_parts("https://receiver.example/hooks?token=secret").is_err());
+        assert!(url_destination_address("http://receiver.example/hooks").is_err());
+        assert!(url_destination_address("https://receiver.example/hooks?token=secret").is_err());
+    }
+
+    /// The derived schedule is the one every retained delivery row records:
+    /// from 30 seconds, doubling, capped at one hour, one delay between each
+    /// pair of the attempt ceiling's attempts.
+    #[test]
+    fn the_retry_schedule_doubles_from_thirty_seconds_to_one_hour() {
+        let mut expected = vec![
+            30_000, 60_000, 120_000, 240_000, 480_000, 960_000, 1_920_000,
+        ];
+        expected.resize(usize::from(MAX_HOOK_ATTEMPTS) - 1, 3_600_000);
+        assert_eq!(retry_delays_ms(), expected);
+    }
+
+    /// The binding digests a deployed Scheduling runtime records with every
+    /// captured delivery. A retained delivery is refused once its recorded
+    /// digest no longer matches the activated destination, so these values
+    /// are pinned: a change to the digest shape is a breaking change.
+    #[test]
+    fn hook_destination_binding_digests_are_pinned() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempfile::tempdir().expect("the test secret directory");
+        let key_path = directory.path().join("hook-key");
+        std::fs::write(&key_path, [0x5a; 32]).expect("write the test hook key");
+        std::fs::set_permissions(&key_path, std::fs::Permissions::from_mode(0o600))
+            .expect("restrict the test hook key");
+        let secrets = SecretResolver::new([SecretProvider::File], directory.path())
+            .expect("the test secret resolver");
+        let configured: DestinationsConfig = serde_json::from_value(json!({"hooks": {
+            "appointment-events": {
+                "url": "https://events.example.test/scheduling",
+                "hmacSha256KeyRef": "secret:file/hook-key",
+            },
+            "audit-mirror": {
+                "url": "http://127.0.0.1:8080/hooks",
+                "hmacSha256KeyRef": "secret:file/hook-key",
+                "attemptTimeoutMilliseconds": 250,
+                "maximumAttempts": 3,
+            },
+        }}))
+        .expect("the pinned hook destinations read");
+        let expected = ["appointment-events".to_owned()].into_iter().collect();
+
+        let activated = activate_destinations(&expected, &configured.hooks, &secrets)
+            .expect("the pinned hook destinations activate");
+
+        assert_eq!(
+            activated.binding_digest,
+            "sha256:6021194b5df3b34eeb31b21c8b3ef448f2d639d3e8393d13b98a8276b5411df0"
+        );
+        assert_eq!(
+            activated.bindings["appointment-events"].binding_digest(),
+            "sha256:519db07c7b8250700c34939c5212b9fabf77b2c37c42e72dfa997214e4da985d"
+        );
+        assert_eq!(
+            activated.bindings["audit-mirror"].binding_digest(),
+            "sha256:dd0b35e51274ab6a1d2456e9b0520acdf5b68e720a352d0d4819f41090ff7d97"
+        );
     }
 
     /// Whether the runtime configuration's reader accepts `config` bound to
     /// the hook destination `id`.
-    fn configuration_accepts(id: &str, config: &HookDestinationConfig) -> bool {
+    fn configuration_accepts(id: &str, config: &UrlHookDestinationConfig) -> bool {
         reads_block::<DestinationsConfig>(&json!({"hooks": {id: {
             "url": config.url,
             "hmacSha256KeyRef": config.hmac_sha256_key_ref,
@@ -1422,9 +1123,10 @@ mod tests {
         // the budget is refused one step later, for its signing material.
         let secrets = SecretResolver::new([SecretProvider::Environment], "/")
             .expect("the test secret resolver");
-        let binding = |timeout: u32, attempts: u8| HookDestinationConfig {
-            url: "https://events.example.test/scheduling".to_owned(),
-            hmac_sha256_key_ref: "secret:file/hook-key".to_owned(),
+        let binding = |timeout: u32, attempts: u8| UrlHookDestinationConfig {
+            url: Url::new("https://events.example.test/scheduling").expect("the test URL"),
+            hmac_sha256_key_ref: SecretReference::parse("secret:file/hook-key")
+                .expect("the test key reference"),
             attempt_timeout_milliseconds: timeout,
             maximum_attempts: attempts,
         };
@@ -1460,7 +1162,15 @@ mod tests {
         let mut accepted = 0;
         for (id, config) in cases {
             let configured = configuration_accepts(&id, &config);
-            let activated = ActivatedDestination::activate(&id, &config, &secrets);
+            let activated = activate_url_hook_destination(
+                DESTINATION_BINDING_SCHEMA,
+                &id,
+                &config,
+                &secrets,
+                MAXIMUM_PAYLOAD_BYTES,
+            )
+            .map(drop)
+            .map_err(activation_error);
             if configured {
                 accepted += 1;
                 assert!(

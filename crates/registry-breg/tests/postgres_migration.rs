@@ -1211,6 +1211,67 @@ async fn real_postgres_reconciliation_reports_a_held_migration_lock_as_in_progre
     database.cleanup().await;
 }
 
+/// Reviewed migration checkpoints remain durable when final fingerprint
+/// verification refuses. Reconciliation must retain that catalog finding
+/// instead of misreporting the database as unavailable.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn reviewed_fingerprint_mismatch_keeps_checkpoints_and_reconcile_finding() {
+    let (database, initial) = initial_package_database().await;
+    let base = compile_variant(Variant::Base);
+    let active = apply(&database, &initial, ApplyPrecondition::InitialActivation)
+        .await
+        .expect("initial package activates");
+    seed_backfill_rows(&database, &base, 5).await;
+    let required = compile_variant(Variant::RankRequired);
+    let measured = required_target_fingerprint(&database, &required).await;
+    let declared = digest(b"different declared target catalog");
+    assert_ne!(declared, measured);
+    let package = prepare_and_load_reviewed(
+        &active,
+        &base,
+        Variant::RankRequired,
+        &declared,
+        backfill_source(BackfillSourceRequest {
+            id: "reconcile-fingerprint-mismatch",
+            current: &active,
+            prior: &base,
+            candidate: &required,
+            final_fingerprint: &declared,
+            pre: AssertionMode::True,
+            post: AssertionMode::True,
+            rehearsed_rows: 5,
+        }),
+    );
+    assert_value_free(
+        apply(
+            &database,
+            &package,
+            ApplyPrecondition::Successor { current: &active },
+        )
+        .await
+        .err(),
+        MigrationError::SchemaFingerprintMismatchAfterMaintenance { declared, measured },
+    );
+    assert_non_ready_target(&database, &active, &package, "failed").await;
+    assert_all_ranks(&database, &required, 1).await;
+    assert_eq!(
+        step_snapshot(&database, &package, "backfill-rank").await.0,
+        "completed"
+    );
+    let before = plan_durable_state(&database).await;
+    let assessed = reconcile(&database, &package, &active, &base, false)
+        .await
+        .expect("fingerprint mismatch remains an inspectable catalog finding");
+    assert_eq!(assessed.outcome, ReconcileOutcome::Unresolvable);
+    assert!(assessed
+        .target_catalog_finding
+        .is_some_and(|finding| finding.contains("fingerprint")));
+    assert_eq!(assessed.durable_step_progress, Some(true));
+    assert!(!assessed.executed);
+    assert_eq!(plan_durable_state(&database).await, before);
+    database.cleanup().await;
+}
+
 /// A reviewed apply whose every durable step closed, failing only because an
 /// administrator left an unmanaged object behind. While the object is there
 /// the reconciliation is unresolvable and refuses to execute; once it is gone
@@ -3068,6 +3129,147 @@ async fn real_postgres_a_plan_refuses_what_apply_refuses_and_changes_nothing() {
     database.cleanup().await;
 }
 
+/// A connection that is not the configured migration role is refused by
+/// plan and apply alike, naming the role check, before maintenance: no
+/// registry state is created and no activation is audited.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_postgres_a_refused_migration_role_is_named_before_maintenance() {
+    let (database, package) = initial_package_database().await;
+    let refused = MigrationError::MigrationRoleRefused("migration connection uses the wrong role");
+    let roles = ApplyRoles::new(&database.runtime_role, &database.runtime_role);
+
+    assert_value_free(
+        plan_verified_package(ApplyVerifiedPackageRequest::plan(
+            &database.migration_config,
+            &package,
+            deployment(),
+            ApplyPrecondition::InitialActivation,
+            roles,
+            timeouts(),
+        ))
+        .await
+        .err(),
+        refused.clone(),
+    );
+    assert_value_free(
+        apply_verified_package(ApplyVerifiedPackageRequest::new(
+            &database.migration_config,
+            &package,
+            deployment(),
+            ApplyPrecondition::InitialActivation,
+            roles,
+            timeouts(),
+            database.activation_audit(),
+        ))
+        .await
+        .err(),
+        refused,
+    );
+    assert_eq!(registry_state_table(&database).await, None);
+    assert!(database.activation_audit_entries().is_empty());
+    database.cleanup().await;
+}
+
+/// A fresh initial package whose declared schema fingerprint differs from
+/// the catalog its DDL would install, as one built by another release, is
+/// refused by plan and apply before maintenance begins: the database holds
+/// no state, no audit is recorded, and the correct package still applies.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_postgres_a_foreign_schema_fingerprint_is_refused_before_maintenance() {
+    let (database, package) = initial_package_database().await;
+    let base = compile_variant(Variant::Base);
+    let declared = format!("sha256:{}", "0".repeat(64));
+    let foreign = prepare_and_load_initial(&base, &declared);
+    assert_initial_refused_before_maintenance(
+        &database,
+        &foreign,
+        MigrationError::SchemaFingerprintMismatch {
+            declared,
+            measured: package.manifest().schema_fingerprint.clone(),
+        },
+    )
+    .await;
+
+    apply(&database, &package, ApplyPrecondition::InitialActivation)
+        .await
+        .expect("the package built with this release applies");
+    database.cleanup().await;
+}
+
+/// A statement of a fresh initial package's DDL that PostgreSQL refuses is
+/// met by the rehearsal before maintenance, so plan and apply both refuse it
+/// with the SQLSTATE and leave the database without state or audit; once
+/// the cause is removed, the same package applies.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_postgres_a_refused_initial_ddl_statement_is_refused_before_maintenance() {
+    let (database, package) = initial_package_database().await;
+    database
+        .admin
+        .batch_execute(
+            "CREATE FUNCTION public.refuse_registry_data_ddl() RETURNS event_trigger
+                 LANGUAGE plpgsql AS $$
+             BEGIN
+                 IF EXISTS (
+                     SELECT 1 FROM pg_catalog.pg_event_trigger_ddl_commands()
+                     WHERE schema_name = 'registry_data'
+                 ) THEN
+                     RAISE EXCEPTION 'refused' USING ERRCODE = 'P0001';
+                 END IF;
+             END
+             $$;
+             CREATE EVENT TRIGGER refuse_registry_data_ddl ON ddl_command_end
+                 EXECUTE FUNCTION public.refuse_registry_data_ddl()",
+        )
+        .await
+        .expect("administrator installs an event trigger that refuses registry DDL");
+
+    assert_initial_refused_before_maintenance(
+        &database,
+        &package,
+        MigrationError::PackageDdlRefused(PostgresFailure {
+            sqlstate: Some("P0001".to_owned()),
+            ..PostgresFailure::default()
+        }),
+    )
+    .await;
+
+    database
+        .admin
+        .batch_execute("DROP EVENT TRIGGER refuse_registry_data_ddl")
+        .await
+        .expect("administrator removes the event trigger");
+    apply(&database, &package, ApplyPrecondition::InitialActivation)
+        .await
+        .expect("the same package applies once PostgreSQL admits its DDL");
+    database.cleanup().await;
+}
+
+/// A relation a managed schema does not admit, here a materialized view, is
+/// met by the rehearsal of a fresh initial activation before maintenance, so
+/// plan and apply both refuse the catalog and leave the database without
+/// state or audit.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_postgres_an_unadmitted_managed_relation_is_refused_before_maintenance() {
+    let (database, package) = initial_package_database().await;
+    database
+        .admin
+        .batch_execute(&format!(
+            "CREATE MATERIALIZED VIEW registry_data.unadmitted AS SELECT 1 AS one;
+             ALTER MATERIALIZED VIEW registry_data.unadmitted OWNER TO \"{}\"",
+            database.migration_role.as_str()
+        ))
+        .await
+        .expect("administrator adds an object the managed catalog refuses");
+
+    assert_initial_refused_before_maintenance(
+        &database,
+        &package,
+        MigrationError::CatalogRefused("managed catalog contains unsupported executable objects"),
+    )
+    .await;
+    database.cleanup().await;
+}
+
 /// Status reads the active identity and every ledger entry in apply order as
 /// the migration role, and answers while another session holds the apply
 /// lock.
@@ -3204,6 +3406,37 @@ async fn registry_state_table(database: &TestDatabase) -> Option<String> {
         .await
         .expect("the catalog reads")
         .get(0)
+}
+
+/// Plan and apply of a fresh initial `package` both refuse with `refused`
+/// before maintenance begins: the database holds no state and no activation
+/// audit is recorded.
+async fn assert_initial_refused_before_maintenance(
+    database: &TestDatabase,
+    package: &VerifiedPackage,
+    refused: MigrationError,
+) {
+    assert_value_free(
+        plan_verified_package(ApplyVerifiedPackageRequest::plan(
+            &database.migration_config,
+            package,
+            deployment(),
+            ApplyPrecondition::InitialActivation,
+            ApplyRoles::new(&database.migration_role, &database.runtime_role),
+            timeouts(),
+        ))
+        .await
+        .err(),
+        refused.clone(),
+    );
+    assert_value_free(
+        apply(database, package, ApplyPrecondition::InitialActivation)
+            .await
+            .err(),
+        refused,
+    );
+    assert_eq!(registry_state_table(database).await, None);
+    assert!(database.activation_audit_entries().is_empty());
 }
 
 /// What a plan must leave as it found it: the ledger, the state row, the
@@ -7432,7 +7665,7 @@ async fn native_patterns_quote_apostrophes_and_backslashes_independent_of_sessio
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn native_patterns_invalid_initial_activation_fails_closed_in_maintenance() {
+async fn native_patterns_invalid_initial_activation_is_refused_before_maintenance() {
     let database = TestDatabase::create(1).await;
     let base = compile_variant(Variant::Base);
     let fingerprint = initial_fingerprint(&database, &base).await;
@@ -7446,34 +7679,15 @@ async fn native_patterns_invalid_initial_activation_fails_closed_in_maintenance(
     ))
     .unwrap();
     let invalid = publish_and_load(prepared, local_context());
-    assert_value_free(
-        apply(&database, &invalid, ApplyPrecondition::InitialActivation)
-            .await
-            .err(),
-        MigrationError::FieldPatternSyntax {
+    assert_initial_refused_before_maintenance(
+        &database,
+        &invalid,
+        MigrationError::FieldPatternSyntaxRefused {
             entity_id: "asset".to_owned(),
             field_id: "legacy".to_owned(),
         },
-    );
-    let row = database.admin.query_one("SELECT maintenance_status, maintenance_target_package_digest FROM registry_internal.registry_state WHERE singleton", &[]).await.unwrap();
-    assert_eq!(row.get::<_, String>(0), "failed");
-    assert_eq!(
-        row.get::<_, Option<String>>(1).as_deref(),
-        Some(invalid.package_digest())
-    );
-    let tables: i64 = database
-        .admin
-        .query_one(
-            "SELECT count(*) FROM pg_catalog.pg_tables WHERE schemaname = 'registry_data'",
-            &[],
-        )
-        .await
-        .unwrap()
-        .get(0);
-    assert_eq!(
-        tables, 0,
-        "invalid constraint activation commits no current-row schema"
-    );
+    )
+    .await;
     database.cleanup().await;
 }
 

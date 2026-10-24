@@ -91,7 +91,7 @@ pub struct Metrics {
 /// bounded by the workers a process can run.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, PartialOrd, Ord)]
 pub enum ProgressWorker {
-    Webhook,
+    Hook,
     AttachmentVerification,
     Review,
     SubjectAccessLogRetention,
@@ -99,7 +99,7 @@ pub enum ProgressWorker {
 
 impl ProgressWorker {
     pub const ALL: [Self; 4] = [
-        Self::Webhook,
+        Self::Hook,
         Self::AttachmentVerification,
         Self::Review,
         Self::SubjectAccessLogRetention,
@@ -108,7 +108,7 @@ impl ProgressWorker {
     #[must_use]
     pub const fn label(self) -> &'static str {
         match self {
-            Self::Webhook => "webhook",
+            Self::Hook => "hook",
             Self::AttachmentVerification => "attachment-verification",
             Self::Review => "review",
             Self::SubjectAccessLogRetention => "subject-access-log-retention",
@@ -122,14 +122,14 @@ impl ProgressWorker {
 /// bounded by the queues the schema holds.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, PartialOrd, Ord)]
 pub enum PendingQueue {
-    WebhookDelivery,
+    HookDelivery,
     ReviewSubmission,
     ReviewApplication,
 }
 
 impl PendingQueue {
     pub const ALL: [Self; 3] = [
-        Self::WebhookDelivery,
+        Self::HookDelivery,
         Self::ReviewSubmission,
         Self::ReviewApplication,
     ];
@@ -137,7 +137,7 @@ impl PendingQueue {
     #[must_use]
     pub const fn label(self) -> &'static str {
         match self {
-            Self::WebhookDelivery => "webhook-delivery",
+            Self::HookDelivery => "hook-delivery",
             Self::ReviewSubmission => "review-submission",
             Self::ReviewApplication => "review-application",
         }
@@ -394,7 +394,7 @@ impl Metrics {
 
 /// Read every queue age in one bounded, read-only statement. The due
 /// predicates follow each worker's claim, so work scheduled for a later
-/// retry does not count as waiting. A webhook lease that expired is claimable
+/// retry does not count as waiting. A hook lease that expired is claimable
 /// again, so it has waited since its lease expired. A review submission claim
 /// extends its lease without advancing `next_attempt_at`, so a claimable
 /// submission has waited since the later of the two; `GREATEST` ignores a
@@ -446,7 +446,7 @@ async fn read_queues(pool: &RuntimePool) -> Result<QueueSample, ()> {
                       WHERE p.state='submitted' AND p.submission_version=q.submission_version
                         AND p.blocked_reason='package-changed'
                         AND q.state IN ('queued','applying','blocked','cancelled'))",
-                schema = crate::webhook::DELIVERY_SCHEMA,
+                schema = crate::hooks::DELIVERY_SCHEMA,
                 submission_claimable = crate::review_store::REVIEW_SUBMISSION_CLAIMABLE,
             ),
             &[],
@@ -585,10 +585,10 @@ mod tests {
     #[test]
     fn worker_last_success_age_is_absent_until_the_worker_first_succeeds() {
         let review = Arc::new(LastSuccess::default());
-        let webhook = Arc::new(LastSuccess::default());
+        let hook = Arc::new(LastSuccess::default());
         let metrics = Metrics::default()
             .with_worker_progress(ProgressWorker::Review, Arc::clone(&review))
-            .with_worker_progress(ProgressWorker::Webhook, Arc::clone(&webhook));
+            .with_worker_progress(ProgressWorker::Hook, Arc::clone(&hook));
         let rendered = metrics.render(None);
         assert!(rendered.contains("# TYPE breg_worker_last_success_age_seconds gauge\n"));
         assert!(
@@ -645,7 +645,7 @@ mod tests {
         assert!(!unsampled.contains("breg_proposal_application_blocked_jobs 0\n"));
         let sampled = metrics.render(Some(&QueueSample {
             ages: vec![
-                (PendingQueue::WebhookDelivery, 0.0),
+                (PendingQueue::HookDelivery, 0.0),
                 (PendingQueue::ReviewSubmission, 90.5),
                 (PendingQueue::ReviewApplication, 0.0),
             ],
@@ -653,7 +653,7 @@ mod tests {
         }));
         assert!(sampled.contains("breg_proposal_application_blocked_jobs 2\n"));
         for expected in [
-            "breg_queue_oldest_pending_age_seconds{queue=\"webhook-delivery\"} 0\n",
+            "breg_queue_oldest_pending_age_seconds{queue=\"hook-delivery\"} 0\n",
             "breg_queue_oldest_pending_age_seconds{queue=\"review-submission\"} 90.5\n",
             "breg_queue_oldest_pending_age_seconds{queue=\"review-application\"} 0\n",
         ] {

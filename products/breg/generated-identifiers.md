@@ -1,0 +1,79 @@
+# Generated business identifiers
+
+The UUID in each BReg record envelope remains the stable record identity.
+Use a generated `string` field for an institution-facing number or code. It is
+readable like an ordinary field, but callers and Actions cannot set or patch it.
+Do not grant it in `writableFields` or a Function write ceiling.
+
+Add `generate` to a stored `string` field. The complete
+[acceptance project](acceptance/generated-identifiers/registry.yaml) shows both
+strategies and a Proposal Action:
+
+```yaml
+- id: number
+  type: string
+  required: true
+  minimumLength: 6
+  maximumLength: 32
+  classification: internal
+  generate: {type: sequence, prefix: "APP-", minimumDigits: 4, scope: [jurisdiction]}
+- id: code
+  type: string
+  required: true
+  minimumLength: 12
+  maximumLength: 12
+  classification: internal
+  generate: {type: random, prefix: "REF-", length: 8}
+```
+
+`sequence` allocates `APP-0001`, `APP-0002`, and so on within each distinct
+`jurisdiction`. `minimumDigits` pads the number but does not cap the sequence;
+the field's `maximumLength` must fit its full range. `random` generates
+`length` characters after the prefix from the fixed alphabet
+`23456789ABCDEFGHJKLMNPQRSTUVWXYZ`, which leaves out characters that are easy
+to misread. Choose enough length for the expected number of
+records. BReg retries a collision within a bounded attempt count and refuses
+the create if the code space cannot supply a free value.
+
+`scope`, accepted on `sequence` only, lists required stored scalar fields
+classified `public` or `internal`, and never a `reference`. BReg keeps every
+issued value with its scope values after the record is erased, so a scope must
+not hold restricted data or point at a person; use a jurisdiction or category
+code. BReg includes the scope values in both the allocation namespace and a
+database uniqueness constraint. Omit it for one namespace across that Record
+type; a `random` code always has one namespace across its Record type. Include
+the scope fields when looking up a scoped identifier, since the same code can
+exist in another scope. The compiler limits the combined maximum size of the
+identifier field and its scope fields to a 1 KiB index budget. For string and
+text fields, it counts four bytes per character to cover UTF-8 values,
+including retained identifiers seeded during migration. Use short keys for
+scope fields rather than descriptions. A scope field cannot change after the
+record is created, because moving a number to another namespace would
+invalidate its issued meaning. Issued values are never recycled, including
+after a record is tombstoned or erased.
+
+Direct create, batch/import create, and Action create allocate in the write
+transaction. A Proposal allocates on Submit and freezes the exact values in
+its reviewed effects. A replay of Submit, Apply, or Retry reuses those values.
+
+Sequences are monotonic, not gapless. A create that rolls back releases its
+number, so a failed write leaves no gap. Gaps come from three places: a
+Proposal that is rejected or cancelled after Submit keeps the values Submit
+allocated; Revise followed by a fresh Submit can allocate new values and
+leaves the earlier ones reserved; and a sequence adopted on an existing field
+starts after the highest retained number and skips values already reserved.
+A register that must issue gapless numbers therefore cannot use `sequence`
+with a Proposal Action.
+
+A `sequence` value is guessable and shows how many values its scope has
+issued. Use `random` for a code that people outside the registry see, such as
+one printed on a certificate and checked on a public verification page.
+
+For a new registry, the compiler installs allocation state and the unique
+constraint with the initial schema. Enabling generation on a field in an
+existing registry requires a reviewed migration. Backfill any missing values
+first, then the compiler seeds reservations and sequence high-water marks from
+retained rows and checks uniqueness before activation. Existing identifiers
+are preserved. Changing or removing an active generation rule is currently
+unsupported, so plan the strategy, prefix, length, and scope as part of the
+issuing scheme.

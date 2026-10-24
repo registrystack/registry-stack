@@ -16,6 +16,7 @@ that every checkout or release ships it.
 |---|---|
 | `registry-{breg,casework,coordinator,discovery,evidence,messaging,scheduling}-client` | Canonical Rust product HTTP and response contract |
 | `registry-evidence-verifier` | Evidence response formats, payload contract, and relying-party verification |
+| `registry-documents-client` | Rust Document Store HTTP and response contract; no language binding and not part of the unified packages or the Rust facade |
 | BReg, Casework, Coordinator, Discovery, Evidence, Messaging, and Scheduling `-client-node` / `-client-py` crates | Thin napi-rs / PyO3 bindings and language conversion over the Rust decisions |
 | `registry-stack-client` | Curated Rust facade for BReg, Casework, Discovery, Evidence, Messaging, and Scheduling, with separate product, record, and auth modules |
 | `registry-stack-client-node` | Public `@registrystack/client` facade and platform package definitions |

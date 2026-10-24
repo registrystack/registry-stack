@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- `evidencectl dev` retains redacted one-shot issuer setup logs in its private
+  log directory and includes that directory in failed-start guidance.
+
 ## 0.43.0 - 2026-10-21
 
 - BREAKING: authored display fields reject prohibited Unicode controls, and

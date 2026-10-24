@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { parse } from 'yaml';
 
+import { PRODUCT_CLI_BINARIES, PRODUCT_PAGES } from '../src/lib/docset-products.mjs';
 import {
   buildConfigurationFormats,
   generateConfigurationFormats,
@@ -99,12 +100,17 @@ test('gates formats by the docset product that publishes them', async () => {
   assert.equal(formats.get('breg/runtime').docsetProduct, null);
   const docsets = parse(await readFile(new URL('../src/data/docsets.yaml', import.meta.url), 'utf8'));
   const latest = docsets.docsets.find((entry) => entry.id === docsets.current);
+  // A gated product no docset publishes yet is still a known gate.
+  const gated = new Set([...Object.keys(PRODUCT_PAGES), ...Object.keys(PRODUCT_CLI_BINARIES)]);
   for (const gate of [
     ...document.products.map((entry) => entry.docsetProduct),
     ...[...formats.values()].map((format) => format.docsetProduct),
   ].filter(Boolean)) {
-    assert.ok(latest.products[gate], `${gate} is not a docsets.yaml product key`);
+    assert.ok(latest.products[gate] || gated.has(gate), `${gate} is not a docsets.yaml product key`);
   }
+  assert.equal(product('documents').docsetProduct, 'registry-documents');
+  assert.ok(latest.products['registry-documents'], 'the current docset publishes the Document Store');
+  assert.equal(product('documents').checkPage, 'reference/documents-configuration');
 });
 
 test('publishes the three Coordinator formats with their owned check commands', async () => {

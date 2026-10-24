@@ -34,15 +34,26 @@
 //! the contract half above is always available and depends on no database.
 //! The worker sends the product's captured payload bytes with the product's
 //! headers, and everything product-owned enters through the delivery module's
-//! seam trait. No executor lives here: a delivery row that binds a Rhai or
-//! WASM handler is run through the product's own handler seam, so the
-//! reviewed program, the script engine, and the module format stay on the
-//! product side of the boundary.
+//! seam trait. The same feature carries the shared halves of a product's
+//! seam: the URL destination, the pooled connection, the activation-record
+//! identity check, and the hook audit entry.
+//!
+//! The local-handler executor lives in the `executor` module behind the
+//! opt-in `rhai` and `wasm` features. A product hands over the reviewed
+//! programs its compiled package carries and the executor runs them on the
+//! bare platform script engine under one fixed hook profile, so every
+//! product runs the same program the same way. A product that enables
+//! neither feature compiles neither engine.
+//!
+//! [`HookCapabilities`] is the product-declared set of handler kinds and
+//! declaration features a product supports, checked with one shared
+//! diagnostic before any product-specific rule runs.
 //!
 //! The opt-in `receiver` feature adds `receiver::verify_delivery`, the one
 //! receiver-side reading of a signed Version 1 delivery that every product
 //! receiving a hook delivery calls.
 
+mod capability;
 mod declaration;
 #[cfg(feature = "postgres")]
 pub mod delivery;
@@ -50,11 +61,15 @@ pub mod delivery;
 pub mod delivery_schema;
 mod envelope;
 mod error;
+#[cfg(any(feature = "rhai", feature = "wasm"))]
+pub mod executor;
 mod message;
 #[cfg(feature = "receiver")]
 pub mod receiver;
+mod retry;
 mod validate;
 
+pub use capability::{HookCapabilities, HookCapability, HookCapabilityError};
 pub use declaration::{
     HookDeclaration, HookHandlerKind, HookHandlerSource, HookPhase, HOOK_HANDLER_ABI_V1,
 };
@@ -67,4 +82,5 @@ pub use message::{
     BoundedText, BoundedTextError, HandlerOutputLimits, HookMessage, HookMessageError,
     HookProposal, MAX_OUTPUT_BYTES, MAX_REFUSAL_CODE_BYTES, MAX_REFUSAL_SUMMARY_BYTES,
 };
+pub use retry::exponential_retry_delays_ms;
 pub use validate::{validate_hooks, HookValidationError};

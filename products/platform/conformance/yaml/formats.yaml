@@ -329,6 +329,8 @@ formats:
       - /fieldEncryption/provider/kind
       - /attachmentStorage/kind
       - /attachmentVerification/kind
+      - /attachmentStorage/endpoint
+      - /attachmentVerification/endpoint
       - /authentication/oidc/jwksSource/kind
   breg/dev-clients:
     init: {command: "bregctl init {directory}", file: dev-clients.yaml}
@@ -339,6 +341,10 @@ formats:
     init: {command: "caseworkctl init --template standalone-decision {directory}", file: casework.yaml}
   scheduling/records:
     init: {command: "schedulingctl init --template standalone-exact-time {directory}", file: records.yaml}
+  documents/project:
+    init: {command: "documentsctl init {directory}", file: documents.yaml}
+  documents/runtime:
+    init: {command: "documentsctl init {directory}", file: runtime.example.yaml}
   # Coordinator checks the staged three-file portable project. Its init output
   # carries the same project and runtime envelopes the readers accept.
   coordinator/project:

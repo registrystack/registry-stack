@@ -1,0 +1,28 @@
+// SPDX-License-Identifier: Apache-2.0
+//! Every Messaging migration file is pinned by its sha256. The migration
+//! ledger records versions only, so a database that applied a version never
+//! reads its file again: an edit would change fresh installs and leave every
+//! existing database behind. A change to the schema is the next version.
+
+use std::path::Path;
+
+use registry_platform_testing::assert_migration_pins;
+
+const PINS: &[(&str, &str)] = &[
+    (
+        "0100_messaging.sql",
+        "0a91c7183781fcf67bc4993cbff5c86caa8b1300345730bbaaa00b15f829a3e5",
+    ),
+    (
+        "0101_dispatch_lease_expiry.sql",
+        "2a505e1bac1e306880409ddc67c0fb0a55a5ca65714b41875eda7ac176b9796d",
+    ),
+];
+
+#[test]
+fn every_migration_file_is_pinned_by_its_digest() {
+    assert_migration_pins(
+        &Path::new(env!("CARGO_MANIFEST_DIR")).join("migrations"),
+        PINS,
+    );
+}

@@ -112,11 +112,14 @@ const UNREPORTED_VERSION: &str = "unreported";
 const MAX_VERSION: usize = 200;
 /// Shortest run of secret bytes that must not survive in captured output.
 const SECRET_RUN: usize = 8;
-/// Longest refusal carried out of a native child or out of the supervisor.
+/// Longest refusal carried out of a native child.
 const MAX_REFUSAL: usize = 400;
+/// A supervisor refusal can carry a complete Unix log path plus its fixed
+/// diagnosis. Native child summaries keep their shorter bound.
+const MAX_SUPERVISOR_REFUSAL: usize = 8 * 1024;
 /// Maximum bytes the supervisor entry point can add to its retained log when
 /// it reports one bounded error plus its terminating newline.
-const MAX_SUPERVISOR_ERROR_BYTES: u64 = MAX_REFUSAL as u64 * 4 + 1;
+const MAX_SUPERVISOR_ERROR_BYTES: u64 = MAX_SUPERVISOR_REFUSAL as u64 * 4 + 1;
 /// Bound on the journal tail `dev events` reports, in bytes and in lines.
 const MAX_JOURNAL_BYTES: u64 = 256 * 1024;
 const MAX_JOURNAL_LINES: usize = 512;
@@ -1666,7 +1669,7 @@ fn run_supervisor_inner(args: SupervisorArgs) -> Result<()> {
         .into_iter()
         .flatten()
         .next()
-        .map(|error| format!("{error:#}").chars().take(MAX_REFUSAL).collect());
+        .map(bounded_supervisor_error);
         state.save()?;
         result?;
         child_cleanup?;
@@ -1684,7 +1687,10 @@ fn run_supervisor_inner(args: SupervisorArgs) -> Result<()> {
 }
 
 fn bounded_supervisor_error(error: &anyhow::Error) -> String {
-    format!("{error:#}").chars().take(MAX_REFUSAL).collect()
+    format!("{error:#}")
+        .chars()
+        .take(MAX_SUPERVISOR_REFUSAL)
+        .collect()
 }
 
 /// Read one client control command from `stream`, stopping at the first
@@ -3690,9 +3696,12 @@ fn issuer(docker: &Path, state: &State, terminate: &AtomicBool) -> Result<()> {
         state_root: &state_root,
         image: &pin.image,
     };
-    let jwks = registry_thunderid_tooling::local::start(&session, docker, &mut || {
-        terminate.load(Ordering::Relaxed)
-    })?;
+    let jwks = registry_thunderid_tooling::local::start_with_logs(
+        &session,
+        docker,
+        &mut || terminate.load(Ordering::Relaxed),
+        &state.root().join("logs"),
+    )?;
     private::replace(
         &state.root().join("secrets/issuer-jwks"),
         &serde_json::to_vec(&jwks)?,

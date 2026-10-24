@@ -370,18 +370,19 @@ audit:
   path: $audit_path
 cursor:
   secretRef: secret:file/cursor-key
-eventDestinations:
-  record-events:
-    origin: http://$receiver_address
-    path: /events
-    networkProfile: loopback-development-http
-    dnsFamily: dual-stack-strict
-    allowedPrivateCidrs: []
-    hmacSha256KeyRef: secret:file/record-events-key
-    classificationCeiling: internal
-    deliveryCeilings:
-      attemptTimeoutMilliseconds: 2000
-      maximumAttempts: 5
+destinations:
+  hooks:
+    record-events:
+      origin: http://$receiver_address
+      path: /events
+      networkProfile: loopback-development-http
+      dnsFamily: dual-stack-strict
+      allowedPrivateCidrs: []
+      hmacSha256KeyRef: secret:file/record-events-key
+      classificationCeiling: internal
+      deliveryCeilings:
+        attemptTimeoutMilliseconds: 2000
+        maximumAttempts: 5
 EOF
 }
 
@@ -813,7 +814,7 @@ wait_for_receipts "a refused attempt for the second record" \
   "any(r['recordId'] == '$record_2' and r['answer'] == 503 for r in receipts)"
 capture_served_state "$temporary_root/backup-point"
 stop_server
-run_json "$temporary_root/webhooks-backup-point.json" webhook list --runtime-config "$original_config"
+run_json "$temporary_root/webhooks-backup-point.json" hook list --runtime-config "$original_config"
 python3 - "$temporary_root/webhooks-backup-point.json" <<'PY'
 import json
 import sys
@@ -1009,7 +1010,7 @@ items = json.load(open(sys.argv[1], encoding="utf-8"))["items"]
 if sorted(item["recordIdentifier"] for item in items) != sorted(sys.argv[2:]):
     raise SystemExit("the adopted copy does not serve exactly the backup-point records and its own write")
 PY
-run_json "$temporary_root/webhooks-restored.json" webhook list --runtime-config "$restored_config"
+run_json "$temporary_root/webhooks-restored.json" hook list --runtime-config "$restored_config"
 python3 - "$temporary_root/webhooks-restored.json" <<'PY'
 import json
 import sys

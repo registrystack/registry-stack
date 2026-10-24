@@ -9,6 +9,12 @@ compile_error!(
 #[cfg(feature = "test-authorization-server")]
 mod authorization_server;
 
+#[cfg(feature = "migration-pins")]
+mod migration_pins;
+
+#[cfg(feature = "migration-pins")]
+pub use migration_pins::{assert_migration_pins, verify_migration_pins, MIGRATION_PIN_RULE};
+
 #[cfg(feature = "test-authorization-server")]
 pub use authorization_server::{
     ExchangeProfile, TestActorKind, TestAuthorizationServer, TestAuthorizationServerBuilder,

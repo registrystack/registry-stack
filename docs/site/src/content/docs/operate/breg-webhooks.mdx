@@ -31,22 +31,23 @@ first delivery on a local registry.
 
 ## Bind each destination
 
-Add an `eventDestinations` block to the runtime file, with one entry per destination the package
+Add a `destinations.hooks` block to the runtime file, with one entry per destination the package
 names:
 
 ```yaml title="runtime.yaml"
-eventDestinations:
-  contact-events:
-    origin: https://receiver.example.org
-    path: /events
-    networkProfile: production-https
-    dnsFamily: dual-stack-strict
-    allowedPrivateCidrs: []
-    hmacSha256KeyRef: secret:file/contact-events-key
-    classificationCeiling: internal
-    deliveryCeilings:
-      attemptTimeoutMilliseconds: 1000
-      maximumAttempts: 3
+destinations:
+  hooks:
+    contact-events:
+      origin: https://receiver.example.org
+      path: /events
+      networkProfile: production-https
+      dnsFamily: dual-stack-strict
+      allowedPrivateCidrs: []
+      hmacSha256KeyRef: secret:file/contact-events-key
+      classificationCeiling: internal
+      deliveryCeilings:
+        attemptTimeoutMilliseconds: 1000
+        maximumAttempts: 3
 ```
 
 `bregctl check <project> --runtime-config runtime.yaml` checks the binding's shape offline. The
@@ -80,9 +81,9 @@ before the runtime starts.
     (InventoryMismatch, DeliveryCeilingWidening), RawEventDestinationConfig, digest_value() for
     the tls keys; crates/registry-platform-httputil/src/destination.rs,
     origin_uses_localhost_namespace();
-    crates/registry-breg/src/compiler.rs, WEBHOOK_ATTEMPT_TIMEOUT_MS and WEBHOOK_MAXIMUM_ATTEMPTS;
-    crates/registry-breg/src/webhook.rs;
-    crates/registry-bregctl/src/doctor.rs, startup.event-destinations.refused. */}
+    crates/registry-breg/src/compiler.rs, HOOK_ATTEMPT_TIMEOUT_MS and HOOK_MAXIMUM_ATTEMPTS;
+    crates/registry-breg/src/hooks.rs;
+    crates/registry-bregctl/src/doctor.rs, startup.hook-destinations.refused. */}
 
 ## Provision the shared key
 
@@ -98,23 +99,23 @@ exactly as written, so the receiver loads the 64 characters as its key and does 
 The key must be at least 32 bytes, and the file a regular file owned by the user that runs `breg`
 with mode `0400` or `0600`; `doctor` and startup refuse anything else.
 
-{/* Evidence: crates/registry-breg/src/event_destination.rs, MIN_HMAC_SHA256_KEY_BYTES;
+{/* Evidence: crates/registry-platform-crypto/src/delivery_signature.rs, MIN_HMAC_SHA256_KEY_BYTES;
     crates/registry-platform-config/src/secrets.rs, read_secret_file() and validate_file_metadata(). */}
 
 ## Build the receiver against a sample
 
-`bregctl webhook sample` prints the request one event produces, without a runtime or a database,
+`bregctl hook sample` prints the request one event produces, without a runtime or a database,
 so you can build the receiver before the registry serves:
 
 ```sh test-skip="needs your own registry project with an event"
-bregctl webhook sample ./my-registry --event contact-created-v1
+bregctl hook sample ./my-registry --event contact-created-v1
 ```
 
 ```text
 Built the sample delivery. The canonical request follows.
   event  contact-created-v1
 
-POST <configured-webhook-request-target> HTTP/1.1
+POST <configured-hook-request-target> HTTP/1.1
 Accept: application/json
 Content-Type: application/json
 Idempotency-Key: sha256:0000000000000000000000000000000000000000000000000000000000000000
@@ -146,9 +147,9 @@ The receiver should:
    events for one record by `data.revision`.
 4. Deduplicate by `Idempotency-Key`, and answer `2xx` only after it has durably recorded the event.
 
-{/* Evidence: crates/registry-bregctl/src/lib.rs, WebhookSampleArgs and webhook_sample();
-    crates/registry-bregctl/src/webhook_lifecycle.rs, sample() and synthetic_field_value();
-    crates/registry-breg/src/webhook.rs. */}
+{/* Evidence: crates/registry-bregctl/src/lib.rs, HookSampleArgs and hook_sample();
+    crates/registry-bregctl/src/hook_lifecycle.rs, sample() and synthetic_field_value();
+    crates/registry-breg/src/hooks.rs. */}
 
 ## Settle local hooks before go-live
 
@@ -184,7 +185,7 @@ execution-only Wasm runtime or field-encryption service.
 Run the bounded drain:
 
 ```sh test-skip="needs the active package runtime file and database"
-bregctl --format json webhook drain \
+bregctl --format json hook drain \
   --runtime-config /etc/breg/runtime.yaml \
   --max-attempts 100 --timeout-seconds 30
 ```
@@ -202,7 +203,7 @@ The attempt budget accepts 1 to 1000 and defaults to 100; the time budget accept
 and defaults to 30. A drain can itself produce further governed hook work, so one bounded call
 does not guarantee an empty queue.
 
-If work remains, inspect it with `webhook list`.
+If work remains, inspect it with `hook list`.
 Wait for a live lease or scheduled retry, or correct a runtime failure and explicitly replay
 eligible work. Replay uses the captured handler under the active package.
 If recovery requires changing governed handler code, assess and explicitly discard that retained
@@ -215,9 +216,9 @@ If you defer cutover, restore service on the still-active package.
 
 {/* Evidence: crates/registry-breg/src/postgres/interlock.rs, retained_local_hook_deliveries;
     crates/registry-breg/src/migration.rs;
-    crates/registry-breg/src/webhook.rs, from_runtime_config_with_execution();
+    crates/registry-breg/src/hooks.rs, from_runtime_config_with_execution();
     crates/registry-breg/src/startup.rs, serve_until_shutdown() and shutdown_signal();
-    crates/registry-bregctl/src/webhook_lifecycle.rs;
+    crates/registry-bregctl/src/hook_lifecycle.rs;
     crates/registry-breg/tests/support/hook_activation.rs. */}
 
 ## Answers that arrive after go-live
@@ -246,17 +247,17 @@ Inspect the recovered delivery before deciding whether to replay or discard it.
 
 {/* Evidence: crates/registry-breg/src/mutation/action.rs;
     crates/registry-platform-hooks/src/delivery/store.rs, lapsed_columns();
-    crates/registry-breg/src/webhook.rs;
+    crates/registry-breg/src/hooks.rs;
     crates/registry-breg/tests/support/hook_activation.rs;
     crates/registry-breg/tests/postgres_hook_changes.rs,
     real_postgres_same_answer_replays_after_a_compatible_package_upgrade. */}
 
 ## Inspect and recover deliveries
 
-`webhook list` shows deliveries that are pending, leased, dead-lettered, or expired:
+`hook list` shows deliveries that are pending, leased, dead-lettered, or expired:
 
 ```sh test-skip="needs a deployed registry's runtime file and database"
-bregctl --format json webhook list --runtime-config /etc/breg/runtime.yaml --limit 50
+bregctl --format json hook list --runtime-config /etc/breg/runtime.yaml --limit 50
 ```
 
 ```json
@@ -264,7 +265,7 @@ bregctl --format json webhook list --runtime-config /etc/breg/runtime.yaml --lim
   "apiVersion": "id.registrystack.org/formats/breg/ctl-report/v1alpha1",
   "kind": "BRegCtlReport",
   "ok": true,
-  "command": "webhook list",
+  "command": "hook list",
   "deliveries": [
     {
       "eventId": "<event-id>",
@@ -297,7 +298,7 @@ every delivery that needs them has arrived.
 After you fix the receiver, replay the dead letter with the ids and generation from the list:
 
 ```sh test-skip="needs a dead letter from a deployed registry"
-bregctl webhook replay --runtime-config /etc/breg/runtime.yaml \
+bregctl hook replay --runtime-config /etc/breg/runtime.yaml \
   --event-id <eventId> --delivery-id <deliveryId> --expected-generation <generation>
 ```
 
@@ -311,17 +312,17 @@ Queued the delivery for replay.
 Replay keeps the event id and issues a new generation and idempotency key. If you are not sure
 whether the receiver acted on an earlier attempt, check its state before replaying. A replay whose
 generation is stale, whose payload has expired, or whose destination is no longer bound is refused
-with `webhook.operation.refused`; list again and use the current generation.
+with `hook.operation.refused`; list again and use the current generation.
 
 ### Discard deliveries pinned to an old binding
 
 When you correct a binding while deliveries still wait under the old one, `doctor` reports
-`startup.webhook.retained-bindings`, and those deliveries show `bindingActive: false`. The
+`startup.hook.retained-bindings`, and those deliveries show `bindingActive: false`. The
 runtime will not start until they are gone: restore the old binding until they drain, or discard
 each one whose `discardEligible` is true:
 
 ```sh test-skip="needs a delivery from a deployed registry"
-bregctl webhook discard --runtime-config /etc/breg/runtime.yaml \
+bregctl hook discard --runtime-config /etc/breg/runtime.yaml \
   --event-id <eventId> --delivery-id <deliveryId> --expected-generation <generation>
 ```
 
@@ -344,14 +345,14 @@ The webhook commands connect to PostgreSQL with the runtime file's database sett
 database presents a certificate from a private certificate authority, name its PEM bundle with
 `database.trustedRootCertificateRef` in the runtime file.
 
-{/* Evidence: crates/registry-breg/src/webhook.rs, MAX_WEBHOOK_STATUS_RESULTS and
-    WebhookOperatorService::from_runtime_config();
+{/* Evidence: crates/registry-breg/src/hooks.rs, MAX_HOOK_STATUS_RESULTS and
+    HookOperatorService::from_runtime_config();
     crates/registry-platform-hooks/src/delivery/service.rs, discard_eligible and binding_active;
-    crates/registry-breg/src/runtime_config.rs, MAX_WEBHOOK_PAYLOAD_RETENTION_DAYS and
+    crates/registry-breg/src/runtime_config.rs, MAX_HOOK_PAYLOAD_RETENTION_DAYS and
     runtime_database_connection_config();
-    crates/registry-bregctl/src/webhook_lifecycle.rs;
-    crates/registry-bregctl/src/lib.rs, WebhookListArgs, WebhookReplayArgs, and WebhookDiscardArgs;
-    crates/registry-bregctl/src/doctor.rs, startup.webhook.retained-bindings. */}
+    crates/registry-bregctl/src/hook_lifecycle.rs;
+    crates/registry-bregctl/src/lib.rs, HookListArgs, HookReplayArgs, and HookDiscardArgs;
+    crates/registry-bregctl/src/doctor.rs, startup.hook.retained-bindings. */}
 
 When `doctor` or a webhook command refuses, look up its diagnostic code in
 [monitor and recover](../breg-monitor/).

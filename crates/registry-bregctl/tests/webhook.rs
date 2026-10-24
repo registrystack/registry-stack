@@ -53,10 +53,10 @@ impl TestProject {
 const SAMPLE_EVENT_SOURCE: &str = r#"apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
 kind: BRegProject
 project:
-  id: webhook-sample
+  id: hook-sample
   version: "1"
   defaultLanguage: en
-  canonicalBaseIri: https://webhook-sample.example.test
+  canonicalBaseIri: https://hook-sample.example.test
 datasets:
   - id: test-dataset
 recordTypes:
@@ -123,7 +123,7 @@ fn sample_is_an_exact_deterministic_cloudevents_request_without_deployment_autho
         OsStr::new("bregctl"),
         OsStr::new("--format"),
         OsStr::new("json"),
-        OsStr::new("webhook"),
+        OsStr::new("hook"),
         OsStr::new("sample"),
         project.path().as_os_str(),
         OsStr::new("--event"),
@@ -133,7 +133,7 @@ fn sample_is_an_exact_deterministic_cloudevents_request_without_deployment_autho
         OsStr::new("bregctl"),
         OsStr::new("--format"),
         OsStr::new("json"),
-        OsStr::new("webhook"),
+        OsStr::new("hook"),
         OsStr::new("sample"),
         project.path().as_os_str(),
         OsStr::new("--event"),
@@ -146,12 +146,12 @@ fn sample_is_an_exact_deterministic_cloudevents_request_without_deployment_autho
     assert_eq!(first, second);
     let report: Value = serde_json::from_str(&first).expect("sample report is JSON");
     assert_eq!(report["ok"], true);
-    assert_eq!(report["command"], "webhook sample");
+    assert_eq!(report["command"], "hook sample");
     assert_eq!(report["eventId"], EVENT_ID);
     assert_eq!(report["request"]["method"], "POST");
     assert_eq!(
         report["request"]["requestTarget"],
-        "<configured-webhook-request-target>"
+        "<configured-hook-request-target>"
     );
     let headers = report["request"]["headers"]
         .as_object()
@@ -178,13 +178,13 @@ fn sample_is_an_exact_deterministic_cloudevents_request_without_deployment_autho
     assert_eq!(headers["ce-type"], EVENT_ID);
     assert_eq!(
         headers["ce-source"],
-        "urn:registrystack:registry:webhook-sample:instance:<configured-instance>"
+        "urn:registrystack:registry:hook-sample:instance:<configured-instance>"
     );
     assert_eq!(headers["X-Registry-Signature"], "v1=<computed-at-delivery>");
     assert!(headers["ce-dataschema"]
         .as_str()
         .expect("data schema is text")
-        .starts_with("urn:breg:event-schema:webhook-sample:record:record-created-v1:sha256:"));
+        .starts_with("urn:breg:event-schema:hook-sample:record:record-created-v1:sha256:"));
     let body = &report["request"]["body"];
     assert_eq!(
         body.as_object()
@@ -239,7 +239,7 @@ fn unavailable_sample_event_is_value_free_and_field_addressed() {
         OsStr::new("bregctl"),
         OsStr::new("--format"),
         OsStr::new("json"),
-        OsStr::new("webhook"),
+        OsStr::new("hook"),
         OsStr::new("sample"),
         project.path().as_os_str(),
         OsStr::new("--event"),
@@ -252,13 +252,13 @@ fn unavailable_sample_event_is_value_free_and_field_addressed() {
     let report: Value = serde_json::from_str(&stdout).expect("failure is JSON");
     assert_eq!(
         report["diagnostics"][0]["code"],
-        "webhook.sample.event-refused"
+        "hook.sample.event-refused"
     );
     assert_eq!(report["diagnostics"][0]["path"], "event");
-    assert_eq!(report["diagnostics"][0]["artifact"], "webhook-sample");
+    assert_eq!(report["diagnostics"][0]["artifact"], "hook-sample");
     assert_eq!(
         report["diagnostics"][0]["suggestedAction"],
-        "select-webhook-event"
+        "select-hook-event"
     );
     let message = report["diagnostics"][0]["message"]
         .as_str()
@@ -270,7 +270,7 @@ fn unavailable_sample_event_is_value_free_and_field_addressed() {
         OsStr::new("bregctl"),
         OsStr::new("--format"),
         OsStr::new("json"),
-        OsStr::new("webhook"),
+        OsStr::new("hook"),
         OsStr::new("sample"),
         without_hooks.path().as_os_str(),
         OsStr::new("--event"),
@@ -282,12 +282,12 @@ fn unavailable_sample_event_is_value_free_and_field_addressed() {
     let report: Value = serde_json::from_str(&stdout).expect("failure is JSON");
     assert_eq!(
         report["diagnostics"][0]["code"],
-        "webhook.sample.event-refused"
+        "hook.sample.event-refused"
     );
     let message = report["diagnostics"][0]["message"]
         .as_str()
         .expect("message is a string");
-    assert!(message.contains("authors no webhook delivery"), "{message}");
+    assert!(message.contains("authors no hook delivery"), "{message}");
 }
 
 #[test]
@@ -298,7 +298,7 @@ fn operator_commands_share_one_value_free_refusal() {
             OsStr::new("bregctl"),
             OsStr::new("--format"),
             OsStr::new("json"),
-            OsStr::new("webhook"),
+            OsStr::new("hook"),
             OsStr::new("list"),
             OsStr::new("--runtime-config"),
             relative.as_os_str(),
@@ -307,7 +307,7 @@ fn operator_commands_share_one_value_free_refusal() {
             OsStr::new("bregctl"),
             OsStr::new("--format"),
             OsStr::new("json"),
-            OsStr::new("webhook"),
+            OsStr::new("hook"),
             OsStr::new("replay"),
             OsStr::new("--runtime-config"),
             relative.as_os_str(),
@@ -326,18 +326,15 @@ fn operator_commands_share_one_value_free_refusal() {
         assert!(stderr.is_empty());
         assert!(!stdout.contains(PATH_VALUE_CANARY));
         let report: Value = serde_json::from_str(&stdout).expect("failure is JSON");
-        assert_eq!(
-            report["diagnostics"][0]["code"],
-            "webhook.operation.refused"
-        );
-        assert_eq!(report["diagnostics"][0]["path"], "webhook");
-        assert_eq!(report["diagnostics"][0]["artifact"], "webhook-operations");
+        assert_eq!(report["diagnostics"][0]["code"], "hook.operation.refused");
+        assert_eq!(report["diagnostics"][0]["path"], "hook");
+        assert_eq!(report["diagnostics"][0]["artifact"], "hook-operations");
     }
 }
 
 #[test]
 fn webhook_help_describes_the_bounded_operator_contract() {
-    let (status, stdout, stderr) = run(["bregctl", "webhook", "list", "--help"]);
+    let (status, stdout, stderr) = run(["bregctl", "hook", "list", "--help"]);
 
     assert_eq!(status, 0);
     assert!(stderr.is_empty());

@@ -3057,14 +3057,14 @@ fn check_substitutes_the_environment_only_when_asked_and_never_repeats_a_value()
 fn runtime_config_with_deferred_locations(scratch: &TestProject, tail: &str) -> PathBuf {
     const BLOCKS: &str = r"attachmentStorage:
   type: s3
-  endpoint: ${BREG_CHECK_TEST_STORAGE}
+  url: ${BREG_CHECK_TEST_STORAGE}
   bucket: test-bucket
   region: us-east-1
   accessKeyIdRef: secret:file/access
   secretAccessKeyRef: secret:file/key
 attachmentVerification:
   type: http
-  endpoint: ${BREG_CHECK_TEST_VERIFIER}
+  url: ${BREG_CHECK_TEST_VERIFIER}
   policyId: scanner-rules-v1
   authorizationRef: secret:file/verifier-token
 fieldEncryption:
@@ -3073,18 +3073,19 @@ fieldEncryption:
     unixSocketPath: ${BREG_CHECK_TEST_TRANSIT_SOCKET}
     mount: transit
     keyName: breg-field-dek
-eventDestinations:
-  case-operations:
-    origin: ${BREG_CHECK_TEST_EVENTS_ORIGIN}
-    path: ${BREG_CHECK_TEST_EVENTS_PATH}
-    networkProfile: production-https
-    dnsFamily: dual-stack-strict
-    allowedPrivateCidrs: []
-    hmacSha256KeyRef: secret:file/event-hmac-key
-    classificationCeiling: restricted
-    deliveryCeilings:
-      attemptTimeoutMilliseconds: 4000
-      maximumAttempts: 4
+destinations:
+  hooks:
+    case-operations:
+      origin: ${BREG_CHECK_TEST_EVENTS_ORIGIN}
+      path: ${BREG_CHECK_TEST_EVENTS_PATH}
+      networkProfile: production-https
+      dnsFamily: dual-stack-strict
+      allowedPrivateCidrs: []
+      hmacSha256KeyRef: secret:file/event-hmac-key
+      classificationCeiling: restricted
+      deliveryCeilings:
+        attemptTimeoutMilliseconds: 4000
+        maximumAttempts: 4
 evidenceProviders:
   civil:
     baseUrl: ${BREG_CHECK_TEST_EVIDENCE_URL}
@@ -3436,6 +3437,26 @@ fn init_from_publicschema_starter_writes_a_derived_project_that_checks_immediate
 
     let check = bregctl(&["--format", "json", "check", path(&destination)]);
     assert!(check.status.success(), "{check:?}");
+    // Both warnings are fields the model classifies above their record type,
+    // which the operator profile reads whatever its scopes and purposes.
+    let check = bregctl(&[
+        "--format",
+        "json",
+        "check",
+        path(&destination),
+        "--deny-warnings",
+    ]);
+    assert_eq!(check.status.code(), Some(1), "{check:?}");
+    let denied_codes: Vec<String> = json_stdout(&check)["diagnostics"]
+        .as_array()
+        .expect("diagnostics")
+        .iter()
+        .map(|diagnostic| diagnostic["code"].as_str().expect("code").to_owned())
+        .collect();
+    assert_eq!(
+        denied_codes,
+        ["breg.access.profile-higher-classification"; 2]
+    );
     // The generated `.invalid` IRI runs through local development and schema
     // tests unchanged; asserting production readiness or building a package
     // for deployment refuses it until the adopter replaces it.
@@ -6249,7 +6270,7 @@ recordTypes:
     assert!(outbox.status.success(), "{outbox:?}");
     assert_eq!(json_stdout(&outbox)["explanation"]["deliveries"], json!([]));
 
-    let webhook = TestProject::from_registry_source(
+    let hook = TestProject::from_registry_source(
         br#"apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
 kind: BRegProject
 project:
@@ -6284,7 +6305,7 @@ recordTypes:
         "json",
         "explain",
         "events",
-        webhook.path().to_str().expect("path is UTF-8"),
+        hook.path().to_str().expect("path is UTF-8"),
     ];
     let first = bregctl(&arguments);
     let second = bregctl(&arguments);
@@ -8437,7 +8458,7 @@ fn lifecycle_parser_surfaces_are_exact_and_value_free() {
     let help = bregctl(&["--help"]);
     assert!(help.status.success());
     let rendered = String::from_utf8(help.stdout).expect("top-level help is UTF-8");
-    for available in ["package", "apply", "verify", "migration", "data", "webhook"] {
+    for available in ["package", "apply", "verify", "migration", "data", "hook"] {
         assert!(rendered
             .lines()
             .any(|line| line.trim_start().starts_with(available)));
@@ -8731,9 +8752,9 @@ fn assert_operator_command_names_both_digests_of_a_package_pin_mismatch(
 fn webhook_operations_name_both_digests_when_the_active_package_misses_its_pin() {
     for command in ["list", "drain"] {
         assert_operator_command_names_both_digests_of_a_package_pin_mismatch(
-            &["webhook", command],
+            &["hook", command],
             &[],
-            "webhook.package.refused",
+            "hook.package.refused",
         );
     }
 }

@@ -420,6 +420,12 @@ fn person_cases() -> Vec<(&'static str, String, String, Expected)> {
             Expected::Refused(Ceiling),
         ),
         (
+            "ordinary create slot without mutations",
+            r#"{"effects":[{"id":"person"}]}"#.into(),
+            script(r#"#{effects:[#{id:"person"}]}"#),
+            Expected::Refused(ResultKind),
+        ),
+        (
             "unknown write slot",
             r#"{"effects":[{"id":"unknown","set":{"name":"Mina"}}]}"#.into(),
             script(r#"#{effects:[#{id:"unknown",set:#{name:"Mina"}}]}"#),
@@ -485,6 +491,34 @@ fn person_outcome_corpus_parity() {
         // for callers that inspect an accepted outcome.
         let _ = assert_parity(case, &action, &person_inputs(), &document, expected);
     }
+}
+
+#[test]
+fn generated_only_create_accepts_empty_mutations_from_both_backends() {
+    let script = r#"fn plan(ctx) { #{effects:[#{id:"person"}]} }"#;
+    let mut action = person_action(script);
+    action.effects.retain(|effect| effect.id == "person");
+    action.effects[0].mutations.clear();
+    let handler = action.handler.as_mut().unwrap();
+    handler.writes.retain(|write| write.id == "person");
+    handler.writes[0].ceiling.fields.clear();
+    handler.writes[0].ceiling.field_types.clear();
+    handler.writes[0].ceiling.required_fields.clear();
+    handler.writes[0].ceiling.reference_sources.clear();
+
+    let outcome = assert_parity(
+        "generated-only create without handler mutations",
+        &action,
+        &person_inputs(),
+        r#"{"effects":[{"id":"person"}]}"#,
+        Expected::Accepted,
+    )
+    .unwrap();
+    let ActionHandlerOutcome::Effects(effects) = outcome else {
+        panic!("effects expected")
+    };
+    assert_eq!(effects.len(), 1);
+    assert!(effects[0].mutations.is_empty());
 }
 
 /// The pinned diagnostic for a representative refusal, proving the parity

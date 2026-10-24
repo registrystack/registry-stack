@@ -1,0 +1,143 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/documents/project/project.v1alpha1.schema.json
+# A complete Document Store project: three DocumentPolicies, the access profiles
+# they reference, and the after-commit URL observers for document events.
+# Startup configuration: `documentsctl check --project` checks it, and the
+# runtime reads it from its package at start. A document grant keeps its
+# expiry; who may hold it follows the active package.
+apiVersion: id.registrystack.org/formats/documents/project/v1alpha1
+kind: DocumentsProject
+project:
+  id: civil-registry-documents
+  version: "1"
+
+accessProfiles:
+  custodian-app:
+    principalClaim: sub
+    requiredScopes: [documents:custody]
+    # The OAuth client ids that may resolve to this profile; a client appears
+    # in exactly one profile.
+    requesterClients: [civil-registry-app]
+    actorKind: service
+    # custodian: places documents in custody and issues document grants.
+    role: custodian
+    # The institution this profile acts for, recorded as the issuing
+    # institution of every document it reserves.
+    institution: civil-registry
+  citizen:
+    principalClaim: sub
+    requiredScopes: [documents:own]
+    requesterClients: [citizen-portal]
+    actorKind: human
+    # represented-principal: the person on whose behalf custody is held.
+    role: represented-principal
+  staff:
+    principalClaim: sub
+    requiredScopes: [documents:read]
+    requesterClients: [case-portal]
+    actorKind: human
+    # recipient: the institution's own staff, named one at a time by a grant.
+    role: recipient
+  reader:
+    principalClaim: sub
+    requiredScopes: [documents:read]
+    requesterClients: [partner-portal]
+    actorKind: human
+    # recipient: reads exactly the document version a document grant names.
+    role: recipient
+
+documentPolicies:
+  citizen-delivery:
+    version: "1"
+    label: Citizen delivery
+    # Profiles that may place a document in custody under this policy.
+    custodyProfiles: [custodian-app]
+    # Profiles that may issue a document grant on a document they hold in
+    # custody under this policy. Empty here: the citizen holds a delivered
+    # document, and the issuing institution never grants on it.
+    grantingProfiles: []
+    # The profile a represented principal authenticates under.
+    representedPrincipalProfile: citizen
+    # Whether the represented principal may issue document grants itself.
+    representedPrincipalGrants: permitted
+    # Who holds a document placed for a named person: represented-principal
+    # makes that person its custodian; institution keeps it with the
+    # reserving system.
+    custodian: represented-principal
+    # Profiles a document grant may name as its recipient (named persons only).
+    recipientProfiles: [reader]
+    mandatoryRestrictions:
+      maximumDocumentBytes: 16777216
+      # Bytes one custodian may hold under this policy, reserved or stored.
+      maximumCustodianBytes: 1073741824
+      allowedContentTypes: [application/pdf]
+      grantExpiryHours: 24
+      maximumGrantExpiryHours: 24
+      # Time between the custodian's removal request, or a rejection, and
+      # erasure of the bytes; at least one hour. Grant expiry and
+      # revocation erase nothing.
+      cleanupGraceHours: 24
+  institutional-custody:
+    version: "1"
+    label: Institutional custody
+    # The owning system places a document in the institution's own custody
+    # and issues document grants to the staff it assigns.
+    custodyProfiles: [custodian-app]
+    grantingProfiles: [custodian-app]
+    # The person the document concerns, when one is named; never a custodian here.
+    representedPrincipalProfile: citizen
+    representedPrincipalGrants: refused
+    custodian: institution
+    recipientProfiles: [staff]
+    mandatoryRestrictions:
+      maximumDocumentBytes: 16777216
+      maximumCustodianBytes: 107374182400
+      allowedContentTypes: [application/pdf, image/jpeg, image/png]
+      grantExpiryHours: 24
+      maximumGrantExpiryHours: 168
+      cleanupGraceHours: 24
+  named-share:
+    version: "1"
+    label: Named share
+    custodyProfiles: [custodian-app, citizen]
+    grantingProfiles: []
+    representedPrincipalProfile: citizen
+    representedPrincipalGrants: permitted
+    custodian: represented-principal
+    recipientProfiles: [reader, staff]
+    mandatoryRestrictions:
+      maximumDocumentBytes: 10485760
+      maximumCustodianBytes: 268435456
+      allowedContentTypes: [application/pdf, image/jpeg, image/png]
+      grantExpiryHours: 24
+      maximumGrantExpiryHours: 168
+      cleanupGraceHours: 24
+
+# After-commit URL observers. Each hears only about documents held under the
+# policies it lists, receives only its trigger's closed projection, and
+# delivers to a destination the runtime configuration binds under
+# destinations.hooks; this file carries no endpoint or secret.
+hooks:
+  - id: document-version-ready
+    phase: after
+    trigger: document-version.ready
+    policies: [citizen-delivery, institutional-custody, named-share]
+    projection: [documentId, versionId, versionDigest, policyId, policyVersion]
+    handler:
+      type: url
+      destinationId: owning-system-events
+  - id: document-version-rejected
+    phase: after
+    trigger: document-version.rejected
+    policies: [citizen-delivery, institutional-custody, named-share]
+    projection: [documentId, versionId, policyId, policyVersion]
+    handler:
+      type: url
+      destinationId: owning-system-events
+  - id: document-grant-changed
+    phase: after
+    trigger: document-grant.changed
+    policies: [citizen-delivery, institutional-custody, named-share]
+    projection: [grantId, change, documentId, versionId, actorKind, expiresAt]
+    handler:
+      type: url
+      destinationId: owning-system-events

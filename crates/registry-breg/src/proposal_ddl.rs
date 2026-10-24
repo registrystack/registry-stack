@@ -279,8 +279,10 @@ fn add_application_policies(
     });
     for operation in [Operation::Create, Operation::Patch] {
         let mut fields = BTreeSet::new();
+        let mut targets_operation = false;
         for effect in &action.effects {
             if effect.target.entity_id == entity.id && effect.operation == operation {
+                targets_operation = true;
                 fields.extend(effect.mutations.iter().map(|mutation| match mutation {
                     CompiledPlanMutation::Set { field, .. }
                     | CompiledPlanMutation::Clear { field } => field.clone(),
@@ -292,9 +294,13 @@ fn add_application_policies(
                 if write.ceiling.target_entity_id == entity.id
                     && write.ceiling.operation == operation
                 {
+                    targets_operation = true;
                     fields.extend(write.ceiling.fields.iter().cloned());
                 }
             }
+        }
+        if operation == Operation::Create && targets_operation {
+            fields.extend(entity.generated_fields().map(|field| field.id.clone()));
         }
         if fields.is_empty() {
             continue;

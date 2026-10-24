@@ -1,0 +1,236 @@
+---
+title: Registry Document Store API
+description: Authentication, exact document versions, uploads, grants, retries, pagination, erasure, and errors for the Document Store HTTP API.
+status: draft
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: unreviewed
+doc_type: reference
+locale: en
+standards_referenced:
+  - openapi
+---
+
+Use the Document Store API to place document bytes in custody, release a verified version to a
+named recipient, and remove content from custody.
+The API is pre-1.0 and held out of releases; document routes use `/v1/`, while the probes use
+`/health` and `/ready`.
+The [generated API operations](../documents/) define every route, field, response, and reachable
+problem code for this development version.
+
+{/* Manually maintained integration reference. The generated contract is
+    products/documents/generated/registry-documents.openapi.json. */}
+{/* Evidence: crates/registry-documents/src/schema.rs, OPERATIONS;
+    release/scripts/release_roster.py, DOCUMENTS_FIRST_RELEASE. */}
+
+## Authentication and authority
+
+Every document request carries `Authorization: Bearer <token>` with an access token from the
+configured issuer, for this deployment's audience and an admitted client.
+The token must match one access profile's client, scopes, actor kind, and principal claim.
+Use the principal selected by that claim when naming a custodian or recipient; it is the token's
+`sub` only when the profile uses `principalClaim: sub`.
+[Access tokens](../../../operate/documents/#access-tokens) gives the exact header and claim rules.
+The probes take no token.
+
+A document's custodian can read its verified bytes and request erasure.
+The system that reserved it for another custodian keeps metadata and status access only: it cannot
+read the bytes, manage grants, or list them.
+Use the returned document's `actions` to present available operations, and handle refusal when an
+operation runs: authority and verification state can change after a read.
+An unknown document and one you may not see both return `404 resource.not-found`.
+
+{/* Evidence: crates/registry-documents/src/auth.rs, authenticate;
+    crates/registry-documents-core/src/access.rs, resolve, standing, allowed_actions;
+    crates/registry-documents/src/service.rs, read, release;
+    crates/registry-documents/tests/postgres_documents.rs,
+    the_owning_system_that_is_not_the_custodian_is_refused_the_content_as_unauthorized. */}
+
+## Reserve, upload, and read a version
+
+Before reserving, read `GET /v1/document-policies` for the policies your profile may use and their
+limits on size, media types, and grant expiry.
+`POST /v1/documents` reserves one document and its single immutable version.
+Send the policy ID, custodian subject, exact byte length, media type, and expected SHA-256 digest
+(`sha256:` followed by 64 lowercase hexadecimal characters), with an `Idempotency-Key`.
+A successful `201` response carries the document, `uploadPath`, and `uploadExpiresAt`.
+Keep the document ID and version ID separately: a grant and a download name the exact version.
+
+Send the complete raw bytes with `PUT` to the returned upload path,
+`/v1/uploads/{uploadId}/content`, using the reserving principal's token and the exact reserved
+`Content-Type`.
+The Store checks length and digest before finalizing the version.
+An incomplete or mismatched upload keeps no finalized content; send the reserved bytes again
+within the upload window.
+Sending identical bytes again to a finalized upload returns its document view; different bytes
+return `409 upload.finalized`.
+An expired reservation returns `410 upload.expired` and requires a new reservation.
+
+{/* Evidence: crates/registry-documents-core/src/wire.rs, ReserveDocumentRequest, ReservationView;
+    crates/registry-documents/src/http.rs, upload;
+    crates/registry-documents/src/service.rs, reserve, reservation, accept_content;
+    crates/registry-documents/tests/postgres_documents.rs,
+    an_expired_or_unknown_upload_is_refused. */}
+
+Upload success records the bytes and schedules content verification; it does not authorize a
+download.
+Read `GET /v1/documents/{documentId}` to observe the version's status.
+Only `ready` content approved under the current verifier binding can be released.
+A pending or suspended version remains unavailable, and a rejected version cannot be downloaded.
+Verifier outages retry in the background; exhausted jobs require operator recovery through
+`documentsctl`, with no public route to supply a verdict or replay a job.
+
+Download the full bytes with
+`GET /v1/documents/{documentId}/versions/{versionId}/content`.
+The response uses the reserved media type, a content length, and `Content-Disposition: attachment`.
+Every download passes through the Store and is checked against the stored digest and length.
+A storage URL is never the access grant.
+
+{/* Evidence: crates/registry-documents-core/src/custody.rs, DocumentStatus, is_releasable;
+    crates/registry-documents/src/service.rs, releasable_digest, download;
+    crates/registry-documents/src/http.rs, download;
+    crates/registry-documents/src/verification.rs, verification_policy;
+    crates/registry-documents/src/schema.rs, OPERATIONS. */}
+
+## Issue and revoke a grant
+
+`POST /v1/documents/{documentId}/grants` takes a `versionId`, a grantee's `subject` and `kind`
+(`human` or `service`), and an `Idempotency-Key`.
+The recipient belongs to the configured issuer.
+Only a caller with grant authority under the policy may issue a grant (the custodian, under a profile the policy lists or as the represented principal when the policy permits it), and the version must be releasable.
+A successful response is `201` with the grant and its fixed `expiresAt`.
+
+Omit `expiryHours` to use the policy default, or choose an integer from one through the policy's
+`maximumGrantExpiryHours`.
+Zero or a value above that maximum returns `422 document-grant.expiry-out-of-range`.
+A grant's issued expiry never slides or changes when the policy default changes.
+At each later read, the recipient must still match the grant's principal and actor kind, and its
+current access profile must remain one of the policy's recipient profiles.
+Issuing a grant does not check which profile a recipient's future token will select.
+
+`GET /v1/document-grants` lists only grants you can redeem now.
+`GET /v1/documents/{documentId}/grants` gives the custodian the document's grant history, including
+revoked and expired grants. The reserving system that is not the custodian gets
+`403 profile.not-authorized`, so it never learns whom the custodian shared with.
+An authorized `DELETE /v1/document-grants/{grantId}` revokes a grant; repeating it returns its
+current view without another change.
+Revocation and expiry stop new downloads, while a download already admitted can finish within
+its transfer deadline.
+Your application must revoke grants when its own entitlement changes; the Store does not consult
+live case assignments or organizational membership.
+
+{/* Evidence: crates/registry-documents-core/src/access.rs, grant_expiry_hours, is_recipient;
+    crates/registry-documents-core/src/problem.rs, DocumentGrantExpiryOutOfRange;
+    crates/registry-documents/src/service/grants.rs, issue_inner, revoke_inner, document_grants,
+    received_grants;
+    crates/registry-documents/tests/postgres_documents.rs,
+    a_grant_releases_one_exact_version_to_its_named_recipient_until_expiry_or_revocation,
+    an_idempotent_grant_retry_after_revocation_releases_nothing,
+    a_transfer_admitted_before_a_revocation_completes. */}
+
+## Retry an uncertain result
+
+The two creation routes require an `Idempotency-Key` of 1 to 128 visible ASCII characters,
+without spaces.
+A key belongs to the verified issuer, actor kind, and subject and to its operation; a grant key is also
+scoped to its document.
+Retry with the same key and request body if the response is lost or returns `503`.
+A failure after commit can leave the resource created, so choosing a new key could duplicate it.
+
+An exact retry rechecks current authority and, if still permitted, returns the existing resource
+as it stands with `201`, without creating another resource or extending a grant.
+A refusal after a policy change does not prove the first attempt failed.
+A different parsed request body under the same key returns `409 idempotency.key-reused`.
+After the configured receipt-retention period, the key stays spent and returns
+`410 idempotency.expired`; reconcile the original resource before choosing a new key.
+There is no separate receipt-lookup route.
+For an uncertain upload, resend the same bytes to the same upload path.
+
+{/* Evidence: crates/registry-documents/src/http.rs, idempotency_key;
+    crates/registry-documents/src/service.rs, key_digest, request_digest, replay, record_key;
+    crates/registry-documents/src/service/grants.rs, issue_operation, issue_inner;
+    crates/registry-documents/tests/postgres_documents.rs,
+    a_response_audit_failure_after_commit_answers_unavailable_and_the_retry_answers_the_commit. */}
+
+## Lists and pagination
+
+`GET /v1/documents` lists documents you hold in custody or reserved.
+Use the received-grants route for documents shared with you.
+Document and grant lists return `items` and, when more results remain, `nextCursor`.
+Pass that value unchanged as `cursor` to the same list route.
+Lists order documents by creation time and grants by issue time, with the ID breaking ties.
+They default to 50 results and accept `limit` from 1 through 100.
+Continue until `nextCursor` is absent, even when a document page is short or empty: current
+access filtering can omit records within a page.
+The policy list is unpaged.
+
+{/* Evidence: crates/registry-documents-core/src/wire.rs, DEFAULT_PAGE_SIZE, MAXIMUM_PAGE_SIZE;
+    crates/registry-documents/src/service.rs, PageRequest, list, placeable_policies;
+    crates/registry-documents/src/service/grants.rs, document_grants, received_grants;
+    crates/registry-documents/tests/postgres_documents.rs,
+    grant_and_document_lists_page_in_a_stable_order. */}
+
+## Expiry and erasure
+
+Grant expiry or revocation removes access and erases no held bytes.
+Only the custodian may request removal with `POST /v1/documents/{documentId}/erasure`, which takes
+no idempotency key.
+It suspends release, revokes active grants, cancels pending verification, and schedules erasure
+after the policy's cleanup grace.
+Repeating the request changes nothing and returns the current document view.
+
+:::danger
+Requesting erasure removes the held content after the cleanup grace, which is at least one hour.
+There is no API to undo removal.
+The Store cannot recall copies a recipient already downloaded.
+:::
+
+Rejection also schedules the rejected bytes for erasure.
+`erased` means the Store can no longer serve the bytes; document and grant records remain.
+Backups, database archives, and provider copies have separate retention obligations.
+[Removal and erasure](../../../operate/documents/#removal-and-erasure) covers operator recovery
+and those storage limits.
+
+{/* Evidence: crates/registry-documents/src/service/erasure.rs, request_erasure_inner;
+    crates/registry-documents-core/src/project.rs, cleanup_grace_hours;
+    crates/registry-documents/tests/postgres_documents.rs,
+    a_custodian_erasure_request_stops_release_and_the_sweep_erases_the_bytes,
+    grant_expiry_and_revocation_erase_nothing_held_in_custody,
+    no_delete_cascades_through_custody_records;
+    products/documents/README.md, Retention and erasure. */}
+
+## Errors and current limits
+
+Failures use `application/problem+json` with `type`, `title`, `status`, `detail`, `code`, and
+`traceId`.
+Branch on `code` and retain the trace ID for support; the fixed title and detail do not echo your
+request values.
+`401 authentication.refused` requires a valid access token; `403 profile.not-authorized` means the
+resolved profile cannot perform the operation.
+For `422`, correct the request according to the named problem, including the grant-expiry bounds.
+`503 service.unavailable` carries `Retry-After: 5`; creation retries must still retain their key.
+The generated operations list the complete closed problem vocabulary for each route.
+
+The runtime defaults to 16 MiB per document.
+PostgreSQL storage allows at most 16 MiB; S3 storage allows a configured ceiling up to 64 MiB.
+A policy may impose a lower ceiling and a total custody quota.
+Labels hold at most 256 bytes and are untrusted display text.
+The current API reserves one version per document, accepts whole uploads, and grants one named
+recipient access to one version.
+Version replacement, resumable uploads, organizational grants, and batch operations are not
+supported.
+
+{/* Evidence: crates/registry-documents-core/src/problem.rs, ProblemCode;
+    crates/registry-documents-core/src/wire.rs, ProblemDocument, MAXIMUM_LABEL_BYTES;
+    crates/registry-documents/src/http.rs, problem_response;
+    crates/registry-documents/src/config.rs, DATABASE_MAXIMUM_DOCUMENT_BYTES,
+    S3_MAXIMUM_DOCUMENT_BYTES;
+    crates/registry-documents/src/schema.rs, OPERATIONS;
+    crates/registry-documents-core/src/project.rs, MandatoryRestrictions. */}
+
+## Next
+
+- [Document Store API operations](../documents/)
+- [Document Store configuration](../../documents-configuration/)
+- [Deploy and operate the Document Store](../../../operate/documents/)

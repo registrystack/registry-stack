@@ -20,12 +20,12 @@ use std::time::{Duration, SystemTime};
 
 use async_trait::async_trait;
 use registry_platform_dispatch::postgres::{
-    enqueue, AttemptAudit, CancelOutcome, Claim, ClaimRefusal, Columns, Decoded, DispatchConfig,
-    DispatchConnection, DispatchEvent, DispatchOutcome, DispatchSql, DispatchStore,
-    DispatchTransport, DispatchWorker, Dispatcher, ExpirySql, JobKey, JobState, JobTable,
-    LeasedJob, Quarantine, QuarantineAudit, QuarantineDisposition, QuarantineReason, ReplayAudit,
-    ReplayOutcome, SelectSql, TargetAction, TransitionAudit, TransitionCode, TransitionOutcome,
-    WorkerConfig,
+    cancel_unattempted, enqueue, AttemptAudit, CancelOutcome, Claim, ClaimRefusal, Columns,
+    Decoded, DispatchConfig, DispatchConnection, DispatchEvent, DispatchOutcome, DispatchSql,
+    DispatchStore, DispatchTransport, DispatchWorker, Dispatcher, ExpirySql, JobKey, JobState,
+    JobTable, LeasedJob, Quarantine, QuarantineAudit, QuarantineDisposition, QuarantineReason,
+    ReplayAudit, ReplayOutcome, SelectSql, TargetAction, TransitionAudit, TransitionCode,
+    TransitionOutcome, WorkerConfig,
 };
 use registry_platform_dispatch::{
     idempotency_key, AttemptTimeoutBound, Backoff, DispatchError, FailureCode, Jitter, JobPolicy,
@@ -1130,6 +1130,110 @@ async fn the_attempt_is_committed_and_audited_before_egress() {
             "attempt_finished:delivered:g1:a1"
         ]
     );
+}
+
+/// Cancel one job inside a caller transaction, as a product does in the
+/// same transaction as the decision that makes the job obsolete.
+async fn cancel_in_transaction(harness: &Harness, key: &JobKey) -> bool {
+    let mut client = connect(&harness.url).await;
+    let transaction = client.transaction().await.expect("transaction");
+    let cancelled = cancel_unattempted(&transaction, &harness.table, key)
+        .await
+        .expect("the cancel runs");
+    transaction.commit().await.expect("commit");
+    cancelled
+}
+
+#[tokio::test]
+async fn cancel_unattempted_withdraws_only_a_pending_job_never_attempted() {
+    let harness = harness().await;
+    let dispatcher = dispatcher(&harness);
+
+    // Claim and fail one job first, so it is pending again with an attempt
+    // behind it. Its retry is far enough out that it is never due during the
+    // test, so the final claim can only find the cancelled job.
+    let attempted = enqueue_message(
+        &harness,
+        &Message {
+            initial_backoff_ms: 600_000,
+            maximum_backoff_ms: 600_000,
+            ..Message::default()
+        },
+    )
+    .await;
+    let job = dispatcher.claim().await.unwrap().leased().unwrap();
+    assert_eq!(job.key, attempted);
+    dispatcher
+        .finish(
+            &job,
+            Sent {
+                outcome: transient(),
+                detail: (),
+            },
+        )
+        .await
+        .expect("the failed attempt is recorded");
+    // One leased job and one delivered job.
+    let leased = enqueue_message(&harness, &Message::default()).await;
+    let held = dispatcher.claim().await.unwrap().leased().unwrap();
+    assert_eq!(held.key, leased);
+    let delivered = enqueue_message(&harness, &Message::default()).await;
+    let job = dispatcher.claim().await.unwrap().leased().unwrap();
+    assert_eq!(job.key, delivered);
+    dispatcher
+        .finish(
+            &job,
+            Sent {
+                outcome: accepted(),
+                detail: (),
+            },
+        )
+        .await
+        .expect("the delivery is recorded");
+    let unattempted = enqueue_message(&harness, &Message::default()).await;
+
+    assert!(cancel_in_transaction(&harness, &unattempted).await);
+    let row = state_row(&harness, &unattempted).await;
+    assert_eq!(row.state, "cancelled");
+    assert_eq!(row.attempt, 0, "a cancelled job was never sent");
+    let next_attempt: Option<SystemTime> = harness
+        .admin
+        .query_one(
+            &format!(
+                "SELECT next_attempt_at FROM {}.{JOB_TABLE} WHERE message_id = $1",
+                harness.schema
+            ),
+            &[&unattempted.id()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(next_attempt, None);
+    assert!(
+        !cancel_in_transaction(&harness, &unattempted).await,
+        "a second cancel changes nothing"
+    );
+
+    for (key, state, attempt) in [
+        (&attempted, "pending", 1),
+        (&leased, "leased", 1),
+        (&delivered, "delivered", 1),
+    ] {
+        assert!(
+            !cancel_in_transaction(&harness, key).await,
+            "a {state} job is left alone"
+        );
+        let row = state_row(&harness, key).await;
+        assert_eq!(row.state, state);
+        assert_eq!(row.attempt, attempt);
+    }
+    let absent = JobKey::new(Uuid::new_v4(), RECIPIENT).expect("a bounded key");
+    assert!(!cancel_in_transaction(&harness, &absent).await);
+
+    // The cancel left no audit of its own: it is the caller's write.
+    assert!(audit_trail(&harness, &unattempted).await.is_empty());
+    // A cancelled job is never claimed.
+    assert!(matches!(dispatcher.claim().await, Ok(Claim::Idle)));
 }
 
 #[tokio::test]
@@ -3673,5 +3777,64 @@ async fn terminal_prune_rechecks_state_cutoff_batch_bound_and_caller_transaction
         messages,
         keys.len() as i64,
         "the product owns parent-record retention"
+    );
+}
+
+#[tokio::test]
+async fn the_shape_check_refuses_a_lease_without_an_expiry() {
+    let harness = harness().await;
+    let dispatcher = dispatcher(&harness);
+    let key = enqueue_message(&harness, &Message::default()).await;
+    let job = dispatcher.claim().await.unwrap().leased().unwrap();
+    assert_eq!(job.key, key);
+
+    // A NULL expiry makes `lease_expires_at > attempt_started_at` NULL, and
+    // PostgreSQL admits a check that is NULL, so the leased arm has to
+    // require the expiry itself. A lease that never expires is never reaped.
+    let error = harness
+        .admin
+        .execute(
+            &format!(
+                "UPDATE {}.{JOB_TABLE} SET lease_expires_at = NULL
+                  WHERE message_id = $1 AND recipient = $2",
+                harness.schema
+            ),
+            &[&key.id(), &key.part()],
+        )
+        .await
+        .expect_err("a leased job without a lease expiry is refused");
+    let database = error.as_db_error().expect("a database refusal");
+    assert_eq!(
+        database.code(),
+        &tokio_postgres::error::SqlState::CHECK_VIOLATION
+    );
+    assert_eq!(database.constraint(), Some("test_message_jobs_shape"));
+
+    let error = harness
+        .admin
+        .execute(
+            &format!(
+                "INSERT INTO {}.{JOB_TABLE}
+                     (message_id, recipient, generation, state, attempt,
+                      attempt_started_at, lease_token)
+                 VALUES ($1, 'recipient-2', 1, 'leased', 1,
+                         transaction_timestamp(), gen_random_uuid())",
+                harness.schema
+            ),
+            &[&key.id()],
+        )
+        .await
+        .expect_err("a leased job inserted without a lease expiry is refused");
+    let database = error.as_db_error().expect("a database refusal");
+    assert_eq!(
+        database.code(),
+        &tokio_postgres::error::SqlState::CHECK_VIOLATION
+    );
+    assert_eq!(database.constraint(), Some("test_message_jobs_shape"));
+
+    assert_eq!(
+        state_row(&harness, &key).await.state,
+        "leased",
+        "the refused write leaves the live lease in place"
     );
 }

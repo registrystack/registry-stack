@@ -30,7 +30,7 @@
       "description": "Base Registry Engine fixed Proposal lifecycle event schema, reproduced byte-for-byte from its packaged artifact.",
       "source": {
         "path": "crates/registry-breg/src/proposal_hooks.rs",
-        "sha256": "85e00aa997167fea3047cc9a94378bc5db069dd7a42bca4aa2cfa65561931609"
+        "sha256": "02fe083f3d06c107298847923f42c0036ee98d5ba12347e527e886c0cedd2178"
       },
       "artifact": {
         "path": "products/breg/generated/event-schemas/proposal-lifecycle.schema.json",
@@ -2294,6 +2294,462 @@
       }
     },
     {
+      "uri": "https://id.registrystack.org/problems/registry-documents/authentication/refused",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "documents",
+      "title": "Authentication refused",
+      "description": "The bearer credential is missing, invalid, or expired. Sign in again.",
+      "source": {
+        "path": "crates/registry-documents-core/src/problem.rs",
+        "sha256": "68327ca116e11364be13f8b00388fb6c513e09d91520bd99f5b562d53db61acd"
+      },
+      "problem": {
+        "code": "authentication.refused",
+        "httpStatuses": [
+          401
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-documents/custody/not-permitted",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "documents",
+      "title": "Custody not permitted",
+      "description": "The caller's access profile may not place a document in this custody, or the request names an issuing institution other than the profile's.",
+      "source": {
+        "path": "crates/registry-documents-core/src/problem.rs",
+        "sha256": "68327ca116e11364be13f8b00388fb6c513e09d91520bd99f5b562d53db61acd"
+      },
+      "problem": {
+        "code": "custody.not-permitted",
+        "httpStatuses": [
+          403
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-documents/custody/quota-exceeded",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "documents",
+      "title": "Custody quota exceeded",
+      "description": "The upload would exceed the bytes this custodian may hold under the policy.",
+      "source": {
+        "path": "crates/registry-documents-core/src/problem.rs",
+        "sha256": "68327ca116e11364be13f8b00388fb6c513e09d91520bd99f5b562d53db61acd"
+      },
+      "problem": {
+        "code": "custody.quota-exceeded",
+        "httpStatuses": [
+          422
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-documents/document-grant/expiry-out-of-range",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "documents",
+      "title": "Document grant expiry out of range",
+      "description": "The requested grant expiry is outside the document policy bounds. Choose at least one hour and no more than the policy maximum.",
+      "source": {
+        "path": "crates/registry-documents-core/src/problem.rs",
+        "sha256": "68327ca116e11364be13f8b00388fb6c513e09d91520bd99f5b562d53db61acd"
+      },
+      "problem": {
+        "code": "document-grant.expiry-out-of-range",
+        "httpStatuses": [
+          422
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-documents/document-policy/unknown",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "documents",
+      "title": "Document policy unknown",
+      "description": "The request names a document policy this deployment does not hold.",
+      "source": {
+        "path": "crates/registry-documents-core/src/problem.rs",
+        "sha256": "68327ca116e11364be13f8b00388fb6c513e09d91520bd99f5b562d53db61acd"
+      },
+      "problem": {
+        "code": "document-policy.unknown",
+        "httpStatuses": [
+          422
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-documents/document-version/not-releasable",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "documents",
+      "title": "Document version not releasable",
+      "description": "The document version is not ready for release. Read its status and try again once it is ready.",
+      "source": {
+        "path": "crates/registry-documents-core/src/problem.rs",
+        "sha256": "68327ca116e11364be13f8b00388fb6c513e09d91520bd99f5b562d53db61acd"
+      },
+      "problem": {
+        "code": "document-version.not-releasable",
+        "httpStatuses": [
+          409
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-documents/document/content-type-not-allowed",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "documents",
+      "title": "Content type not allowed",
+      "description": "The declared media type is not one the document policy allows.",
+      "source": {
+        "path": "crates/registry-documents-core/src/problem.rs",
+        "sha256": "68327ca116e11364be13f8b00388fb6c513e09d91520bd99f5b562d53db61acd"
+      },
+      "problem": {
+        "code": "document.content-type-not-allowed",
+        "httpStatuses": [
+          422
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-documents/document/too-large",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "documents",
+      "title": "Document too large",
+      "description": "The declared length exceeds the document policy maximum.",
+      "source": {
+        "path": "crates/registry-documents-core/src/problem.rs",
+        "sha256": "68327ca116e11364be13f8b00388fb6c513e09d91520bd99f5b562d53db61acd"
+      },
+      "problem": {
+        "code": "document.too-large",
+        "httpStatuses": [
+          422
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-documents/idempotency/expired",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "documents",
+      "title": "Idempotency window expired",
+      "description": "The stored response for this idempotency key has expired. Reconcile the original submission before choosing a new key.",
+      "source": {
+        "path": "crates/registry-documents-core/src/problem.rs",
+        "sha256": "68327ca116e11364be13f8b00388fb6c513e09d91520bd99f5b562d53db61acd"
+      },
+      "problem": {
+        "code": "idempotency.expired",
+        "httpStatuses": [
+          410
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-documents/idempotency/key-reused",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "documents",
+      "title": "Idempotency key reused",
+      "description": "This idempotency key was used for a different request.",
+      "source": {
+        "path": "crates/registry-documents-core/src/problem.rs",
+        "sha256": "68327ca116e11364be13f8b00388fb6c513e09d91520bd99f5b562d53db61acd"
+      },
+      "problem": {
+        "code": "idempotency.key-reused",
+        "httpStatuses": [
+          409
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-documents/profile/not-authorized",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "documents",
+      "title": "Profile not authorized",
+      "description": "The caller's access profile does not permit this operation.",
+      "source": {
+        "path": "crates/registry-documents-core/src/problem.rs",
+        "sha256": "68327ca116e11364be13f8b00388fb6c513e09d91520bd99f5b562d53db61acd"
+      },
+      "problem": {
+        "code": "profile.not-authorized",
+        "httpStatuses": [
+          403
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-documents/request/body-too-large",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "documents",
+      "title": "Payload too large",
+      "description": "The request body exceeds the accepted size.",
+      "source": {
+        "path": "crates/registry-documents-core/src/problem.rs",
+        "sha256": "68327ca116e11364be13f8b00388fb6c513e09d91520bd99f5b562d53db61acd"
+      },
+      "problem": {
+        "code": "request.body-too-large",
+        "httpStatuses": [
+          413
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-documents/request/invalid",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "documents",
+      "title": "Request invalid",
+      "description": "The request could not be read as a Document Store request.",
+      "source": {
+        "path": "crates/registry-documents-core/src/problem.rs",
+        "sha256": "68327ca116e11364be13f8b00388fb6c513e09d91520bd99f5b562d53db61acd"
+      },
+      "problem": {
+        "code": "request.invalid",
+        "httpStatuses": [
+          400
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-documents/request/method-not-allowed",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "documents",
+      "title": "Method not allowed",
+      "description": "The route exists but not for this method.",
+      "source": {
+        "path": "crates/registry-documents-core/src/problem.rs",
+        "sha256": "68327ca116e11364be13f8b00388fb6c513e09d91520bd99f5b562d53db61acd"
+      },
+      "problem": {
+        "code": "request.method-not-allowed",
+        "httpStatuses": [
+          405
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-documents/request/not-found",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "documents",
+      "title": "Not found",
+      "description": "The requested route does not exist.",
+      "source": {
+        "path": "crates/registry-documents-core/src/problem.rs",
+        "sha256": "68327ca116e11364be13f8b00388fb6c513e09d91520bd99f5b562d53db61acd"
+      },
+      "problem": {
+        "code": "request.not-found",
+        "httpStatuses": [
+          404
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-documents/request/unprocessable",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "documents",
+      "title": "Request unprocessable",
+      "description": "The request body could not be processed.",
+      "source": {
+        "path": "crates/registry-documents-core/src/problem.rs",
+        "sha256": "68327ca116e11364be13f8b00388fb6c513e09d91520bd99f5b562d53db61acd"
+      },
+      "problem": {
+        "code": "request.unprocessable",
+        "httpStatuses": [
+          422
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-documents/request/unsupported-media-type",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "documents",
+      "title": "Unsupported media type",
+      "description": "The request body is not JSON.",
+      "source": {
+        "path": "crates/registry-documents-core/src/problem.rs",
+        "sha256": "68327ca116e11364be13f8b00388fb6c513e09d91520bd99f5b562d53db61acd"
+      },
+      "problem": {
+        "code": "request.unsupported-media-type",
+        "httpStatuses": [
+          415
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-documents/resource/not-found",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "documents",
+      "title": "Not found",
+      "description": "The requested resource does not exist or is not available to the caller.",
+      "source": {
+        "path": "crates/registry-documents-core/src/problem.rs",
+        "sha256": "68327ca116e11364be13f8b00388fb6c513e09d91520bd99f5b562d53db61acd"
+      },
+      "problem": {
+        "code": "resource.not-found",
+        "httpStatuses": [
+          404
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-documents/service/unavailable",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "documents",
+      "title": "Document Store unavailable",
+      "description": "The Document Store is unavailable. Try again after the service recovers.",
+      "source": {
+        "path": "crates/registry-documents-core/src/problem.rs",
+        "sha256": "68327ca116e11364be13f8b00388fb6c513e09d91520bd99f5b562d53db61acd"
+      },
+      "problem": {
+        "code": "service.unavailable",
+        "httpStatuses": [
+          503
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-documents/upload/content-type-mismatch",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "documents",
+      "title": "Content type mismatch",
+      "description": "The content type differs from the media type the upload reserved.",
+      "source": {
+        "path": "crates/registry-documents-core/src/problem.rs",
+        "sha256": "68327ca116e11364be13f8b00388fb6c513e09d91520bd99f5b562d53db61acd"
+      },
+      "problem": {
+        "code": "upload.content-type-mismatch",
+        "httpStatuses": [
+          422
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-documents/upload/digest-mismatch",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "documents",
+      "title": "Digest mismatch",
+      "description": "The content does not match the expected digest. Nothing was kept; send the reserved content again.",
+      "source": {
+        "path": "crates/registry-documents-core/src/problem.rs",
+        "sha256": "68327ca116e11364be13f8b00388fb6c513e09d91520bd99f5b562d53db61acd"
+      },
+      "problem": {
+        "code": "upload.digest-mismatch",
+        "httpStatuses": [
+          422
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-documents/upload/expired",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "documents",
+      "title": "Upload expired",
+      "description": "The upload reservation has expired. Reserve a new upload.",
+      "source": {
+        "path": "crates/registry-documents-core/src/problem.rs",
+        "sha256": "68327ca116e11364be13f8b00388fb6c513e09d91520bd99f5b562d53db61acd"
+      },
+      "problem": {
+        "code": "upload.expired",
+        "httpStatuses": [
+          410
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-documents/upload/finalized",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "documents",
+      "title": "Upload finalized",
+      "description": "The upload already holds other content and cannot be replaced.",
+      "source": {
+        "path": "crates/registry-documents-core/src/problem.rs",
+        "sha256": "68327ca116e11364be13f8b00388fb6c513e09d91520bd99f5b562d53db61acd"
+      },
+      "problem": {
+        "code": "upload.finalized",
+        "httpStatuses": [
+          409
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-documents/upload/length-mismatch",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "documents",
+      "title": "Length mismatch",
+      "description": "The content length differs from the reserved length. Nothing was kept; send the reserved content again.",
+      "source": {
+        "path": "crates/registry-documents-core/src/problem.rs",
+        "sha256": "68327ca116e11364be13f8b00388fb6c513e09d91520bd99f5b562d53db61acd"
+      },
+      "problem": {
+        "code": "upload.length-mismatch",
+        "httpStatuses": [
+          422
+        ]
+      }
+    },
+    {
       "uri": "https://id.registrystack.org/problems/registry-evidence/auth/invalid-credential",
       "kind": "problem",
       "status": "active",
@@ -3687,7 +4143,7 @@
       "description": "Base Registry Engine portable Action contract export schema, reproduced from the canonical compiled project.",
       "source": {
         "path": "crates/registry-breg/src/artifacts.rs",
-        "sha256": "23687fb23e57f4a886c53f5af845c8c1ffd0bc6d86008ef7e7faa4153ba63386"
+        "sha256": "981160f7d03a9ff2b8ca1281f13249c1663472a82d000cb45afa5b6b19f0e6a8"
       },
       "artifact": {
         "path": "products/breg/generated/facility/generated/action-contracts.schema.json",
@@ -3745,7 +4201,7 @@
       },
       "artifact": {
         "path": "products/breg/generated/tools/dev-clients.v1alpha1.schema.json",
-        "sha256": "58fd684bc91478e42ec0e8f92effeab533f5b89caf720b7ad1e139b8ce0c54ef",
+        "sha256": "5020d8c8d12191760b03bfd268a0f11a8a88b7bc06982063573b7e48c9950fae",
         "mediaType": "application/schema+json"
       }
     },
@@ -3853,7 +4309,7 @@
       },
       "artifact": {
         "path": "products/breg/generated/tools/migration-descriptor.v1alpha1.schema.json",
-        "sha256": "2213fb509528694eb088691c68036b318d75e633e405018c72cd8d28ee77fdb7",
+        "sha256": "100315e48b363b9f32004f472633a0710816abb6dce52129f2f98513dfd0d8ab",
         "mediaType": "application/schema+json"
       }
     },
@@ -3903,11 +4359,11 @@
       "description": "Base Registry Engine project authoring JSON Schema.",
       "source": {
         "path": "crates/registry-breg/src/schema.rs",
-        "sha256": "3611b4c909a7dbd6a371c3590dfc086434fda9ff0a90193a17fa7035d20b1dd3"
+        "sha256": "a4f271e6bce5bb3f80aea875d47589081660c95384be57782aed60216f753005"
       },
       "artifact": {
         "path": "products/breg/generated/authoring/registry-module.schema.json",
-        "sha256": "d65b89c37268c96cc059b18511a8397063047e591a0d1bacfbcc19b484465e7f",
+        "sha256": "b7f99fad60afc3a166529b52e51e765f6e7a78e98b10a4743dce09c8b23f47d9",
         "mediaType": "application/schema+json"
       }
     },
@@ -3921,11 +4377,11 @@
       "description": "Base Registry Engine project authoring JSON Schema.",
       "source": {
         "path": "crates/registry-breg/src/schema.rs",
-        "sha256": "3611b4c909a7dbd6a371c3590dfc086434fda9ff0a90193a17fa7035d20b1dd3"
+        "sha256": "a4f271e6bce5bb3f80aea875d47589081660c95384be57782aed60216f753005"
       },
       "artifact": {
         "path": "products/breg/generated/authoring/registry-project.schema.json",
-        "sha256": "6b95d0925e65d86dbfb351fd089497584d7cad7f5c6935a311d082c533abfa6f",
+        "sha256": "a707783337ff4117a11512509d2c9354305e7e91d27db4e5dfd069b2bbe4ef3a",
         "mediaType": "application/schema+json"
       }
     },
@@ -4011,11 +4467,11 @@
       "description": "Base Registry Engine runtime configuration JSON Schema.",
       "source": {
         "path": "crates/registry-breg/src/schema.rs",
-        "sha256": "3611b4c909a7dbd6a371c3590dfc086434fda9ff0a90193a17fa7035d20b1dd3"
+        "sha256": "a4f271e6bce5bb3f80aea875d47589081660c95384be57782aed60216f753005"
       },
       "artifact": {
         "path": "products/breg/generated/runtime/runtime.schema.json",
-        "sha256": "98d90628f2edef3f491e885ce72415c8c2e1098adc1a71b74ce6b8ba44b6bccf",
+        "sha256": "3b486d00ae22ddc2cf42d40e5fba33a9de5c2c4ae110ab6a899b16e1261b51c9",
         "mediaType": "application/schema+json"
       }
     },
@@ -4137,11 +4593,11 @@
       "description": "Registry Casework runtime configuration JSON Schema.",
       "source": {
         "path": "crates/registry-casework/src/schema.rs",
-        "sha256": "bccc84b7d08eb68cf9b953845f93ab3c545a647d2324a761248853cc2d89123a"
+        "sha256": "0e260ef7b277b4fbc67ee96a4d24f897c5ca05df5ff85a743792d7173ca677e5"
       },
       "artifact": {
         "path": "products/casework/generated/runtime/runtime.schema.json",
-        "sha256": "d2d840eaca8141caae26af9b6dca3afd9c396622e7d9365024cd3b03dd9c2036",
+        "sha256": "fce28345a617548109021fc23f493be6c32288a71dd43f81fa4be78eefc2cd1e",
         "mediaType": "application/schema+json"
       }
     },
@@ -4268,6 +4724,96 @@
       "artifact": {
         "path": "products/discovery/schemas/runtime.schema.json",
         "sha256": "d4c5894f466ce1683e7d0b3db2b86413fa71cb7cea81843d12dc1ccbafd5cff8",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/schemas/documents/events/document-grant-changed.v1alpha1.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "documents",
+      "title": "Registry Stack Document Store document-grant.changed event data",
+      "description": "Registry Document Store event data JSON Schemas, one per event family.",
+      "source": {
+        "path": "crates/registry-documents/src/schema.rs",
+        "sha256": "9d6fc4ae1e652e78cb3de6410e3fb044ea2883e468db99e10bbb7ac4022a4914"
+      },
+      "artifact": {
+        "path": "products/documents/generated/events/document-grant-changed.schema.json",
+        "sha256": "dc7d339a46f7450b1c158e7c5bce237f3c1c5ea54a03c1b3fa3e53cb54a1c4a1",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/schemas/documents/events/document-version-ready.v1alpha1.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "documents",
+      "title": "Registry Stack Document Store document-version.ready event data",
+      "description": "Registry Document Store event data JSON Schemas, one per event family.",
+      "source": {
+        "path": "crates/registry-documents/src/schema.rs",
+        "sha256": "9d6fc4ae1e652e78cb3de6410e3fb044ea2883e468db99e10bbb7ac4022a4914"
+      },
+      "artifact": {
+        "path": "products/documents/generated/events/document-version-ready.schema.json",
+        "sha256": "d341927b2bb9a139cebe16a2edff9acaf6b069c9863b6f6f12108be6e4cd0731",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/schemas/documents/events/document-version-rejected.v1alpha1.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "documents",
+      "title": "Registry Stack Document Store document-version.rejected event data",
+      "description": "Registry Document Store event data JSON Schemas, one per event family.",
+      "source": {
+        "path": "crates/registry-documents/src/schema.rs",
+        "sha256": "9d6fc4ae1e652e78cb3de6410e3fb044ea2883e468db99e10bbb7ac4022a4914"
+      },
+      "artifact": {
+        "path": "products/documents/generated/events/document-version-rejected.schema.json",
+        "sha256": "02988cabcddaa2560bc4efae9d8ad45bbc800fb2be14abfbb59533112e1c892a",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/schemas/documents/project/project.v1alpha1.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "documents",
+      "title": "Registry Stack Document Store project",
+      "description": "Registry Document Store project JSON Schema.",
+      "source": {
+        "path": "crates/registry-documents/src/schema.rs",
+        "sha256": "9d6fc4ae1e652e78cb3de6410e3fb044ea2883e468db99e10bbb7ac4022a4914"
+      },
+      "artifact": {
+        "path": "products/documents/generated/project/project.schema.json",
+        "sha256": "43d58cc3028e7a97f91929625aeff1ec243f937e16ee455de8f3cb1caa4675b7",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/schemas/documents/runtime/runtime.v1alpha1.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "documents",
+      "title": "Registry Stack Document Store runtime configuration",
+      "description": "Registry Document Store runtime configuration JSON Schema.",
+      "source": {
+        "path": "crates/registry-documents/src/schema.rs",
+        "sha256": "9d6fc4ae1e652e78cb3de6410e3fb044ea2883e468db99e10bbb7ac4022a4914"
+      },
+      "artifact": {
+        "path": "products/documents/generated/runtime/runtime.schema.json",
+        "sha256": "8f4833f26187b81d360edb0849313806ecdc55191a2dc1bbad731023130fa873",
         "mediaType": "application/schema+json"
       }
     },
@@ -4821,11 +5367,11 @@
       "description": "Registry Scheduling runtime configuration JSON Schema.",
       "source": {
         "path": "crates/registry-scheduling/src/schema.rs",
-        "sha256": "95ed07d3de2d4259a94b34c5254015272f973d9c7bc6ec7dceea4d3c34e735a9"
+        "sha256": "c2b892dbabea581b983f28991dd206a00f252076357f033a7164c2599a92ac5c"
       },
       "artifact": {
         "path": "products/scheduling/generated/runtime/runtime.schema.json",
-        "sha256": "1500f7e2e90ad90139df9141d3d8ff1d850f9dca54469f469f7493ad96550103",
+        "sha256": "66ee663ec4f54e72590d2fc5a94c094b0e6342d39ae05ceda0e824bef7292d40",
         "mediaType": "application/schema+json"
       }
     },

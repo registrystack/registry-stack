@@ -424,6 +424,7 @@ where the database uses split roles.
 
 ```sh
 caseworkctl check ./casework --runtime-config /etc/registry-casework/runtime.yaml
+caseworkctl check ./casework --production
 caseworkctl package ./casework --dry-run
 caseworkctl package ./casework --output /srv/registry-casework/package
 caseworkctl doctor --runtime-config /etc/registry-casework/runtime.yaml
@@ -433,7 +434,10 @@ caseworkctl status --runtime-config /etc/registry-casework/runtime.yaml
 casework --runtime-config /etc/registry-casework/runtime.yaml serve
 ```
 
-`check --runtime-config` checks authored configuration offline. `plan` reads
+`check --runtime-config` checks authored configuration offline. `check
+--production` also reads the exact package input closure and points an unpaired
+context provider back to its authored `description` with the `provider pair`
+recovery command. It writes no package and contacts no runtime dependency. `plan` reads
 the configured database; `doctor` also checks the audit destination. `apply` alone
 uses the migration credential and records package activation. A candidate
 that removes a still-needed policy, producer, profile, team, provider, or

@@ -507,6 +507,89 @@ fn create_effects_still_require_an_explicit_identifier() {
 }
 
 #[test]
+fn create_effects_may_rely_entirely_on_server_generated_fields() {
+    use serde_json::json;
+
+    for (execution, operation) in [
+        (json!({"mode": "immediate"}), "invoke"),
+        (
+            json!({
+                "mode": "proposal",
+                "proposal": {
+                    "review": {"type": "none"},
+                    "application": {"mode": "manual"},
+                    "retention": {"mode": "retain"}
+                }
+            }),
+            "start",
+        ),
+    ] {
+        let project = json!({
+            "datasets": [{"id": "test-dataset"}],
+            "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
+            "kind": "BRegProject",
+            "project": {
+                "id": "generated-only-action",
+                "version": "1",
+                "defaultLanguage": "en",
+                "canonicalBaseIri": "https://authoring.example.test"
+            },
+            "recordTypes": [{
+                "id": "registration",
+                "primaryDataset": "test-dataset",
+                "route": "registrations",
+                "mutationMode": "mutable",
+                "fields": [{
+                    "id": "number",
+                    "type": "string",
+                    "minimumLength": 1,
+                    "maximumLength": 32,
+                    "required": true,
+                    "classification": "internal",
+                    "generate": {"type": "sequence", "minimumDigits": 1}
+                }]
+            }],
+            "actions": [{
+                "id": "register",
+                "inputs": [{
+                    "id": "confirmed",
+                    "type": "boolean",
+                    "required": true,
+                    "classification": "internal"
+                }],
+                "execution": execution,
+                "plan": {"type": "fixed", "effects": [{
+                    "id": "registration",
+                    "target": {"recordType": "registration"},
+                    "operation": "create",
+                    "set": {}
+                }]}
+            }],
+            "accessProfiles": [{
+                "id": "operator",
+                "default": true,
+                "principalClaim": "principal",
+                "requiredScopes": "unrestricted",
+                "permissions": {"actions": [{
+                    "action": "register",
+                    "operations": [operation],
+                    "targets": [{
+                        "recordType": "registration",
+                        "rowBoundaries": "unrestricted"
+                    }]
+                }]}
+            }]
+        });
+
+        let compiled = compile_json(&serde_json::to_vec(&project).unwrap())
+            .expect("a create effect may contain only generated fields");
+        assert!(compiled.actions().actions[0].effects[0]
+            .mutations
+            .is_empty());
+    }
+}
+
+#[test]
 fn action_grants_refuse_request_metadata_projection_overrides() {
     let mut source: serde_json::Value =
         serde_json::from_str(&household_contact_project("")).unwrap();
@@ -844,6 +927,104 @@ fn action_field_and_snapshot_ceilings_refuse_otherwise_valid_plans() {
                 && diagnostic.path == "project.package"
         }));
     }
+}
+
+#[test]
+fn generated_create_fields_count_toward_the_proposal_snapshot_ceiling() {
+    use serde_json::{json, Map, Value};
+
+    let mut fields = vec![json!({
+        "id": "description",
+        "type": "string",
+        "maximumLength": 100_000,
+        "required": true,
+        "classification": "internal"
+    })];
+    for index in 0..127 {
+        fields.push(json!({
+            "id": format!("generated-{index}"),
+            "type": "string",
+            "minimumLength": 1,
+            "maximumLength": 256,
+            "required": true,
+            "classification": "internal",
+            "generate": {
+                "type": "random",
+                "length": 128
+            }
+        }));
+    }
+    let project = json!({
+        "datasets": [{"id": "test-dataset"}],
+        "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
+        "kind": "BRegProject",
+        "project": {
+            "id": "generated-proposal-snapshot-bound",
+            "version": "1",
+            "defaultLanguage": "en",
+            "canonicalBaseIri": "https://authoring.example.test"
+        },
+        "recordTypes": [{
+            "id": "bounded-record",
+            "primaryDataset": "test-dataset",
+            "route": "bounded-records",
+            "mutationMode": "mutable",
+            "fields": fields
+        }],
+        "actions": [{
+            "execution": {
+                "mode": "proposal",
+                "proposal": {
+                    "review": {"type": "none"},
+                    "application": {"mode": "manual"},
+                    "retention": {"mode": "retain"}
+                }
+            },
+            "id": "create-bounded-record",
+            "inputs": [{
+                "id": "description",
+                "type": "string",
+                "maximumLength": 100_000,
+                "required": true,
+                "classification": "internal"
+            }],
+            "plan": {
+                "type": "fixed",
+                "effects": [{
+                    "id": "created-record",
+                    "target": {"recordType": "bounded-record"},
+                    "operation": "create",
+                    "set": Value::Object(Map::from_iter([(
+                        "description".to_owned(),
+                        json!({"fromInput": "description"})
+                    )]))
+                }]
+            }
+        }],
+        "accessProfiles": [{
+            "id": "operator",
+            "default": true,
+            "principalClaim": "principal",
+            "requiredScopes": "unrestricted",
+            "permissions": {"actions": [{
+                "action": "create-bounded-record",
+                "operations": ["start"],
+                "targets": [{"recordType": "bounded-record", "rowBoundaries": "unrestricted"}]
+            }]}
+        }]
+    });
+
+    let failure = compile_json(&serde_json::to_vec(&project).unwrap())
+        .expect_err("generated fields must not overflow the Proposal snapshot at Submit");
+    assert_eq!(
+        failure
+            .diagnostics()
+            .iter()
+            .filter(|diagnostic| diagnostic.severity == DiagnosticSeverity::Error)
+            .map(|diagnostic| diagnostic.code.as_str())
+            .collect::<Vec<_>>(),
+        vec!["breg.action.bounds-snapshot-bytes"]
+    );
 }
 
 #[test]

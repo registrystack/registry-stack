@@ -8,13 +8,13 @@ use serde::{Deserialize, Serialize};
 use crate::artifacts::GeneratedArtifacts;
 use crate::contract::{
     AccessLogSource, AccessProfileSource, BatchSource, Classification, ConstraintSource,
-    EventConditionSource, FieldTypeSource, HookSource, ManifestProjectionCatalogSource,
-    ManifestProjectionDataServiceSource, ManifestProjectionDatasetSource,
-    ManifestProjectionDistributionSource, ManifestProjectionEntitySource,
-    ManifestProjectionPublicServiceSource, ManifestProjectionVocabularySource, MutationMode,
-    NormalizationStep, Operation, PackageIdentitySource, ProvenanceFieldSource,
-    RecipientGroupSource, RecipientOrganizationSource, RowBoundarySource, TemporalSource,
-    ValidTimeRole, WebhookAuthenticationProfile, WebhookDeadLetterMode,
+    EventConditionSource, FieldTypeSource, HookAuthenticationProfile, HookDeadLetterMode,
+    HookSource, ManifestProjectionCatalogSource, ManifestProjectionDataServiceSource,
+    ManifestProjectionDatasetSource, ManifestProjectionDistributionSource,
+    ManifestProjectionEntitySource, ManifestProjectionPublicServiceSource,
+    ManifestProjectionVocabularySource, MutationMode, NormalizationStep, Operation,
+    PackageIdentitySource, ProvenanceFieldSource, RecipientGroupSource,
+    RecipientOrganizationSource, RowBoundarySource, TemporalSource, ValidTimeRole,
 };
 use crate::diagnostics::Diagnostic;
 use crate::generated_ddl::DdlInventory;
@@ -39,6 +39,8 @@ pub struct CompiledField {
     /// `physical_name` points at the envelope column.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub encryption: Option<CompiledFieldEncryption>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generate: Option<CompiledGeneratedIdentifier>,
     pub display: crate::contract::DisplaySource,
     pub relationship: Option<crate::contract::RelationshipSource>,
 }
@@ -60,6 +62,28 @@ pub struct CompiledBlindIndex {
     pub physical_name: String,
     pub normalization: Vec<NormalizationStep>,
     pub unique: bool,
+}
+
+/// Server-owned business identifier generation attached to one stored string
+/// field. This does not replace the canonical record UUID.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CompiledGeneratedIdentifier {
+    pub strategy: CompiledGeneratedIdentifierStrategy,
+    pub prefix: String,
+    /// The fields that partition a sequence; always empty for a random code.
+    pub scope: Vec<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase"
+)]
+pub enum CompiledGeneratedIdentifierStrategy {
+    Sequence { minimum_digits: u32 },
+    Random { length: u32 },
 }
 
 /// Binary slot policy, separate from scalar fields and physical SQL columns.
@@ -945,6 +969,30 @@ pub struct CompiledEntity {
     pub definition_revision: String,
 }
 
+impl CompiledEntity {
+    /// The fields whose values the server generates on create.
+    pub fn generated_fields(&self) -> impl Iterator<Item = &CompiledField> {
+        self.fields
+            .values()
+            .filter(|field| field.generate.is_some())
+    }
+
+    /// Generated values and every field that partitions their namespace are
+    /// immutable after create. Action compilation, Proposal preparation, and
+    /// direct mutation admission share this predicate so work cannot freeze
+    /// only to fail later at apply.
+    pub fn is_generated_identifier_immutable(&self, field_id: &str) -> bool {
+        self.fields
+            .get(field_id)
+            .is_some_and(|field| field.generate.is_some())
+            || self.generated_fields().any(|field| {
+                field.generate.as_ref().is_some_and(|generation| {
+                    generation.scope.iter().any(|scope| scope == field_id)
+                })
+            })
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct CompiledRelationship {
@@ -1154,9 +1202,9 @@ pub struct CompiledEventDelivery {
     pub data_schema: String,
     pub data_schema_fingerprint: String,
     pub data_schema_artifact_path: String,
-    pub authentication_profile: WebhookAuthenticationProfile,
-    pub delivery_mode: CompiledWebhookDeliveryMode,
-    pub retry_profile: CompiledWebhookRetryProfile,
+    pub authentication_profile: HookAuthenticationProfile,
+    pub delivery_mode: CompiledHookDeliveryMode,
+    pub retry_profile: CompiledHookRetryProfile,
     pub attempt_timeout_ms: u32,
     pub initial_backoff_ms: u32,
     pub maximum_backoff_ms: u32,
@@ -1167,7 +1215,7 @@ pub struct CompiledEventDelivery {
     pub retry_delays_ms: Vec<u32>,
     /// Compiler-proved upper bound for the canonical projected JSON body.
     pub maximum_payload_bytes: u32,
-    pub dead_letter: WebhookDeadLetterMode,
+    pub dead_letter: HookDeadLetterMode,
     pub operator_replay: bool,
 }
 
@@ -1269,13 +1317,13 @@ pub struct CompiledHookHandler {
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
-pub enum CompiledWebhookDeliveryMode {
+pub enum CompiledHookDeliveryMode {
     AfterCommit,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
-pub enum CompiledWebhookRetryProfile {
+pub enum CompiledHookRetryProfile {
     RegistryV1,
 }
 

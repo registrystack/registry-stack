@@ -383,14 +383,24 @@ async fn real_postgres_kernel_proves_roles_rls_interlock_and_pool_isolation() {
             &database.runtime_role,
         )
         .await;
-        assert!(
-            matches!(
-                refusal,
-                Err(PostgresKernelError::CatalogInvariant(_))
-                    | Err(PostgresKernelError::RegistryUnavailable)
-            ),
-            "{reason} must refuse exact catalog verification"
-        );
+        if reason == "schema fingerprint drift" {
+            assert!(
+                matches!(
+                    refusal,
+                    Err(PostgresKernelError::SchemaFingerprintMismatch { .. })
+                ),
+                "fingerprint drift must retain its named refusal: {refusal:?}",
+            );
+        } else {
+            assert!(
+                matches!(
+                    refusal,
+                    Err(PostgresKernelError::CatalogInvariant(_))
+                        | Err(PostgresKernelError::RegistryUnavailable)
+                ),
+                "{reason} must refuse exact catalog verification"
+            );
+        }
         database
             .admin
             .batch_execute(&restore)

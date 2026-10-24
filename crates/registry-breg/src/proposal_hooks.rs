@@ -2,12 +2,12 @@
 //! Native Proposal observers share the ordinary governed delivery mechanism.
 
 use crate::compiler::{
-    WEBHOOK_ATTEMPT_TIMEOUT_MS, WEBHOOK_BACKOFF_MULTIPLIER, WEBHOOK_INITIAL_BACKOFF_MS,
-    WEBHOOK_MAXIMUM_ATTEMPTS, WEBHOOK_MAXIMUM_BACKOFF_MS,
+    HOOK_ATTEMPT_TIMEOUT_MS, HOOK_BACKOFF_MULTIPLIER, HOOK_INITIAL_BACKOFF_MS,
+    HOOK_MAXIMUM_ATTEMPTS, HOOK_MAXIMUM_BACKOFF_MS,
 };
 use crate::contract::{
-    ActionExecutionSource, Classification, HookHandlerSource, ModuleAssetSource,
-    ProposalEventTransition, WebhookAuthenticationProfile, WebhookDeadLetterMode,
+    ActionExecutionSource, Classification, HookAuthenticationProfile, HookDeadLetterMode,
+    HookHandlerSource, ModuleAssetSource, ProposalEventTransition,
 };
 use crate::diagnostics::Diagnostic;
 use crate::immediate_actions::CollectedActionSource;
@@ -89,7 +89,7 @@ pub(crate) fn compile_hooks(
                 HookHandlerSource::Url { destination_id } => {
                     if !crate::compiler::valid_logical_destination_id(destination_id) {
                         errors.push(Diagnostic::error(
-                            "breg.event.webhook-destination-invalid",
+                            "breg.event.hook-destination-invalid",
                             format!("{path}.handler.destinationId"),
                             "use a bounded logical destination identifier",
                         ));
@@ -204,21 +204,21 @@ pub(crate) fn compile_delivery(
             crate::physical_names::hex_prefix(&Sha256::digest(bytes), 32)
         ),
         data_schema_artifact_path: PROPOSAL_EVENT_SCHEMA_PATH.into(),
-        authentication_profile: WebhookAuthenticationProfile::HmacSha256V1,
-        delivery_mode: CompiledWebhookDeliveryMode::AfterCommit,
-        retry_profile: CompiledWebhookRetryProfile::RegistryV1,
-        attempt_timeout_ms: WEBHOOK_ATTEMPT_TIMEOUT_MS,
-        initial_backoff_ms: WEBHOOK_INITIAL_BACKOFF_MS,
-        maximum_backoff_ms: WEBHOOK_MAXIMUM_BACKOFF_MS,
-        exponential_backoff_multiplier: WEBHOOK_BACKOFF_MULTIPLIER,
-        maximum_attempts: WEBHOOK_MAXIMUM_ATTEMPTS,
-        retry_delays_ms: crate::compiler::webhook_retry_delays(
-            WEBHOOK_INITIAL_BACKOFF_MS,
-            WEBHOOK_MAXIMUM_BACKOFF_MS,
-            WEBHOOK_MAXIMUM_ATTEMPTS,
+        authentication_profile: HookAuthenticationProfile::HmacSha256V1,
+        delivery_mode: CompiledHookDeliveryMode::AfterCommit,
+        retry_profile: CompiledHookRetryProfile::RegistryV1,
+        attempt_timeout_ms: HOOK_ATTEMPT_TIMEOUT_MS,
+        initial_backoff_ms: HOOK_INITIAL_BACKOFF_MS,
+        maximum_backoff_ms: HOOK_MAXIMUM_BACKOFF_MS,
+        exponential_backoff_multiplier: HOOK_BACKOFF_MULTIPLIER,
+        maximum_attempts: HOOK_MAXIMUM_ATTEMPTS,
+        retry_delays_ms: crate::compiler::hook_retry_delays(
+            HOOK_INITIAL_BACKOFF_MS,
+            HOOK_MAXIMUM_BACKOFF_MS,
+            HOOK_MAXIMUM_ATTEMPTS,
         ),
         maximum_payload_bytes: MAX_PROPOSAL_EVENT_PAYLOAD_BYTES,
-        dead_letter: WebhookDeadLetterMode::Required,
+        dead_letter: HookDeadLetterMode::Required,
         operator_replay: true,
     }
 }

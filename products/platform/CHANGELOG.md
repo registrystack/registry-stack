@@ -2,6 +2,72 @@
 
 ## Unreleased
 
+- CFG-SCHEMA-5 clarifies that the shared URL hook block owns fixed-policy
+  delivery. BReg's explicit private-network, TLS-identity and classification
+  controls remain product-owned while using the shared delivery primitives;
+  accepted configuration and binding digests do not change.
+
+- The `registry-platform-dispatch` job table shape and the
+  `registry-platform-hooks` `registry_webhook_delivery_state` shape refuse a
+  `leased` row without a `lease_expires_at`. The check compared the expiry
+  with `attempt_started_at` only, and a comparison with a missing expiry let
+  a lease that never lapses through. The dispatch core always writes an
+  expiry, so no row it claims changes; tables created by an earlier version
+  keep their earlier check until the owning product recreates them.
+
+- BREAKING: `registry-platform-hooks` holds the hook adapter every product
+  wrote for itself and the local handler executor. Behind `postgres`: the
+  signing URL destination, the audit entry builder parameterised by the
+  product's audit schema and `<product>.hook-delivery` event, the retry
+  schedule, and the identity preflight that reads the
+  `registry-platform-activation` record. The pooled connection is
+  `registry_platform_dispatch::postgres::PooledClient`, behind that crate's
+  `postgres` feature. Behind the new `rhai` and `wasm`
+  features: `LocalHookProgram`, `LocalHookHandlers`, and the Rhai and WASM
+  engines, built on the bare `registry-platform-script` engine. A product
+  states the declaration parts it executes as a `HookCapabilities` set and
+  every refusal outside it is `hook.capability.unsupported`. Migration for a
+  crate consumer: enable `rhai` or `wasm` to run local programs, pass a
+  capability set where hook declarations are loaded, and implement
+  `DeliverySeams::verify_transaction` with `verify_active_package` or an
+  equivalent check; the receiving-side names Coordinator uses
+  (`eventSources`, `workflow.eventTriggers`) are unchanged.
+- `registry-platform-objectstore` is a new crate holding the S3-compatible
+  object storage adapter and the HTTP content verifier transport the Base
+  Registry Engine used for attachments. A product supplies its own key prefix
+  and binding domain; moving the adapter out of BReg changes no object key,
+  binding digest, protocol exchange, or request header. BReg's own changelog
+  records the timeout, refusal, and database changes made beside it.
+- `S3ObjectStore::scoped` derives the store of another scope from an activated
+  store without resolving secrets, building a client, or probing the bucket
+  again.
+- `registry-platform-config` adds the shared blocks `ObjectStorageConfig` and
+  `AttachmentVerifierConfig` (CFG-SCHEMA-5).
+- `registry-platform-config` adds the shared block `UrlHookDestinationConfig`
+  (CFG-SCHEMA-5), Scheduling's `destinations.hooks` entry with its keys,
+  bounds, and defaults unchanged. `registry-platform-hooks` activates it with
+  `activate_url_hook_destinations` behind `postgres`, recording the same
+  binding digest.
+- BREAKING: the destination key of both blocks is `url`, not `endpoint`
+  (CFG-VAL-7). Rename `endpoint:` to `url:` under `attachmentStorage` and
+  `attachmentVerification` in a BReg runtime configuration; the old key is
+  refused with a pointer to the new one under `type: s3` and `type: http`,
+  and as an unknown key under `type: database` and `type: disabled`. The
+  shared URL reader keeps the value exactly as written: it never trims
+  whitespace, maps a host through IDNA, or rewrites a backslash, and refuses
+  instead a value holding whitespace, a control character, or a backslash, or
+  a host the URL parser would rewrite. It also refuses user information and
+  any scheme other than `http` or `https` when the file is decoded, with
+  `config.invalid-value` at the member and the shared URL sentence.
+- A removed-key path segment may name a variant, `name[tag=value]`, so a key
+  renamed in one variant of a tagged union is named as renamed only there.
+- `registry-platform-dispatch` adds `postgres::cancel_unattempted`, which
+  cancels one job inside the caller's transaction only while it is pending
+  at attempt 0, so a product withdraws work in the transaction that made it
+  obsolete. It returns `false` and leaves the job alone in any other state,
+  and fails with `DispatchError::Unavailable` when the update fails or
+  changes more than one row.
+
 ## 0.43.0 - 2026-10-21
 
 - BREAKING: the shared `DisplayText` reader rejects bidi embedding, override,

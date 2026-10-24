@@ -188,6 +188,21 @@ pub async fn verify_postgis(
     runtime_role: &SqlIdentifier,
 ) -> Result<()> {
     verify_postgres_version(client).await?;
+    // A missing extension is the first setup action, even when its dependent
+    // bbox role has not been provisioned either. Check existence before the
+    // role checks; the complete extension ownership and ACL check follows.
+    let installed: bool = client
+        .query_one(
+            "SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_extension WHERE extname = 'postgis')",
+            &[],
+        )
+        .await?
+        .get(0);
+    if !installed {
+        return Err(PostgresKernelError::CatalogInvariant(
+            "administrator-installed PostGIS is required",
+        ));
+    }
     let bbox_role = spatial_bbox_role(runtime_role);
     verify_postgis_spatial_bbox_role(client, migration_role, runtime_role, &bbox_role).await?;
     let installed = client

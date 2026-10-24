@@ -8,6 +8,9 @@ mod postgres_harness;
 #[path = "postgres_package/fingerprint.rs"]
 mod fingerprint_tests;
 
+#[path = "postgres_package/pre_1_0_schema.rs"]
+mod pre_1_0_schema_tests;
+
 #[cfg(feature = "tooling")]
 #[path = "postgres_package/policy_upgrade.rs"]
 mod policy_upgrade_tests;
@@ -56,7 +59,7 @@ use registry_breg::package::{
 };
 use registry_breg::postgres::{
     begin_record_transaction, install_compiled_schema, managed_schema_fingerprint, ClaimContext,
-    ExpectedManagedCatalog, ExpectedRegistryIdentity, RegistryLockKey,
+    ExpectedManagedCatalog, ExpectedRegistryIdentity, PostgresFailure, RegistryLockKey,
 };
 use registry_breg::runtime_config::parse_runtime_config;
 use registry_breg::startup::{prepare_startup, StartupError};
@@ -1610,7 +1613,12 @@ async fn wrong_migration_role_is_refused_before_initial_control_plane_or_ddl() {
         database.activation_audit(),
     ))
     .await;
-    assert_eq!(refused.err(), Some(MigrationError::ApplyFailed));
+    assert_eq!(
+        refused.err(),
+        Some(MigrationError::MigrationRoleRefused(
+            "migration connection uses the wrong role"
+        ))
+    );
     let state_table: Option<String> = database
         .admin
         .query_one(
@@ -1624,8 +1632,65 @@ async fn wrong_migration_role_is_refused_before_initial_control_plane_or_ddl() {
     database.cleanup().await;
 }
 
+/// A database without an administrator-installed prerequisite is refused by
+/// plan and apply alike, naming the prerequisite, before maintenance: no
+/// registry state is created and no activation is audited.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn signed_schema_fingerprint_mismatch_is_durably_failed_and_never_ready() {
+async fn a_missing_prerequisite_is_named_by_plan_and_apply_before_maintenance() {
+    let database = TestDatabase::create(1).await;
+    let root = publish_temporal_policy_package(
+        None,
+        fingerprint(1),
+        temporal_policy_module_bytes(false),
+        PackageMigrationPlanInput::InitialCompiledDdl,
+    );
+    let package = load_package(root.path(), &local_context())
+        .expect("initial temporal package verifies before prerequisite enforcement");
+    assert!(package.registry().ddl().requires_btree_gist);
+    let missing =
+        MigrationError::PrerequisiteMissing("administrator-installed btree_gist is required");
+    let timeouts = ApplyTimeouts::new(Duration::from_secs(1), Duration::from_secs(1))
+        .expect("test apply timeouts are bounded");
+
+    let planned = plan_verified_package(ApplyVerifiedPackageRequest::plan(
+        &database.migration_config,
+        &package,
+        ActivationDeployment::new("local", INSTANCE, DATABASE),
+        ApplyPrecondition::InitialActivation,
+        ApplyRoles::new(&database.migration_role, &database.runtime_role),
+        timeouts,
+    ))
+    .await;
+    assert_eq!(planned.err(), Some(missing.clone()));
+    let refused = apply_package(
+        &database,
+        &package,
+        ApplyPrecondition::InitialActivation,
+        Duration::from_secs(1),
+        Duration::from_secs(1),
+    )
+    .await;
+    assert_eq!(refused.err(), Some(missing));
+    let state_table: Option<String> = database
+        .admin
+        .query_one(
+            "SELECT to_regclass('registry_internal.registry_state')::text",
+            &[],
+        )
+        .await
+        .expect("the administrator can inspect control-plane absence")
+        .get(0);
+    assert_eq!(state_table, None);
+    assert!(database.activation_audit_entries().is_empty());
+    database.cleanup().await;
+}
+
+/// A signed package whose declared schema fingerprint differs from the
+/// catalog its DDL installs is refused by plan and apply before maintenance
+/// begins: no control plane, ledger, or audit is written, and startup still
+/// finds an uninitialized database rather than a ready one.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn signed_schema_fingerprint_mismatch_is_refused_before_maintenance_and_never_ready() {
     let database = TestDatabase::create(1).await;
     database
         .admin
@@ -1636,6 +1701,16 @@ async fn signed_schema_fingerprint_mismatch_is_durably_failed_and_never_ready() 
     let initial_context = fixture.context();
     let package = load_package(fixture.root.path(), &initial_context)
         .expect("production-shaped package verifies before catalog apply");
+    let planned = plan_verified_package(ApplyVerifiedPackageRequest::plan(
+        &database.migration_config,
+        &package,
+        ActivationDeployment::new("local", INSTANCE, DATABASE),
+        ApplyPrecondition::InitialActivation,
+        ApplyRoles::new(&database.migration_role, &database.runtime_role),
+        ApplyTimeouts::new(Duration::from_secs(1), Duration::from_secs(1))
+            .expect("test timeouts are bounded"),
+    ))
+    .await;
     let refused = apply_package(
         &database,
         &package,
@@ -1644,7 +1719,137 @@ async fn signed_schema_fingerprint_mismatch_is_durably_failed_and_never_ready() 
         Duration::from_secs(1),
     )
     .await;
-    assert_eq!(refused.err(), Some(MigrationError::ApplyFailed));
+    for error in [planned.err(), refused.err()] {
+        match error {
+            Some(MigrationError::SchemaFingerprintMismatch { declared, measured }) => {
+                assert_eq!(declared, fingerprint(7));
+                assert_ne!(measured, fingerprint(7));
+                assert!(measured.starts_with("sha256:"), "{measured}");
+            }
+            other => panic!("expected a schema fingerprint refusal, got {other:?}"),
+        }
+    }
+    let state_table: Option<String> = database
+        .admin
+        .query_one(
+            "SELECT to_regclass('registry_internal.registry_state')::text",
+            &[],
+        )
+        .await
+        .expect("the administrator can inspect control-plane absence")
+        .get(0);
+    assert_eq!(state_table, None);
+    assert!(database.activation_audit_entries().is_empty());
+
+    let pool = database
+        .runtime_config
+        .build_pool()
+        .expect("runtime pool builds");
+    let mut runtime = pool.get_for_test().await.expect("runtime connects");
+    let startup_context = fixture.context();
+    let startup = prepare_startup(
+        fixture.root.path(),
+        &startup_context,
+        DATABASE,
+        &mut runtime,
+        &database.migration_role,
+        &database.runtime_role,
+    )
+    .await;
+    assert_eq!(startup.err(), Some(StartupError::DatabaseUninitialized));
+    drop(runtime);
+    database.cleanup().await;
+}
+
+/// A failed initial activation leaves a state row naming its own target,
+/// yet the ledger records no applied activation, so the recorded state says
+/// so and a plan of the same package reports the initial activation the
+/// next apply resumes.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_failed_initial_activation_is_recorded_unapplied_and_plans_as_its_resume() {
+    let database = TestDatabase::create(1).await;
+    database
+        .admin
+        .batch_execute("CREATE EXTENSION btree_gist")
+        .await
+        .expect("administrator installs prerequisite");
+    let fixture = PackageFixture::build(None, fingerprint(7), PlanChoice::Schema);
+    let provisional = load_package(fixture.root.path(), &local_context())
+        .expect("initial package verifies before its fingerprint is measured");
+    let (mut migration, migration_task) = database.connect_migration().await;
+    let transaction = migration
+        .transaction()
+        .await
+        .expect("fingerprint transaction starts");
+    install_compiled_schema(&transaction, provisional.registry(), &database.runtime_role)
+        .await
+        .expect("the compiled schema installs for fingerprinting");
+    let schema = managed_schema_fingerprint(
+        &transaction,
+        &database.runtime_role,
+        &ExpectedManagedCatalog::compiled(provisional.registry()),
+    )
+    .await
+    .expect("the compiled fingerprint computes");
+    transaction
+        .rollback()
+        .await
+        .expect("fingerprint transaction rolls back");
+    drop(migration);
+    migration_task.abort();
+    rewrite_unsigned(fixture.root.path(), |manifest| {
+        manifest.schema_fingerprint.clone_from(&schema);
+    });
+    let package = load_package(fixture.root.path(), &local_context())
+        .expect("initial package verifies with its exact fingerprint");
+    // The first transaction to create a registry_data object, the rehearsal
+    // before maintenance, records its id in a sequence, which its rollback
+    // keeps. Registry DDL in any later transaction is refused, so the
+    // rehearsal passes and the DDL after maintenance began fails.
+    database
+        .admin
+        .batch_execute(
+            "CREATE SEQUENCE public.rehearsed_ddl_transaction MINVALUE 0 START 0;
+             CREATE FUNCTION public.refuse_unrehearsed_registry_ddl() RETURNS event_trigger
+                 LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog AS $$
+             DECLARE
+                 rehearsed bigint;
+             BEGIN
+                 IF NOT EXISTS (
+                     SELECT 1 FROM pg_catalog.pg_event_trigger_ddl_commands()
+                     WHERE schema_name = 'registry_data'
+                 ) THEN
+                     RETURN;
+                 END IF;
+                 SELECT last_value INTO rehearsed FROM public.rehearsed_ddl_transaction;
+                 IF rehearsed = 0 THEN
+                     PERFORM pg_catalog.setval(
+                         'public.rehearsed_ddl_transaction', pg_catalog.txid_current());
+                 ELSIF rehearsed <> pg_catalog.txid_current() THEN
+                     RAISE EXCEPTION 'unrehearsed' USING ERRCODE = 'P0001';
+                 END IF;
+             END
+             $$;
+             CREATE EVENT TRIGGER refuse_unrehearsed_registry_ddl ON ddl_command_end
+                 EXECUTE FUNCTION public.refuse_unrehearsed_registry_ddl()",
+        )
+        .await
+        .expect("administrator installs an event trigger that admits only the rehearsal");
+    let refused = apply_package(
+        &database,
+        &package,
+        ApplyPrecondition::InitialActivation,
+        Duration::from_secs(1),
+        Duration::from_secs(1),
+    )
+    .await;
+    assert_eq!(
+        refused.err(),
+        Some(MigrationError::StatementFailed(PostgresFailure {
+            sqlstate: Some("P0001".to_owned()),
+            ..PostgresFailure::default()
+        }))
+    );
     let state = registry_state_snapshot(&database.admin).await;
     assert_eq!(state.5, "failed");
     assert_eq!(state.6.as_deref(), Some(package.package_digest()));
@@ -1677,52 +1882,6 @@ async fn signed_schema_fingerprint_mismatch_is_durably_failed_and_never_ready() 
             ("response".to_owned(), "failed".to_owned()),
         ]
     );
-
-    let pool = database
-        .runtime_config
-        .build_pool()
-        .expect("runtime pool builds");
-    let mut runtime = pool.get_for_test().await.expect("runtime connects");
-    let startup_context = fixture.context();
-    let startup = prepare_startup(
-        fixture.root.path(),
-        &startup_context,
-        DATABASE,
-        &mut runtime,
-        &database.migration_role,
-        &database.runtime_role,
-    )
-    .await;
-    assert_eq!(startup.err(), Some(StartupError::DatabaseUnready));
-    drop(runtime);
-    database.cleanup().await;
-}
-
-/// A failed initial activation leaves a state row naming its own target,
-/// yet the ledger records no applied activation, so the recorded state says
-/// so and a plan of the same package reports the initial activation the
-/// next apply resumes.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_failed_initial_activation_is_recorded_unapplied_and_plans_as_its_resume() {
-    let database = TestDatabase::create(1).await;
-    database
-        .admin
-        .batch_execute("CREATE EXTENSION btree_gist")
-        .await
-        .expect("administrator installs prerequisite");
-    let fixture = PackageFixture::build(None, fingerprint(7), PlanChoice::Schema);
-    let context = fixture.context();
-    let package = load_package(fixture.root.path(), &context)
-        .expect("production-shaped package verifies before catalog apply");
-    let refused = apply_package(
-        &database,
-        &package,
-        ApplyPrecondition::InitialActivation,
-        Duration::from_secs(1),
-        Duration::from_secs(1),
-    )
-    .await;
-    assert_eq!(refused.err(), Some(MigrationError::ApplyFailed));
     let failed_activation: String = database
         .admin
         .query_one(
@@ -1750,6 +1909,60 @@ async fn a_failed_initial_activation_is_recorded_unapplied_and_plans_as_its_resu
         "the ledger records no applied activation"
     );
 
+    let rebuilt_root = TempRoot::create();
+    let rebuilt_module = module_bytes(PlanChoice::Schema);
+    let module = parse_module_yaml(&rebuilt_module).expect("rebuilt module parses");
+    let mut rebuilt_request = build_request(BuildRequestParts {
+        prior_revision: None,
+        schema_fingerprint: schema,
+        project_bytes: project_bytes_with_source_revision(
+            &module_digest(&module),
+            "rebuilt-source",
+        ),
+        module_bytes: rebuilt_module,
+        migration_plan: PackageMigrationPlanInput::InitialCompiledDdl,
+    });
+    rebuilt_request.compiler_source_revision = "rebuilt-source".to_owned();
+    prepare_package(rebuilt_request)
+        .expect("rebuilt initial package prepares")
+        .publish_to_directory(rebuilt_root.path())
+        .expect("rebuilt initial package publishes");
+    let rebuilt = load_package(rebuilt_root.path(), &local_context())
+        .expect("rebuilt package verifies independently");
+    assert_ne!(rebuilt.package_digest(), package.package_digest());
+    let audit_before = database.activation_audit_entries().len();
+    let refused = MigrationError::CatalogRefused(
+        "recorded initial activation does not match this target; inspect bregctl status and retry the exact pinned package, or preserve this database and provision a separate empty database for a rebuilt initial package",
+    );
+    assert_eq!(
+        plan_verified_package(ApplyVerifiedPackageRequest::plan(
+            &database.migration_config,
+            &rebuilt,
+            ActivationDeployment::new("local", INSTANCE, DATABASE),
+            ApplyPrecondition::InitialActivation,
+            ApplyRoles::new(&database.migration_role, &database.runtime_role),
+            timeouts,
+        ))
+        .await
+        .err(),
+        Some(refused.clone()),
+    );
+    assert_eq!(
+        apply_package(
+            &database,
+            &rebuilt,
+            ApplyPrecondition::InitialActivation,
+            Duration::from_secs(1),
+            Duration::from_secs(1),
+        )
+        .await
+        .err(),
+        Some(refused),
+    );
+    assert_eq!(registry_state_snapshot(&database.admin).await, state);
+    assert_eq!(migration_ledger_snapshot(&database.admin).await, ledger);
+    assert_eq!(database.activation_audit_entries().len(), audit_before);
+
     let plan = plan_verified_package(ApplyVerifiedPackageRequest::plan(
         &database.migration_config,
         &package,
@@ -1761,8 +1974,158 @@ async fn a_failed_initial_activation_is_recorded_unapplied_and_plans_as_its_resu
     .await
     .expect("the plan reports the interrupted initial activation");
     assert_eq!(plan.activation, PlannedActivation::Initial);
-    assert_eq!(plan.resumes_activation_id, Some(failed_activation));
+    assert_eq!(
+        plan.resumes_activation_id.as_deref(),
+        Some(failed_activation.as_str())
+    );
+    database
+        .admin
+        .batch_execute("DROP EVENT TRIGGER refuse_unrehearsed_registry_ddl")
+        .await
+        .expect("administrator removes the test-only failure injection");
+    let resumed = apply_package(
+        &database,
+        &package,
+        ApplyPrecondition::InitialActivation,
+        Duration::from_secs(1),
+        Duration::from_secs(5),
+    )
+    .await
+    .expect("the exact original target resumes after its cause is fixed");
+    assert_eq!(resumed.activation_id, failed_activation);
+    assert_eq!(registry_state_snapshot(&database.admin).await.5, "ready");
     database.cleanup().await;
+}
+
+/// A plain successor verifies the catalog before its DDL transaction commits.
+/// A wrong target fingerprint leaves its new table absent and the previous
+/// active identity intact, while the durable target remains failed and pinned.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn plain_successor_catalog_verification_precedes_ddl_commit() {
+    for valid_fingerprint in [false, true] {
+        let database = TestDatabase::create(1).await;
+        database
+            .admin
+            .batch_execute("CREATE EXTENSION btree_gist")
+            .await
+            .expect("administrator installs the test prerequisite");
+        let base = compile_fixture_registry(PlanChoice::Schema);
+        let candidate = compile_fixture_registry(PlanChoice::SecondTable);
+        let initial_schema = measure_fresh_compiled_schema(&database, &base).await;
+        let target_schema = measure_fresh_compiled_schema(&database, &candidate).await;
+        let initial_fixture =
+            PackageFixture::build(None, initial_schema.clone(), PlanChoice::Schema);
+        let initial = load_package(initial_fixture.root.path(), &local_context())
+            .expect("initial package verifies");
+        let active = apply_package(
+            &database,
+            &initial,
+            ApplyPrecondition::InitialActivation,
+            Duration::from_secs(1),
+            Duration::from_secs(5),
+        )
+        .await
+        .expect("initial package activates");
+        let declared = if valid_fingerprint {
+            target_schema.clone()
+        } else {
+            fingerprint(7)
+        };
+        if !valid_fingerprint {
+            assert_ne!(declared, target_schema);
+        }
+        let successor_fixture = PackageFixture::build(
+            Some(initial.package_digest()),
+            declared.clone(),
+            PlanChoice::SecondTable,
+        );
+        let successor = load_package(successor_fixture.root.path(), &local_context())
+            .expect("successor package verifies before database contact");
+        let result = apply_package(
+            &database,
+            &successor,
+            ApplyPrecondition::Successor { current: &active },
+            Duration::from_secs(1),
+            Duration::from_secs(5),
+        )
+        .await;
+        let second_table = format!(
+            "registry_data.{}",
+            quote_identifier(&successor.registry().entities()["second-record"].physical_table,)
+        );
+        let table: Option<String> = database
+            .admin
+            .query_one("SELECT to_regclass($1)::text", &[&second_table])
+            .await
+            .expect("candidate table existence reads")
+            .get(0);
+        let state = registry_state_snapshot(&database.admin).await;
+        let ledger = migration_ledger_snapshot(&database.admin).await;
+        assert_eq!(ledger.len(), 2);
+        assert_eq!(ledger[1].1, successor.package_digest());
+        if valid_fingerprint {
+            let activated = result.expect("the exact target catalog activates");
+            assert_eq!(activated.package_digest, successor.package_digest());
+            assert!(table.is_some());
+            assert_eq!(state.2, successor.package_digest());
+            assert_eq!(state.3, activated.activation_id);
+            assert_eq!(state.4, target_schema);
+            assert_eq!(state.5, "ready");
+            assert_eq!(state.6, None);
+            assert_eq!(ledger[1].4, "applied");
+            let grants = database.admin.query_one(
+                "SELECT has_table_privilege($1, $2, 'SELECT'), has_table_privilege($1, $2, 'INSERT'), has_table_privilege($1, $2, 'UPDATE')",
+                &[&database.runtime_role.as_str(), &second_table],
+            ).await.expect("successor runtime grants read");
+            assert!(grants.get::<_, bool>(0));
+            assert!(grants.get::<_, bool>(1));
+            assert!(!grants.get::<_, bool>(2));
+        } else {
+            assert_eq!(
+                result.err(),
+                Some(MigrationError::SchemaFingerprintMismatchAfterMaintenance {
+                    declared,
+                    measured: target_schema,
+                })
+            );
+            assert_eq!(table, None, "refused target DDL did not commit");
+            assert_eq!(state.2, active.package_digest);
+            assert_eq!(state.3, active.activation_id);
+            assert_eq!(state.4, initial_schema);
+            assert_eq!(state.5, "failed");
+            assert_eq!(state.6.as_deref(), Some(successor.package_digest()));
+            assert_eq!(ledger[1].4, "failed");
+        }
+        database.cleanup().await;
+    }
+}
+
+async fn measure_fresh_compiled_schema(
+    database: &TestDatabase,
+    registry: &registry_breg::CompiledRegistry,
+) -> String {
+    let (mut migration, task) = database.connect_migration().await;
+    let transaction = migration
+        .transaction()
+        .await
+        .expect("fingerprint transaction starts");
+    install_compiled_schema(&transaction, registry, &database.runtime_role)
+        .await
+        .expect("compiled schema installs in disposable transaction");
+    let fingerprint = managed_schema_fingerprint(
+        &transaction,
+        &database.runtime_role,
+        &ExpectedManagedCatalog::compiled(registry),
+    )
+    .await
+    .expect("exact compiled catalog fingerprints");
+    transaction
+        .rollback()
+        .await
+        .expect("fingerprint rehearsal rolls back");
+    drop(migration);
+    task.abort();
+    fingerprint
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1820,7 +2183,9 @@ async fn real_postgres_package_startup_apply_failure_and_old_process_are_closed(
     .await;
     assert_eq!(
         wrong_migration_role.err(),
-        Some(MigrationError::ApplyFailed),
+        Some(MigrationError::MigrationRoleRefused(
+            "migration connection uses the wrong role"
+        )),
         "the exact configured migration role is verified before control-plane DDL"
     );
     let state_table: Option<String> = database
@@ -2504,34 +2869,34 @@ async fn successor_apply_refuses_to_strand_retained_webhook_work() {
     let (mut migration, migration_task) = database.connect_migration().await;
     let destination_fixture = EventDestinationCompatibilityFixture::create();
 
-    let first = PackageFixture::build(None, fingerprint(1), PlanChoice::WebhookSchema);
+    let first = PackageFixture::build(None, fingerprint(1), PlanChoice::HookSchema);
     let provisional_first = load_package(first.root.path(), &local_context())
-        .expect("initial webhook package verifies before fingerprinting");
+        .expect("initial hook package verifies before fingerprinting");
     let transaction = migration
         .transaction()
         .await
-        .expect("initial webhook fingerprint transaction starts");
+        .expect("initial hook fingerprint transaction starts");
     install_compiled_schema(
         &transaction,
         provisional_first.registry(),
         &database.runtime_role,
     )
     .await
-    .expect("initial webhook schema installs for fingerprinting");
+    .expect("initial hook schema installs for fingerprinting");
     let first_catalog = ExpectedManagedCatalog::compiled(provisional_first.registry());
     let first_fingerprint =
         managed_schema_fingerprint(&transaction, &database.runtime_role, &first_catalog)
             .await
-            .expect("initial webhook fingerprint derives");
+            .expect("initial hook fingerprint derives");
     transaction
         .rollback()
         .await
-        .expect("initial webhook fingerprint transaction rolls back");
+        .expect("initial hook fingerprint transaction rolls back");
     rewrite_unsigned(first.root.path(), |manifest| {
         manifest.schema_fingerprint.clone_from(&first_fingerprint);
     });
     let verified_first = load_package(first.root.path(), &local_context())
-        .expect("initial webhook package reloads with exact fingerprint");
+        .expect("initial hook package reloads with exact fingerprint");
     let active = apply_package(
         &database,
         &verified_first,
@@ -2540,7 +2905,7 @@ async fn successor_apply_refuses_to_strand_retained_webhook_work() {
         Duration::from_secs(1),
     )
     .await
-    .expect("initial webhook package activates");
+    .expect("initial hook package activates");
 
     let exact_inventory = destination_fixture.inventory(verified_first.registry(), "/events/v1");
     let exact_digest = exact_inventory
@@ -2551,7 +2916,7 @@ async fn successor_apply_refuses_to_strand_retained_webhook_work() {
         .data_schema
         .as_str();
     let pending_event = Uuid::new_v4();
-    insert_upgrade_webhook_delivery(
+    insert_upgrade_hook_delivery(
         &database,
         &active,
         pending_event,
@@ -2561,7 +2926,7 @@ async fn successor_apply_refuses_to_strand_retained_webhook_work() {
         UpgradeDeliveryState::Pending,
     )
     .await;
-    insert_upgrade_webhook_delivery(
+    insert_upgrade_hook_delivery(
         &database,
         &active,
         Uuid::new_v4(),
@@ -2572,7 +2937,7 @@ async fn successor_apply_refuses_to_strand_retained_webhook_work() {
     )
     .await;
     let erased_pending_event = Uuid::new_v4();
-    insert_upgrade_webhook_delivery(
+    insert_upgrade_hook_delivery(
         &database,
         &active,
         erased_pending_event,
@@ -2593,7 +2958,7 @@ async fn successor_apply_refuses_to_strand_retained_webhook_work() {
         .await
         .expect("upgrade test erases one pending payload before retention cleanup");
     let expired_pending_event = Uuid::new_v4();
-    insert_upgrade_webhook_delivery(
+    insert_upgrade_hook_delivery(
         &database,
         &active,
         expired_pending_event,
@@ -2614,7 +2979,7 @@ async fn successor_apply_refuses_to_strand_retained_webhook_work() {
         .await
         .expect("upgrade test expires one pending payload before retention cleanup");
     let replayable_dead_letter_event = Uuid::new_v4();
-    insert_upgrade_webhook_delivery(
+    insert_upgrade_hook_delivery(
         &database,
         &active,
         replayable_dead_letter_event,
@@ -2624,7 +2989,7 @@ async fn successor_apply_refuses_to_strand_retained_webhook_work() {
         UpgradeDeliveryState::DeadLettered,
     )
     .await;
-    insert_upgrade_webhook_delivery(
+    insert_upgrade_hook_delivery(
         &database,
         &active,
         Uuid::new_v4(),
@@ -2638,15 +3003,15 @@ async fn successor_apply_refuses_to_strand_retained_webhook_work() {
     let second = PackageFixture::build(
         Some(&active.package_digest),
         first_fingerprint,
-        PlanChoice::WebhookSecondTable,
+        PlanChoice::HookSecondTable,
     );
     let activation_context = local_context();
     let provisional_second = load_package(second.root.path(), &activation_context)
-        .expect("unrelated additive webhook successor verifies before fingerprinting");
+        .expect("unrelated additive hook successor verifies before fingerprinting");
     let transaction = migration
         .transaction()
         .await
-        .expect("successor webhook fingerprint transaction starts");
+        .expect("successor hook fingerprint transaction starts");
     for statement in &provisional_second.manifest().migration_plan.statements {
         transaction
             .batch_execute(&statement.sql)
@@ -2675,16 +3040,16 @@ async fn successor_apply_refuses_to_strand_retained_webhook_work() {
     let second_fingerprint =
         managed_schema_fingerprint(&transaction, &database.runtime_role, &second_catalog)
             .await
-            .expect("successor webhook fingerprint derives");
+            .expect("successor hook fingerprint derives");
     transaction
         .rollback()
         .await
-        .expect("successor webhook fingerprint transaction rolls back");
+        .expect("successor hook fingerprint transaction rolls back");
     rewrite_unsigned(second.root.path(), |manifest| {
         manifest.schema_fingerprint.clone_from(&second_fingerprint);
     });
     let verified_second = load_package(second.root.path(), &activation_context)
-        .expect("successor webhook package reloads with exact fingerprint");
+        .expect("successor hook package reloads with exact fingerprint");
     migration_task.abort();
 
     let before_refusals = registry_state_snapshot(&database.admin).await;
@@ -2886,8 +3251,8 @@ enum PlanChoice {
     Schema,
     SecondTable,
     ThirdTable,
-    WebhookSchema,
-    WebhookSecondTable,
+    HookSchema,
+    HookSecondTable,
     TemporalSchema,
 }
 
@@ -2895,8 +3260,8 @@ fn predecessor_plan_choice(plan: PlanChoice) -> PlanChoice {
     match plan {
         PlanChoice::Schema | PlanChoice::SecondTable => PlanChoice::Schema,
         PlanChoice::ThirdTable => PlanChoice::SecondTable,
-        PlanChoice::WebhookSchema => PlanChoice::WebhookSchema,
-        PlanChoice::WebhookSecondTable => PlanChoice::WebhookSchema,
+        PlanChoice::HookSchema => PlanChoice::HookSchema,
+        PlanChoice::HookSecondTable => PlanChoice::HookSchema,
         PlanChoice::TemporalSchema => PlanChoice::TemporalSchema,
     }
 }
@@ -3117,7 +3482,7 @@ fn module_bytes(plan: PlanChoice) -> Vec<u8> {
     }
     let second = if matches!(
         plan,
-        PlanChoice::SecondTable | PlanChoice::ThirdTable | PlanChoice::WebhookSecondTable
+        PlanChoice::SecondTable | PlanChoice::ThirdTable | PlanChoice::HookSecondTable
     ) {
         r#",{"id":"second-record","primaryDataset":"neutral-registry","route":"second-records","mutationMode":"create-only","fields":[{"id":"code","type":"string","maximumLength":8,"classification":"internal"}],"accessProfiles":[{"id":"writer","principalClaim":"principal","operations":["get","create"],"readableFields":["code"],"writableFields":["code"], "requiredScopes":"unrestricted","rowBoundaries":"unrestricted"}]}"#
     } else {
@@ -3128,10 +3493,7 @@ fn module_bytes(plan: PlanChoice) -> Vec<u8> {
     } else {
         ""
     };
-    let events = if matches!(
-        plan,
-        PlanChoice::WebhookSchema | PlanChoice::WebhookSecondTable
-    ) {
+    let events = if matches!(plan, PlanChoice::HookSchema | PlanChoice::HookSecondTable) {
         r#","hooks":[{"phase":"after","id":"neutral-created-v1","trigger":"created","projection":["code"],"handler":{"type":"url","destinationId":"neutral-events"}}]"#
     } else {
         ""
@@ -3310,7 +3672,7 @@ enum UpgradeDeliveryState {
     Expired,
 }
 
-async fn insert_upgrade_webhook_delivery(
+async fn insert_upgrade_hook_delivery(
     database: &TestDatabase,
     active: &ExpectedRegistryIdentity,
     event_id: Uuid,
@@ -3497,7 +3859,7 @@ package:
 authentication:
   oidc:
     issuer: https://issuer.example
-    audience: urn:breg:webhook-upgrade
+    audience: urn:breg:hook-upgrade
     allowedAlgorithm: EdDSA
     accessTokenType: JWT
     scopeClaim: scope
@@ -3522,18 +3884,19 @@ audit:
 cursor:
   secretRef: secret:file/cursor-key
   maximumAgeSeconds: 300
-eventDestinations:
-  neutral-events:
-    origin: https://events.example/
-    path: {path}
-    networkProfile: production-https
-    dnsFamily: dual-stack-strict
-    allowedPrivateCidrs: []
-    hmacSha256KeyRef: secret:file/webhook-key
-    classificationCeiling: internal
-    deliveryCeilings:
-      attemptTimeoutMilliseconds: 4000
-      maximumAttempts: 4
+destinations:
+  hooks:
+    neutral-events:
+      origin: https://events.example/
+      path: {path}
+      networkProfile: production-https
+      dnsFamily: dual-stack-strict
+      allowedPrivateCidrs: []
+      hmacSha256KeyRef: secret:file/webhook-key
+      classificationCeiling: internal
+      deliveryCeilings:
+        attemptTimeoutMilliseconds: 4000
+        maximumAttempts: 4
 operationalTimeouts:
   httpRequestMilliseconds: 10000
   shutdownGraceMilliseconds: 30000

@@ -4,8 +4,8 @@
 use crate::event_destination::ActivatedEventDestinationRegistry;
 use crate::model::{CompiledAction, CompiledActionExecution, CompiledRegistry};
 use crate::outbox::{
-    activate_delivery, capture_envelope, capture_time, envelope_payload, insert_webhook_delivery,
-    CapturedEvent, EnvelopeBinding, OutboxError, WebhookCapture,
+    activate_delivery, capture_envelope, capture_time, envelope_payload, insert_hook_delivery,
+    CapturedEvent, EnvelopeBinding, HookCapture, OutboxError,
 };
 use registry_platform_hooks::{EnvelopeLimits, HookEnvelope};
 use serde_json::json;
@@ -175,10 +175,10 @@ pub(crate) async fn insert_proposal_lifecycle_event(
         }
     } else {
         for activated in &active {
-            insert_webhook_delivery(
+            insert_hook_delivery(
                 transaction,
                 event_id,
-                WebhookCapture {
+                HookCapture {
                     activated,
                     payload: &payload,
                     package_revision: event.package_revision,

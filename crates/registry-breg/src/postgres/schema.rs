@@ -57,6 +57,11 @@ pub async fn install_compiled_schema(
     install_mutation_schema(migration, runtime_role)
         .await
         .map_err(|_| PostgresKernelError::Connection)?;
+    if crate::generated_identifiers::registry_uses_generated_identifiers(registry) {
+        crate::generated_identifiers::install(migration, runtime_role)
+            .await
+            .map_err(|_| PostgresKernelError::Connection)?;
+    }
     install_history_schema_store(migration, runtime_role)
         .await
         .map_err(|_| PostgresKernelError::Connection)?;
@@ -830,6 +835,14 @@ pub async fn prepare_schema_test_database_with_connections(
 ) -> Result<PreparedSchemaTestDatabase> {
     let (mut migration, migration_task) = connect_schema_test(migration_connection).await?;
     verify_migration_role(&migration, migration_role).await?;
+    // The runtime connection's identity and role attributes need no managed
+    // schema, so a misconfigured runtime role is refused before anything is
+    // written.
+    let (runtime_precheck, runtime_precheck_task) = connect_schema_test(runtime_connection).await?;
+    let precheck =
+        verify_schema_test_runtime_identity(&runtime_precheck, migration_role, runtime_role).await;
+    runtime_precheck_task.abort();
+    precheck?;
     // The scratch database is its own activation of the candidate, so its
     // scope values never collide with a deployed activation's.
     let activation_id = uuid::Uuid::new_v4().hyphenated().to_string();
@@ -993,8 +1006,10 @@ pub(super) async fn refuse_existing_managed_objects(client: &impl GenericClient)
     Ok(())
 }
 
+/// Checks the runtime connection's identity and role attributes, which need
+/// none of the managed schemas.
 #[cfg(all(feature = "runtime", feature = "tooling"))]
-async fn verify_schema_test_runtime_role(
+async fn verify_schema_test_runtime_identity(
     client: &impl GenericClient,
     migration_role: &SqlIdentifier,
     runtime_role: &SqlIdentifier,
@@ -1008,8 +1023,34 @@ async fn verify_schema_test_runtime_role(
                     rolcreaterole,
                     current_user = $1,
                     pg_has_role(current_user, $1, 'MEMBER'),
-                    has_database_privilege(current_user, current_database(), 'CREATE'),
-                    has_schema_privilege(current_user, 'registry_internal', 'CREATE'),
+                    has_database_privilege(current_user, current_database(), 'CREATE')
+               FROM pg_catalog.pg_roles
+              WHERE rolname = current_user",
+            &[&migration_role.as_str()],
+        )
+        .await?;
+    if row.get::<_, String>(0) != runtime_role.as_str()
+        || (1..=7).any(|index| row.get::<_, bool>(index))
+    {
+        return Err(PostgresKernelError::RoleInvariant(
+            "schema-test runtime connection uses unexpected authority",
+        ));
+    }
+    Ok(())
+}
+
+/// Checks that the runtime connection holds no CREATE on, and owns nothing in,
+/// the managed schemas, which exist only once the install has committed.
+#[cfg(all(feature = "runtime", feature = "tooling"))]
+async fn verify_schema_test_runtime_role(
+    client: &impl GenericClient,
+    migration_role: &SqlIdentifier,
+    runtime_role: &SqlIdentifier,
+) -> Result<()> {
+    verify_schema_test_runtime_identity(client, migration_role, runtime_role).await?;
+    let row = client
+        .query_one(
+            "SELECT has_schema_privilege(current_user, 'registry_internal', 'CREATE'),
                     has_schema_privilege(current_user, 'registry_data', 'CREATE'),
                     has_schema_privilege(current_user, 'registry_source', 'CREATE'),
                     has_schema_privilege(current_user, 'registry_derived', 'CREATE'),
@@ -1030,15 +1071,11 @@ async fn verify_schema_test_runtime_role(
                                  FROM pg_catalog.pg_roles
                                 WHERE rolname = current_user
                            )
-                    )
-               FROM pg_catalog.pg_roles
-              WHERE rolname = current_user",
-            &[&migration_role.as_str()],
+                    )",
+            &[],
         )
         .await?;
-    if row.get::<_, String>(0) != runtime_role.as_str()
-        || (1..=13).any(|index| row.get::<_, bool>(index))
-    {
+    if (0..=5).any(|index| row.get::<_, bool>(index)) {
         return Err(PostgresKernelError::RoleInvariant(
             "schema-test runtime connection uses unexpected authority",
         ));

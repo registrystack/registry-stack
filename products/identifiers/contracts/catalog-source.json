@@ -71,6 +71,16 @@
       "exporterPath": "crates/registry-coordinator/examples/problem-catalog.rs",
       "cargoPackage": "registry-coordinator",
       "cargoExample": "problem-catalog"
+    },
+    {
+      "owner": "documents",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "uriPrefix": "https://id.registrystack.org/problems/registry-documents/",
+      "sourcePath": "crates/registry-documents-core/src/problem.rs",
+      "exporterPath": "crates/registry-documents-core/examples/problem-catalog.rs",
+      "cargoPackage": "registry-documents-core",
+      "cargoExample": "problem-catalog"
     }
   ],
   "referenceExclusions": [
@@ -441,6 +451,30 @@
       "status": "active",
       "compatibilityLine": "v1alpha1",
       "description": "Registry Messaging runtime configuration JSON Schema."
+    },
+    {
+      "glob": "products/documents/generated/project/*.schema.json",
+      "sourcePath": "crates/registry-documents/src/schema.rs",
+      "owner": "documents",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "description": "Registry Document Store project JSON Schema."
+    },
+    {
+      "glob": "products/documents/generated/runtime/*.schema.json",
+      "sourcePath": "crates/registry-documents/src/schema.rs",
+      "owner": "documents",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "description": "Registry Document Store runtime configuration JSON Schema."
+    },
+    {
+      "glob": "products/documents/generated/events/*.schema.json",
+      "sourcePath": "crates/registry-documents/src/schema.rs",
+      "owner": "documents",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "description": "Registry Document Store event data JSON Schemas, one per event family."
     },
     {
       "glob": "products/discovery/schemas/*.schema.json",

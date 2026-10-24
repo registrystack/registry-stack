@@ -71,7 +71,7 @@ class BRegProductCatalogTests(unittest.TestCase):
         )
         extension_rows = matrix["invariants"][24:]
         self.assertEqual(
-            [f"BREG-NEG-{index:02d}" for index in range(25, 190) if index not in {61, 62}],
+            [f"BREG-NEG-{index:02d}" for index in range(25, 191) if index not in {61, 62}],
             [invariant["negativeId"] for invariant in extension_rows],
         )
         for invariant in extension_rows:
@@ -119,16 +119,17 @@ class BRegProductCatalogTests(unittest.TestCase):
                 "dep:hmac",
                 "dep:ipnet",
                 "dep:jsonwebtoken",
-                "dep:quick-xml",
                 "dep:reqwest",
                 "dep:registry-platform-audit",
                 "dep:registry-platform-authcommon",
                 "dep:registry-platform-buildinfo",
                 "dep:registry-platform-crypto",
                 "registry-platform-crypto/transit",
+                "dep:registry-platform-dispatch",
                 "registry-platform-hooks/postgres",
                 "dep:registry-platform-httpsec",
                 "dep:registry-platform-httputil",
+                "dep:registry-platform-objectstore",
                 "dep:registry-platform-oidc",
                 "dep:registry-review-client",
                 "dep:rustls",
@@ -150,7 +151,6 @@ class BRegProductCatalogTests(unittest.TestCase):
             "clap",
             "deadpool-postgres",
             "getrandom",
-            "quick-xml",
             "reqwest",
             "hex",
             "hmac",
@@ -160,8 +160,10 @@ class BRegProductCatalogTests(unittest.TestCase):
             "registry-platform-authcommon",
             "registry-platform-buildinfo",
             "registry-platform-crypto",
+            "registry-platform-dispatch",
             "registry-platform-httpsec",
             "registry-platform-httputil",
+            "registry-platform-objectstore",
             "registry-platform-oidc",
             "registry-review-client",
             "rustls",
@@ -222,6 +224,21 @@ class BRegProductCatalogTests(unittest.TestCase):
         for target in ("postgres_refactor", "postgres_proposal", "postgres_proposal_security", "postgres_proposal_s3", "postgres_native_retention", "postgres_facility_proposal", "postgres_action_task_grants", "postgres_generated_console"):
             self.assertIn("cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test " + target, commands)
         self.assertFalse(any("--test postgres_request_" in command or "--test postgres_change_requests" in command or "--test postgres_rhai_planner" in command for command in commands))
+
+    def test_generated_identifier_postgres_targets_are_owned_by_gate(self) -> None:
+        commands = set(VALIDATOR.POSTGRES_TEST_COMMANDS)
+        for target in (
+            "postgres_generated_identifiers",
+            "postgres_generated_identifier_batch_import",
+            "postgres_generated_identifier_migration",
+            "postgres_immediate_action_generated_identifiers",
+            "postgres_proposal_generated_identifiers",
+        ):
+            self.assertIn(
+                "cargo test --locked -p registry-breg "
+                "--features postgres-test,tooling,schema --test " + target,
+                commands,
+            )
 
     def test_postgres_constraint_races_follow_partial_unique_in_the_owned_gate(
         self,

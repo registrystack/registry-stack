@@ -256,7 +256,7 @@ async fn real_postgres_webhook_outbox_capture_is_atomic_package_bound_and_determ
             create_request(&plan, &claims, "successful-create", "first"),
         )
         .await
-        .expect("configured webhook capture commits with the record");
+        .expect("configured hook capture commits with the record");
     assert!(!first.replayed());
     let first_response: Value = serde_json::from_slice(first.response().body())
         .expect("held create response is strict JSON");
@@ -751,9 +751,9 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
           }]
         }"#,
     )
-    .expect("webhook capture fixture parses");
+    .expect("hook capture fixture parses");
     compile_project(&project, &[], CompileProfile::Authoring)
-        .expect("webhook capture fixture compiles")
+        .expect("hook capture fixture compiles")
 }
 
 fn mutation_claims(registry: &registry_breg::CompiledRegistry) -> ClaimContext {
@@ -1347,7 +1347,7 @@ package:
 authentication:
   oidc:
     issuer: https://issuer.example
-    audience: urn:breg:webhook-outbox
+    audience: urn:breg:hook-outbox
     allowedAlgorithm: EdDSA
     accessTokenType: JWT
     scopeClaim: scope
@@ -1372,18 +1372,19 @@ audit:
 cursor:
   secretRef: secret:file/cursor-key
   maximumAgeSeconds: 300
-eventDestinations:
-  {DESTINATION_ID}:
-    origin: https://{ORIGIN_CANARY}/
-    path: {PATH_CANARY}
-    networkProfile: production-https
-    dnsFamily: dual-stack-strict
-    allowedPrivateCidrs: []
-    hmacSha256KeyRef: secret:file/{SECRET_REF_CANARY}
-    classificationCeiling: restricted
-    deliveryCeilings:
-      attemptTimeoutMilliseconds: 4000
-      maximumAttempts: 4
+destinations:
+  hooks:
+    {DESTINATION_ID}:
+      origin: https://{ORIGIN_CANARY}/
+      path: {PATH_CANARY}
+      networkProfile: production-https
+      dnsFamily: dual-stack-strict
+      allowedPrivateCidrs: []
+      hmacSha256KeyRef: secret:file/{SECRET_REF_CANARY}
+      classificationCeiling: restricted
+      deliveryCeilings:
+        attemptTimeoutMilliseconds: 4000
+        maximumAttempts: 4
 operationalTimeouts:
   httpRequestMilliseconds: 10000
   shutdownGraceMilliseconds: 30000

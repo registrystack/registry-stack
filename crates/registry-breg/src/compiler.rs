@@ -16,15 +16,16 @@ use crate::contract::{
     parsed_bbox, valid_decimal_bounds, valid_structured_schema, AccessProfileSource,
     ActionExecutionSource, ActionSource, Classification, ConstraintSource, DerivedExecutionSource,
     DerivedFieldSource, DisplaySource, EntityExtensionSource, EntitySource, EventConditionSource,
-    EventTrigger, FieldSource, FieldTypeSource, GeoJsonSource, HookHandlerSource, HookPhase,
-    LookupValueOrigin, ManifestProjectionTextSource, ModuleAssetSource, MutationMode, Operation,
-    PresentationSource, ReadPathPermissionSource, RegistryModule, RegistryProject,
-    SpatialBboxPermissionSource, SpatialQueryPermissionSource, UniqueWhenPredicate, ValidTimeRole,
-    WebhookAuthenticationProfile, WebhookDeadLetterMode, DECIMAL_BOUNDS_REQUIREMENTS,
+    EventTrigger, FieldGenerationSource, FieldSource, FieldTypeSource, GeoJsonSource,
+    HookAuthenticationProfile, HookDeadLetterMode, HookHandlerSource, HookPhase, LookupValueOrigin,
+    ManifestProjectionTextSource, ModuleAssetSource, MutationMode, Operation, PresentationSource,
+    ReadPathPermissionSource, RegistryModule, RegistryProject, SpatialBboxPermissionSource,
+    SpatialQueryPermissionSource, UniqueWhenPredicate, ValidTimeRole, DECIMAL_BOUNDS_REQUIREMENTS,
     MAX_ACCESS_LOG_EXEMPTIONS, MAX_ACCESS_LOG_EXEMPTION_REASON_BYTES,
     MAX_ACCESS_LOG_RETENTION_DAYS, MAX_ACCESS_LOG_SUBJECT_CHARACTERS,
     MAX_ACCESS_LOG_TRUSTED_INTERMEDIARIES, MAX_ENCRYPTED_FIELD_PLAINTEXT_BYTES,
     MAX_ENCRYPTED_FIELD_STRING_CHARACTERS, MAX_FIELD_LOOKUP_NORMALIZATION_STEPS,
+    MAX_GENERATED_IDENTIFIER_COMPONENT_LENGTH, MAX_GENERATED_IDENTIFIER_SCOPE_FIELDS,
     MAX_STRUCTURED_VALUE_BYTES,
 };
 use crate::derived_sql::{derived_sql_dependencies, validate_derived_sql};
@@ -43,18 +44,19 @@ use crate::model::{
     CompiledAccessEntry, CompiledAccessInventory, CompiledBboxQueryCapability, CompiledBlindIndex,
     CompiledChangeControl, CompiledDerivedField, CompiledDerivedRelation, CompiledEntity,
     CompiledEntityModuleOrigins, CompiledEventDelivery, CompiledEventDeliveryInventory,
-    CompiledField, CompiledFieldEncryption, CompiledGeoJsonBinding, CompiledHookHandler,
-    CompiledHookHandlerKind, CompiledLogicalField, CompiledManifestAuthority,
-    CompiledManifestDataService, CompiledManifestDataset, CompiledManifestDistribution,
-    CompiledManifestProjection, CompiledManifestPublicService, CompiledMetadataEntity,
-    CompiledMetadataEntry, CompiledMetadataInventory, CompiledModuleIdentity,
-    CompiledQueryFilterField, CompiledQueryFilterOperator, CompiledQueryInventory,
-    CompiledQueryKind, CompiledQueryOperation, CompiledQuerySortDirection, CompiledQuerySortField,
-    CompiledQueryTemporalBinding, CompiledQueryTemporalSemantics, CompiledReadPath,
-    CompiledRegistry, CompiledRevisionKind, CompiledRoute, CompiledRouteInventory,
-    CompiledSelectorProfile, CompiledSourceRelation, CompiledSpatialQueryCapability,
-    CompiledStoredField, CompiledTemporal, CompiledWebhookDeliveryMode,
-    CompiledWebhookRetryProfile, HttpMethod, MAX_REVISION_HISTORY_RECORDS,
+    CompiledField, CompiledFieldEncryption, CompiledGeneratedIdentifier,
+    CompiledGeneratedIdentifierStrategy, CompiledGeoJsonBinding, CompiledHookDeliveryMode,
+    CompiledHookHandler, CompiledHookHandlerKind, CompiledHookRetryProfile, CompiledLogicalField,
+    CompiledManifestAuthority, CompiledManifestDataService, CompiledManifestDataset,
+    CompiledManifestDistribution, CompiledManifestProjection, CompiledManifestPublicService,
+    CompiledMetadataEntity, CompiledMetadataEntry, CompiledMetadataInventory,
+    CompiledModuleIdentity, CompiledQueryFilterField, CompiledQueryFilterOperator,
+    CompiledQueryInventory, CompiledQueryKind, CompiledQueryOperation, CompiledQuerySortDirection,
+    CompiledQuerySortField, CompiledQueryTemporalBinding, CompiledQueryTemporalSemantics,
+    CompiledReadPath, CompiledRegistry, CompiledRevisionKind, CompiledRoute,
+    CompiledRouteInventory, CompiledSelectorProfile, CompiledSourceRelation,
+    CompiledSpatialQueryCapability, CompiledStoredField, CompiledTemporal, HttpMethod,
+    MAX_REVISION_HISTORY_RECORDS,
 };
 use crate::physical_names::{
     hex_prefix, EntityPhysicalNames, PhysicalNameBuilder, PhysicalNameInventory,
@@ -80,13 +82,13 @@ pub const INGESTION_CHUNK_REQUEST_CEILING: u32 = MAX_BATCH_BYTES + 1024;
 /// The attempt budget starts at the claim's database timestamp and covers the claim
 /// commit and reload round trips before the request leaves, so this floor is a
 /// validation bound: samples and fixtures should use a realistic value such as 1000 ms.
-pub const MIN_WEBHOOK_ATTEMPT_TIMEOUT_MS: u32 = 100;
-pub const WEBHOOK_ATTEMPT_TIMEOUT_MS: u32 = 5_000;
-pub const WEBHOOK_INITIAL_BACKOFF_MS: u32 = 1_000;
-pub const WEBHOOK_MAXIMUM_BACKOFF_MS: u32 = 8_000;
-pub const WEBHOOK_MAXIMUM_ATTEMPTS: u8 = 5;
-pub const MAX_WEBHOOK_ATTEMPT_TIMEOUT_MS: u32 = WEBHOOK_ATTEMPT_TIMEOUT_MS;
-pub const MAX_WEBHOOK_ATTEMPTS: u8 = WEBHOOK_MAXIMUM_ATTEMPTS;
+pub const MIN_HOOK_ATTEMPT_TIMEOUT_MS: u32 = 100;
+pub const HOOK_ATTEMPT_TIMEOUT_MS: u32 = 5_000;
+pub const HOOK_INITIAL_BACKOFF_MS: u32 = 1_000;
+pub const HOOK_MAXIMUM_BACKOFF_MS: u32 = 8_000;
+pub const HOOK_MAXIMUM_ATTEMPTS: u8 = 5;
+pub const MAX_HOOK_ATTEMPT_TIMEOUT_MS: u32 = HOOK_ATTEMPT_TIMEOUT_MS;
+pub const MAX_HOOK_ATTEMPTS: u8 = HOOK_MAXIMUM_ATTEMPTS;
 pub const MAX_EVENT_PACKAGE_REVISION_BYTES: u32 = 256;
 /// The longest build identity value, shared by the environment, instance, and
 /// database identifiers a package build request carries.
@@ -94,13 +96,13 @@ pub const MAX_BUILD_ID_BYTES: u32 = 64;
 /// Largest canonical statistical release document admitted by compilation
 /// and retained by the runtime release store.
 pub(crate) const MAX_STATISTICAL_RELEASE_DOCUMENT_BYTES: usize = 8 * 1024 * 1024;
-/// Maximum canonical event body accepted by the governed webhook transport.
+/// Maximum canonical event body accepted by the governed hook transport.
 ///
 /// This intentionally matches the platform event-destination body ceiling.
 /// The compiler uses this bound without constructing a transport; the runtime
 /// integration pins the equality.
-pub const MAX_WEBHOOK_PAYLOAD_BYTES: u32 = 1_048_576;
-pub const WEBHOOK_BACKOFF_MULTIPLIER: u8 = 2;
+pub const MAX_HOOK_PAYLOAD_BYTES: u32 = 1_048_576;
+pub const HOOK_BACKOFF_MULTIPLIER: u8 = 2;
 
 /// One ingestion-run operation of the published HTTP surface, carrying the
 /// problem-response catalogue the operation's OpenAPI entry must publish.
@@ -3877,6 +3879,7 @@ fn validate_entity_fields(
                 ));
             }
         }
+        validate_generated_identifier(entity, field, errors);
         match &field.field_type {
             FieldTypeSource::String {
                 min_length,
@@ -4002,6 +4005,189 @@ fn validate_entity_fields(
                 "valid-time boundary fields must use the same type",
             ));
         }
+    }
+}
+
+fn validate_generated_identifier(
+    entity: &EntitySource,
+    field: &FieldSource,
+    errors: &mut Vec<Diagnostic>,
+) {
+    let Some(generate) = &field.generate else {
+        return;
+    };
+    let path = format!(
+        "recordTypes[id={}].fields[id={}].generate",
+        entity.id, field.id
+    );
+    let FieldTypeSource::String {
+        min_length,
+        max_length,
+    } = &field.field_type
+    else {
+        errors.push(Diagnostic::error(
+            "breg.field.generate-type-unsupported",
+            &path,
+            "generate is supported only on a persisted string field",
+        ));
+        return;
+    };
+    if field.encrypted
+        || field.lookup.is_some()
+        || field.pattern.is_some()
+        || field.valid_time_role.is_some()
+        || field.relationship.is_some()
+    {
+        errors.push(Diagnostic::error(
+            "breg.field.generate-options-incompatible",
+            &path,
+            "a generated identifier cannot be encrypted, looked up through a blind index, pattern-constrained, a valid-time boundary, or a relationship",
+        ));
+    }
+    // The migration seed copies retained values into the append-only
+    // reservation ledger, which keeps them after record erasure.
+    if field.classification > Classification::Internal {
+        errors.push(Diagnostic::error(
+            "breg.field.generate-classification-sensitive",
+            &path,
+            "a generated identifier must be classified public or internal, because the reservation ledger keeps issued and migrated values after record erasure",
+        ));
+    }
+
+    let prefix = generate.prefix();
+    if prefix.len() > MAX_GENERATED_IDENTIFIER_COMPONENT_LENGTH as usize
+        || prefix.bytes().any(|byte| !(0x21..=0x7e).contains(&byte))
+    {
+        errors.push(Diagnostic::error(
+            "breg.field.generate-prefix-invalid",
+            format!("{path}.prefix"),
+            &format!(
+                "a generated identifier prefix must contain at most {MAX_GENERATED_IDENTIFIER_COMPONENT_LENGTH} printable ASCII characters and no whitespace"
+            ),
+        ));
+    }
+
+    let (minimum_output_length, maximum_output_length) = match generate {
+        FieldGenerationSource::Sequence { minimum_digits, .. } => {
+            let minimum = prefix.len().saturating_add(*minimum_digits as usize);
+            let maximum = prefix
+                .len()
+                .saturating_add((*minimum_digits as usize).max(19));
+            (minimum, maximum)
+        }
+        FieldGenerationSource::Random { length, .. } => {
+            let exact = prefix.len().saturating_add(*length as usize);
+            (exact, exact)
+        }
+    };
+    if minimum_output_length < *min_length as usize || maximum_output_length > *max_length as usize
+    {
+        let message = match generate {
+            FieldGenerationSource::Sequence { .. } => format!(
+                "a sequence identifier is the prefix plus max(minimumDigits, 19) digits, because the sequence is not capped at minimumDigits and must fit the longest i64 value; this field needs minimumLength at most {minimum_output_length} and maximumLength at least {maximum_output_length}"
+            ),
+            FieldGenerationSource::Random { .. } => format!(
+                "a random identifier is the prefix plus length, exactly {maximum_output_length} characters here; this field needs minimumLength at most {minimum_output_length} and maximumLength at least {maximum_output_length}"
+            ),
+        };
+        errors.push(Diagnostic::error(
+            "breg.field.generate-length-outside-field",
+            &path,
+            &message,
+        ));
+    }
+
+    if generate
+        .scope()
+        .is_some_and(|scope| scope.len() > MAX_GENERATED_IDENTIFIER_SCOPE_FIELDS)
+    {
+        errors.push(Diagnostic::error(
+            "breg.field.generate-scope-too-large",
+            format!("{path}.scope"),
+            &format!(
+                "a generated identifier may name at most {MAX_GENERATED_IDENTIFIER_SCOPE_FIELDS} scope fields"
+            ),
+        ));
+    }
+    // Both the reservation key and the Record's scoped unique constraint use
+    // B-tree indexes. Migration also retains existing identifier values, which
+    // can be longer and non-ASCII even when newly generated values are short.
+    // Budget every indexed field's worst-case UTF-8 size before PostgreSQL.
+    const MAX_INDEXED_BYTES: u64 = 1024;
+    let fields = stored_field_map(entity);
+    let mut maximum_indexed_bytes = u64::from(*max_length) * 4;
+    for scope_field_id in generate.scope().into_iter().flatten() {
+        let scope_path = format!("{path}.scope[field={scope_field_id}]");
+        let Some(scope_field) = fields.get(scope_field_id.as_str()) else {
+            errors.push(Diagnostic::error(
+                "breg.field.generate-scope-field-unknown",
+                scope_path,
+                "a generated identifier scope refers to an unknown stored field",
+            ));
+            continue;
+        };
+        if !scope_field.required {
+            errors.push(Diagnostic::error(
+                "breg.field.generate-scope-field-optional",
+                &scope_path,
+                "a generated identifier scope field must be required",
+            ));
+        }
+        if scope_field.generate.is_some() || scope_field.encrypted {
+            errors.push(Diagnostic::error(
+                "breg.field.generate-scope-field-managed",
+                &scope_path,
+                "a generated identifier scope field cannot itself be generated or encrypted",
+            ));
+        }
+        // The append-only reservation ledger keeps scope values after record
+        // erasure, so a scope must not carry restricted data or point at a
+        // person.
+        if scope_field.classification > Classification::Internal
+            || matches!(scope_field.field_type, FieldTypeSource::Reference { .. })
+        {
+            errors.push(Diagnostic::error(
+                "breg.field.generate-scope-field-sensitive",
+                &scope_path,
+                "a generated identifier scope field must be classified public or internal and cannot be a reference, because the reservation ledger keeps scope values after record erasure; scope by a non-personal field such as a jurisdiction or category code",
+            ));
+        }
+        match generated_identifier_scope_max_bytes(&scope_field.field_type) {
+            Some(bytes) => maximum_indexed_bytes = maximum_indexed_bytes.saturating_add(bytes),
+            None => errors.push(Diagnostic::error(
+                "breg.field.generate-scope-type-unsupported",
+                &scope_path,
+                "a generated identifier scope field must use a stored scalar type",
+            )),
+        }
+    }
+    if maximum_indexed_bytes > MAX_INDEXED_BYTES {
+        errors.push(Diagnostic::error(
+            "breg.field.generate-index-key-too-large",
+            &path,
+            "the generated field and its scope fields exceed the combined 1024-byte index budget; lower their maximumLength or use shorter scope fields",
+        ));
+    }
+}
+
+fn generated_identifier_scope_max_bytes(field_type: &FieldTypeSource) -> Option<u64> {
+    match field_type {
+        FieldTypeSource::String { max_length, .. } | FieldTypeSource::Text { max_length } => {
+            Some(u64::from(*max_length) * 4)
+        }
+        FieldTypeSource::VocabularyCode { values, .. } => Some(
+            values
+                .iter()
+                .map(|value| value.len() as u64)
+                .max()
+                .unwrap_or(0),
+        ),
+        FieldTypeSource::Boolean => Some(5),
+        FieldTypeSource::Int64 => Some(20),
+        FieldTypeSource::Decimal { .. } | FieldTypeSource::Timestamp => Some(64),
+        FieldTypeSource::Date => Some(10),
+        FieldTypeSource::Uuid | FieldTypeSource::Reference { .. } => Some(36),
+        FieldTypeSource::Crs84Point { .. } | FieldTypeSource::Structured { .. } => None,
     }
 }
 
@@ -4972,6 +5158,18 @@ fn validate_profiles(
                 ));
             }
         }
+        for field in &access.writable_fields {
+            if fields
+                .get(field.as_str())
+                .is_some_and(|field| field.generate.is_some())
+            {
+                errors.push(Diagnostic::error(
+                    "breg.access-profile.generated-field-writable",
+                    format!("{profile_path}.writableFields[field={field}]"),
+                    "a server-generated identifier must not be granted as a caller-writable field",
+                ));
+            }
+        }
         for (member, processed) in [
             ("filterableFields", &access.filterable_fields),
             ("sortableFields", &access.sortable_fields),
@@ -5115,7 +5313,9 @@ fn create_required_field_findings(entities: &BTreeMap<String, EntitySource>) -> 
             // Engine-managed record identity, revision, and lifecycle columns
             // are not authored EntitySource fields and are therefore excluded.
             for field in entity.fields.iter().filter(|field| {
-                field.required && !access.writable_fields.contains(field.id.as_str())
+                field.required
+                    && field.generate.is_none()
+                    && !access.writable_fields.contains(field.id.as_str())
             }) {
                 findings.push(Diagnostic::finding(
                     "breg.access.profile-create-required-field-not-writable",
@@ -5641,20 +5841,19 @@ fn validate_hooks(
                 continue;
             }
         };
-        if maximum_payload_bytes
-            .is_some_and(|maximum| maximum > u64::from(MAX_WEBHOOK_PAYLOAD_BYTES))
+        if maximum_payload_bytes.is_some_and(|maximum| maximum > u64::from(MAX_HOOK_PAYLOAD_BYTES))
         {
             errors.push(Diagnostic::error(
-                "breg.event.webhook-projection-too-large",
+                "breg.event.hook-projection-too-large",
                 format!("{hook_path}.projection"),
-                "the webhook projection can exceed the governed transport body bound",
+                "the hook projection can exceed the governed transport body bound",
             ));
         }
         if destination_id.is_some_and(|value| !valid_logical_destination_id(value)) {
             errors.push(Diagnostic::error(
-                "breg.event.webhook-destination-invalid",
+                "breg.event.hook-destination-invalid",
                 format!("{hook_path}.handler.destinationId"),
-                "a webhook destination must use the closed logical identifier grammar",
+                "a hook destination must use the closed logical identifier grammar",
             ));
         }
     }
@@ -5792,7 +5991,9 @@ fn validate_hook_module_structure(bytes: &[u8], errors: &mut Vec<Diagnostic>) {
 fn validate_hook_module_structure(_bytes: &[u8], _errors: &mut Vec<Diagnostic>) {}
 
 pub(crate) fn validate_hook_script_asset(bytes: &[u8], errors: &mut Vec<Diagnostic>) {
-    if bytes.is_empty() || bytes.len() > crate::rhai_planner::MAXIMUM_SOURCE_BYTES {
+    if bytes.is_empty()
+        || bytes.len() > registry_platform_hooks::executor::RHAI_HOOK_MAX_SOURCE_BYTES
+    {
         errors.push(Diagnostic::error(
             "breg.hook.handler-source-bound",
             "recordTypes[].hooks[].handler.script",
@@ -5808,14 +6009,16 @@ pub(crate) fn validate_hook_script_asset(bytes: &[u8], errors: &mut Vec<Diagnost
         ));
         return;
     };
-    if let Err(error) = crate::rhai_planner::compile_entrypoint_detailed(script, "handle") {
-        use crate::rhai_planner::EntrypointCompileError;
+    // A hook program runs on the bare platform engine under the shared hook
+    // profile, so admission compiles it the same way the executor does.
+    if let Err(error) = registry_platform_hooks::executor::compile_rhai_hook(script) {
+        use registry_platform_script::rhai::RhaiCompileError;
         let (code, message) = match error {
-            EntrypointCompileError::SourceBound => (
+            RhaiCompileError::SourceBound => (
                 "breg.hook.handler-source-bound",
                 "the handler source exceeds its fixed byte bound".to_owned(),
             ),
-            EntrypointCompileError::Parse(position) => {
+            RhaiCompileError::Parse(position) => {
                 let location = match (position.line(), position.position()) {
                     (Some(line), Some(column)) => format!(" at line {line}, column {column}"),
                     (Some(line), None) => format!(" at line {line}"),
@@ -5826,7 +6029,7 @@ pub(crate) fn validate_hook_script_asset(bytes: &[u8], errors: &mut Vec<Diagnost
                     format!("correct the Rhai syntax or unsupported construct{location}"),
                 )
             }
-            EntrypointCompileError::Entrypoint => (
+            RhaiCompileError::Entrypoint => (
                 "breg.hook.handler-entrypoint",
                 "declare exactly one public fn handle(ctx) entry point and do not overload functions"
                     .to_owned(),
@@ -6108,7 +6311,7 @@ pub(crate) fn maximum_envelope_wrapper_bytes(
     )?;
     // `id` is a quoted UUID.
     total = total.checked_add(38)?;
-    // `source` is the quoted deployment URN `crate::webhook::delivery_source`
+    // `source` is the quoted deployment URN `crate::hooks::delivery_source`
     // builds. Its package id is this registry's id; its instance id is the
     // runtime configuration's `identity.instanceId`, recorded in registry
     // state by `bregctl apply`, which the configuration loader holds to the
@@ -6281,26 +6484,26 @@ fn compile_event_delivery_inventory(
                 data_schema: binding.data_schema,
                 data_schema_fingerprint: binding.fingerprint,
                 data_schema_artifact_path: binding.artifact_path,
-                authentication_profile: WebhookAuthenticationProfile::HmacSha256V1,
-                delivery_mode: CompiledWebhookDeliveryMode::AfterCommit,
-                retry_profile: CompiledWebhookRetryProfile::RegistryV1,
-                attempt_timeout_ms: WEBHOOK_ATTEMPT_TIMEOUT_MS,
-                initial_backoff_ms: WEBHOOK_INITIAL_BACKOFF_MS,
-                maximum_backoff_ms: WEBHOOK_MAXIMUM_BACKOFF_MS,
-                exponential_backoff_multiplier: WEBHOOK_BACKOFF_MULTIPLIER,
-                maximum_attempts: WEBHOOK_MAXIMUM_ATTEMPTS,
-                retry_delays_ms: webhook_retry_delays(
-                    WEBHOOK_INITIAL_BACKOFF_MS,
-                    WEBHOOK_MAXIMUM_BACKOFF_MS,
-                    WEBHOOK_MAXIMUM_ATTEMPTS,
+                authentication_profile: HookAuthenticationProfile::HmacSha256V1,
+                delivery_mode: CompiledHookDeliveryMode::AfterCommit,
+                retry_profile: CompiledHookRetryProfile::RegistryV1,
+                attempt_timeout_ms: HOOK_ATTEMPT_TIMEOUT_MS,
+                initial_backoff_ms: HOOK_INITIAL_BACKOFF_MS,
+                maximum_backoff_ms: HOOK_MAXIMUM_BACKOFF_MS,
+                exponential_backoff_multiplier: HOOK_BACKOFF_MULTIPLIER,
+                maximum_attempts: HOOK_MAXIMUM_ATTEMPTS,
+                retry_delays_ms: hook_retry_delays(
+                    HOOK_INITIAL_BACKOFF_MS,
+                    HOOK_MAXIMUM_BACKOFF_MS,
+                    HOOK_MAXIMUM_ATTEMPTS,
                 ),
                 maximum_payload_bytes: maximum_compiled_event_payload_bytes(
                     registry_id,
                     entity,
                     event,
                 )
-                .expect("validated webhook projection fields are bounded"),
-                dead_letter: WebhookDeadLetterMode::Required,
+                .expect("validated hook projection fields are bounded"),
+                dead_letter: HookDeadLetterMode::Required,
                 operator_replay: true,
             })
         })
@@ -6493,21 +6696,17 @@ fn valid_relative_asset_path(path: &str) -> bool {
             .all(|part| !part.is_empty() && part != "." && part != "..")
 }
 
-pub(crate) fn webhook_retry_delays(
+pub(crate) fn hook_retry_delays(
     initial_ms: u32,
     maximum_ms: u32,
     maximum_attempts: u8,
 ) -> Vec<u32> {
-    let mut delay = initial_ms;
-    (1..maximum_attempts)
-        .map(|_| {
-            let current = delay;
-            delay = delay
-                .saturating_mul(u32::from(WEBHOOK_BACKOFF_MULTIPLIER))
-                .min(maximum_ms);
-            current
-        })
-        .collect()
+    registry_platform_hooks::exponential_retry_delays_ms(
+        initial_ms,
+        maximum_ms,
+        u32::from(HOOK_BACKOFF_MULTIPLIER),
+        maximum_attempts,
+    )
 }
 
 /// Projects one entity's slice out of a whole-project `(entity_id, item_id) ->
@@ -6527,6 +6726,32 @@ fn member_origins_for_entity(
             }
         })
         .collect()
+}
+
+fn compile_generated_identifier(source: &FieldGenerationSource) -> CompiledGeneratedIdentifier {
+    let (strategy, prefix, scope) = match source {
+        FieldGenerationSource::Sequence {
+            prefix,
+            minimum_digits,
+            scope,
+        } => (
+            CompiledGeneratedIdentifierStrategy::Sequence {
+                minimum_digits: *minimum_digits,
+            },
+            prefix.clone(),
+            scope.iter().cloned().collect(),
+        ),
+        FieldGenerationSource::Random { prefix, length } => (
+            CompiledGeneratedIdentifierStrategy::Random { length: *length },
+            prefix.clone(),
+            Vec::new(),
+        ),
+    };
+    CompiledGeneratedIdentifier {
+        strategy,
+        prefix,
+        scope,
+    }
 }
 
 fn compile_entities(
@@ -6601,9 +6826,10 @@ fn compile_entities(
                 field.classification,
             );
             logical.encryption = encryption.clone();
+            let generate = field.generate.as_ref().map(compile_generated_identifier);
             stored_fields.push(CompiledStoredField {
                 logical: logical.clone(),
-                required: field.required,
+                required: field.required || generate.is_some(),
                 valid_time_role: field.valid_time_role,
                 physical_name: physical.clone(),
             });
@@ -6615,11 +6841,12 @@ fn compile_entities(
                     id: field.id,
                     field_type: field.field_type,
                     pattern: field.pattern,
-                    required: field.required,
+                    required: field.required || generate.is_some(),
                     classification: field.classification,
                     valid_time_role: field.valid_time_role,
                     physical_name: physical,
                     encryption,
+                    generate,
                 },
             );
         }
@@ -6748,6 +6975,41 @@ fn compile_entities(
                 .map_err(CompileFailure::from_one)?;
             constraint_names.insert(id.clone(), physical);
             constraints.insert(id, normalized_constraint(constraint));
+        }
+        for field in source
+            .fields
+            .iter()
+            .filter(|field| field.generate.is_some())
+        {
+            let id = format!("generated:{}", field.id);
+            let mut constraint_fields = field
+                .generate
+                .as_ref()
+                .expect("filtered generated field")
+                .scope()
+                .into_iter()
+                .flatten()
+                .cloned()
+                .collect::<Vec<_>>();
+            constraint_fields.push(field.id.clone());
+            constraint_names.insert(
+                id.clone(),
+                builder
+                    .derive(
+                        "c",
+                        &format!("{}.{}", source.id, id),
+                        "recordTypes[].fields[].generate",
+                    )
+                    .map_err(CompileFailure::from_one)?,
+            );
+            constraints.insert(
+                id.clone(),
+                ConstraintSource::Unique {
+                    id: Some(id),
+                    fields: constraint_fields,
+                    when: None,
+                },
+            );
         }
         for field in &source.fields {
             if field.pattern.is_some() {
@@ -8348,7 +8610,31 @@ fn record_definition_revision(
     source: &EntitySource,
     constraints: &BTreeMap<String, ConstraintSource>,
 ) -> String {
-    let fields=source.fields.iter().map(|field|(&field.id,serde_json::json!({"apiName":field.api_name,"type":field.field_type,"required":field.required,"pattern":field.pattern,"classification":field.classification,"encrypted":field.encrypted,"relationship":field.relationship}))).collect::<BTreeMap<_,_>>();
+    let fields = source
+        .fields
+        .iter()
+        .map(|field| {
+            let mut definition = serde_json::json!({
+                "apiName": field.api_name,
+                "type": field.field_type,
+                "required": field.required || field.generate.is_some(),
+                "pattern": field.pattern,
+                "classification": field.classification,
+                "encrypted": field.encrypted,
+                "relationship": field.relationship,
+            });
+            if let Some(generate) = &field.generate {
+                definition
+                    .as_object_mut()
+                    .expect("field definition is an object")
+                    .insert(
+                        "generate".to_owned(),
+                        serde_json::to_value(generate).expect("generation source serializes"),
+                    );
+            }
+            (&field.id, definition)
+        })
+        .collect::<BTreeMap<_, _>>();
     let payload = serde_json::json!({"id":source.id,"apiName":source.api_name.clone().unwrap_or_else(||type_api_name(&source.id)),"fields":fields,"mutationMode":source.mutation_mode,"mutationPolicy":source.mutation_policy,"constraints":constraints});
     let digest = Sha256::digest(
         registry_platform_canonical_json::canonicalize_json(&payload)

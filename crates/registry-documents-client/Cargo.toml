@@ -1,0 +1,31 @@
+[package]
+name = "registry-documents-client"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Bounded Rust client for the Registry Stack Document Store."
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+hex.workspace = true
+registry-documents-core.workspace = true
+registry-platform-httpsec.workspace = true
+registry-platform-httputil.workspace = true
+registry-platform-yaml.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+url.workspace = true
+
+[dev-dependencies]
+axum.workspace = true
+bytes.workspace = true
+http-body.workspace = true
+tokio = { workspace = true, features = ["io-util"] }

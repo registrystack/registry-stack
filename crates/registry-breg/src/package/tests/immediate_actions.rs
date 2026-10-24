@@ -939,6 +939,52 @@ fn action_only_claim_change_is_a_reviewable_successor() {
     assert!(change_codes(&plan).contains(&CompiledRegistryChangeCode::ActionChanged));
 }
 
+#[test]
+fn target_record_type_changes_are_reviewed_by_record_type_rules_not_as_action_changes() {
+    let value = source();
+    let before = compile(&value);
+
+    let mut reclassified = value.clone();
+    reclassified["recordTypes"][0]["fields"][0]["classification"] = json!("restricted");
+    let mut constrained = value;
+    constrained["recordTypes"][0]["constraints"] =
+        json!([{"id":"label-unique", "type":"unique", "fields":["label"]}]);
+
+    for (variant, expected) in [
+        (
+            reclassified,
+            CompiledRegistryChangeCode::FieldClassificationChanged,
+        ),
+        (constrained, CompiledRegistryChangeCode::ConstraintAdded),
+    ] {
+        let after = compile(&variant);
+        assert_ne!(
+            before.actions().actions[0].definition_revision,
+            after.actions().actions[0].definition_revision,
+            "the Action definition revision tracks its target record type"
+        );
+        assert_eq!(
+            crate::immediate_actions::migration_review_revision(&before.actions().actions[0]),
+            crate::immediate_actions::migration_review_revision(&after.actions().actions[0]),
+            "the migration review revision ignores the target record type"
+        );
+        let changes = compiled_registry_change_set(&before, &after, "prior-package");
+        let codes = changes
+            .changes
+            .iter()
+            .map(|change| change.code)
+            .collect::<Vec<_>>();
+        assert!(
+            codes.contains(&expected),
+            "{expected:?} missing from {codes:?}"
+        );
+        assert!(
+            !codes.contains(&CompiledRegistryChangeCode::ActionChanged),
+            "{codes:?}"
+        );
+    }
+}
+
 fn reviewed_plan(before: &CompiledRegistry, after: &CompiledRegistry) -> MigrationPlan {
     let change_set = compiled_registry_change_set(before, after, "prior-package");
     let baseline = CompiledRegistryMigrationBaseline::from_compiled("prior-package", before);

@@ -1,0 +1,61 @@
+{
+  "$id": "https://id.registrystack.org/schemas/documents/events/document-grant-changed.v1alpha1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "The data of a document-grant.changed event: a document grant was issued or revoked.",
+  "properties": {
+    "actorKind": {
+      "description": "The kind of caller that issued or revoked the grant.",
+      "enum": [
+        "service",
+        "human"
+      ],
+      "type": "string"
+    },
+    "change": {
+      "description": "Whether the grant was issued or revoked.",
+      "enum": [
+        "issued",
+        "revoked"
+      ],
+      "type": "string"
+    },
+    "documentId": {
+      "description": "The document the event is about.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "expiresAt": {
+      "description": "The expiry frozen into the grant at issue. Reaching it emits no event: the grant stops releasing the version at this instant.",
+      "format": "date-time",
+      "type": "string"
+    },
+    "grantId": {
+      "description": "The document grant that changed.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "policyId": {
+      "description": "The document policy the document is held under.",
+      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+      "type": "string"
+    },
+    "policyVersion": {
+      "description": "The version of that policy the document was placed under.",
+      "minLength": 1,
+      "type": "string"
+    },
+    "versionDigest": {
+      "description": "The SHA-256 digest of the version's content.",
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "versionId": {
+      "description": "The exact document version the event is about.",
+      "format": "uuid",
+      "type": "string"
+    }
+  },
+  "title": "Registry Stack Document Store document-grant.changed event data",
+  "type": "object"
+}

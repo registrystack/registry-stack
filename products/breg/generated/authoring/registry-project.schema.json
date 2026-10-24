@@ -2458,6 +2458,72 @@
       "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$",
       "type": "string"
     },
+    "FieldGenerationSource": {
+      "description": "Server-side generation requested for a persisted business identifier.\n\nThe canonical record UUID remains independent. On a sequence, `scope`\nnames required, immutable stored fields whose values partition the\nnumbering. A random code has one namespace per field.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "minimumDigits": {
+              "format": "uint32",
+              "maximum": 128,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "prefix": {
+              "default": "",
+              "maxLength": 128,
+              "pattern": "^[!-~]*$",
+              "type": "string"
+            },
+            "scope": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 8,
+              "type": "array",
+              "uniqueItems": true
+            },
+            "type": {
+              "const": "sequence",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "minimumDigits"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "length": {
+              "format": "uint32",
+              "maximum": 128,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "prefix": {
+              "default": "",
+              "maxLength": 128,
+              "pattern": "^[!-~]*$",
+              "type": "string"
+            },
+            "type": {
+              "const": "random",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "length"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "FieldLookupSource": {
       "additionalProperties": false,
       "description": "The authored blind-index declaration for an encrypted field. Normalization\ncomposes in declared order over the canonical string form of the value;\n`unique` requests a unique index over the derived blind-index column.",
@@ -2988,7 +3054,7 @@
         },
         "handler": {
           "$ref": "#/$defs/HookHandlerSource",
-          "description": "Governed, destination-neutral delivery. `destinationId` is a key in\nruntime `eventDestinations`; the project carries no URL or secret, and\ndeployment configuration may tighten the bounds it binds but cannot\nsupply or widen this authority. Production compilation requires it."
+          "description": "Governed, destination-neutral delivery. `destinationId` is a key in\nruntime `destinations.hooks`; the project carries no URL or secret, and\ndeployment configuration may tighten the bounds it binds but cannot\nsupply or widen this authority. Production compilation requires it."
         },
         "id": {
           "$ref": "#/$defs/LocalId",
@@ -4814,6 +4880,9 @@
         "encrypted": {
           "default": false,
           "type": "boolean"
+        },
+        "generate": {
+          "$ref": "#/$defs/FieldGenerationSource"
         },
         "id": {
           "$ref": "#/$defs/LocalId"

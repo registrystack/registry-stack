@@ -15,11 +15,208 @@
   restricted to the caller.
 - Preserve bounded authentication-refusal warnings after a poisoned timestamp
   lock, while retaining their rate limit.
+- A plain successor apply verifies its target catalog and reconciles runtime
+  grants in the same transaction as its DDL. A fingerprint refusal rolls that
+  transaction back and preserves the failed target for inspection and exact
+  retry. Reviewed migration checkpoints remain durable; this does not make a
+  multi-step migration atomic.
+- A package that this compiler cannot rederive reports a package build
+  mismatch with rebuild guidance, separately from package integrity refusal.
+  A failed initial apply names an already pinned different target and keeps
+  it unchanged; recovery requires the exact target or a separate empty database.
+- Spatial apply names a missing PostGIS extension before checking its runtime
+  role, and still refuses an installed extension with unsuitable role grants.
+- ThunderID's initial agent-schema bootstrap retains bounded, redacted
+  owner-only logs on a failed command, without automatically retrying it.
+
+- BREAKING: `breg` and `bregctl doctor` refuse a database that still carries
+  the attachment verification shape v0.43.0 and earlier installed (a
+  `registry_internal.registry_attachment_verification` table with a
+  `lease_id` column, or without the
+  `registry_internal.registry_attachment_verification_jobs` table), with
+  `startup.database.pre-1-0-schema`, before the role and catalog checks that
+  reported it as missing grants or as catalog drift to restore from a backup
+  carrying the same shape. `bregctl plan` and `bregctl apply` refuse it with
+  `apply.database.pre-1-0-schema` before any other database outcome, where
+  they reported an active package as ready or already active, and the
+  commands that bind the active registry refuse it as
+  `<command>.active-registry.pre-1-0-schema`. Migration: create a fresh
+  database, rebuild the package with the v0.44.0 `bregctl test` and
+  `bregctl package`, because a package an earlier release built records
+  that release's schema fingerprint, and run
+  `bregctl apply --package DIR --initial`.
+
+- BREAKING: `registry_internal.registry_attachment_verification_jobs` and
+  the hook delivery state refuse a `leased` row without a `lease_expires_at`,
+  through the corrected shared dispatch job and delivery state shapes, and the
+  managed schema fingerprint changes with them. Migration: install the release
+  on a fresh database.
+
+- BREAKING: attachment verification audit entries use the schema
+  `breg-attachment-verification-audit/v3`, with the same record fields as
+  `/v2`. The keyed verification reference is derived under the
+  `breg-attachment-verification-v2` domain from the verification id and the
+  attempt's lease token, in place of the `breg-attachment-verification-v1`
+  domain over the content digest, content type, and lease id, so a reference
+  under one domain never matches one under the other for the same
+  verification. Migration: a reader joining verification entries across the
+  change branches on the schema.
+- BREAKING: one 60 second attachment verification attempt covers both the
+  storage read and the verifier call, so `breg` refuses at configuration load
+  an `attachmentStorage.attemptTimeoutMilliseconds` (S3 storage only) plus
+  `attachmentVerification.attemptTimeoutMilliseconds` above 55,000, with
+  `breg.runtime.attachment-attempt-budget-exceeded`; the remaining five
+  seconds are kept for recording the outcome. Migration: lower either timeout
+  so the two add up to at most 55,000.
+- BREAKING: attachment verification runs on the shared
+  `registry-platform-dispatch` job core. Each pending verdict has one job in
+  the `registry_internal.registry_attachment_verification_jobs` table, and
+  `registry_internal.registry_attachment_verification` loses its
+  `next_attempt_at`, `lease_id`, `lease_expires_at`, and `attempts` columns
+  and the `registry_attachment_verification_pending` index, and gains a
+  `verification_id` column. A failed attempt is retried after a delay
+  drawn with equal jitter, 15 to 30 seconds for the first retry and doubling
+  to at most one hour with jitter included, in place of a fixed 30 seconds; an attempt has 60 seconds in place of 180; and a lease a
+  stopped worker left behind is retried after that delay and audited as
+  `unfinished` by the worker that recovers it. Migration: the tables are not
+  converted in place, so install the release on a fresh database. Operator
+  queries that read the attempt count or lease from the verdict table read
+  `attempt`, `state`, and `lease_expires_at` from the job table, joined on
+  `verification_id`. A pending verdict whose job is missing or dead-lettered
+  holds back the worker's last success, so
+  `breg_worker_last_success_age_seconds` grows while one waits.
+- BREAKING: hook destinations move from `eventDestinations` to
+  `destinations.hooks` in `runtime.yaml` and in the `bregctl dev` clients file
+  `dev-clients.yaml` (CFG-NAME-5). Migration: add a `destinations:` block,
+  put a `hooks:` key under it, and move each `eventDestinations` entry under
+  `hooks:` unchanged. A file that still writes `eventDestinations` is refused
+  with `config.removed-key` naming `destinations.hooks`, and `breg` refuses to
+  start on it. The destination binding digest a retained delivery was captured
+  under is unchanged, so retained deliveries stay deliverable. `bregctl
+  doctor` reports the check as `destinations.hooks`; its diagnostic codes are
+  renamed in the hook vocabulary entry below.
+- BREAKING: hook delivery audit entries use the schema `breg-hook-audit/v1`
+  in place of `breg-webhook-audit/v3`, carry `"event": "breg.hook-delivery"`,
+  and derive their keyed event and delivery references under the
+  `breg-hook-event-v1` and `breg-hook-delivery-v1` domains. Migration: select
+  hook delivery entries by the new schema or event name, and branch on the
+  schema when joining references across the upgrade; a reference written
+  before the upgrade does not match one written after it for the same
+  delivery.
+- BREAKING: local Rhai and WASM hook handlers run on the shared
+  `registry-platform-hooks` executor, which uses the bare
+  `registry-platform-script` engine. Hook programs lose the `join` helper the
+  action planner engine carries. Migration: build the string in the program
+  itself. A package whose hook calls `join` still compiles and activates,
+  because the engine resolves functions when the program runs, and then
+  dead-letters every delivery of that hook with the reason
+  `handler-execution`. After upgrading, run `bregctl hook list` and look for
+  `handler-execution` dead letters; fix the program, then replay them with
+  `bregctl hook replay`.
+  Action handlers keep `join`. The WASM hook entry point no longer shares the
+  action handler module cache.
+- BREAKING: the Rust module `registry_breg::webhook` is `registry_breg::hooks`,
+  its `Webhook*` types are `Hook*`, and `registry_breg::hook_handler` is
+  removed in favour of the executor in `registry-platform-hooks`. Migration:
+  rename the imports. BReg runs no hook capability check; every declaration
+  it accepted before is still accepted.
+- BREAKING: the sending side of event delivery is named hooks throughout,
+  with no aliases. Migration: update every script, alert, dashboard, and
+  receiver that names the old words:
+  - the operator verb `bregctl webhook` is `bregctl hook` (`sample`, `list`,
+    `drain`, `replay`, `discard`), and its diagnostics name the artifacts
+    `hook-sample` and `hook-operations` and the suggested actions
+    `select-hook-event` and `verify-hook-operation`; the offline sample
+    request target placeholder is `<configured-hook-request-target>`;
+  - the codes `webhook.sample.event-refused`, `webhook.sample.render-refused`,
+    `webhook.package.refused`, `webhook.operation.refused`,
+    `webhook.claim.*`, and `webhook.worker.*` are `hook.*` with the same
+    suffix;
+  - `startup.webhook.retained-bindings` is `startup.hook.retained-bindings`,
+    and `startup.event-destinations.refused`,
+    `apply.event-destinations.refused`,
+    `test.event-destinations.inventory-mismatch`, and
+    `test.event-destinations.activation-failed` name `hook-destinations` in
+    place of `event-destinations`;
+  - `breg.event.webhook-projection-too-large`,
+    `breg.event.webhook-destination-invalid`,
+    `breg.runtime.invalid-event-destination`, and
+    `breg.runtime.event-destination-id-collision` are
+    `breg.event.hook-projection-too-large`,
+    `breg.event.hook-destination-invalid`,
+    `breg.runtime.invalid-hook-destination`, and
+    `breg.runtime.hook-destination-id-collision`;
+  - the operational events `WebhookWorkerIterationFailed` and
+    `WebhookStateTransitionFailed` are `HookWorkerIterationFailed` and
+    `HookStateTransitionFailed`, and every hook worker log uses the target
+    `registry_breg::hooks` in place of `registry_breg::webhook`;
+  - the metrics labels `worker="webhook"` and `queue="webhook-delivery"` are
+    `worker="hook"` and `queue="hook-delivery"`, and the `bregctl plan`
+    and `apply` check `webhook-bindings` is `hook-bindings`;
+  - the Rust constants `WEBHOOK_*`, `MAX_WEBHOOK_*`, `MIN_WEBHOOK_*`, and
+    `DEFAULT_WEBHOOK_*` are `HOOK_*`, `MAX_HOOK_*`, `MIN_HOOK_*`, and
+    `DEFAULT_HOOK_*`;
+  - in `registry-breg-client`, `verify_webhook_delivery`,
+    `BRegWebhookDelivery`, `BRegVerifiedWebhookDelivery`, and
+    `BRegWebhookVerificationError` are `verify_hook_delivery`,
+    `BRegHookDelivery`, `BRegVerifiedHookDelivery`, and
+    `BRegHookVerificationError`; the Node.js client exports
+    `verifyHookDelivery`, `HookDeliveryInput`, `VerifiedHookDelivery`, and
+    `HookVerificationRefusalCode`, the Python client exports
+    `verify_hook_delivery`, and both report a refused delivery with the error
+    kind `hook-verification` in place of `webhook-verification`.
+  The signature and idempotency domains (`breg-webhook-signature-v1`,
+  `breg-webhook-idempotency-v1`), the delivery tables, the compiled delivery
+  identifiers, the destination binding digests, and the CloudEvents request a
+  receiver gets are unchanged, so retained deliveries stay deliverable and
+  receivers keep verifying.
+- BREAKING: `attachmentStorage` and `attachmentVerification` in `runtime.yaml`
+  name their destination `url`, not `endpoint` (CFG-VAL-7). Migration: rename
+  `endpoint:` to `url:` in both blocks and keep the value. A file that still
+  writes `endpoint` under `type: s3` or `type: http` is refused with
+  `config.removed-key` at that member, and `breg` refuses to start on it;
+  under `type: database` or `type: disabled`, which take no `url` either, it
+  is refused as an unknown key. The value is kept exactly as written: no
+  whitespace is trimmed, no host is mapped through IDNA, and no backslash is
+  rewritten; a value holding whitespace, a control character, or a
+  backslash, or a host the URL parser would rewrite, is refused instead. User
+  information and a scheme other than `http` or `https` are refused when the
+  file is decoded, with `config.invalid-value` at the member and the shared
+  URL sentence. The S3 adapter and the verifier transport now
+  come from `registry-platform-objectstore`; moving them changes no object
+  key, no storage or verification binding digest a registry has pinned, and
+  no request. The attempt timeouts, the attempt budget refusal, and the fresh
+  database the attachment verification jobs need are the separate entries
+  above.
+
+- `bregctl plan` and `bregctl apply` name a refusal that happens before
+  maintenance begins instead of reporting `apply.migration.failed` with advice
+  to reconcile a migration that never started. A wrong migration role reports
+  `apply.database.migration-role-refused`, a missing administrator-installed
+  prerequisite `apply.database.prerequisite-missing` naming it, a refused
+  catalog `apply.database.catalog-refused`, a refused database setting
+  `apply.database-configuration.refused`, and a package id that derives no
+  lock key `apply.package.lock-key-refused`. Each says nothing was changed.
+- An initial `bregctl plan` or `bregctl apply` of a package whose declared
+  schema fingerprint differs from the catalog its DDL installs, as one built
+  by another release, is refused with `apply.package.fingerprint-mismatch`
+  before maintenance begins. It previously failed after the DDL committed,
+  leaving the database pinned in failed maintenance, and plan reported the
+  package ready. The same rehearsal refuses, before maintenance and with
+  nothing changed, a DDL statement PostgreSQL refuses
+  (`apply.package.ddl-refused`, naming the SQLSTATE), a native pattern it
+  rejects (`breg.field.pattern-syntax-invalid`), and a managed catalog it
+  does not admit (`apply.database.catalog-refused`). Successor activations
+  are not rehearsed this way.
+
 - A manual Proposal Apply that hits a unique constraint rolls back its Record
   effects and durably blocks that application. It returns the same value-free
   `409 mutation.conflict`, disables Apply, and leaves Rebase available to correct
   the input. Stale Record revisions remain `412 precondition.failed` and do not
-  create that block.
+  create that block. Every package activation keeps that block until Rebase;
+  one that changes the Action withdraws its Review round but keeps the refusal.
+  Review recovery, `bregctl` and `applicationStatus` report it as
+  `application-refused` rather than as a package change.
 - Bind Proposal review delivery digests to the configured `review.source`,
   including source namespaces distinct from the registry id. Pending legacy
   submissions recover their acceptance under the same request and idempotency
@@ -41,10 +238,21 @@
   failures name the step, profile and unreadable field, or the Action and missing
   required input.
 - Warning findings now include a stable `rank` of `widens-access`, `performance`
-  or `hygiene`. Clean generated starters suppress broad-access warnings when
-  scope and purpose requirements already bound their callers. Optional stored
-  fields that no supported Record grant or Action can fill report
+  or `hygiene`. A profile that requires both scopes and purposes does not
+  report `breg.access.profile-unrestricted-collection` or
+  `breg.access.profile-unrestricted-rows`;
+  `breg.access.profile-higher-classification` is always reported. Optional
+  stored fields that no supported Record grant or Action can fill report
   `breg.record-type.stored-field-unfillable`.
+- Add compiler-configured business identifiers on stored string fields. Records
+  retain their internal UUID while BReg allocates, inside the write transaction,
+  either a `sequence` number (`minimumDigits`, with an optional field-based
+  `scope`) or a `random` code (`length`, from a fixed alphabet), each with an
+  optional `prefix`. Generated fields and their scope fields must be `public` or
+  `internal`, and scope fields cannot be references, because issued values and
+  their scopes outlive record erasure.
+  Existing fields can adopt generation through a reviewed backfill migration;
+  Proposal Submit freezes generated values for Apply and Retry.
 - Add the closed `logLevel` runtime setting to BReg, `breg-mcp`, and
   `breg-review`. Each existing product environment variable takes precedence,
   then the runtime file, then `info`; an unknown environment or configuration

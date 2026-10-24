@@ -2,7 +2,7 @@
 
 This receiver uses the Python standard library, the public
 [BReg webhook contract](../../EVENTS-AND-WEBHOOKS.md), and
-`registry_client.breg.verify_webhook_delivery` from the `registry-stack-client`
+`registry_client.breg.verify_hook_delivery` from the `registry-stack-client`
 package. That function authenticates the signed CloudEvents with the shared
 Rust verifier. The receiver then checks the expected registry/instance/event
 contract and delivery-time bound, and commits exact event content and the
@@ -10,7 +10,7 @@ delivery binding to its own SQLite inbox before returning `204`. Storage
 failure returns `503` for retry.
 
 Install a `registry-stack-client` release whose `breg` namespace provides
-`verify_webhook_delivery`. Set the registry, instance, Record type, event ID and
+`verify_hook_delivery`. Set the registry, instance, Record type, event ID and
 repeated `--field` names to those of your configured webhook. Supply the same
 raw HMAC key bytes used by the runtime destination in an owner-only key file.
 Use an owner-only directory for the inbox, then run:

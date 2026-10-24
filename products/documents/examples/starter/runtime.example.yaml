@@ -1,0 +1,105 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/documents/runtime/runtime.v1alpha1.schema.json
+# A complete Document Store runtime configuration: the document
+# `documents --runtime-config <file> serve` reads and
+# `documentsctl check --runtime-config <file>` checks.
+# Every configured path must be absolute. Secret members (ending in Ref) take
+# only a literal secret reference.
+apiVersion: id.registrystack.org/formats/documents/runtime/v1alpha1
+kind: DocumentsRuntimeConfig
+identity:
+  # The one database this deployment owns.
+  databaseId: registry-documents-production
+package:
+  # The directory holding the deployment's documents.yaml.
+  root: /srv/registry-documents/package
+  # expectedDigest: sha256:<64 lowercase hex digits>
+listener:
+  bind: 127.0.0.1:8116
+  tlsTermination: operator-controlled-upstream
+  networkExposure: private-address
+secretProviders:
+  file:
+    root: /run/secrets/registry-documents
+  # environment: {}
+database:
+  runtimeUrlRef: secret:file/runtime-database-url
+  migrationUrlRef: secret:file/migration-database-url
+  # Both connections require TLS and verify the server's host name. A
+  # private CA's PEM bundle replaces the system roots:
+  # trustedRootCertificateRef: secret:file/postgres-ca.pem
+authentication:
+  oidc:
+    issuer: https://identity.example.test/realms/registry
+    audience: urn:example:documents
+    scopeClaim: scope
+    # Required; `unrestricted` is a startup refusal.
+    allowedClients: [civil-registry-app, citizen-portal, case-portal, partner-portal]
+    # Signing keys come from the issuer's discovery document by default. A
+    # static key set suits a host that cannot reach the issuer, or a local
+    # test issuer: it is read once at startup and never rotates, so replace
+    # the secret and restart to change keys. It holds RSA or EC public keys,
+    # each with a distinct non-empty `kid`.
+    # jwksSource:
+    #   type: static
+    #   documentRef: secret:file/jwks.json
+audit:
+  destination: file
+  path: /var/lib/registry-documents/audit.ndjson
+  # The active file is sealed at rotateBytes, and sealed files older than
+  # retentionDays are deleted: ship the records your retention schedule
+  # requires off the host first.
+  rotateBytes: 104857600
+  retentionDays: 90
+  hashKeyRef: secret:file/documents-audit-key
+storage:
+  # Document version bytes held in PostgreSQL. maximumDocumentBytes is the
+  # deployment ceiling, at most 16777216 (16 MiB) and 16 MiB when omitted; a
+  # policy's mandatory restriction may only be lower, and startup refuses a
+  # package whose policy asks for more.
+  type: database
+  maximumDocumentBytes: 16777216
+  # S3-compatible object storage, the same keys Base Registry Engine reads
+  # under attachmentStorage. The binding is pinned at the first upload, and
+  # maximumDocumentBytes may rise to 67108864 (64 MiB).
+  # type: s3
+  # url: https://objects.example.test
+  # bucket: registry-documents
+  # region: eu-west-1
+  # pathStyle: true
+  # accessKeyIdRef: secret:file/s3-access-key-id
+  # secretAccessKeyRef: secret:file/s3-secret-access-key
+  # caBundleRef: secret:file/s3-ca.pem
+  # attemptTimeoutMilliseconds: 10000
+  # maximumDocumentBytes: 67108864
+contentVerification:
+  # Required: no document version becomes releasable until this verifier
+  # accepts it. The keys match Base Registry Engine attachmentVerification.
+  # attemptTimeoutMilliseconds defaults to 10000. `type: disabled` is
+  # accepted only beside `tlsTermination: development-loopback`.
+  type: http
+  url: https://scanner.example.test/v1/verify
+  authorizationRef: secret:file/content-verifier-authorization
+  policyId: documents-default
+  attemptTimeoutMilliseconds: 10000
+transfers:
+  # One upload or download may run for this floor plus an allowance per
+  # started mebibyte; a 16 MiB document gets 60 + 16 * 8 = 188 seconds.
+  # A transfer still running at its deadline is cut off with
+  # service.unavailable and its bytes leave the transfer budget.
+  minimumDeadlineSeconds: 60
+  mebibyteAllowanceSeconds: 8
+cleanup:
+  # paused stops every erasure; a removal request still stops release at
+  # once. Pause it while restoring a backup.
+  erasure: active
+destinations:
+  hooks:
+    owning-system-events:
+      url: https://civil-registry.example.test/document-events
+      hmacSha256KeyRef: secret:file/owning-system-events-hmac
+      attemptTimeoutMilliseconds: 5000
+      maximumAttempts: 8
+retention:
+  # Seven days is a placeholder, not a jurisdictional recommendation.
+  receiptRetentionDays: 7
+  hookPayloadRetentionDays: 7

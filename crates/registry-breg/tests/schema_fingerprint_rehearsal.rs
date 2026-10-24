@@ -31,7 +31,7 @@ const SOURCE_REVISION: &str = "rehearsal-source-revision";
 // Includes the runtime Evidence expiry function, both expires_at indexes, and
 // the Proposal blocked-reason constraint that admits a durable Apply refusal.
 const PORTABLE_SCHEMA_FINGERPRINT: &str =
-    "sha256:0d95c82566268d7e93a562982b943fb0b7f429b11505ab43493345574343421f";
+    "sha256:0abb3156966b9b6f97dd2304bb23f3e72ec1d4901f5112406f9c590ba2a9c4c6";
 const FIXTURE_JOURNEYS: &[u8] = br#"apiVersion: id.registrystack.org/formats/breg/journeys/v1
 kind: BRegJourneys
 journeys: []
@@ -308,7 +308,9 @@ async fn rehearsal_and_schema_test_prepare_refuse_dirty_text_search_configuratio
         )
         .await
         .err(),
-        Some(StartupError::DatabaseUnready)
+        Some(StartupError::SchemaTestSetupRefused(
+            "schema-test database is not clean"
+        ))
     );
     assert!(
         registry_state_table(&database).await.is_none(),
@@ -334,7 +336,9 @@ async fn rehearsal_and_schema_test_prepare_refuse_dirty_text_search_configuratio
         )
         .await
         .err(),
-        Some(StartupError::DatabaseUnready)
+        Some(StartupError::SchemaTestSetupRefused(
+            "schema-test database is not clean"
+        ))
     );
     assert!(
         text_search_configuration_exists(&database).await,
@@ -357,11 +361,94 @@ async fn rehearsal_refuses_migration_connection_using_the_runtime_role() {
         )
         .await
         .err(),
-        Some(StartupError::DatabaseUnready)
+        Some(StartupError::SchemaTestSetupRefused(
+            "migration connection uses the wrong role"
+        ))
     );
     assert!(
         managed_schemas_empty_by_restrict(&database).await,
         "wrong migration role is refused before any managed schema dependency is installed"
+    );
+    database.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn rehearsal_and_prepare_refuse_a_migration_role_with_database_create() {
+    let registry = compiled_registry(SOURCE_REVISION);
+    let database = TestDatabase::create(1).await;
+    database
+        .admin
+        .batch_execute(&format!(
+            "DO $$ BEGIN EXECUTE format('GRANT CREATE ON DATABASE %I TO \"{}\"', current_database()); END $$",
+            database.migration_role.as_str()
+        ))
+        .await
+        .expect("test can grant database CREATE to the migration role");
+    let config = runtime_config(&database, ENVIRONMENT, INSTANCE);
+    let refusal = Some(StartupError::SchemaTestSetupRefused(
+        "migration role has database-level administrative authority",
+    ));
+
+    assert_eq!(
+        rehearse_schema_fingerprint_with_connection_config_for_test(
+            &config,
+            &registry,
+            &database.migration_config,
+        )
+        .await
+        .err(),
+        refusal
+    );
+    let package =
+        prepared_package("sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    assert_eq!(
+        prepare_schema_test_database_with_connection_configs_for_test(
+            &config,
+            &package,
+            &database.migration_config,
+            &database.runtime_config,
+        )
+        .await
+        .err(),
+        refusal
+    );
+    assert!(
+        managed_schemas_empty_by_restrict(&database).await,
+        "the migration-role refusal happens before any managed schema dependency is installed"
+    );
+    database.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn prepare_refuses_a_single_role_runtime_connection_naming_the_role_invariant() {
+    let registry = compiled_registry(SOURCE_REVISION);
+    let database = TestDatabase::create(1).await;
+    let config = runtime_config(&database, ENVIRONMENT, INSTANCE);
+    let fingerprint = rehearse_schema_fingerprint_with_connection_config_for_test(
+        &config,
+        &registry,
+        &database.migration_config,
+    )
+    .await
+    .expect("schema fingerprint rehearsal succeeds");
+    let package = prepared_package(&fingerprint);
+
+    assert_eq!(
+        prepare_schema_test_database_with_connection_configs_for_test(
+            &config,
+            &package,
+            &database.migration_config,
+            &database.migration_config,
+        )
+        .await
+        .err(),
+        Some(StartupError::SchemaTestSetupRefused(
+            "schema-test runtime connection uses unexpected authority"
+        ))
+    );
+    assert!(
+        managed_schemas_empty_by_restrict(&database).await,
+        "a single-role setup is refused before any managed schema is written"
     );
     database.cleanup().await;
 }
@@ -533,7 +620,8 @@ audit:
 cursor:
   secretRef: secret:env/BREG_REHEARSAL_CURSOR_KEY
   maximumAgeSeconds: 300
-eventDestinations: {{}}
+destinations:
+  hooks: {{}}
 operationalTimeouts:
   httpRequestMilliseconds: 10000
   shutdownGraceMilliseconds: 30000

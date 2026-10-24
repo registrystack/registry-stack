@@ -299,7 +299,7 @@ pub(crate) fn read_project(project: &Path) -> Result<Decoded<CaseworkProject>> {
 pub(crate) fn load_and_check_policy(project: &Path) -> Result<CaseworkProject> {
     Ok(CaseworkProject::load(project.join("casework.yaml"))?)
 }
-pub(super) fn check(project: &Path, _production: bool, deny_warnings: bool) -> Result<Value> {
+pub(super) fn check(project: &Path, production: bool, deny_warnings: bool) -> Result<Value> {
     let decoded = read_project(project)?;
     let policy = decoded.value;
     let mut diagnostics = decoded.document.warnings();
@@ -338,6 +338,30 @@ pub(super) fn check(project: &Path, _production: bool, deny_warnings: bool) -> R
         files_checked.insert(relative.to_owned());
     }
     check_holiday_sets(project, &mut files_checked, &mut diagnostics)?;
+    if production {
+        for provider in &policy.context_providers {
+            if provider.description.is_none() {
+                let provider_path = format!("/contextProviders/{}", provider.id);
+                let message = format!(
+                    "Context provider `{}` has no paired producer description, so its production package input closure is incomplete.",
+                    provider.id
+                );
+                let action = format!(
+                    "Run `caseworkctl provider pair` for `{}`, then retry the production check.",
+                    provider.id
+                );
+                let mut diagnostic = decoded.document.diagnostic_at_key(
+                    Severity::Error,
+                    "casework.context-provider.missing-description",
+                    &provider_path,
+                    &message,
+                    &action,
+                );
+                diagnostic.path.push_str("/description");
+                diagnostics.push(diagnostic);
+            }
+        }
+    }
     if diagnostics.has_errors() || (deny_warnings && diagnostics.warning_count() > 0) {
         return Err(diagnostics.into());
     }
@@ -366,6 +390,14 @@ pub(super) fn check(project: &Path, _production: bool, deny_warnings: bool) -> R
                         bail!("provider export context contract differs from the compiled policy");
                     }
                 }
+            }
+        }
+    }
+    if production {
+        for input in registry_casework::package_inputs(&policy, &policy_bytes)? {
+            read_package_input(&project_input_path(project, &input)?)?;
+            if input != registry_casework::POLICY_FILE {
+                files_checked.insert(input);
             }
         }
     }
@@ -996,6 +1028,61 @@ mod display_integrity_tests {
             report.diagnostics()[0].code,
             "casework.review-policy.duplicate-outcome-label"
         );
+    }
+
+    #[test]
+    fn production_check_requires_a_paired_context_provider_at_its_authored_path() {
+        let root = crate::canonical_tempdir();
+        let project = root.path().join("project");
+        init(&project, "canonical-review").unwrap();
+
+        check(&project, false, false)
+            .expect("ordinary authoring check permits a provider that is not paired yet");
+
+        let assert_pairing_diagnostic = |error: anyhow::Error| {
+            let report =
+                crate::configuration_report(&error).expect("a structured authored diagnostic");
+            assert_eq!(report.error_count(), 1);
+            let diagnostic = &report.diagnostics()[0];
+            assert_eq!(
+                diagnostic.code,
+                "casework.context-provider.missing-description"
+            );
+            assert_eq!(
+                diagnostic.path,
+                "/contextProviders/facility-proposal-context/description"
+            );
+            assert!(diagnostic.message.contains("facility-proposal-context"));
+            assert_eq!(
+                diagnostic.suggested_action,
+                "Run `caseworkctl provider pair` for `facility-proposal-context`, then retry the production check."
+            );
+            assert_eq!(diagnostic.artifact.as_deref(), Some("CaseworkProject"));
+            let source = diagnostic
+                .source
+                .as_ref()
+                .expect("the diagnostic retains its authored source");
+            assert_eq!(
+                source.file,
+                project.join("casework.yaml").display().to_string()
+            );
+            assert!(source.line.is_some(), "the provider declaration has a line");
+            assert!(
+                source.column.is_some(),
+                "the provider declaration has a column"
+            );
+        };
+        assert_pairing_diagnostic(
+            check(&project, true, false)
+                .expect_err("production check requires the exact package input closure"),
+        );
+
+        let package_root = root.path().join("package");
+        assert_pairing_diagnostic(
+            package(&project, &package_root, None)
+                .expect_err("packaging reuses the authored pairing diagnostic"),
+        );
+        assert!(!package_root.exists(), "the refused check wrote a package");
     }
 }
 

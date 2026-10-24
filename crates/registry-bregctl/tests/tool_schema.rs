@@ -610,9 +610,9 @@ fn the_reader_accepts_every_word_the_migration_descriptor_schema_enumerates() {
             checked += 1;
         }
     }
-    // 3 change classes, 59 change codes, 14 target kinds, 1 recovery,
+    // 3 change classes, 60 change codes, 14 target kinds, 1 recovery,
     // 2 history choices, 4 object kinds, and 1 cursor protocol.
-    assert_eq!(checked, 84);
+    assert_eq!(checked, 85);
 
     let steps = &definitions["ReviewedMigrationStepDescriptor"]["oneOf"];
     let types: Vec<&str> = steps

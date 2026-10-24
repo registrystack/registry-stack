@@ -1,0 +1,26 @@
+[package]
+name = "registry-documents-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Source-neutral project model, wire documents, and problem vocabulary for the Registry Stack Document Store."
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+hex.workspace = true
+registry-platform-canonical-json.workspace = true
+registry-platform-config.workspace = true
+registry-platform-hooks.workspace = true
+registry-platform-yaml.workspace = true
+schemars = { workspace = true, optional = true }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+
+[features]
+schema = ["dep:schemars", "registry-platform-yaml/schema", "registry-platform-config/schema"]

@@ -591,7 +591,7 @@ async fn wasm_multi_effect_application_rolls_back_completely_on_a_late_failure()
     database.cleanup().await;
 }
 
-/// The activated webhook destination the acceptance project's declared events
+/// The activated hook destination the acceptance project's declared events
 /// expect, the same construction the Rhai handler journey activates.
 fn event_destinations(
     registry: &registry_breg::CompiledRegistry,
@@ -631,11 +631,11 @@ fn event_destinations(
         },
         "audit":{"hashKeyRef":"secret:file/audit-key","path":root.join("audit").join("audit.jsonl")},
         "cursor":{"secretRef":"secret:file/cursor-key", "maximumAgeSeconds":300},
-        "eventDestinations":{"person-events":{
+        "destinations":{"hooks":{"person-events":{
             "origin":"https://consumer.example/", "path":"/events", "networkProfile":"production-https", "dnsFamily":"dual-stack-strict",
             "allowedPrivateCidrs":[], "hmacSha256KeyRef":"secret:file/event-key", "classificationCeiling":"internal",
             "deliveryCeilings":{"attemptTimeoutMilliseconds":5000,"maximumAttempts":5}
-        }},
+        }}},
         "operationalTimeouts":{"httpRequestMilliseconds":10000,"shutdownGraceMilliseconds":30000,"recordLockMilliseconds":5000,"migrationLockMilliseconds":30000,"migrationStatementMilliseconds":60000}
     });
     registry_breg::runtime_config::parse_runtime_config(&config.to_string())

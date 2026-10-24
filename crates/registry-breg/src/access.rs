@@ -327,8 +327,8 @@ pub(crate) fn compiled_access_findings(
     }
     for reach in row_reach(entities, actions) {
         // Ordinary permissions and read-path grants retain their existing
-        // finding codes above. A read path reaches related rows under the
-        // root profile's authority; it is not an Action or Proposal target.
+        // finding codes above; a read path reaches related rows under the
+        // root profile's own boundaries, which is not a target authority.
         if reach.surface == "record" || reach.surface == "read_path" {
             continue;
         }

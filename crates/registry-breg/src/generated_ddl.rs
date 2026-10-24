@@ -271,6 +271,16 @@ pub(crate) fn generate_ddl_with_actions(
         });
     }
 
+    // Reserve values already present when generation is enabled on a retained
+    // field. On an initial install these statements are no-ops because the
+    // tables are empty. A successor migration selects the same stable
+    // statement after its reviewed field backfill and before serving writes.
+    for entity in entities.values() {
+        for field in entity.generated_fields() {
+            statements.push(generated_identifier_seed_statement(entity, field));
+        }
+    }
+
     // Install every referenced key before any foreign key, including cycles.
     // The physical-name inventory records these compiler-owned constraints:
     // a predecessor without them still reconstructs its original schema.
@@ -708,6 +718,114 @@ pub(crate) fn generate_ddl_with_actions(
         tables,
         views,
         functions,
+    }
+}
+
+/// Seed the append-only reservation ledger and sequence high-water state from
+/// retained rows. Runtime allocation never derives a candidate from record
+/// data; only an exclusive migration uses this statement while adopting the
+/// generated-field contract for existing data.
+pub(crate) fn generated_identifier_seed_statement(
+    entity: &CompiledEntity,
+    field: &crate::model::CompiledField,
+) -> DdlStatement {
+    use crate::model::CompiledGeneratedIdentifierStrategy;
+
+    let generation = field
+        .generate
+        .as_ref()
+        .expect("seed statement is emitted only for a generated field");
+    let table = quote_identifier(&entity.physical_table);
+    let column = quote_identifier(&field.physical_name);
+    let scope_values = if generation.scope.is_empty() {
+        "'[]'::jsonb".to_owned()
+    } else {
+        let values = generation
+            .scope
+            .iter()
+            .map(|field_id| {
+                format!(
+                    "to_jsonb({})",
+                    quote_identifier(&entity.fields[field_id].physical_name)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("jsonb_build_array({values})")
+    };
+    let entity_id = quote_literal(&entity.id);
+    let field_id = quote_literal(&field.id);
+    let mut sql = format!(
+        "SET LOCAL TimeZone = 'UTC';
+         LOCK TABLE registry_data.{table} IN ACCESS EXCLUSIVE MODE;
+         ALTER TABLE registry_data.{table} NO FORCE ROW LEVEL SECURITY;
+         INSERT INTO registry_internal.registry_generated_identifier_reservations
+             (entity_id, field_id, scope_values, generated_value)
+         SELECT {entity_id}, {field_id}, {scope_values}, {column}
+           FROM registry_data.{table}
+          WHERE {column} IS NOT NULL
+         ON CONFLICT (entity_id, field_id, scope_values, generated_value) DO NOTHING"
+    );
+    if matches!(
+        generation.strategy,
+        CompiledGeneratedIdentifierStrategy::Sequence { .. }
+    ) {
+        let prefix = quote_literal(&generation.prefix);
+        sql.push_str(&format!(
+            "; WITH retained AS MATERIALIZED (
+                 SELECT {scope_values} AS scope_values,
+                        substring({column} FROM char_length({prefix}) + 1) AS suffix
+                   FROM registry_data.{table}
+                  WHERE {column} IS NOT NULL
+                    AND left({column}, char_length({prefix})) = {prefix}
+             ), normalized AS MATERIALIZED (
+                 SELECT scope_values,
+                        CASE WHEN suffix ~ '^[0-9]+$'
+                             THEN COALESCE(NULLIF(ltrim(suffix, '0'), ''), '0')
+                             ELSE NULL END AS canonical_digits
+                   FROM retained
+             ), parsed AS MATERIALIZED (
+                 SELECT scope_values,
+                        CASE WHEN canonical_digits IS NOT NULL
+                                  AND char_length(canonical_digits) <= 19
+                             THEN canonical_digits::numeric
+                             ELSE NULL END AS numeric_suffix
+                   FROM normalized
+             ), candidates AS MATERIALIZED (
+                 SELECT scope_values,
+                        CASE WHEN numeric_suffix <= 9223372036854775807::numeric
+                             THEN numeric_suffix + 1
+                             ELSE NULL END AS next_value
+                   FROM parsed
+             ), high_water AS MATERIALIZED (
+                 SELECT scope_values, max(next_value) AS next_value
+                   FROM candidates
+                  WHERE next_value IS NOT NULL
+                  GROUP BY scope_values
+             )
+             INSERT INTO registry_internal.registry_generated_identifier_counters
+                 (entity_id, field_id, scope_values, next_value)
+             SELECT {entity_id}, {field_id}, scope_values, next_value
+               FROM high_water
+             ON CONFLICT (entity_id, field_id, scope_values)
+             DO UPDATE SET
+                 next_value = GREATEST(
+                     registry_internal.registry_generated_identifier_counters.next_value,
+                     EXCLUDED.next_value
+                 ),
+                 updated_at = transaction_timestamp()"
+        ));
+    }
+    sql.push_str(&format!(
+        "; ALTER TABLE registry_data.{table} FORCE ROW LEVEL SECURITY"
+    ));
+    DdlStatement {
+        id: format!(
+            "entity.{}.field.{}.generated-identifiers.seed",
+            entity.id, field.id
+        ),
+        kind: DdlStatementKind::Constraint,
+        sql,
     }
 }
 
@@ -1996,7 +2114,7 @@ fn immediate_action_common_expression(
         format!(
             "(({context} ->> 'purpose') IS NULL OR ({context} ->> 'purpose') = NULLIF(current_setting('registry.purpose', true), ''))"
         ),
-        immediate_action_effect_group_expression(context, compatible),
+        immediate_action_effect_group_expression(context, compatible, target_entity),
         format!(
             "{context} ->> 'targetEntityId' = {}",
             quote_literal(&effect.target.entity_id)
@@ -2019,6 +2137,7 @@ fn immediate_action_common_expression(
 fn immediate_action_effect_group_expression(
     context: &str,
     compatible: &[&CompiledPlanEffect],
+    target_entity: &CompiledEntity,
 ) -> String {
     let allowed_effects = compatible
         .iter()
@@ -2028,11 +2147,19 @@ fn immediate_action_effect_group_expression(
     let field_rows = compatible
         .iter()
         .flat_map(|candidate| {
-            candidate.mutations.iter().map(|mutation| {
-                let field = match mutation {
-                    CompiledPlanMutation::Set { field, .. }
-                    | CompiledPlanMutation::Clear { field } => field,
-                };
+            let authored = candidate.mutations.iter().map(|mutation| match mutation {
+                CompiledPlanMutation::Set { field, .. } | CompiledPlanMutation::Clear { field } => {
+                    field.as_str()
+                }
+            });
+            let generated = target_entity
+                .fields
+                .values()
+                .filter(|field| {
+                    candidate.operation == Operation::Create && field.generate.is_some()
+                })
+                .map(|field| field.id.as_str());
+            authored.chain(generated).map(|field| {
                 format!(
                     "({}, {})",
                     quote_literal(&candidate.id),

@@ -399,3 +399,68 @@ fn an_unrelated_target_string_minimum_is_additive_while_a_related_input_needs_re
     assert_eq!(related.changes.len(), 2, "{:#?}", related.changes);
     assert!(change_set_to_applicable_migration_plan(&related).is_err());
 }
+
+#[test]
+fn a_narrowed_target_field_limit_stays_under_migration_review() {
+    const SOURCE_REFERENCE: &str =
+        "{id: source-reference, type: string, maximumLength: 255, classification: internal}";
+    fn record_changes(
+        changes: &CompiledRegistryChangeSet,
+    ) -> Vec<(
+        CompiledRegistryChangeCode,
+        CompiledRegistryChangeClass,
+        Option<&str>,
+    )> {
+        changes
+            .changes
+            .iter()
+            .map(|change| {
+                (
+                    change.code,
+                    change.class,
+                    change.target.member_id.as_deref(),
+                )
+            })
+            .collect()
+    }
+    let with_field = |field: &str| {
+        replace_once(
+            CONSENT_MODULE,
+            SOURCE_REFERENCE,
+            &format!("{SOURCE_REFERENCE}\n  - {field}"),
+        )
+    };
+
+    for (before, after, field) in [
+        (
+            "{id: review-note, type: text, maximumLength: 255, classification: internal}",
+            "{id: review-note, type: text, maximumLength: 100, classification: internal}",
+            "review-note",
+        ),
+        (
+            "{id: review-code, type: string, minimumLength: 8, maximumLength: 64, classification: internal}",
+            "{id: review-code, type: string, minimumLength: 16, maximumLength: 64, classification: internal}",
+            "review-code",
+        ),
+    ] {
+        let narrowed = compiled_registry_change_set(
+            &consent(CONSENT_PROJECT, &with_field(before)),
+            &consent(CONSENT_PROJECT, &with_field(after)),
+            "prior-package",
+        );
+        assert_eq!(
+            record_changes(&narrowed),
+            vec![(
+                CompiledRegistryChangeCode::FieldTypeChanged,
+                CompiledRegistryChangeClass::DestructiveOrIrreversible,
+                Some(field)
+            )],
+            "{field}: a narrowed limit may reject stored values: {:#?}",
+            narrowed.changes
+        );
+        assert!(
+            change_set_to_applicable_migration_plan(&narrowed).is_err(),
+            "{field}: a narrowed target field stays under migration review"
+        );
+    }
+}

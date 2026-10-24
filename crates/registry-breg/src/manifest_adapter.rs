@@ -768,6 +768,7 @@ mod tests {
                 valid_time_role: None,
                 physical_name: "field_measurement".to_owned(),
                 encryption: None,
+                generate: None,
             },
             None,
             &[],

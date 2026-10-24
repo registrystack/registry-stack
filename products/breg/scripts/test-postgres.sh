@@ -71,6 +71,7 @@ if [[ "$lane" == all || "$lane" == postgres ]]; then
     --test postgres_mutation \
     --test postgres_reference_integrity \
     --test postgres_immediate_action_requirements \
+    --test postgres_immediate_action_generated_identifiers \
     --test postgres_consent_access \
     --test postgres_membership_access \
     --test postgres_mutation_logical_names \
@@ -89,6 +90,7 @@ if [[ "$lane" == all || "$lane" == postgres ]]; then
     --test postgres_proposal \
     --test postgres_proposal_task_authority \
     --test postgres_proposal_recovery_permissions \
+    --test postgres_proposal_generated_identifiers \
     --test postgres_proposal_shape_activation \
     --test postgres_native_retention \
     --test postgres_proposal_human_recovery \
@@ -100,6 +102,7 @@ if [[ "$lane" == all || "$lane" == postgres ]]; then
     --test postgres_facility_proposal \
     --test postgres_action_task_grants \
     --test postgres_generated_console \
+    --test postgres_generated_identifiers \
     --test postgres_pilot_acceptance \
     --test postgres_tombstone_revision \
     --test postgres_startup \
@@ -110,8 +113,10 @@ if [[ "$lane" == all || "$lane" == postgres ]]; then
     --test postgres_registry_extensibility \
     --test postgres_action_handlers \
     --test postgres_field_encryption \
+    --test postgres_generated_identifier_batch_import \
     --test postgres_package \
     --test postgres_migration \
+    --test postgres_generated_identifier_migration \
     --test postgres_spatial_migration \
     --test postgres_reference_indexes \
     --test postgres_list_page_plans \

@@ -69,7 +69,9 @@ pub struct RuntimeEnvelope {
 /// A key a runtime configuration no longer accepts, and what replaced it.
 ///
 /// `path` is dotted from the document root; a `*` segment matches any mapping
-/// key or sequence index. `replacement` names what to write instead; it is the
+/// key or sequence index, and a `name[tag=value]` segment matches the member
+/// `name` only when its `tag` is `value`, for a key renamed in one variant of
+/// a tagged union. `replacement` names what to write instead; it is the
 /// refusal's suggested action.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RemovedKey {
