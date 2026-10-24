@@ -765,7 +765,7 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
     ("Production-shaped docs build check", "run: npm run check:production"),
     (
         "Base Registry Engine tutorial replay",
-        "node docs/site/scripts/run-tutorial.mjs --gate breg\n",
+        'node docs/site/scripts/run-tutorial.mjs --gate breg --shard "$BREG_TUTORIAL_SHARD"\n',
     ),
     (
         "Base Registry Engine tutorial command drift",
