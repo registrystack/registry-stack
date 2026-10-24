@@ -425,7 +425,7 @@ An exact-time offering may opt into `partyCounts: optional`. Room and equipment
 bookings can then omit `party` without inventing a recipient or attendee.
 Omitted policy configuration keeps required counts, as do arrival windows.
 Supplied counts are validated and retained independently from capacity units;
-legacy claims with unknown counts stay unknown.
+a booking that omits `party` under `partyCounts: optional` records no counts.
 
 `partyReferences` can record up to sixteen typed `beneficiary` or `organization`
 references to source-owned records. Use opaque identifiers without names or

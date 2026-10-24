@@ -2640,9 +2640,8 @@ fn map_claim_row(row: Row) -> Result<ClaimRow, StoreError> {
     })
 }
 
-/// Attach only allocation rows whose immutable operational labels were
-/// recovered. Version-zero rows still count for capacity by resource id, but
-/// cannot safely be disclosed as authorized operational detail.
+/// Attach each claim's allocation rows to it: the primary requirement first,
+/// then each additional requirement in index order, every part in order.
 async fn load_claim_allocations(
     client: &impl DeadpoolGenericClient,
     claims: &mut [ClaimRow],
