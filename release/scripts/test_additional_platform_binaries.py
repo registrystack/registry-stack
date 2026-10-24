@@ -125,3 +125,9 @@ output.chmod(0o755)
         with tempfile.TemporaryDirectory() as temporary:
             result, _ = self.run_builder(Path(temporary), "0.44.0", wrong_version=True)
             self.assertNotEqual(0, result.returncode)
+            binary = release_roster.ADDITIONAL_PLATFORM_BUILDS[0][1]
+            self.assertIn(
+                f'{binary} reports "{binary} 0.1.0"; '
+                f'the release identity expects "{binary} 0.44.0"',
+                result.stderr,
+            )

@@ -916,6 +916,11 @@ os.execv({sys.executable!r}, [{sys.executable!r}, *args])
             name="wrong-version",
         )
         self.assertNotEqual(0, wrong.returncode)
+        self.assertIn(
+            f'evidence-v{VERSION}-macos-arm64 reports "evidence 0.27.1"; '
+            f'the release identity expects "evidence {VERSION}"',
+            wrong.stderr,
+        )
         self.assertEqual([CORE_ARGS], wrong_calls)
         self.assertEqual(
             "evidence\n", (self.root / "wrong-version-smoke.log").read_text()

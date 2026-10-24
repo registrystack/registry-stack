@@ -1308,5 +1308,53 @@ class SourceCheckoutIndependenceTest(unittest.TestCase):
         self.assertIn('"${GIT_CEILING_DIRECTORIES:-}" != "/workspace"', guard)
 
 
+class StagedVersionCheckTest(unittest.TestCase):
+    """A staged binary that reports the wrong version names itself and both values."""
+
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary.name)
+        self.addCleanup(self.temporary.cleanup)
+        self.scripts = self.root / "release/scripts"
+        self.scripts.mkdir(parents=True)
+        shutil.copy2(BINARY_RECIPE, self.scripts / BINARY_RECIPE.name)
+        shutil.copy2(ROOT / "release/scripts/release_roster.py", self.scripts)
+        self.recipe = (self.scripts / BINARY_RECIPE.name).read_text(encoding="utf-8")
+
+    def run_check(self, reported: str, expected: str) -> subprocess.CompletedProcess[str]:
+        executable = self.root / "rstack-v0.44.0-linux-amd64"
+        executable.write_text(f"#!/bin/sh\nprintf '%s\\n' {shlex.quote(reported)}\n")
+        executable.chmod(0o755)
+        # Load the recipe's definitions, stopping before Docker's outer entry
+        # point, and call the version check the way build_payload does.
+        definitions = self.recipe.split("\n# The outer invocation prepares", 1)[0]
+        probe = self.scripts / "probe-version.sh"
+        probe.write_text(
+            f"{definitions}\n"
+            f"check_version {shlex.quote(str(executable))} {shlex.quote(expected)}\n"
+        )
+        return subprocess.run(
+            ["bash", str(probe), "0.44.0"],
+            cwd=self.root,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    def test_matching_version_passes(self) -> None:
+        result = self.run_check("rstack 0.44.0", "rstack 0.44.0")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual("", result.stderr)
+
+    def test_wrong_version_names_the_binary_and_both_values(self) -> None:
+        result = self.run_check("rstack 0.44.0", "rstack 0.44.0-nightly.20261024")
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertEqual(
+            'rstack-v0.44.0-linux-amd64 reports "rstack 0.44.0"; '
+            'the release identity expects "rstack 0.44.0-nightly.20261024"\n',
+            result.stderr,
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
