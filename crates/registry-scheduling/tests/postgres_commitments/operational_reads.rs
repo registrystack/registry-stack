@@ -9,7 +9,7 @@ fn operator(subject: &str) -> String {
     )
 }
 
-fn operational_uri(start: DateTime<Utc>, end: DateTime<Utc>, profile: &str) -> String {
+pub(super) fn operational_uri(start: DateTime<Utc>, end: DateTime<Utc>, profile: &str) -> String {
     format!(
         "/v1/operational/appointments?service=registry-update&location=north-counter&start={}&end={}&timeBasis=displayed&profile={profile}",
         stamp(start),

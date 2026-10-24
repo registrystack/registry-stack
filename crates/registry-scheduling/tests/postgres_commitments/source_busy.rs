@@ -48,7 +48,7 @@ pub(super) fn source_router(
     })
 }
 
-fn reconciliation(
+pub(super) fn reconciliation(
     expected_revision: u64,
     status: &str,
     start: DateTime<Utc>,

@@ -154,9 +154,11 @@ async fn authenticate_busy_source(
     if !valid_identifier(profile) {
         return Err(HttpError(ProblemCode::RequestInvalid));
     }
+    let token =
+        bearer_token(headers).inspect_err(|_| state.authenticator.record_header_refusal())?;
     state
         .authenticator
-        .authenticate_busy_source(bearer_token(headers)?, profile)
+        .authenticate_busy_source(token, profile)
         .await
         .map_err(authentication_problem)
 }
@@ -610,7 +612,8 @@ async fn list_operational_appointments(
         end,
     )
     .map_err(|_| HttpError(ProblemCode::RequestInvalid))?;
-    let token = bearer_token(&headers)?;
+    let token =
+        bearer_token(&headers).inspect_err(|_| state.authenticator.record_header_refusal())?;
     let authority = state
         .authenticator
         .authenticate_operational_read(
@@ -857,7 +860,8 @@ async fn authenticate_appointment_detail(
     state: &HttpState,
     headers: &HeaderMap,
 ) -> Result<Caller, HttpError> {
-    let token = bearer_token(headers)?;
+    let token =
+        bearer_token(headers).inspect_err(|_| state.authenticator.record_header_refusal())?;
     state
         .authenticator
         .authenticate_appointment_detail(token)

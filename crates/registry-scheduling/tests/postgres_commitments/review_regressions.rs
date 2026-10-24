@@ -228,3 +228,65 @@ async fn bundle_confirmation_rechecks_global_duplicates_and_keeps_the_hold() {
         .get(0);
     assert_eq!(state, "active");
 }
+
+/// A request whose Authorization header is not one bearer credential is
+/// refused before the appointment-detail, busy-import, or operational-read
+/// authenticator runs, and each refusal still leaves one value-free header
+/// diagnostic. Every request gets its own router so the per-verifier limiter
+/// starts empty.
+#[tokio::test]
+async fn header_refusals_on_detail_busy_and_operational_routes_log_one_value_free_diagnostic() {
+    use registry_platform_testing::CapturedDiagnosticLogs;
+    use tracing::instrument::WithSubscriber;
+    let fx = fixture().await;
+    let profiles = super::source_busy::profiles();
+    let start = pinned_now() + TimeDelta::hours(2);
+    let routes = [
+        ("GET", format!("/v1/appointments/{}", Uuid::nil()), None),
+        (
+            "POST",
+            "/v1/source-busy/preview?profile=calendar-a".to_owned(),
+            Some(super::source_busy::reconciliation(
+                0,
+                "fresh",
+                start,
+                json!([]),
+            )),
+        ),
+        (
+            "GET",
+            super::operational_reads::operational_uri(
+                pinned_now(),
+                pinned_now() + TimeDelta::days(2),
+                "desk",
+            ),
+            None,
+        ),
+    ];
+    for (method, uri, body) in routes {
+        let captured = CapturedDiagnosticLogs::default();
+        let request = Request::builder()
+            .method(method)
+            .uri(&uri)
+            .header("authorization", "Basic canary-header-credential")
+            .header("content-type", "application/json")
+            .body(body.map_or_else(Body::empty, |value: Value| Body::from(value.to_string())))
+            .expect("a well-formed test request");
+        let response = super::source_busy::source_router(&fx, &profiles)
+            .oneshot(request)
+            .with_subscriber(captured.subscriber())
+            .await
+            .expect("an in-process request always answers");
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{uri}");
+        let rendered = captured.text();
+        let diagnostics = rendered
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).expect("JSON diagnostic"))
+            .filter(|event| event["fields"]["message"] == "Scheduling authentication refused")
+            .collect::<Vec<_>>();
+        assert_eq!(diagnostics.len(), 1, "{uri}");
+        assert_eq!(diagnostics[0]["fields"]["stage"], "header", "{uri}");
+        assert!(!rendered.contains("canary"), "{uri}");
+        assert!(!rendered.contains("Basic"), "{uri}");
+    }
+}
