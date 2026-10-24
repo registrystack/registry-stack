@@ -22,7 +22,7 @@ pub const CTL_REPORT_KIND: &str = "CoordinatorCtlReport";
 #[command(
     name = "coordinatorctl",
     about = "Author, package, activate and operate Registry Coordinator",
-    version
+    version = registry_platform_buildinfo::DISPLAY_VERSION
 )]
 struct Cli {
     #[arg(long, global = true, value_enum, default_value_t = Format::Human)]

@@ -326,7 +326,7 @@ if [[ "${exclude_discovery}" -eq 1 ]]; then
   additional_platform_builds="${filtered_platform_builds%$'\n'}"
 fi
 build_additional_platforms() {
-  local package binary expected typst_pin
+  local package binary expected observed typst_pin
   [[ -n "${additional_platform_builds}" ]] || return 0
   while read -r package binary; do
     [[ "${binary}" != scheduling ]] || continue
@@ -338,7 +338,11 @@ build_additional_platforms() {
       test -n "${typst_pin}"
       expected+=" (typst ${typst_pin})"
     fi
-    test "$("${staged_executable}" --version)" = "${expected}"
+    observed="$("${staged_executable}" --version)"
+    if [[ "${observed}" != "${expected}" ]]; then
+      printf '%s reports "%s"; the release identity expects "%s"\n' "${binary}" "${observed}" "${expected}" >&2
+      exit 1
+    fi
   done <<<"${additional_platform_builds}"
 }
 

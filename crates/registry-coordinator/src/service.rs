@@ -26,7 +26,7 @@ const SHUTDOWN_GRACE: Duration = ATTEMPT_TIMEOUT.saturating_add(LEASE_FINALIZATI
 #[command(
     name = "coordinator",
     about = "Authenticated Registry Coordinator workflow service",
-    version
+    version = registry_platform_buildinfo::DISPLAY_VERSION
 )]
 struct Cli {
     /// Runtime configuration file.

@@ -42,5 +42,9 @@ while read -r package binary; do
 		test -n "${typst_pin}"
 		expected+=" (typst ${typst_pin})"
 	fi
-	test "$("${destination}" --version)" = "${expected}"
+	observed="$("${destination}" --version)"
+	if [[ "${observed}" != "${expected}" ]]; then
+		printf '%s reports "%s"; the release identity expects "%s"\n' "${binary}" "${observed}" "${expected}" >&2
+		exit 1
+	fi
 done <<<"${builds}"
