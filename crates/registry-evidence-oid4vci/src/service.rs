@@ -2084,7 +2084,10 @@ mod tests {
             "https://wallet.example.org",
             "https://mint.example.org",
         ] {
-            assert!(!rendered.contains(member), "rendered: {rendered}");
+            assert!(
+                !rendered.contains(member),
+                "the Debug output contains {member}"
+            );
         }
         assert!(rendered.contains("DeliveryService"));
     }
