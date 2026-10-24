@@ -226,6 +226,14 @@ async fn ownership_remediation_leaves_unrelated_objects_unchanged() {
              CREATE AGGREGATE fixture_total(integer)
                (SFUNC = pg_catalog.int4pl, STYPE = integer, INITCOND = '0');
              ALTER AGGREGATE fixture_total(integer) OWNER TO {runtime_role};
+             CREATE AGGREGATE fixture_count(*)
+               (SFUNC = pg_catalog.int8inc, STYPE = bigint, INITCOND = '0');
+             ALTER AGGREGATE fixture_count(*) OWNER TO {runtime_role};
+             CREATE AGGREGATE fixture_percentile(double precision ORDER BY anyelement)
+               (SFUNC = pg_catalog.ordered_set_transition, STYPE = internal,
+                FINALFUNC = pg_catalog.percentile_disc_final, FINALFUNC_EXTRA);
+             ALTER AGGREGATE fixture_percentile(
+               double precision ORDER BY anyelement) OWNER TO {runtime_role};
              CREATE TABLE unrelated_records(record_id bigint PRIMARY KEY);
              ALTER TABLE unrelated_records OWNER TO {runtime_role};
              CREATE SEQUENCE unrelated_sequence;
@@ -245,7 +253,7 @@ async fn ownership_remediation_leaves_unrelated_objects_unchanged() {
         .expect("identify ownership remediation");
     assert!(!fixes.is_empty(), "owned product object needs remediation");
     assert!(fixes.iter().all(|fix| !fix.starts_with("REASSIGN OWNED")));
-    for fragment in [
+    let expected_fragments = [
         format!("ALTER SCHEMA {schema} OWNER TO"),
         format!("ALTER TABLE {schema}.fixture_records OWNER TO"),
         format!("ALTER TABLE {schema}.fixture_partitioned OWNER TO"),
@@ -257,13 +265,12 @@ async fn ownership_remediation_leaves_unrelated_objects_unchanged() {
         format!("ALTER ROUTINE {schema}.fixture_transform(value integer) OWNER TO"),
         format!("ALTER ROUTINE {schema}.fixture_transform(value text) OWNER TO"),
         format!("ALTER ROUTINE {schema}.fixture_refresh() OWNER TO"),
-        format!("ALTER ROUTINE {schema}.fixture_total(integer) OWNER TO"),
-    ] {
-        assert!(
-            fixes.iter().any(|fix| fix.starts_with(&fragment)),
-            "missing exact remediation {fragment:?}: {fixes:?}"
-        );
-    }
+        format!("ALTER AGGREGATE {schema}.fixture_count(*) OWNER TO"),
+        format!(
+            "ALTER AGGREGATE {schema}.fixture_percentile(double precision ORDER BY anyelement) OWNER TO"
+        ),
+        format!("ALTER AGGREGATE {schema}.fixture_total(integer) OWNER TO"),
+    ];
     let position = |prefix: &str| {
         fixes
             .iter()
@@ -272,13 +279,13 @@ async fn ownership_remediation_leaves_unrelated_objects_unchanged() {
     };
     let identity_table = format!("ALTER TABLE {schema}.fixture_z_identity OWNER TO");
     let identity_sequence = format!("ALTER SEQUENCE {schema}.fixture_a_identity OWNER TO");
-    let first_routine = format!("ALTER ROUTINE {schema}.fixture_refresh() OWNER TO");
+    let first_callable = format!("ALTER AGGREGATE {schema}.fixture_count(*) OWNER TO");
     let last_sequence = fixes
         .iter()
         .rposition(|fix| fix.starts_with("ALTER SEQUENCE "))
         .expect("at least one sequence correction is present");
     assert!(position(&identity_table) < position(&identity_sequence));
-    assert!(last_sequence < position(&first_routine));
+    assert!(last_sequence < position(&first_callable));
     let weakness = first_authority_weakness(&transaction, &layout(), &runtime_role)
         .await
         .expect("inspect the first authority weakness")
@@ -295,6 +302,12 @@ async fn ownership_remediation_leaves_unrelated_objects_unchanged() {
             .batch_execute(fix)
             .await
             .expect("execute emitted ownership remediation");
+    }
+    for fragment in expected_fragments {
+        assert!(
+            fixes.iter().any(|fix| fix.starts_with(&fragment)),
+            "missing exact remediation {fragment:?}: {fixes:?}"
+        );
     }
 
     let owners = transaction
