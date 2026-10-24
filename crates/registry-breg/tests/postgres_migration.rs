@@ -40,10 +40,11 @@ use registry_breg::package::{
     PreparedPackage, VerifiedPackage,
 };
 use registry_breg::postgres::{
-    index_revisions_for_test, install_compiled_schema, managed_schema_fingerprint,
-    rehearse_successor_migration, verify_catalog_identity_for_catalog, ExpectedManagedCatalog,
-    ExpectedRegistryIdentity, MigrationRehearsalError, PostgresFailure, PostgresKernelError,
-    RehearsalAssertionPhase, RehearsalOutcome, SuccessorMigrationRehearsal,
+    find_runtime_write_authority_for_test, index_revisions_for_test, install_compiled_schema,
+    managed_schema_fingerprint, rehearse_successor_migration, verify_catalog_identity_for_catalog,
+    ExpectedManagedCatalog, ExpectedRegistryIdentity, MigrationRehearsalError, PostgresFailure,
+    PostgresKernelError, RehearsalAssertionPhase, RehearsalOutcome, RuntimeWriteAuthority,
+    SuccessorMigrationRehearsal,
 };
 use registry_breg::CompiledRegistry;
 use registry_platform_audit::AuditProfile;
@@ -2541,9 +2542,10 @@ async fn real_postgres_a_role_change_reapply_of_the_active_package_is_its_own_ac
 /// Threat: a split-role runtime role that owns a registry table can add a
 /// deferred constraint trigger that runs as the migration role when an apply
 /// commits and writes the activation ledger. Enforcement: split apply refuses
-/// that ownership before the registry enters maintenance, naming the
-/// reassignment and then the apply that reissues the runtime grants the
-/// reassignment strips.
+/// that ownership before the registry enters maintenance, naming one
+/// ownership change for each registry object the runtime role owns, so the
+/// fix leaves the runtime role's objects outside the registry schemas alone,
+/// and then the apply that reissues the runtime grants the change strips.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn real_postgres_split_apply_refuses_a_runtime_role_that_owns_a_model_table() {
     let (database, package) = initial_package_database().await;
@@ -2555,9 +2557,16 @@ async fn real_postgres_split_apply_refuses_a_runtime_role_that_owns_a_model_tabl
     let migration = database.migration_role.as_str();
     database
         .admin
-        .batch_execute(&format!("ALTER TABLE {table} OWNER TO {runtime}"))
+        .batch_execute(&format!(
+            "ALTER TABLE {table} OWNER TO {runtime};
+             CREATE SCHEMA neighbour AUTHORIZATION {runtime};
+             CREATE TABLE neighbour.rows (id integer);
+             CREATE FUNCTION neighbour.helper() RETURNS integer LANGUAGE sql AS 'SELECT 1';
+             ALTER TABLE neighbour.rows OWNER TO {runtime};
+             ALTER FUNCTION neighbour.helper() OWNER TO {runtime}"
+        ))
         .await
-        .expect("the administrator hands a model table to the runtime role");
+        .expect("the administrator hands registry and neighbouring objects to the runtime role");
     let before = split_refusal_state(&database).await;
 
     let refusal = apply(
@@ -2571,29 +2580,231 @@ async fn real_postgres_split_apply_refuses_a_runtime_role_that_owns_a_model_tabl
         panic!("ownership is named as runtime write authority: {refusal:?}");
     };
     let message = finding.to_string();
-    assert!(message.contains(&format!("TABLE {table}")), "{message}");
-    assert!(
-        message.contains(&format!("`REASSIGN OWNED BY {runtime} TO {migration}`")),
+    let statements = named_ownership_changes(&message);
+    assert_eq!(
+        statements,
+        [format!("ALTER TABLE {table} OWNER TO {migration}")],
         "{message}"
     );
+    assert!(!message.contains("REASSIGN"), "{message}");
     assert!(
         message.ends_with("then `bregctl apply --package DIR` to reissue the runtime grants"),
         "{message}"
     );
     assert_eq!(split_refusal_state(&database).await, before);
 
-    database
+    for statement in &statements {
+        database
+            .admin
+            .batch_execute(statement)
+            .await
+            .unwrap_or_else(|error| panic!("the administrator runs {statement}: {error}"));
+    }
+    let neighbours: Vec<(String, String)> = database
         .admin
-        .batch_execute(&format!("REASSIGN OWNED BY {runtime} TO {migration}"))
+        .query(
+            "SELECT 'SCHEMA neighbour', pg_catalog.pg_get_userbyid(n.nspowner)::text
+               FROM pg_catalog.pg_namespace n WHERE n.nspname = 'neighbour'
+             UNION ALL
+             SELECT 'TABLE neighbour.rows', pg_catalog.pg_get_userbyid(c.relowner)::text
+               FROM pg_catalog.pg_class c WHERE c.oid = 'neighbour.rows'::regclass
+             UNION ALL
+             SELECT 'FUNCTION neighbour.helper()', pg_catalog.pg_get_userbyid(p.proowner)::text
+               FROM pg_catalog.pg_proc p WHERE p.oid = 'neighbour.helper()'::regprocedure
+             ORDER BY 1",
+            &[],
+        )
         .await
-        .expect("the administrator runs the named reassignment");
+        .expect("the neighbouring owners read")
+        .iter()
+        .map(|row| (row.get(0), row.get(1)))
+        .collect();
+    assert_eq!(
+        neighbours,
+        [
+            ("FUNCTION neighbour.helper()".to_owned(), runtime.to_owned()),
+            ("SCHEMA neighbour".to_owned(), runtime.to_owned()),
+            ("TABLE neighbour.rows".to_owned(), runtime.to_owned()),
+        ],
+        "the named fix leaves objects outside the registry schemas with their owner"
+    );
     let reissued = apply(
         &database,
         &package,
         ApplyPrecondition::RoleChange { current: &initial },
     )
     .await
-    .expect("the apply after the reassignment reissues the runtime grants");
+    .expect("the apply after the ownership changes reissues the runtime grants");
+    assert_ne!(reissued.activation_id, initial.activation_id);
+    assert!(matches!(
+        apply(
+            &database,
+            &package,
+            ApplyPrecondition::RoleChange { current: &reissued },
+        )
+        .await,
+        Err(MigrationError::AlreadyActive)
+    ));
+    database.cleanup().await;
+}
+
+/// Threat: a split-role runtime role that owns any kind of registry object
+/// keeps write authority until every one of them moves to the migration role.
+/// Enforcement: the refusal names, in an order an administrator can run as
+/// written, the ownership change PostgreSQL accepts for each kind, with each
+/// overload named by its identity arguments.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_postgres_split_apply_names_an_ownership_change_for_every_kind_of_owned_object() {
+    let (database, package) = initial_package_database().await;
+    let initial = apply(&database, &package, ApplyPrecondition::InitialActivation)
+        .await
+        .expect("the initial package activates in split mode");
+    let runtime = database.runtime_role.as_str();
+    let migration = database.migration_role.as_str();
+    database
+        .admin
+        .batch_execute(&format!(
+            "CREATE FUNCTION registry_data.foreign_helper() RETURNS integer
+                 LANGUAGE sql AS 'SELECT 1';
+             CREATE FUNCTION registry_data.foreign_helper(amount integer) RETURNS integer
+                 LANGUAGE sql AS 'SELECT amount';
+             CREATE PROCEDURE registry_data.foreign_procedure(amount integer)
+                 LANGUAGE sql AS 'SELECT amount';
+             CREATE AGGREGATE registry_data.foreign_count(*)
+                 (SFUNC = int8inc, STYPE = int8, INITCOND = '0');
+             CREATE AGGREGATE registry_data.foreign_percentile(
+                     double precision ORDER BY anyelement)
+                 (SFUNC = ordered_set_transition, STYPE = internal,
+                  FINALFUNC = percentile_disc_final, FINALFUNC_EXTRA);
+             CREATE TABLE registry_data.foreign_rows (id integer GENERATED ALWAYS AS IDENTITY);
+             CREATE VIEW registry_data.foreign_view AS SELECT 1 AS id;
+             CREATE MATERIALIZED VIEW registry_data.foreign_snapshot AS SELECT 1 AS id;
+             CREATE SEQUENCE registry_data.foreign_counter;
+             CREATE TYPE registry_data.foreign_pair AS (left_value integer, right_value integer);
+             CREATE FOREIGN DATA WRAPPER foreign_wrapper;
+             CREATE SERVER foreign_server FOREIGN DATA WRAPPER foreign_wrapper;
+             CREATE FOREIGN TABLE registry_data.foreign_remote (id integer)
+                 SERVER foreign_server;
+             ALTER FUNCTION registry_data.foreign_helper() OWNER TO {runtime};
+             ALTER FUNCTION registry_data.foreign_helper(integer) OWNER TO {runtime};
+             ALTER PROCEDURE registry_data.foreign_procedure(integer) OWNER TO {runtime};
+             ALTER AGGREGATE registry_data.foreign_count(*) OWNER TO {runtime};
+             ALTER AGGREGATE registry_data.foreign_percentile(
+                 double precision ORDER BY anyelement) OWNER TO {runtime};
+             ALTER TABLE registry_data.foreign_rows OWNER TO {runtime};
+             ALTER VIEW registry_data.foreign_view OWNER TO {runtime};
+             ALTER MATERIALIZED VIEW registry_data.foreign_snapshot OWNER TO {runtime};
+             ALTER SEQUENCE registry_data.foreign_counter OWNER TO {runtime};
+             ALTER TYPE registry_data.foreign_pair OWNER TO {runtime};
+             ALTER FOREIGN TABLE registry_data.foreign_remote OWNER TO {runtime}"
+        ))
+        .await
+        .expect("the administrator hands one object of every kind to the runtime role");
+    let before = split_refusal_state(&database).await;
+
+    let refusal = apply(
+        &database,
+        &package,
+        ApplyPrecondition::RoleChange { current: &initial },
+    )
+    .await
+    .expect_err("a runtime role that owns registry objects is refused");
+    let MigrationError::RuntimeWriteAuthority(finding) = refusal else {
+        panic!("ownership is named as runtime write authority: {refusal:?}");
+    };
+    let message = finding.to_string();
+    let statements = named_ownership_changes(&message);
+    let expected = [
+        "TYPE registry_data.foreign_pair",
+        "FOREIGN TABLE registry_data.foreign_remote",
+        "TABLE registry_data.foreign_rows",
+        "MATERIALIZED VIEW registry_data.foreign_snapshot",
+        "VIEW registry_data.foreign_view",
+        "SEQUENCE registry_data.foreign_counter",
+        // The identity sequence follows its table, so its own statement
+        // changes nothing once the table's has run.
+        "SEQUENCE registry_data.foreign_rows_id_seq",
+        "AGGREGATE registry_data.foreign_count(*)",
+        "ROUTINE registry_data.foreign_helper()",
+        "ROUTINE registry_data.foreign_helper(amount integer)",
+        "AGGREGATE registry_data.foreign_percentile(double precision ORDER BY anyelement)",
+        "ROUTINE registry_data.foreign_procedure(IN amount integer)",
+    ]
+    .map(|object| format!("ALTER {object} OWNER TO {migration}"));
+    assert_eq!(statements, expected, "{message}");
+    assert_eq!(split_refusal_state(&database).await, before);
+
+    // Apply refuses a managed schema the migration role does not own before
+    // it reads runtime write authority, so the finding startup reads for an
+    // owned schema is read directly: the schema comes ahead of its objects.
+    database
+        .admin
+        .batch_execute(&format!("ALTER SCHEMA registry_data OWNER TO {runtime}"))
+        .await
+        .expect("the administrator hands the registry schema to the runtime role");
+    let statements: Vec<String> =
+        std::iter::once(format!("ALTER SCHEMA registry_data OWNER TO {migration}"))
+            .chain(expected)
+            .collect();
+    assert_eq!(
+        find_runtime_write_authority_for_test(
+            &database.admin,
+            &database.migration_role,
+            &database.runtime_role,
+        )
+        .await
+        .expect("the runtime write authority reads"),
+        Some(RuntimeWriteAuthority::Owner {
+            runtime: runtime.to_owned(),
+            statements: statements.clone(),
+        })
+    );
+
+    for statement in &statements {
+        database
+            .admin
+            .batch_execute(statement)
+            .await
+            .unwrap_or_else(|error| panic!("the administrator runs {statement}: {error}"));
+    }
+    assert_eq!(
+        find_runtime_write_authority_for_test(
+            &database.admin,
+            &database.migration_role,
+            &database.runtime_role,
+        )
+        .await
+        .expect("the runtime write authority reads"),
+        None,
+        "the named statements remove every ownership"
+    );
+    database
+        .admin
+        .batch_execute(
+            "DROP AGGREGATE registry_data.foreign_count(*);
+             DROP AGGREGATE registry_data.foreign_percentile(
+                 double precision ORDER BY anyelement);
+             DROP FUNCTION registry_data.foreign_helper();
+             DROP FUNCTION registry_data.foreign_helper(integer);
+             DROP PROCEDURE registry_data.foreign_procedure(integer);
+             DROP TABLE registry_data.foreign_rows;
+             DROP VIEW registry_data.foreign_view;
+             DROP MATERIALIZED VIEW registry_data.foreign_snapshot;
+             DROP SEQUENCE registry_data.foreign_counter;
+             DROP TYPE registry_data.foreign_pair;
+             DROP FOREIGN TABLE registry_data.foreign_remote;
+             DROP SERVER foreign_server;
+             DROP FOREIGN DATA WRAPPER foreign_wrapper",
+        )
+        .await
+        .expect("the administrator drops the foreign objects");
+    let reissued = apply(
+        &database,
+        &package,
+        ApplyPrecondition::RoleChange { current: &initial },
+    )
+    .await
+    .expect("the apply after the ownership changes reissues the runtime grants");
     assert_ne!(reissued.activation_id, initial.activation_id);
     assert!(matches!(
         apply(
@@ -2716,11 +2927,14 @@ async fn real_postgres_split_apply_names_the_fix_for_every_runtime_write_authori
                  LANGUAGE sql AS 'SELECT 1'; \
                  ALTER FUNCTION registry_data.foreign_helper() OWNER TO {runtime}"
             ),
-            "DROP FUNCTION registry_data.foreign_helper()".to_owned(),
             format!(
-                "FUNCTION registry_data.foreign_helper() and can write the activation ledger \
-                 through it; run `REASSIGN OWNED BY {runtime} TO {migration}`, then \
-                 `bregctl apply --package DIR` to reissue the runtime grants"
+                "ALTER ROUTINE registry_data.foreign_helper() OWNER TO {migration}; \
+                 DROP FUNCTION registry_data.foreign_helper()"
+            ),
+            format!(
+                "run `ALTER ROUTINE registry_data.foreign_helper() OWNER TO {migration}` as a \
+                 database administrator, then `bregctl apply --package DIR` to reissue the \
+                 runtime grants"
             ),
         ),
         (
@@ -2830,6 +3044,18 @@ async fn real_postgres_split_apply_names_the_fix_for_every_runtime_write_authori
             .unwrap_or_else(|error| panic!("the administrator runs {undo}: {error}"));
     }
     database.cleanup().await;
+}
+
+/// The ownership changes an owned-object refusal names, in the order it names
+/// them.
+fn named_ownership_changes(message: &str) -> Vec<String> {
+    let (_, named) = message
+        .split_once("run `")
+        .unwrap_or_else(|| panic!("the refusal names statements: {message}"));
+    let (statements, _) = named
+        .split_once("` as a database administrator")
+        .unwrap_or_else(|| panic!("the refusal names who runs them: {message}"));
+    statements.split("; ").map(str::to_owned).collect()
 }
 
 /// One registry model table, schema-qualified as a fix names it.

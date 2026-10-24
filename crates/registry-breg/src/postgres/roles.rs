@@ -473,13 +473,16 @@ pub enum RuntimeWriteAuthority {
         runtime: String,
         role: String,
     },
-    /// The runtime role owns a registry object. Reassigning ownership strips
-    /// the runtime grants the object carried, so the fix ends with the apply
-    /// that reissues them.
+    /// The runtime role owns registry objects. Each statement moves one
+    /// object it owns in a registry schema to the migration role, so the fix
+    /// leaves what the runtime role owns elsewhere in the database alone. The
+    /// statements run in order: a schema, then its relations, then sequences,
+    /// whose statement changes nothing once their table's has run, then
+    /// routines. Moving ownership strips the runtime grants the objects
+    /// carried, so the fix ends with the apply that reissues them.
     Owner {
-        object: String,
         runtime: String,
-        migration: String,
+        statements: Vec<String>,
     },
     OwnerMember {
         object: String,
@@ -524,14 +527,14 @@ impl fmt::Display for RuntimeWriteAuthority {
                  activation ledger; run `REVOKE {role} FROM {runtime}`, {RERUN}"
             ),
             Self::Owner {
-                object,
                 runtime,
-                migration,
+                statements,
             } => write!(
                 formatter,
-                "the runtime role {runtime} owns {object} and can write the activation ledger \
-                 through it; run `REASSIGN OWNED BY {runtime} TO {migration}`, then \
-                 `bregctl apply --package DIR` to reissue the runtime grants"
+                "the runtime role {runtime} owns registry objects and can write the activation \
+                 ledger through them; run `{}` as a database administrator, then \
+                 `bregctl apply --package DIR` to reissue the runtime grants",
+                statements.join("; ")
             ),
             Self::OwnerMember {
                 object,
@@ -567,6 +570,69 @@ impl fmt::Display for RuntimeWriteAuthority {
         }
     }
 }
+
+/// Every schema, relation, and routine in the registry schemas with its
+/// owner, for the runtime role named by `$1` and the schemas named by `$2`.
+/// `object` is the label an owner-member finding names. `target` is the object
+/// an ownership change alters, in the form PostgreSQL accepts for its kind:
+/// ALTER TABLE refuses a composite type, which takes ALTER TYPE, and ALTER
+/// ROUTINE refuses an ordered-set aggregate's argument list, so every
+/// aggregate takes ALTER AGGREGATE, which spells no arguments as `*`. `kind`,
+/// `schema_name`, `object_name`, and `signature` order the changes so they run
+/// as written: a schema, its relations, then sequences, so an identity or
+/// serial sequence follows its table, then routines, each overload named by
+/// its identity arguments.
+const OWNED_REGISTRY_OBJECTS: &str = "WITH runtime AS (
+         SELECT oid FROM pg_catalog.pg_roles WHERE rolname = $1
+     ), owned(kind, schema_name, object_name, signature, object, target, owner) AS (
+         SELECT 0, n.nspname, ''::name, '',
+                'SCHEMA ' || pg_catalog.quote_ident(n.nspname),
+                pg_catalog.format('SCHEMA %I', n.nspname),
+                n.nspowner
+           FROM pg_catalog.pg_namespace n
+          WHERE n.nspname = ANY($2::text[])
+         UNION ALL
+         SELECT CASE c.relkind WHEN 'S' THEN 2 ELSE 1 END, n.nspname, c.relname, '',
+                CASE c.relkind
+                    WHEN 'v' THEN 'VIEW '
+                    WHEN 'S' THEN 'SEQUENCE '
+                    ELSE 'TABLE '
+                END || pg_catalog.format('%I.%I', n.nspname, c.relname),
+                pg_catalog.format('%s %I.%I',
+                    CASE c.relkind
+                        WHEN 'v' THEN 'VIEW'
+                        WHEN 'm' THEN 'MATERIALIZED VIEW'
+                        WHEN 'S' THEN 'SEQUENCE'
+                        WHEN 'f' THEN 'FOREIGN TABLE'
+                        WHEN 'c' THEN 'TYPE'
+                        ELSE 'TABLE'
+                    END,
+                    n.nspname, c.relname),
+                c.relowner
+           FROM pg_catalog.pg_class c
+           JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+          WHERE n.nspname = ANY($2::text[])
+            -- An index always has its table's owner, so the table names the
+            -- object an operator changes.
+            AND c.relkind NOT IN ('i', 'I')
+         UNION ALL
+         SELECT 3, n.nspname, p.proname, a.signature,
+                'FUNCTION ' || pg_catalog.format('%I.%I', n.nspname, p.proname)
+                    || '(' || a.signature || ')',
+                CASE p.prokind
+                    WHEN 'a' THEN pg_catalog.format('AGGREGATE %I.%I(%s)',
+                        n.nspname, p.proname, COALESCE(NULLIF(a.signature, ''), '*'))
+                    ELSE pg_catalog.format('ROUTINE %I.%I(%s)',
+                        n.nspname, p.proname, a.signature)
+                END,
+                p.proowner
+           FROM pg_catalog.pg_proc p
+           JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
+          CROSS JOIN LATERAL (
+                SELECT pg_catalog.pg_get_function_identity_arguments(p.oid) AS signature
+          ) a
+          WHERE n.nspname = ANY($2::text[])
+     )";
 
 /// The first way the split-role runtime role could write the activation
 /// ledger or the registry state, or none. Callers run it only when the
@@ -628,59 +694,48 @@ pub async fn find_runtime_write_authority(
             role: privileged.get(0),
         }));
     }
+    let statements: Vec<String> = client
+        .query(
+            &format!(
+                "{OWNED_REGISTRY_OBJECTS}
+                 SELECT 'ALTER ' || o.target || ' OWNER TO ' || pg_catalog.quote_ident($3)
+                   FROM owned o
+                   CROSS JOIN runtime
+                  WHERE o.owner = runtime.oid
+                  ORDER BY o.kind, o.schema_name, o.object_name, o.signature COLLATE \"C\""
+            ),
+            &[&runtime, &MANAGED_SCHEMAS, &migration],
+        )
+        .await?
+        .iter()
+        .map(|row| row.get(0))
+        .collect();
+    if !statements.is_empty() {
+        return Ok(Some(RuntimeWriteAuthority::Owner {
+            runtime,
+            statements,
+        }));
+    }
     if let Some(owned) = client
         .query_opt(
-            "WITH runtime AS (
-                 SELECT oid FROM pg_catalog.pg_roles WHERE rolname = $1
-             ), owned(object, owner) AS (
-                 SELECT 'SCHEMA ' || pg_catalog.quote_ident(n.nspname), n.nspowner
-                   FROM pg_catalog.pg_namespace n
-                  WHERE n.nspname = ANY($2::text[])
-                 UNION ALL
-                 SELECT CASE c.relkind
-                            WHEN 'v' THEN 'VIEW '
-                            WHEN 'S' THEN 'SEQUENCE '
-                            ELSE 'TABLE '
-                        END || pg_catalog.format('%I.%I', n.nspname, c.relname),
-                        c.relowner
-                   FROM pg_catalog.pg_class c
-                   JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
-                  WHERE n.nspname = ANY($2::text[])
-                    -- An index always has its table's owner, so the table
-                    -- names the object an operator reassigns.
-                    AND c.relkind NOT IN ('i', 'I')
-                 UNION ALL
-                 SELECT 'FUNCTION ' || pg_catalog.format('%I.%I', n.nspname, p.proname)
-                        || '(' || pg_catalog.pg_get_function_identity_arguments(p.oid) || ')',
-                        p.proowner
-                   FROM pg_catalog.pg_proc p
-                   JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
-                  WHERE n.nspname = ANY($2::text[])
-             )
-             SELECT o.object, owner.rolname::text, owner.oid = runtime.oid
-               FROM owned o
-               CROSS JOIN runtime
-               JOIN pg_catalog.pg_roles owner ON owner.oid = o.owner
-              WHERE pg_catalog.pg_has_role(runtime.oid, o.owner, 'MEMBER')
-              ORDER BY owner.oid = runtime.oid DESC, o.object
-              LIMIT 1",
+            &format!(
+                "{OWNED_REGISTRY_OBJECTS}
+                 SELECT o.object, owner.rolname::text
+                   FROM owned o
+                   CROSS JOIN runtime
+                   JOIN pg_catalog.pg_roles owner ON owner.oid = o.owner
+                  WHERE pg_catalog.pg_has_role(runtime.oid, o.owner, 'MEMBER')
+                  ORDER BY o.object
+                  LIMIT 1"
+            ),
             &[&runtime, &MANAGED_SCHEMAS],
         )
         .await?
     {
-        let object: String = owned.get(0);
-        return Ok(Some(if owned.get::<_, bool>(2) {
-            RuntimeWriteAuthority::Owner {
-                object,
-                runtime,
-                migration,
-            }
-        } else {
-            RuntimeWriteAuthority::OwnerMember {
-                object,
-                owner: owned.get(1),
-                runtime,
-            }
+        return Ok(Some(RuntimeWriteAuthority::OwnerMember {
+            object: owned.get(0),
+            owner: owned.get(1),
+            runtime,
         }));
     }
     if let Some(privilege) = client
@@ -857,6 +912,25 @@ mod tests {
                 .expect("governed identifier parses")
                 .as_str(),
             "runtime_role_1"
+        );
+    }
+
+    #[test]
+    fn owned_object_finding_names_each_ownership_change_then_the_reissuing_apply() {
+        let finding = RuntimeWriteAuthority::Owner {
+            runtime: "registry_runtime".to_owned(),
+            statements: vec![
+                "ALTER SCHEMA registry_data OWNER TO registry_migration".to_owned(),
+                "ALTER TABLE registry_data.person OWNER TO registry_migration".to_owned(),
+            ],
+        };
+        assert_eq!(
+            finding.to_string(),
+            "the runtime role registry_runtime owns registry objects and can write the \
+             activation ledger through them; run `ALTER SCHEMA registry_data OWNER TO \
+             registry_migration; ALTER TABLE registry_data.person OWNER TO \
+             registry_migration` as a database administrator, then `bregctl apply --package \
+             DIR` to reissue the runtime grants"
         );
     }
 }
