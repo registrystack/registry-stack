@@ -151,6 +151,12 @@ class FakeSchedulingClient:
         if key in self.lose_response_for:
             self.lose_response_for.remove(key)
             raise ClientProblem("transport.closed", outcome_unknown=True)
+        # Scheduling refuses any create-only member on a reschedule.
+        if any(
+            request["admission"].get(member)  # type: ignore[union-attr]
+            for member in ("externalReferences", "partyReferences", "manager")
+        ):
+            raise ClientProblem("request.unprocessable")
         if request["admission"]["start"] in self.conflict_starts:  # type: ignore[index]
             raise ClientProblem("capacity.exhausted")
         value = {
@@ -433,6 +439,53 @@ class JournalTests(unittest.TestCase):
         self.assertEqual(
             reschedule["operation"]["request"]["admission"]["start"], "2026-10-28T18:00:00Z"
         )
+
+    def test_reschedule_omits_every_create_only_member_of_the_template(self) -> None:
+        party_references = [
+            {
+                "role": "beneficiary",
+                "reference": {
+                    "product": "registry",
+                    "recordType": "person",
+                    "identifier": "person:7",
+                },
+            }
+        ]
+        template = admission(
+            manager="schedulingManager",
+            partyReferences=party_references,
+            party={"recipients": 1, "attendees": 2},
+        )
+        self.journal.prepare_series(definition(count=2, exclusionDates=[]), template, owner=OWNER)
+        client = FakeSchedulingClient()
+        processor = SeriesProcessor(self.journal, client, credential_profile=OWNER)
+        created = processor.process(SERIES_ID, token="token")
+        create = next(request for kind, _, request in client.calls if kind == "create")
+        self.assertEqual(create["admission"]["manager"], "schedulingManager")
+        self.assertEqual(create["admission"]["partyReferences"], party_references)
+        target = created["occurrences"][1]["occurrenceId"]
+
+        for local_start in ("2026-10-28T19:00:00", "2026-10-28T20:00:00"):
+            revision = int(self.journal.read_series(SERIES_ID)["revision"])
+            self.journal.prepare_edit(
+                SERIES_ID,
+                expected_revision=revision,
+                scope="one",
+                target_occurrence_id=target,
+                changes={target: {"action": "reschedule", "localStart": local_start}},
+                now=datetime(2026, 10, 1, tzinfo=UTC),
+            )
+            result = processor.process(SERIES_ID, token="token")
+            moved = next(item for item in result["occurrences"] if item["occurrenceId"] == target)
+            self.assertEqual(moved["outcome"], "succeeded")
+
+        reschedules = [request for kind, _, request in client.calls if kind == "reschedule"]
+        self.assertEqual(len(reschedules), 2)
+        for request in reschedules:
+            for member in ("externalReferences", "partyReferences", "manager"):
+                self.assertNotIn(member, request["admission"])
+            self.assertEqual(request["admission"]["party"], {"recipients": 1, "attendees": 2})
+            self.assertEqual(request["admission"]["resource"], "room-a")
 
     def test_explicit_edit_diff_uses_revision_and_retains_failed_reschedule(self) -> None:
         self.journal.prepare_series(

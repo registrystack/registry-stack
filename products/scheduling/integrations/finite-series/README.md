@@ -64,11 +64,12 @@ the recipe's correlation references are added or replaced. In particular,
 reconstructed or dropped. Registry Scheduling still validates the complete
 admission under the active offering, task grant, and capacity ledger.
 
-On reschedule, the recipe again preserves the complete interval, resource, and
-bundle request but omits `externalReferences`, as Scheduling's public contract
-requires. Scheduling retains the appointment's immutable create-time
-references. The journal likewise keeps its original correlated admission while
-updating only the successful current start.
+On reschedule, the recipe again preserves the complete interval, resource,
+party counts, and bundle request but omits `externalReferences`,
+`partyReferences`, and `manager`, as Scheduling's public contract requires.
+Scheduling retains the appointment's immutable create-time references, party
+references, and manager. The journal likewise keeps its original correlated
+admission while updating only the successful current start.
 
 ## Durable partial results and recovery
 
