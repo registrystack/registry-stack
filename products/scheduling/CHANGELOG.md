@@ -60,7 +60,9 @@
 - The version 200 baseline includes operational reads, resource
   availability, booking parties, source managers, atomic allocations, source
   busy facts, window resource reservations, attendance, and the retained
-  source busy outcome.
+  source busy outcome. A database an unreleased build created at version 200
+  has an earlier shape of this baseline, which changed in place, and is not
+  refused by name: create a fresh database and apply the package.
 - Reserve named resources for caller-selected intervals. An exact-time offering
   can opt into `partyCounts: optional`, so a room or equipment booking omits
   `party`, and availability and explain reads accept a hard `durationMinutes`
