@@ -16,7 +16,12 @@ const envelope = { protocol: 'registrystack-tracking', version: 2 };
 const localRefusalKey = 'registrystack.tracking-local-refusal.v2';
 
 function fixture(options = {}) {
-  const { factory = createSharedTrackingClient, initialValues = [], ...clientOptions } = options;
+  const {
+    factory = createSharedTrackingClient,
+    initialValues = [],
+    sendFailures = 0,
+    ...clientOptions
+  } = options;
   const listeners = new Map();
   const documentListeners = new Map();
   const sent = [];
@@ -29,6 +34,7 @@ function fixture(options = {}) {
   };
   let frame;
   let autoLoad = options.autoLoad !== false;
+  let remainingSendFailures = sendFailures;
   const window = {
     location: { origin: 'https://docs.registrystack.org' },
     localStorage: storage,
@@ -44,7 +50,13 @@ function fixture(options = {}) {
       assert.equal(tag, 'iframe');
       const frameListeners = new Map();
       frame = {
-        contentWindow: { postMessage: (data, origin) => sent.push({ data, origin }) },
+        contentWindow: { postMessage: (data, origin) => {
+          if (remainingSendFailures > 0) {
+            remainingSendFailures -= 1;
+            throw new Error('Fixture postMessage failure.');
+          }
+          sent.push({ data, origin });
+        } },
         setAttribute() {},
         addEventListener: (type, listener) => frameListeners.set(type, listener),
         fireLoad: () => frameListeners.get('load')?.(),
@@ -64,7 +76,7 @@ function fixture(options = {}) {
   const client = factory({
     bridgeUrl, window, document, navigator: window.navigator,
     timeoutMs: 100, onFailure: error => failures.push(error),
-    onStateChange: state => changes.push(state), ...clientOptions,
+    onStateChange: (state, confirmed) => changes.push({ state, confirmed }), ...clientOptions,
   });
   const message = (data, overrides = {}) => listeners.get('message')?.({
     origin: 'https://registrystack.org', source: overrides.source ?? frame.contentWindow, data, ...overrides,
@@ -108,6 +120,25 @@ test('reads shared consent through one fixed iframe without a parent tracking sc
   assert.deepEqual(await promise, unknown);
   assert.equal(f.values.size, 0);
   f.client.close();
+});
+
+test('concurrent startup and resume reads share one request and confirm an unchanged remote state', async (t) => {
+  const f = fixture();
+  t.after(() => f.client.close());
+  const first = f.client.read();
+  const second = f.client.read();
+  f.pageshow();
+  await new Promise(resolve => setImmediate(resolve));
+
+  for (const { data } of [...f.sent]) {
+    f.message({ ...envelope, id: data.id, ok: true, state: unknown });
+  }
+  assert.deepEqual(await first, unknown);
+  assert.deepEqual(await second, unknown);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.sent.length, 1);
+  assert.deepEqual(f.changes, [{ state: unknown, confirmed: true }]);
+  assert.equal(f.client.readRetryReason, null);
 });
 
 test('ignores messages from another origin or frame and never accepts surplus response fields', async () => {
@@ -177,6 +208,34 @@ test('an authoritative newer push acknowledges its matching choice before the ol
   f.client.close();
 });
 
+test('a stale rejected choice cannot discard a follow-up frame created by a confirmed push', async (t) => {
+  const renewed = { ...accepted, generation: 'ffffffff-ffff-4fff-8fff-ffffffffffff', revision: 12 };
+  let followup;
+  let f;
+  f = fixture({
+    onStateChange: state => {
+      if (state.generation !== renewed.generation || followup) return;
+      followup = f.client.read();
+      void followup.catch(() => {});
+    },
+  });
+  t.after(() => f.client.close());
+  const initial = await nextRequest(() => f.client.read());
+  f.reply(accepted);
+  await initial.promise;
+  const refusal = await nextRequest(() => f.client.choose('rejected'));
+  const refusalOutcome = refusal.promise.then(value => ({ value }), error => ({ error }));
+  const oldFrame = f.frame;
+
+  f.message({ ...envelope, type: 'changed', state: renewed });
+  const followupFrame = f.frame;
+  assert.notEqual(followupFrame, oldFrame);
+  assert.match((await refusalOutcome).error?.message, /tracking/i);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.notEqual(followupFrame.removed, true);
+  assert.equal(f.frame, followupFrame);
+});
+
 test('a validated generation change settles a readiness-waiting read before it is sent', async (t) => {
   const f = fixture();
   t.after(() => f.client.close());
@@ -223,7 +282,9 @@ test('a readiness-waiting acceptance cannot override a validated rejection', asy
   const conflictingSentBeforeChoice = conflicting.sent.length;
   const acceptance = conflicting.client.choose('accepted');
   conflicting.message({ ...envelope, type: 'changed', state: rejected });
-  await assert.rejects(acceptance, /tracking/i);
+  await assert.rejects(acceptance, error => (
+    error?.code === 'frame-replaced' && /tracking/i.test(error.message)
+  ));
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(conflicting.sent.length, conflictingSentBeforeChoice);
   assert.deepEqual(conflicting.client.state, rejected);
@@ -303,17 +364,20 @@ test('accept reconciles remote acceptance without sending another mutation', asy
   f.client.close();
 });
 
-test('a failed initial bridge can be retried and a late old load cannot win', async () => {
+test('an essential read retries one failed frame without exposing the transient failure', async (t) => {
   const f = fixture({ autoLoad: false });
+  t.after(() => f.client.close());
   const first = f.client.read();
+  const outcome = first.then(value => ({ value }), error => ({ error }));
   const oldFrame = f.frame;
   oldFrame.fireError();
-  await assert.rejects(first, /tracking/i);
-  assert.equal(oldFrame.removed, true);
+  await new Promise(resolve => setImmediate(resolve));
 
-  const retry = f.client.read();
   const currentFrame = f.frame;
   assert.notEqual(currentFrame, oldFrame);
+  assert.equal(oldFrame.removed, true);
+  assert.equal(f.failures.length, 0);
+  assert.equal(f.client.readRetryReason, 'frame-load-failed');
   oldFrame.fireLoad();
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(f.sent.length, 0);
@@ -321,26 +385,32 @@ test('a failed initial bridge can be retried and a late old load cannot win', as
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(f.sent.at(-1).data.type, 'read');
   f.reply(unknown);
-  assert.deepEqual(await retry, unknown);
-  f.client.close();
+  assert.deepEqual(await outcome, { value: unknown });
+  assert.equal(f.failures.length, 0);
+  assert.throws(() => { f.client.readRetryReason = 'send-failed'; }, TypeError);
 });
 
-test('a timed-out initial bridge is removed and the next request can recover', async () => {
-  const f = fixture({ autoLoad: false, timeoutMs: 5 });
+test('an essential read retries one frame-load timeout within the same call', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const f = fixture({ autoLoad: false, timeoutMs: 80 });
+  t.after(() => f.client.close());
   const first = f.client.read();
+  const outcome = first.then(value => ({ value }), error => ({ error }));
   const oldFrame = f.frame;
-  await assert.rejects(first, /tracking/i);
+  t.mock.timers.tick(80);
   await new Promise(resolve => setImmediate(resolve));
+  const retryFrame = f.frame;
+  assert.notEqual(retryFrame, oldFrame);
   assert.equal(oldFrame.removed, true);
+  assert.equal(f.client.readRetryReason, 'frame-load-timeout');
+  assert.equal(f.failures.length, 0);
 
-  f.setAutoLoad(true);
-  const retry = await nextRequest(() => f.client.read());
-  assert.notEqual(f.frame, oldFrame);
+  retryFrame.fireLoad();
+  await new Promise(resolve => setImmediate(resolve));
   assert.equal(f.sent.at(-1).data.type, 'read');
   f.reply(unknown);
-  assert.deepEqual(await retry.promise, unknown);
-  assert.equal(f.failures.length, 1);
-  f.client.close();
+  assert.deepEqual(await outcome, { value: unknown });
+  assert.equal(f.failures.length, 0);
 });
 
 test('iframe startup does not consume the broker response timeout', async (t) => {
@@ -365,21 +435,227 @@ test('iframe startup does not consume the broker response timeout', async (t) =>
   assert.deepEqual(result.value, unknown);
 });
 
-test('an unresponsive loaded bridge is discarded so the next request can recover', async () => {
-  const f = fixture({ timeoutMs: 5 });
-  const first = await nextRequest(() => f.client.read());
+test('an essential read retries one response timeout with a fresh frame', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const f = fixture({ timeoutMs: 80 });
+  t.after(() => f.client.close());
+  const first = f.client.read();
+  const outcome = first.then(value => ({ value }), error => ({ error }));
+  await new Promise(resolve => setImmediate(resolve));
   const oldFrame = f.frame;
   assert.equal(f.sent.at(-1).data.type, 'read');
-  await assert.rejects(first.promise, /tracking/i);
+  t.mock.timers.tick(80);
+  await new Promise(resolve => setImmediate(resolve));
+  const retryFrame = f.frame;
+  assert.notEqual(retryFrame, oldFrame);
   assert.equal(oldFrame.removed, true);
-
-  const retry = await nextRequest(() => f.client.read());
-  assert.notEqual(f.frame, oldFrame);
   assert.equal(f.sent.at(-1).data.type, 'read');
   f.reply(unknown);
-  assert.deepEqual(await retry.promise, unknown);
-  assert.equal(f.failures.length, 1);
+  assert.deepEqual(await outcome, { value: unknown });
+  assert.equal(f.client.readRetryReason, 'response-timeout');
+  assert.equal(f.failures.length, 0);
+});
+
+test('an essential read surfaces the second genuine frame failure once', async (t) => {
+  const f = fixture({ autoLoad: false });
+  t.after(() => f.client.close());
+  const read = f.client.read();
+  const outcome = read.then(value => ({ value }), error => ({ error }));
+  const firstFrame = f.frame;
+  firstFrame.fireError();
+  await new Promise(resolve => setImmediate(resolve));
+  const secondFrame = f.frame;
+  assert.notEqual(secondFrame, firstFrame);
+
+  secondFrame.fireError();
+  const result = await outcome;
+  assert.equal(result.value, undefined);
+  assert.match(result.error?.message, /tracking/i);
+  assert.equal(result.error?.code, 'frame-load-failed');
+  assert.equal(f.client.readRetryReason, 'frame-load-failed');
+  assert.deepEqual(f.failures, [result.error]);
+  assert.equal(f.frames.length, 2);
+});
+
+test('an essential read retries one unavailable broker response with a fresh frame', async (t) => {
+  const f = fixture();
+  t.after(() => f.client.close());
+  const read = f.client.read();
+  const outcome = read.then(value => ({ value }), error => ({ error }));
+  await new Promise(resolve => setImmediate(resolve));
+  const firstFrame = f.frame;
+  const firstRequest = f.sent.at(-1).data;
+  f.message({ ...envelope, id: firstRequest.id, ok: false, error: 'unavailable' });
+  await new Promise(resolve => setImmediate(resolve));
+
+  assert.notEqual(f.frame, firstFrame);
+  assert.equal(firstFrame.removed, true);
+  assert.equal(f.sent.at(-1).data.type, 'read');
+  f.reply(unknown);
+  assert.deepEqual(await outcome, { value: unknown });
+  assert.equal(f.client.readRetryReason, 'broker-unavailable');
+  assert.equal(f.failures.length, 0);
+});
+
+test('a transient read failure suspends accepted state until the retry confirms it', async (t) => {
+  const f = fixture();
+  t.after(() => f.client.close());
+  const initial = await nextRequest(() => f.client.read());
+  f.reply(accepted);
+  await initial.promise;
+  f.changes.length = 0;
+
+  const read = f.client.read();
+  const readOutcome = read.then(value => ({ value }), error => ({ error }));
+  await new Promise(resolve => setImmediate(resolve));
+  const firstRequest = f.sent.at(-1).data;
+  f.message({ ...envelope, id: firstRequest.id, ok: false, error: 'unavailable' });
+  await new Promise(resolve => setImmediate(resolve));
+
+  assert.equal(f.client.state.choice, null);
+  assert.equal(f.failures.length, 0);
+  assert.equal(f.changes.length, 0);
+  assert.equal(f.sent.at(-1).data.type, 'read');
+
+  f.reply(accepted);
+  assert.deepEqual(await readOutcome, { value: accepted });
+  assert.deepEqual(f.client.state, accepted);
+  assert.deepEqual(f.changes.at(-1), { state: accepted, confirmed: true });
+  assert.equal(f.failures.length, 0);
+});
+
+test('an essential read retries one failed send with a fresh frame', async (t) => {
+  const f = fixture({ sendFailures: 1 });
+  t.after(() => f.client.close());
+  const read = f.client.read();
+  const outcome = read.then(value => ({ value }), error => ({ error }));
+  await new Promise(resolve => setImmediate(resolve));
+
+  assert.equal(f.frames.length, 2);
+  assert.equal(f.frames[0].removed, true);
+  assert.equal(f.sent.length, 1);
+  assert.equal(f.sent[0].data.type, 'read');
+  f.reply(unknown);
+  assert.deepEqual(await outcome, { value: unknown });
+  assert.equal(f.client.readRetryReason, 'send-failed');
+  assert.equal(f.failures.length, 0);
+});
+
+test('closing the client rejects an essential read without retrying', async () => {
+  const f = fixture({ autoLoad: false });
+  const read = f.client.read();
+  const outcome = read.then(value => ({ value }), error => ({ error }));
   f.client.close();
+  const result = await outcome;
+  assert.equal(result.value, undefined);
+  assert.equal(result.error?.code, 'client-closed');
+  assert.equal(f.frames.length, 1);
+  assert.equal(f.client.readRetryReason, null);
+  assert.equal(f.failures.length, 0);
+});
+
+test('invalid and prohibited broker responses fail without retrying', async (t) => {
+  const cases = [
+    {
+      name: 'invalid response',
+      response: id => ({ ...envelope, id, ok: true, state: { ...unknown, extra: true } }),
+      code: 'invalid-response',
+    },
+    {
+      name: 'not allowed',
+      response: id => ({ ...envelope, id, ok: false, error: 'not-allowed' }),
+      code: 'broker-not-allowed',
+    },
+    {
+      name: 'invalid request',
+      response: id => ({ ...envelope, id, ok: false, error: 'invalid-request' }),
+      code: 'broker-invalid-request',
+    },
+  ];
+  for (const item of cases) {
+    await t.test(item.name, async () => {
+      const f = fixture();
+      try {
+        const read = await nextRequest(() => f.client.read());
+        const request = f.sent.at(-1).data;
+        f.message(item.response(request.id));
+        const result = await read.promise.then(value => ({ value }), error => ({ error }));
+        assert.equal(result.value, undefined);
+        assert.equal(result.error?.code, item.code);
+        assert.equal(f.frames.length, 1);
+        assert.equal(f.sent.length, 1);
+        assert.equal(f.client.readRetryReason, null);
+        assert.deepEqual(f.failures, [result.error]);
+      } finally {
+        f.client.close();
+      }
+    });
+  }
+});
+
+test('an exhausted read retry resolves harmlessly without discarding a newer explicit choice', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const f = fixture({ timeoutMs: 80 });
+  t.after(() => f.client.close());
+  const read = f.client.read();
+  const readOutcome = read.then(value => ({ value }), error => ({ error }));
+  await new Promise(resolve => setImmediate(resolve));
+  const firstFrame = f.frame;
+
+  t.mock.timers.tick(80);
+  await new Promise(resolve => setImmediate(resolve));
+  const choiceFrame = f.frame;
+  assert.notEqual(choiceFrame, firstFrame);
+  assert.equal(f.sent.at(-1).data.type, 'read');
+
+  t.mock.timers.tick(40);
+  const choice = f.client.choose('accepted');
+  const choiceOutcome = choice.then(value => ({ value }), error => ({ error }));
+  await new Promise(resolve => setImmediate(resolve));
+  const choiceRequest = f.sent.at(-1).data;
+  assert.equal(choiceRequest.type, 'choose');
+  t.mock.timers.tick(40);
+  await new Promise(resolve => setImmediate(resolve));
+
+  assert.equal(choiceFrame.removed, undefined);
+  assert.equal(f.frame, choiceFrame);
+  const renewed = { ...accepted, generation: 'ffffffff-ffff-4fff-8fff-ffffffffffff', revision: 12 };
+  f.message({ ...envelope, id: choiceRequest.id, ok: true, state: renewed });
+  assert.deepEqual(await choiceOutcome, { value: renewed });
+  assert.deepEqual(await readOutcome, { value: unknown });
+  assert.equal(f.failures.length, 0);
+  assert.deepEqual(f.client.state, renewed);
+});
+
+test('a retained-refusal read superseded by a newer accepted choice resolves without failure', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const f = fixture({
+    initialValues: [[localRefusalKey, 'rejected']],
+    timeoutMs: 80,
+  });
+  t.after(() => f.client.close());
+  const read = f.client.read();
+  const readOutcome = read.then(value => ({ value }), error => ({ error }));
+  await new Promise(resolve => setImmediate(resolve));
+  const requestFrame = f.frame;
+  assert.equal(f.sent.at(-1).data.type, 'read');
+
+  t.mock.timers.tick(40);
+  const choice = f.client.choose('accepted');
+  await new Promise(resolve => setImmediate(resolve));
+  const choiceRequest = f.sent.at(-1).data;
+  assert.equal(choiceRequest.type, 'choose');
+  const renewed = { ...accepted, generation: 'ffffffff-ffff-4fff-8fff-ffffffffffff', revision: 12 };
+  f.message({ ...envelope, id: choiceRequest.id, ok: true, state: renewed });
+  assert.deepEqual(await choice, renewed);
+
+  t.mock.timers.tick(40);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(await readOutcome, { value: renewed });
+  assert.equal(f.sent.filter(({ data }) => data.type === 'read').length, 1);
+  assert.equal(f.frame, requestFrame);
+  assert.equal(requestFrame.removed, undefined);
+  assert.equal(f.failures.length, 0);
 });
 
 test('association timeout bounds frame readiness and prevents a late identifier request', async () => {
@@ -422,7 +698,9 @@ test('an unavailable association falls back without suspending accepted consent'
     error: 'unavailable',
   });
 
-  await assert.rejects(association.promise, /tracking/i);
+  await assert.rejects(association.promise, error => (
+    error?.code === 'broker-unavailable' && /tracking/i.test(error.message)
+  ));
   assert.deepEqual(f.client.state, accepted);
   assert.equal(f.failures.length, 0);
   assert.equal('deviceId' in f.client.state, false);
@@ -452,6 +730,31 @@ test('an unavailable broker fails closed and never silently authorizes tracking'
   f.client.close();
 });
 
+test('an exhausted resumed read publishes only an unconfirmed error fallback', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const f = fixture({ timeoutMs: 80 });
+  t.after(() => f.client.close());
+  const initial = await nextRequest(() => f.client.read());
+  f.reply(rejected);
+  await initial.promise;
+  f.changes.length = 0;
+
+  f.pageshow();
+  await new Promise(resolve => setImmediate(resolve));
+  t.mock.timers.tick(80);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.frames.length, 2);
+  assert.equal(f.sent.at(-1).data.type, 'read');
+  t.mock.timers.tick(80);
+  await new Promise(resolve => setImmediate(resolve));
+
+  assert.equal(f.failures.length, 1);
+  assert.equal(f.client.readRetryReason, 'response-timeout');
+  assert.equal(f.changes.at(-1)?.confirmed, false);
+  assert.equal(f.changes.at(-1)?.state.choice, null);
+  assert.equal(f.changes.some(change => change.confirmed === true), false);
+});
+
 test('the shared singleton retains failure and state listeners registered after the form creates it', async () => {
   const f = fixture({ factory: getSharedTrackingClient, timeoutMs: 5 });
   const failures = [];
@@ -477,7 +780,9 @@ test('browser privacy signals override shared acceptance', async () => {
     assert.equal(f.sent[0].data.type, 'read');
     f.reply(rejected);
     assert.equal((await pending.promise).choice, 'rejected');
-    await assert.rejects(f.client.choose('accepted'), /tracking/i);
+    await assert.rejects(f.client.choose('accepted'), error => (
+      error?.code === 'unavailable' && /tracking/i.test(error.message)
+    ));
     assert.equal(f.sent.length, 1, 'The essential bridge must persist revocation of earlier shared consent.');
     f.client.close();
   }
@@ -500,14 +805,22 @@ test('a same-origin outage refusal gates an already-open tab and is relayed to t
   const initial = await nextRequest(() => f.client.read());
   f.reply(accepted);
   await initial.promise;
+  f.changes.length = 0;
   f.storageEvent({ key: 'registrystack.tracking-local-refusal.v2', newValue: 'rejected' });
   assert.equal(f.client.state.choice, 'rejected');
+  assert.deepEqual(f.changes[0], {
+    state: { ...accepted, choice: 'rejected' },
+    confirmed: false,
+  });
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(f.sent.at(-1).data.type, 'choose');
   assert.equal(f.sent.at(-1).data.choice, 'rejected');
   f.reply(rejected);
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(f.client.state.choice, 'rejected');
+  assert.ok(f.changes.some(change => (
+    change.confirmed === true && change.state.generation === rejected.generation
+  )));
   f.client.close();
 });
 

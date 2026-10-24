@@ -42,6 +42,7 @@ const { canonicalOrigin, privacyUrl } = Astro.props;
     buildMauticPageview,
     createSharedTrackingClient,
     trackingDeniedByBrowser,
+    trackingFailureReason,
   } from '../lib/shared-tracking-client.mjs';
 
   type TrackingState = Awaited<
@@ -80,12 +81,21 @@ const { canonicalOrigin, privacyUrl } = Astro.props;
       panel.hidden = true;
     };
 
-    const showFailure = () => {
-      if (errorMessage) errorMessage.hidden = false;
+    const showFailure = (error?: unknown) => {
+      if (errorMessage) {
+        errorMessage.hidden = false;
+        errorMessage.dataset.trackingFailure = trackingFailureReason(error);
+      }
+      if (client?.readRetryReason) panel.dataset.trackingReadRetry = client.readRetryReason;
       showPanel();
     };
 
-    const applyState = async (state: TrackingState) => {
+    const applyState = async (state: TrackingState, confirmed = false) => {
+      if (client?.readRetryReason) panel.dataset.trackingReadRetry = client.readRetryReason;
+      if (confirmed && errorMessage) {
+        errorMessage.hidden = true;
+        delete errorMessage.dataset.trackingFailure;
+      }
       currentState = state;
       if (state.choice === null) {
         showPanel();
@@ -122,12 +132,12 @@ const { canonicalOrigin, privacyUrl } = Astro.props;
         ) {
           sentGeneration = state.generation;
         }
-      } catch (_error) {
+      } catch (error) {
         if (
-          currentState?.choice === 'accepted' &&
-          currentState.generation === state.generation
+          client.state.choice === 'accepted' &&
+          client.state.generation === state.generation
         ) {
-          showFailure();
+          showFailure(error);
         }
       } finally {
         if (pendingGeneration === state.generation) pendingGeneration = null;
@@ -144,7 +154,7 @@ const { canonicalOrigin, privacyUrl } = Astro.props;
 
       const trackingClient = createSharedTrackingClient({
         bridgeUrl,
-        onStateChange: (state: TrackingState) => void applyState(state),
+        onStateChange: (state: TrackingState, confirmed: boolean) => void applyState(state, confirmed),
         onFailure: showFailure,
       });
       client = trackingClient;
@@ -157,8 +167,8 @@ const { canonicalOrigin, privacyUrl } = Astro.props;
           if (choice !== 'accepted' && choice !== 'rejected') return;
           try {
             await applyState(await trackingClient.choose(choice));
-          } catch (_error) {
-            showFailure();
+          } catch (error) {
+            showFailure(error);
           }
         });
       });
