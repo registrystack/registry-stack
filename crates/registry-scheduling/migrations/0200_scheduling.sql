@@ -139,6 +139,7 @@ CREATE TABLE IF NOT EXISTS scheduling_claims (
     CONSTRAINT scheduling_claims_operational_scope_check CHECK (
         operational_service IS NOT NULL AND operational_service <> ''
         AND operational_location IS NOT NULL AND operational_location <> ''
+        AND operational_mode IS NOT NULL
         AND operational_mode IN ('exact-time', 'arrival-window')
     ),
     CONSTRAINT scheduling_claims_party_counts_check CHECK (
@@ -236,6 +237,7 @@ CREATE TABLE IF NOT EXISTS scheduling_claim_allocations (
         AND operational_service <> ''
         AND operational_location IS NOT NULL
         AND operational_location <> ''
+        AND operational_mode IS NOT NULL
         AND operational_mode IN ('exact-time', 'arrival-window')
         AND anchor_id IS NOT NULL
         AND anchor_id <> ''

@@ -69,6 +69,7 @@ entries:
     tests:
       - {path: crates/registry-scheduling/tests/postgres_commitments/operational_reads.rs, name: operational_pages_require_one_profile_and_bind_every_authority_dimension}
       - {path: crates/registry-scheduling/tests/postgres_commitments/operational_reads.rs, name: a_later_offering_move_does_not_relabel_a_closed_appointment}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: the_ledger_refuses_a_claim_or_an_allocation_without_an_operational_mode}
   - id: SCHEDULING-SEC-38
     tests:
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_signed_reminder_uses_the_shared_event_delivery_contract}
