@@ -1454,8 +1454,7 @@ profile scope and binds the caller identity, profile digest, normalized query,
 service, location, effective resource set, time bounds and projection into the
 read context and continuation. The store applies those predicates to every
 page. Retained service and location labels come from the policy revision that
-recorded the booking; unresolved legacy labels remain excluded until the
-audited rematerialization path proves them.
+recorded the booking, and the claim ledger refuses a booking without them.
 
 The closed operational projection vocabulary omits identity, contact, manager
 and actor fields. Party counts remain booking facts and are never inferred
@@ -1472,8 +1471,7 @@ identity. The separately configured attendance after-event uses the closed
 `assisted_manager_authority_is_bound_into_idempotency_and_retention` in
 `crates/registry-scheduling/tests/postgres_commitments/booking_party.rs` pin
 the source-managed boundary. The operational PostgreSQL tests
-`operational_pages_require_one_profile_and_bind_every_authority_dimension`,
-`unresolved_legacy_labels_never_disclose_and_can_be_rematerialized_from_the_recorded_revision`,
+`operational_pages_require_one_profile_and_bind_every_authority_dimension`
 and `a_later_offering_move_does_not_relabel_a_closed_appointment` pin profile,
 continuation and retained-label behavior. The attendance tests
 `attendance_is_off_by_default_and_explicit_in_operational_projection` and

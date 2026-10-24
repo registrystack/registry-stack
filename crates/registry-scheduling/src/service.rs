@@ -1198,22 +1198,21 @@ impl SchedulingService {
         };
         let actor = caller.actor_pseudonym(&self.hasher, &self.scheduling_id)?;
         let confirmation_request = self.confirmation_request(&hold)?;
-        // Every exact-time hold this runtime writes carries scoped allocation
-        // rows. One without any is a legacy hold whose version-0 allocation
-        // has not recovered its labels and pool anchor: it still consumes its
-        // resource, but the window path below writes a booking with no
-        // allocation, and consuming the hold would release that capacity to a
-        // second booking. Refuse until an operator restores the anchor and
-        // rematerializes. A closed or expired hold consumes nothing, so it
-        // keeps the store's replay and refusal answers.
+        // Every exact-time hold this runtime writes carries allocation rows,
+        // and a publication refuses to change the mode of an offering with
+        // an active hold. An active exact-time hold without any rows is
+        // therefore an inconsistent ledger: the window path below writes a
+        // booking with no allocation, and consuming the hold would release
+        // its capacity to a second booking. A closed or expired hold
+        // consumes nothing, so it keeps the store's replay and refusal
+        // answers.
         if confirmation_request.is_none()
             && offering.mode == SchedulingMode::ExactTime
             && hold.state == ClaimState::Active
             && hold.hold_expires_at.is_some_and(|expiry| expiry > now)
         {
             return Err(ServiceError::internal(
-                "an exact-time hold has no scoped allocation; restore its resource's pool \
-                 membership and run schedulingctl operational-scopes rematerialize",
+                "an active exact-time hold has no allocation rows; the claim ledger is inconsistent",
             ));
         }
         let (supply, facts_revision) = if let Some(request) = confirmation_request.as_ref() {

@@ -173,154 +173,6 @@ async fn operational_pages_require_one_profile_and_bind_every_authority_dimensio
 }
 
 #[tokio::test]
-async fn unresolved_legacy_labels_never_disclose_and_can_be_rematerialized_from_the_recorded_revision(
-) {
-    let fx = fixture().await;
-    let (appointment_id, _) = booked(&fx, 300, 500, "operational-legacy").await;
-    let retained: Value = fx
-        .admin
-        .query_one(
-            "SELECT policy_document FROM scheduling_policy_revisions WHERE policy_revision=$1",
-            &[&(fx.revision as i64)],
-        )
-        .await
-        .unwrap()
-        .get(0);
-    begin_current_test_writer(&fx.admin).await;
-    fx.admin
-        .execute(
-            "UPDATE scheduling_claims SET operational_scope_version=0, operational_service=NULL, \
-             operational_location=NULL, operational_mode=NULL WHERE claim_id=$1",
-            &[&Uuid::parse_str(&appointment_id).unwrap()],
-        )
-        .await
-        .unwrap();
-    commit_current_test_writer(&fx.admin).await;
-    begin_current_test_writer(&fx.admin).await;
-    fx.admin
-        .execute(
-            "UPDATE scheduling_policy_revisions SET policy_document=NULL WHERE policy_revision=$1",
-            &[&(fx.revision as i64)],
-        )
-        .await
-        .unwrap();
-    commit_current_test_writer(&fx.admin).await;
-
-    let credential = operator("operations-legacy");
-    let uri = operational_uri(pinned_now(), pinned_now() + TimeDelta::days(2), "desk");
-    let (status, page) = fx.get(&uri, &credential).await;
-    assert_eq!(status, StatusCode::OK, "{page}");
-    assert!(page["items"].as_array().unwrap().is_empty());
-    let coverage = fx.store.operational_scope_coverage().await.unwrap();
-    assert_eq!(coverage.unresolved_bookings, 1);
-    assert_eq!(coverage.unresolved_active_bookings, 1);
-    assert_eq!(
-        registry_scheduling::operational::rematerialize_operational_scopes(&fx.store, &fx.audit)
-            .await
-            .unwrap(),
-        coverage,
-        "a missing snapshot is never reconstructed from current policy"
-    );
-
-    let malformed = json!({
-        "offerings": [{
-            "id": OFFERING,
-            "service": "registry-update",
-            "location": "north-counter",
-            "mode": "exact-time"
-        }]
-    });
-    fx.admin
-        .execute(
-            "UPDATE scheduling_policy_revisions SET policy_document=$2 WHERE policy_revision=$1",
-            &[&(fx.revision as i64), &malformed],
-        )
-        .await
-        .unwrap();
-    assert_eq!(
-        registry_scheduling::operational::rematerialize_operational_scopes(&fx.store, &fx.audit)
-            .await
-            .unwrap(),
-        coverage,
-        "a malformed document is rejected as a whole rather than cherry-picked"
-    );
-
-    fx.admin
-        .execute(
-            "UPDATE scheduling_policy_revisions SET policy_document=$2 WHERE policy_revision=$1",
-            &[&(fx.revision as i64), &retained],
-        )
-        .await
-        .unwrap();
-    let repaired =
-        registry_scheduling::operational::rematerialize_operational_scopes(&fx.store, &fx.audit)
-            .await
-            .unwrap();
-    assert_eq!(repaired.unresolved_bookings, 0);
-    let rematerialization_entries = fx
-        .capture
-        .entries()
-        .into_iter()
-        .filter(|entry| {
-            entry["schema"] == registry_scheduling::audit::OPERATIONAL_SCOPES_AUDIT_SCHEMA
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(rematerialization_entries.len(), 6);
-    for entry in rematerialization_entries {
-        assert_eq!(
-            entry["record"]["operation"],
-            "operational-scopes.rematerialize"
-        );
-        let rendered = entry.to_string();
-        assert!(!rendered.contains(&appointment_id));
-        assert!(!rendered.contains("party"));
-        assert!(!rendered.contains("externalReference"));
-    }
-    let (status, page) = fx.get(&uri, &credential).await;
-    assert_eq!(status, StatusCode::OK, "{page}");
-    assert_eq!(page["items"][0]["appointmentId"], appointment_id);
-}
-
-#[tokio::test]
-async fn operational_scope_rematerialization_changes_nothing_when_audit_refuses_the_request() {
-    let fx = fixture().await;
-    let (appointment_id, _) = booked(&fx, 300, 500, "operational-audit-refusal").await;
-    let appointment_id = Uuid::parse_str(&appointment_id).unwrap();
-    begin_current_test_writer(&fx.admin).await;
-    fx.admin
-        .execute(
-            "UPDATE scheduling_claims SET operational_scope_version=0, operational_service=NULL, \
-             operational_location=NULL, operational_mode=NULL WHERE claim_id=$1",
-            &[&appointment_id],
-        )
-        .await
-        .unwrap();
-    commit_current_test_writer(&fx.admin).await;
-    let (audit, capture) = SchedulingAudit::capture();
-    capture.refuse_after(0);
-
-    let error =
-        registry_scheduling::operational::rematerialize_operational_scopes(&fx.store, &audit)
-            .await
-            .expect_err("the required request audit entry is refused");
-    assert!(matches!(
-        error,
-        registry_scheduling::operational::OperationalRematerializationError::AuditRequest(_)
-    ));
-    assert!(capture.entries().is_empty());
-    let version: i16 = fx
-        .admin
-        .query_one(
-            "SELECT operational_scope_version FROM scheduling_claims WHERE claim_id=$1",
-            &[&appointment_id],
-        )
-        .await
-        .unwrap()
-        .get(0);
-    assert_eq!(version, 0, "the label mutation never started");
-}
-
-#[tokio::test]
 async fn a_later_offering_move_does_not_relabel_a_closed_appointment() {
     let fx = fixture().await;
     let (appointment_id, revision) = booked(&fx, 500, 700, "operational-old-revision").await;
@@ -494,9 +346,9 @@ async fn occupied_arrival_reads_ignore_stale_migrated_allocation_intervals_and_p
     let id = Uuid::parse_str(booking["appointmentId"].as_str().unwrap()).unwrap();
     begin_current_test_writer(&fx.admin).await;
     fx.admin.execute("INSERT INTO scheduling_claim_allocations( \
-        claim_id,requirement_kind,requirement_index,part_index,allocation_scope_version,offering, \
+        claim_id,requirement_kind,requirement_index,part_index,offering, \
         operational_service,operational_location,operational_mode,anchor_id,resource_id,occupied_start,occupied_end,units) \
-        SELECT claim_id,'primary',0,0,1,offering,operational_service,operational_location,operational_mode, \
+        SELECT claim_id,'primary',0,0,offering,operational_service,operational_location,operational_mode, \
         supply_id,supply_id,occupied_start+interval '1 day',occupied_end+interval '1 day',units \
         FROM scheduling_claims WHERE claim_id=$1", &[&id]).await.unwrap();
     commit_current_test_writer(&fx.admin).await;

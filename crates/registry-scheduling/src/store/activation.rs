@@ -379,7 +379,6 @@ impl PostgresStore {
             lock_publication(&transaction).await?;
         }
         let schema_versions_applied = apply_migrations_in(&transaction).await?;
-        super::operational::rematerialize_operational_scopes_in(&*transaction).await?;
         if !publication_locked {
             lock_publication(&transaction).await?;
         }

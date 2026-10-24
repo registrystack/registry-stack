@@ -572,17 +572,6 @@ pub fn status(config_path: &Path) -> Result<Value> {
     let role_mode = runtime
         .block_on(store.effective_role_mode())
         .context("reading the Scheduling runtime credential's ledger privileges")?;
-    let operational_coverage = if schema.current() >= 200 {
-        let coverage = runtime
-            .block_on(store.operational_scope_coverage())
-            .context("reading operational appointment label coverage")?;
-        Some(json!({
-            "unresolvedBookings": coverage.unresolved_bookings,
-            "unresolvedActiveBookings": coverage.unresolved_active_bookings,
-        }))
-    } else {
-        None
-    };
     let active = history.last().map(|active| {
         json!({
             "packageDigest": active.package_digest,
@@ -601,41 +590,11 @@ pub fn status(config_path: &Path) -> Result<Value> {
         "schemaVersion": schema.current(),
         "pendingSchemaVersions": schema.pending,
         "roleMode": role_mode.map(RoleMode::as_str),
-        "operationalScopeCoverage": operational_coverage,
     });
     if role_mode == Some(RoleMode::Single) {
         report["roleModeStatement"] = json!(SINGLE_ROLE_STATEMENT);
     }
     Ok(report)
-}
-
-/// Retry immutable label materialization after missing retained policy
-/// documents have been restored. The strict retained-policy decoder is the
-/// only source of labels; unresolved rows remain excluded from reads.
-pub fn rematerialize_operational_scopes(config_path: &Path) -> Result<Value> {
-    let loaded = load(config_path)?;
-    let store = PostgresStore::connect_migration(&loaded.config.database, &loaded.resolver)
-        .context("the Scheduling migration database configuration is invalid")?;
-    let runtime = operator_runtime()?;
-    let (_, audit) = runtime
-        .block_on(open_audit(
-            &loaded.config,
-            &loaded.resolver,
-            Some("schedulingctl"),
-        ))
-        .context("opening the schedulingctl audit destination")?;
-    let coverage = runtime
-        .block_on(
-            registry_scheduling::operational::rematerialize_operational_scopes(&store, &audit),
-        )
-        .context("rematerializing operational appointment labels")?;
-    Ok(json!({
-        "ok": true,
-        "command": "operational-scopes rematerialize",
-        "config": loaded.config_path,
-        "unresolvedBookings": coverage.unresolved_bookings,
-        "unresolvedActiveBookings": coverage.unresolved_active_bookings,
-    }))
 }
 
 #[cfg(test)]

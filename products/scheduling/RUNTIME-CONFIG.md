@@ -216,10 +216,8 @@ it cannot widen scope. Each request spans at most 62 days and the selected
 profile may impose tighter past, future and span limits. Pages are current
 observations, not an atomic historical snapshot.
 
-Historical rows without verified retained service/location labels are excluded.
-Use the audited operational-scope coverage and rematerialization commands to
-inspect or repair that gap; current policy is never substituted for a missing
-historical policy.
+Each booking keeps the service and location labels of the policy revision that
+recorded it; a later policy never relabels it.
 
 ### Calendar busy source profiles
 

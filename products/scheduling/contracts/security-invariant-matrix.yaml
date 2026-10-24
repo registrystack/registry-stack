@@ -780,8 +780,8 @@ invariants:
       One explicitly configured profile bounds each verified caller's
       service, location, resources, time span and projection. Its continuation
       binds the caller, profile and normalized query. Retained scope labels
-      follow the recorded policy revision; unverified legacy labels are
-      excluded until audited rematerialization proves them.
+      follow the recorded policy revision, and the claim ledger refuses a
+      claim without them.
     refusal: >-
       Refuse unselected or missing role authority and altered continuations.
       Omit unpermitted projections and unknown historical party counts; never

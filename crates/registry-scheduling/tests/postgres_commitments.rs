@@ -71,8 +71,6 @@ mod atomic_allocations;
 mod attendance;
 #[path = "postgres_commitments/booking_party.rs"]
 mod booking_party;
-#[path = "postgres_commitments/legacy_allocations.rs"]
-mod legacy_allocations;
 #[path = "postgres_commitments/multi_window.rs"]
 mod multi_window;
 #[path = "postgres_commitments/operational_reads.rs"]
@@ -4776,18 +4774,6 @@ async fn a_records_swap_preserves_an_active_allocation_when_physical_inventory_i
         .await;
     assert_eq!(status, StatusCode::CREATED, "the direct create commits");
 
-    // Model a legacy active claim whose immutable disclosure labels could
-    // not be recovered during migration. Its resource identity remains
-    // capacity truth even while operational allocation detail is unknown.
-    fx.admin.batch_execute(
-        "BEGIN; \
-         SET LOCAL registry_scheduling.allocation_writer = 'v2'; \
-         UPDATE scheduling_claim_allocations SET allocation_scope_version=0, \
-           operational_service=NULL, operational_location=NULL, operational_mode=NULL, anchor_id=NULL \
-         WHERE resource_id='station-1'; \
-         COMMIT",
-    ).await.expect("mark the retained allocation as legacy unknown");
-
     fx.store
         .replace_facts(SCHEDULING_ID, &records_without(&["station-1"]))
         .await
@@ -5865,13 +5851,14 @@ const DUPLICATE_KEY_CEILING_BYTES: usize = 256;
 /// column's own bound is what decides, not a caller-facing check above it.
 async fn claim_keyed(fx: &Fixture, duplicate_key: &str) -> Result<u64, tokio_postgres::Error> {
     begin_current_test_writer(&fx.admin).await;
-    let result = fx.admin
+    let result = fx
+        .admin
         .execute(
-            "INSERT INTO scheduling_claims(claim_id, kind, state, offering, operational_scope_version, \
+            "INSERT INTO scheduling_claims(claim_id, kind, state, offering, \
              operational_service, operational_location, operational_mode, supply_id, \
              displayed_start, displayed_end, occupied_start, occupied_end, units, \
              duplicate_key, revision, policy_revision, actor) \
-             VALUES($1,'booking','active','registry-update-30',1, \
+             VALUES($1,'booking','active','registry-update-30', \
              'registry-update','north-counter','exact-time','station-1', \
              $3, $3, $3, $3, 1, $2, 1, 1, 'actor-pseudonym')",
             &[&Uuid::new_v4(), &duplicate_key, &pinned_now()],

@@ -68,8 +68,6 @@ entries:
   - id: SCHEDULING-SEC-37
     tests:
       - {path: crates/registry-scheduling/tests/postgres_commitments/operational_reads.rs, name: operational_pages_require_one_profile_and_bind_every_authority_dimension}
-      - {path: crates/registry-scheduling/tests/postgres_commitments/operational_reads.rs, name: unresolved_legacy_labels_never_disclose_and_can_be_rematerialized_from_the_recorded_revision}
-      - {path: crates/registry-scheduling/tests/postgres_commitments/operational_reads.rs, name: operational_scope_rematerialization_changes_nothing_when_audit_refuses_the_request}
       - {path: crates/registry-scheduling/tests/postgres_commitments/operational_reads.rs, name: a_later_offering_move_does_not_relabel_a_closed_appointment}
   - id: SCHEDULING-SEC-38
     tests:
