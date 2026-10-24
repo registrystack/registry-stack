@@ -177,6 +177,59 @@ test('an authoritative newer push acknowledges its matching choice before the ol
   f.client.close();
 });
 
+test('a validated generation change settles a readiness-waiting read before it is sent', async (t) => {
+  const f = fixture();
+  t.after(() => f.client.close());
+  const initial = await nextRequest(() => f.client.read());
+  f.reply(accepted);
+  await initial.promise;
+  const oldFrame = f.frame;
+  const sentBeforeRead = f.sent.length;
+
+  const waitingRead = f.client.read();
+  f.message({ ...envelope, type: 'changed', state: rejected });
+
+  assert.deepEqual(await waitingRead, rejected);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.sent.length, sentBeforeRead);
+  assert.equal(oldFrame.removed, true);
+  assert.deepEqual(f.client.state, rejected);
+  assert.equal(f.failures.length, 0);
+});
+
+test('a validated generation change settles only its matching readiness-waiting choice', async (t) => {
+  const matching = fixture();
+  t.after(() => matching.client.close());
+  const initial = await nextRequest(() => matching.client.read());
+  matching.reply(accepted);
+  await initial.promise;
+
+  const matchingSentBeforeChoice = matching.sent.length;
+  const refusal = matching.client.choose('rejected');
+  matching.message({ ...envelope, type: 'changed', state: rejected });
+  assert.deepEqual(await refusal, rejected);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(matching.sent.length, matchingSentBeforeChoice);
+  assert.equal(matching.values.has(localRefusalKey), false);
+  assert.equal(matching.failures.length, 0);
+});
+
+test('a readiness-waiting acceptance cannot override a validated rejection', async (t) => {
+  const conflicting = fixture();
+  t.after(() => conflicting.client.close());
+  const initial = await nextRequest(() => conflicting.client.read());
+  conflicting.reply(accepted);
+  await initial.promise;
+  const conflictingSentBeforeChoice = conflicting.sent.length;
+  const acceptance = conflicting.client.choose('accepted');
+  conflicting.message({ ...envelope, type: 'changed', state: rejected });
+  await assert.rejects(acceptance, /tracking/i);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(conflicting.sent.length, conflictingSentBeforeChoice);
+  assert.deepEqual(conflicting.client.state, rejected);
+  assert.equal(conflicting.failures.length, 0);
+});
+
 test('a visible rejected tab recreates its essential bridge and observes another tab reaccepting', async () => {
   const f = fixture();
   const initial = await nextRequest(() => f.client.read());

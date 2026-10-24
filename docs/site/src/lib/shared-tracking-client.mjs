@@ -273,12 +273,14 @@ export function createSharedTrackingClient(options = {}) {
       const resolveOnce = value => {
         if (settled) return;
         settled = true;
+        pending.delete(message.id);
         clearTimeout(timer);
         resolve(value);
       };
       const rejectOnce = error => {
         if (settled) return;
         settled = true;
+        pending.delete(message.id);
         clearTimeout(timer);
         reject(error);
       };
@@ -302,6 +304,17 @@ export function createSharedTrackingClient(options = {}) {
         rejectOnce(requestOptions.recoverUnavailable ? recoverableFailure() : fail());
         return;
       }
+      // Generation replacement must also settle operations awaiting readiness.
+      const item = {
+        resolve: resolveOnce,
+        reject: rejectOnce,
+        timer,
+        type,
+        frame,
+        recoverUnavailable: requestOptions.recoverUnavailable === true,
+        ...payload,
+      };
+      pending.set(message.id, item);
       readiness.then(readyFrame => {
         if (settled) return;
         if (closed || readyFrame !== frame) {
@@ -310,15 +323,8 @@ export function createSharedTrackingClient(options = {}) {
         }
         requestFrame = readyFrame;
         if (requestOptions.timeoutMs === undefined) timer = startTimer();
-        pending.set(message.id, {
-          resolve: resolveOnce,
-          reject: rejectOnce,
-          timer,
-          type,
-          frame: readyFrame,
-          recoverUnavailable: requestOptions.recoverUnavailable === true,
-          ...payload,
-        });
+        item.frame = readyFrame;
+        item.timer = timer;
         try {
           readyFrame.contentWindow.postMessage(message, bridge.origin);
         } catch {
