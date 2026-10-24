@@ -256,7 +256,7 @@ operator, and the eighth failed attempt sets it aside. A worker that stops
 mid-attempt leaves its lease to lapse, and the attempt counts as a failure.
 If the destination accepts an event but the runtime cannot record that
 outcome, recovery applies the retry schedule and may send the event again.
-Successful delivery is therefore not guaranteed.
+Retries are bounded, so successful delivery is not guaranteed.
 A cancellation or reschedule cancels the appointment's reminders no attempt
 has started on, in the same transaction. Just before each send the runtime
 reads, under the attempt's lease, whether the intent still describes the
