@@ -142,11 +142,6 @@ postgres_targets=(
   postgres_logical_sql_names
   schema_fingerprint_rehearsal
 )
-evidence_targets=(
-  postgres_action_evidence
-  postgres_action_evidence_targets
-  postgres_action_evidence_retention
-)
 immediate_action_targets=(
   postgres_immediate_actions
 )
