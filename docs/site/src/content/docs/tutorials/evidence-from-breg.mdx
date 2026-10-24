@@ -28,7 +28,7 @@ decides who may ask.
   outcome="A checked Evidence candidate with two Sources, three AssertionDefinitions, and 35 synthetic fixture cases."
   time="About 20 minutes after installing matching binaries"
   level="Offline authoring with synthetic data"
-  prerequisites={['Matching bregctl, evidencectl, and evidence binaries on PATH', 'A shell, tar, yq version 4, and an editor', 'The downloaded BReg and Evidence teaching archive']}
+  prerequisites={['The BReg and Evidence components installed for rstack', 'A shell, tar, yq version 4, and an editor', 'The downloaded BReg and Evidence teaching archive']}
 />
 
 ## Unpack the teaching registry
@@ -41,7 +41,7 @@ registry:
 mkdir teaching-inputs
 tar -xzf breg-evidence-starter.tar.gz -C teaching-inputs
 cp -R teaching-inputs/registry ./registry
-bregctl check ./registry
+rstack breg check ./registry
 ```
 
 The registry has one Record type, `record`, with two unique selectors, `by-code` and
@@ -53,8 +53,8 @@ The archive also holds `offline-starter`, a complete Evidence project, and `star
 of assertion definitions. Start the project from the first:
 
 ```sh
-evidencectl init ./evidence --starter ./teaching-inputs/offline-starter --profile local
-evidencectl test ./evidence --target ./evidence/local-target.yaml
+rstack evidence init ./evidence --starter ./teaching-inputs/offline-starter --profile local
+rstack evidence test ./evidence --target ./evidence/local-target.yaml
 ```
 
 ```text test-excerpt
@@ -75,7 +75,7 @@ The registry writes the source description, so the lookup Evidence calls is the 
 registry reviewed:
 
 ```sh
-bregctl generate evidence-source ./registry \
+rstack breg generate evidence-source ./registry \
   --access-profile evidence-source --record-type record \
   --selector by-code --selector by-registration-number \
   --fields status --source-id registry-status --connection registry \
@@ -90,7 +90,7 @@ profile see.
 Import it into the project:
 
 ```sh
-evidencectl source import ./registry-status-export --project ./evidence
+rstack evidence source import ./registry-status-export --project ./evidence
 ```
 
 ```json test-excerpt
@@ -105,8 +105,8 @@ evidencectl source import ./registry-status-export --project ./evidence
 The import checks every artifact's checksum, then adds the `registry-status` Source, its selector
 profiles, and two Functions. It adds no assertion definition and no caller grant: the registry's
 profile does not become an Evidence permission. For a local registry with a stopped development
-session, `evidencectl source add` does both steps, driving the `bregctl` of the same version on
-your `PATH`.
+session, `rstack evidence source add` does both steps, driving the BReg tooling selected from the
+same managed release.
 
 {/* Evidence: crates/registry-breg/src/evidence_source.rs;
     crates/registry-evidencectl/src/source_import/mod.rs, replace_project_sections;
@@ -146,7 +146,7 @@ in this project, not anything the registry granted.
 Create a target for the project:
 
 ```sh
-evidencectl target new ./configured-target --local --project ./evidence
+rstack evidence target new ./configured-target --local --project ./evidence
 ```
 
 ```text test-expect
@@ -175,8 +175,8 @@ Fixtures supply recorded responses, so nothing contacts these endpoints; bind th
 issuer, audience, scope, and secrets before live use. Prove the project and package it:
 
 ```sh
-evidencectl test ./evidence --target ./configured-target
-evidencectl package ./evidence --target ./configured-target --output ./candidate
+rstack evidence test ./evidence --target ./configured-target
+rstack evidence package ./evidence --target ./configured-target --output ./candidate
 ```
 
 ```text test-excerpt
@@ -242,7 +242,7 @@ keep traffic off and correct the source client or the profile before you retry.
 
 ## Keep the two reviews separate
 
-A changed selector, fact, or profile needs a fresh export, a reviewed `evidencectl source diff`
+A changed selector, fact, or profile needs a fresh export, a reviewed `rstack evidence source diff`
 and `source update`, and a new package. [How Evidence works](../../explanation/how-evidence-works/) explains the split.
 
 {/* Evidence: products/breg/EVIDENCE.md;

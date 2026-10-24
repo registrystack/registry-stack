@@ -5444,6 +5444,7 @@ name = "registry-cli-api"
 version = "0.44.0"
 dependencies = [
  "clap",
+ "fs2",
  "http",
  "registry-platform-config",
  "registry-platform-crypto",

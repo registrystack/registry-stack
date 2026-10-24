@@ -36,7 +36,7 @@ Open a terminal in the directory that holds `tutorial-work`, go to the project, 
 ready-made examples:
 
 ```sh test-cwd="tutorial-work/project"
-bregctl examples list
+rstack breg examples list
 ```
 
 ```text test-expect
@@ -130,7 +130,7 @@ contacts in its own jurisdiction:
 ## Change a contact's email
 
 ```sh
-bregctl examples run update-contact-email
+rstack breg examples run update-contact-email
 ```
 
 ```text test-excerpt
@@ -176,7 +176,7 @@ afterwards is at that revision, with the new address:
 ## Register a contact through a Proposal
 
 ```sh
-bregctl examples run register-contact
+rstack breg examples run register-contact
 ```
 
 ```text test-excerpt
@@ -251,7 +251,7 @@ use each one now. Once applied, `edit`, `submit` and `cancel` all report `alread
 The token from the first tutorial has probably expired, so get a fresh one:
 
 ```sh
-bregctl dev token editor
+rstack breg dev token editor
 ```
 
 ```text test-expect

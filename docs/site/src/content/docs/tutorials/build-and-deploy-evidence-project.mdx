@@ -27,7 +27,7 @@ dependencies before it opens a listener.
   outcome="An activated Registry Evidence candidate with a recorded package digest and passing dependency preflight."
   time="About 30 minutes"
   level="Operator handoff with synthetic data and a local signer"
-  prerequisites={['The proved adult-status project', 'evidence and evidencectl from one release', 'Free loopback port 18090']}
+  prerequisites={['The proved adult-status project', 'The Evidence component installed for rstack', 'Free loopback port 18090']}
 />
 
 ## Before you begin
@@ -47,7 +47,7 @@ If you stopped the development session, start it again from the project director
 issuer answers on `8082`:
 
 ```sh test-skip="the session from Your first assertion is still running"
-evidencectl dev start . \
+rstack evidence dev start . \
   --target local-target.yaml \
   --evidence-port 18080 \
   --issuer-port 8082
@@ -62,7 +62,7 @@ settings:
 
 ```sh test-cwd="first-evidence-assertion/adult-status"
 cd ..
-evidencectl target new ./deploy-target --settings adult-status/local-target.yaml
+rstack evidence target new ./deploy-target --settings adult-status/local-target.yaml
 ```
 
 ```text test-expect
@@ -84,7 +84,7 @@ Give the deployment its own signing key:
 
 ```sh
 umask 077
-evidencectl keygen signing --output-dir deploy-target/secrets \
+rstack evidence keygen signing --output-dir deploy-target/secrets \
   --public-output deploy-target/public-keys/signing.jwk.json
 ```
 
@@ -140,7 +140,7 @@ The bind must be a loopback or private address unless `listener.networkExposure`
 `container-private`. Read back what the target selects, offline:
 
 ```sh
-evidencectl target explain deploy-target/target.yaml adult-status
+rstack evidence target explain deploy-target/target.yaml adult-status
 ```
 
 ```text test-expect
@@ -159,7 +159,7 @@ Access profiles: 1
 Ask whether the target is fit for production:
 
 ```sh test-exit="1"
-evidencectl check adult-status --target deploy-target/target.yaml --production
+rstack evidence check adult-status --target deploy-target/target.yaml --production
 ```
 
 ```text test-expect
@@ -171,7 +171,7 @@ A local key file cannot meet a production `assuranceProfile`, so this target dec
 stays a rehearsal. Package it into a new directory outside the project:
 
 ```sh
-evidencectl package adult-status --target deploy-target/target.yaml --output candidate
+rstack evidence package adult-status --target deploy-target/target.yaml --output candidate
 ```
 
 ```text test-expect
@@ -223,8 +223,8 @@ Only the candidate travels to the target host, here this same directory. Provisi
 source accepts only the one it was started with, so copy that one:
 
 ```sh
-evidencectl keygen secret --output deploy-target/secrets/audit-hmac-key
-evidencectl keygen secret --output deploy-target/secrets/subject-binding-hmac-key
+rstack evidence keygen secret --output deploy-target/secrets/audit-hmac-key
+rstack evidence keygen secret --output deploy-target/secrets/subject-binding-hmac-key
 cp adult-status/.generated/secrets/synthetic-source-token deploy-target/secrets/
 cp -R candidate/bundle deploy-target/package
 ```
@@ -237,7 +237,7 @@ wrote deploy-target/secrets/subject-binding-hmac-key
 Activate the authority against the installed package:
 
 ```sh
-evidence authority activate --runtime-config candidate/runtime.yaml \
+rstack evidence runtime authority activate --runtime-config candidate/runtime.yaml \
   --document candidate/compiled-authority.yaml
 ```
 
@@ -249,7 +249,7 @@ Activation records the authority snapshot for the next start; a running process 
 until restart. Check the installed package, which reads no secret and contacts no network service:
 
 ```sh
-evidence check --runtime-config candidate/runtime.yaml
+rstack evidence runtime check --runtime-config candidate/runtime.yaml
 ```
 
 ```text test-expect
@@ -262,7 +262,7 @@ resolves every secret, proves the signer, opens the audit log, and fetches the t
 keys, as startup does. Name the runtime file by absolute path:
 
 ```sh
-evidencectl doctor --runtime-config "$PWD/candidate/runtime.yaml"
+rstack evidence doctor --runtime-config "$PWD/candidate/runtime.yaml"
 ```
 
 ```text test-excerpt
@@ -283,7 +283,7 @@ Start the service in a terminal of its own; it logs `evidence service listening`
 package digest:
 
 ```sh test-skip="runs in the foreground until stopped"
-evidence serve --runtime-config "$PWD/candidate/runtime.yaml"
+rstack evidence runtime serve --runtime-config "$PWD/candidate/runtime.yaml"
 ```
 
 Route traffic through your TLS front only after `GET http://127.0.0.1:18090/ready` succeeds. To

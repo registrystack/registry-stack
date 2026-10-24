@@ -27,13 +27,13 @@ process receives no Vault or OpenBao token.
   authenticated operator session for it. The commands use a mount named `transit`.
 - A copy of the release's production example. Download the source archive of your release,
   `https://github.com/registrystack/registry-stack/archive/refs/tags/v<version>.tar.gz`, where
-  `<version>` is the version `evidencectl --version` prints. It unpacks to
+  `<version>` is the version `rstack evidence --version` prints. It unpacks to
   `registry-stack-<version>/`; copy its
   `products/evidence/reference/deployment-targets/environments/production/` directory to
   `production/` beside your project. The copy holds the Transit policy, the proxy configuration,
   and the deployment target `production/evidence/target.yaml`; `<target>` in the commands is
   `production/evidence`.
-- `evidencectl` and `evidence` from the same release, and [`jq`](https://jqlang.org/).
+- The `evidence` component installed for `rstack`, and [`jq`](https://jqlang.org/).
 
 ## Create the Transit key and its policy
 
@@ -137,7 +137,7 @@ Convert the pinned key version's public PEM from the review file into the target
 
 ```sh
 jq -r '.data.keys["<key-version>"].public_key' "<operator-review-path>/evidence-key.json" \
-  | evidencectl jwk from-pem - --output-dir "<target>/public-keys"
+  | rstack evidence jwk from-pem - --output-dir "<target>/public-keys"
 ```
 
 ```text test-expect
@@ -146,7 +146,7 @@ wrote <target>/public-keys/<thumbprint>.jwk.json (kid <thumbprint>)
 
 The `kid` is the RFC 7638 thumbprint, and it names the public JWK file. The command refuses a
 private key. Commit only the public JWK file, then delete the review file; do not commit provider
-responses. See [`evidencectl jwk from-pem`](../../reference/cli/evidencectl/jwk/from-pem/).
+responses. Run `rstack evidence jwk from-pem --help` for the command reference.
 
 {/* Evidence: crates/registry-evidencectl/src/jwk.rs, run_from_pem, public_jwk_from_pem */}
 
@@ -176,7 +176,7 @@ Put no provider token or private key in the target.
 Check the project against the target for production:
 
 ```sh
-evidencectl check "<project>" --target "<target>/target.yaml" --production
+rstack evidence check "<project>" --target "<target>/target.yaml" --production
 ```
 
 ```text test-expect
@@ -189,7 +189,7 @@ Target: <target>/target.yaml
 Package the candidate. `package` runs the check and the fixtures again before it writes anything:
 
 ```sh
-evidencectl package "<project>" --target "<target>/target.yaml" --output "<candidate>"
+rstack evidence package "<project>" --target "<target>/target.yaml" --output "<candidate>"
 ```
 
 ```text test-excerpt
@@ -210,7 +210,7 @@ the candidate's `runtime.yaml`. Install the bundle and activate the target autho
 Start the proxy first. Then, on the target host, run doctor:
 
 ```sh
-evidencectl doctor --runtime-config "<candidate>/runtime.yaml"
+rstack evidence doctor --runtime-config "<candidate>/runtime.yaml"
 ```
 
 Doctor reads the key's metadata, checks the custody fields and the key version, compares the
@@ -223,10 +223,11 @@ error[evidence.deployment.signing-unavailable] <candidate>/runtime.yaml
 ```
 
 When doctor passes, start the service with
-[`evidence serve`](../../reference/cli/evidence/serve/) and route traffic only after `/ready` reports
+[`rstack evidence runtime serve`](../../reference/cli/evidence/serve/) and route traffic only
+after `/ready` reports
 ready. If the provider becomes unreachable later, signing fails closed and readiness reports the
 signer unavailable until a self-test succeeds. See
-[`evidencectl doctor`](../../reference/cli/evidencectl/doctor/).
+`rstack evidence doctor --help`.
 
 {/* Evidence: crates/registry-evidence/src/runtime.rs; crates/registry-platform-crypto/src/lib.rs, validate_transit_public_key; crates/registry-evidencectl/src/runtime.rs */}
 

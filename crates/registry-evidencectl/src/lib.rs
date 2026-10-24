@@ -3,7 +3,11 @@
 //! implements Evidence semantics itself and shells out to the runtime binary
 //! for them.
 
-use std::{ffi::OsString, path::PathBuf, process::ExitCode};
+use std::{
+    ffi::OsString,
+    path::PathBuf,
+    process::{Command as ProcessCommand, ExitCode},
+};
 
 use clap::{
     builder::{PossibleValuesParser, TypedValueParser as _},
@@ -130,11 +134,29 @@ enum Command {
     /// Inspect stopped local audit history.
     #[command(subcommand)]
     Audit(audit_view::AuditCommand),
+    /// Run the matching Evidence runtime with unchanged arguments and streams; use `runtime -- --help` for its native command tree.
+    Runtime(RuntimeArgs),
     /// Advanced: editor and tooling integration surfaces.
     #[command(subcommand)]
     Tooling(tooling::ToolingCommand),
     #[command(name = "__dev-supervisor", hide = true)]
     DevSupervisor(dev::SupervisorArgs),
+}
+
+#[derive(Debug, Args)]
+#[command(
+    trailing_var_arg = true,
+    after_help = "The first RUNTIME_ARGUMENT selects an Evidence runtime command. Every following argument is passed unchanged. Run `evidencectl runtime -- --help` for the Evidence runtime command tree. Unmanaged installations select `evidence` from EVIDENCE_BIN, an installed sibling, or PATH; rstack uses only its selected generation."
+)]
+struct RuntimeArgs {
+    /// Evidence runtime command and arguments, passed directly to `evidence`.
+    #[arg(
+        value_name = "RUNTIME_ARGUMENT",
+        required = true,
+        num_args = 1..,
+        allow_hyphen_values = true
+    )]
+    arguments: Vec<OsString>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
@@ -303,9 +325,19 @@ const HUMAN_ONLY_COMMANDS: &[&[&str]] = &[
 /// output it renders. A subcommand that defines the `output_format` argument
 /// itself does not receive the global one.
 fn cli_command() -> clap::Command {
-    HUMAN_ONLY_COMMANDS
+    let command = HUMAN_ONLY_COMMANDS
         .iter()
-        .fold(Cli::command(), |command, path| narrow_format(command, path))
+        .fold(Cli::command(), |command, path| narrow_format(command, path));
+    command.mut_subcommand("runtime", |subcommand| {
+        subcommand.arg(
+            clap::Arg::new("output_format")
+                .long("format")
+                .value_name("FORMAT")
+                .default_value("human")
+                .hide(true)
+                .value_parser(clap::builder::EnumValueParser::<CliFormat>::new()),
+        )
+    })
 }
 
 fn narrow_format(command: clap::Command, path: &[&str]) -> clap::Command {
@@ -440,6 +472,15 @@ fn run_entry() -> ExitCode {
     };
     let command_path = command_path(&matches);
     let format_explicit = report_format_requested(&arguments);
+    if let Command::Runtime(args) = &cli.command {
+        if format_explicit {
+            eprintln!(
+                "error: --format is not supported by runtime because Evidence runtime output is passed through unchanged"
+            );
+            return ExitCode::from(report::USAGE_EXIT);
+        }
+        return run_runtime(args);
+    }
     let junit = cli.output_format == CliFormat::Junit;
     if junit
         && (legacy_json_requested(&cli.command)
@@ -643,6 +684,7 @@ fn run_entry() -> ExitCode {
         Command::Audit(command) => audit_view::run(command, format),
         Command::Tooling(command) => tooling::run(command, format),
         Command::DevSupervisor(args) => dev::run_supervisor(args),
+        Command::Runtime(_) => unreachable!("runtime bypasses report dispatch"),
     };
     match result {
         Ok(code) => code,
@@ -746,10 +788,20 @@ fn write_junit_setup_failure(command: &str, message: &str) {
 /// a value spelled "help" carried by a later argument, such as the client id
 /// in `access client revoke help`, is never mistaken for a help request.
 fn help_requested(arguments: &[OsString]) -> bool {
+    let passthrough_start = runtime_passthrough_start(arguments);
+    let outer_end = passthrough_start.unwrap_or(arguments.len());
     if arguments
         .iter()
         .skip(1)
+        .take(outer_end.saturating_sub(1))
         .any(|argument| argument == "--help" || argument == "-h")
+    {
+        return true;
+    }
+    if passthrough_start.is_some()
+        && arguments
+            .get(outer_end)
+            .is_some_and(|argument| argument == "--help" || argument == "-h")
     {
         return true;
     }
@@ -813,13 +865,19 @@ fn requested_output_format(arguments: &[OsString]) -> OutputFormat {
     if legacy_json_named(arguments) {
         return OutputFormat::Json;
     }
-    if arguments.iter().enumerate().any(|(index, argument)| {
-        argument == "--format=json"
-            || (argument == "--format"
-                && arguments
-                    .get(index + 1)
-                    .is_some_and(|value| value == "json"))
-    }) {
+    let outer_end = runtime_passthrough_start(arguments).unwrap_or(arguments.len());
+    if arguments
+        .iter()
+        .take(outer_end)
+        .enumerate()
+        .any(|(index, argument)| {
+            argument == "--format=json"
+                || (argument == "--format"
+                    && arguments
+                        .get(index + 1)
+                        .is_some_and(|value| value == "json"))
+        })
+    {
         OutputFormat::Json
     } else {
         OutputFormat::Human
@@ -827,9 +885,11 @@ fn requested_output_format(arguments: &[OsString]) -> OutputFormat {
 }
 
 fn report_format_requested(arguments: &[OsString]) -> bool {
+    let outer_end = runtime_passthrough_start(arguments).unwrap_or(arguments.len());
     arguments
         .iter()
         .skip(1)
+        .take(outer_end.saturating_sub(1))
         .take_while(|argument| *argument != "--")
         .any(|argument| {
             argument == "--format"
@@ -837,6 +897,16 @@ fn report_format_requested(arguments: &[OsString]) -> bool {
                     .to_str()
                     .is_some_and(|value| value.starts_with("--format="))
         })
+}
+
+/// Index of the first argument delegated to the Evidence runtime.
+///
+/// Global evidencectl options before that boundary remain evidencectl options.
+/// Once the first runtime argument is present, every later token belongs to
+/// `evidence`, including its own `--format` and dash-prefixed values.
+fn runtime_passthrough_start(arguments: &[OsString]) -> Option<usize> {
+    let (path, index) = named_command(arguments);
+    (path.as_slice() == ["runtime"]).then_some(index)
 }
 
 /// Whether a command's legacy `--json` flag asked for JSON output. The flag
@@ -1249,7 +1319,52 @@ fn safe_failure_json(failure: &SafeCliFailure, command: &str) -> serde_json::Val
 /// top-level flag owns output rendering. Its two closed values are
 /// unambiguous; new help uses `--response-format`.
 fn normalized_process_args() -> Vec<OsString> {
-    normalize_arguments(std::env::args_os().collect())
+    let arguments: Vec<OsString> = std::env::args_os().collect();
+    if runtime_passthrough_start(&arguments).is_some() {
+        arguments
+    } else {
+        normalize_arguments(arguments)
+    }
+}
+
+/// Replace evidencectl with the selected, matching Evidence runtime so Unix
+/// signals and all three standard streams retain their native runtime behavior.
+fn run_runtime(args: &RuntimeArgs) -> ExitCode {
+    let evidence = match evidence_binary::resolve_matching(None) {
+        Ok(evidence) => evidence,
+        Err(error) => {
+            eprintln!("evidencectl runtime could not select evidence: {error:#}");
+            return ExitCode::from(report::OPERATIONAL_FAILURE_EXIT);
+        }
+    };
+    let mut command = ProcessCommand::new(evidence);
+    command.args(&args.arguments);
+    replace_with_runtime(command)
+}
+
+#[cfg(unix)]
+fn replace_with_runtime(mut command: ProcessCommand) -> ExitCode {
+    use std::os::unix::process::CommandExt as _;
+
+    let error = command.exec();
+    eprintln!("evidencectl runtime could not start evidence: {error}");
+    ExitCode::from(report::OPERATIONAL_FAILURE_EXIT)
+}
+
+#[cfg(not(unix))]
+fn replace_with_runtime(mut command: ProcessCommand) -> ExitCode {
+    match command.status() {
+        Ok(status) => ExitCode::from(
+            status
+                .code()
+                .and_then(|code| u8::try_from(code).ok())
+                .unwrap_or(report::OPERATIONAL_FAILURE_EXIT),
+        ),
+        Err(error) => {
+            eprintln!("evidencectl runtime could not start evidence: {error}");
+            ExitCode::from(report::OPERATIONAL_FAILURE_EXIT)
+        }
+    }
 }
 
 fn normalize_arguments(mut arguments: Vec<OsString>) -> Vec<OsString> {
@@ -1461,8 +1576,13 @@ mod tests {
     ];
 
     /// Protocol and artifact output, or a foreground service without a report.
-    const NON_REPORT_COMMANDS: &[&str] =
-        &["api", "oid4vci inspect", "oid4vci openapi", "oid4vci serve"];
+    const NON_REPORT_COMMANDS: &[&str] = &[
+        "api",
+        "oid4vci inspect",
+        "oid4vci openapi",
+        "oid4vci serve",
+        "runtime",
+    ];
 
     fn leaf_paths(command: &clap::Command, prefix: &mut Vec<String>, leaves: &mut Vec<String>) {
         let subcommands: Vec<_> = command

@@ -8,6 +8,7 @@ use std::{
 };
 
 use clap::{Args, Subcommand};
+use fs2::FileExt as _;
 use registry_platform_config::{
     AuthoredExpressions, EnvironmentSecretProviderConfig, FileSecretProviderConfig,
     SecretProvidersConfig, SecretReference,
@@ -497,16 +498,6 @@ fn add(path: &Path, product: &str, mut args: AddConnectionArgs) -> Result<(), Ap
     if product == "casework" && args.access_profile.is_none() && io::stdin().is_terminal() {
         args.access_profile = prompt_optional("Casework access profile (optional): ")?;
     }
-    let mut store = read_store(path)?;
-    if store
-        .connections
-        .iter()
-        .any(|saved| saved.product.as_str() == product && saved.name.as_str() == args.name)
-    {
-        return Err(ApiError::Usage(
-            "a connection with this name already exists for the product".to_owned(),
-        ));
-    }
     let name = args.name.clone();
     let access_profile = args
         .access_profile
@@ -520,7 +511,7 @@ fn add(path: &Path, product: &str, mut args: AddConnectionArgs) -> Result<(), Ap
         .transpose()?;
     let mut secret_providers = None;
     let auth = saved_auth(&mut secret_providers, args)?;
-    store.connections.push(SavedConnection {
+    let saved = SavedConnection {
         product: local_id(product, "product")?,
         name: local_id(&name, "connection NAME")?,
         base_url: config_url(base_url, "--url")?,
@@ -528,11 +519,23 @@ fn add(path: &Path, product: &str, mut args: AddConnectionArgs) -> Result<(), Ap
         trusted_root_certificates_file,
         secret_providers,
         auth,
-    });
-    store
-        .connections
-        .sort_by(|left, right| (&left.product, &left.name).cmp(&(&right.product, &right.name)));
-    write_store(path, &store)
+    };
+    mutate_store(path, |store| {
+        if store
+            .connections
+            .iter()
+            .any(|existing| existing.product == saved.product && existing.name == saved.name)
+        {
+            return Err(ApiError::Usage(
+                "a connection with this name already exists for the product".to_owned(),
+            ));
+        }
+        store.connections.push(saved);
+        store
+            .connections
+            .sort_by(|left, right| (&left.product, &left.name).cmp(&(&right.product, &right.name)));
+        Ok(())
+    })
 }
 
 fn saved_auth(
@@ -665,33 +668,36 @@ fn show(path: &Path, product: &str, name: &str) -> Result<(), ApiError> {
 }
 
 fn select(path: &Path, product: &str, args: UseConnectionArgs) -> Result<(), ApiError> {
-    let mut store = read_store(path)?;
-    if !store
-        .connections
-        .iter()
-        .any(|saved| saved.product.as_str() == product && saved.name.as_str() == args.name)
-    {
-        return Err(ApiError::Configuration(
-            "the named connection does not exist".to_owned(),
-        ));
-    }
+    let product_id = local_id(product, "product")?;
+    let connection = local_id(&args.name, "connection NAME")?;
     let start = args
         .project
         .map_or_else(std::env::current_dir, Ok)
         .map_err(|_| ApiError::Io)?;
     let project = find_project(product, &start)?;
-    store
-        .selections
-        .retain(|selected| !(selected.product.as_str() == product && selected.project == project));
-    store.selections.push(ProjectSelection {
-        product: local_id(product, "product")?,
-        project,
-        connection: local_id(&args.name, "connection NAME")?,
-    });
-    store.selections.sort_by(|left, right| {
-        (&left.product, &left.project).cmp(&(&right.product, &right.project))
-    });
-    write_store(path, &store)
+    mutate_store(path, |store| {
+        if !store
+            .connections
+            .iter()
+            .any(|saved| saved.product == product_id && saved.name == connection)
+        {
+            return Err(ApiError::Configuration(
+                "the named connection does not exist".to_owned(),
+            ));
+        }
+        store
+            .selections
+            .retain(|selected| !(selected.product == product_id && selected.project == project));
+        store.selections.push(ProjectSelection {
+            product: product_id,
+            project,
+            connection,
+        });
+        store.selections.sort_by(|left, right| {
+            (&left.product, &left.project).cmp(&(&right.product, &right.project))
+        });
+        Ok(())
+    })
 }
 
 fn materialize(_store: &Store, saved: &SavedConnection) -> Result<LocalConnection, ApiError> {
@@ -1032,6 +1038,50 @@ fn validate_reference(
         .map_err(|_| ApiError::Configuration("a credential reference is invalid".to_owned()))
 }
 
+/// Serialize one read-modify-write transaction across CLI processes. The
+/// companion lock is persistent because replacing the data file must not
+/// replace the inode on which cooperating processes coordinate.
+fn mutate_store<T>(
+    path: &Path,
+    mutation: impl FnOnce(&mut Store) -> Result<T, ApiError>,
+) -> Result<T, ApiError> {
+    let _lock = lock_store_mutation(path)?;
+    let mut store = read_store(path)?;
+    let result = mutation(&mut store)?;
+    write_store(path, &store)?;
+    Ok(result)
+}
+
+fn lock_store_mutation(path: &Path) -> Result<fs::File, ApiError> {
+    let parent = path.parent().ok_or(ApiError::Io)?;
+    fs::create_dir_all(parent).map_err(|_| ApiError::Io)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        fs::set_permissions(parent, fs::Permissions::from_mode(0o700)).map_err(|_| ApiError::Io)?;
+    }
+
+    let mut lock_name = path.as_os_str().to_os_string();
+    lock_name.push(".lock");
+    let lock_path = PathBuf::from(lock_name);
+    match fs::symlink_metadata(&lock_path) {
+        Ok(metadata) if !metadata.file_type().is_file() => return Err(ApiError::Io),
+        Ok(_) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(_) => return Err(ApiError::Io),
+    }
+    let mut options = fs::OpenOptions::new();
+    options.read(true).write(true).create(true).truncate(false);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.mode(0o600);
+    }
+    let lock = options.open(lock_path).map_err(|_| ApiError::Io)?;
+    lock.lock_exclusive().map_err(|_| ApiError::Io)?;
+    Ok(lock)
+}
+
 fn write_store(path: &Path, store: &Store) -> Result<(), ApiError> {
     let parent = path.parent().ok_or(ApiError::Io)?;
     fs::create_dir_all(parent).map_err(|_| ApiError::Io)?;
@@ -1114,6 +1164,7 @@ fn trim_one_line_ending(value: &mut String) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{sync::mpsc, thread, time::Duration};
     use tempfile::TempDir;
 
     fn anonymous(name: &str, product: &str) -> SavedConnection {
@@ -1281,6 +1332,71 @@ mod tests {
         });
         let error = validate_store(duplicate).unwrap_err();
         assert!(error.to_string().contains("unique within a product"));
+    }
+
+    #[test]
+    fn overlapping_store_mutations_preserve_connections_and_selections() {
+        let temporary = TempDir::new().unwrap();
+        let path = temporary.path().join("config/connections.yaml");
+        let first_path = path.clone();
+        let second_path = path.clone();
+        let (first_entered_tx, first_entered_rx) = mpsc::channel();
+        let (release_first_tx, release_first_rx) = mpsc::channel();
+        let (second_attempting_tx, second_attempting_rx) = mpsc::channel();
+        let (second_entered_tx, second_entered_rx) = mpsc::channel();
+
+        let first = thread::spawn(move || {
+            mutate_store(&first_path, |store| {
+                store.connections.push(anonymous("production", "breg"));
+                store.selections.push(ProjectSelection {
+                    product: LocalId::new("breg").unwrap(),
+                    project: PathBuf::from("/srv/registries/businesses"),
+                    connection: LocalId::new("production").unwrap(),
+                });
+                first_entered_tx.send(()).unwrap();
+                release_first_rx.recv().unwrap();
+                Ok(())
+            })
+        });
+        first_entered_rx.recv().unwrap();
+
+        let second = thread::spawn(move || {
+            second_attempting_tx.send(()).unwrap();
+            mutate_store(&second_path, |store| {
+                second_entered_tx.send(()).unwrap();
+                store.connections.push(anonymous("review", "casework"));
+                store.selections.push(ProjectSelection {
+                    product: LocalId::new("casework").unwrap(),
+                    project: PathBuf::from("/srv/casework/benefits"),
+                    connection: LocalId::new("review").unwrap(),
+                });
+                Ok(())
+            })
+        });
+        second_attempting_rx.recv().unwrap();
+        let entered_while_first_held = second_entered_rx
+            .recv_timeout(Duration::from_millis(250))
+            .is_ok();
+        release_first_tx.send(()).unwrap();
+
+        first.join().unwrap().unwrap();
+        second.join().unwrap().unwrap();
+        assert!(
+            !entered_while_first_held,
+            "the second mutation entered while the first held the store lock"
+        );
+        let store = read_store(&path).unwrap();
+        assert!(validate_store(store.clone()).is_ok());
+        assert_eq!(store.connections.len(), 2);
+        assert_eq!(store.selections.len(), 2);
+        assert!(store
+            .connections
+            .iter()
+            .any(|saved| saved.product.as_str() == "breg"));
+        assert!(store
+            .connections
+            .iter()
+            .any(|saved| saved.product.as_str() == "casework"));
     }
 
     #[test]

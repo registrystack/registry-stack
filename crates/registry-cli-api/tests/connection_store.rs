@@ -4,10 +4,13 @@ use std::{
     net::TcpListener,
     os::unix::fs::PermissionsExt as _,
     path::{Path, PathBuf},
-    sync::mpsc,
+    process::{Child, Command, Output, Stdio},
+    sync::{mpsc, Mutex},
     thread,
+    time::{Duration, Instant},
 };
 
+use fs2::FileExt as _;
 use registry_cli_api::{
     run_api, run_api_with_profile_headers, run_connection, AddConnectionArgs, ApiArgs,
     CheckConnectionArgs, ConnectionCommand, ListConnectionArgs, ShowConnectionArgs,
@@ -16,6 +19,10 @@ use registry_cli_api::{
 use tempfile::TempDir;
 
 const CLIENT_JWK: &str = r#"{"kty":"EC","crv":"P-384","d":"Cp2oq8BnIF6oQ2KWV-1yiR7Mf0rFOuDZ5nvS9E_9HGEODI76izZiDEFQ5kfSwCAg","x":"TH-XDvwYtzdc43QDOiBjfdQZTCx1k9Rz5ELDu_2NS8JWcCv8HlfK0T9rYijDIcAY","y":"eLx0gh3VmCC2DeubmC0CdDgno7aEBYEkz5Legyg-2GoLlFohSIop3zKCGSjhg7Ta","alg":"ES384","kid":"client-key-es384-2026-01"}"#;
+const MUTATION_WORKER: &str = "REGISTRY_CLI_API_MUTATION_WORKER";
+const MUTATION_WORKER_READY: &str = "REGISTRY_CLI_API_MUTATION_WORKER_READY";
+const MUTATION_WORKER_PROJECT: &str = "REGISTRY_CLI_API_MUTATION_WORKER_PROJECT";
+static ENVIRONMENT_LOCK: Mutex<()> = Mutex::new(());
 
 fn write_secret(path: &Path, value: &str) {
     fs::write(path, value).unwrap();
@@ -59,6 +66,198 @@ fn add_args(name: &str, url: String) -> AddConnectionArgs {
         resource: None,
         assertion_audience: None,
     }
+}
+
+fn mutation_worker(mode: &str, config_root: &Path, ready: &Path, project: &Path) -> Child {
+    Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "connection_mutation_process_worker",
+            "--nocapture",
+        ])
+        .env(MUTATION_WORKER, mode)
+        .env(MUTATION_WORKER_READY, ready)
+        .env(MUTATION_WORKER_PROJECT, project)
+        .env("XDG_CONFIG_HOME", config_root)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap()
+}
+
+fn wait_for_worker_ready(paths: &[&Path], timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if paths.iter().all(|path| path.is_file()) {
+            return true;
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    false
+}
+
+fn wait_for_worker(mut child: Child, timeout: Duration) -> Output {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if child.try_wait().unwrap().is_some() {
+            return child.wait_with_output().unwrap();
+        }
+        if Instant::now() >= deadline {
+            child.kill().unwrap();
+            let output = child.wait_with_output().unwrap();
+            panic!(
+                "connection mutation worker timed out\nstdout:\n{}\nstderr:\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[test]
+fn connection_mutation_process_worker() {
+    let Some(mode) = std::env::var_os(MUTATION_WORKER) else {
+        return;
+    };
+    let ready = PathBuf::from(std::env::var_os(MUTATION_WORKER_READY).unwrap());
+    fs::write(ready, b"ready").unwrap();
+    match mode.to_str().unwrap() {
+        "add" => {
+            let mut args = add_args("review", "https://casework.example.test/api".to_owned());
+            args.anonymous = true;
+            run_connection("casework", ConnectionCommand::Add(Box::new(args))).unwrap();
+        }
+        "use" => {
+            let project = PathBuf::from(std::env::var_os(MUTATION_WORKER_PROJECT).unwrap());
+            run_connection(
+                "breg",
+                ConnectionCommand::Use(UseConnectionArgs {
+                    name: "production".to_owned(),
+                    project: Some(project),
+                }),
+            )
+            .unwrap();
+        }
+        _ => panic!("unknown connection mutation worker mode"),
+    }
+}
+
+#[test]
+fn cross_process_add_and_use_preserve_disjoint_store_changes() {
+    let _environment = ENVIRONMENT_LOCK.lock().unwrap();
+    let temporary = TempDir::new().unwrap();
+    let config_root = temporary.path().join("config");
+    std::env::set_var("XDG_CONFIG_HOME", &config_root);
+    let store_path = config_root.join("registrystack/connections.yaml");
+    let lock_path = config_root.join("registrystack/connections.yaml.lock");
+    let project = temporary.path().join("breg-project");
+    fs::create_dir_all(&project).unwrap();
+    fs::write(project.join("registry.yaml"), "marker").unwrap();
+
+    let mut production = add_args("production", "https://registry.example.test/api".to_owned());
+    production.anonymous = true;
+    run_connection("breg", ConnectionCommand::Add(Box::new(production.clone()))).unwrap();
+    let before_refusal = fs::read(&store_path).unwrap();
+    let refusal = run_connection("breg", ConnectionCommand::Add(Box::new(production)))
+        .expect_err("a duplicate add is refused inside the locked transaction");
+    assert_eq!(refusal.exit_code(), 2);
+    assert_eq!(fs::read(&store_path).unwrap(), before_refusal);
+
+    let mut after_refusal = add_args(
+        "recovery",
+        "https://registry-recovery.example.test/api".to_owned(),
+    );
+    after_refusal.anonymous = true;
+    run_connection("breg", ConnectionCommand::Add(Box::new(after_refusal)))
+        .expect("the mutation after a refusal acquires the released lock");
+
+    let lock = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&lock_path)
+        .unwrap();
+    lock.lock_exclusive().unwrap();
+    let add_ready = temporary.path().join("add.ready");
+    let use_ready = temporary.path().join("use.ready");
+    let mut add = mutation_worker("add", &config_root, &add_ready, &project);
+    let mut select = mutation_worker("use", &config_root, &use_ready, &project);
+    let ready = wait_for_worker_ready(
+        &[add_ready.as_path(), use_ready.as_path()],
+        Duration::from_secs(5),
+    );
+    if !ready {
+        fs2::FileExt::unlock(&lock).unwrap();
+        let _ = add.kill();
+        let _ = select.kill();
+        let add = add.wait_with_output().unwrap();
+        let select = select.wait_with_output().unwrap();
+        panic!(
+            "connection mutation workers did not become ready\nadd stdout:\n{}\nadd stderr:\n{}\nuse stdout:\n{}\nuse stderr:\n{}",
+            String::from_utf8_lossy(&add.stdout),
+            String::from_utf8_lossy(&add.stderr),
+            String::from_utf8_lossy(&select.stdout),
+            String::from_utf8_lossy(&select.stderr)
+        );
+    }
+    thread::sleep(Duration::from_millis(200));
+    let add_finished_while_locked = add.try_wait().unwrap().is_some();
+    let use_finished_while_locked = select.try_wait().unwrap().is_some();
+    fs2::FileExt::unlock(&lock).unwrap();
+
+    let add = wait_for_worker(add, Duration::from_secs(5));
+    let select = wait_for_worker(select, Duration::from_secs(5));
+    assert!(
+        !add_finished_while_locked,
+        "add bypassed the held store lock\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&add.stdout),
+        String::from_utf8_lossy(&add.stderr)
+    );
+    assert!(
+        !use_finished_while_locked,
+        "use bypassed the held store lock\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&select.stdout),
+        String::from_utf8_lossy(&select.stderr)
+    );
+    assert!(
+        add.status.success(),
+        "add failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&add.stdout),
+        String::from_utf8_lossy(&add.stderr)
+    );
+    assert!(
+        select.status.success(),
+        "use failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&select.stdout),
+        String::from_utf8_lossy(&select.stderr)
+    );
+    assert!(add.stderr.is_empty());
+    assert!(select.stderr.is_empty());
+
+    run_connection(
+        "breg",
+        ConnectionCommand::Check(CheckConnectionArgs {
+            file: store_path.clone(),
+            deny_warnings: false,
+        }),
+    )
+    .expect("the combined saved store remains valid");
+    let bytes = fs::read(&store_path).unwrap();
+    let saved = registry_platform_yaml::Reader::new(store_path.display().to_string())
+        .scan(&bytes)
+        .unwrap()
+        .expect("saved store is not empty")
+        .to_json_value();
+    assert!(saved["connections"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|entry| { entry["product"] == "casework" && entry["name"] == "review" }));
+    assert!(saved["selections"].as_array().unwrap().iter().any(|entry| {
+        entry["product"] == "breg"
+            && entry["connection"] == "production"
+            && entry["project"] == project.display().to_string()
+    }));
 }
 
 fn request_server(count: usize, status: &str, body: &str) -> (String, mpsc::Receiver<Vec<u8>>) {
@@ -106,6 +305,7 @@ fn request_server(count: usize, status: &str, body: &str) -> (String, mpsc::Rece
 
 #[test]
 fn saved_connections_add_show_use_reread_credentials_and_acquire_private_key_jwt() {
+    let _environment = ENVIRONMENT_LOCK.lock().unwrap();
     let temporary = TempDir::new().unwrap();
     std::env::set_var("XDG_CONFIG_HOME", temporary.path().join("config"));
 

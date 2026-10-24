@@ -18453,6 +18453,37 @@
               "subcommands": []
             }
           ]
+        },
+        {
+          "name": "runtime",
+          "invocation": "evidencectl runtime",
+          "about": "Run the matching Evidence runtime with unchanged arguments and streams; use `runtime -- --help` for its native command tree",
+          "long_about": null,
+          "usage": "evidencectl runtime <RUNTIME_ARGUMENT>...",
+          "arguments": [
+            {
+              "display": "<RUNTIME_ARGUMENT>",
+              "description": "Evidence runtime command and arguments, passed directly to `evidence`",
+              "always_required": true,
+              "repeatable": true,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "options": [
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
         }
       ]
     },

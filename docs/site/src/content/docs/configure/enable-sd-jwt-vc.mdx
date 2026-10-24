@@ -46,8 +46,9 @@ Each output travels as a disclosure, a salted claim the holder may keep or drop.
 To present the fields of a structured value separately, give that output an `sdJwtVc` block. The
 output then appears under `claim`, a unique name of at most 64 characters, and each direct field becomes
 its own disclosure; a nested object stays one. `top-level` is the only `disclosure` value.
-Only a `reviewed-structured-value` output may declare `sdJwtVc`; on any other type `evidencectl
-check` refuses with `output-projection-type`, because a scalar has no fields to split.
+Only a `reviewed-structured-value` output may declare `sdJwtVc`; on any other type
+`rstack evidence check` refuses with `output-projection-type`, because a scalar has no fields to
+split.
 
 {/* Evidence: crates/registry-evidence-authoring/src/project.rs, output-projection-type;
     crates/registry-evidence-authoring/src/validate.rs, validate_sd_jwt_claim_name;
@@ -59,7 +60,7 @@ check` refuses with `output-projection-type`, because a scalar has no fields to 
 `adult-status` declares `subjectBinding: audience-scoped`, and the project checks clean:
 
 ```sh test-cwd="first-evidence-assertion/adult-status"
-evidencectl check . --target local-target.yaml
+rstack evidence check . --target local-target.yaml
 ```
 
 ```text test-excerpt
@@ -78,7 +79,7 @@ Declare [`holder-bound`](../../reference/glossary/#holder-bound) instead, and ke
 ```
 
 ```sh test-exit="1"
-evidencectl check . --target local-target.yaml
+rstack evidence check . --target local-target.yaml
 ```
 
 ```text test-excerpt
@@ -111,7 +112,7 @@ then the `age-checker-service` one:
 ```
 
 ```sh
-evidencectl check . --target local-target.yaml
+rstack evidence check . --target local-target.yaml
 ```
 
 ```text test-expect

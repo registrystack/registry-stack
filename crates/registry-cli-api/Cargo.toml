@@ -17,6 +17,7 @@ schema = [
 
 [dependencies]
 clap.workspace = true
+fs2.workspace = true
 http.workspace = true
 registry-platform-config.workspace = true
 registry-platform-crypto.workspace = true

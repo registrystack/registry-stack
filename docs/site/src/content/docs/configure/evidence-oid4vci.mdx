@@ -23,8 +23,9 @@ import reference from '../../../data/generated/evidence-configuration.json';
 
 If you run Registry Evidence and a wallet must receive its holder-bound
 [SD-JWT VC](../../reference/glossary/#sd-jwt-vc) responses over
-[OID4VCI](../../reference/glossary/#oid4vci), run `evidence-oid4vci` beside it. It speaks the wallet
-protocol Registry Evidence does not, and turns each response into the credential the wallet stores.
+[OID4VCI](../../reference/glossary/#oid4vci), run `rstack evidence oid4vci serve` beside it. The
+wallet-delivery service speaks the protocol Registry Evidence does not, and turns each response
+into the credential the wallet stores.
 It never signs, never holds a holder private key, and adds no Evidence semantics, so
 [how Evidence works](../../explanation/how-evidence-works/) still describes every decision.
 
@@ -39,16 +40,17 @@ It never signs, never holds a holder private key, and adds no Evidence semantics
   [Build and deploy an Evidence project](../../tutorials/build-and-deploy-evidence-project/) leaves
   you.
 - A TLS proxy that publishes the front end's public HTTPS origin.
-- The `evidence-oid4vci` binary, which the
-  [same installer](../../tutorials/first-evidence-assertion/#install-registry-stack)
-  installs beside `evidence` and `evidencectl`, or the image `ghcr.io/registrystack/evidence-oid4vci:<tag>` from the
+- The Evidence component selected by `rstack`, installed through
+  [Install Registry Stack](../../tutorials/first-evidence-assertion/#install-registry-stack).
+  `rstack evidence oid4vci` selects its matching managed wallet-delivery helper. You can instead use
+  the image `ghcr.io/registrystack/evidence-oid4vci:<tag>` from the
   [latest release](https://github.com/registrystack/registry-stack/releases/latest). The image runs
   as the distroless `nonroot` user (uid 65532), exposes port 8090, and runs
   `serve --runtime-config /etc/registry-evidence-oid4vci/runtime.yaml`. Mount the runtime file and
   the token client key read-only; the image has no shell, so your platform owns the probes.
 
 {/* Evidence: crates/registry-evidence-oid4vci/src/metadata.rs, HolderBound;
-    crates/registry-evidencectl/install.sh, evidence-oid4vci;
+    crates/registry-evidencectl/src/oid4vci.rs, HELPER;
     release/docker/Dockerfile.evidence-oid4vci, nonroot, WORKDIR, EXPOSE. */}
 
 ## Write the runtime file
@@ -112,7 +114,7 @@ a schema cannot hold:
 Check the file before the service reads it:
 
 ```sh
-evidence-oid4vci check --runtime-config runtime.yaml
+rstack evidence oid4vci check --runtime-config runtime.yaml
 ```
 
 ```text test-expect
@@ -121,7 +123,7 @@ evidence-oid4vci check --runtime-config runtime.yaml
 
 `check` reads that one file and nothing else, so it does not prove that the client key resolves
 or parses; `inspect` and `serve` prove that when they start. See
-[`evidence-oid4vci check`](../../reference/cli/evidence-oid4vci/check/).
+[`rstack evidence oid4vci check`](../../reference/cli/evidence-oid4vci/check/).
 
 {/* Evidence: crates/registry-evidence-oid4vci/src/main.rs, check. */}
 
@@ -131,7 +133,7 @@ With the key in place, `inspect` loads the service, reads the Registry Evidence'
 prints the metadata it would publish:
 
 ```sh test-skip="needs a reachable Registry Evidence and token issuer"
-evidence-oid4vci inspect --runtime-config runtime.yaml
+rstack evidence oid4vci inspect --runtime-config runtime.yaml
 ```
 
 It prints one JSON document: the profile marker `registry.evidence.oid4vci-profile/v1`, the
@@ -151,11 +153,11 @@ which also lists what the front end does not support.
 Render the HTTP contract your own front end and the wallet will call, then start the service:
 
 ```sh
-evidence-oid4vci openapi --output evidence-oid4vci.openapi.json
+rstack evidence oid4vci openapi --output evidence-oid4vci.openapi.json
 ```
 
 ```sh test-skip="starts a long-running service against a reachable Registry Evidence"
-evidence-oid4vci serve --runtime-config runtime.yaml
+rstack evidence oid4vci serve --runtime-config runtime.yaml
 ```
 
 Your front end creates a credential offer at `/offers` with an access token the `offers` block
@@ -167,8 +169,8 @@ token issuer.
 
 Run exactly one replica: offers, codes, and tokens live in process memory, and a restart
 invalidates every outstanding exchange. A change to the gateway's bundle or batch ceiling needs a
-coordinated restart: stop `evidence-oid4vci`, change or restart the gateway, then start
-`evidence-oid4vci` again so its first catalog comes from the new gateway.
+coordinated restart: stop the wallet-delivery service, change or restart the gateway, then start it
+again so its first catalog comes from the new gateway.
 
 {/* Evidence: crates/registry-evidence-oid4vci/src/main.rs, openapi;
     crates/registry-evidence-oid4vci/src/authorizer.rs;
@@ -249,4 +251,4 @@ credential it stores is the Registry Evidence's SD-JWT VC response, bound to the
 
 - [Registry Evidence security model](../../security/evidence/)
 - [Wallet delivery API reference](../../reference/apis/evidence-oid4vci/)
-- [`evidence-oid4vci` command reference](../../reference/cli/evidence-oid4vci/)
+- [Wallet-delivery command reference](../../reference/cli/evidence-oid4vci/)
