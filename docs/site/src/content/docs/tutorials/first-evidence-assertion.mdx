@@ -27,37 +27,30 @@ test person is an adult, and read `"value": true` from a verified response with 
   level="Local development with synthetic data"
   prerequisites={[
     'Running Docker',
-    'Python 3, curl, tar, and jq',
+    'Python 3, tar, and jq',
+    'The tools required by the release verification procedure',
     'Free loopback ports 8081, 8082, and 18080',
   ]}
 />
 
-## Install evidence and evidencectl
+## Install Registry Stack
 
-`evidence` is Registry Evidence, the service that answers requests, and
-[`evidencectl`](../../reference/cli/evidencectl/) the tool you check and drive a project with. The
-installer checks every download against the release's `SHA256SUMS`, then puts `evidence`,
-`evidencectl`, and `evidence-oid4vci` in `~/.local/bin` together; keep that directory on your
-`PATH`.
+Download one exact `rstack-vX.Y.Z-install.sh` and the verification material from the same Registry
+Stack release. Follow the
+[release verification procedure](https://github.com/registrystack/registry-stack/blob/main/release/VERIFY.md)
+before running the installer. From the verified release directory, install the `evidence`
+component:
 
-{/* Evidence: crates/registry-evidencectl/install.sh, binaries, EVIDENCECTL_INSTALL_DIR, SHA256SUMS. */}
-
-```sh test-skip="downloads a release; the gate uses binaries built from this checkout"
-curl -fsSL https://github.com/registrystack/registry-stack/releases/latest/download/evidencectl-install.sh | bash
+```sh test-skip="uses a downloaded, independently verified release installer"
+tag="vX.Y.Z"
+bash "rstack-${tag}-install.sh" evidence
+rstack evidence --version
 ```
 
-`evidencectl` refuses an `evidence` binary from another release, so check that both report the
-same version:
+The managed installation exposes `rstack` on your `PATH`. The `evidence` component supplies the
+Registry Evidence runtime and its command-line tools from the same release.
 
-```sh
-evidence --version
-evidencectl --version
-```
-
-```text test-expect
-evidence <version>
-evidencectl <version>
-```
+{/* Evidence: crates/registry-rstack/README.md; crates/registry-rstack/install.sh; release/VERIFY.md. */}
 
 ## Get the example project
 
@@ -76,16 +69,16 @@ Generate disposable owner-only keys and secrets:
 
 ```sh
 umask 077
-evidencectl keygen signing --output-dir .generated/secrets
-evidencectl keygen secret --output .generated/secrets/audit-hmac-key
-evidencectl keygen secret --output .generated/secrets/subject-binding-hmac-key
-evidencectl keygen token --output .generated/secrets/synthetic-source-token
+rstack evidence keygen signing --output-dir .generated/secrets
+rstack evidence keygen secret --output .generated/secrets/audit-hmac-key
+rstack evidence keygen secret --output .generated/secrets/subject-binding-hmac-key
+rstack evidence keygen token --output .generated/secrets/synthetic-source-token
 ```
 
 ## Check and explain the project
 
 ```sh
-evidencectl check . --target local-target.yaml
+rstack evidence check . --target local-target.yaml
 ```
 
 ```text test-expect
@@ -99,7 +92,7 @@ Target: local-target.yaml
 and source address. Ask what the project answers:
 
 ```sh
-evidencectl explain . --target local-target.yaml
+rstack evidence explain . --target local-target.yaml
 ```
 
 ```text test-excerpt
@@ -115,7 +108,7 @@ and may return one output, the Boolean `adult`. The report goes on to three othe
 Run the fixture cases offline:
 
 ```sh
-evidencectl test . --target local-target.yaml
+rstack evidence test . --target local-target.yaml
 ```
 
 ```text test-excerpt
@@ -125,7 +118,7 @@ PASS: fixtures/adult-status.yaml (10 cases)
 Register the caller you will send the request as:
 
 ```sh
-evidencectl access client add tutorial-client \
+rstack evidence access client add tutorial-client \
   --access-profile standalone-service \
   --generate-local-key
 ```
@@ -157,7 +150,7 @@ Port `18080` avoids a clash with any service on the default `8080`. `dev start` 
 Docker; the first start pulls its image.
 
 ```sh
-evidencectl dev start . \
+rstack evidence dev start . \
   --target local-target.yaml \
   --evidence-port 18080 \
   --issuer-port 8082
@@ -178,7 +171,7 @@ If a port is in use, stop what holds it and start again.
 what a valid answer must match before any response exists.
 
 ```sh
-evidencectl request prepare adult-status \
+rstack evidence request prepare adult-status \
   --client tutorial-client \
   --purpose age-check \
   --subject subject:record-id=adult \
@@ -191,23 +184,21 @@ Prepared verification context: .evidence/requests/adult-status/verification.json
 Prepared authorization: .evidence/requests/adult-status/authorization.curl
 ```
 
-Send it. `authorization.curl` holds the token; keep it out of logs.
+Send the prepared JSON as `tutorial-client`. The API command obtains a fresh token in memory,
+uses `POST` because `--input` is present, and writes the signed response to the named file.
 
 ```sh
-curl --silent --show-error --fail-with-body \
-  --config .evidence/requests/adult-status/authorization.curl \
-  --request POST \
-  --url http://127.0.0.1:18080/v1/evidence \
-  --header 'Content-Type: application/json' \
-  --header 'Accept: application/jose+json' \
-  --data-binary @.evidence/requests/adult-status/request.json \
+rstack evidence api /v1/evidence \
+  --client tutorial-client \
+  --input .evidence/requests/adult-status/request.json \
+  --accept application/jose+json \
   --output adult-status.jws.json
 ```
 
 Verify the response offline against what `request prepare` fixed:
 
 ```sh
-evidencectl verify adult-status.jws.json \
+rstack evidence verify adult-status.jws.json \
   --context .evidence/requests/adult-status/verification.json \
   --output adult-status.verified.json
 ```
@@ -239,13 +230,15 @@ for the `adult` output's concept. The source holds a birth date for record `adul
 assertion carries only `true`.
 
 {/* Evidence: crates/registry-evidencectl/src/{request,dev,verify}.rs, prepare_local, obtain_issuer_token,
-    rename_noreplace; products/evidence/examples/standalone/serve-source.py, birth_date. */}
+    rename_noreplace; crates/registry-cli-api/src/api.rs, run_api, request_method;
+    products/evidence/examples/standalone/serve-source.py, birth_date. */}
 
 ## Leave it running
 
 The next tutorial continues with this project, with the source and Registry Evidence still
-running, so leave both as they are. When you are finished with them, run `evidencectl dev stop .`
-and then `evidencectl dev clean .` in this directory, and press `Ctrl+C` in the source's terminal.
+running, so leave both as they are. When you are finished with them, run
+`rstack evidence dev stop .` and then `rstack evidence dev clean .` in this directory, and press
+`Ctrl+C` in the source's terminal.
 
 ## Next
 

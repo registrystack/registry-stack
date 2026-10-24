@@ -189,6 +189,13 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Send one raw HTTP request to a configured or ready local Base Registry Engine.
+    Api(Box<registry_cli_api::ApiArgs>),
+    /// Manage named Base Registry Engine API connections.
+    Connection {
+        #[command(subcommand)]
+        command: registry_cli_api::ConnectionCommand,
+    },
     /// Run the production Base Registry Engine service with the selected runtime.
     Serve(ServeArgs),
     /// Operate the optional citizen-facing MCP gateway.
@@ -2596,6 +2603,51 @@ where
 
     let format = cli.format;
     let result = match cli.command {
+        Command::Api(args) => {
+            if format_explicit {
+                let _ = writeln!(
+                    stderr,
+                    "error: --format is not supported by api because the HTTP response is written to stdout unchanged"
+                );
+                return ExitCode::from(USAGE_EXIT);
+            }
+            return match registry_cli_api::run_api("breg", *args, dev::local_api_connection) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(error) => {
+                    let _ = writeln!(stderr, "error: {error}");
+                    ExitCode::from(error.exit_code())
+                }
+            };
+        }
+        Command::Connection { command } => {
+            if let registry_cli_api::ConnectionCommand::Check(args) = &command {
+                return match registry_cli_api::run_connection_check(
+                    &args.file,
+                    matches!(format, OutputFormat::Json),
+                    args.deny_warnings,
+                ) {
+                    Ok(code) => ExitCode::from(code),
+                    Err(error) => {
+                        let _ = writeln!(stderr, "error: {error}");
+                        ExitCode::from(error.exit_code())
+                    }
+                };
+            }
+            if format_explicit {
+                let _ = writeln!(
+                    stderr,
+                    "error: --format is not supported by connection; remove it and retry"
+                );
+                return ExitCode::from(USAGE_EXIT);
+            }
+            return match registry_cli_api::run_connection("breg", command) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(error) => {
+                    let _ = writeln!(stderr, "error: {error}");
+                    ExitCode::from(error.exit_code())
+                }
+            };
+        }
         Command::Serve(args) => {
             return serve(args, format, format_explicit, stdout, stderr);
         }
@@ -15083,6 +15135,8 @@ mod tests {
         assert_eq!(
             names,
             [
+                "api",
+                "connection",
                 "serve",
                 "mcp",
                 "review",

@@ -155,6 +155,113 @@ fn init_clients_bind_the_standalone_template() {
 }
 
 #[test]
+fn api_client_selects_the_exact_retained_profile_and_refuses_unknown_clients() {
+    let root = crate::canonical_tempdir();
+    let project = fs::canonicalize(standalone(root.path())).unwrap();
+    let mut state = session(&project);
+    state.clients = vec![
+        ReportedClient {
+            id: "staff".to_owned(),
+            profile: "staff-reviewers".to_owned(),
+            role: CaseworkRole::Staff,
+            principal: "dev-staff".to_owned(),
+        },
+        ReportedClient {
+            id: "requester".to_owned(),
+            profile: "trusted-requester".to_owned(),
+            role: CaseworkRole::Requester,
+            principal: "dev-requester".to_owned(),
+        },
+    ];
+
+    parent_directory(&project).unwrap();
+    private::directory(&state.root()).unwrap();
+    private::create(
+        &state.root().join("clients.json"),
+        STANDALONE_DEV_CLIENTS.as_bytes(),
+    )
+    .unwrap();
+    assert_eq!(
+        api_client_profile(&state, "staff").unwrap(),
+        Some("staff-reviewers")
+    );
+    assert_eq!(
+        api_client_profile(&state, "requester").unwrap(),
+        Some("trusted-requester")
+    );
+    let refusal = api_client_profile(&state, "stranger").unwrap_err();
+    assert!(
+        refusal.to_string().contains("not a local Casework client"),
+        "{refusal:#}"
+    );
+}
+
+#[test]
+fn api_connection_sends_the_bearer_profiles_and_writes_only_response_bytes() {
+    use std::io::{Read as _, Write as _};
+
+    let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let address = listener.local_addr().unwrap();
+    let (sent, received) = mpsc::channel();
+    thread::spawn(move || {
+        let (mut socket, _) = listener.accept().unwrap();
+        let mut request = Vec::new();
+        let mut buffer = [0_u8; 2048];
+        loop {
+            let count = socket.read(&mut buffer).unwrap();
+            request.extend_from_slice(&buffer[..count]);
+            if count == 0 || request.windows(4).any(|bytes| bytes == b"\r\n\r\n") {
+                break;
+            }
+        }
+        sent.send(request).unwrap();
+        socket
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 8\r\nConnection: close\r\n\r\nraw-body")
+            .unwrap();
+    });
+
+    let root = crate::canonical_tempdir();
+    let project = standalone(root.path());
+    let output = root.path().join("response.bin");
+    registry_cli_api::run_api(
+        "casework",
+        registry_cli_api::ApiArgs {
+            path: "/ready".to_owned(),
+            project: Some(project),
+            client: Some("staff".to_owned()),
+            connection: None,
+            url: None,
+            token_file: None,
+            ca_file: None,
+            method: None,
+            input: None,
+            header: Vec::new(),
+            accept: None,
+            output: Some(output.clone()),
+            include: false,
+            idempotency_key: None,
+            if_match: None,
+        },
+        |_, _| {
+            api_connection_with_credentials(
+                format!("http://{address}"),
+                Zeroizing::new("canary-token".to_owned()),
+                Some("staff-reviewers"),
+            )
+            .map_err(|error| error.to_string())
+        },
+    )
+    .unwrap();
+
+    let request = String::from_utf8(received.recv().unwrap()).unwrap();
+    let request = request.to_ascii_lowercase();
+    assert!(request.contains("authorization: bearer canary-token\r\n"));
+    assert!(request.contains("registry-casework-profile: staff-reviewers\r\n"));
+    assert!(request.contains("registry-review-profile: staff-reviewers\r\n"));
+    assert_eq!(fs::read(output).unwrap(), b"raw-body");
+}
+
+#[test]
 fn clients_file_refuses_unknown_keys_and_repeated_identity() {
     let unknown = one_staff("").replace(
         "scopes: [casework:staff]\n",
@@ -3392,6 +3499,42 @@ fn unsafe_token_clients_are_refused_without_effects() {
             .to_string()
             .contains("bounded local client"));
     }
+}
+
+#[test]
+fn local_api_refuses_an_integration_client_bound_to_another_resource() {
+    let temp = crate::canonical_tempdir();
+    let project = fs::canonicalize(standalone(temp.path())).unwrap();
+    let mut state = session(&project);
+    state.clients = vec![ReportedClient {
+        id: "staff".to_owned(),
+        profile: "staff".to_owned(),
+        role: CaseworkRole::Staff,
+        principal: config::principal("staff"),
+    }];
+    let root = state.root();
+    private::directory(&project.join(".casework")).unwrap();
+    private::directory(&root).unwrap();
+    let mut clients = accepted(STANDALONE_DEV_CLIENTS.as_bytes());
+    clients.integrations = Some(
+        serde_json::from_value(json!({
+            "resource":"urn:records:external",
+            "serviceClients":[{"id":"source-reader","scopes":["records:get"]}]
+        }))
+        .unwrap(),
+    );
+    private::create(
+        &root.join("clients.json"),
+        &serde_json::to_vec(&clients).unwrap(),
+    )
+    .unwrap();
+
+    assert_eq!(api_client_profile(&state, "staff").unwrap(), Some("staff"));
+    let refusal = api_client_profile(&state, "source-reader")
+        .unwrap_err()
+        .to_string();
+    assert!(refusal.contains("local Casework client"), "{refusal}");
+    assert!(refusal.contains("another service"), "{refusal}");
 }
 
 #[test]

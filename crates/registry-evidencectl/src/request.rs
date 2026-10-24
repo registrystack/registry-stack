@@ -638,6 +638,27 @@ fn resolve_request_client(ready: &ReadyDevState, client_id: Option<&str>) -> Res
     }
 }
 
+/// Resolve one active local Evidence client for the raw API command. The
+/// short-lived bearer remains in memory and the command does not create the
+/// reusable tutorial header written by `evidencectl dev token`.
+pub(crate) fn local_api_connection(
+    project: &Path,
+    client_id: &str,
+) -> std::result::Result<registry_cli_api::LocalConnection, String> {
+    local_api_connection_inner(project, client_id).map_err(|error| format!("{error:#}"))
+}
+
+fn local_api_connection_inner(
+    project: &Path,
+    client_id: &str,
+) -> Result<registry_cli_api::LocalConnection> {
+    let ready = dev::load_ready_state(project)?;
+    let client = resolve_request_client(&ready, Some(client_id))?;
+    let token = dev::obtain_issuer_token(&ready, &client.client_id, &client.private_key_path)?;
+    registry_cli_api::LocalConnection::bearer(ready.evidence_origin, token)
+        .map_err(|error| anyhow!(error.to_string()))
+}
+
 fn validate_closed_inputs<'a>(
     ready: &'a ReadyDevState,
     args: &PrepareArgs,

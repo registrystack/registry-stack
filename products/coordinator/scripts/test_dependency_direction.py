@@ -21,6 +21,7 @@ NAMES = {
     "client-py": "registry-coordinator-client-py",
     "stack-client": "registry-stack-client",
     "cli-docs": "registry-cli-docs",
+    "cli-api": "registry-cli-api",
     "breg": "registry-breg",
     "breg-client": "registry-breg-client",
     "bregctl": "registry-bregctl",
@@ -62,6 +63,7 @@ INTENDED = {
     "client-py": ["client", "serde"],
     "stack-client": ["breg-client", "messaging-client", "scheduling-client", "client"],
     "cli-docs": ["runtime", "breg", "bregctl", "messaging", "scheduling", "schedulingctl"],
+    "cli-api": ["platform"],
     "breg": ["record", "platform"],
     "breg-client": ["record", "platform"],
     "bregctl": ["breg"],
@@ -114,6 +116,14 @@ def failures(**changes: list) -> str:
 
 
 class RuntimeTests(unittest.TestCase):
+    def test_shared_cli_support_is_accepted_without_product_authority(self):
+        self.assertEqual(failures(runtime=[*INTENDED["runtime"], "cli-api"]), "")
+        found = failures(
+            runtime=[*INTENDED["runtime"], "cli-api"],
+            cli_api=["bregctl"],
+        )
+        self.assertIn("registry-bregctl", found)
+
     def test_intended_direction_is_accepted(self):
         self.assertEqual(MODULE.violations(metadata()), [])
 

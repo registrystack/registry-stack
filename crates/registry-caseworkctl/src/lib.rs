@@ -106,6 +106,13 @@ enum Command {
     },
     /// Start, stop and inspect a retained standalone local session.
     Dev(Box<dev::DevArgs>),
+    /// Call the Casework HTTP API with a saved connection or retained local client.
+    Api(Box<registry_cli_api::ApiArgs>),
+    /// Manage saved Casework API connections.
+    Connection {
+        #[command(subcommand)]
+        command: registry_cli_api::ConnectionCommand,
+    },
     #[command(name = "__dev-supervisor", hide = true)]
     DevSupervisor(dev::SupervisorArgs),
     #[command(name = "__dev-service-guard", hide = true)]
@@ -273,6 +280,10 @@ pub fn main_entry_from(
     let Cli { format, command } = cli;
     let command = match command {
         Command::Serve(args) => return serve(args, format, format_supplied, stdout, stderr),
+        Command::Api(args) => return api(*args, format_supplied, stderr),
+        Command::Connection { command } => {
+            return connection(command, format, format_supplied, stderr);
+        }
         command => command,
     };
     let kind = command_kind(&command);
@@ -352,6 +363,8 @@ fn command_kind(command: &Command) -> CommandKind {
             | Command::Apply { .. }
             | Command::Status(_)
             | Command::Dev(_)
+            | Command::Api(_)
+            | Command::Connection { .. }
     ) {
         CommandKind::Operational
     } else {
@@ -482,6 +495,8 @@ impl Command {
                 "CaseworkDevTokenReport" => "dev-token",
                 _ => "dev",
             },
+            Self::Api(_) => "api",
+            Self::Connection { .. } => "connection",
             Self::DevSupervisor(_) | Self::DevServiceGuard(_) => "internal",
         }
     }
@@ -588,11 +603,71 @@ fn run(command: Command) -> Result<Value> {
             backup_reference,
         } => project::apply(&runtime_config, operator_reference, backup_reference),
         Command::Dev(args) => dev::run(*args),
+        Command::Api(_) | Command::Connection { .. } => {
+            unreachable!("raw API commands bypass report dispatch")
+        }
         Command::DevSupervisor(args) => {
             dev::run_supervisor(args)?;
             Ok(json!({"ok":true}))
         }
         Command::DevServiceGuard(args) => Ok(json!({"ok":dev::run_service_guard(args)?})),
+    }
+}
+
+fn api(args: registry_cli_api::ApiArgs, format_supplied: bool, stderr: &mut dyn Write) -> ExitCode {
+    if format_supplied {
+        let _ = writeln!(
+            stderr,
+            "error: --format is not supported by api because the HTTP response is written to stdout unchanged"
+        );
+        return ExitCode::from(report::USAGE_EXIT);
+    }
+    match registry_cli_api::run_api_with_profile_headers(
+        "casework",
+        args,
+        dev::api_connection,
+        &["Registry-Casework-Profile", "Registry-Review-Profile"],
+    ) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            let _ = writeln!(stderr, "error: {error}");
+            ExitCode::from(error.exit_code())
+        }
+    }
+}
+
+fn connection(
+    command: registry_cli_api::ConnectionCommand,
+    format: OutputFormat,
+    format_supplied: bool,
+    stderr: &mut dyn Write,
+) -> ExitCode {
+    if let registry_cli_api::ConnectionCommand::Check(args) = &command {
+        return match registry_cli_api::run_connection_check(
+            &args.file,
+            matches!(format, OutputFormat::Json),
+            args.deny_warnings,
+        ) {
+            Ok(code) => ExitCode::from(code),
+            Err(error) => {
+                let _ = writeln!(stderr, "error: {error}");
+                ExitCode::from(error.exit_code())
+            }
+        };
+    }
+    if format_supplied {
+        let _ = writeln!(
+            stderr,
+            "error: --format is not supported by connection; remove it and retry"
+        );
+        return ExitCode::from(report::USAGE_EXIT);
+    }
+    match registry_cli_api::run_connection("casework", command) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            let _ = writeln!(stderr, "error: {error}");
+            ExitCode::from(error.exit_code())
+        }
     }
 }
 
@@ -828,6 +903,57 @@ mod tests {
         for name in ["source", "attempt", "retention", "simulate"] {
             assert!(Cli::try_parse_from(["caseworkctl", name]).is_err());
         }
+    }
+    #[test]
+    fn api_and_connection_commands_are_exposed() {
+        assert!(Cli::try_parse_from([
+            "caseworkctl",
+            "api",
+            "/ready",
+            "--project",
+            "project",
+            "--client",
+            "staff",
+        ])
+        .is_ok());
+        assert!(Cli::try_parse_from([
+            "caseworkctl",
+            "connection",
+            "add",
+            "staging",
+            "--url",
+            "https://casework.example.test",
+            "--anonymous",
+            "--access-profile",
+            "staff-reviewers",
+        ])
+        .is_ok());
+        assert!(Cli::try_parse_from(["caseworkctl", "connection", "list",]).is_ok());
+    }
+    #[test]
+    fn api_refuses_report_format_before_resolving_a_connection() {
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let exit = main_entry_from(
+            [
+                OsString::from("caseworkctl"),
+                OsString::from("--format=json"),
+                OsString::from("api"),
+                OsString::from("/ready"),
+                OsString::from("--url"),
+                OsString::from("http://127.0.0.1:9"),
+            ],
+            &mut stdout,
+            &mut stderr,
+        );
+        assert_eq!(exit, ExitCode::from(report::USAGE_EXIT));
+        assert!(stdout.is_empty());
+        let stderr = String::from_utf8(stderr).unwrap();
+        assert!(
+            stderr.contains("HTTP response is written to stdout unchanged"),
+            "{stderr}"
+        );
+        assert!(!stderr.contains("\"diagnostics\""), "{stderr}");
     }
     #[test]
     fn package_requires_one_output_mode_before_project_io() {

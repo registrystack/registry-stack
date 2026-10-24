@@ -5214,6 +5214,42 @@
       }
     },
     {
+      "uri": "https://id.registrystack.org/schemas/platform/cli-connection-check-report/cli-connection-check-report.v1alpha1.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "platform",
+      "title": "Registry Stack CLI connection check report",
+      "description": "Product-scoped CLI API connections and project selections.",
+      "source": {
+        "path": "crates/registry-cli-api/src/schema.rs",
+        "sha256": "78e2cceb547c9691ee7636d8d3527aebde5a54570fa69c2fbced8b3583f561b1"
+      },
+      "artifact": {
+        "path": "crates/registry-cli-api/schema/connection-check-report.schema.json",
+        "sha256": "e9cd16517d62a4297b7798e68ce7cb79a8d7fd11c408cc54ddebe5dbf309c0ac",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/schemas/platform/cli-connections/cli-connections.v1alpha1.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "platform",
+      "title": "Registry Stack CLI saved connections",
+      "description": "Product-scoped CLI API connections and project selections.",
+      "source": {
+        "path": "crates/registry-cli-api/src/schema.rs",
+        "sha256": "78e2cceb547c9691ee7636d8d3527aebde5a54570fa69c2fbced8b3583f561b1"
+      },
+      "artifact": {
+        "path": "crates/registry-cli-api/schema/connections.schema.json",
+        "sha256": "5ea2b8f0276de7b574efc392e72672179ce8e1ccea923dc62f10cbb115274099",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
       "uri": "https://id.registrystack.org/schemas/platform/task-connection/task-connection.v1alpha1.schema.json",
       "kind": "schema",
       "status": "active",

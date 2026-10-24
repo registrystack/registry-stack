@@ -36,6 +36,7 @@ registry-language-server.workspace = true
 registry-platform-audit.workspace = true
 registry-platform-buildinfo.workspace = true
 registry-platform-config.workspace = true
+registry-cli-api.workspace = true
 registry-cli-reference.workspace = true
 registry-platform-crypto.workspace = true
 registry-platform-yaml.workspace = true

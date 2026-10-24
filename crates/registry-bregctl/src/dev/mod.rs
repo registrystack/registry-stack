@@ -528,6 +528,67 @@ fn fresh_token(project_path: &Path, client: &str) -> Result<Value> {
     Ok(json!({"ok":true,"command":"dev token","headerFile":output}))
 }
 
+/// Resolve one ready local BReg client for the raw API command without
+/// materializing its bearer token or authorization header on disk.
+pub(crate) fn local_api_connection(
+    project_path: &Path,
+    client: &str,
+) -> std::result::Result<registry_cli_api::LocalConnection, String> {
+    local_api_connection_inner(project_path, client).map_err(|error| format!("{error:#}"))
+}
+
+fn local_api_connection_inner(
+    project_path: &Path,
+    client: &str,
+) -> Result<registry_cli_api::LocalConnection> {
+    if !config::identifier(client) {
+        bail!("a registered bounded local client ID is required");
+    }
+    let project = project(project_path)?;
+    private::check(&project.join(".breg"), true)?;
+    let root = project.join(".breg/dev");
+    let state = read_state(&root)?;
+    if !matches!(state.status, Status::Ready)
+        || !control(&root, "status").is_ok_and(|status| status == "ready")
+    {
+        bail!("the local development session must be ready before calling its API");
+    }
+    let clients = retained_clients(&root)?;
+    let configured = local_breg_client(&state, &clients, client)?;
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("cannot build the dev token runtime")?;
+    let token = runtime.block_on(obtain_token_async_with_claims(
+        &state,
+        client,
+        client,
+        configured.scopes.clone(),
+    ))?;
+    registry_cli_api::LocalConnection::bearer(state.breg_origin(), token)
+        .map_err(|error| anyhow::anyhow!(error.to_string()))
+}
+
+fn local_breg_client<'a>(
+    state: &State,
+    clients: &'a Clients,
+    client: &str,
+) -> Result<&'a config::Client> {
+    let configured = clients
+        .clients
+        .iter()
+        .find(|configured| configured.id == client)
+        .context("the local client is not registered")?;
+    if configured.access_profiles.is_empty() && !configured.allow_breg_access {
+        bail!("the local client is not admitted to the Base Registry Engine");
+    }
+    if config::client_resource(state, clients, client) != state.audience() {
+        bail!("the local client is bound to an external resource, not this Base Registry Engine");
+    }
+    Ok(configured)
+}
+
 fn project(path: &Path) -> Result<PathBuf> {
     if !fs::symlink_metadata(path)?.is_dir() {
         bail!("project must be an ordinary existing directory");
@@ -2710,6 +2771,23 @@ async fn token_async_with_claims(
     scopes: Vec<String>,
     output_id: &str,
 ) -> Result<()> {
+    let text =
+        obtain_token_async_with_claims(state, credential_id, token_client_id, scopes).await?;
+    private::replace(
+        &state
+            .root()
+            .join("secrets")
+            .join(format!("{output_id}-token")),
+        text.as_bytes(),
+    )
+}
+
+async fn obtain_token_async_with_claims(
+    state: &State,
+    credential_id: &str,
+    token_client_id: &str,
+    scopes: Vec<String>,
+) -> Result<Zeroizing<String>> {
     use registry_platform_httputil::TokenProvider;
 
     let root = state.root();
@@ -2744,19 +2822,18 @@ async fn token_async_with_claims(
         .await
         .map_err(|error| anyhow::anyhow!("the dev issuer declined to issue a token: {error}"))?;
     let header = value.authorization_header_value();
-    let text = header
-        .to_str()
-        .context("the issued credential is not header-safe")?
-        .strip_prefix("Bearer ")
-        .unwrap_or_default()
-        .to_owned();
+    let text = Zeroizing::new(
+        header
+            .to_str()
+            .context("the issued credential is not header-safe")?
+            .strip_prefix("Bearer ")
+            .unwrap_or_default()
+            .to_owned(),
+    );
     if text.len() > 65536 || text.split('.').count() != 3 {
         bail!("the dev issuer returned an invalid compact token");
     }
-    private::replace(
-        &root.join("secrets").join(format!("{output_id}-token")),
-        text.as_bytes(),
-    )
+    Ok(text)
 }
 
 fn dev_token_provider(

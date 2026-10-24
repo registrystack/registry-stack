@@ -81,6 +81,13 @@ impl ListState {
 }
 #[derive(Subcommand)]
 enum Command {
+    /// Send one raw HTTP request using a saved Coordinator connection.
+    Api(Box<registry_cli_api::ApiArgs>),
+    /// Manage named Coordinator API connections.
+    Connection {
+        #[command(subcommand)]
+        command: registry_cli_api::ConnectionCommand,
+    },
     /// Run the production Coordinator service with the selected runtime.
     Serve {
         /// Coordinator runtime executable for an unmanaged installation.
@@ -318,6 +325,8 @@ enum Command {
 impl Command {
     fn name(&self) -> &'static str {
         match self {
+            Self::Api(_) => "api",
+            Self::Connection { .. } => "connection",
             Self::Serve { .. } => "serve",
             Self::Init { .. } => "init",
             Self::Check { .. } => "check",
@@ -755,6 +764,9 @@ fn refusal_advice(problem: ProblemCode) -> Option<&'static str> {
 }
 async fn execute(cli: &Cli) -> Result<Value> {
     match &cli.command {
+        Command::Api(_) | Command::Connection { .. } => {
+            unreachable!("API commands handle their output before report dispatch")
+        }
         Command::Serve { .. } => {
             unreachable!("serve replaces the ctl process before report dispatch")
         }
@@ -1074,6 +1086,53 @@ pub async fn run() -> std::process::ExitCode {
     if let Command::Serve { coordinator_bin } = &cli.command {
         return serve(&cli, coordinator_bin.as_deref(), format_requested);
     }
+    let cli = match cli {
+        Cli {
+            command: Command::Api(args),
+            ..
+        } => {
+            if format_requested {
+                eprintln!("error: --format does not apply to api; the HTTP response bytes are written unchanged");
+                return std::process::ExitCode::from(2);
+            }
+            return match tokio::task::spawn_blocking(move || {
+                registry_cli_api::run_api("coordinator", *args, |_, _| {
+                    Err("Coordinator has no retained local caller session; run rstack coordinator connection add NAME and select it with --connection NAME".to_owned())
+                })
+            }).await {
+                Ok(result) => api_result(result),
+                Err(_) => {
+                    eprintln!("error: the API request worker could not complete");
+                    std::process::ExitCode::from(3)
+                }
+            };
+        }
+        Cli {
+            command: Command::Connection { command },
+            format,
+            ..
+        } => {
+            if let registry_cli_api::ConnectionCommand::Check(args) = &command {
+                return match registry_cli_api::run_connection_check(
+                    &args.file,
+                    matches!(format, Format::Json),
+                    args.deny_warnings,
+                ) {
+                    Ok(code) => std::process::ExitCode::from(code),
+                    Err(error) => {
+                        eprintln!("error: {error}");
+                        std::process::ExitCode::from(error.exit_code())
+                    }
+                };
+            }
+            if format_requested {
+                eprintln!("error: --format does not apply to connection; remove it and retry");
+                return std::process::ExitCode::from(2);
+            }
+            return api_result(registry_cli_api::run_connection("coordinator", command));
+        }
+        cli => cli,
+    };
     match execute(&cli).await {
         Ok(value) => {
             let tested = matches!(cli.command, Command::Test { .. });
@@ -1111,6 +1170,18 @@ pub async fn run() -> std::process::ExitCode {
                 }
             }
             std::process::ExitCode::from(e.exit_code)
+        }
+    }
+}
+
+fn api_result(
+    result: std::result::Result<(), registry_cli_api::ApiError>,
+) -> std::process::ExitCode {
+    match result {
+        Ok(()) => std::process::ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("error: {error}");
+            std::process::ExitCode::from(error.exit_code())
         }
     }
 }

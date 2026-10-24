@@ -71,6 +71,13 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Send one raw HTTP request to a configured or ready local Evidence service.
+    Api(Box<registry_cli_api::ApiArgs>),
+    /// Manage named Evidence API connections.
+    Connection {
+        #[command(subcommand)]
+        command: registry_cli_api::ConnectionCommand,
+    },
     /// Create a new editable Evidence project.
     Init(scaffold::NewArgs),
     /// Generate typed project outputs and Requirement URI names.
@@ -276,6 +283,10 @@ pub fn command() -> clap::Command {
 /// command is refused before dispatch, so none of their handlers can write
 /// files, bind listeners, or emit prose for a caller expecting JSON.
 const HUMAN_ONLY_COMMANDS: &[&[&str]] = &[
+    &["connection", "add"],
+    &["connection", "list"],
+    &["connection", "show"],
+    &["connection", "use"],
     &["client", "profile", "create"],
     &["client", "contracts", "fetch"],
     &["source", "mock", "serve"],
@@ -428,6 +439,7 @@ fn run_entry() -> ExitCode {
         }
     };
     let command_path = command_path(&matches);
+    let format_explicit = report_format_requested(&arguments);
     let junit = cli.output_format == CliFormat::Junit;
     if junit
         && (legacy_json_requested(&cli.command)
@@ -464,6 +476,48 @@ fn run_entry() -> ExitCode {
         }
     }
     let result = match cli.command {
+        Command::Api(args) => {
+            if format_explicit {
+                eprintln!(
+                    "error: --format is not supported by api because the HTTP response is written to stdout unchanged"
+                );
+                return ExitCode::from(report::USAGE_EXIT);
+            }
+            return match registry_cli_api::run_api("evidence", *args, request::local_api_connection)
+            {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(error) => {
+                    eprintln!("error: {error}");
+                    ExitCode::from(error.exit_code())
+                }
+            };
+        }
+        Command::Connection { command } => {
+            if let registry_cli_api::ConnectionCommand::Check(args) = &command {
+                return match registry_cli_api::run_connection_check(
+                    &args.file,
+                    matches!(format, OutputFormat::Json),
+                    args.deny_warnings,
+                ) {
+                    Ok(code) => ExitCode::from(code),
+                    Err(error) => {
+                        eprintln!("error: {error}");
+                        ExitCode::from(error.exit_code())
+                    }
+                };
+            }
+            if format_explicit {
+                eprintln!("error: --format is not supported by connection; remove it and retry");
+                return ExitCode::from(report::USAGE_EXIT);
+            }
+            return match registry_cli_api::run_connection("evidence", command) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(error) => {
+                    eprintln!("error: {error}");
+                    ExitCode::from(error.exit_code())
+                }
+            };
+        }
         Command::Init(args) => {
             let artifact = args.directory.display().to_string();
             safe_command(
@@ -770,6 +824,19 @@ fn requested_output_format(arguments: &[OsString]) -> OutputFormat {
     } else {
         OutputFormat::Human
     }
+}
+
+fn report_format_requested(arguments: &[OsString]) -> bool {
+    arguments
+        .iter()
+        .skip(1)
+        .take_while(|argument| *argument != "--")
+        .any(|argument| {
+            argument == "--format"
+                || argument
+                    .to_str()
+                    .is_some_and(|value| value.starts_with("--format="))
+        })
 }
 
 /// Whether a command's legacy `--json` flag asked for JSON output. The flag
@@ -1353,6 +1420,7 @@ mod tests {
 
     /// Commands that answer `--format json` with a JSON report.
     const JSON_REPORTING_COMMANDS: &[&str] = &[
+        "connection check",
         "init",
         "check",
         "explain",
@@ -1393,7 +1461,8 @@ mod tests {
     ];
 
     /// Protocol and artifact output, or a foreground service without a report.
-    const NON_REPORT_COMMANDS: &[&str] = &["oid4vci inspect", "oid4vci openapi", "oid4vci serve"];
+    const NON_REPORT_COMMANDS: &[&str] =
+        &["api", "oid4vci inspect", "oid4vci openapi", "oid4vci serve"];
 
     fn leaf_paths(command: &clap::Command, prefix: &mut Vec<String>, leaves: &mut Vec<String>) {
         let subcommands: Vec<_> = command
@@ -1963,6 +2032,8 @@ mod tests {
         // outside the shared phrase below.
         let own_phrase = |path: &str| {
             [
+                "evidencectl api",
+                "evidencectl connection use",
                 "evidencectl check",
                 "evidencectl explain",
                 "evidencectl test",
