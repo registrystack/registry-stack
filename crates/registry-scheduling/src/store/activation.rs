@@ -698,14 +698,17 @@ async fn split_weakness_in(
     let runtime = weakness.runtime_role;
     let schema = weakness.schema;
     let migration = weakness.migration_role;
-    // Moving ownership takes the runtime role's grants on the object with
-    // it, so only that fix needs an apply to reissue them.
+    // Moving ownership takes the runtime role's grants on the corrected
+    // objects with it, so only that fix needs an apply to reissue them.
     const THEN_APPLY: &str =
         "then run `schedulingctl apply --runtime-config FILE` to reissue the runtime role's grants";
     let (cause, fix, then) = match weakness.cause {
-        platform_activation::AuthorityCause::OwnedObject { owner } => (
-            format!("{owner} owns an object in the Scheduling schema {schema}"),
-            format!("REASSIGN OWNED BY {owner} TO {migration}"),
+        platform_activation::AuthorityCause::OwnedObjects { owners, statements } => (
+            format!(
+                "{} own Scheduling objects in the schema {schema}",
+                owners.join(", ")
+            ),
+            statements.join("; "),
             THEN_APPLY,
         ),
         platform_activation::AuthorityCause::TriggerPrivilege { relation, grantee } => (

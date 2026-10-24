@@ -1046,15 +1046,15 @@ async fn observe_role(
 
 /// The SQL statements that take away `role`'s authority to reach the
 /// activation ledger through code that runs as the migration role, or this
-/// connection's role's when none is given: reassign every Casework relation
-/// or function a role it belongs to owns, revoke every CREATE grant on the
-/// schema and every TRIGGER grant on a Casework table or view that reaches
-/// it, `PUBLIC`'s included, and drop every trigger on a Casework table that
-/// no Casework migration creates. `role` is measured against this
+/// connection's role's when none is given: move each Casework schema object a
+/// role it belongs to owns back to the migration role, revoke every CREATE
+/// grant on the schema and every TRIGGER grant on a Casework table or view
+/// that reaches it, `PUBLIC`'s included, and drop every trigger on a Casework
+/// table that no Casework migration creates. `role` is measured against this
 /// connection's role, the migration role; without one it is measured
 /// against the ledger's owner. Empty when there is none of these, and for a
-/// superuser or a member of the migration role or the schema owner, whose
-/// authority no reassignment, revoke, or drop takes away.
+/// superuser or a member of the migration role, whose authority no owner
+/// correction, revoke, or drop takes away.
 async fn stray_authority(
     transaction: &Transaction<'_>,
     role: Option<&str>,
@@ -1081,21 +1081,21 @@ async fn default_trigger_grant(
 }
 
 /// The next action for stray authority `statements` from
-/// [`stray_authority`]. Reassigning an object to the migration role takes
-/// the runtime role's grants on it too, so apply must reissue them; a revoke
-/// or a drop takes nothing apply issued.
+/// [`stray_authority`]. Moving an object's ownership to the migration role
+/// takes the runtime role's grants on it too, so apply must reissue them; a
+/// revoke or a drop takes nothing apply issued.
 fn stray_authority_fix(statements: &[String]) -> String {
-    let reassigns = statements
+    let owner_changes = statements
         .iter()
-        .any(|statement| statement.starts_with("REASSIGN OWNED BY "));
+        .any(|statement| statement.contains(" OWNER TO "));
     let statements = statements
         .iter()
         .map(|statement| format!("`{statement}`"))
         .collect::<Vec<_>>()
         .join(" and ");
-    if reassigns {
+    if owner_changes {
         format!(
-            "run {statements} as the migration role, then `caseworkctl apply --runtime-config \
+            "run {statements} as a database administrator, then `caseworkctl apply --runtime-config \
              FILE` to reissue the runtime role's grants"
         )
     } else {
