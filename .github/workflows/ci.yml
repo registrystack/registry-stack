@@ -1408,9 +1408,12 @@ jobs:
 
       # The fixture provisions its own databases and roles through the job's
       # BREG_TEST_DATABASE_URL. postgres-test enables its loopback plaintext
-      # database.
+      # database. Each single-copy proof is pinned to one PostgreSQL shard so
+      # it still executes exactly once while balancing shard wall time: the
+      # first shard carries the Evidence proof's build, the second the citizen
+      # journey, the third the worker and S3 runs.
       - name: Native citizen gateway and review authority journey
-        if: matrix.lane == 'postgres'
+        if: matrix.lane == 'postgres:2/3'
         shell: bash
         env:
           BREG_BIN: ${{ github.workspace }}/target/debug/breg
@@ -1428,7 +1431,7 @@ jobs:
       # need postgres-test; keep the production-feature variants in the runner.
       # External-issuer cases compile here and execute only in their opt-in runner.
       - name: Base Registry Engine PostgreSQL worker and startup tests
-        if: matrix.lane == 'postgres'
+        if: matrix.lane == 'postgres:3/3'
         run: cargo test --locked -p registry-breg --features postgres-test,tooling,schema --lib --test startup_http --test runtime_config --test issuer_portability -- --test-threads=1
 
       # The transactional harness uses its own roles over the initial local
@@ -1449,7 +1452,7 @@ jobs:
         run: cargo test --locked -p registry-bregctl --features wasm --test wasm_test_lifecycle --test publicschema_inline_value_lists -- --ignored --exact
 
       - name: Base Registry Engine real S3 attachment storage
-        if: matrix.lane == 'postgres'
+        if: matrix.lane == 'postgres:3/3'
         run: bash products/breg/scripts/test-attachment-s3.sh
 
       - name: Base Registry Engine clean-checkout adopter workflow

@@ -117,6 +117,10 @@ BREG_TEST_DATABASE_URL=postgresql://breg:breg_test@localhost:5432/breg \
   products/breg/scripts/test-postgres.sh
 ```
 
+CI integration events run the same journeys as parallel `--lane postgres:I/N`
+shard jobs that split the owned target lists; a plain local run keeps the full
+suite.
+
 `products/breg/scripts/test-postgres-tls.sh` proves the TLS behavior and needs
 the `BREG_TEST_TLS_*` variables the `breg-contracts` job exports. The adopter
 workflow needs the same TLS PostgreSQL: without it `bregctl test` refuses with
