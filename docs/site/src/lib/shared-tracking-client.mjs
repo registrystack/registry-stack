@@ -80,6 +80,7 @@ export function createSharedTrackingClient(options = {}) {
   let closed = false;
   let suspended = false;
   let localRefusal = false;
+  let choiceIntent = 0;
   let expiryTimer;
   try {
     localRefusal = currentWindow?.localStorage?.getItem(LOCAL_REFUSAL_KEY) === 'rejected';
@@ -353,13 +354,19 @@ export function createSharedTrackingClient(options = {}) {
     subscribe(listener) { subscribers.add(listener); return () => subscribers.delete(listener); },
     subscribeFailure(listener) { failureSubscribers.add(listener); return () => failureSubscribers.delete(listener); },
     async read() {
-      if (localRefusal) return client.choose('rejected');
-      return request('read');
+      if (!localRefusal) return request('read');
+      const intent = choiceIntent;
+      // Keep the local refusal active while learning the current shared
+      // revision. Replaying revision zero would strand it after an outage.
+      await request('read');
+      if (!localRefusal || choiceIntent !== intent) return effectiveState();
+      return client.choose('rejected');
     },
     async choose(choice) {
       if (!['accepted', 'rejected'].includes(choice) || (choice === 'accepted' && denied())) {
         throw trackingError();
       }
+      const intent = ++choiceIntent;
       const expectedRevision = state.revision;
       if (choice === 'rejected') {
         localRefusal = true;
@@ -376,10 +383,14 @@ export function createSharedTrackingClient(options = {}) {
         if (choice === 'rejected') discardFrame();
         if (choice !== 'accepted' || !recoverableFailures.has(error)) throw error;
         await request('read');
-        if (effectiveState().choice !== 'accepted') throw fail();
+        // A retained refusal masks the shared state until this explicit
+        // acceptance finishes reconciling. Privacy signals still take priority.
+        if (state.choice !== 'accepted' || denied() ||
+            (state.expiresAt !== null && state.expiresAt <= now())) throw fail();
       }
       // A refusal that could not reach the bridge remains local and visible as
       // an error, rather than allowing an older shared acceptance to return.
+      if (choiceIntent !== intent) return effectiveState();
       localRefusal = false;
       try { currentWindow?.localStorage?.removeItem(LOCAL_REFUSAL_KEY); } catch { suspended = true; }
       notify();
