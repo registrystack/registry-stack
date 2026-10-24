@@ -49,8 +49,18 @@ export function buildMauticPageview({ canonicalUrl, currentUrl, pageTitle, refer
   return pageview;
 }
 
-function trackingError() {
-  return new Error('Shared tracking is unavailable. Tracking remains off.');
+const FAILURE_CODES = new Set([
+  'frame-load-failed', 'frame-load-timeout', 'response-timeout', 'frame-replaced',
+  'client-closed', 'invalid-response', 'broker-unavailable', 'broker-not-allowed',
+  'broker-invalid-request', 'send-failed', 'unavailable',
+]);
+
+export function trackingFailureReason(error) {
+  return FAILURE_CODES.has(error?.code) ? error.code : 'unavailable';
+}
+
+function trackingError(code = 'unavailable') {
+  return Object.assign(new Error('Shared tracking is unavailable. Tracking remains off.'), { code });
 }
 
 /**
@@ -81,6 +91,8 @@ export function createSharedTrackingClient(options = {}) {
   let suspended = false;
   let localRefusal = false;
   let choiceIntent = 0;
+  let pendingRead;
+  let readRetryReason = null;
   let expiryTimer;
   try {
     localRefusal = currentWindow?.localStorage?.getItem(LOCAL_REFUSAL_KEY) === 'rejected';
@@ -96,19 +108,19 @@ export function createSharedTrackingClient(options = {}) {
     }
     return { ...state };
   };
-  const notify = () => {
+  const notify = (confirmed = false) => {
     const snapshot = effectiveState();
-    for (const subscriber of subscribers) subscriber(snapshot);
+    for (const subscriber of subscribers) subscriber(snapshot, confirmed);
   };
-  const fail = () => {
+  const fail = (code = 'unavailable') => {
     suspended = true;
-    const error = trackingError();
+    const error = trackingError(code);
     for (const subscriber of failureSubscribers) subscriber(error);
     return error;
   };
   const recoverableFailures = new WeakSet();
-  const recoverableFailure = () => {
-    const error = trackingError();
+  const recoverableFailure = code => {
+    const error = trackingError(code);
     recoverableFailures.add(error);
     return error;
   };
@@ -130,7 +142,7 @@ export function createSharedTrackingClient(options = {}) {
       if (item.frame !== failedFrame) continue;
       pending.delete(id);
       clearTimeout(item.timer);
-      item.reject(trackingError());
+      item.reject(trackingError('frame-replaced'));
     }
   };
   const replaceNativeRealm = next => {
@@ -142,14 +154,13 @@ export function createSharedTrackingClient(options = {}) {
           next.choice === item.choice && next.revision > item.expectedRevision)) {
         item.resolve(effectiveState());
       } else {
-        item.reject(trackingError());
+        item.reject(trackingError('frame-replaced'));
       }
     }
   };
   const update = next => {
     if (next.revision < state.revision) return false;
     if (next.revision === state.revision && next.generation !== state.generation) return false;
-    const changed = JSON.stringify(next) !== JSON.stringify(state);
     const previousGeneration = state.generation;
     state = { ...next };
     suspended = false;
@@ -174,7 +185,8 @@ export function createSharedTrackingClient(options = {}) {
         item.reject(trackingError());
       }
     }
-    if (changed) notify();
+    // Even an unchanged validated read confirms recovery from an earlier error.
+    notify(true);
     return true;
   };
 
@@ -192,13 +204,11 @@ export function createSharedTrackingClient(options = {}) {
     clearTimeout(item.timer);
     const response = parseTrackingResponse(event.data);
     if (!response || (response.deviceId && item.type !== 'associate')) {
-      item.reject(fail());
+      item.reject(item.failure('invalid-response'));
       return;
     }
     if (!response.ok) {
-      item.reject(item.recoverUnavailable && response.error === 'unavailable'
-        ? recoverableFailure()
-        : fail());
+      item.reject(item.failure(`broker-${response.error}`, response.error === 'unavailable'));
       return;
     }
     const current = update(response.state);
@@ -216,7 +226,9 @@ export function createSharedTrackingClient(options = {}) {
   currentWindow?.addEventListener('message', receive);
 
   const ensureFrame = () => {
-    if (closed || !currentWindow || !currentDocument) return Promise.reject(trackingError());
+    if (closed || !currentWindow || !currentDocument) {
+      return Promise.reject(trackingError(closed ? 'client-closed' : 'unavailable'));
+    }
     if (frameReady) return frameReady;
     const candidate = currentDocument.createElement('iframe');
     candidate.src = bridge.href;
@@ -234,7 +246,7 @@ export function createSharedTrackingClient(options = {}) {
     });
     frame = candidate;
     frameReady = ready;
-    const reset = () => {
+    const reset = (code = 'frame-replaced') => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
@@ -242,9 +254,9 @@ export function createSharedTrackingClient(options = {}) {
       if (frameReady === ready) frameReady = undefined;
       if (frameReadyCancel === reset) frameReadyCancel = undefined;
       candidate.remove();
-      rejectReady(trackingError());
+      rejectReady(trackingError(code));
     };
-    const timer = setTimeout(reset, timeoutMs);
+    const timer = setTimeout(() => reset('frame-load-timeout'), timeoutMs);
     frameReadyCancel = reset;
     candidate.addEventListener('load', () => {
       if (settled) return;
@@ -257,11 +269,11 @@ export function createSharedTrackingClient(options = {}) {
       if (frameReadyCancel === reset) frameReadyCancel = undefined;
       resolveReady(candidate);
     }, { once: true });
-    candidate.addEventListener('error', reset, { once: true });
+    candidate.addEventListener('error', () => reset('frame-load-failed'), { once: true });
     try {
       currentDocument.body.append(candidate);
     } catch {
-      reset();
+      reset('frame-load-failed');
     }
     return ready;
   };
@@ -285,14 +297,19 @@ export function createSharedTrackingClient(options = {}) {
         reject(error);
       };
       let timer;
+      const failure = (code, recoverable = false) => {
+        if (requestOptions.essentialRead) {
+          return recoverable ? recoverableFailure(code) : trackingError(code);
+        }
+        return recoverable && requestOptions.recoverUnavailable
+          ? recoverableFailure(code) : fail(code);
+      };
       const startTimer = () => setTimeout(() => {
         pending.delete(message.id);
-        if (requestOptions.recoverUnavailable) {
-          rejectOnce(recoverableFailure());
-        } else {
+        if (!requestOptions.essentialRead && !requestOptions.recoverUnavailable) {
           dropFailedFrame(requestFrame);
-          rejectOnce(fail());
         }
+        rejectOnce(failure('response-timeout', true));
       }, requestOptions.timeoutMs ?? timeoutMs);
       // An association has one total budget so attribution never delays the
       // form. Other requests get a response budget after the bounded load.
@@ -301,7 +318,7 @@ export function createSharedTrackingClient(options = {}) {
       try {
         readiness = ensureFrame();
       } catch {
-        rejectOnce(requestOptions.recoverUnavailable ? recoverableFailure() : fail());
+        rejectOnce(failure('frame-load-failed', true));
         return;
       }
       // Generation replacement must also settle operations awaiting readiness.
@@ -312,13 +329,14 @@ export function createSharedTrackingClient(options = {}) {
         type,
         frame,
         recoverUnavailable: requestOptions.recoverUnavailable === true,
+        failure,
         ...payload,
       };
       pending.set(message.id, item);
       readiness.then(readyFrame => {
         if (settled) return;
         if (closed || readyFrame !== frame) {
-          rejectOnce(trackingError());
+          rejectOnce(trackingError(closed ? 'client-closed' : 'frame-replaced'));
           return;
         }
         requestFrame = readyFrame;
@@ -329,11 +347,13 @@ export function createSharedTrackingClient(options = {}) {
           readyFrame.contentWindow.postMessage(message, bridge.origin);
         } catch {
           pending.delete(message.id);
-          dropFailedFrame(readyFrame);
-          rejectOnce(requestOptions.recoverUnavailable ? recoverableFailure() : fail());
+          if (!requestOptions.essentialRead) dropFailedFrame(readyFrame);
+          rejectOnce(failure('send-failed', true));
         }
-      }, () => {
-        if (!settled) rejectOnce(requestOptions.recoverUnavailable ? recoverableFailure() : fail());
+      }, error => {
+        const code = trackingFailureReason(error);
+        const recoverable = ['frame-load-failed', 'frame-load-timeout'].includes(code);
+        if (!settled) rejectOnce(failure(code, recoverable));
       });
     });
   };
@@ -357,16 +377,43 @@ export function createSharedTrackingClient(options = {}) {
 
   const client = {
     get state() { return effectiveState(); },
+    get readRetryReason() { return readRetryReason; },
     subscribe(listener) { subscribers.add(listener); return () => subscribers.delete(listener); },
     subscribeFailure(listener) { failureSubscribers.add(listener); return () => failureSubscribers.delete(listener); },
-    async read() {
-      if (!localRefusal) return request('read');
+    read() {
+      if (pendingRead) return pendingRead;
       const intent = choiceIntent;
-      // Keep the local refusal active while learning the current shared
-      // revision. Replaying revision zero would strand it after an outage.
-      await request('read');
-      if (!localRefusal || choiceIntent !== intent) return effectiveState();
-      return client.choose('rejected');
+      readRetryReason = null;
+      const read = async () => {
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+          const reading = request('read', {}, { essentialRead: true });
+          const readingFrame = frame;
+          try {
+            await reading;
+            break;
+          } catch (error) {
+            if (closed) throw error;
+            // An older read must not interrupt or reopen errors over a newer
+            // explicit choice, including one using this same frame.
+            if (choiceIntent !== intent) return effectiveState();
+            suspended = true;
+            if (recoverableFailures.has(error)) {
+              dropFailedFrame(readingFrame);
+              if (attempt === 0) {
+                readRetryReason = trackingFailureReason(error);
+                continue;
+              }
+            }
+            throw fail(trackingFailureReason(error));
+          }
+        }
+        // Keep a retained refusal active until the shared revision is known.
+        // A newer explicit choice always takes precedence over reconciliation.
+        if (localRefusal && choiceIntent === intent) return client.choose('rejected');
+        return effectiveState();
+      };
+      pendingRead = read().finally(() => { pendingRead = undefined; });
+      return pendingRead;
     },
     async choose(choice) {
       if (!['accepted', 'rejected'].includes(choice) || (choice === 'accepted' && denied())) {
@@ -374,19 +421,22 @@ export function createSharedTrackingClient(options = {}) {
       }
       const intent = ++choiceIntent;
       const expectedRevision = state.revision;
+      let choiceFrame;
       if (choice === 'rejected') {
         localRefusal = true;
         try { currentWindow?.localStorage?.setItem(LOCAL_REFUSAL_KEY, 'rejected'); } catch { suspended = true; }
         notify();
       }
       try {
-        await request(
+        const choosing = request(
           'choose',
           { choice, expectedRevision },
           { recoverUnavailable: choice === 'accepted' },
         );
+        choiceFrame = frame;
+        await choosing;
       } catch (error) {
-        if (choice === 'rejected') discardFrame();
+        if (choice === 'rejected' && choiceIntent === intent && frame === choiceFrame) discardFrame();
         if (choice !== 'accepted' || !recoverableFailures.has(error)) throw error;
         await request('read');
         // A retained refusal masks the shared state until this explicit
@@ -413,7 +463,7 @@ export function createSharedTrackingClient(options = {}) {
     close() {
       closed = true;
       clearTimeout(expiryTimer);
-      for (const item of pending.values()) { clearTimeout(item.timer); item.reject(trackingError()); }
+      for (const item of pending.values()) { clearTimeout(item.timer); item.reject(trackingError('client-closed')); }
       pending.clear();
       currentWindow?.removeEventListener('message', receive);
       currentWindow?.removeEventListener('pageshow', resume);
