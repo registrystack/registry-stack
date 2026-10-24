@@ -5925,6 +5925,81 @@ async fn the_claim_ledger_bounds_a_caller_chosen_duplicate_key() {
     );
 }
 
+/// Write one booking claim and one allocation of it straight into the ledger,
+/// each carrying the given operational mode, so the scope checks are what
+/// decide. The rows never stay: the transaction always rolls back.
+async fn scoped_rows(
+    fx: &Fixture,
+    claim_mode: Option<&str>,
+    allocation_mode: Option<&str>,
+) -> Result<(), tokio_postgres::Error> {
+    let claim_id = Uuid::new_v4();
+    let start = pinned_now();
+    let end = start + TimeDelta::minutes(30);
+    begin_current_test_writer(&fx.admin).await;
+    let mut result = fx
+        .admin
+        .execute(
+            "INSERT INTO scheduling_claims(claim_id, kind, state, offering, \
+             operational_service, operational_location, operational_mode, supply_id, \
+             displayed_start, displayed_end, occupied_start, occupied_end, units, \
+             revision, policy_revision, actor) \
+             VALUES($1,'booking','active','registry-update-30', \
+             'registry-update','north-counter',$2,'station-1', \
+             $3, $4, $3, $4, 1, 1, 1, 'actor-pseudonym')",
+            &[&claim_id, &claim_mode, &start, &end],
+        )
+        .await
+        .map(drop);
+    if result.is_ok() {
+        result = fx
+            .admin
+            .execute(
+                "INSERT INTO scheduling_claim_allocations( \
+                 claim_id, requirement_kind, requirement_index, part_index, offering, \
+                 operational_service, operational_location, operational_mode, anchor_id, \
+                 resource_id, occupied_start, occupied_end, units) \
+                 VALUES($1,'primary',0,0,'registry-update-30', \
+                 'registry-update','north-counter',$2,'station-1', \
+                 'station-1', $3, $4, 1)",
+                &[&claim_id, &allocation_mode, &start, &end],
+            )
+            .await
+            .map(drop);
+    }
+    fx.admin
+        .batch_execute("ROLLBACK")
+        .await
+        .expect("roll back the probe rows");
+    result
+}
+
+#[tokio::test]
+async fn the_ledger_refuses_a_claim_or_an_allocation_without_an_operational_mode() {
+    let fx = fixture().await;
+    scoped_rows(&fx, Some("exact-time"), Some("exact-time"))
+        .await
+        .expect("a labeled claim and allocation are stored");
+
+    let refused = scoped_rows(&fx, None, Some("exact-time"))
+        .await
+        .expect_err("a claim without an operational mode is refused");
+    assert_eq!(
+        refused.as_db_error().and_then(|error| error.constraint()),
+        Some("scheduling_claims_operational_scope_check"),
+        "{refused}"
+    );
+
+    let refused = scoped_rows(&fx, Some("exact-time"), None)
+        .await
+        .expect_err("an allocation without an operational mode is refused");
+    assert_eq!(
+        refused.as_db_error().and_then(|error| error.constraint()),
+        Some("scheduling_claim_allocations_scope_check"),
+        "{refused}"
+    );
+}
+
 #[tokio::test]
 async fn an_unknown_offering_and_a_malformed_body_answer_their_own_codes() {
     let fx = fixture().await;
