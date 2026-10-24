@@ -557,9 +557,11 @@ class SeriesJournal:
                     instant = _resolve_local(local, zone, ambiguity)
                     admission = json.loads(str(row["admission_json"]))
                     admission["start"] = _utc_text(instant)
-                    # Scheduling keeps the create-time reference set immutable.
-                    # Its reschedule contract requires this member to be absent.
-                    admission.pop("externalReferences", None)
+                    # Scheduling keeps the create-time references, party
+                    # references, and manager immutable. Its reschedule
+                    # contract requires these members to be absent.
+                    for member in ("externalReferences", "partyReferences", "manager"):
+                        admission.pop(member, None)
                     request = {"observedRevision": observed_revision, "admission": admission}
                     change["resolvedStart"] = admission["start"]
                 self._insert_operation(
