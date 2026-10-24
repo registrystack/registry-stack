@@ -73,6 +73,8 @@ export function createSharedTrackingClient(options = {}) {
   const currentNavigator = options.navigator ?? currentWindow?.navigator ?? globalThis.navigator;
   const now = options.now ?? Date.now;
   const timeoutMs = options.timeoutMs ?? 6500;
+  // Loading includes the bridge's module graph before responses can begin.
+  const frameLoadTimeoutMs = options.frameLoadTimeoutMs ?? options.timeoutMs ?? 30_000;
   const bridge = new URL(options.bridgeUrl ?? SHARED_TRACKING_BRIDGE_URL);
   if (bridge.protocol !== 'https:' || bridge.username || bridge.password ||
       bridge.pathname !== '/tracking-bridge/' || bridge.search || bridge.hash) {
@@ -256,7 +258,7 @@ export function createSharedTrackingClient(options = {}) {
       candidate.remove();
       rejectReady(trackingError(code));
     };
-    const timer = setTimeout(() => reset('frame-load-timeout'), timeoutMs);
+    const timer = setTimeout(() => reset('frame-load-timeout'), frameLoadTimeoutMs);
     frameReadyCancel = reset;
     candidate.addEventListener('load', () => {
       if (settled) return;

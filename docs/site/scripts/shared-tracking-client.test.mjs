@@ -390,7 +390,7 @@ test('an essential read retries one failed frame without exposing the transient 
   assert.throws(() => { f.client.readRetryReason = 'send-failed'; }, TypeError);
 });
 
-test('an essential read retries one frame-load timeout within the same call', async (t) => {
+test('an explicit timeout overrides the frame-load budget', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const f = fixture({ autoLoad: false, timeoutMs: 80 });
   t.after(() => f.client.close());
@@ -413,20 +413,78 @@ test('an essential read retries one frame-load timeout within the same call', as
   assert.equal(f.failures.length, 0);
 });
 
-test('iframe startup does not consume the broker response timeout', async (t) => {
+test('the default 30-second frame-load budget still permits only two attempts', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
-  const f = fixture({ autoLoad: false, timeoutMs: 80 });
+  const f = fixture({ autoLoad: false, timeoutMs: undefined });
+  t.after(() => f.client.close());
+  const read = f.client.read();
+  const outcome = read.then(value => ({ value }), error => ({ error }));
+  const firstFrame = f.frame;
+
+  t.mock.timers.tick(6_500);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.frame, firstFrame);
+  assert.equal(firstFrame.removed, undefined);
+  assert.equal(f.client.readRetryReason, null);
+
+  t.mock.timers.tick(23_500);
+  await new Promise(resolve => setImmediate(resolve));
+  const retryFrame = f.frame;
+  assert.notEqual(retryFrame, firstFrame);
+  assert.equal(firstFrame.removed, true);
+  assert.equal(f.client.readRetryReason, 'frame-load-timeout');
+
+  t.mock.timers.tick(30_000);
+  const result = await outcome;
+  assert.equal(result.value, undefined);
+  assert.equal(result.error?.code, 'frame-load-timeout');
+  assert.equal(retryFrame.removed, true);
+  assert.equal(f.frames.length, 2);
+  assert.equal(f.sent.length, 0);
+  assert.deepEqual(f.failures, [result.error]);
+});
+
+test('the default broker response budget remains 6.5 seconds after the frame loads', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const f = fixture({ timeoutMs: undefined });
+  t.after(() => f.client.close());
+  const read = f.client.read();
+  const outcome = read.then(value => ({ value }), error => ({ error }));
+  await new Promise(resolve => setImmediate(resolve));
+  const firstFrame = f.frame;
+
+  t.mock.timers.tick(6_499);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.frame, firstFrame);
+  assert.equal(firstFrame.removed, undefined);
+
+  t.mock.timers.tick(1);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.notEqual(f.frame, firstFrame);
+  assert.equal(firstFrame.removed, true);
+  assert.equal(f.client.readRetryReason, 'response-timeout');
+  f.reply(unknown);
+  assert.deepEqual(await outcome, { value: unknown });
+  assert.equal(f.failures.length, 0);
+});
+
+test('a separate frame-load budget lets startup wait without consuming the response timeout', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const f = fixture({ autoLoad: false, timeoutMs: 80, frameLoadTimeoutMs: 240 });
   t.after(() => f.client.close());
   const pending = f.client.read();
   const outcome = pending.then(value => ({ value }), error => ({ error }));
   const requestFrame = f.frame;
 
-  t.mock.timers.tick(50);
+  t.mock.timers.tick(160);
+  assert.equal(f.frame, requestFrame);
+  assert.equal(requestFrame.removed, undefined);
+  assert.equal(f.sent.length, 0);
   requestFrame.fireLoad();
   await new Promise(resolve => setImmediate(resolve));
   const request = f.sent.at(-1).data;
 
-  t.mock.timers.tick(50);
+  t.mock.timers.tick(79);
   f.message({ ...envelope, id: request.id, ok: true, state: unknown }, {
     source: requestFrame.contentWindow,
   });
@@ -435,7 +493,7 @@ test('iframe startup does not consume the broker response timeout', async (t) =>
   assert.deepEqual(result.value, unknown);
 });
 
-test('an essential read retries one response timeout with a fresh frame', async (t) => {
+test('an explicit timeout overrides the broker response budget', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const f = fixture({ timeoutMs: 80 });
   t.after(() => f.client.close());
@@ -658,8 +716,10 @@ test('a retained-refusal read superseded by a newer accepted choice resolves wit
   assert.equal(f.failures.length, 0);
 });
 
-test('association timeout bounds frame readiness and prevents a late identifier request', async () => {
-  const f = fixture({ timeoutMs: 100 });
+test('association keeps its 750ms total deadline despite a longer frame-load budget', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const f = fixture({ timeoutMs: 100, frameLoadTimeoutMs: 30_000 });
+  t.after(() => f.client.close());
   const initial = await nextRequest(() => f.client.read());
   f.reply(accepted);
   await initial.promise;
@@ -668,9 +728,13 @@ test('association timeout bounds frame readiness and prevents a late identifier 
   f.message({ ...envelope, type: 'changed', state: renewed });
 
   let outcome = 'pending';
-  const association = f.client.associate(renewed.generation, { timeoutMs: 5 });
+  const association = f.client.associate(renewed.generation, { timeoutMs: 750 });
   association.then(() => { outcome = 'resolved'; }, () => { outcome = 'rejected'; });
-  await new Promise(resolve => setTimeout(resolve, 20));
+  t.mock.timers.tick(749);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(outcome, 'pending');
+  t.mock.timers.tick(1);
+  await new Promise(resolve => setImmediate(resolve));
   assert.equal(outcome, 'rejected');
   const lateFrame = f.frame;
   lateFrame.fireLoad();
@@ -679,7 +743,6 @@ test('association timeout bounds frame readiness and prevents a late identifier 
   await assert.rejects(association, /tracking/i);
   assert.deepEqual(f.client.state, renewed);
   assert.equal(f.failures.length, 0);
-  f.client.close();
 });
 
 test('an unavailable association falls back without suspending accepted consent', async () => {
