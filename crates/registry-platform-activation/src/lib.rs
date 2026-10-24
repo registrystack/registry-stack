@@ -604,9 +604,10 @@ struct OwnershipCorrection {
 
 /// Exact owner changes for product objects through which `role` inherits
 /// migration authority, ordered as schema, non-sequence relations, sequences,
-/// and routines. An identity or owned sequence cannot change owner before its
-/// parent table does. `target_role` names the migration connection when it is
-/// known; otherwise the activation ledger's owner is the target.
+/// and routines or aggregates. An identity or owned sequence cannot change
+/// owner before its parent table does. `target_role` names the migration
+/// connection when it is known; otherwise the activation ledger's owner is
+/// the target.
 async fn ownership_corrections(
     client: &impl GenericClient,
     layout: &Layout,
@@ -647,10 +648,18 @@ async fn ownership_corrections(
                FROM pg_class c WHERE c.relnamespace=context.schema_oid
                  AND c.relname LIKE $3 AND c.relkind IN ('r','p','v','m','S','f')
                UNION ALL
-               SELECT p.proowner,3,p.proname,pg_get_function_identity_arguments(p.oid),
-                 format('ALTER ROUTINE %I.%I(%s) OWNER TO %I',context.schema_name,p.proname,
-                   pg_get_function_identity_arguments(p.oid),context.migration_role)
-               FROM pg_proc p WHERE p.pronamespace=context.schema_oid AND p.proname LIKE $3
+               SELECT p.proowner,3,p.proname,arguments.signature,
+                 CASE p.prokind
+                   WHEN 'a' THEN format('ALTER AGGREGATE %I.%I(%s) OWNER TO %I',
+                     context.schema_name,p.proname,
+                     COALESCE(NULLIF(arguments.signature,''),'*'),context.migration_role)
+                   ELSE format('ALTER ROUTINE %I.%I(%s) OWNER TO %I',
+                     context.schema_name,p.proname,arguments.signature,context.migration_role)
+                 END
+               FROM pg_proc p CROSS JOIN LATERAL (
+                 SELECT pg_get_function_identity_arguments(p.oid) signature
+               ) arguments
+               WHERE p.pronamespace=context.schema_oid AND p.proname LIKE $3
              ) object
              WHERE context.migration_oid IS NOT NULL
                AND object.owner<>context.migration_oid

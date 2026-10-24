@@ -599,7 +599,8 @@ invariants:
       ownership, TRIGGER privilege, or schema CREATE privilege weakens the
       split, or an attached trigger on a scheduling_* table, naming exact
       ALTER SCHEMA, ALTER TABLE, ALTER VIEW, ALTER MATERIALIZED VIEW, ALTER
-      SEQUENCE, ALTER FOREIGN TABLE, or ALTER ROUTINE owner corrections then
+      SEQUENCE, ALTER FOREIGN TABLE, ALTER ROUTINE, or ALTER AGGREGATE owner
+      corrections then
       schedulingctl apply, or REVOKE TRIGGER, REVOKE CREATE ON SCHEMA (from
       the grantee it is held through, PUBLIC included), or DROP TRIGGER then
       a rerun of the refused command. Split-mode apply refuses a
