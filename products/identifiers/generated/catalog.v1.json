@@ -4990,11 +4990,11 @@
       "description": "Evidence OID4VCI delivery runtime configuration JSON Schema.",
       "source": {
         "path": "crates/registry-evidence-oid4vci/src/schema.rs",
-        "sha256": "135abfbd96e615c9c0d3c8a767b974a9a39b5a3805fb85e20c5b9fe31cfe5b5f"
+        "sha256": "0cc005a1e55672ce3a11ad5fd0c4e714155ec6e4b003328bd025a88d29d455b3"
       },
       "artifact": {
         "path": "products/evidence/generated/oid4vci-runtime/oid4vci-runtime.schema.json",
-        "sha256": "c17920e039dc46a3627cbd0091a3728732398e8d857cf30bc87c5ebdb2cf0ced",
+        "sha256": "701ee38be07cd80d8fd73a393abfb243511d3accd7a34124893c39781d883191",
         "mediaType": "application/schema+json"
       }
     },
