@@ -4613,8 +4613,9 @@ async fn replace_parent_allocations(
     busy_source_bindings: &std::collections::BTreeMap<String, Vec<String>>,
 ) -> Result<(), StoreError> {
     let subject = &parent.subject;
-    let duration_seconds = parent.end.signed_duration_since(parent.start).num_seconds();
-    if duration_seconds <= 0 || duration_seconds % 60 != 0 {
+    let duration = parent.end.signed_duration_since(parent.start);
+    let duration_seconds = duration.num_seconds();
+    if duration.subsec_nanos() != 0 || duration_seconds <= 0 || duration_seconds % 60 != 0 {
         return Err(StoreError::CombinedInvariant(format!(
             "{subject} must span whole positive minutes"
         )));

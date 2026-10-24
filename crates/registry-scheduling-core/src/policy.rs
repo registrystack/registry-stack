@@ -1876,10 +1876,12 @@ impl SchedulingPolicy {
         requirement: &WindowResourceRequirement,
     ) -> Option<&ExactTimeOffering> {
         let offering = self.offering(&requirement.offering)?;
-        let duration_seconds = window.end.signed_duration_since(window.start).num_seconds();
-        let duration_minutes = (duration_seconds > 0 && duration_seconds % 60 == 0)
-            .then(|| u32::try_from(duration_seconds / 60).ok())
-            .flatten()?;
+        let duration = window.end.signed_duration_since(window.start);
+        let duration_seconds = duration.num_seconds();
+        let duration_minutes =
+            (duration.subsec_nanos() == 0 && duration_seconds > 0 && duration_seconds % 60 == 0)
+                .then(|| u32::try_from(duration_seconds / 60).ok())
+                .flatten()?;
         offering.exact_time.as_ref().filter(|exact| {
             offering.mode == SchedulingMode::ExactTime
                 && offering.location == window.location
@@ -3625,6 +3627,14 @@ maximumRecipients: 1
             .duration_minutes = 60;
         assert_eq!(
             rendered(&shorter.check_window_records(&windows)),
+            vec![mismatched.to_owned()]
+        );
+        // A span a fraction of a second past whole minutes is not one the
+        // offering sells.
+        let mut fractional = windows.clone();
+        fractional[0].end += chrono::TimeDelta::milliseconds(500);
+        assert_eq!(
+            rendered(&policy.check_window_records(&fractional)),
             vec![mismatched.to_owned()]
         );
         // An arrival offering reserves nothing physical.
