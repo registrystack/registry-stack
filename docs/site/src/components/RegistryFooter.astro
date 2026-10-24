@@ -31,11 +31,12 @@ const hasPagination = Boolean(prev || next);
 
 const pageTitle = entryData?.title ?? 'this page';
 const pagePath = Astro.url.pathname;
-const isNotFound = route.entry.id === '404' || route.entry.id.endsWith('/404');
+const isNotFound = route.entry?.id === '404' || route.entry?.id.endsWith('/404');
 const showSharedTracking =
   !isNotFound &&
   docsSharedTrackingEnabled({
     isReleasedArchiveBuild,
+    isCurrentDocsetBuild: activeDocset?.id === docsetsManifest.current,
     base,
     path: '/',
   });
@@ -127,7 +128,7 @@ const showPageFooter = hasPagination || hasMeta || showFeedback;
   </nav>
 </footer>
 
-{showSharedTracking && <RegistryTrackingPreferences canonicalOrigin={canonicalOrigin} />}
+{showSharedTracking && <RegistryTrackingPreferences canonicalOrigin={canonicalOrigin} privacyUrl={`${base}privacy/`} />}
 
 <script>
   // Wire the per-page "Was this helpful?" controls on each full page load.

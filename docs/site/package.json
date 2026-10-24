@@ -9,7 +9,7 @@
   "scripts": {
     "dev": "npm run generate && astro dev",
     "build": "npm run generate && astro check && astro build && node scripts/apply-archive-seo.mjs dist",
-    "build:dev": "npm run generate && DOCS_DOCSET=latest DOCS_BASE=/dev/ astro check && DOCS_DOCSET=latest DOCS_BASE=/dev/ astro build --outDir dist/dev && node scripts/apply-archive-seo.mjs dist/dev",
+    "build:dev": "npm run generate && DOCS_DOCSET=latest DOCS_BASE=/dev/ astro check && DOCS_DOCSET=latest DOCS_BASE=/dev/ astro build --outDir dist/dev && node scripts/apply-archive-seo.mjs dist/dev && node scripts/check-built-analytics.mjs dist/dev --profile development",
     "build:archive": "node scripts/build-archive.mjs",
     "build:archives": "node scripts/build-archives.mjs",
     "build:production-search": "node scripts/build-production-search.mjs",

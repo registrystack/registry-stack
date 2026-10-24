@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
@@ -117,6 +118,54 @@ test('noncanonical builds reject shared tracking controls', async (t) => {
   const root = await builtRoot(t, '', trackingPreferences);
   await assert.rejects(
     checkBuiltAnalytics(root, { enabled: false }),
-    /must not contain shared tracking outside the canonical released tree/,
+    /must not contain shared tracking in this build/,
   );
+});
+
+const developmentTracking = { enabled: false, sharedTrackingEnabled: true };
+
+test('public development output requires shared controls while keeping Umami off', async (t) => {
+  const root = await builtRoot(t, '', trackingPreferences);
+  await checkBuiltAnalytics(root, developmentTracking);
+});
+
+test('public development output rejects Umami', async (t) => {
+  const root = await builtRoot(
+    t,
+    `<script defer src="${DOCS_UMAMI_SCRIPT_SRC}" data-website-id="${DOCS_UMAMI_WEBSITE_ID}"></script>`,
+    trackingPreferences,
+  );
+  await assert.rejects(checkBuiltAnalytics(root, developmentTracking), /must not contain analytics/);
+});
+
+test('public development output rejects missing, duplicate and untrusted shared controls', async (t) => {
+  for (const body of [
+    '',
+    trackingPreferences + trackingPreferences,
+    '<aside data-registry-shared-tracking data-shared-tracking-bridge-url="https://other.example.org/"></aside>',
+  ]) {
+    const root = await builtRoot(t, '', body);
+    await assert.rejects(checkBuiltAnalytics(root, developmentTracking), /shared tracking/);
+  }
+});
+
+test('public development output rejects a direct native tracker', async (t) => {
+  const root = await builtRoot(t, '<script src="https://mautic.example.org/mtc.js"></script>', trackingPreferences);
+  await assert.rejects(checkBuiltAnalytics(root, developmentTracking), /must not load Mautic directly/);
+});
+
+test('error output cannot offer shared tracking even in an eligible tree', async (t) => {
+  const root = await builtRoot(t, '', trackingPreferences);
+  await writeFile(resolve(root, '404.html'), '<html><body></body></html>');
+  await checkBuiltAnalytics(root, developmentTracking);
+  await writeFile(resolve(root, '404.html'), `<html><body>${trackingPreferences}</body></html>`);
+  await assert.rejects(checkBuiltAnalytics(root, developmentTracking), /404.html.*must not contain shared tracking/);
+});
+
+test('development build command verifies the built tracking profile', async (t) => {
+  const root = await builtRoot(t, '', trackingPreferences);
+  const checker = new URL('./check-built-analytics.mjs', import.meta.url);
+  execFileSync(process.execPath, [checker.pathname, root, '--profile', 'development']);
+  await writeFile(resolve(root, 'index.html'), '<html><body></body></html>');
+  assert.throws(() => execFileSync(process.execPath, [checker.pathname, root, '--profile', 'development'], { stdio: 'pipe' }));
 });

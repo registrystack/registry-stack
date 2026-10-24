@@ -11,38 +11,46 @@ const footerUrl = new URL('src/components/RegistryFooter.astro', root);
 const headUrl = new URL('src/components/RegistryHead.astro', root);
 const privacyUrl = new URL('src/content/docs/privacy.mdx', root);
 
-test('shared tracking is enabled only for canonical released documentation pages', () => {
-  assert.equal(
-    docsSharedTrackingEnabled({ isReleasedArchiveBuild: true, base: '/', path: '/' }),
-    true,
-  );
-  assert.equal(
-    docsSharedTrackingEnabled({
-      isReleasedArchiveBuild: true,
-      base: '/',
-      path: '/products/base-registry/',
+test('shared tracking is enabled for released-root and current public development pages', () => {
+  for (const build of [
+    { isReleasedArchiveBuild: true, base: '/' },
+    { isCurrentDocsetBuild: true, base: '/dev/' },
+  ]) {
+    for (const path of ['/', '/products/base-registry/']) {
+      assert.equal(docsSharedTrackingEnabled({ ...build, path }), true);
+    }
+    for (const path of ['/404', '/404/']) {
+      assert.equal(docsSharedTrackingEnabled({ ...build, path }), false);
+    }
+  }
+});
+
+test('local, historical and arbitrary-base builds do not offer shared tracking', () => {
+  for (const build of [
+    { isCurrentDocsetBuild: true, base: '/' },
+    { isReleasedArchiveBuild: false, base: '/dev/' },
+    { isReleasedArchiveBuild: true, base: '/dev/' },
+    { isCurrentDocsetBuild: true, base: '/preview/' },
+    { isReleasedArchiveBuild: true, base: '/v/0.43.0/' },
+    { isCurrentDocsetBuild: true, base: '/v/0.43.0/' },
+  ]) {
+    assert.equal(docsSharedTrackingEnabled({ ...build, path: '/' }), false);
+  }
+});
+
+test('development page views retain the public development path without query or fragment data', () => {
+  assert.deepEqual(
+    buildMauticPageview({
+      canonicalUrl: 'https://docs.registrystack.org/dev/start/concepts/?private=yes#record',
+      currentUrl: 'https://docs.registrystack.org/dev/start/concepts/?email=person%40example.org#record',
+      pageTitle: 'How the products fit together',
+      referrer: 'https://registrystack.org/starters/?email=person%40example.org',
     }),
-    true,
-  );
-  assert.equal(
-    docsSharedTrackingEnabled({ isReleasedArchiveBuild: false, base: '/dev/', path: '/' }),
-    false,
-  );
-  assert.equal(
-    docsSharedTrackingEnabled({
-      isReleasedArchiveBuild: true,
-      base: '/v/0.43.0/',
-      path: '/',
-    }),
-    false,
-  );
-  assert.equal(
-    docsSharedTrackingEnabled({ isReleasedArchiveBuild: true, base: '/', path: '/404/' }),
-    false,
-  );
-  assert.equal(
-    docsSharedTrackingEnabled({ isReleasedArchiveBuild: true, base: '/', path: '/404' }),
-    false,
+    {
+      page_url: 'https://docs.registrystack.org/dev/start/concepts/',
+      page_title: 'How the products fit together',
+      page_referrer: 'https://registrystack.org',
+    },
   );
 });
 
@@ -98,6 +106,9 @@ test('tracking controls use the shared bridge and remain available after failure
   assert.match(component, /new URL\(window\.location\.pathname, canonicalOrigin\)/);
   assert.match(component, /Accept optional cookies/);
   assert.match(component, /Reject optional cookies/);
+  assert.match(component, /href=\{privacyUrl\}/);
+  assert.doesNotMatch(component, /href="\/privacy\/"/);
+  assert.doesNotMatch(component, /client\.associate/);
   assert.match(component, /main Registry Stack website and this\s+documentation/i);
   assert.match(component, /data-tracking-error[^>]*role="alert"/);
   assert.match(component, /client\.pageview\(pageview\)/);
@@ -114,8 +125,10 @@ test('tracking controls use the shared bridge and remain available after failure
 
   assert.match(footer, /<RegistryTrackingPreferences/);
   assert.match(footer, /canonicalOrigin=\{canonicalOrigin\}/);
-  assert.match(footer, /route\.entry\.id === '404'/);
-  assert.match(footer, /route\.entry\.id\.endsWith\('\/404'\)/);
+  assert.match(footer, /privacyUrl=\{`\$\{base\}privacy\/`\}/);
+  assert.match(footer, /isCurrentDocsetBuild/);
+  assert.match(footer, /route\.entry\?\.id === '404'/);
+  assert.match(footer, /route\.entry\?\.id\.endsWith\('\/404'\)/);
   assert.match(footer, /path: '\/'/);
   assert.match(footer, /data-tracking-preferences-open/);
   assert.match(footer, /data-tracking-preferences-open hidden/);
@@ -133,5 +146,8 @@ test('tracking controls use the shared bridge and remain available after failure
   assert.match(privacy, /tracking bridge/i);
   assert.match(privacy, /six months/i);
   assert.match(privacy, /Do Not Track and Global Privacy Control/i);
-  assert.match(privacy, /\/dev\/[\s\S]*\/v\/<version>\/[\s\S]*do not load/i);
+  assert.match(privacy, /\/dev\/[\s\S]*\/v\/<version>\/[\s\S]*do not load Umami/i);
+  assert.match(privacy, /optional tracking is available on[\s\S]*\/dev\//i);
+  assert.match(privacy, /versioned archives and error pages do not offer optional tracking/i);
+  assert.match(privacy, /does not send[\s\S]*marketing email/i);
 });

@@ -34,8 +34,7 @@ You can contact Aubex at [contact@registrystack.org](mailto:contact@registrystac
 
 Registry Docs loads self-hosted Umami analytics from `stats.registrystack.org` only on the
 canonical documentation at `docs.registrystack.org/`.
-The `/dev/` tree and versioned `/v/<version>/` archives do not load Umami or optional visit
-tracking.
+The `/dev/` tree and versioned `/v/<version>/` archives do not load Umami.
 Umami records page views, including URL query parameters, referral sources, general browser and
 device information, approximate location, and selected outbound-link clicks.
 The tracker does not set cookies or use a persistent visitor identifier.
@@ -54,12 +53,15 @@ The analytics records are not sold, used for advertising, or shared with adverti
 
 ## Optional visit tracking
 
+Optional tracking is available on canonical released pages and the public `/dev/` documentation.
+Versioned archives and error pages do not offer optional tracking.
+
 If you accept optional cookies, that choice applies to the main Registry Stack website and Registry
 Docs for six months. Registry Docs sends approved visit details through a hidden tracking bridge on
 the main website. The Mautic tracker and its browser identifier remain in that bridge; Registry Docs
 does not store a Mautic identifier or load Mautic directly.
 
-For each accepted documentation visit, Registry Stack can record the public canonical page URL,
+For each accepted documentation visit, Registry Stack can record the public page URL,
 page title, referring site's origin, and reviewed external campaign labels. It does not send search
 terms, other query parameters, URL fragments, or the full referring page. The shared bridge can
 recognise an accepted journey between the main website and Registry Docs without putting an
