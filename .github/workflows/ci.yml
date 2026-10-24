@@ -770,12 +770,13 @@ jobs:
         run: npm run check:tutorial:discovery:dry-run
 
       - name: Build the Registry Discovery binaries the tutorial runs
-        run: cargo build --locked -p registry-discovery -p registry-discoveryctl --bins
+        run: cargo build --locked -p registry-discovery -p registry-discoveryctl -p registry-rstack --bins
 
       - name: Execute the Registry Discovery tutorial from a copy of the checkout
         env:
           DISCOVERY_BIN: ${{ github.workspace }}/target/debug/discovery
           DISCOVERYCTL_BIN: ${{ github.workspace }}/target/debug/discoveryctl
+          RSTACK_BIN: ${{ github.workspace }}/target/debug/rstack
         # The page serves on 127.0.0.1:38080 and 38090, which nothing on this
         # runner holds, so the replay runs on the ports a reader gets.
         run: node docs/site/scripts/run-tutorial.mjs --gate discovery

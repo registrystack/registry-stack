@@ -193,8 +193,8 @@ The package report lists the secrets to provision, the two registry client secre
 Fixtures cannot show what a live credential reaches. Run this check against your [deployed
 registry](../../operate/breg/) once it serves this project, and before Evidence takes traffic,
 calling it as Evidence will, with the source client's token. Ask your identity operator for an owner-only
-`source-authorization.curl` file holding a short-lived authorization header for the source
-client, kept outside the candidate. Put the synthetic selector in `source-lookup.json`:
+`source-authorization.header` file containing one complete `Authorization: Bearer <token>` line for
+the source client, kept outside the candidate. Put the synthetic selector in `source-lookup.json`:
 
 ```json
 {"selector":"by-code","values":{"code":"SYNTHETIC-ACTIVE"}}
@@ -203,25 +203,25 @@ client, kept outside the candidate. Put the synthetic selector in `source-lookup
 Look the record up through the route the export names:
 
 ```sh
-curl --silent --show-error --fail-with-body \
-  --config ./source-authorization.curl \
-  --header 'Content-Type: application/json' \
-  --data-binary @source-lookup.json \
-  'https://registry.example.invalid/v1/records/records:lookup?accessProfile=evidence-source&$select=code,status' \
-  --output source-lookup-response.json --write-out 'HTTP %{http_code}\n'
+rstack breg api '/v1/records/records:lookup?accessProfile=evidence-source&$select=code,status' \
+  --url https://registry.example.invalid \
+  --header @./source-authorization.header \
+  --input source-lookup.json \
+  --output source-lookup-response.json
 ```
 
-A match answers HTTP 200 with one record, limited to `code` and `status`; read its UUID from
-`data.recordIdentifier`.
+A match exits 0 with one record, limited to `code` and `status`; read its UUID from
+`data.recordIdentifier`. A non-success status leaves the problem body in the output file and makes the
+command exit non-zero.
 
 Then ask for the same record through the `operator` profile, which the source client does not
 hold. Replace `<recordIdentifier>` with the UUID:
 
-```sh
-curl --silent --show-error --fail-with-body \
-  --config ./source-authorization.curl \
-  'https://registry.example.invalid/v1/records/records/<recordIdentifier>?accessProfile=operator' \
-  --output source-refusal.json --write-out 'HTTP %{http_code}\n'
+```sh test-exit="1"
+rstack breg api '/v1/records/records/<recordIdentifier>?accessProfile=operator' \
+  --url https://registry.example.invalid \
+  --header @./source-authorization.header \
+  --output source-refusal.json
 ```
 
 This one must fail with HTTP 404 and the problem `resource.not_found`, which is also how the
@@ -238,6 +238,7 @@ keep traffic off and correct the source client or the profile before you retry.
     crates/registry-breg/tests/http_read_only.rs,
     lookup_route_conceals_a_substituted_access_profile_selection;
     crates/registry-record/src/lib.rs, decode_record;
+    crates/registry-cli-api/src/api.rs, ApiArgs, append_cli_headers, write_response;
     products/breg/evidence/registry/registry.yaml. */}
 
 ## Keep the two reviews separate

@@ -19,6 +19,8 @@ bounded and value-free.
 
 ## Prerequisites
 
+- Use an active `rstack` installation that includes the managed Evidence component for these
+  `rstack evidence` commands.
 - Record the binary version, package or configuration revision, and trace identifier.
 - Use a synthetic subject or non-production registry record.
 - Keep tokens, credentials, source responses, and private keys out of tickets and logs.
@@ -36,8 +38,8 @@ bounded and value-free.
 Query health and readiness through the same network path used for traffic admission:
 
 ```sh
-curl -fsS https://<evidence-host>/health
-curl -fsS https://<evidence-host>/ready
+rstack evidence api /health --url 'https://<evidence-host>'
+rstack evidence api /ready --url 'https://<evidence-host>'
 ```
 
 Registry Evidence's closed problem-code catalog is the

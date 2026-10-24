@@ -77,7 +77,8 @@ else
 fi
 [[ -x "$bregctl" && -x "$breg" ]] || fail "the native binaries are not executable"
 
-read -r database_port issuer_port breg_port < <(python3 - <<'PY'
+read -r database_port issuer_port breg_port < <(
+  python3 - <<'PY'
 import socket
 sockets = []
 ports = []
@@ -100,7 +101,8 @@ if ! "$bregctl" --format json dev start \
   cat "$temporary_root/dev.json" >&2
   fail "bregctl dev start did not reach ready"
 fi
-breg_url=$(python3 - "$temporary_root/dev.json" <<'PY'
+breg_url=$(
+  python3 - "$temporary_root/dev.json" <<'PY'
 import json, sys
 report = json.load(open(sys.argv[1], encoding="utf-8"))
 if report.get("ok") is not True or report.get("status") != "ready":
@@ -258,6 +260,24 @@ refused_path = "/v1/statistics/monthly-discharge-reports:live?accessProfile=stat
 refused_body, _ = get(refused_path, reader, expected=404)
 if json.loads(refused_body).get("code") != "resource.not_found":
     raise SystemExit("the release-only reader was not concealed from live mode")
+PY
+
+checkpoint "reading the documented CSV series through the API command"
+"$bregctl" api \
+  '/v1/statistics/monthly-discharge-reports/releases:series?accessProfile=statistics-reader&from=2025-01&to=2025-03&status=final' \
+  --url "$breg_url" \
+  --token-file "$temporary_root/statistics-reader-token" \
+  --accept text/csv \
+  --output "$temporary_root/series.csv"
+python3 - "$temporary_root/series.csv" <<'PY'
+import csv, sys
+with open(sys.argv[1], encoding="utf-8", newline="") as source:
+    rows = list(csv.reader(source))
+expected = ["period", "periodStart", "periodEnd", "administrative-boundary", "has-measured-quantity", "value", "status"]
+if not rows or rows[0] != expected or not any(row[-2] == "5" for row in rows[1:]):
+    raise SystemExit("the API command did not preserve the released CSV count")
+if any(row[0] != "2025-01" for row in rows[1:]):
+    raise SystemExit("the series invented rows for an unpublished period")
 PY
 
 checkpoint "withdrawing the release with the public CLI"

@@ -248,18 +248,10 @@ use each one now. Once applied, `edit`, `submit` and `cancel` all report `alread
 
 ## Read the new contact
 
-The token from the first tutorial has probably expired, so get a fresh one:
+List the contacts as the local `editor` client. The API command obtains a fresh credential:
 
 ```sh
-rstack breg dev token editor
-```
-
-```text test-expect
-bregctl dev token succeeded.
-```
-
-```sh
-curl -s -H @.breg/dev/secrets/editor.header http://127.0.0.1:8090/v1/records/contacts
+rstack breg api /v1/records/contacts --client editor
 ```
 
 The list now holds three contacts. Among them is the one the Proposal created:

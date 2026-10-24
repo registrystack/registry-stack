@@ -286,23 +286,68 @@ package digest:
 rstack evidence runtime serve --runtime-config "$PWD/candidate/runtime.yaml"
 ```
 
-Route traffic through your TLS front only after `GET http://127.0.0.1:18090/ready` succeeds. To
-send one synthetic request, keep the access token in an owner-only curl configuration, never on a
-command line:
+Route traffic through your TLS front only after the readiness request succeeds:
 
-```sh test-skip="needs the running service and an access token"
-umask 077
-install -m 600 /dev/null "<owner-only-curl-config>"
+```sh test-skip="needs the running service"
+rstack evidence api /ready --url http://127.0.0.1:18090
 ```
 
-Put `header = "Authorization: Bearer <access-token>"` in it through your secret-management path,
-then send the request with `curl --config "<owner-only-curl-config>"` and delete the file. In
-production only, where the deployment ships `audit.path` to an append-only audit store, confirm
-that the request's `access-attempt` and `disclosure-release` entries, which share one
-`correlation`, reached that store.
+Create `deployment-check-client.json` by following
+[Create the client profile](../request-evidence-from-an-application/#create-the-client-profile).
+Use this deployment's reviewed endpoint and trust pins, plus the client registration, assertion
+audience, resource, and scopes issued for that endpoint. A loopback-only smoke may use
+`--local-loopback-discovery`; a deployed call uses its HTTPS origin and reviewed pinned trust after
+the deployment signer has been provisioned. Do not carry the development session's identity or
+discovery settings into this profile.
+
+Prepare a new synthetic request from that profile. This discovers the deployment's published
+contract and retains the pinned verification context before any response exists:
+
+```sh test-skip="needs the running service and token issuer"
+rstack evidence request prepare \
+  --profile deployment-check-client.json \
+  --requirement urn:example:requirement:adult-status:v1 \
+  --subject record-id=adult \
+  --name deployment-check
+```
+
+This creates owner-only `.evidence/requests/deployment-check/request.json`,
+`.evidence/requests/deployment-check/verification.json`, and
+`.evidence/requests/deployment-check/curl.config`. The curl config is a raw-HTTP handoff and is not
+input to `rstack evidence api`. Create an owner-only destination for a fresh, short-lived access
+token for the same registered client, resource, and scopes:
+
+```sh test-skip="the operator supplies the credential path"
+umask 077
+install -m 600 /dev/null "<owner-only-token-file>"
+```
+
+Have your secret-management path write the token into that file. Replace
+`https://<evidence-host>` with the same endpoint the profile names, then send the emitted request
+and verify the response against the emitted retained context:
+
+```sh test-skip="needs the running service and an access token"
+rstack evidence api /v1/evidence \
+  --url 'https://<evidence-host>' \
+  --token-file "<owner-only-token-file>" \
+  --input .evidence/requests/deployment-check/request.json \
+  --accept application/jose+json \
+  --output .evidence/requests/deployment-check/response.jws.json
+rstack evidence verify .evidence/requests/deployment-check/response.jws.json \
+  --context .evidence/requests/deployment-check/verification.json \
+  --output .evidence/requests/deployment-check/verified.json
+```
+
+The verification command must print `VERIFIED` before you inspect the assertion. Remove the token
+file through the same secret-management path after the check. In production only, where the
+deployment ships `audit.path` to an append-only audit store, confirm that the request's
+`access-attempt` and `disclosure-release` entries, which share one `correlation`, reached that
+store.
 
 {/* Evidence: crates/registry-evidence/src/server.rs, READY_ROUTE;
-    crates/registry-evidence/src/audit.rs, correlation; products/evidence/OPERATOR-CONTRACT.md. */}
+    crates/registry-evidence/src/audit.rs, correlation;
+    crates/registry-cli-api/src/api.rs, ApiArgs, resolve_connection, execute;
+    products/evidence/OPERATOR-CONTRACT.md. */}
 
 ## Next
 

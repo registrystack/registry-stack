@@ -81,7 +81,10 @@ Suppression does not keep a cell unknown. With minimum five and base five, two s
 
 ## Publish an ended period
 
-[Obtain a publisher token](../request-an-access-token/) into an absolute, owner-only file. The commands on this page use a dataset `monthly-discharge-reports`, published by `statistics-publisher` and read by `statistics-reader`. BReg has no release scheduler; your own scheduler or CI runs this command with a fresh token:
+[Obtain publisher and reader tokens](../request-an-access-token/) into separate absolute,
+owner-only files. The commands on this page use a dataset `monthly-discharge-reports`, published by
+`statistics-publisher` and read by `statistics-reader`. BReg has no release scheduler; your own
+scheduler or CI runs this command with a fresh token:
 
 ```sh test-skip="needs a live registry"
 bregctl statistics publish \
@@ -101,10 +104,11 @@ The response names the version, definition digest, content digest, and snapshot.
 A reader names its profile with `accessProfile` and a period range. Ask for `text/csv` to receive `period`, `periodStart`, `periodEnd`, one column per dimension, `value`, and `status`:
 
 ```sh test-skip="needs a live registry"
-curl --fail-with-body \
-  --header @"$READER_HEADERS_FILE" \
-  --header 'Accept: text/csv' \
-  "$BREG_URL/v1/statistics/monthly-discharge-reports/releases:series?accessProfile=statistics-reader&from=2025-01&to=2025-03&status=final"
+bregctl api \
+  '/v1/statistics/monthly-discharge-reports/releases:series?accessProfile=statistics-reader&from=2025-01&to=2025-03&status=final' \
+  --url "$BREG_URL" \
+  --token-file "$READER_TOKEN_FILE" \
+  --accept text/csv
 ```
 
 A suppressed value is blank, not zero; a period without a release has no cells.

@@ -565,9 +565,10 @@ const discovery = productToolset({
     ['discovery', 'DISCOVERY_BIN'],
     ['discoveryctl', 'DISCOVERYCTL_BIN'],
   ],
-  cargoArgs: ['-p', 'registry-discovery', '-p', 'registry-discoveryctl'],
+  cargoArgs: ['-p', 'registry-discovery', '-p', 'registry-discoveryctl', '-p', 'registry-rstack'],
   profileVariable: 'DISCOVERY_TUTORIAL_CARGO_PROFILE',
   targetName: 'discovery-tutorial-source',
+  managedComponents: { discovery: { entrypoint: 'discoveryctl', binaries: ['discoveryctl', 'discovery'] } },
   sessions: [],
 });
 

@@ -71,10 +71,7 @@ caseworkctl dev identity staff
 Read it as the administrator to confirm every queue has a team:
 
 ```sh
-caseworkctl dev token administrator
-curl --fail-with-body --silent --show-error \
-  --header @.casework/dev/secrets/administrator.header \
-  http://127.0.0.1:8092/v1/directory | jq .
+rstack casework api /v1/directory --client administrator | jq .
 ```
 
 ```json test-excerpt
@@ -92,16 +89,27 @@ curl --fail-with-body --silent --show-error \
 A deployment has no `dev-clients.yaml`. Its first administrator creates the first team with one
 call, naming directory revision `0` and an idempotency key so a retry cannot create it twice:
 
+```json title="directory-bootstrap.json"
+{
+  "teamId": "decisions-team",
+  "queueId": "decisions",
+  "staff": [
+    {"issuer": "https://identity.example.test/realms/registry", "subject": "<staff subject>"}
+  ],
+  "supervisors": [
+    {"issuer": "https://identity.example.test/realms/registry", "subject": "<supervisor subject>"}
+  ]
+}
+```
+
 ```sh test-skip="the development session already seeded its directory, so revision 0 is refused"
-curl --fail-with-body --silent --show-error --request POST \
+rstack casework api /v1/directory/bootstrap \
+  --url "$casework_url" \
   --header @administrator.header \
-  --header 'If-Match: "0"' \
-  --header 'Idempotency-Key: directory-bootstrap-1' \
-  --header 'Content-Type: application/json' \
-  --data '{"teamId": "decisions-team", "queueId": "decisions",
-    "staff": [{"issuer": "https://identity.example.test/realms/registry", "subject": "<staff subject>"}],
-    "supervisors": [{"issuer": "https://identity.example.test/realms/registry", "subject": "<supervisor subject>"}]}' \
-  "$casework_url/v1/directory/bootstrap"
+  --header 'Registry-Casework-Profile: administrator' \
+  --if-match '"0"' \
+  --idempotency-key directory-bootstrap-1 \
+  --input directory-bootstrap.json
 ```
 
 Casework refuses a queue the active package does not declare. Later changes go through

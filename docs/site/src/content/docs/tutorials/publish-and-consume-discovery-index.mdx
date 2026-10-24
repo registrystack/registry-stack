@@ -26,29 +26,37 @@ application, ask it which Registry Evidence service can answer a question.
 
 <QuickstartMeta
   outcome="One local Discovery index, one resolved requirement, and one provider to select."
-  time="About 15 minutes after the Rust dependencies are available"
+  time="About 15 minutes after the release assets are available"
   level="Local development with synthetic data"
-  prerequisites={['Git', 'Rust 1.95.0 through rustup', 'Python 3', 'curl', 'Local ports 38080 and 38090']}
+  prerequisites={['Git', 'Python 3', 'curl', 'Local ports 38080 and 38090', 'The tools required by the release verification procedure']}
 />
 
-## Build discovery and discoveryctl
+## Install Registry Stack
 
-`discoveryctl` checks and packages an index offline, and `discovery` serves one package. Clone the
-repository and build both from its root:
+Download one exact `rstack-vX.Y.Z-install.sh` and the verification material from the same Registry
+Stack release. Follow the
+[release verification procedure](https://github.com/registrystack/registry-stack/blob/main/release/VERIFY.md)
+before running the installer. From the verified release directory, install the `discovery`
+component:
+
+```sh test-skip="uses a downloaded, independently verified release installer"
+tag="vX.Y.Z"
+bash "rstack-${tag}-install.sh" discovery
+rstack discovery --version
+```
+
+The managed installation exposes `rstack` on your `PATH`. The `discovery` component supplies the
+Discovery runtime and its command-line tools from the same release.
+
+{/* Evidence: crates/registry-rstack/README.md; crates/registry-rstack/install.sh;
+    release/VERIFY.md. */}
+
+Clone the same release for the example project and synthetic provider description:
 
 ```sh test-skip="the runner starts in a copy of this checkout"
-git clone --depth 1 --quiet https://github.com/registrystack/registry-stack.git
+git clone --branch "$tag" --depth 1 --quiet https://github.com/registrystack/registry-stack.git
 cd registry-stack
 ```
-
-```sh test-skip="builds from source; the runner serves the binaries under test"
-. scripts/cargo-runtime-library-path.sh
-registry_cargo_build "$PWD" --locked --release -p registry-discovery -p registry-discoveryctl
-export PATH="$PWD/target/release:$PATH"
-```
-
-The helper also sets the library path the binaries need on macOS, so run every `discoveryctl` and
-`discovery` command in this shell.
 
 ## Check the project
 
@@ -91,7 +99,7 @@ Check the project. `--allow-loopback` accepts the local `http://127.0.0.1` URL; 
 HTTPS origins pass.
 
 ```sh
-discoveryctl check --project discovery-project --allow-loopback
+rstack discovery check --project discovery-project --allow-loopback
 ```
 
 ```text test-expect
@@ -118,7 +126,7 @@ python3 products/discovery/tutorial/publication_server.py \
 Back in the first shell, package the index:
 
 ```sh
-discoveryctl package \
+rstack discovery package \
   --project discovery-project \
   --output discovery-project/package \
   --allow-loopback
@@ -144,7 +152,7 @@ Stop the publication server with `Ctrl+C`. Discovery never contacts a provider w
 
 ```sh test-background="http://127.0.0.1:38080/ready"
 DISCOVERY_PACKAGE_ROOT="$PWD/discovery-project/package" \
-  discovery --runtime-config "$PWD/discovery-project/runtime.yaml"
+  rstack discovery serve --runtime-config "$PWD/discovery-project/runtime.yaml"
 ```
 
 It checks the package against its `SHA256SUMS` file before it listens. In the second shell:
@@ -163,10 +171,11 @@ Now play the application. It knows it must establish that a person is an adult, 
 provider can say so. Ask Discovery which Evidence types satisfy that requirement:
 
 ```sh
-curl -s \
-  -H 'Content-Type: application/json' \
-  --data '{"requirementId":"urn:example:requirement:adult-status","jurisdiction":"urn:example:jurisdiction"}' \
-  http://127.0.0.1:38080/v1/evidence-types/resolve
+rstack discovery api /v1/evidence-types/resolve \
+  --url http://127.0.0.1:38080 \
+  --input - <<'JSON'
+{"requirementId":"urn:example:requirement:adult-status","jurisdiction":"urn:example:jurisdiction"}
+JSON
 ```
 
 ```json test-expect
@@ -193,10 +202,9 @@ type.
 Search for Registry Evidence services that assert that type:
 
 ```sh
-curl -s --get \
-  --data-urlencode 'serviceKind=evidence' \
-  --data-urlencode 'evidenceType=urn:example:evidence-type:adult-status' \
-  http://127.0.0.1:38080/v1/services
+rstack discovery api \
+  '/v1/services?serviceKind=evidence&evidenceType=urn%3Aexample%3Aevidence-type%3Aadult-status' \
+  --url http://127.0.0.1:38080
 ```
 
 The response carries the `catalogRevision` from the package step and one item. Its key fields:
@@ -229,8 +237,8 @@ saves selections from Rust, Node.js, or Python.
 | Symptom | Cause | Fix |
 | --- | --- | --- |
 | A service stops at startup | Port `38090` or `38080` is in use | Stop the process using the port, then start the service again |
-| `discoveryctl package` cannot fetch an origin | The publication server is not running | Start it, then package again; a failed run writes no package |
-| `discoveryctl package` refuses the output directory | `discovery-project/package` exists from an earlier run | Remove it, then package again |
+| `rstack discovery package` cannot fetch an origin | The publication server is not running | Start it, then package again; a failed run writes no package |
+| `rstack discovery package` refuses the output directory | `discovery-project/package` exists from an earlier run | Remove it, then package again |
 
 ## Next
 

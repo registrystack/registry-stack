@@ -124,11 +124,9 @@ To start a local session:
 messagingctl init ./notices
 messagingctl dev ./notices
 # in another terminal
-messagingctl dev token case-system ./notices
-curl -X POST http://127.0.0.1:8107/v1/messages \
-  -H @./notices/.messaging/dev/tokens/case-system.header \
-  -H 'content-type: application/json' -H 'Idempotency-Key: first' \
-  --data '{"senderProfile":"reminders-sms","to":{"phone":"+15555550100"},"template":{"id":"appointment-reminder-sms","version":"1"},"locale":"en","data":{"name":"Ada","day":"2026-10-01","office":"North"}}'
+printf '%s\n' '{"senderProfile":"reminders-sms","to":{"phone":"+15555550100"},"template":{"id":"appointment-reminder-sms","version":"1"},"locale":"en","data":{"name":"Ada","day":"2026-10-01","office":"North"}}' |
+  messagingctl api /v1/messages --project ./notices --client case-system \
+    --idempotency-key first --input -
 ```
 
 The session runs in the foreground until Ctrl-C or SIGTERM and owns

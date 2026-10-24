@@ -58,6 +58,7 @@ async function fakeRstack(dir) {
       '  breg) entrypoint=bregctl ;;',
       '  casework) entrypoint=caseworkctl ;;',
       '  evidence) entrypoint=evidencectl ;;',
+      '  discovery) entrypoint=discoveryctl ;;',
       '  *) printf "unsupported fixture product: %s\\n" "$product" >&2; exit 2 ;;',
       'esac',
       'exec "$install_root/current/components/$product/$entrypoint/$entrypoint" "$@"',
@@ -170,6 +171,39 @@ async function fakeBregBinaries(dir) {
   }
   return { BREG_BIN: join(dir, 'breg'), BREGCTL_BIN: join(dir, 'bregctl'), RSTACK_BIN: await fakeRstack(dir) };
 }
+
+test('the discovery toolset serves managed API calls and its selected runtime', async () => {
+  const body = '## Query\n\n' +
+    fence('sh', 'rstack discovery api /v1/services --url http://127.0.0.1:38080\ndiscovery --version') +
+    fence('text test-expect', 'discoveryctl api /v1/services --url http://127.0.0.1:38080\ndiscovery --version');
+  await withPage(body, async ({ dir, page }) => {
+    for (const name of ['discovery', 'discoveryctl']) {
+      await writeFile(join(dir, name), `#!/bin/sh\nprintf '%s %s\\n' ${name} "$*"\n`, { mode: 0o755 });
+    }
+    const { code, output } = await run(['--toolset', 'discovery', page], {
+      DISCOVERY_BIN: join(dir, 'discovery'),
+      DISCOVERYCTL_BIN: join(dir, 'discoveryctl'),
+      RSTACK_BIN: await fakeRstack(dir),
+    });
+    assert.equal(code, 0, output);
+    assert.match(output, /tutorial PASS/u);
+  });
+});
+
+test('the discovery toolset refuses an incomplete supplied binary set', async () => {
+  await withPage('## Query\n\n' + fence('sh', 'true'), async ({ dir, page }) => {
+    for (const name of ['discovery', 'discoveryctl']) {
+      await writeFile(join(dir, name), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+    }
+    const { code, output } = await run(['--toolset', 'discovery', page], {
+      DISCOVERY_BIN: join(dir, 'discovery'),
+      DISCOVERYCTL_BIN: join(dir, 'discoveryctl'),
+      RSTACK_BIN: '',
+    });
+    assert.equal(code, 2, output);
+    assert.match(output, /set DISCOVERY_BIN, DISCOVERYCTL_BIN, and RSTACK_BIN, or none of them to build from source/u);
+  });
+});
 
 // A directory holding a packed npm package and a stand-in wheel, as
 // release/scripts/assemble-registry-client-packages.py leaves its output.

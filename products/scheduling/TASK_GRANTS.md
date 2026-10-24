@@ -243,19 +243,26 @@ caseworkctl dev grant scheduling-agent \
 ```
 
 The command reports an owner-only header file and the immutable grant deadline.
-Use that header to read a free start, then book it. Set `START` and
-`POLICY_REVISION` from the availability response:
+Use the `rstack` installation whose Scheduling component matches the runtime to
+read the active policy revision, select a free start, then book it. Set
+`POLICY_REVISION` from the service document and `START` from the availability
+response. `--header @FILE` reads the grant header without putting
+its value on the command line:
 
 ```sh
-curl --fail-with-body \
-  -H "$(cat "$HEADER_FILE")" \
-  "$SCHEDULING_URL/v1/availability?offering=registry-update-30"
+rstack scheduling api /v1/scheduling \
+  --url "$SCHEDULING_URL" \
+  --header @"$HEADER_FILE"
 
-curl --fail-with-body -X POST \
-  -H "$(cat "$HEADER_FILE")" \
-  -H 'content-type: application/json' \
-  -H 'idempotency-key: approved-registry-update-1' \
-  --data @- "$SCHEDULING_URL/v1/appointments" <<JSON
+rstack scheduling api '/v1/availability?offering=registry-update-30' \
+  --url "$SCHEDULING_URL" \
+  --header @"$HEADER_FILE"
+
+rstack scheduling api /v1/appointments \
+  --url "$SCHEDULING_URL" \
+  --header @"$HEADER_FILE" \
+  --idempotency-key approved-registry-update-1 \
+  --input - <<JSON
 {"admission":{"offering":"registry-update-30","start":"$START","party":{"recipients":1,"attendees":1},"duplicateKey":"subject:approved-request","policyRevision":$POLICY_REVISION,"capabilities":[],"prerequisites":[]}}
 JSON
 ```

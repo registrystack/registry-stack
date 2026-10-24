@@ -245,11 +245,16 @@ As staff, find the open task in the `applications` queue and read the facts you 
 applicant's email address stays in BReg.
 
 ```sh
-curl -fsS --header @"$staff_headers" --header 'Registry-Casework-Profile: staff' \
-  "$casework_url/v1/review-tasks?queue=applications" > tutorial-work/tasks.json
+caseworkctl api '/v1/review-tasks?queue=applications' \
+  --url "$casework_url" \
+  --header @"$staff_headers" \
+  --header 'Registry-Casework-Profile: staff' \
+  --output tutorial-work/tasks.json
 task_id="$(jq -r '.items[] | select(.state == "open") | .taskId' tutorial-work/tasks.json)"
-curl -fsS --header @"$staff_headers" --header 'Registry-Casework-Profile: staff' \
-  "$casework_url/v1/review-tasks/$task_id/context" | jq .context.snapshot
+caseworkctl api "/v1/review-tasks/$task_id/context" \
+  --url "$casework_url" \
+  --header @"$staff_headers" \
+  --header 'Registry-Casework-Profile: staff' | jq .context.snapshot
 ```
 
 ```json test-excerpt
@@ -260,19 +265,21 @@ curl -fsS --header @"$staff_headers" --header 'Registry-Casework-Profile: staff'
 }
 ```
 
-Claim the task at the revision you read. Casework answers `200`:
+Claim the task at the revision you read:
 
 ```sh
 revision="$(jq -r '.items[] | select(.state == "open") | .revision' tutorial-work/tasks.json)"
-curl -sS --output /dev/null --write-out '%{http_code}\n' -X POST \
-  --header @"$staff_headers" --header 'Registry-Casework-Profile: staff' \
-  --header "If-Match: \"$revision\"" --header "Idempotency-Key: $(openssl rand -hex 16)" \
-  "$casework_url/v1/review-tasks/$task_id/claim"
+caseworkctl api "/v1/review-tasks/$task_id/claim" \
+  --url "$casework_url" \
+  --header @"$staff_headers" \
+  --header 'Registry-Casework-Profile: staff' \
+  --method POST \
+  --if-match "\"$revision\"" \
+  --idempotency-key "$(openssl rand -hex 16)" \
+  --output /dev/null
 ```
 
-```text test-expect
-200
-```
+The command exits successfully when Casework returns the claimed task.
 
 Before you decide, restart Coordinator. The run is durable state, not a running process:
 
@@ -287,23 +294,29 @@ jq .coordinatorRestarts "$session"
 1
 ```
 
-Now approve at the task's current revision, with the policy's `approved` outcome. Casework answers
-`204`:
+Now approve at the task's current revision, with the policy's `approved` outcome:
 
 ```sh
-revision="$(curl -fsS --header @"$staff_headers" --header 'Registry-Casework-Profile: staff' \
-  "$casework_url/v1/review-tasks/$task_id" | jq -r .revision)"
-curl -sS --output /dev/null --write-out '%{http_code}\n' -X POST \
-  --header @"$staff_headers" --header 'Registry-Casework-Profile: staff' \
-  --header 'Content-Type: application/json' \
-  --header "If-Match: \"$revision\"" --header "Idempotency-Key: $(openssl rand -hex 16)" \
-  --data '{"decision":{"type":"approve","outcome":"approved"}}' \
-  "$casework_url/v1/review-tasks/$task_id/decisions"
+caseworkctl api "/v1/review-tasks/$task_id" \
+  --url "$casework_url" \
+  --header @"$staff_headers" \
+  --header 'Registry-Casework-Profile: staff' \
+  --output tutorial-work/task.json
+revision="$(jq -r .revision tutorial-work/task.json)"
+cat > tutorial-work/decision.json <<'JSON'
+{"decision":{"type":"approve","outcome":"approved"}}
+JSON
+caseworkctl api "/v1/review-tasks/$task_id/decisions" \
+  --url "$casework_url" \
+  --header @"$staff_headers" \
+  --header 'Registry-Casework-Profile: staff' \
+  --if-match "\"$revision\"" \
+  --idempotency-key "$(openssl rand -hex 16)" \
+  --input tutorial-work/decision.json \
+  --output /dev/null
 ```
 
-```text test-expect
-204
-```
+The command exits successfully when Casework records the decision and answers `204`.
 
 If a request answers `401`, the local token expired. Refresh the staff token, and the Coordinator
 token for `coordinatorctl`, then repeat:
