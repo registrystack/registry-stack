@@ -597,10 +597,12 @@ invariants:
       missing a grant apply issues, naming the same command. In configured
       split mode, plan, apply, and startup refuse a runtime role whose
       ownership, TRIGGER privilege, or schema CREATE privilege weakens the
-      split, or an attached trigger on a scheduling_* table, naming REASSIGN
-      OWNED BY then schedulingctl apply, or REVOKE TRIGGER, REVOKE CREATE ON
-      SCHEMA (from the grantee it is held through, PUBLIC included), or DROP
-      TRIGGER then a rerun of the refused command. Split-mode apply refuses a
+      split, or an attached trigger on a scheduling_* table, naming exact
+      ALTER SCHEMA, ALTER TABLE, ALTER VIEW, ALTER MATERIALIZED VIEW, ALTER
+      SEQUENCE, ALTER FOREIGN TABLE, or ALTER ROUTINE owner corrections then
+      schedulingctl apply, or REVOKE TRIGGER, REVOKE CREATE ON SCHEMA (from
+      the grantee it is held through, PUBLIC included), or DROP TRIGGER then
+      a rerun of the refused command. Split-mode apply refuses a
       TRIGGER default privilege naming ALTER DEFAULT PRIVILEGES FOR ROLE
       <migrator> REVOKE TRIGGER ON TABLES FROM <grantee> then a rerun. Plan
       refuses a runtime role that cannot read the ledger it would compare,

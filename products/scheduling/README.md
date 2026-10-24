@@ -140,8 +140,9 @@ runtime credential can now write the ledger, naming `schedulingctl apply` to
 reissue the grants. With two roles, `plan`, `apply`, and `serve` refuse a
 runtime role that owns a Scheduling object, holds TRIGGER on a Scheduling
 table, or holds CREATE on the schema, and a trigger attached to a Scheduling
-table, naming `REASSIGN OWNED BY` then `schedulingctl apply`, or `REVOKE
-TRIGGER`, `REVOKE CREATE ON SCHEMA`, or `DROP TRIGGER` then a rerun of the
+table, naming object-scoped `ALTER ... OWNER TO` corrections then
+`schedulingctl apply`, or `REVOKE TRIGGER`, `REVOKE CREATE ON SCHEMA`, or
+`DROP TRIGGER` then a rerun of the
 refused command. `serve` also refuses a split runtime role missing a grant
 apply issues, naming `schedulingctl apply`. A `serve` that finds a schema older than the one its
 binary carries refuses at the readiness check rather than serving against it,
@@ -247,12 +248,15 @@ declares, each due a fixed number of minutes before the appointment, and a
 worker renders every due intent as one
 shared hook envelope in canonical JSON, the same envelope an appointment
 observer receives, and POSTs it to the configured reminder destination with
-`content-type: application/json`, once per claim. Delivery runs on the
+`content-type: application/json`. Delivery runs on the
 shared dispatch core: each attempt is bounded at five seconds, a transport
 failure retries after thirty seconds, doubling to about thirty-two minutes,
 a refusal the retry classes do not cover sets the intent aside for the
 operator, and the eighth failed attempt sets it aside. A worker that stops
 mid-attempt leaves its lease to lapse, and the attempt counts as a failure.
+If the destination accepts an event but the runtime cannot record that
+outcome, recovery applies the retry schedule and may send the event again.
+Successful delivery is therefore not guaranteed.
 A cancellation or reschedule cancels the appointment's reminders no attempt
 has started on, in the same transaction. Just before each send the runtime
 reads, under the attempt's lease, whether the intent still describes the

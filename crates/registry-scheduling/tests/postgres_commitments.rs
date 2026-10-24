@@ -6760,8 +6760,8 @@ async fn intent_state(fx: &Fixture, claim_id: &str) -> (String, i32, bool) {
 }
 
 /// A dispatch pass sends every due intent to the configured destination and
-/// reads each answer back the way the classes say: a taken event is delivered
-/// and never sent twice, a destination that could not answer proves nothing
+/// reads each answer back the way the classes say: a recorded successful
+/// delivery is not retried, a destination that could not answer proves nothing
 /// and waits out a back-off, and an outright refusal is held for an operator
 /// rather than retried against a destination that has already said no.
 ///
@@ -6947,6 +6947,112 @@ async fn a_signed_reminder_uses_the_shared_event_delivery_contract() {
         sign_v1(SIGNING_KEY.as_bytes(), fields("/other")).expect("the target-bound signature"),
         expected,
         "the exact request target is covered"
+    );
+}
+
+/// A receiver can accept an event before the dispatcher loses the database
+/// acknowledgement. Recovery retries the same event after the lease expires,
+/// so the receiver can deduplicate it by the stable envelope identifier.
+#[tokio::test]
+async fn an_unrecorded_delivery_is_retried_with_the_same_event() {
+    let destination = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/events"))
+        .respond_with(ResponseTemplate::new(202))
+        .mount(&destination)
+        .await;
+    let fx = fixture().await;
+    let (appointment, _) = booked(&fx, 90, 200, "dispatch-unrecorded").await;
+    let outbox_id = intent_of(&fx, &appointment, "confirmation").await;
+    make_intent_due(&fx, outbox_id).await;
+    let transport = transport_to(&destination);
+
+    fx.admin
+        .batch_execute(
+            "CREATE FUNCTION refuse_delivery_acknowledgement() RETURNS trigger
+             LANGUAGE plpgsql AS $fixture$
+             BEGIN
+               IF NEW.state = 'delivered' THEN
+                 RAISE EXCEPTION 'fixture delivery acknowledgement unavailable';
+               END IF;
+               RETURN NEW;
+             END;
+             $fixture$;
+             CREATE TRIGGER refuse_delivery_acknowledgement
+               BEFORE UPDATE OF state ON scheduling_outbox
+               FOR EACH ROW EXECUTE FUNCTION refuse_delivery_acknowledgement();",
+        )
+        .await
+        .expect("interrupt the delivery outcome write");
+    dispatch_due_intents(&fx.store, SCHEDULING_ID, Some(Arc::clone(&transport)))
+        .await
+        .expect_err("the accepted delivery cannot be recorded");
+    let received = destination.received_requests().await.expect("the requests");
+    assert_eq!(
+        received.len(),
+        1,
+        "the receiver accepted the first delivery"
+    );
+    let first: Value = serde_json::from_slice(&received[0].body).expect("the event");
+    assert_eq!(first["data"]["appointmentId"], appointment);
+    assert_eq!(
+        outbox_row(&fx, outbox_id).await,
+        ("leased".to_owned(), 1, None, None),
+        "the unrecorded outcome leaves the intent leased"
+    );
+
+    fx.admin
+        .batch_execute(
+            "DROP TRIGGER refuse_delivery_acknowledgement ON scheduling_outbox;
+             DROP FUNCTION refuse_delivery_acknowledgement();",
+        )
+        .await
+        .expect("restore the delivery outcome write");
+    dispatch_due_intents(&fx.store, SCHEDULING_ID, Some(Arc::clone(&transport)))
+        .await
+        .expect("a pass inside the lease leaves the intent alone");
+    assert_eq!(
+        destination
+            .received_requests()
+            .await
+            .expect("the requests")
+            .len(),
+        1,
+        "recovery waits for the outstanding lease"
+    );
+    lapse_intent_lease(&fx, outbox_id).await;
+    dispatch_due_intents(&fx.store, SCHEDULING_ID, Some(Arc::clone(&transport)))
+        .await
+        .expect("recover the uncertain attempt after its lease");
+    assert_eq!(
+        outbox_row(&fx, outbox_id).await,
+        (
+            "pending".to_owned(),
+            1,
+            Some("delivery_failed".to_owned()),
+            Some(30_000)
+        ),
+        "recovery applies the frozen retry schedule"
+    );
+    make_intent_due(&fx, outbox_id).await;
+    dispatch_due_intents(&fx.store, SCHEDULING_ID, Some(transport))
+        .await
+        .expect("retry the unrecorded delivery after its back-off");
+
+    let received = destination.received_requests().await.expect("the requests");
+    assert_eq!(
+        received.len(),
+        2,
+        "the receiver sees the accepted event again"
+    );
+    assert_eq!(
+        received[0].body, received[1].body,
+        "retries preserve the canonical event"
+    );
+    assert_eq!(
+        outbox_row(&fx, outbox_id).await,
+        ("delivered".to_owned(), 2, None, None),
+        "the retry records delivery as the second attempt"
     );
 }
 
