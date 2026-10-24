@@ -76,6 +76,7 @@ export function createSharedTrackingClient(options = {}) {
   let state = { ...EMPTY_STATE };
   let frame;
   let frameReady;
+  let frameReadyCancel;
   let closed = false;
   let suspended = false;
   let localRefusal = false;
@@ -104,10 +105,32 @@ export function createSharedTrackingClient(options = {}) {
     for (const subscriber of failureSubscribers) subscriber(error);
     return error;
   };
+  const recoverableFailures = new WeakSet();
+  const recoverableFailure = () => {
+    const error = trackingError();
+    recoverableFailures.add(error);
+    return error;
+  };
   const discardFrame = () => {
+    if (frameReadyCancel) {
+      const cancel = frameReadyCancel;
+      frameReadyCancel = undefined;
+      cancel();
+      return;
+    }
     frame?.remove();
     frame = undefined;
     frameReady = undefined;
+  };
+  const dropFailedFrame = failedFrame => {
+    if (!failedFrame || frame !== failedFrame) return;
+    discardFrame();
+    for (const [id, item] of [...pending]) {
+      if (item.frame !== failedFrame) continue;
+      pending.delete(id);
+      clearTimeout(item.timer);
+      item.reject(trackingError());
+    }
   };
   const replaceNativeRealm = next => {
     discardFrame();
@@ -167,8 +190,14 @@ export function createSharedTrackingClient(options = {}) {
     pending.delete(id);
     clearTimeout(item.timer);
     const response = parseTrackingResponse(event.data);
-    if (!response || !response.ok || (response.deviceId && item.type !== 'associate')) {
+    if (!response || (response.deviceId && item.type !== 'associate')) {
       item.reject(fail());
+      return;
+    }
+    if (!response.ok) {
+      item.reject(item.recoverUnavailable && response.error === 'unavailable'
+        ? recoverableFailure()
+        : fail());
       return;
     }
     const current = update(response.state);
@@ -188,42 +217,113 @@ export function createSharedTrackingClient(options = {}) {
   const ensureFrame = () => {
     if (closed || !currentWindow || !currentDocument) return Promise.reject(trackingError());
     if (frameReady) return frameReady;
-    frameReady = new Promise((resolve, reject) => {
-      frame = currentDocument.createElement('iframe');
-      frame.src = bridge.href;
-      frame.hidden = true;
-      frame.title = 'Shared tracking preferences';
-      frame.referrerPolicy = 'no-referrer';
-      frame.setAttribute('aria-hidden', 'true');
-      frame.setAttribute('tabindex', '-1');
-      const timer = setTimeout(() => reject(trackingError()), timeoutMs);
-      frame.addEventListener('load', () => { clearTimeout(timer); resolve(frame); }, { once: true });
-      frame.addEventListener('error', () => { clearTimeout(timer); reject(trackingError()); }, { once: true });
-      currentDocument.body.append(frame);
+    const candidate = currentDocument.createElement('iframe');
+    candidate.src = bridge.href;
+    candidate.hidden = true;
+    candidate.title = 'Shared tracking preferences';
+    candidate.referrerPolicy = 'no-referrer';
+    candidate.setAttribute('aria-hidden', 'true');
+    candidate.setAttribute('tabindex', '-1');
+    let settled = false;
+    let resolveReady;
+    let rejectReady;
+    const ready = new Promise((resolve, reject) => {
+      resolveReady = resolve;
+      rejectReady = reject;
     });
-    return frameReady;
-  };
-  const request = async (type, payload = {}, requestOptions = {}) => {
-    let readyFrame;
+    frame = candidate;
+    frameReady = ready;
+    const reset = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (frame === candidate) frame = undefined;
+      if (frameReady === ready) frameReady = undefined;
+      if (frameReadyCancel === reset) frameReadyCancel = undefined;
+      candidate.remove();
+      rejectReady(trackingError());
+    };
+    const timer = setTimeout(reset, timeoutMs);
+    frameReadyCancel = reset;
+    candidate.addEventListener('load', () => {
+      if (settled) return;
+      if (closed || frame !== candidate || frameReady !== ready) {
+        reset();
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      if (frameReadyCancel === reset) frameReadyCancel = undefined;
+      resolveReady(candidate);
+    }, { once: true });
+    candidate.addEventListener('error', reset, { once: true });
     try {
-      readyFrame = await ensureFrame();
+      currentDocument.body.append(candidate);
     } catch {
-      throw fail();
+      reset();
     }
-    if (closed || readyFrame !== frame) throw trackingError();
+    return ready;
+  };
+  const request = (type, payload = {}, requestOptions = {}) => {
     const message = createTrackingRequest(type, payload, () => currentWindow.crypto.randomUUID());
     return new Promise((resolve, reject) => {
+      let settled = false;
+      let requestFrame;
+      const resolveOnce = value => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(value);
+      };
+      const rejectOnce = error => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        reject(error);
+      };
       const timer = setTimeout(() => {
         pending.delete(message.id);
-        reject(fail());
+        dropFailedFrame(requestFrame);
+        rejectOnce(fail());
       }, requestOptions.timeoutMs ?? timeoutMs);
-      pending.set(message.id, { resolve, reject, timer, type, ...payload });
-      readyFrame.contentWindow.postMessage(message, bridge.origin);
+      let readiness;
+      try {
+        readiness = ensureFrame();
+      } catch {
+        rejectOnce(fail());
+        return;
+      }
+      readiness.then(readyFrame => {
+        if (settled) return;
+        if (closed || readyFrame !== frame) {
+          rejectOnce(trackingError());
+          return;
+        }
+        requestFrame = readyFrame;
+        pending.set(message.id, {
+          resolve: resolveOnce,
+          reject: rejectOnce,
+          timer,
+          type,
+          frame: readyFrame,
+          recoverUnavailable: requestOptions.recoverUnavailable === true,
+          ...payload,
+        });
+        try {
+          readyFrame.contentWindow.postMessage(message, bridge.origin);
+        } catch {
+          pending.delete(message.id);
+          dropFailedFrame(readyFrame);
+          rejectOnce(fail());
+        }
+      }, () => {
+        if (!settled) rejectOnce(fail());
+      });
     });
   };
 
   const resume = () => {
-    if (!closed && frame && currentDocument.visibilityState !== 'hidden') {
+    if (!closed && currentDocument.visibilityState !== 'hidden') {
       void client.read().catch(() => notify());
     }
   };
@@ -258,10 +358,16 @@ export function createSharedTrackingClient(options = {}) {
         notify();
       }
       try {
-        await request('choose', { choice, expectedRevision });
+        await request(
+          'choose',
+          { choice, expectedRevision },
+          { recoverUnavailable: choice === 'accepted' },
+        );
       } catch (error) {
         if (choice === 'rejected') discardFrame();
-        throw error;
+        if (choice !== 'accepted' || !recoverableFailures.has(error)) throw error;
+        await request('read');
+        if (effectiveState().choice !== 'accepted') throw fail();
       }
       // A refusal that could not reach the bridge remains local and visible as
       // an error, rather than allowing an older shared acceptance to return.
