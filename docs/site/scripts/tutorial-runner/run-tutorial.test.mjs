@@ -1001,6 +1001,24 @@ test('the evidence toolset serves its binaries, the client package, and the FHIR
   });
 });
 
+for (const annotation of ['test-file', 'test-append']) {
+  test(`the evidence toolset supplies the client imported by a ${annotation} program`, async () => {
+    const body = '## Request\n\n' +
+      (annotation === 'test-append' ? fence('python title="request.py" test-file', '# A saved application.\n') : '') +
+      fence(`python title="request.py" ${annotation}`, 'from registry_client import NAME\nprint(NAME)') +
+      fence('sh', 'python3 request.py') +
+      fence('text test-expect', 'unpacked');
+    await withPage(body, async ({ dir, page }) => {
+      const { code, output } = await run(['--toolset', 'evidence', page], {
+        ...(await fakeEvidenceBinaries(dir, join(dir, 'calls.log'))),
+        REGISTRY_CLIENT_PY_WHEEL: await fakeWheel(dir),
+      });
+      assert.equal(code, 0, output);
+      assert.match(output, /tutorial PASS/u);
+    });
+  });
+}
+
 test('the evidence toolset needs the client wheel as an absolute path to a file', async () => {
   await withPage('## A\n\n' + fence('sh', "python3 - <<'PY'\nimport registry_client\nPY"), async ({ dir, page }) => {
     const env = await fakeEvidenceBinaries(dir, join(dir, 'calls.log'));

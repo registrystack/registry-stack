@@ -676,7 +676,10 @@ const evidence = {
   ...evidenceProduct,
 
   async prepare({ repoRoot, binDir, workRoot, readerDir, steps = [] }) {
-    const needsPythonClient = steps.some((step) => step.kind === 'run' && PYTHON_CLIENT.test(step.code));
+    const needsPythonClient = steps.some((step) =>
+      (step.kind === 'run' && PYTHON_CLIENT.test(step.code)) ||
+      (step.kind === 'file' && PYTHON_CLIENT.test(step.text)),
+    );
     const wheel = needsPythonClient ? clientWheel() : undefined;
     await evidenceProduct.prepare({ repoRoot, binDir, workRoot });
     await packageExamples(join(repoRoot, 'products/evidence/examples'), join(readerDir, 'evidence-examples.tar.gz'));
