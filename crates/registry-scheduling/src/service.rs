@@ -1203,7 +1203,7 @@ impl SchedulingService {
         // Every exact-time hold this runtime writes carries allocation rows,
         // and a publication refuses to change the mode of an offering with
         // an active hold. An active exact-time hold without any rows is
-        // therefore an inconsistent ledger: the window path below writes a
+        // therefore an inconsistent ledger: confirming it would write a
         // booking with no allocation, and consuming the hold would release
         // its capacity to a second booking. A closed or expired hold
         // consumes nothing, so it keeps the store's replay and refusal
@@ -1248,6 +1248,14 @@ impl SchedulingService {
                         Some(request),
                         commitment,
                     )
+                    .await
+            }
+            // An exact-time hold without allocation rows has ended: the
+            // check above refuses a live one. The store answers its replay
+            // or refusal and consumes nothing.
+            (ResolvedRequestSupply::Window(ResolvedSupply::ExactTime { .. }), None) => {
+                self.store
+                    .confirm_unallocated_hold(hold_id, commitment)
                     .await
             }
             (ResolvedRequestSupply::Window(supply), _) => {
@@ -3227,17 +3235,9 @@ impl ResolvedSupply {
         pick: impl FnOnce(&'a [PublishedWindow]) -> Option<&'a PublishedWindow>,
     ) -> Option<SupplyContext<'a>> {
         match self {
-            Self::ExactTime {
-                exact,
-                members,
-                open,
-                closures,
-            } => Some(SupplyContext::ExactTime {
-                exact,
-                members,
-                open,
-                closures,
-            }),
+            // Exact-time supply commits as bundle lines and has no
+            // single-supply context.
+            Self::ExactTime { .. } => None,
             Self::Window {
                 windows,
                 lead_time_minutes,
@@ -3245,7 +3245,7 @@ impl ResolvedSupply {
                 channels,
                 open,
                 closures,
-            } => pick(windows).map(|window| SupplyContext::Window {
+            } => pick(windows).map(|window| SupplyContext {
                 window,
                 lead_time_minutes: *lead_time_minutes,
                 horizon_days: *horizon_days,

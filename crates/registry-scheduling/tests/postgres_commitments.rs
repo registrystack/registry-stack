@@ -47,8 +47,8 @@ use registry_scheduling::runtime::{
 use registry_scheduling::service::SchedulingService;
 use registry_scheduling::source_busy::{BusyImpactProjection, BusyImportProfileConfig};
 use registry_scheduling::store::{
-    activation_layout, attempt_key_reference, ActivationRequest, ActivePackage, CommitError,
-    CommitOutcome, CommitSupply, Commitment, PostgresStore, RoleMode, StoreError, SupplyContext,
+    activation_layout, attempt_key_reference, ActivationRequest, ActivePackage, BundleSupplyLine,
+    CommitError, CommitOutcome, CommitSupply, Commitment, PostgresStore, RoleMode, StoreError,
 };
 use registry_scheduling_core::{
     location_closure_intervals, location_open_intervals, AdmissionRefusal, AdmissionRequest,
@@ -716,6 +716,34 @@ fn exact_supply_parts(
     let closures = location_closure_intervals(facts, &offering.location, &timezone)
         .expect("resolve the closures");
     (members, open, closures)
+}
+
+/// The one primary line an exact-time commitment places, as the service
+/// resolves it: a direct create names no resource, and a confirmation names
+/// the member its hold already occupies, read back from the ledger.
+fn primary_line<'p>(
+    offering: &'p OfferingPolicy,
+    (members, open, closures): &'p (
+        Vec<PoolMember>,
+        Vec<registry_platform_calendar::CalendarInterval>,
+        Vec<registry_platform_calendar::CalendarInterval>,
+    ),
+    resource: Option<&'p str>,
+) -> BundleSupplyLine<'p> {
+    BundleSupplyLine {
+        requirement_id: "primary".to_owned(),
+        offering,
+        exact: offering
+            .exact_time
+            .as_ref()
+            .expect("the test offering is exact-time"),
+        members,
+        open,
+        closures,
+        resource,
+        stored_resource: resource.is_some(),
+        units: 1,
+    }
 }
 
 /// The instant every fixture pins the deployment's clock at: tomorrow at
@@ -3618,13 +3646,32 @@ async fn a_delayed_confirmation_cannot_transfer_rebooked_capacity_after_expiry()
     let expires_at = moment(&hold, "expiresAt");
     let confirmation_started_at = expires_at - TimeDelta::seconds(1);
     let after_expiry = expires_at + TimeDelta::seconds(1);
-    let hold_actor = fx
+    let held = fx
         .store
         .claim(hold_id)
         .await
         .expect("read the held claim")
-        .expect("the hold stands")
-        .actor;
+        .expect("the hold stands");
+    let hold_actor = held.actor.clone();
+    // The confirmation request the service rebuilds from the hold's own
+    // allocation: its interval, and the member it already occupies.
+    let mut confirmation: AdmissionRequest =
+        serde_json::from_value(admission(&fx, OFFERING, slot)).expect("the admission request");
+    confirmation.duration_minutes = Some(
+        u32::try_from(
+            held.displayed_end
+                .signed_duration_since(held.displayed_start)
+                .num_minutes(),
+        )
+        .expect("a bounded hold interval"),
+    );
+    confirmation.resource = Some(
+        held.allocations
+            .first()
+            .expect("an exact-time hold carries its allocation")
+            .resource
+            .clone(),
+    );
 
     // Capture the confirmation's request clock and resolved supply while the
     // hold is live, then stop it before the capacity transaction opens. This
@@ -3640,16 +3687,12 @@ async fn a_delayed_confirmation_cannot_transfer_rebooked_capacity_after_expiry()
             .facts()
             .await
             .expect("resolve supply before the stall");
-        let (members, open, closures) = exact_supply_parts(&policy, &facts, offering);
-        let supply = SupplyContext::ExactTime {
-            exact: offering
-                .exact_time
-                .as_ref()
-                .expect("the exact-time offering"),
-            members: &members,
-            open: &open,
-            closures: &closures,
-        };
+        let parts = exact_supply_parts(&policy, &facts, offering);
+        let lines = [primary_line(
+            offering,
+            &parts,
+            confirmation.resource.as_deref(),
+        )];
         let commitment = Commitment {
             now: confirmation_started_at,
             policy_revision: i64::try_from(delayed_revision).expect("a bounded revision"),
@@ -3671,11 +3714,8 @@ async fn a_delayed_confirmation_cannot_transfer_rebooked_capacity_after_expiry()
         delayed_store
             .confirm_hold(
                 hold_id,
-                &CommitSupply::Single {
-                    offering,
-                    supply: &supply,
-                },
-                None,
+                &CommitSupply::Bundle(&lines),
+                Some(&confirmation),
                 commitment,
             )
             .await
@@ -3689,25 +3729,14 @@ async fn a_delayed_confirmation_cannot_transfer_rebooked_capacity_after_expiry()
     let policy = read_policy(POLICY).expect("the scheduling test policy");
     let offering = policy.offering(OFFERING).expect("the test offering");
     let (facts, facts_revision) = fx.store.facts().await.expect("resolve current supply");
-    let (members, open, closures) = exact_supply_parts(&policy, &facts, offering);
-    let supply = SupplyContext::ExactTime {
-        exact: offering
-            .exact_time
-            .as_ref()
-            .expect("the exact-time offering"),
-        members: &members,
-        open: &open,
-        closures: &closures,
-    };
+    let parts = exact_supply_parts(&policy, &facts, offering);
+    let lines = [primary_line(offering, &parts, None)];
     let request: AdmissionRequest =
         serde_json::from_value(admission(&fx, OFFERING, slot)).expect("the admission request");
     let competing = fx
         .store
         .create_appointment(
-            &CommitSupply::Single {
-                offering,
-                supply: &supply,
-            },
+            &CommitSupply::Bundle(&lines),
             &request,
             Commitment {
                 now: after_expiry,
@@ -3764,6 +3793,159 @@ async fn a_delayed_confirmation_cannot_transfer_rebooked_capacity_after_expiry()
         counts.get::<_, String>(1),
         "active",
         "the refused confirmation rolls back without consuming the hold row"
+    );
+}
+
+/// Plant a hold the ledger carries without allocation rows on the exact-time
+/// test offering, owned by the agent caller: the shape a window hold leaves
+/// when it ended before its offering was republished as exact time.
+async fn unallocated_hold(fx: &Fixture, state: &str, expires_at: DateTime<Utc>) -> Uuid {
+    let hold_id = Uuid::new_v4();
+    let start = pinned_now() + TimeDelta::hours(2);
+    let end = start + TimeDelta::minutes(30);
+    let policy_revision = i64::try_from(fx.revision).expect("a bounded revision");
+    begin_current_test_writer(&fx.admin).await;
+    fx.admin
+        .execute(
+            "INSERT INTO scheduling_claims(claim_id, kind, state, offering, \
+             operational_service, operational_location, operational_mode, supply_id, \
+             displayed_start, displayed_end, occupied_start, occupied_end, units, \
+             hold_expires_at, revision, policy_revision, actor, owner_issuer, owner_subject) \
+             VALUES($1,'hold',$2,$3,'registry-update','north-counter','arrival-window', \
+             'retired-window',$4,$5,$4,$5,1,$6,1,$7,'actor-pseudonym',$8,'principal-agent')",
+            &[
+                &hold_id,
+                &state,
+                &OFFERING,
+                &start,
+                &end,
+                &expires_at,
+                &policy_revision,
+                &ISSUER,
+            ],
+        )
+        .await
+        .expect("plant the unallocated hold");
+    commit_current_test_writer(&fx.admin).await;
+    hold_id
+}
+
+/// A hold without allocation rows on an exact-time offering has nothing to
+/// place. Its confirmation answers the stored attempt or the refusal the
+/// hold's state earns, and a live one is an inconsistent ledger that writes
+/// nothing, whether the service or the store meets it.
+#[tokio::test]
+async fn an_unallocated_exact_time_hold_answers_only_a_replay_or_a_refusal() {
+    let fx = fixture().await;
+    let later = pinned_now() + TimeDelta::minutes(5);
+    let earlier = pinned_now() - TimeDelta::minutes(5);
+
+    let released = unallocated_hold(&fx, "released", later).await;
+    let (status, problem) = fx
+        .post(
+            "/v1/appointments",
+            &fx.agent,
+            "unallocated-released",
+            json!({"hold": released, "admission": null}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{problem}");
+    assert_eq!(problem["code"], "hold.released");
+
+    // An expired hold is refused as expired, and that refusal's receipt
+    // answers a retry of the key even after the hold's state moves on.
+    let expired = unallocated_hold(&fx, "active", earlier).await;
+    let confirm = json!({"hold": expired, "admission": null});
+    let (status, problem) = fx
+        .post(
+            "/v1/appointments",
+            &fx.agent,
+            "unallocated-expired",
+            confirm.clone(),
+        )
+        .await;
+    assert_eq!(status, StatusCode::GONE, "{problem}");
+    assert_eq!(problem["code"], "hold.expired");
+    begin_current_test_writer(&fx.admin).await;
+    fx.admin
+        .execute(
+            "UPDATE scheduling_claims SET state='released' WHERE claim_id=$1",
+            &[&expired],
+        )
+        .await
+        .expect("close the expired hold");
+    commit_current_test_writer(&fx.admin).await;
+    let (status, problem) = fx
+        .post(
+            "/v1/appointments",
+            &fx.agent,
+            "unallocated-expired",
+            confirm,
+        )
+        .await;
+    assert_eq!(
+        status,
+        StatusCode::GONE,
+        "the stored refusal answers the retry: {problem}"
+    );
+    assert_eq!(problem["code"], "hold.expired");
+
+    // A live hold without its rows never reaches a capacity transaction, and
+    // the store refuses one it is handed directly without writing.
+    let live = unallocated_hold(&fx, "active", later).await;
+    let (status, problem) = fx
+        .post(
+            "/v1/appointments",
+            &fx.agent,
+            "unallocated-live",
+            json!({"hold": live, "admission": null}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{problem}");
+    let (_, facts_revision) = fx.store.facts().await.expect("the records revision");
+    let direct = fx
+        .store
+        .confirm_unallocated_hold(
+            live,
+            Commitment {
+                now: pinned_now(),
+                policy_revision: i64::try_from(fx.revision).expect("a bounded revision"),
+                facts_revision,
+                actor: "actor-pseudonym",
+                actor_issuer: ISSUER,
+                actor_subject: "principal-agent",
+                source_manager: None,
+                idempotency_key: "unallocated-live-direct",
+                request_hash: "sha256:unallocated-live-direct",
+                attempt_expires_at: pinned_now() + TimeDelta::days(7),
+                grant_exp_unix: None,
+                hooks: None,
+            },
+        )
+        .await;
+    assert!(
+        matches!(direct, Err(CommitError::Store(StoreError::Corrupt))),
+        "a live unallocated hold is an inconsistent ledger: {direct:?}"
+    );
+    let ledger = fx
+        .admin
+        .query_one(
+            "SELECT \
+                 (SELECT count(*) FROM scheduling_claims WHERE kind='booking'), \
+                 (SELECT state FROM scheduling_claims WHERE claim_id=$1)",
+            &[&live],
+        )
+        .await
+        .expect("read the claim ledger");
+    assert_eq!(
+        ledger.get::<_, i64>(0),
+        0,
+        "no confirmation wrote a booking"
+    );
+    assert_eq!(
+        ledger.get::<_, String>(1),
+        "active",
+        "the live hold is left for release or expiry"
     );
 }
 
@@ -8754,32 +8936,7 @@ async fn a_records_swap_refuses_a_commitment_resolving_the_old_facts() {
     // The slot resolves while the station still stands: the swap retires it.
     let slot = first_slot(&fx, OFFERING, 90, 200).await;
     let (facts, resolved_under) = fx.store.facts().await.expect("resolve the standing facts");
-    let exceptions: Vec<_> = facts
-        .exceptions
-        .iter()
-        .filter(|exception| exception.location == offering.location)
-        .map(|exception| exception.borrowed())
-        .collect();
-    let timezone = facts
-        .location(&offering.location)
-        .expect("the seeded location")
-        .timezone
-        .clone();
-    let members: Vec<PoolMember> = facts
-        .pool(
-            &offering
-                .exact_time
-                .as_ref()
-                .expect("an exact-time offering")
-                .pool,
-        )
-        .expect("the seeded pool")
-        .members
-        .clone();
-    let open = location_open_intervals(&policy, &offering.location, &timezone, &exceptions)
-        .expect("resolve the openings");
-    let closures = location_closure_intervals(&facts, &offering.location, &timezone)
-        .expect("resolve the closures");
+    let parts = exact_supply_parts(&policy, &facts, offering);
     // The operator retires the station this offering books; nothing occupies
     // it, so the swap commits.
     let swapped = records_without(&["station-1"]);
@@ -8787,15 +8944,7 @@ async fn a_records_swap_refuses_a_commitment_resolving_the_old_facts() {
         .replace_facts(SCHEDULING_ID, &swapped)
         .await
         .expect("the records swap commits");
-    let supply = SupplyContext::ExactTime {
-        exact: offering
-            .exact_time
-            .as_ref()
-            .expect("an exact-time offering"),
-        members: &members,
-        open: &open,
-        closures: &closures,
-    };
+    let lines = [primary_line(offering, &parts, None)];
     let request = AdmissionRequest {
         offering: OFFERING.to_owned(),
         start: slot,
@@ -8833,14 +8982,7 @@ async fn a_records_swap_refuses_a_commitment_resolving_the_old_facts() {
     };
     let outcome = fx
         .store
-        .create_appointment(
-            &CommitSupply::Single {
-                offering,
-                supply: &supply,
-            },
-            &request,
-            commitment,
-        )
+        .create_appointment(&CommitSupply::Bundle(&lines), &request, commitment)
         .await;
     assert!(
         matches!(outcome, Err(CommitError::FactsStale)),
