@@ -46,6 +46,19 @@ invariants:
       ready. A later `dev token` requires that ready state, re-exports and
       compares the credential and endpoint, and authenticates the new token
       against the retained keys and caller identity before publishing it.
+      A local raw API request uses the same client-token acquisition without
+      publishing a header file, requires the ready session's exact numeric
+      loopback API origin, and passes the token to the shared CLI transport.
+      That transport confines the relative path to the selected origin and
+      deployment prefix, owns Host and automatic Authorization, follows no
+      redirects, and ignores ambient proxy settings. The runtime still makes
+      every access-profile and operation authorization decision; the tooling
+      adds none. Direct file arguments for credentials, CA bundles, bodies,
+      and headers pass through the raw API's bounded regular-file check;
+      saved-connection secret references retain the platform secret resolver's
+      separate file and root policy, and the saved-connections document uses
+      the platform's separate bounded regular-file reader. Standard input is
+      available only for a request body explicitly named by `--input -`.
       Messaging reads no private BReg state and has no owner lifecycle action.
     refusal: >-
       Refuse with profile.not-authorized for a sender profile, template, or
@@ -53,7 +66,14 @@ invariants:
       for an operator; accept nothing. Refuse a borrowed development session
       or token before readiness or header publication when its issuer,
       resource, credential, scopes, keys, or caller identity do not match the
-      foreground session's capture.
+      foreground session's capture. Refuse a local raw API request before
+      connection when the session is not ready, its retained API endpoint is
+      not one exact numeric-loopback HTTP origin, its path escapes the selected
+      endpoint, or a caller attempts to replace connection-owned authority.
+      Refuse non-regular file inputs before the API request is sent; on Unix,
+      refuse a FIFO without blocking while opening it. Refuse an explicit or
+      implicit saved-connections store that is not a regular file, likewise
+      without blocking on a Unix FIFO.
     negativeTest:
       path: crates/registry-messaging/src/http.rs
       name: only_the_sender_role_submits_and_only_through_what_its_profile_lists

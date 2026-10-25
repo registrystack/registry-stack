@@ -19,13 +19,16 @@ use registry_platform_httputil::client::{
 };
 use registry_platform_yaml::{
     ApiVersion, Diagnostic, EnvelopeRule, Expect, ExternalId, FormatSpec, LocalId, Reader, Report,
-    Source, UniqueList, Url as ConfigUrl,
+    Source, UniqueList, Url as ConfigUrl, MAXIMUM_DOCUMENT_BYTES,
 };
 use serde::{ser::SerializeMap as _, Deserialize, Serialize, Serializer};
 use zeroize::Zeroizing;
 
 use crate::{
-    api::read_trusted_root_certificates, project::find_project, ApiError, LocalConnection,
+    api::read_trusted_root_certificates,
+    file::{read_bounded_regular_file, FileReadError},
+    project::find_project,
+    ApiError, LocalConnection,
 };
 
 pub const CONNECTIONS_API_VERSION: &str =
@@ -301,7 +304,7 @@ pub fn check_connections_file(path: &Path) -> Result<(), ApiError> {
 
 /// Check one saved-connections file and retain structured, positioned diagnostics.
 pub fn inspect_connections_file(path: &Path) -> Result<Report, ApiError> {
-    let bytes = fs::read(path).map_err(|_| ApiError::Io)?;
+    let bytes = read_connections_file(path).map_err(connections_file_error)?;
     let mut report = match decode_store(path, &bytes) {
         Ok(store) => match validate_store(store) {
             Ok(_) => Report::default(),
@@ -914,10 +917,10 @@ fn store_path() -> Result<PathBuf, ApiError> {
 }
 
 fn read_store(path: &Path) -> Result<Store, ApiError> {
-    let bytes = match fs::read(path) {
+    let bytes = match read_connections_file(path) {
         Ok(bytes) => bytes,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Store::default()),
-        Err(_) => return Err(ApiError::Io),
+        Err(FileReadError::NotFound) => return Ok(Store::default()),
+        Err(error) => return Err(connections_file_error(error)),
     };
     let decoded = decode_store(path, &bytes).map_err(|report| {
             ApiError::Configuration(format!(
@@ -925,6 +928,19 @@ fn read_store(path: &Path) -> Result<Store, ApiError> {
             ))
         })?;
     validate_store(decoded)
+}
+
+fn read_connections_file(path: &Path) -> Result<Vec<u8>, FileReadError> {
+    read_bounded_regular_file(path, MAXIMUM_DOCUMENT_BYTES as u64)
+}
+
+fn connections_file_error(error: FileReadError) -> ApiError {
+    match error {
+        FileReadError::NotRegular => {
+            ApiError::Usage("a saved connections file must name a regular file".to_owned())
+        }
+        FileReadError::NotFound | FileReadError::Unavailable => ApiError::Io,
+    }
 }
 
 fn decode_store(path: &Path, bytes: &[u8]) -> Result<Store, Report> {
