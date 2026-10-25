@@ -121,6 +121,50 @@ fn automatic_credentials_cannot_be_replaced_by_a_repeated_header() {
 }
 
 #[test]
+fn anonymous_requests_accept_one_explicit_authorization_header_from_each_supported_input() {
+    let temporary = TempDir::new().unwrap();
+    let complete_header = temporary.path().join("complete-header");
+    let header_value = temporary.path().join("header-value");
+    fs::write(
+        &complete_header,
+        "Authorization: Bearer complete-file-canary\n",
+    )
+    .unwrap();
+    fs::write(&header_value, "Bearer value-file-canary\n").unwrap();
+
+    for (argument, expected) in [
+        (
+            "Authorization: Bearer inline-canary".to_owned(),
+            "Bearer inline-canary",
+        ),
+        (
+            format!("@{}", complete_header.display()),
+            "Bearer complete-file-canary",
+        ),
+        (
+            format!("Authorization: @{}", header_value.display()),
+            "Bearer value-file-canary",
+        ),
+    ] {
+        let response = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok";
+        let (base_url, request) = server(response);
+        let mut args = api_args("v1/status", temporary.path().join("out"));
+        args.url = Some(base_url);
+        args.header = vec![argument];
+        run_api("breg", args, |_, _| unreachable!("--url bypasses resolver")).unwrap();
+
+        let request = String::from_utf8(request.recv().unwrap()).unwrap();
+        let authorization = request
+            .lines()
+            .filter_map(|line| line.split_once(':'))
+            .filter(|(name, _)| name.eq_ignore_ascii_case("authorization"))
+            .map(|(_, value)| value.trim_start())
+            .collect::<Vec<_>>();
+        assert_eq!(authorization, [expected]);
+    }
+}
+
+#[test]
 fn local_connection_headers_cannot_be_replaced_by_cli_headers() {
     let temporary = TempDir::new().unwrap();
     let project = temporary.path().join("casework-project");

@@ -1501,15 +1501,19 @@ a credential selected for one connection is silently replaced on the request.
 
 Scheduling retains no local caller session, so `schedulingctl api` does not
 resolve `--client`. The operator selects a saved connection or an explicit
-one-off URL. A saved connection may be anonymous, a referenced bearer, or a
-renewable `private_key_jwt` client under the shared
+one-off URL. A saved connection's automatic authentication may be anonymous,
+a referenced bearer, or a renewable `private_key_jwt` client under the shared
 [`registry-cli-api` security boundary](../../crates/registry-cli-api/README.md#security-boundary).
-That boundary owns endpoint confinement, automatic authorization, credential
-resolution, redirects, proxies, bounds, and redaction; it carries no task
-grant, catalogue scope, appointment ownership, or capacity authority.
+That boundary owns endpoint confinement, automatic credential resolution and
+header precedence, redirects, proxies, bounds, and its focused debug
+redaction; it carries no task grant, catalogue scope, appointment ownership,
+or capacity authority.
 
 The runtime continues to authenticate and authorize every protected request.
-An anonymous connection reaches only routes the runtime already makes public.
+An anonymous connection supplies no automatic credential, but the raw command
+may still supply one explicit `Authorization` header under the shared contract.
+The runtime, not the connection label, decides whether the request may reach a
+public or protected route.
 `api_and_saved_connections_are_available_without_a_runtime_config` and
 `raw_api_refuses_report_format_before_network_access` in
 `crates/registry-schedulingctl/tests/api_cli.rs` pin the product surface. The

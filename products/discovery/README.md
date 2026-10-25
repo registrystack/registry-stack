@@ -43,11 +43,13 @@ then restart. The runtime verifies `SHA256SUMS` and an optional
 
 `discoveryctl api` has no local `--client` credential adapter. Discovery's
 endpoint is public, so the product resolver directs operators to an anonymous
-saved connection. The shared CLI also permits an operator to deliberately
-select an explicit or saved authenticated connection, but that credential is
-operator-supplied transport state: it is never derived from catalog metadata,
-creates no Discovery authority, and does not make Discovery a native-provider
-proxy. Endpoint and request handling follow the shared
+saved connection, meaning the connection supplies no automatic credential.
+The shared CLI also permits one explicit `Authorization` header on that raw
+request, or lets an operator deliberately select an explicit or saved
+authenticated connection. Such a credential is operator-supplied transport
+state: it is never derived from catalog metadata, creates no Discovery
+authority, and does not make Discovery a native-provider proxy. Endpoint and
+request handling follow the shared
 [`registry-cli-api` security boundary](../../crates/registry-cli-api/README.md#security-boundary).
 `api_and_saved_connections_are_available_without_a_runtime_config` in
 `crates/registry-discoveryctl/tests/api_cli.rs` pins the product surface; the

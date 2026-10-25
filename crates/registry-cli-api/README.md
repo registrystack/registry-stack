@@ -27,10 +27,13 @@ as its maintained example.
 Connection selection does not create product authority. `--client` delegates
 to the product adapter, which owns any retained local endpoint, credential,
 profile headers, and readiness checks. `--connection` materializes one saved
-connection for that product, and `--url` is an advanced one-off destination
-that is anonymous unless `--token-file` is supplied. Saved authentication is
-exactly one of anonymous, a referenced bearer, or `private_key_jwt`. The
-receiving product still authenticates and authorizes every protected request.
+connection for that product. `--url` is an advanced one-off destination with
+no automatic credential unless `--token-file` is supplied. A saved
+connection's automatic authentication mode is one of anonymous, a referenced
+bearer, or `private_key_jwt`. Anonymous means that the connection supplies no
+automatic credential; when no automatic provider is selected, the raw command
+may still supply one explicit `Authorization` header. The receiving product
+still authenticates and authorizes every protected request.
 
 The direct `--token-file` input must fit within 8 KiB, including its optional
 line ending. That ending is removed and the bearer remains opaque; it need not
@@ -43,19 +46,33 @@ the same reader under its own document bound. Saved bearer and private-key
 references instead use the platform secret resolver, retaining that resolver's
 separate root, permission, size, and symlink policy.
 
+An explicit header may be inline, read as one value with `NAME: @FILE`, or
+read as complete `NAME: VALUE` lines with `@FILE`. Each header file is bounded
+to 64 KiB. These explicit headers are raw request material held as ordinary
+strings; they do not inherit the 8 KiB `--token-file` credential contract or
+the saved secret resolver's custody policy. In particular, an inline
+credential may be visible to process-argument inspection.
+
 Every service base URL uses the shared checked HTTP(S) type, which permits
 plain HTTP only for loopback. A request path stays under the selected origin
 and deployment prefix. The selected connection owns `Host`, automatic
-`Authorization`, and any product profile header it sets, so command-line headers
-cannot replace them. The client ignores ambient proxies, follows no redirect,
-retries no request, applies fixed connect and overall deadlines, and bounds
-both request and response bodies. Debug output and transport errors do not
-contain the bearer or request values.
+`Authorization`, and any product profile header it sets, so command-line
+headers cannot replace them. Without an automatic provider, exactly one
+explicit `Authorization` header is accepted through any of the raw header
+forms; another explicit source is refused. The client ignores ambient proxies,
+follows no redirect, retries no request, applies fixed connect and overall
+deadlines, and bounds both request and response bodies. `ApiArgs` debug output
+records header counts and option presence rather than raw request values, and
+the automatic bearer connection's tested debug and failure paths do not expose
+that bearer. Those focused properties are not a general secret-custody
+guarantee for explicit raw headers.
 
 The maintained proofs are:
 
 - `crates/registry-cli-api/tests/api_http.rs`, including
+  `anonymous_requests_accept_one_explicit_authorization_header_from_each_supported_input`,
   `automatic_credentials_cannot_be_replaced_by_a_repeated_header`,
+  `api_args_debug_redacts_request_values`,
   `paths_and_host_headers_cannot_escape_the_selected_endpoint`,
   `redirect_answers_are_returned_without_following_them`,
   `response_bodies_are_bounded`, and
