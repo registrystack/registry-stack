@@ -1,5 +1,34 @@
 // SPDX-License-Identifier: Apache-2.0
 use super::*;
+use tracing::instrument::WithSubscriber;
+use tracing_subscriber::fmt::MakeWriter;
+
+#[derive(Clone, Default)]
+struct InboxLogs(Arc<Mutex<Vec<u8>>>);
+impl std::io::Write for InboxLogs {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+impl<'writer> MakeWriter<'writer> for InboxLogs {
+    type Writer = Self;
+    fn make_writer(&'writer self) -> Self {
+        self.clone()
+    }
+}
+impl InboxLogs {
+    fn entries(&self) -> Vec<Value> {
+        String::from_utf8(self.0.lock().unwrap().clone())
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect()
+    }
+}
 use std::time::Duration;
 use tokio::sync::Notify;
 
@@ -8,6 +37,120 @@ fn bounded_project() -> Value {
     value["inbox"] = json!({"defaultPageSize":2,"maximumSourceReads":4,
         "maximumCandidateScan":4,"pageDeadlineMilliseconds":2000});
     value
+}
+
+#[tokio::test]
+async fn inbox_source_refusal_summary_is_aggregated_redacted_and_levelled() {
+    let f = Fixture::new(bounded_project()).await;
+    for id in ["denied-subject-canary-a", "denied-subject-canary-b"] {
+        f.create(id).await;
+    }
+    let logs = InboxLogs::default();
+    let subscriber = tracing_subscriber::fmt()
+        .json()
+        .without_time()
+        .with_ansi(false)
+        .with_max_level(operational_log_level(Some("info")).expect("runtime info log level"))
+        .with_writer(logs.clone())
+        .finish();
+    let denied = f
+        .service
+        .review_staffing_tasks(
+            &actor("a", CaseworkRole::Staff),
+            Some("source-profile-canary"),
+            "source-token-canary",
+            Default::default(),
+        )
+        .with_subscriber(subscriber)
+        .await
+        .expect("denied source work stays concealed");
+    assert!(denied.items.is_empty());
+    assert_eq!(denied.status, PageStatus::Complete);
+
+    let entries = logs.entries();
+    let summaries = entries
+        .iter()
+        .filter(|entry| {
+            entry["fields"]["message"]
+                == "Casework review inbox omitted current-source work after an explicit provider or configuration refusal"
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        summaries.len(),
+        1,
+        "one summary for the whole page: {entries:?}"
+    );
+    assert_eq!(summaries[0]["level"], "WARN");
+    let fields = summaries[0]["fields"].as_object().expect("summary fields");
+    assert_eq!(fields["source_denied"], true);
+    assert_eq!(fields["source_concealed"], false);
+    assert_eq!(fields["source_binding_moved"], false);
+    assert_eq!(fields["source_contract_changed"], false);
+    assert_eq!(fields["source_profile_required"], false);
+    assert_eq!(
+        fields.keys().map(String::as_str).collect::<BTreeSet<_>>(),
+        BTreeSet::from([
+            "message",
+            "source_binding_moved",
+            "source_concealed",
+            "source_contract_changed",
+            "source_denied",
+            "source_profile_required",
+        ])
+    );
+    let rendered = serde_json::to_string(&entries).unwrap();
+    for canary in [
+        "denied-subject-canary-a",
+        "denied-subject-canary-b",
+        "source-profile-canary",
+        "source-token-canary",
+    ] {
+        assert!(!rendered.contains(canary), "summary disclosed {canary}");
+    }
+
+    f.state.hidden.lock().unwrap().extend([
+        "denied-subject-canary-a".into(),
+        "denied-subject-canary-b".into(),
+    ]);
+    let logs = InboxLogs::default();
+    let subscriber = tracing_subscriber::fmt()
+        .json()
+        .without_time()
+        .with_ansi(false)
+        .with_max_level(operational_log_level(Some("info")).expect("runtime info log level"))
+        .with_writer(logs.clone())
+        .finish();
+    let concealed = f
+        .service
+        .review_staffing_tasks(
+            &actor("a", CaseworkRole::Staff),
+            Some("source-staff"),
+            "human-source-token",
+            Default::default(),
+        )
+        .with_subscriber(subscriber)
+        .await
+        .expect("ordinary source concealment stays an empty page");
+    assert!(concealed.items.is_empty());
+    assert_eq!(concealed.status, PageStatus::Complete);
+    let entries = logs.entries();
+    let summaries = entries
+        .iter()
+        .filter(|entry| {
+            entry["fields"]["message"]
+                == "Casework review inbox omitted current-source work during expected concealment or source authorization filtering"
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        summaries.len(),
+        1,
+        "one summary for the whole page: {entries:?}"
+    );
+    assert_eq!(summaries[0]["level"], "INFO");
+    assert_eq!(summaries[0]["fields"]["source_concealed"], true);
+    assert_eq!(summaries[0]["fields"]["source_denied"], false);
+    let rendered = serde_json::to_string(&entries).unwrap();
+    assert!(!rendered.contains("denied-subject-canary"));
 }
 
 #[tokio::test]

@@ -139,6 +139,7 @@ impl CaseworkService {
         let mut position = None;
         let mut examined = 0;
         let mut items = Vec::new();
+        let mut skipped_without_source_profile = false;
         loop {
             if examined >= self.project.inbox.maximum_candidate_scan
                 || tokio::time::Instant::now() >= until
@@ -191,11 +192,13 @@ impl CaseworkService {
                 let display_reference =
                     match observations.display(record, source_profile, true, false) {
                         Ok(reference) => reference,
-                        Err(
-                            ReviewRuntimeError::Forbidden
-                            | ReviewRuntimeError::NotFound
-                            | ReviewRuntimeError::SourceProfileRequired,
-                        ) => continue,
+                        Err(ReviewRuntimeError::SourceProfileRequired) => {
+                            skipped_without_source_profile = true;
+                            continue;
+                        }
+                        Err(ReviewRuntimeError::Forbidden | ReviewRuntimeError::NotFound) => {
+                            continue
+                        }
                         Err(error) => return Err(error),
                     };
                 let Some(mut row) = current.remove(&task.task_id) else {
@@ -226,6 +229,7 @@ impl CaseworkService {
                     VALUES($1,$2,$3,$4,$5,'',0,$6,now()+interval '15 minutes')",
                     &[&cursor,&actor.principal.issuer,&actor.principal.subject,&actor.profile_id,&context_digest,&key]).await?;
                 items.truncate(limit);
+                observations.log_refusal_summary(skipped_without_source_profile);
                 return Ok(ReviewTaskPage {
                     items,
                     next_cursor: Some(cursor),
@@ -240,6 +244,7 @@ impl CaseworkService {
             after = page.items.last().map(staffing_position);
         }
         if ordinary {
+            observations.log_refusal_summary(skipped_without_source_profile);
             return Ok(ReviewTaskPage {
                 items,
                 next_cursor: None,
@@ -308,6 +313,7 @@ impl CaseworkService {
         } else {
             None
         };
+        observations.log_refusal_summary(skipped_without_source_profile);
         Ok(ReviewTaskPage {
             items: items.into_iter().skip(offset).take(limit).collect(),
             next_cursor,
