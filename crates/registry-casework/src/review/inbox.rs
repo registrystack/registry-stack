@@ -10,9 +10,74 @@ pub(super) struct InboxObservations {
     status: BTreeMap<Uuid, Result<ServiceStatusObservation, ReviewContextError>>,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct InboxRefusalSummary {
+    concealed: bool,
+    denied: bool,
+    binding_moved: bool,
+    contract_changed: bool,
+}
+
+impl InboxRefusalSummary {
+    fn observe(&mut self, error: ReviewContextError) {
+        match error {
+            ReviewContextError::Concealed => self.concealed = true,
+            ReviewContextError::Denied => self.denied = true,
+            ReviewContextError::BindingMoved => self.binding_moved = true,
+            ReviewContextError::ContractChanged => self.contract_changed = true,
+            ReviewContextError::Unavailable
+            | ReviewContextError::Unsupported
+            | ReviewContextError::VersionMismatch
+            | ReviewContextError::VersionUnavailable
+            | ReviewContextError::Invalid => {}
+        }
+    }
+
+    fn has_actionable_refusal(self) -> bool {
+        self.denied || self.contract_changed
+    }
+
+    fn has_refusal(self) -> bool {
+        self.concealed || self.denied || self.binding_moved || self.contract_changed
+    }
+}
+
 impl InboxObservations {
     pub(super) fn source_reads(&self) -> usize {
         self.human.len()
+    }
+
+    pub(super) fn log_refusal_summary(&self, source_profile_required: bool) {
+        let mut summary = InboxRefusalSummary::default();
+        for error in self
+            .human
+            .values()
+            .filter_map(|observation| observation.as_ref().err())
+        {
+            summary.observe(*error);
+        }
+        if !summary.has_refusal() && !source_profile_required {
+            return;
+        }
+        if summary.has_actionable_refusal() || source_profile_required {
+            tracing::warn!(
+                source_concealed = summary.concealed,
+                source_denied = summary.denied,
+                source_binding_moved = summary.binding_moved,
+                source_contract_changed = summary.contract_changed,
+                source_profile_required,
+                "Casework review inbox omitted current-source work after an explicit provider or configuration refusal"
+            );
+        } else {
+            tracing::info!(
+                source_concealed = summary.concealed,
+                source_denied = summary.denied,
+                source_binding_moved = summary.binding_moved,
+                source_contract_changed = summary.contract_changed,
+                source_profile_required,
+                "Casework review inbox omitted current-source work during expected concealment or source authorization filtering"
+            );
+        }
     }
 
     pub(super) async fn prepare(
@@ -395,5 +460,41 @@ impl PostgresStore {
             next_cursor,
             status: PageStatus::Complete,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn inbox_refusal_summary_separates_routine_concealment_from_actionable_refusals() {
+        let mut summary = InboxRefusalSummary::default();
+        summary.observe(ReviewContextError::Concealed);
+        summary.observe(ReviewContextError::BindingMoved);
+        assert!(!summary.has_actionable_refusal());
+        assert!(summary.concealed);
+        assert!(summary.binding_moved);
+
+        summary.observe(ReviewContextError::Denied);
+        summary.observe(ReviewContextError::ContractChanged);
+        assert!(summary.has_actionable_refusal());
+        assert!(summary.denied);
+        assert!(summary.contract_changed);
+
+        let before = summary;
+        for error in [
+            ReviewContextError::Unavailable,
+            ReviewContextError::Unsupported,
+            ReviewContextError::VersionMismatch,
+            ReviewContextError::VersionUnavailable,
+            ReviewContextError::Invalid,
+        ] {
+            summary.observe(error);
+        }
+        assert_eq!(
+            summary, before,
+            "page-level failures have their own diagnostics"
+        );
     }
 }

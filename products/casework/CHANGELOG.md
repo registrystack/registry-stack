@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Summarize current-source inbox refusals once per page in operator logs,
+  including list and next-task reads. Expected concealment and source
+  authorization filtering use informational logging; explicit provider or
+  configuration refusals use warnings. Summaries carry fixed refusal classes
+  without task counts, identifiers, profile values, or credentials, and the
+  caller's task visibility is unchanged.
 - Split-mode refusals for a runtime role that owns Casework objects name an
   exact `ALTER ... OWNER TO` statement for each Casework schema object, run as
   a database administrator, then `caseworkctl apply`, in place of

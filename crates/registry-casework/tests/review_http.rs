@@ -15,8 +15,8 @@ use axum::{
     http::{header::CONTENT_TYPE, Request, StatusCode},
 };
 use registry_casework::{
-    router, CaseworkAuthenticator, CaseworkService, DatabaseConfig, HttpState, HumanIdentityConfig,
-    PostgresStore, ReviewTaskDecisionRequest,
+    operational_log_level, router, CaseworkAuthenticator, CaseworkService, DatabaseConfig,
+    HttpState, HumanIdentityConfig, PostgresStore, ReviewTaskDecisionRequest,
 };
 use registry_casework_client::{
     BearerToken, CaseworkAuth, CaseworkClient, CaseworkClientConfig, CaseworkClientError,
@@ -31,9 +31,38 @@ use registry_platform_testing::{oidc_verifier_config, MockIdp};
 use serde_json::{json, Value};
 use tokio_postgres::NoTls;
 use tower::ServiceExt;
+use tracing::instrument::WithSubscriber;
+use tracing_subscriber::fmt::MakeWriter;
 use uuid::Uuid;
 
 const AUDIENCE: &str = "urn:test:casework-review";
+
+#[derive(Clone, Default)]
+struct InboxLogs(Arc<Mutex<Vec<u8>>>);
+impl std::io::Write for InboxLogs {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+impl<'writer> MakeWriter<'writer> for InboxLogs {
+    type Writer = Self;
+    fn make_writer(&'writer self) -> Self {
+        self.clone()
+    }
+}
+impl InboxLogs {
+    fn entries(&self) -> Vec<Value> {
+        String::from_utf8(self.0.lock().unwrap().clone())
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect()
+    }
+}
 
 #[derive(Clone)]
 struct ReviewSource {
@@ -4485,10 +4514,69 @@ async fn a_statically_source_only_inbox_requires_a_source_profile() {
 
     // A source profile that hides the task from this caller still yields an
     // ordinary empty page: only the absent header is refused.
+    let logs = InboxLogs::default();
+    let subscriber = tracing_subscriber::fmt()
+        .json()
+        .without_time()
+        .with_ansi(false)
+        .with_max_level(operational_log_level(Some("info")).expect("runtime info log level"))
+        .with_writer(logs.clone())
+        .finish();
     let hidden = list(Some("other-source-profile"))
+        .with_subscriber(subscriber)
         .await
         .expect("mismatched profile inbox response");
     assert_eq!(hidden.status(), StatusCode::OK);
+    let hidden_body = to_bytes(hidden.into_body(), 32 * 1024)
+        .await
+        .expect("bounded hidden page");
+    let hidden_page: ReviewTaskPage =
+        serde_json::from_slice(&hidden_body).expect("hidden page JSON");
+    assert!(hidden_page.items.is_empty());
+
+    let logs_for_next = InboxLogs::default();
+    let subscriber = tracing_subscriber::fmt()
+        .json()
+        .without_time()
+        .with_ansi(false)
+        .with_max_level(operational_log_level(Some("info")).expect("runtime info log level"))
+        .with_writer(logs_for_next.clone())
+        .finish();
+    let next = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v1/review-tasks/next")
+                .header("authorization", format!("Bearer {reviewer_token}"))
+                .header(CASEWORK_PROFILE_HEADER, "staff")
+                .header(SOURCE_PROFILE_HEADER, "other-source-profile")
+                .body(Body::empty())
+                .expect("next request"),
+        )
+        .with_subscriber(subscriber)
+        .await
+        .expect("mismatched profile next response");
+    assert_eq!(next.status(), StatusCode::OK);
+    let next_body = to_bytes(next.into_body(), 32 * 1024)
+        .await
+        .expect("bounded next body");
+    assert_eq!(next_body.as_ref(), b"null");
+    for entries in [logs.entries(), logs_for_next.entries()] {
+        let summaries = entries
+            .iter()
+            .filter(|entry| {
+                entry["fields"]["message"]
+                    == "Casework review inbox omitted current-source work during expected concealment or source authorization filtering"
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(summaries.len(), 1, "one summary per request: {entries:?}");
+        assert_eq!(summaries[0]["level"], "INFO");
+        assert_eq!(summaries[0]["fields"]["source_concealed"], true);
+        let rendered = serde_json::to_string(&entries).unwrap();
+        assert!(!rendered.contains("source-only-ref"));
+        assert!(!rendered.contains("other-source-profile"));
+        assert!(!rendered.contains(&reviewer_token));
+    }
     idp.stop().await;
 }
 
