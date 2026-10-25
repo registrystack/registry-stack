@@ -122,6 +122,10 @@ impl LocalAuthority {
         )
     }
 
+    #[allow(
+        dead_code,
+        reason = "The Proposal compatibility target uses this digest control; other targets share the authority."
+    )]
     pub fn replace_submission_digest_for_test(
         &self,
         digest: registry_review_client::SubmissionDigest,

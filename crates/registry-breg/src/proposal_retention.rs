@@ -913,15 +913,24 @@ pub async fn guard_successor_activation(
         let CompiledActionExecution::Proposal { proposal } = &action.execution else {
             return Err(ProposalRetentionError::ActiveProposalRecoveryUnavailable);
         };
-        if !proposal.permissions.iter().any(|grant| {
+        let inspection_available = proposal.permissions.iter().any(|grant| {
             grant
                 .operations
                 .contains(&crate::model::ProposalOperation::Get)
-        }) || !proposal.permissions.iter().any(|grant| {
+        });
+        let cancellation_recovery_available = proposal.permissions.iter().any(|grant| {
             grant
                 .operations
                 .contains(&crate::model::ProposalOperation::Cancel)
-        }) {
+                && grant.operations.iter().any(|operation| {
+                    matches!(
+                        operation,
+                        crate::model::ProposalOperation::Get
+                            | crate::model::ProposalOperation::List
+                    )
+                })
+        });
+        if !inspection_available || !cancellation_recovery_available {
             return Err(ProposalRetentionError::ActiveProposalRecoveryUnavailable);
         }
     }

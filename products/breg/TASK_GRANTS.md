@@ -92,6 +92,12 @@ taskGrantStatus:
     statusResource: urn:casework:case-management
 ```
 
+Use a lowercase `https://` source identifier in each BReg task profile and copy
+it exactly into the matching runtime entry. The shared runtime format also
+accepts other absolute issuer identifiers, such as URNs; this does not make
+them valid BReg profile issuers or grant authority. A source identifier selects
+a configured service and is never used as an outbound URL.
+
 `statusScope` and `statusPath` are optional. Omitted, BReg requests the
 `casework:grants:status` scope and calls Casework's
 `/v1/task-grants/{grantId}/status` route under `baseUrl`. Set them only for a
@@ -125,8 +131,10 @@ original principal, client, resource, purpose, bounds, subjects, and deadline.
 
 Submission freezes the original task authority alongside the proposal version
 and its immutable effects. A later human reviewer remains a separate actor.
-Approval and application check the original grant, including automatic
-application. A database concurrency retry makes a fresh status check.
+Before applying a submitted Proposal, BReg checks the original grant in
+addition to the current executor's authority, including for automatic
+application and separately authorized manual Apply. Every new application
+attempt makes a fresh status check.
 
 An exact completed retry recovers the existing receipt under current disclosure
 authority. It does not perform a new mutation or require a new positive status
@@ -146,10 +154,12 @@ a failed precondition. Human rejection and owner cancellation keep their existin
 permissions. These actions do not require the old submitter grant to remain
 active. Read cursors and representation ETags do not incorporate grant IDs.
 
-The bounded status check uses the shared platform exact-status transport and
-runs while the proposal is locked. Its total five-second bound includes obtaining
-the status service credential; positive status is never cached. BReg keeps its
-own persisted binding and BReg-only bounds validation. Deferred Casework grants
+The bounded status check uses the shared platform exact-status transport
+outside the mutation transaction, after preflight identifies the exact retained
+submission. Its total five-second bound includes obtaining the status service
+credential; positive status is never cached. The mutation transaction reloads
+the retained binding and checks equality and local expiry before effects and
+again checks expiry before commit. BReg keeps its own persisted binding and BReg-only bounds validation. Deferred Casework grants
 use the same status contract and original deadline, without changing BReg's
 write or human approval permissions. Casework revocation
 can still occur between that check and the local commit. BReg and Casework do

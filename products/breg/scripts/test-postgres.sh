@@ -103,6 +103,8 @@ postgres_targets=(
   postgres_import_authority
   postgres_refactor
   postgres_proposal
+  postgres_proposal_task_authority
+  postgres_proposal_recovery_permissions
   postgres_proposal_generated_identifiers
   postgres_proposal_shape_activation
   postgres_native_retention

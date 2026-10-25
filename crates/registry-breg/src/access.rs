@@ -335,7 +335,6 @@ pub(crate) fn compiled_access_findings(
         // A `self` consent issuer's subject and record targets are bound
         // through the caller's principal link, not by a row boundary.
         if reach.rows == "all"
-            && !reach.owner_only
             && !link_bound.contains(&reach.source_path)
             && entities
                 .get(&reach.entity)

@@ -1578,6 +1578,18 @@ fn alternatives(steps: &[Step]) -> Vec<Vec<Step>> {
         {
             under_profile("actions", "action", action, profile, rest)
         }
+        [Step::Member(actions), Step::Select { value: action, .. }, Step::Member(execution), Step::Member(proposal), Step::Member(permissions), Step::Select {
+            key,
+            value: profile,
+        }, rest @ ..]
+            if actions == "actions"
+                && execution == "execution"
+                && proposal == "proposal"
+                && permissions == "permissions"
+                && key.as_deref() == Some("profile") =>
+        {
+            under_profile("proposals", "action", action, profile, rest)
+        }
         _ => Vec::new(),
     }
 }
@@ -2130,6 +2142,25 @@ mod tests {
         assert_eq!(
             found.pointer,
             "/accessProfiles/1/permissions/actions/0/targets/1/rowBoundaries"
+        );
+    }
+
+    #[test]
+    fn a_proposal_permission_path_is_found_under_the_profile_that_grants_it() {
+        let project = document(
+            "apiVersion: id.registrystack.org/formats/breg/project/v1alpha1\nkind: BRegProject\nproject:\n  id: example\n  canonicalBaseIri: https://example.invalid\n  version: 0.1.0\n  defaultLanguage: en\naccessProfiles:\n  - id: reader\n    principalClaim: registry_principal\n    requiredScopes: unrestricted\n  - id: steward\n    principalClaim: registry_principal\n    requiredScopes: unrestricted\n    permissions:\n      proposals:\n        - action: update-record\n          operations: [edit]\n          targets:\n            - {recordType: other, rowBoundaries: unrestricted}\n            - {recordType: record, rowBoundaries: unrestricted}\n",
+        );
+        let steps = parse_steps(
+            "actions[id=update-record].execution.proposal.permissions[profile=steward].targets[recordType=record].rowBoundaries",
+        );
+        let found = alternatives(&steps)
+            .iter()
+            .map(|alternative| resolve(project.root(), alternative))
+            .find(|found| found.complete)
+            .expect("the profile's permission names the Proposal action");
+        assert_eq!(
+            found.pointer,
+            "/accessProfiles/1/permissions/proposals/0/targets/1/rowBoundaries"
         );
     }
 }

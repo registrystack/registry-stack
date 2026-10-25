@@ -6,7 +6,7 @@ use super::*;
 use crate::api::proposals::{ProposalListQuery, ProposalMutationInput};
 use crate::api::VerifiedRequestClaims;
 use crate::model::ProposalOperation;
-use crate::mutation::ProposalApplyPreflight;
+use crate::mutation::{CheckedProposalTaskAuthority, ProposalApplyPreflight};
 use crate::postgres::{begin_proposal_transaction, ProposalAuthority, ProposalAuthorityOperation};
 use crate::proposal_store;
 use std::collections::{BTreeMap, BTreeSet};
@@ -515,63 +515,72 @@ impl PostgresRecordMutationService {
                 .await
                 .map_err(|_| MutationError::Unavailable)??;
         }
-        let (review_evidence, commit_requests) =
-            if input.operation == ProposalAuthorityOperation::Lifecycle(ProposalOperation::Apply) {
-                let preflight = {
-                    let client = tokio::time::timeout_at(deadline, self.pool.get())
-                        .await
-                        .map_err(|_| MutationError::Unavailable)?
-                        .map_err(|_| MutationError::Unavailable)?;
-                    let mut guard = QueryCancellationGuard::new(self.pool.clone(), client);
-                    let preflight = tokio::time::timeout_at(
-                        deadline,
-                        self.coordinator.preflight_proposal_apply(
-                            guard.client(),
-                            &self.registry,
-                            &input,
-                        ),
-                    )
-                    .await;
-                    match preflight {
-                        Ok(result) => {
-                            guard.disarm();
-                            result?
-                        }
-                        Err(_) => {
-                            guard.cancel_and_discard().await;
-                            return Err(MutationError::Unavailable);
-                        }
-                    }
-                };
+        let (review_evidence, commit_requests, checked_task_authority) = if input.operation
+            == ProposalAuthorityOperation::Lifecycle(ProposalOperation::Apply)
+        {
+            let preflight = {
+                let client = tokio::time::timeout_at(deadline, self.pool.get())
+                    .await
+                    .map_err(|_| MutationError::Unavailable)?
+                    .map_err(|_| MutationError::Unavailable)?;
+                let mut guard = QueryCancellationGuard::new(self.pool.clone(), client);
+                let preflight = tokio::time::timeout_at(
+                    deadline,
+                    self.coordinator.preflight_proposal_apply(
+                        guard.client(),
+                        &self.registry,
+                        &input,
+                    ),
+                )
+                .await;
                 match preflight {
-                    ProposalApplyPreflight::Receipt(receipt) => return Ok(receipt),
-                    ProposalApplyPreflight::Continue {
-                        review: None,
-                        evidence,
-                    } => (None, evidence),
-                    ProposalApplyPreflight::Continue {
-                        review: Some((authority, accepted, result_id)),
-                        evidence,
-                    } => {
-                        let source = self
-                            .review_result_source
-                            .as_ref()
-                            .ok_or(MutationError::Unavailable)?;
-                        let fresh = tokio::time::timeout_at(
-                            deadline,
-                            source.approved_evidence(&authority, &accepted),
-                        )
-                        .await
-                        .map_err(|_| MutationError::Unavailable)??;
-                        if result_id.is_some_and(|result_id| fresh.result_id() != result_id) {
-                            return Err(MutationError::ProposalReviewResultMismatch);
-                        }
-                        (Some(fresh), evidence)
+                    Ok(result) => {
+                        guard.disarm();
+                        result?
+                    }
+                    Err(_) => {
+                        guard.cancel_and_discard().await;
+                        return Err(MutationError::Unavailable);
                     }
                 }
-            } else {
-                (None, vec![])
             };
+            let (task_authority, review, evidence) = match preflight {
+                ProposalApplyPreflight::Receipt(receipt) => return Ok(receipt),
+                ProposalApplyPreflight::Continue {
+                    task_authority,
+                    review,
+                    evidence,
+                } => (task_authority, review, evidence),
+            };
+            if let Some(binding) = &task_authority {
+                tokio::time::timeout_at(deadline, self.coordinator.check_task_authority(binding))
+                    .await
+                    .map_err(|_| MutationError::Unavailable)??;
+            }
+            let checked_task_authority = CheckedProposalTaskAuthority::new(task_authority);
+            let review_evidence = match review {
+                None => None,
+                Some((authority, accepted, result_id)) => {
+                    let source = self
+                        .review_result_source
+                        .as_ref()
+                        .ok_or(MutationError::Unavailable)?;
+                    let fresh = tokio::time::timeout_at(
+                        deadline,
+                        source.approved_evidence(&authority, &accepted),
+                    )
+                    .await
+                    .map_err(|_| MutationError::Unavailable)??;
+                    if result_id.is_some_and(|result_id| fresh.result_id() != result_id) {
+                        return Err(MutationError::ProposalReviewResultMismatch);
+                    }
+                    Some(fresh)
+                }
+            };
+            (review_evidence, evidence, Some(checked_task_authority))
+        } else {
+            (None, vec![], None)
+        };
         // Preflight admitted and projected only the frozen guard selectors.
         // Reuse the configured, pinned provider adapter with no checked-out
         // database connection; the coordinator rechecks those same selectors.
@@ -618,6 +627,7 @@ impl PostgresRecordMutationService {
                 input,
                 review_evidence.as_ref(),
                 &commit_evidence,
+                checked_task_authority.as_ref(),
                 deadline,
             ),
         )
