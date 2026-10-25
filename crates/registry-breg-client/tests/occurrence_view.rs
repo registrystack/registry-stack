@@ -585,6 +585,46 @@ fn unknown_time_kinds_relations_and_meanings_degrade_to_unsupported_members() {
 }
 
 #[test]
+fn a_supersedes_correction_is_projected_like_a_corrects_correction() {
+    let mut descriptor = suspension_descriptor();
+    descriptor["correction"]["relation"] = json!("supersedes");
+    let view = expect_view(&arguments(
+        "suspension-decision",
+        descriptor.clone(),
+        correction_record(),
+    ));
+    assert_eq!(
+        view["correction"],
+        json!({"relation": "supersedes", "reference": reference(DECISION_ID, "suspension-decision")})
+    );
+    let parsed = BRegOccurrenceDescriptor::from_value(&descriptor).expect("descriptor parses");
+    assert_eq!(parsed.to_value(), descriptor);
+}
+
+#[test]
+fn an_unknown_role_kind_makes_only_that_role_unsupported() {
+    let mut descriptor = transfer_descriptor();
+    descriptor["subjects"][1]["kind"] = json!("delegated");
+    let view = expect_view(&arguments(
+        "ownership-transfer",
+        descriptor.clone(),
+        transfer_record(),
+    ));
+    let subjects = view["subjects"].as_array().expect("subjects");
+    assert_eq!(subjects.len(), 3);
+    assert_eq!(
+        subjects[1],
+        json!({"role": "previous-ownership", "label": "Previous ownership",
+            "value": {"status": "unsupported", "detail": "role kind delegated"}})
+    );
+    assert_eq!(subjects[0]["kind"], json!("native"));
+    assert_eq!(subjects[2]["value"]["status"], json!("available"));
+    assert_eq!(view["sources"][0]["value"]["value"], json!("DEED-0007"));
+    let parsed = BRegOccurrenceDescriptor::from_value(&descriptor).expect("descriptor parses");
+    assert_eq!(parsed.to_value(), descriptor);
+}
+
+#[test]
 fn an_open_interval_end_that_is_not_mapped_is_unavailable() {
     let mut descriptor = suspension_descriptor();
     descriptor["effective"]
@@ -761,6 +801,66 @@ fn a_matching_proposal_application_contributes_only_what_it_carries() {
     );
 }
 
+#[test]
+fn an_applied_at_instant_is_emitted_like_every_other_instant() {
+    let mut arguments = transfer_arguments();
+    arguments.insert(
+        "proposalApplications".into(),
+        json!([{"applicationId": "b2000000-0000-4000-8000-000000000002", "submissionVersion": 3,
+            "effectDigest": "sha256:00000000000000000000000000000000000000000000000000000000000000bb",
+            "appliedBy": "reviewer-ref-1", "appliedAt": "2026-10-26t09:00:00.5z",
+            "resultLinks": [{"recordType": "ownership-transfer", "recordId": TRANSFER_ID, "revision": 1}]}]),
+    );
+    assert_eq!(
+        expect_view(&arguments)["provenance"][0]["appliedAt"],
+        json!("2026-10-26T09:00:00.5Z")
+    );
+
+    arguments["proposalApplications"][0]["appliedAt"] = json!("yesterday");
+    assert!(matches!(
+        project(&arguments),
+        Err(BRegOccurrenceError::WrongRecordEvidence { .. })
+    ));
+}
+
+#[test]
+fn repeated_evidence_contributes_one_provenance_entry_in_first_seen_order() {
+    let receipt = |effect: &str| json!({"effect": effect, "receipt": incorporation_receipt()});
+    let mut arguments = incorporation_arguments();
+    arguments.insert(
+        "actionReceipts".into(),
+        json!([
+            receipt("record-incorporation"),
+            receipt("update-company"),
+            receipt("record-incorporation")
+        ]),
+    );
+    let application = json!({"applicationId": "b2000000-0000-4000-8000-000000000002",
+        "submissionVersion": 1,
+        "effectDigest": "sha256:00000000000000000000000000000000000000000000000000000000000000bb",
+        "resultLinks": [{"recordType": "incorporation", "recordId": INCORPORATION_ID, "revision": 1}]});
+    arguments.insert(
+        "proposalApplications".into(),
+        json!([application.clone(), application]),
+    );
+    let view = expect_view(&arguments);
+    assert_eq!(
+        view["provenance"],
+        json!([
+            {"kind": "action-receipt", "action": "incorporate-company",
+                "applicationId": APPLICATION_ID, "effect": "record-incorporation"},
+            {"kind": "proposal-application",
+                "applicationId": "b2000000-0000-4000-8000-000000000002", "submissionVersion": 1}
+        ])
+    );
+    // The update-company receipt result names another record type.
+    assert_eq!(
+        view["ignoredEvidence"],
+        json!([{"kind": "action-receipt", "applicationId": APPLICATION_ID,
+            "reason": "no-matching-result"}])
+    );
+}
+
 // ---- Descriptor errors ----
 
 #[test]
@@ -811,7 +911,10 @@ type DescriptorMutation = fn(&mut Value);
 fn malformed_nested_members_name_their_path() {
     let cases: [(&str, DescriptorMutation); 6] = [
         ("subjects[0].kind", |d| {
-            d["subjects"][0]["kind"] = json!("virtual")
+            d["subjects"][0]
+                .as_object_mut()
+                .expect("role")
+                .remove("kind");
         }),
         ("subjects[0].field.apiName", |d| {
             d["subjects"][0]["field"]
@@ -911,6 +1014,43 @@ fn argument_documents_are_strict() {
         );
         assert_eq!(error.code(), "invalid-input");
     }
+}
+
+#[test]
+fn invalid_input_errors_carry_no_supplied_value() {
+    let secret = "SECRET-EVIDENCE-VALUE";
+    let mut wrong_type = incorporation_arguments();
+    wrong_type["actionReceipts"][0]["receipt"]["results"]["record-incorporation"]["revision"] =
+        json!(secret);
+    let mut unknown_member = incorporation_arguments();
+    unknown_member.insert(secret.into(), json!(true));
+    let mut unknown_nested = incorporation_arguments();
+    unknown_nested["actionReceipts"][0]["receipt"][secret] = json!(secret);
+    let mut wrong_domain_data = incorporation_arguments();
+    wrong_domain_data["record"]["domainData"] = json!(secret);
+    let mut wrong_record_member = incorporation_arguments();
+    wrong_record_member["record"]
+        .as_object_mut()
+        .expect("record")
+        .remove("revisionIdentifier");
+    wrong_record_member["record"]["recordIdentifier"] = json!(secret);
+    for arguments in [
+        wrong_type,
+        unknown_member,
+        unknown_nested,
+        wrong_domain_data,
+    ] {
+        let error = project(&arguments).expect_err("invalid input is refused");
+        assert!(
+            matches!(error, BRegOccurrenceError::InvalidInput { .. }),
+            "{error}"
+        );
+        let message = error.to_string();
+        assert!(!message.contains(secret), "{message}");
+        assert!(!message.contains("SECRET"), "{message}");
+    }
+    let error = project(&wrong_record_member).expect_err("a missing member is refused");
+    assert!(!error.to_string().contains(secret), "{error}");
 }
 
 #[test]

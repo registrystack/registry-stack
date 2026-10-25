@@ -94,7 +94,14 @@ struct FieldRef {
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum RoleKind {
     Native,
-    External { namespace: String },
+    External {
+        namespace: String,
+    },
+    /// A role kind this client does not know, retained for the descriptor
+    /// round trip.
+    Unsupported {
+        kind: String,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -227,7 +234,9 @@ fn parse_roles(value: &Value, path: &str) -> Result<Vec<RoleDescriptor>, BRegOcc
                             &child("namespace"),
                         )?,
                     },
-                    _ => return Err(malformed(child("kind"))),
+                    other => RoleKind::Unsupported {
+                        kind: other.to_owned(),
+                    },
                 };
             Ok(RoleDescriptor {
                 role: text(required(object, "role", &child("role"))?, &child("role"))?,
@@ -448,6 +457,9 @@ fn roles_value(roles: &[RoleDescriptor]) -> Value {
                     RoleKind::External { namespace } => {
                         member.insert("kind".into(), Value::from("external"));
                         member.insert("namespace".into(), Value::from(namespace.clone()));
+                    }
+                    RoleKind::Unsupported { kind } => {
+                        member.insert("kind".into(), Value::from(kind.clone()));
                     }
                 }
                 member.insert("field".into(), field_value(&role.field));
@@ -858,6 +870,10 @@ fn role_members(
                     member.insert("kind".into(), Value::from("external"));
                     member.insert("namespace".into(), Value::from(namespace.clone()));
                 }
+                RoleKind::Unsupported { kind } => {
+                    member.insert("value".into(), unsupported(&format!("role kind {kind}")));
+                    return Ok(Value::Object(member));
+                }
             }
             member.insert("value".into(), value_member(&role.field, record)?);
             Ok(Value::Object(member))
@@ -872,7 +888,7 @@ fn correction_member(
     let Some(correction) = correction else {
         return Ok(status("unavailable"));
     };
-    if correction.relation != "corrects" {
+    if !matches!(correction.relation.as_str(), "corrects" | "supersedes") {
         return Ok(unsupported(&format!(
             "correction relation {}",
             correction.relation
@@ -967,38 +983,53 @@ fn build_view(
             ),
         };
         match outcome {
-            EvidenceMatch::Exact => provenance.push(match entry {
-                EvidenceRef::Receipt {
-                    action,
-                    application_id,
-                    effect,
-                    ..
-                } => serde_json::json!({
-                    "kind": kind,
-                    "action": action,
-                    "applicationId": application_id,
-                    "effect": effect,
-                }),
-                EvidenceRef::Application {
-                    application_id,
-                    submission_version,
-                    applied_at,
-                    applied_by,
-                    ..
-                } => {
-                    let mut member = Map::new();
-                    member.insert("kind".into(), Value::from(kind));
-                    member.insert("applicationId".into(), Value::from(*application_id));
-                    member.insert("submissionVersion".into(), Value::from(*submission_version));
-                    if let Some(applied_at) = applied_at {
-                        member.insert("appliedAt".into(), Value::from(*applied_at));
+            EvidenceMatch::Exact => {
+                let item = match entry {
+                    EvidenceRef::Receipt {
+                        action,
+                        application_id,
+                        effect,
+                        ..
+                    } => serde_json::json!({
+                        "kind": kind,
+                        "action": action,
+                        "applicationId": application_id,
+                        "effect": effect,
+                    }),
+                    EvidenceRef::Application {
+                        application_id,
+                        submission_version,
+                        applied_at,
+                        applied_by,
+                        ..
+                    } => {
+                        let mut member = Map::new();
+                        member.insert("kind".into(), Value::from(kind));
+                        member.insert("applicationId".into(), Value::from(*application_id));
+                        member.insert("submissionVersion".into(), Value::from(*submission_version));
+                        if let Some(applied_at) = applied_at {
+                            if OffsetDateTime::parse(applied_at, &Rfc3339).is_err() {
+                                return Err(wrong_evidence(
+                                    "the proposal application time is not an RFC 3339 timestamp",
+                                ));
+                            }
+                            member.insert(
+                                "appliedAt".into(),
+                                Value::from(canonical_instant(applied_at)),
+                            );
+                        }
+                        if let Some(applied_by) = applied_by {
+                            member.insert("appliedBy".into(), Value::from(*applied_by));
+                        }
+                        Value::Object(member)
                     }
-                    if let Some(applied_by) = applied_by {
-                        member.insert("appliedBy".into(), Value::from(*applied_by));
-                    }
-                    Value::Object(member)
+                };
+                // Evidence repeated by the caller adds no second entry; the
+                // first occurrence keeps its place.
+                if !provenance.contains(&item) {
+                    provenance.push(item);
                 }
-            }),
+            }
             EvidenceMatch::RevisionMismatch | EvidenceMatch::NoResult => {
                 let reason = if matches!(outcome, EvidenceMatch::RevisionMismatch) {
                     "revision-mismatch"
@@ -1153,13 +1184,14 @@ struct ResultDocument {
 /// actionReceipts?: [{effect, receipt}], proposalApplications?}`.
 ///
 /// Duplicate members, unknown members and malformed shapes are refused as
-/// `InvalidInput`; the descriptor and the evidence keep their own errors.
+/// `InvalidInput` with a fixed reason that never quotes the input; the
+/// descriptor and the evidence keep their own errors.
 pub fn occurrence_view_from_json(bytes: &[u8]) -> Result<BRegOccurrenceView, BRegOccurrenceError> {
-    let document = decode_exact_json(bytes)
-        .map_err(|error| invalid_input(format!("the arguments are not exact JSON: {error}")))?;
-    let arguments: ViewArguments = serde_json::from_value(document).map_err(|error| {
-        invalid_input(format!("the arguments do not match the contract: {error}"))
-    })?;
+    let document =
+        decode_exact_json(bytes).map_err(|_| invalid_input("the arguments are not exact JSON"))?;
+    // The serde message is dropped: it quotes the offending value or member name.
+    let arguments: ViewArguments = serde_json::from_value(document)
+        .map_err(|_| invalid_input("the arguments do not match the contract"))?;
     let record = arguments
         .record
         .as_object()
