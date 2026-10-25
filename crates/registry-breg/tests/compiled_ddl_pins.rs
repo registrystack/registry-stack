@@ -55,6 +55,8 @@
 //! extensions, and the idempotency key-reuse Problem are compiled artifacts.
 //! Their contract bytes affect artifact revisions while leaving these fixtures'
 //! SQL and unchanged Action definition fingerprints intact.
+//! Optional empty preconditions in unconditioned immediate Action schemas are
+//! also part of the artifact revision, without changing SQL or Action identity.
 
 use registry_breg::compiler::{compile_project, CompileProfile};
 use registry_breg::contract::{parse_module_yaml, parse_project_yaml};
@@ -88,7 +90,7 @@ const FIXTURES: &[Fixture] = &[
             "../../../products/breg/fixtures/asset-registration-actions/modules/asset-registration-actions-core/module.yaml"
         )),
         ddl_sha256: "43acdae956eb2f932fb22a2cccc5cee5ed19cf806f2f28bbc677eff219d00b99",
-        revision: "sha256:a966fb0a0370b7d587200d49f7812c851a1d8692c7bbb6d6ca9b219788e83c6b",
+        revision: "sha256:e0f392a28cb5826c55dfe4b92f4b8e820f0622c927d915eb274499ae433595bb",
     },
     Fixture {
         name: "facility-registry-actions",
@@ -99,7 +101,7 @@ const FIXTURES: &[Fixture] = &[
             "../../../products/breg/fixtures/facility-registry-actions/modules/facility-registry-actions-core/module.yaml"
         )),
         ddl_sha256: "6439a877ee6508b999a77242542695d8ccddc6d80518699d90eddc32b305780b",
-        revision: "sha256:386596dbd4d58416fecef5604098a0b97011f9e9932efbac8f26e9944b763762",
+        revision: "sha256:e8b1e6e2e502d1d1e6e074278343d775430c98344bfec26f3d3e11f80de8be13",
     },
     Fixture {
         name: "household-contact-actions",

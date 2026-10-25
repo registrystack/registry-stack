@@ -63,6 +63,23 @@ journeys:
             destinationAuthorityId: {recordCapture: south-authority}
             transferReference: TRANSFER-002
         expect: {outcome: refusal, status: 412, problemCode: precondition.failed}
+      - id: refuse-source-reference-outside-claim
+        action: register-authority-transfer
+        accessProfile: transfer-clerk
+        claims:
+          principal: synthetic-transfer-clerk
+          scopes: [registry:permit:transfer]
+          purpose: permit-administration
+          directClaims:
+            allowed_jurisdictions: [south-district]
+        request:
+          type: invoke
+          idempotencyKey: source-authority-outside-claim
+          input:
+            sourceAuthorityId: {recordCapture: north-authority}
+            destinationAuthorityId: {recordCapture: south-authority}
+            transferReference: TRANSFER-003
+        expect: {outcome: refusal, status: 412, problemCode: precondition.failed}
       - id: refuse-missing-array-claim
         action: register-authority-transfer
         accessProfile: transfer-clerk
@@ -76,5 +93,5 @@ journeys:
           input:
             sourceAuthorityId: {recordCapture: north-authority}
             destinationAuthorityId: {recordCapture: south-authority}
-            transferReference: TRANSFER-003
+            transferReference: TRANSFER-004
         expect: {outcome: refusal, status: 404, problemCode: resource.not_found}

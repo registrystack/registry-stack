@@ -2,6 +2,8 @@
 
 use super::*;
 use registry_breg::contract::parse_project_json;
+#[cfg(feature = "tooling")]
+use registry_breg::migration_plan::{ArtifactDigestBinding, ReviewedMigrationAssertionDescriptor};
 use registry_breg::package::MAX_MIGRATION_STATEMENTS;
 use serde_json::{json, Value};
 
@@ -174,6 +176,81 @@ fn capacity_request(
     }
 }
 
+#[cfg(feature = "tooling")]
+fn preassertion_review_source(
+    changes: &[registry_breg::package::CompiledRegistryChange],
+    prior_revision: &str,
+    prior_schema_fingerprint: &str,
+    final_schema_fingerprint: &str,
+    physical_table: &str,
+) -> ReviewedMigrationSource {
+    let mut covers = changes
+        .iter()
+        .filter(|change| change.class != CompiledRegistryChangeClass::CompatibleAdditive)
+        .map(ReviewedChangeCover::from)
+        .collect::<Vec<_>>();
+    covers.sort();
+    assert!(!covers.is_empty());
+    let base = "modules/core/migrations/capacity-access";
+    let assertion_path = format!("{base}/assertions/pre.sql");
+    let assertion_sql =
+        format!("SELECT pg_catalog.count(*) >= 0 FROM registry_data.{physical_table}");
+    let descriptor = ReviewedMigrationDescriptor {
+        id: "capacity-access".to_owned(),
+        change_class: CompiledRegistryChangeClass::AccessOrDisclosureChange,
+        covers,
+        recovery: ReviewedMigrationRecovery::ExactTargetResume,
+        history: None,
+        lock_timeout_ms: 100,
+        statement_timeout_ms: 1_000,
+        steps: Vec::new(),
+        pre_assertions: vec![ReviewedMigrationAssertionDescriptor {
+            id: "pre".to_owned(),
+            sql_path: assertion_path.clone(),
+        }],
+        post_assertions: Vec::new(),
+        rehearsal_receipt_path: format!("{base}/rehearsal.json"),
+        backup_binding_path: None,
+    };
+    let descriptor_bytes =
+        canonicalize_json(&serde_json::to_value(&descriptor).expect("descriptor serializes"))
+            .expect("descriptor canonicalizes");
+    let receipt = MigrationRehearsalReceipt {
+        prior_package_digest: prior_revision.to_owned(),
+        prior_schema_fingerprint: prior_schema_fingerprint.to_owned(),
+        plan_sha256: format!("sha256:{}", hex(&Sha256::digest(&descriptor_bytes))),
+        sql_sha256: Vec::new(),
+        assertion_sha256: vec![ArtifactDigestBinding {
+            path: assertion_path.clone(),
+            sha256: format!("sha256:{}", hex(&Sha256::digest(assertion_sql.as_bytes()))),
+        }],
+        fixture_inventory: Vec::new(),
+        postgres_major: 17,
+        row_assertions: Vec::new(),
+        final_schema_fingerprint: final_schema_fingerprint.to_owned(),
+    };
+    let mut files = vec![
+        ReviewedMigrationFile {
+            path: assertion_path,
+            bytes: assertion_sql.into_bytes(),
+        },
+        ReviewedMigrationFile {
+            path: descriptor.rehearsal_receipt_path.clone(),
+            bytes: canonicalize_json(&serde_json::to_value(receipt).expect("receipt serializes"))
+                .expect("receipt canonicalizes"),
+        },
+    ];
+    files.sort_by(|left, right| left.path.cmp(&right.path));
+    ReviewedMigrationSource {
+        module_id: "core".to_owned(),
+        descriptor: ReviewedMigrationFile {
+            path: format!("{base}/descriptor.json"),
+            bytes: descriptor_bytes,
+        },
+        files,
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn reviewed_flow_package_beyond_the_old_statement_limit_prepares_and_activates() {
     let source = serde_json::to_vec(&reviewed_flow_project(4, PROPOSAL_OPERATIONS))
@@ -258,7 +335,7 @@ async fn reviewed_successor_upgrades_the_legacy_ledger_and_applies_more_than_102
         .expect("prior package publishes");
     let prior_package =
         load_package(prior_root.path(), &local_context()).expect("prior package verifies");
-    let current = apply_package(
+    let mut current = apply_package(
         &database,
         &prior_package,
         ApplyPrecondition::InitialActivation,
@@ -289,13 +366,39 @@ async fn reviewed_successor_upgrades_the_legacy_ledger_and_applies_more_than_102
         )
         .await
         .expect("fixture reinstalls the legacy statement constraint");
+    let (migration, migration_task) = database.connect_migration().await;
+    let legacy_fingerprint = managed_schema_fingerprint(
+        &migration,
+        &database.runtime_role,
+        &ExpectedManagedCatalog::compiled(&prior),
+    )
+    .await
+    .expect("the legacy ledger catalog fingerprints");
+    drop(migration);
+    migration_task.abort();
+    assert_ne!(
+        legacy_fingerprint, current.schema_fingerprint,
+        "the constraint version belongs to the managed schema fingerprint"
+    );
+    database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_state
+             SET schema_fingerprint = $1
+             WHERE singleton AND active_activation_id = $2::text::uuid",
+            &[&legacy_fingerprint, &current.activation_id],
+        )
+        .await
+        .expect("fixture records the historical active fingerprint");
+    current.schema_fingerprint = legacy_fingerprint;
 
     let changes = compiled_registry_change_set(&prior, &candidate, &current.package_digest);
-    let review = metadata_only_review_source(
+    let review = preassertion_review_source(
         &changes.changes,
         &current.package_digest,
         &current.schema_fingerprint,
         &candidate_fingerprint,
+        &candidate.entities()["case-0"].physical_table,
     );
     let candidate_prepared = prepare_package(capacity_request(
         candidate_source,
@@ -315,6 +418,8 @@ async fn reviewed_successor_upgrades_the_legacy_ledger_and_applies_more_than_102
         .len();
     assert!(statement_count > OLD_MIGRATION_STATEMENT_LIMIT);
     assert!(statement_count <= MAX_MIGRATION_STATEMENTS);
+    let ledger_statement_count = statement_count + 1;
+    assert!(ledger_statement_count <= MAX_MIGRATION_STATEMENTS);
     let candidate_root = TempRoot::create();
     candidate_prepared
         .publish_to_directory(candidate_root.path())
@@ -349,6 +454,60 @@ async fn reviewed_successor_upgrades_the_legacy_ledger_and_applies_more_than_102
         .get(0);
     assert!(legacy_constraint_remains);
 
+    let table = &candidate.entities()["case-0"].physical_table;
+    let (mut blocker_client, blocker_task) = database.connect_migration().await;
+    let blocker = blocker_client
+        .transaction()
+        .await
+        .expect("capacity blocker transaction starts");
+    blocker
+        .batch_execute(&format!(
+            "LOCK TABLE registry_data.{table} IN ACCESS EXCLUSIVE MODE"
+        ))
+        .await
+        .expect("capacity blocker holds the pre-assertion table");
+    let refused = apply_package(
+        &database,
+        &candidate_package,
+        ApplyPrecondition::Successor { current: &current },
+        Duration::from_secs(30),
+        Duration::from_secs(60),
+    )
+    .await;
+    assert_eq!(refused.err(), Some(MigrationError::ApplyFailed));
+    blocker
+        .rollback()
+        .await
+        .expect("capacity blocker rolls back");
+    blocker_task.abort();
+    let pinned = database
+        .admin
+        .query_one(
+            "SELECT maintenance_status, maintenance_target_package_digest,
+                    EXISTS (
+                        SELECT 1 FROM pg_catalog.pg_constraint
+                        WHERE conrelid = 'registry_internal.registry_migrations'::regclass
+                          AND conname = 'registry_migrations_statement_checksums_bounded_v2'
+                    ),
+                    EXISTS (
+                        SELECT 1 FROM pg_catalog.pg_constraint
+                        WHERE conrelid = 'registry_internal.registry_migrations'::regclass
+                          AND conname = 'registry_migrations_checksums_nonempty'
+                    )
+             FROM registry_internal.registry_state
+             WHERE singleton",
+            &[],
+        )
+        .await
+        .expect("failed capacity activation remains inspectable");
+    assert_eq!(pinned.get::<_, String>(0), "failed");
+    assert_eq!(
+        pinned.get::<_, Option<String>>(1).as_deref(),
+        Some(candidate_package.package_digest())
+    );
+    assert!(pinned.get::<_, bool>(2));
+    assert!(!pinned.get::<_, bool>(3));
+
     let active = apply_package(
         &database,
         &candidate_package,
@@ -357,7 +516,7 @@ async fn reviewed_successor_upgrades_the_legacy_ledger_and_applies_more_than_102
         Duration::from_secs(60),
     )
     .await
-    .expect("reviewed successor widens the ledger and activates");
+    .expect("the exact target resumes after the transient pre-assertion lock clears");
     let ledger = database
         .admin
         .query_one(
@@ -383,6 +542,6 @@ async fn reviewed_successor_upgrades_the_legacy_ledger_and_applies_more_than_102
         ledger.get::<_, bool>(1),
         ledger.get::<_, bool>(2),
     );
-    assert_eq!(ledger, (statement_count as i32, true, false));
+    assert_eq!(ledger, (ledger_statement_count as i32, true, false));
     database.cleanup().await;
 }

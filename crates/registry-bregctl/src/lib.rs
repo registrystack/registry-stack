@@ -5237,13 +5237,6 @@ fn data_lifecycle_failure(
                 action,
             )
         }
-        DataLifecycleError::PackageManifest => (
-            format!("{prefix}.package.refused"),
-            "package",
-            "the data package was refused",
-            DiagnosticArtifact::VerifiedPackage,
-            SuggestedAction::VerifyPackageIntegrity,
-        ),
         DataLifecycleError::Input | DataLifecycleError::Data(DataError::InvalidInput) => (
             format!("{prefix}.input.refused"),
             "input",
