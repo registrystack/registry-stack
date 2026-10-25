@@ -62,6 +62,11 @@ path = "tests/postgres_immediate_action_examples.rs"
 required-features = ["postgres-test", "tooling"]
 
 [[test]]
+name = "postgres_occurrence_examples"
+path = "tests/postgres_occurrence_examples.rs"
+required-features = ["postgres-test", "runtime", "tooling"]
+
+[[test]]
 name = "postgres_immediate_action_activation"
 path = "tests/postgres_immediate_action_activation.rs"
 required-features = ["postgres-test", "runtime", "tooling"]
