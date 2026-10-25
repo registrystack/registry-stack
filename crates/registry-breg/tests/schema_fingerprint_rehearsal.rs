@@ -30,8 +30,9 @@ const DATABASE: &str = "rehearsal-database";
 const SOURCE_REVISION: &str = "rehearsal-source-revision";
 // Includes the runtime Evidence expiry function, both expires_at indexes, and
 // the Proposal blocked-reason constraint that admits a durable Apply refusal.
+// The migration ledger bounds statement checksums at 4,096 entries.
 const PORTABLE_SCHEMA_FINGERPRINT: &str =
-    "sha256:0abb3156966b9b6f97dd2304bb23f3e72ec1d4901f5112406f9c590ba2a9c4c6";
+    "sha256:260e0df5e8f922f9c263a57cb2c7220339e63dae1ca685f2fa2d546f8046b322";
 const FIXTURE_JOURNEYS: &[u8] = br#"apiVersion: id.registrystack.org/formats/breg/journeys/v1
 kind: BRegJourneys
 journeys: []

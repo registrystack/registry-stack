@@ -20,7 +20,7 @@ use registry_breg::data::{
     DataImportOperation, DataImportPlan, MAX_DATA_EXPORT_PAGE_BYTES, MAX_DATA_HTTP_RESPONSE_BYTES,
     MAX_DATA_IMPORT_INPUT_BYTES,
 };
-use registry_breg::package::{inspect_package_integrity, PackageEnvelope, PackageError};
+use registry_breg::package::{inspect_package_integrity, PackageError};
 use registry_breg_client::{
     ingestion_prefix_digest, BRegBatchOperation, BRegIngestionBlockedReason, BRegIngestionChunk,
     BRegIngestionChunkReceipt, BRegIngestionError, BRegIngestionRun, BRegIngestionRunListQuery,
@@ -79,7 +79,6 @@ static DATA_WRITE_COUNTER: AtomicU64 = AtomicU64::new(0);
 pub(crate) enum DataLifecycleError {
     PackagePath,
     Package(PackageError),
-    PackageManifest,
     Input,
     Output,
     Checkpoint,
@@ -1224,18 +1223,9 @@ fn inspect_data_package(package: &Path) -> Result<InspectedDataPackage, DataLife
         return Err(DataLifecycleError::PackagePath);
     }
     let inspected = inspect_package_integrity(package).map_err(DataLifecycleError::Package)?;
-    let manifest_bytes = read_bounded_regular(&package.join("package.json"), MAX_CHECKPOINT_BYTES)
-        .map_err(|_| DataLifecycleError::PackageManifest)?;
-    let envelope: PackageEnvelope = serde_json::from_value(
-        parse_json_strict(&manifest_bytes).map_err(|_| DataLifecycleError::PackageManifest)?,
-    )
-    .map_err(|_| DataLifecycleError::PackageManifest)?;
-    if envelope.manifest.schema_fingerprint != inspected.schema_fingerprint() {
-        return Err(DataLifecycleError::PackageManifest);
-    }
     Ok(InspectedDataPackage {
         package_revision: inspected.package_digest().to_owned(),
-        schema_fingerprint: envelope.manifest.schema_fingerprint,
+        schema_fingerprint: inspected.schema_fingerprint().to_owned(),
         registry: inspected.registry().clone(),
     })
 }
@@ -1886,6 +1876,215 @@ mod tests {
         });
         let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
         compile_project(&project, &[], CompileProfile::Authoring).unwrap()
+    }
+
+    fn large_manifest_package_source() -> Vec<u8> {
+        let record_types = (0..3)
+            .map(|target| {
+                json!({
+                    "id": format!("case-{target}"),
+                    "primaryDataset": "cases",
+                    "route": format!("cases-{target}"),
+                    "mutationMode": "mutable",
+                    "mutationPolicy": {"patch": "proposal-required"},
+                    "batch": {"maximumItems": 2, "maximumBytes": 400},
+                    "fields": [{
+                        "id": "label", "type": "string", "required": true,
+                        "maximumLength": 80, "classification": "internal"
+                    }]
+                })
+            })
+            .collect::<Vec<_>>();
+        let targets = (0..3)
+            .map(|target| {
+                json!({
+                    "recordType": format!("case-{target}"),
+                    "rowBoundaries": "unrestricted"
+                })
+            })
+            .collect::<Vec<_>>();
+        let readable_inputs = (0..3)
+            .flat_map(|target| [format!("case-{target}"), format!("case-{target}-label")])
+            .collect::<Vec<_>>();
+        let actions = (0..4)
+            .map(|flow| {
+                let inputs = (0..3)
+                    .flat_map(|target| {
+                        [
+                            json!({
+                                "id": format!("case-{target}"), "type": "reference",
+                                "target": format!("case-{target}"), "required": true,
+                                "classification": "internal"
+                            }),
+                            json!({
+                                "id": format!("case-{target}-label"), "type": "string",
+                                "required": true, "maximumLength": 80,
+                                "classification": "internal"
+                            }),
+                        ]
+                    })
+                    .collect::<Vec<_>>();
+                let effects = (0..3)
+                    .map(|target| {
+                        json!({
+                            "id": format!("update-{target}"),
+                            "target": {"fromInput": format!("case-{target}")},
+                            "operation": "patch",
+                            "set": {"label": {"fromInput": format!("case-{target}-label")}}
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                json!({
+                    "id": format!("review-flow-{flow}"),
+                    "execution": {"mode": "proposal", "proposal": {
+                        "review": {"type": "none"},
+                        "application": {"mode": "manual"},
+                        "retention": {"mode": "retain"}
+                    }},
+                    "inputs": inputs,
+                    "plan": {"type": "fixed", "effects": effects}
+                })
+            })
+            .collect::<Vec<_>>();
+        let access_profiles = (0..4)
+            .map(|profile| {
+                let action_permissions = (0..4)
+                    .map(|flow| {
+                        json!({
+                            "action": format!("review-flow-{flow}"),
+                            "operations": ["start"],
+                            "targets": targets
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                let proposal_permissions = (0..4)
+                    .map(|flow| {
+                        json!({
+                            "action": format!("review-flow-{flow}"),
+                            "operations": ["get", "list", "edit", "submit", "cancel", "apply"],
+                            "ownership": "caller",
+                            "readableInputs": readable_inputs,
+                            "targets": targets
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                let mut permissions = json!({
+                    "actions": action_permissions,
+                    "proposals": proposal_permissions
+                });
+                if profile == 0 {
+                    permissions["records"] = json!([{
+                        "recordType": "case-0",
+                        "operations": ["create", "batch", "get", "list"],
+                        "readableFields": ["label"],
+                        "writableFields": ["label"],
+                        "allowDataExport": true,
+                        "rowBoundaries": "unrestricted"
+                    }]);
+                }
+                json!({
+                    "id": format!("reviewer-{profile}"),
+                    "default": profile == 0,
+                    "principalClaim": "principal",
+                    "requiredScopes": [format!("review:{profile}")],
+                    "permissions": permissions
+                })
+            })
+            .collect::<Vec<_>>();
+        serde_json::to_vec(&json!({
+            "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
+            "kind": "BRegProject",
+            "project": {
+                "id": "review-capacity", "version": "1", "defaultLanguage": "en",
+                "canonicalBaseIri": "https://review-capacity.example.test"
+            },
+            "package": {"sourceRevision": "data-package-regression"},
+            "manifestProjection": {
+                "accessProfile": "reviewer-0",
+                "classificationCeiling": "internal",
+                "catalog": {
+                    "baseUrl": "https://review-capacity.example.test",
+                    "title": "Review Capacity Registry",
+                    "publisher": {"id": "review-authority", "name": "Review Authority"}
+                },
+                "publicService": {"id": "review-service", "title": "Review Service"},
+                "datasets": [{
+                    "id": "cases", "title": "Cases",
+                    "owner": "Review Authority", "status": "active"
+                }],
+                "dataServices": [{
+                    "id": "review-api", "title": "Review API",
+                    "endpointUrl": "https://review-capacity.example.test",
+                    "servesDatasets": ["cases"]
+                }],
+                "distributions": []
+            },
+            "datasets": [{"id": "cases"}],
+            "recordTypes": record_types,
+            "actions": actions,
+            "accessProfiles": access_profiles
+        }))
+        .expect("large-manifest package source serializes")
+    }
+
+    #[test]
+    fn data_validate_accepts_a_verified_manifest_above_the_checkpoint_bound() {
+        use registry_breg::package::{
+            prepare_package, PackageBuildRequest, PackageMigrationPlanInput, PackageSourceFile,
+        };
+
+        let directory = tempfile::tempdir().expect("large package test directory is created");
+        let package = directory.path().join("package");
+        let input = directory.path().join("input.jsonl");
+        let source = large_manifest_package_source();
+        let project = parse_project_json(&source).expect("large package project parses");
+        let compiled = compile_project(&project, &[], CompileProfile::Production)
+            .expect("large package project compiles in production");
+        assert!(
+            compiled.ddl().statements.len() <= registry_breg::package::MAX_MIGRATION_STATEMENTS,
+            "the regression package remains inside the supported migration capacity"
+        );
+        let prepared = prepare_package(PackageBuildRequest {
+            from_package_digest: None,
+            compiler_source_revision: "data-package-regression".to_owned(),
+            schema_fingerprint: format!("sha256:{}", "0".repeat(64)),
+            project: PackageSourceFile {
+                path: "source/registry.json".to_owned(),
+                bytes: source,
+            },
+            modules: Vec::new(),
+            fixture_journeys: PackageSourceFile {
+                path: "tests/journeys.yaml".to_owned(),
+                bytes: b"apiVersion: id.registrystack.org/formats/breg/journeys/v1\nkind: BRegJourneys\njourneys: []\n".to_vec(),
+            },
+            migration_plan: PackageMigrationPlanInput::InitialCompiledDdl,
+        })
+        .expect("a package with a manifest above the checkpoint bound prepares");
+        prepared
+            .publish_to_directory(&package)
+            .expect("the large manifest package publishes");
+        assert!(
+            fs::metadata(package.join("package.json")).unwrap().len() > MAX_CHECKPOINT_BYTES,
+            "the regression package must cross the stale data-workflow read bound"
+        );
+        inspect_package_integrity(&package)
+            .expect("the package verifier accepts the large manifest");
+        fs::write(
+            &input,
+            b"{\"operation\":\"create\",\"data\":{\"label\":\"AA\"}}\n",
+        )
+        .unwrap();
+
+        let outcome = validate_import(DataValidateRequest {
+            package: &package,
+            entity: "case-0",
+            operation: DataImportOperation::Create,
+            profile: "reviewer-0",
+            input: &input,
+        })
+        .expect("data validation accepts every package the package verifier accepts");
+        assert_eq!(outcome.entity_id, "case-0");
+        assert_eq!(outcome.item_count, 1);
     }
 
     fn import_plan_and_inspected(input: &[u8]) -> (DataImportPlan, InspectedDataPackage) {

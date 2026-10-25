@@ -213,6 +213,12 @@ requires restoring the operator's own pre-activation backup and starting again
 from the restored active package. Operators must not edit managed tables to make
 a retry pass.
 
+The first successor on a database with the legacy 1,024-statement ledger bound
+widens that constraint when maintenance begins. This engine catalog change
+remains if a later precondition or migration step fails. Correct the cause and
+retry the exact pinned target; if it cannot complete and reconciliation reports
+`unresolvable`, restore the pre-activation backup.
+
 Authoring and migration authority are deliberately separate. An author or
 coding agent can edit configuration, inspect a diff, and run checks. Those
 commands cannot obtain the production migration credential. A runtime configuration without that credential is

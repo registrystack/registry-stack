@@ -174,6 +174,28 @@ async fn every_same_type_reference_target_must_match_the_array_claim() {
     );
     assert_eq!(transfer_count(&database, &registry).await, 1);
 
+    let south_only = token(
+        &idp,
+        Some(json!(["south-district"])),
+        "registry:permit:transfer",
+    );
+    let source_refused = send(
+        &app,
+        Method::POST,
+        "/v1/actions/register-authority-transfer?accessProfile=transfer-clerk",
+        &south_only,
+        Some("source-authority-outside-claim"),
+        input.clone(),
+    )
+    .await;
+    assert_eq!(
+        source_refused.0,
+        StatusCode::PRECONDITION_FAILED,
+        "{}",
+        source_refused.1
+    );
+    assert_eq!(transfer_count(&database, &registry).await, 1);
+
     let missing = token(&idp, None, "registry:permit:transfer");
     let missing_refused = send(
         &app,

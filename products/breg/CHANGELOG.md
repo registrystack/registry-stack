@@ -7,7 +7,11 @@
   schema exceeds that bound; successor packages check their actual migration
   plan, including reviewed steps and assertions. Permit manifests up to 8 MiB
   within the existing per-file and total package bounds, and reject oversized
-  manifests before publishing them.
+  manifests before publishing them. Data validation, import, and export reuse
+  the verified manifest without imposing the smaller checkpoint-file bound.
+  On legacy databases, the first successor widens the ledger when maintenance
+  begins; later failures retain that change for exact-target retry or recovery
+  from a pre-activation backup.
 - Preserve the safe package refusal cause and failing stage in schema-test
   diagnostics, including fingerprint-only measurements, and retain runtime
   warnings in native development-session logs.

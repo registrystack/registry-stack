@@ -80,7 +80,8 @@ current target authority, including a reference used only as a link in a newly c
 When two inputs reference the same Record type, BReg checks the target row boundaries against each
 referenced Record independently. An `in` boundary therefore succeeds only when the array claim
 covers both Records; authority over one does not authorize the other.
-Run the [two-reference example](https://github.com/registrystack/registry-stack/tree/main/products/breg/fixtures/multi-reference-array-claim)
+From a matching source checkout, run
+`bregctl dev start products/breg/fixtures/multi-reference-array-claim`
 to exercise the permitted and refused cases with local clients.
 
 {/* evidence: crates/registry-breg/src/contract.rs (ActionSource);

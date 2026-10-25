@@ -24,6 +24,15 @@ clients:
       allowed_jurisdictions: [north-district]
     testBindings:
       - {journeyId: every-reference-needs-authority, stepId: refuse-one-reference-outside-claim}
+  - id: south-only-transfer-clerk
+    accessProfiles: [transfer-clerk]
+    scopes: [registry:permit:transfer]
+    claims:
+      registry_principal: synthetic-transfer-clerk
+      registry_purpose: permit-administration
+      allowed_jurisdictions: [south-district]
+    testBindings:
+      - {journeyId: every-reference-needs-authority, stepId: refuse-source-reference-outside-claim}
   - id: transfer-clerk-without-claim
     accessProfiles: [transfer-clerk]
     scopes: [registry:permit:transfer]
