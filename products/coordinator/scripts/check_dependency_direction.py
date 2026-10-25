@@ -42,6 +42,10 @@ CLIENT_SUPPORT = {
     "registry-review-protocol": "the review handoff contract registry-casework-client carries",
 }
 
+# The combined Coordinator crate also publishes coordinatorctl. This helper
+# supplies its product-neutral request/connection CLI and reaches no product.
+CLI_SUPPORT = frozenset({"registry-cli-api"})
+
 # Product cores the runtime reaches only through their product client. The
 # core is in the runtime's forward closure through that client, so only the
 # runtime's own edges can show a direct dependency.
@@ -103,6 +107,8 @@ def runtime_may_reach(name: str) -> bool:
     if name.startswith("registry-platform-") or name == "registry-record":
         return True
     if name in CLIENT_SUPPORT:
+        return True
+    if name in CLI_SUPPORT:
         return True
     if name.endswith("-core"):
         return True

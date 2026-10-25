@@ -37,7 +37,7 @@ with the source and Registry Evidence still running.
 In `first-evidence-assertion/adult-status`, run the relationship fixture on its own:
 
 ```sh test-cwd="first-evidence-assertion/adult-status"
-evidencectl test . \
+rstack evidence test . \
   --target local-target.yaml \
   --fixture fixtures/legal-parent-relationship.yaml
 ```
@@ -72,29 +72,24 @@ the parent list never enters the assertion.
 Prepare one request with both roles, send it, verify the response, and read it:
 
 ```sh
-evidencectl request prepare legal-parent-relationship \
+rstack evidence request prepare legal-parent-relationship \
   --client tutorial-client \
   --purpose relationship-check \
   --subject child:record-id=child \
   --subject candidate-parent:record-id=parent \
   --name legal-parent-relationship
-curl --silent --show-error --fail-with-body \
-  --config .evidence/requests/legal-parent-relationship/authorization.curl \
-  --request POST \
-  --url http://127.0.0.1:18080/v1/evidence \
-  --header 'Content-Type: application/json' \
-  --header 'Accept: application/jose+json' \
-  --data-binary @.evidence/requests/legal-parent-relationship/request.json \
-  --output legal-parent.jws.json \
-  --write-out 'HTTP %{http_code}\n'
-evidencectl verify legal-parent.jws.json \
+rstack evidence api /v1/evidence \
+  --client tutorial-client \
+  --input .evidence/requests/legal-parent-relationship/request.json \
+  --accept application/jose+json \
+  --output legal-parent.jws.json
+rstack evidence verify legal-parent.jws.json \
   --context .evidence/requests/legal-parent-relationship/verification.json \
   --output legal-parent.verified.json
 jq -c '.subjects[], .supportedValues[]' legal-parent.verified.json
 ```
 
 ```text test-excerpt
-HTTP 200
 VERIFIED
 {"binding":"urn:evidence:subject:<binding>","role":"child"}
 {"binding":"urn:evidence:subject:<binding>","role":"candidate-parent"}
@@ -109,7 +104,7 @@ Each role carries its own [subject binding](../../reference/glossary/#subject-bi
 Leave out the candidate parent, and `request prepare` refuses before it writes anything:
 
 ```sh test-exit="1"
-evidencectl request prepare legal-parent-relationship \
+rstack evidence request prepare legal-parent-relationship \
   --client tutorial-client \
   --purpose relationship-check \
   --subject child:record-id=child \
@@ -123,7 +118,7 @@ evidencectl: subject inputs must match the definition's complete role set
 Give the `child` role twice, and it refuses again:
 
 ```sh test-exit="1"
-evidencectl request prepare legal-parent-relationship \
+rstack evidence request prepare legal-parent-relationship \
   --client tutorial-client \
   --purpose relationship-check \
   --subject child:record-id=child \
@@ -139,26 +134,27 @@ evidencectl: subject inputs must contain each selected profile field exactly onc
 Swap the two values. The request is complete, but the source holds no parent set for `parent`:
 
 ```sh
-evidencectl request prepare legal-parent-relationship \
+rstack evidence request prepare legal-parent-relationship \
   --client tutorial-client \
   --purpose relationship-check \
   --subject child:record-id=parent \
   --subject candidate-parent:record-id=child \
   --name swapped-relationship
-curl --silent --show-error \
-  --config .evidence/requests/swapped-relationship/authorization.curl \
-  --request POST \
-  --url http://127.0.0.1:18080/v1/evidence \
-  --header 'Content-Type: application/json' \
-  --header 'Accept: application/jose+json' \
-  --data-binary @.evidence/requests/swapped-relationship/request.json \
-  --output swapped-relationship.json \
-  --write-out 'HTTP %{http_code}\n'
+```
+
+```sh test-exit="1"
+rstack evidence api /v1/evidence \
+  --client tutorial-client \
+  --input .evidence/requests/swapped-relationship/request.json \
+  --accept application/jose+json \
+  --output swapped-relationship.json
+```
+
+```sh
 jq -r .code swapped-relationship.json
 ```
 
-```text test-excerpt
-HTTP 422
+```text test-expect
 evidence.unavailable
 ```
 

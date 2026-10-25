@@ -16,7 +16,7 @@ tutorial_test:
   skip: drift-checked by evidence-production-build-docs.test.mjs; needs Docker Compose
 ---
 
-You have a candidate from `evidencectl package` that signs through a Transit proxy, and you run
+You have a candidate from `rstack evidence package` that signs through a Transit proxy, and you run
 containers with Docker Compose. Run that candidate unchanged, with the runtime, secrets, Transit
 socket, and audit storage each mounted separately; the package digest stays the same as on a host
 deployment.
@@ -30,14 +30,14 @@ deployment.
 - An owner-only secret directory and storage that UID and GID `65532` can write.
 - The Compose adapter from your release's source archive,
   `https://github.com/registrystack/registry-stack/archive/refs/tags/v<version>.tar.gz`, where
-  `<version>` is the version `evidencectl --version` prints. The archive unpacks to
+  `<version>` is the version `rstack evidence --version` prints. The archive unpacks to
   `registry-stack-<version>/`, and the adapter is its `docker/` directory. Copy that directory to
   `evidence-compose/`, your operator-owned copy, and run every command from inside it.
 
 ## Set the Compose adapter inputs
 
 The Compose file is `compose/docker-compose.yaml` in `evidence-compose/`. You own it;
-`evidencectl package` does not write it. It reads five variables:
+`rstack evidence package` does not write it. It reads five variables:
 
 ```sh test-skip="needs the reader's candidate, secrets, Transit proxy, and reviewed image"
 export EVIDENCE_CANDIDATE_DIR='<candidate>'

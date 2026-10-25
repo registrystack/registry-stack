@@ -133,6 +133,13 @@ enum Command {
     /// axllent/mailpit:v1.31.2 at those digests. Each publishes on 127.0.0.1
     /// only, and the session removes both when it stops.
     Dev(dev::DevArgs),
+    /// Call the Messaging HTTP API with a saved connection or retained local client.
+    Api(Box<registry_cli_api::ApiArgs>),
+    /// Manage saved Messaging API connections.
+    Connection {
+        #[command(subcommand)]
+        command: registry_cli_api::ConnectionCommand,
+    },
 }
 
 #[derive(Debug, Args)]
@@ -680,6 +687,10 @@ where
     let outcome = match cli.command {
         Command::Serve(args) => return serve(args, cli.format, format_requested, stdout, stderr),
         Command::Dev(args) => return dev::run(args, cli.format, stdout, stderr),
+        Command::Api(args) => return api(*args, format_requested, stderr),
+        Command::Connection { command } => {
+            return connection(command, cli.format, format_requested, stderr);
+        }
         Command::Init(args) => init(&args.directory),
         Command::Package(args) => package(&args),
         Command::Check(args) => check(&args),
@@ -711,6 +722,64 @@ fn command_path(command: &Command) -> &'static str {
         Command::Messages(MessagesCommand::Cancel(_)) => "messages cancel",
         Command::Retention(RetentionCommand::EraseExpired(_)) => "retention erase-expired",
         Command::Dev(args) => dev::command_path(args),
+        Command::Api(_) => "api",
+        Command::Connection { .. } => "connection",
+    }
+}
+
+fn api(
+    args: registry_cli_api::ApiArgs,
+    format_requested: bool,
+    stderr: &mut dyn io::Write,
+) -> ExitCode {
+    if format_requested {
+        let _ = writeln!(
+            stderr,
+            "error: --format is not supported by api because the HTTP response is written to stdout unchanged"
+        );
+        return ExitCode::from(USAGE_EXIT);
+    }
+    match registry_cli_api::run_api("messaging", args, dev::api_connection) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            let _ = writeln!(stderr, "error: {error}");
+            ExitCode::from(error.exit_code())
+        }
+    }
+}
+
+fn connection(
+    command: registry_cli_api::ConnectionCommand,
+    format: OutputFormat,
+    format_requested: bool,
+    stderr: &mut dyn io::Write,
+) -> ExitCode {
+    if let registry_cli_api::ConnectionCommand::Check(args) = &command {
+        return match registry_cli_api::run_connection_check(
+            &args.file,
+            matches!(format, OutputFormat::Json),
+            args.deny_warnings,
+        ) {
+            Ok(code) => ExitCode::from(code),
+            Err(error) => {
+                let _ = writeln!(stderr, "error: {error}");
+                ExitCode::from(error.exit_code())
+            }
+        };
+    }
+    if format_requested {
+        let _ = writeln!(
+            stderr,
+            "error: --format is not supported by connection; remove it and retry"
+        );
+        return ExitCode::from(USAGE_EXIT);
+    }
+    match registry_cli_api::run_connection("messaging", command) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            let _ = writeln!(stderr, "error: {error}");
+            ExitCode::from(error.exit_code())
+        }
     }
 }
 
@@ -1985,7 +2054,7 @@ fn render_dev(report: &Value, stdout: &mut dyn io::Write) -> io::Result<()> {
     }
     writeln!(
         stdout,
-        "next: messagingctl dev token CLIENT, then send with curl -H @HEADER_FILE; Ctrl-C stops the session"
+        "next: rstack messaging api PATH --client CLIENT; Ctrl-C stops the session"
     )
 }
 

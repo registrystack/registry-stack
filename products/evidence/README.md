@@ -343,7 +343,8 @@ shipped verifier checks an SD-JWT VC for exactly what it checks for a signed
 JWS, namely issuer authenticity against a pinned key set and the output
 contract, and it never falls back to the credential format when signing fails.
 [The SD-JWT VC demo](SD-JWT-VC-DEMO.md) issues one assertion in both formats and
-re-verifies the credential offline with `curl` and the `evidence` binary.
+uses `curl` to request both formats, then re-verifies the credential offline with the
+`evidence` binary.
 
 ## Current verification
 

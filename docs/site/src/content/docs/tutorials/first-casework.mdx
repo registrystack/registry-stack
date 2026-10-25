@@ -24,31 +24,27 @@ producer. The request carries its own snapshot, so no source registry is needed.
   outcome="One ReviewRequest decided by staff and read by its producer, who is refused the task."
   time="About 20 minutes, plus image downloads"
   level="Local evaluation only"
-  prerequisites={['Running Docker', 'curl 7.76 or later', 'jq', 'Free loopback ports 8092, 8093 and 15433']}
+  prerequisites={['Running Docker', 'jq', 'Free loopback ports 8092, 8093 and 15433', 'The tools required by the release verification procedure']}
 />
 
-## Install casework and caseworkctl
+## Install Registry Stack
 
-`casework` is the review service and [`caseworkctl`](../../reference/cli/caseworkctl/) its tool. The
-installer checks the checksums on the
-[releases page](https://github.com/registrystack/registry-stack/releases/latest) and puts both
-in `~/.local/bin`; keep it on your `PATH`.
+Download one exact `rstack-vX.Y.Z-install.sh` and the verification material from the same Registry
+Stack release. Follow the
+[release verification procedure](https://github.com/registrystack/registry-stack/blob/main/release/VERIFY.md)
+before running the installer. From the verified release directory, install the `casework`
+component:
 
-{/* Evidence: crates/registry-casework/install.sh, CASEWORK_INSTALL_DIR. */}
-
-```sh test-skip="downloads a release; the gate uses binaries built from this checkout"
-curl -fsSL https://github.com/registrystack/registry-stack/releases/latest/download/casework-install.sh | bash
+```sh test-skip="uses a downloaded, independently verified release installer"
+tag="vX.Y.Z"
+bash "rstack-${tag}-install.sh" casework
+rstack casework --version
 ```
 
-```sh
-casework --version
-caseworkctl --version
-```
+The managed installation exposes `rstack` on your `PATH`. The `casework` component supplies the
+Casework runtime and its command-line tools from the same release.
 
-```text test-expect
-casework <version>
-caseworkctl <version>
-```
+{/* Evidence: crates/registry-rstack/README.md; crates/registry-rstack/install.sh; release/VERIFY.md. */}
 
 ## Create the project
 
@@ -56,7 +52,7 @@ Create a project from the standalone template and work inside it:
 
 ```sh
 mkdir -p tutorial-work
-caseworkctl init tutorial-work/casework --template standalone-decision
+rstack casework init tutorial-work/casework --template standalone-decision
 cd tutorial-work/casework
 ```
 
@@ -77,8 +73,8 @@ The project declares one [ReviewPolicy](../../reference/glossary/#review-policy)
 may ask, which team answers, and the outcomes allowed. Check it offline and run its fixture:
 
 ```sh
-caseworkctl check .
-caseworkctl test .
+rstack casework check .
+rstack casework test .
 ```
 
 ```json test-excerpt
@@ -92,7 +88,7 @@ caseworkctl test .
 The digest pins the policy's behavior. To read what that behavior is, explain it:
 
 ```sh
-caseworkctl explain .
+rstack casework explain .
 ```
 
 ```json test-excerpt
@@ -116,7 +112,7 @@ Casework keeps the snapshot the producer sends and refuses each listed case.
 ## Start the development session
 
 ```sh
-caseworkctl dev start
+rstack casework dev start
 ```
 
 ```json test-excerpt
@@ -128,24 +124,11 @@ caseworkctl dev start
 ```
 
 PostgreSQL and a token issuer run in Docker, with one staff team seeded. `.casework/dev/` holds
-private credentials; keep it out of version control. Get tokens for the producer (`requester`)
-and for `staff`:
+private credentials; keep it out of version control. The API commands get short-lived tokens for
+the registered local clients in memory.
 
-```sh
-caseworkctl dev token requester
-caseworkctl dev token staff
-casework_url=http://127.0.0.1:8092
-headers=.casework/dev/secrets
-```
-
-```json test-excerpt
-{"headerFile": "<path>"}
-```
-
-Each header file carries a token and the caller's profiles. Tokens last five minutes; when a call
-answers `401`, run `dev token` again.
-
-{/* Evidence: crates/registry-caseworkctl/src/dev/mod.rs, start, the dev token report, header_file. */}
+{/* Evidence: crates/registry-caseworkctl/src/dev/mod.rs, start, api_connection, acquire_token;
+    crates/registry-cli-api/src/api.rs, run_api. */}
 
 ## Submit a ReviewRequest
 
@@ -174,12 +157,11 @@ The subject digest is the producer's own fingerprint of the version it asks abou
 SHA-256 of the snapshot's compact JSON; Casework binds the request and its result to it. Send it:
 
 ```sh
-curl --fail-with-body --silent --show-error \
-  --header @"$headers/requester.header" \
-  --header 'Idempotency-Key: tutorial-review-1' \
-  --header 'Content-Type: application/json' \
-  --data-binary @request.json --output accepted.json \
-  "$casework_url/v1/review-requests"
+rstack casework api /v1/review-requests \
+  --client requester \
+  --idempotency-key tutorial-review-1 \
+  --input request.json \
+  --output accepted.json
 jq . accepted.json
 request_id="$(jq -r .requestId accepted.json)"
 ```
@@ -205,9 +187,9 @@ The request named only the policy ID, so Casework bound it to the active version
 The request opened a [ReviewTask](../../reference/glossary/#review-task). List it as staff:
 
 ```sh
-curl --fail-with-body --silent --show-error \
-  --header @"$headers/staff.header" --output tasks.json \
-  "$casework_url/v1/review-tasks?limit=25"
+rstack casework api '/v1/review-tasks?limit=25' \
+  --client staff \
+  --output tasks.json
 task_id="$(jq -r '.items[0].taskId' tasks.json)"
 task_revision="$(jq -r '.items[0].revision' tasks.json)"
 ```
@@ -215,9 +197,10 @@ task_revision="$(jq -r '.items[0].revision' tasks.json)"
 Try to read it as the producer:
 
 ```sh
-curl --silent --show-error \
-  --header @"$headers/requester.header" \
-  "$casework_url/v1/review-tasks/$task_id" | jq .
+rstack casework api "/v1/review-tasks/$task_id" \
+  --client requester \
+  --output refused.json || test "$?" -eq 1
+jq . refused.json
 ```
 
 ```json test-excerpt
@@ -234,12 +217,12 @@ A producer may read its result, never the human task.
 it while you work:
 
 ```sh
-curl --fail-with-body --silent --show-error --request POST \
-  --header @"$headers/staff.header" \
-  --header "If-Match: \"$task_revision\"" \
-  --header 'Idempotency-Key: tutorial-claim-1' \
-  --output claimed.json \
-  "$casework_url/v1/review-tasks/$task_id/claim"
+rstack casework api "/v1/review-tasks/$task_id/claim" \
+  --client staff \
+  --method POST \
+  --if-match "\"$task_revision\"" \
+  --idempotency-key tutorial-claim-1 \
+  --output claimed.json
 jq . claimed.json
 claimed_revision="$(jq -r .revision claimed.json)"
 ```
@@ -251,22 +234,24 @@ claimed_revision="$(jq -r .revision claimed.json)"
 }
 ```
 
-You hold the task at revision 2. Decide it with one of the policy's outcomes:
+You hold the task at revision 2. Save one of the policy's outcomes as `decision.json`:
+
+```json title="decision.json" test-file
+{"decision":{"type":"answer","outcome":"confirmed"}}
+```
+
+Send the decision:
 
 ```sh
-curl --fail-with-body --silent --show-error --request POST \
-  --header @"$headers/staff.header" \
-  --header "If-Match: \"$claimed_revision\"" \
-  --header 'Idempotency-Key: tutorial-answer-1' \
-  --header 'Content-Type: application/json' \
-  --data '{"decision":{"type":"answer","outcome":"confirmed"}}' \
-  --output /dev/null --write-out 'HTTP %{http_code}\n' \
-  "$casework_url/v1/review-tasks/$task_id/decisions"
+rstack casework api "/v1/review-tasks/$task_id/decisions" \
+  --client staff \
+  --if-match "\"$claimed_revision\"" \
+  --idempotency-key tutorial-answer-1 \
+  --input decision.json \
+  --output /dev/null
 ```
 
-```text test-expect
-HTTP 204
-```
+The command exits successfully when Casework records the decision and answers `204`.
 
 {/* Evidence: crates/registry-casework/src/http.rs, claim_review_task, decide_review_task;
     crates/registry-casework/src/review.rs, claim_review_task, decide_review_task. */}
@@ -276,9 +261,10 @@ HTTP 204
 Back as the producer, fetch the answer:
 
 ```sh
-curl --fail-with-body --silent --show-error \
-  --header @"$headers/requester.header" \
-  "$casework_url/v1/review-requests/$request_id/result" | jq .
+rstack casework api "/v1/review-requests/$request_id/result" \
+  --client requester \
+  --output result.json
+jq . result.json
 ```
 
 ```json test-excerpt
@@ -295,7 +281,7 @@ and submission digest. It names no reviewer and is kept until `availableUntil`.
 ## Leave it running
 
 The next page continues with this session and its policy, so leave it running. When you are
-finished with Casework, run `caseworkctl dev stop --remove` in `tutorial-work/casework` to delete
+finished with Casework, run `rstack casework dev stop --remove` in `tutorial-work/casework` to delete
 the session's containers, database and credentials.
 
 {/* Evidence: crates/registry-caseworkctl/src/dev/mod.rs, stop. */}

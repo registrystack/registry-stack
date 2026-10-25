@@ -18,25 +18,26 @@ tutorial_test:
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
 If you would rather start your registry from a published data model than type its fields yourself,
-derive one from PublicSchema. In about 20 minutes you will have a registry of people, households,
-and household memberships running on your machine, with one person in it that your operator client
-can read in full and your reader client can read without the sensitive field.
+derive one from PublicSchema with Base Registry Engine (BReg). In about 20 minutes you will have a
+registry of people, households, and household memberships running on your machine, with one person
+in it that your operator client can read in full and your reader client can read without the
+sensitive field.
 
 <QuickstartMeta
   outcome="A registry derived from PublicSchema, running locally, holding one person record."
   time="About 20 minutes, plus image downloads"
   level="Local evaluation only"
   prerequisites={[
-    { label: 'Matching breg and bregctl binaries', href: '/tutorials/first-breg/' },
+    { label: 'Registry Stack with the BReg component', href: '/tutorials/first-breg/' },
     { label: 'Running Docker', href: 'https://docs.docker.com/get-started/get-docker/' },
-    'A shell with curl, and an editor',
+    'A shell and an editor',
   ]}
 />
 
 ## Why start from a published model
 
 PublicSchema is a published vocabulary for social protection and public-service data: people,
-households, memberships, programmes, and the code lists that describe them. `bregctl` carries a
+households, memberships, programmes, and the code lists that describe them. The BReg component carries a
 copy of PublicSchema 0.3.0, so deriving from it needs no network.
 
 Starting from the model gives you field names, types, and code lists that other institutions
@@ -59,7 +60,7 @@ The `household` starter selects three PublicSchema concepts, `Person`, `Househol
 `GroupMembership`, with some of their properties:
 
 ```sh
-bregctl init household-registry --from publicschema --starter household
+rstack breg init household-registry --from publicschema --starter household
 ```
 
 ```text test-excerpt
@@ -150,7 +151,7 @@ Keep it with the project and with any package you build from it.
 Check the project:
 
 ```sh
-bregctl check household-registry
+rstack breg check household-registry
 ```
 
 ```text test-excerpt
@@ -165,7 +166,7 @@ The same two warnings follow, each pointing at the line of `registry.yaml` it is
 ## Start the registry
 
 ```sh
-bregctl dev start household-registry
+rstack breg dev start household-registry
 ```
 
 ```text test-excerpt
@@ -184,29 +185,31 @@ other ports.
 
 ## Create a person
 
-Ask the local issuer for an operator token. `bregctl` writes it as a ready-made `Authorization`
-header to `household-registry/.breg/dev/secrets/operator.header`, a file only you can read:
+Save the person you will create. The API takes field names in camel case, `personCode` for the
+`person-code` field:
 
-```sh
-bregctl dev token operator household-registry
+```json title="person.json" test-file
+{
+  "data": {
+    "personCode": "P-0001",
+    "givenName": "Ama",
+    "familyName": "Mensah",
+    "dateOfBirth": "1990-04-12",
+    "maritalStatus": "married"
+  }
+}
 ```
 
-```text test-expect
-bregctl dev token succeeded.
-```
-
-Set `registry` to the `breg url` your report printed, then create a person. The API takes field
-names in camel case, `personCode` for the `person-code` field, and every write carries an
-`Idempotency-Key`, so a retry of the same request never creates a second person:
+Create it as the local `operator` client. The API command finds the running project and obtains a
+fresh credential. Every write carries an idempotency key, so a retry of the same request never
+creates a second person:
 
 ```sh
-registry=http://127.0.0.1:8090
-curl --silent --show-error --fail-with-body \
-  --header @household-registry/.breg/dev/secrets/operator.header \
-  --header 'Content-Type: application/json' \
-  --header 'Idempotency-Key: first-person' \
-  --data '{"data": {"personCode": "P-0001", "givenName": "Ama", "familyName": "Mensah", "dateOfBirth": "1990-04-12", "maritalStatus": "married"}}' \
-  "$registry/v1/records/persons"
+rstack breg api /v1/records/persons \
+  --project household-registry \
+  --client operator \
+  --idempotency-key first-person \
+  --input person.json
 ```
 
 ```json test-excerpt
@@ -230,28 +233,19 @@ The response carries the [Record](../../reference/glossary/#registry-record) the
 holds: your fields under `domainData`, an identifier the registry assigned, and revision `1`. Fields you
 did not send are `null`, because the derivation makes no PublicSchema property required.
 
-{/* Evidence: crates/registry-bregctl/src/dev/mod.rs, token();
+{/* Evidence: crates/registry-bregctl/src/dev/mod.rs, local_api_connection();
+    crates/registry-cli-api/src/api.rs, run_api();
     crates/registry-breg/src/api/mod.rs, router();
     crates/registry-breg/src/logical_names.rs, default_api_name(). */}
 
 ## Read it as a reader
 
-Get a token for the `reader` client:
-
-```sh
-bregctl dev token reader household-registry
-```
-
-```text test-expect
-bregctl dev token succeeded.
-```
-
 List people under the `reader` access profile:
 
 ```sh
-curl --silent --show-error --fail-with-body \
-  --header @household-registry/.breg/dev/secrets/reader.header \
-  "$registry/v1/records/persons?accessProfile=reader"
+rstack breg api '/v1/records/persons?accessProfile=reader' \
+  --project household-registry \
+  --client reader
 ```
 
 ```json test-excerpt
@@ -297,7 +291,7 @@ Open `household-registry/model/selection.yaml` and remove `marital_status` from 
 Derive a second project from the edited file, into a new directory:
 
 ```sh
-bregctl init household-registry-2 --from publicschema --selection household-registry/model/selection.yaml
+rstack breg init household-registry-2 --from publicschema --selection household-registry/model/selection.yaml
 ```
 
 The report has a new revision and one warning, for the membership's link to a person:
@@ -310,7 +304,7 @@ warning[breg.access.profile-higher-classification] recordTypes[id=group-membersh
 
 Every change to what you derive follows the same cycle: edit `model/selection.yaml`, derive into a
 new directory, and read the new README. To build a selection by answering questions instead, run
-`bregctl init <directory> --from publicschema` at a terminal;
+`rstack breg init <directory> --from publicschema` at a terminal;
 [The PublicSchema wizard prompts](../../reference/bregctl-publicschema-wizard/) describes each
 question.
 
@@ -323,7 +317,7 @@ question.
 records for a later `dev start`:
 
 ```sh
-bregctl dev stop household-registry --remove
+rstack breg dev stop household-registry --remove
 ```
 
 ```text test-excerpt

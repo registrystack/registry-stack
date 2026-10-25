@@ -31,7 +31,7 @@ vault read -format=json transit/keys/evidence-signing > "<operator-review-path>/
 
 ```sh
 jq -r '.data.keys["<successor-version>"].public_key' "<operator-review-path>/evidence-key.json" \
-  | evidencectl jwk from-pem - --output-dir "<target>/public-keys"
+  | rstack evidence jwk from-pem - --output-dir "<target>/public-keys"
 ```
 
 ```text test-expect
@@ -44,7 +44,7 @@ rotation relies on overlap trust that consumers hold, set up as in
 [Manage verifier trust](../manage-evidence-verifier-trust/). Give consumers both keys as one set:
 
 ```sh
-evidencectl jwks --output "<overlap.jwks.json>" \
+rstack evidence jwks --output "<overlap.jwks.json>" \
   "<target>/public-keys/<predecessor-thumbprint>.jwk.json" \
   "<target>/public-keys/<successor-thumbprint>.jwk.json"
 ```
@@ -65,7 +65,7 @@ to the successor's file. Allow both versions in the proxy policy, for example
 replicas still sign with it. Then package; `package` runs the fixtures:
 
 ```sh
-evidencectl package "<project>" --target "<target>/target.yaml" --output "<successor-candidate>"
+rstack evidence package "<project>" --target "<target>/target.yaml" --output "<successor-candidate>"
 ```
 
 ```text test-excerpt
@@ -76,9 +76,10 @@ Package: <successor-candidate>/bundle
 Install the bundle at the runtime's `package.root`, then activate the authority and check:
 
 ```sh
-evidence authority activate --runtime-config "<successor-candidate>/runtime.yaml" \
+rstack evidence runtime authority activate --runtime-config "<successor-candidate>/runtime.yaml" \
   --document "<successor-candidate>/compiled-authority.yaml"
-evidence check --runtime-config "<successor-candidate>/runtime.yaml" --require-runtime-dependencies
+rstack evidence runtime check --runtime-config "<successor-candidate>/runtime.yaml" \
+  --require-runtime-dependencies
 ```
 
 ```text test-excerpt

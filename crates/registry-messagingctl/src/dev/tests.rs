@@ -187,6 +187,29 @@ fn a_client_no_profile_names_is_refused_with_the_package_clients() {
 }
 
 #[test]
+fn api_origin_requires_the_ready_session_endpoint() {
+    let (_temporary, _project, root, _loaded) = session();
+    let session = Session {
+        root: root.clone(),
+        owner: uuid::Uuid::new_v4().to_string(),
+        containers: vec![],
+        borrowed: None,
+    };
+    session
+        .write("ready", &json!({"api": "http://127.0.0.1:18107"}))
+        .unwrap();
+    let record = read_session(&root).unwrap();
+    assert_eq!(api_origin(&record).unwrap(), "http://127.0.0.1:18107");
+
+    session.write("stopped", &json!({})).unwrap();
+    let record = read_session(&root).unwrap();
+    assert!(api_origin(&record)
+        .unwrap_err()
+        .message
+        .contains("not ready"));
+}
+
+#[test]
 fn a_token_without_a_session_is_refused() {
     let temporary = tempfile::tempdir().unwrap();
     let project = temporary.path().join("project");

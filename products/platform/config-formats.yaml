@@ -3193,6 +3193,77 @@ formats:
       boolean: none
     securityMembers: []
     restrictingMembers: []
+  - id: platform/cli-connections
+    product: platform
+    title: Saved CLI API connections
+    files: [connections.yaml]
+    syntax: yaml
+    audience: operator
+    stability: unpromised
+    current:
+      apiVersion: id.registrystack.org/formats/platform/cli-connections/v1alpha1
+      kind: PlatformCliConnections
+      checkedBy:
+        file: crates/registry-cli-api/src/connection.rs
+        symbol: CONNECTIONS_API_VERSION
+    target:
+      apiVersion: id.registrystack.org/formats/platform/cli-connections/v1alpha1
+      kind: PlatformCliConnections
+    schema:
+      path: crates/registry-cli-api/schema/connections.schema.json
+      id: https://id.registrystack.org/schemas/platform/cli-connections/cli-connections.v1alpha1.schema.json
+      origin: generated
+      generator: cargo run -p registry-cli-api --features schema --example connections-schema -- --output crates/registry-cli-api/schema/connections.schema.json --report-output crates/registry-cli-api/schema/connection-check-report.schema.json
+      driftCheck: crates/registry-cli-api/src/schema.rs
+    reader:
+      crate: registry-cli-api
+      file: crates/registry-cli-api/src/connection.rs
+      function: read_store
+      type: Store
+    check: bregctl connection check --file {file}
+    example: crates/registry-cli-api/example/connections.yaml
+    conformance:
+      requiredText: none
+      optionalText: none
+      integer: none
+      boolean: none
+    securityMembers:
+      - pointer: /connections/*/auth
+        whenOmitted: refused
+      - pointer: /connections/*/secretProviders
+        whenOmitted: closed
+    restrictingMembers: []
+  - id: platform/cli-connection-check-report
+    product: platform
+    title: Shared CLI connection check report
+    files: []
+    syntax: json
+    audience: generated
+    stability: unpromised
+    current:
+      apiVersion: id.registrystack.org/formats/platform/cli-connection-check-report/v1alpha1
+      kind: PlatformCliConnectionCheckReport
+      checkedBy:
+        file: crates/registry-cli-api/src/connection.rs
+        symbol: CONNECTION_CHECK_REPORT_API_VERSION
+    target:
+      apiVersion: id.registrystack.org/formats/platform/cli-connection-check-report/v1alpha1
+      kind: PlatformCliConnectionCheckReport
+    schema:
+      path: crates/registry-cli-api/schema/connection-check-report.schema.json
+      id: https://id.registrystack.org/schemas/platform/cli-connection-check-report/cli-connection-check-report.v1alpha1.schema.json
+      origin: generated
+      generator: cargo run -p registry-cli-api --features schema --example connections-schema -- --output crates/registry-cli-api/schema/connections.schema.json --report-output crates/registry-cli-api/schema/connection-check-report.schema.json
+      driftCheck: crates/registry-cli-api/src/schema.rs
+    reader: none
+    emittedBy:
+      file: crates/registry-cli-api/src/connection.rs
+      symbol: run_connection_check
+    check: none
+    example: crates/registry-cli-api/example/connection-check-report.json
+    conformance: none
+    securityMembers: []
+    restrictingMembers: []
   - id: platform/task-connection
     product: platform
     title: Task-grant operator connection file

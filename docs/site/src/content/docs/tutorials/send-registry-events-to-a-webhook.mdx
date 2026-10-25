@@ -33,7 +33,7 @@ the event declared, a contact added, and the signed delivery read back from a lo
 In the project directory, ask which events the registry sends today:
 
 ```sh test-cwd="tutorial-work/project"
-bregctl explain events .
+rstack breg explain events .
 ```
 
 ```text test-excerpt
@@ -63,8 +63,8 @@ and the local registry binds it to a receiver of its own.
 Check the project and ask again:
 
 ```sh
-bregctl check .
-bregctl explain events .
+rstack breg check .
+rstack breg explain events .
 ```
 
 ```text test-excerpt
@@ -81,7 +81,7 @@ Event deliveries:
 Start the registry with the hook in place:
 
 ```sh
-bregctl dev start
+rstack breg dev start
 ```
 
 ```text test-excerpt
@@ -93,7 +93,7 @@ The receiver verifies each delivery's signature before it keeps it, in `.breg/de
 That file holds projected values, so use test records only. Add the test contact again:
 
 ```sh
-bregctl examples run contact
+rstack breg examples run contact
 ```
 
 The registry commits the contact first, then delivers the event from its own queue.
@@ -101,7 +101,7 @@ The registry commits the contact first, then delivers the event from its own que
 ## Read the delivery
 
 ```sh test-retry="10"
-bregctl --format json dev events
+rstack breg --format json dev events
 ```
 
 ```json test-excerpt
@@ -119,14 +119,14 @@ report leaves out the projected `name`; add `--include-payload` to see it.
 
 If `deliveries` is empty, the first delivery has not arrived yet or the registry is still
 retrying; run the command again after a few seconds. On a deployed registry,
-`bregctl hook list` shows the deliveries still waiting or failed, as
+`rstack breg hook list` shows the deliveries still waiting or failed, as
 [Bind webhook receivers](../../operate/breg-webhooks/) describes.
 
 The local receiver proves only that an attempt arrived. A real receiving service stores each
 event before acting on it. A retry resends an event with the same `idempotencyKey`; an operator
 replay resends it with the same `eventId` and a new key. Check both before acting.
 
-When you are finished, `bregctl dev stop --remove` stops the registry and deletes its test data.
+When you are finished, `rstack breg dev stop --remove` stops the registry and deletes its test data.
 
 {/* Evidence: crates/registry-bregctl/src/dev/events.rs, Receiver, verify and report;
     crates/registry-bregctl/src/dev/mod.rs, CHANGED_INPUTS and reclaimed;

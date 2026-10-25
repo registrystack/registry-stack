@@ -68,6 +68,31 @@ the offline command catalogue. `rstack doctor` checks the selected generation
 and executable path, including whether a different `rstack` shadows it on
 `PATH`.
 
+## Call a running service
+
+Product API commands use the same connection and HTTP conventions:
+
+```sh
+rstack breg api /v1/records/contacts --client editor
+rstack breg connection add pilot
+rstack breg api /v1/records/contacts --connection pilot
+```
+
+Local client selection reuses the ready project's endpoint and acquires a
+fresh credential. The guided connection setup saves a remote endpoint and
+credential references once. `connection use NAME` selects a default for the
+current product project, including calls from its subdirectories; explicit
+connection names also work outside a project.
+
+`api` defaults to GET, or POST with `--input FILE` (`-` reads stdin). It
+writes the HTTP response bytes directly; `--output`, `--include`, `--accept`,
+and repeated `--header` options handle files and content negotiation. A
+refused HTTP response retains its body and exits 1. Usage exits 2 and
+operational failures exit 3. Requests are sent once. Product authorization,
+mutation revisions, idempotency keys, and Evidence verification retain their
+own API meanings. See [API connections](../../docs/site/src/content/docs/configure/api-connections.mdx)
+for local and remote setup.
+
 ## Command migration
 
 | Previous local command | Managed command |

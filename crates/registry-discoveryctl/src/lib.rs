@@ -60,6 +60,16 @@ enum OutputFormat {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Send one raw HTTP request to a Discovery endpoint.
+    Api(Box<registry_cli_api::ApiArgs>),
+    /// Manage named Discovery API connections.
+    Connection {
+        /// Write human-readable diagnostics or one JSON report for connection check.
+        #[arg(long, global = true, value_enum, default_value_t = OutputFormat::Human)]
+        format: OutputFormat,
+        #[command(subcommand)]
+        command: registry_cli_api::ConnectionCommand,
+    },
     /// Run the production Discovery service with the selected runtime.
     Serve(ServeArgs),
     /// Check an authoring project, a runtime file, or an index without
@@ -184,6 +194,38 @@ where
         }
     };
     match arguments.command {
+        Command::Api(args) => api_command(
+            registry_cli_api::run_api("discovery", *args, |_, _| {
+                Err("Discovery uses a public endpoint; run rstack discovery connection add NAME --anonymous and select it with --connection NAME".to_owned())
+            }),
+            stderr,
+        ),
+        Command::Connection { command, format } => {
+            if let registry_cli_api::ConnectionCommand::Check(args) = &command {
+                return match registry_cli_api::run_connection_check(
+                    &args.file,
+                    matches!(format, OutputFormat::Json),
+                    args.deny_warnings,
+                ) {
+                    Ok(code) => ExitCode::from(code),
+                    Err(error) => {
+                        let _ = writeln!(stderr, "error: {error}");
+                        ExitCode::from(error.exit_code())
+                    }
+                };
+            }
+            if matches!(format, OutputFormat::Json) {
+                let _ = writeln!(
+                    stderr,
+                    "error: --format json is supported only by connection check"
+                );
+                return ExitCode::from(report::USAGE_EXIT);
+            }
+            api_command(
+                registry_cli_api::run_connection("discovery", command),
+                stderr,
+            )
+        }
         Command::Serve(args) => serve(args, stderr),
         Command::Check {
             project,
@@ -218,6 +260,19 @@ where
                 ExitCode::from(DOMAIN_REFUSAL_EXIT)
             }
         },
+    }
+}
+
+fn api_command(
+    result: Result<(), registry_cli_api::ApiError>,
+    stderr: &mut dyn io::Write,
+) -> ExitCode {
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            let _ = writeln!(stderr, "error: {error}");
+            ExitCode::from(error.exit_code())
+        }
     }
 }
 
@@ -344,6 +399,9 @@ fn envelope(command: &str, exit: u8, mut body: Value) -> Value {
 
 fn run(command: Command) -> Result<String, String> {
     match command {
+        Command::Api(_) | Command::Connection { .. } => {
+            unreachable!("API commands handle their output before report dispatch")
+        }
         Command::Serve(_) => unreachable!("serve replaces the ctl process before report dispatch"),
         Command::Check { .. } => unreachable!("check reports through its own path"),
         Command::Package {

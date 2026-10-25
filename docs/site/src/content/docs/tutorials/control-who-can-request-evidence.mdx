@@ -35,7 +35,7 @@ Registry Evidence still running.
 In `first-evidence-assertion/adult-status`, list the clients the project knows:
 
 ```sh test-cwd="first-evidence-assertion/adult-status"
-evidencectl access client list --format json | jq -c '.entries[]'
+rstack evidence access client list --format json | jq -c '.entries[]'
 ```
 
 ```text test-expect
@@ -91,7 +91,7 @@ Give each new application a profile with one grant. Add these profiles to the en
 each grant stays inside its definition's grant ceiling:
 
 ```sh
-evidencectl check . --target local-target.yaml
+rstack evidence check . --target local-target.yaml
 ```
 
 ```text test-excerpt
@@ -103,11 +103,11 @@ evidencectl check . --target local-target.yaml
 
 ## Register a client for each profile
 
-Registry Evidence reads profiles and clients only as it starts, and `evidencectl` refuses a client
-change while it runs, so stop it first:
+Registry Evidence reads profiles and clients only as it starts, and `rstack evidence` refuses a
+client change while it runs, so stop it first:
 
 ```sh
-evidencectl dev stop .
+rstack evidence dev stop .
 ```
 
 ```text test-expect
@@ -117,10 +117,10 @@ Local Evidence stopped
 Register one client per profile; the local issuer puts each profile's tags in its client's tokens:
 
 ```sh
-evidencectl access client add age-checker \
+rstack evidence access client add age-checker \
   --access-profile age-checker-service \
   --generate-local-key
-evidencectl access client add region-router \
+rstack evidence access client add region-router \
   --access-profile region-router-service \
   --generate-local-key
 ```
@@ -133,7 +133,7 @@ Added client region-router with access profile region-router-service.
 Start Registry Evidence again with the same ports, so it loads the profiles and clients:
 
 ```sh
-evidencectl dev start . \
+rstack evidence dev start . \
   --target local-target.yaml \
   --evidence-port 18080 \
   --issuer-port 8082
@@ -153,7 +153,7 @@ The source kept running throughout.
 `adult-status` declares only the purpose `age-check`. Ask under another:
 
 ```sh test-exit="1"
-evidencectl request prepare adult-status \
+rstack evidence request prepare adult-status \
   --client age-checker \
   --purpose residence-check \
   --subject subject:record-id=adult \
@@ -171,37 +171,37 @@ Preparation refuses it, so nothing reaches Registry Evidence.
 Preparation checks the request against the project, not the grants, so both succeed:
 
 ```sh
-evidencectl request prepare residence-region \
+rstack evidence request prepare residence-region \
   --client region-router \
   --purpose residence-check \
   --subject subject:record-id=adult \
   --name region-by-router
-evidencectl request prepare residence-region \
+rstack evidence request prepare residence-region \
   --client age-checker \
   --purpose residence-check \
   --subject subject:record-id=adult \
   --name region-by-checker
 ```
 
-Send both; Registry Evidence applies the grants:
+Send the request as `region-router`; Registry Evidence applies that client's grants:
 
 ```sh
-for name in region-by-router region-by-checker; do
-  curl --silent --show-error \
-    --config ".evidence/requests/$name/authorization.curl" \
-    --request POST \
-    --url http://127.0.0.1:18080/v1/evidence \
-    --header 'Content-Type: application/json' \
-    --header 'Accept: application/jose+json' \
-    --data-binary "@.evidence/requests/$name/request.json" \
-    --output "$name.response" \
-    --write-out "$name HTTP %{http_code}\n"
-done
+rstack evidence api /v1/evidence \
+  --client region-router \
+  --input .evidence/requests/region-by-router/request.json \
+  --accept application/jose+json \
+  --output region-by-router.response
 ```
 
-```text test-expect
-region-by-router HTTP 200
-region-by-checker HTTP 403
+Send the other prepared request as `age-checker`. The API writes the refusal body and exits 1 for
+the HTTP 403 response:
+
+```sh test-exit="1"
+rstack evidence api /v1/evidence \
+  --client age-checker \
+  --input .evidence/requests/region-by-checker/request.json \
+  --accept application/jose+json \
+  --output region-by-checker.response
 ```
 
 Read the refusal `age-checker` received:

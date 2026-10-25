@@ -29,6 +29,27 @@ fn invoke(arguments: impl IntoIterator<Item = OsString>) -> (ExitCode, Value) {
     (exit, report)
 }
 
+#[test]
+fn ready_session_points_the_reader_to_the_public_api_command() {
+    let report = json!({
+        "state":"ready",
+        "api":"http://127.0.0.1:8107",
+        "metrics":"http://127.0.0.1:9107",
+        "mailpit":"http://127.0.0.1:8025",
+        "mockGateway":"http://127.0.0.1:8187",
+        "runtimeConfig":"/project/.messaging/dev/runtime.yaml",
+        "log":"/project/.messaging/dev/messaging.log"
+    });
+    let mut output = Vec::new();
+    render_dev(&report, &mut output).expect("render ready session");
+    let output = String::from_utf8(output).expect("UTF-8 report");
+    assert!(
+        output.contains("next: rstack messaging api PATH --client CLIENT"),
+        "{output}"
+    );
+    assert!(!output.contains("curl -H @HEADER_FILE"), "{output}");
+}
+
 /// Every JSON report opens with `ok`, `command`, and `status` in that order;
 /// `ok` is true exactly when the process exits zero, and a report that is not
 /// ok carries at least one diagnostic naming the next step.
@@ -69,6 +90,47 @@ fn path_arguments(values: &[&str], path: &Path) -> Vec<OsString> {
     let mut all = arguments(values);
     all.push(path.as_os_str().to_owned());
     all
+}
+
+#[test]
+fn api_and_connection_commands_are_exposed() {
+    assert!(Cli::try_parse_from([
+        "messagingctl",
+        "api",
+        "/ready",
+        "--project",
+        "project",
+        "--client",
+        "case-system",
+    ])
+    .is_ok());
+    assert!(Cli::try_parse_from(["messagingctl", "connection", "list",]).is_ok());
+}
+
+#[test]
+fn api_refuses_report_format_before_resolving_a_connection() {
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    let exit = main_entry_from(
+        [
+            "messagingctl",
+            "--format=json",
+            "api",
+            "/ready",
+            "--url",
+            "http://127.0.0.1:9",
+        ],
+        &mut stdout,
+        &mut stderr,
+    );
+    assert_eq!(exit, ExitCode::from(USAGE_EXIT));
+    assert!(stdout.is_empty());
+    let stderr = String::from_utf8(stderr).unwrap();
+    assert!(
+        stderr.contains("HTTP response is written to stdout unchanged"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("\"diagnostics\""), "{stderr}");
 }
 
 /// A temporary directory by its canonical path, which the runtime

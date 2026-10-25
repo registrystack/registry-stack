@@ -51,6 +51,13 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Send one raw HTTP request using a saved Scheduling connection.
+    Api(Box<registry_cli_api::ApiArgs>),
+    /// Manage named Scheduling API connections.
+    Connection {
+        #[command(subcommand)]
+        command: registry_cli_api::ConnectionCommand,
+    },
     /// Run the production Scheduling service with the selected runtime.
     Serve(ServeArgs),
     /// Create a complete Registry Scheduling authoring project in a new directory.
@@ -284,6 +291,31 @@ where
     }
     let Cli { format, command } = cli;
     let command = match command {
+        Command::Api(args) => {
+            return api_command(format_requested, stderr, || {
+                registry_cli_api::run_api("scheduling", *args, |_, _| {
+                    Err("Scheduling has no retained local caller session; run rstack scheduling connection add NAME and select it with --connection NAME".to_owned())
+                })
+            });
+        }
+        Command::Connection { command } => {
+            if let registry_cli_api::ConnectionCommand::Check(args) = &command {
+                return match registry_cli_api::run_connection_check(
+                    &args.file,
+                    matches!(format, OutputFormat::Json),
+                    args.deny_warnings,
+                ) {
+                    Ok(code) => ExitCode::from(code),
+                    Err(error) => {
+                        let _ = writeln!(stderr, "error: {error}");
+                        ExitCode::from(error.exit_code())
+                    }
+                };
+            }
+            return api_command(format_requested, stderr, || {
+                registry_cli_api::run_connection("scheduling", command)
+            });
+        }
         Command::Serve(args) => {
             return serve(args, format, format_requested, stdout, stderr);
         }
@@ -344,9 +376,32 @@ where
     }
 }
 
+fn api_command(
+    format_requested: bool,
+    stderr: &mut dyn io::Write,
+    execute: impl FnOnce() -> Result<(), registry_cli_api::ApiError>,
+) -> ExitCode {
+    if format_requested {
+        let _ = writeln!(
+            stderr,
+            "error: --format does not apply to API connection commands; remove it and retry"
+        );
+        return ExitCode::from(USAGE_EXIT);
+    }
+    match execute() {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            let _ = writeln!(stderr, "error: {error}");
+            ExitCode::from(error.exit_code())
+        }
+    }
+}
+
 /// The subcommand path a parsed invocation selected, as its report names it.
 fn command_path(command: &Command) -> &'static str {
     match command {
+        Command::Api(_) => "api",
+        Command::Connection { .. } => "connection",
         Command::Serve(_) => "serve",
         Command::Init(_) => "init",
         Command::Check(_) => "check",
@@ -365,6 +420,9 @@ fn command_path(command: &Command) -> &'static str {
 
 fn run(cli: Cli) -> Result<Value> {
     match cli.command {
+        Command::Api(_) | Command::Connection { .. } => {
+            unreachable!("API commands handle their output before report dispatch")
+        }
         Command::Serve(_) => unreachable!("serve replaces the ctl process before report dispatch"),
         Command::Init(args) => project::init(&args.project, &args.template),
         Command::Check(args) => {

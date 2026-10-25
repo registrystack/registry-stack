@@ -205,6 +205,102 @@ fn evidence_junit_format_reaches_only_the_supported_commands() {
 }
 
 #[test]
+fn evidence_runtime_help_dispatches_after_the_opaque_runtime_leaf() {
+    let scratch = tempfile::tempdir().unwrap();
+    let (root, bin) = install_products(scratch.path(), &["evidence"]);
+
+    let wrapper_help = installed_command(&bin, &root)
+        .args(["evidence", "runtime", "--help"])
+        .output()
+        .unwrap();
+    assert!(wrapper_help.status.success(), "{wrapper_help:?}");
+    assert!(
+        String::from_utf8_lossy(&wrapper_help.stdout).contains("rstack evidence runtime"),
+        "{wrapper_help:?}"
+    );
+    assert!(
+        String::from_utf8_lossy(&wrapper_help.stdout).contains("runtime -- --help"),
+        "{wrapper_help:?}"
+    );
+
+    let native_help = installed_command(&bin, &root)
+        .args(["evidence", "runtime", "check", "--help"])
+        .output()
+        .unwrap();
+    assert_eq!(native_help.status.code(), Some(7), "{native_help:?}");
+    let stdout = String::from_utf8_lossy(&native_help.stdout);
+    for argument in ["runtime", "check", "--help"] {
+        assert!(stdout.contains(&format!("arg:{argument}\n")), "{stdout}");
+    }
+}
+
+#[test]
+fn evidence_runtime_global_format_placements_reach_the_same_native_command() {
+    let scratch = tempfile::tempdir().unwrap();
+    let (root, bin) = install_products(scratch.path(), &["evidence"]);
+
+    for arguments in [
+        &[
+            "--format",
+            "json",
+            "evidence",
+            "runtime",
+            "check",
+            "--runtime-config",
+            "runtime.yaml",
+        ][..],
+        &[
+            "evidence",
+            "--format",
+            "json",
+            "runtime",
+            "check",
+            "--runtime-config",
+            "runtime.yaml",
+        ][..],
+        &[
+            "evidence",
+            "runtime",
+            "--format",
+            "json",
+            "check",
+            "--runtime-config",
+            "runtime.yaml",
+        ][..],
+    ] {
+        let output = installed_command(&bin, &root)
+            .args(arguments)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(7), "{arguments:?}: {output:?}");
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        let forwarded: Vec<_> = stdout
+            .lines()
+            .filter_map(|line| line.strip_prefix("arg:"))
+            .collect();
+        assert_eq!(&forwarded[..2], ["runtime", "check"], "{arguments:?}");
+        assert_eq!(
+            forwarded
+                .windows(2)
+                .filter(|pair| *pair == ["--format", "json"])
+                .count(),
+            1,
+            "{arguments:?}: {forwarded:?}"
+        );
+        let runtime_config = forwarded
+            .windows(2)
+            .position(|pair| pair == ["--runtime-config", "runtime.yaml"])
+            .unwrap_or_else(|| panic!("{arguments:?}: {forwarded:?}"));
+        let format = forwarded
+            .windows(2)
+            .position(|pair| pair == ["--format", "json"])
+            .unwrap();
+        assert!(format >= 2, "{arguments:?}: {forwarded:?}");
+        assert!(runtime_config >= 2, "{arguments:?}: {forwarded:?}");
+    }
+}
+
+#[test]
 fn old_invocation_keeps_its_generation_while_new_one_activates() {
     let scratch = tempfile::tempdir().unwrap();
     let assets = scratch.path().join("assets");
