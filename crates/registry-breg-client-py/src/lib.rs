@@ -6,20 +6,20 @@
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 use breg_client_sdk::{
-    verify_hook_delivery as verify_core_hook_delivery, BRegActionAvailabilityRequest,
-    BRegActionBinding, BRegActionInvocationRequest, BRegActionTargetConditions,
-    BRegActionTargetConditionsRequest, BRegAsOfContinuation, BRegAsOfContinuationProjection,
-    BRegAsOfListRequest, BRegBatchBinding, BRegBatchBuilder, BRegBoundingBox, BRegChangeContext,
-    BRegComplete, BRegContinuation, BRegContinuationProjection, BRegCreateBinding,
-    BRegCreateRequest, BRegCurrentContinuation, BRegCurrentContinuationProjection,
-    BRegCurrentListRequest, BRegDirectWrite, BRegEtag, BRegGeoJsonContinuation,
-    BRegGeoJsonContinuationProjection, BRegGeoJsonListRequest, BRegGeoJsonOptions,
-    BRegHookDelivery as CoreHookDelivery, BRegHookVerificationError, BRegIdempotencyKey,
-    BRegIngestionChunk as CoreIngestionChunk, BRegIngestionError,
+    occurrence_view_from_json, verify_hook_delivery as verify_core_hook_delivery,
+    BRegActionAvailabilityRequest, BRegActionBinding, BRegActionInvocationRequest,
+    BRegActionTargetConditions, BRegActionTargetConditionsRequest, BRegAsOfContinuation,
+    BRegAsOfContinuationProjection, BRegAsOfListRequest, BRegBatchBinding, BRegBatchBuilder,
+    BRegBoundingBox, BRegChangeContext, BRegComplete, BRegContinuation, BRegContinuationProjection,
+    BRegCreateBinding, BRegCreateRequest, BRegCurrentContinuation,
+    BRegCurrentContinuationProjection, BRegCurrentListRequest, BRegDirectWrite, BRegEtag,
+    BRegGeoJsonContinuation, BRegGeoJsonContinuationProjection, BRegGeoJsonListRequest,
+    BRegGeoJsonOptions, BRegHookDelivery as CoreHookDelivery, BRegHookVerificationError,
+    BRegIdempotencyKey, BRegIngestionChunk as CoreIngestionChunk, BRegIngestionError,
     BRegIngestionPrefixDigest as CoreIngestionPrefixDigest, BRegIngestionRunListQuery,
     BRegIngestionRunRequest, BRegListRequest, BRegLookupRequest, BRegMetadata as CoreMetadata,
-    BRegMetadataSelectionError, BRegMetadataSelectionErrorKind, BRegPage, BRegPatchBinding,
-    BRegPatchRequest, BRegPreparedAction as CorePreparedAction,
+    BRegMetadataSelectionError, BRegMetadataSelectionErrorKind, BRegOccurrenceError, BRegPage,
+    BRegPatchBinding, BRegPatchRequest, BRegPreparedAction as CorePreparedAction,
     BRegPreparedCreate as CorePreparedCreate, BRegProblemCode, BRegProtocolFailure,
     BRegRawDocument, BRegRecordFormat, BRegRecordOptions, BRegRelationshipContinuation,
     BRegRelationshipContinuationProjection, BRegRelationshipListRequest, BRegReleaseSelection,
@@ -1036,6 +1036,36 @@ fn hook_verification_error(py: Python<'_>, error: BRegHookVerificationError) -> 
     to_py_err(py, mapped)
 }
 
+fn occurrence_error(py: Python<'_>, error: BRegOccurrenceError) -> PyErr {
+    let mut mapped = MappedError::binding("occurrence", error.to_string());
+    mapped.code = Some(error.code().to_owned());
+    to_py_err(py, mapped)
+}
+
+/// Project one record revision into the occurrence view.
+///
+/// `arguments` is a mapping with `registryRevision`, `recordType`,
+/// `descriptor`, `record` and the optional `creationRevision`,
+/// `actionReceipts` and `proposalApplications`. The result is the view
+/// document. Refusal raises `BaseRegistryClientError` with kind `occurrence`
+/// and a value-free `code`.
+#[pyfunction]
+fn occurrence_view<'py>(
+    py: Python<'py>,
+    arguments: &Bound<'py, PyAny>,
+) -> PyResult<Bound<'py, PyAny>> {
+    let arguments = python_to_json(arguments)
+        .map_err(|error| conversion_error(py, "invalid-request", error))?;
+    let bytes = serde_json::to_vec(&arguments).map_err(|_| {
+        to_py_err(
+            py,
+            MappedError::binding("invalid-request", "arguments are not representable"),
+        )
+    })?;
+    let view = occurrence_view_from_json(&bytes).map_err(|error| occurrence_error(py, error))?;
+    json_to_python(py, view.as_value())
+}
+
 /// Verify one exact Base Registry Engine Version 1 hook delivery with the
 /// shared Rust verifier and return its authenticated attributes and body.
 ///
@@ -1487,6 +1517,19 @@ struct Metadata {
 
 #[pymethods]
 impl Metadata {
+    /// The occurrence descriptor declared for one record type.
+    fn occurrence_descriptor<'py>(
+        &self,
+        py: Python<'py>,
+        record_type: &str,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let descriptor = self
+            .inner
+            .occurrence(record_type)
+            .map_err(|error| occurrence_error(py, error))?;
+        json_to_python(py, &descriptor.to_value())
+    }
+
     /// Read-only capability inventory for each exact Action/profile pair.
     #[getter]
     fn proposal_actions<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
@@ -1775,6 +1818,31 @@ impl BaseRegistryClient {
             })
             .map_err(|error| sdk_error(py, error))?;
         raw_value(py, &value.value, &value.metadata)
+    }
+
+    /// The first revision of one record as `{recordId, revision, createdAt}`,
+    /// or `None` when the caller may not read it.
+    #[pyo3(signature = (entity_route, record_identifier, *, access_profile=None))]
+    fn occurrence_creation_revision<'py>(
+        &self,
+        py: Python<'py>,
+        entity_route: &str,
+        record_identifier: &str,
+        access_profile: Option<&str>,
+    ) -> PyResult<Option<Bound<'py, PyAny>>> {
+        let revision = py
+            .detach(|| {
+                self.runtime
+                    .block_on(self.inner.occurrence_creation_revision(
+                        entity_route,
+                        record_identifier,
+                        access_profile,
+                    ))
+            })
+            .map_err(|error| sdk_error(py, error))?;
+        revision
+            .map(|revision| serialize_to_python(py, &revision))
+            .transpose()
     }
 
     #[pyo3(signature = (dataset, *, from_period=None, to_period=None, access_profile=None, format="json"))]
@@ -3379,6 +3447,7 @@ fn registry_breg_client(module: &Bound<'_, PyModule>) -> PyResult<()> {
     )?;
     module.add_function(pyo3::wrap_pyfunction!(encode_ingestion_chunk, module)?)?;
     module.add_function(pyo3::wrap_pyfunction!(verify_hook_delivery, module)?)?;
+    module.add_function(pyo3::wrap_pyfunction!(occurrence_view, module)?)?;
     module.add("__version__", env!("CARGO_PKG_VERSION"))?;
     Ok(())
 }

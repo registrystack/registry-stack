@@ -119,6 +119,15 @@ function verifyHookDelivery(value) {
   }
 }
 
+function occurrenceView(argumentsJson) {
+  try {
+    if (typeof argumentsJson !== 'string') throw inputError('invalid-request');
+    return native.occurrenceView(argumentsJson);
+  } catch (error) {
+    throw normalize(error, 'invalid-request');
+  }
+}
+
 function chargeString(value, budget, kind) {
   budget.stringBytes += Buffer.byteLength(value, 'utf8');
   if (budget.stringBytes > MAX_JSON_STRING_BYTES) throw inputError(kind);
@@ -211,7 +220,7 @@ for (const [method, jsonIndexes, requiredIndexes] of [
   ['statisticsLive'], ['statisticsReleases'], ['statisticsLatestRelease'],
   ['statisticsReleaseVersion'], ['statisticsReleaseSeries'], ['statisticsPublish'],
   ['statisticsWithdraw'],
-  ['recordRevisions'], ['getRecordRevision', [3]],
+  ['recordRevisions'], ['getRecordRevision', [3]], ['occurrenceCreationRevision'],
   ['getRecord', [2]], ['listRecords', [1]], ['continueList', [0], [0]],
   ['getGeoJsonRecord', [2]], ['listGeoJsonRecords', [1]], ['continueGeoJsonList', [0], [0]],
   ['listCurrentRecords', [1]], ['continueCurrentList', [0], [0]],
@@ -298,7 +307,7 @@ const BRegPreparedProposal = preparedClass(native.BRegPreparedProposal, 'BRegPre
 for (const name of [
   'selectCreate', 'selectPatch',
   'selectAction', 'selectTombstone', 'selectBatch', 'selectProposals', 'selectProposalGet',
-  'selectProposalReviewContext', 'selectProposalReviewStatus',
+  'selectProposalReviewContext', 'selectProposalReviewStatus', 'occurrenceDescriptor',
 ]) {
   const original = native.BRegMetadata.prototype[name];
   native.BRegMetadata.prototype[name] = function (...args) {
@@ -374,6 +383,7 @@ class PrivateKeyJwt {
 
 module.exports = {
   verifyHookDelivery,
+  occurrenceView,
   PrivateKeyJwt,
   BaseRegistryClient,
   BaseRegistryClientError,

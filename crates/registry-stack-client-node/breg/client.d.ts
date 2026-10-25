@@ -46,6 +46,17 @@ export interface VerifiedHookDelivery {
  */
 export declare function verifyHookDelivery(input: HookDeliveryInput): VerifiedHookDelivery
 
+/**
+ * Project one record revision into the occurrence view. `argumentsJson` is a
+ * JSON object with `registryRevision`, `recordType`, `descriptor`, `record`
+ * and optional `creationRevision`, `actionReceipts` and
+ * `proposalApplications`. The result is the view document as JSON text.
+ * Failures carry kind `occurrence` and one of the codes `not-an-occurrence`,
+ * `unsupported-version`, `malformed-descriptor`, `wrong-record-evidence`,
+ * `revision-mismatch`, `incompatible-metadata` or `invalid-input`.
+ */
+export declare function occurrenceView(argumentsJson: string): string
+
 export interface PrivateJwk {
   readonly kty: string
   readonly kid: string
@@ -796,6 +807,8 @@ export declare class BRegMetadata {
   selectAction(actionIdentifier: string, expectedProfile: string): BRegActionBinding
   selectTombstone(recordTypeIdentifier: string, expectedProfile: string): BRegTombstoneBinding
   selectBatch(recordTypeIdentifier: string, expectedProfile: string): BRegBatchBinding
+  /** The occurrence descriptor declared for a record type, as JSON text. */
+  occurrenceDescriptor(recordType: string): string
 }
 
 /** Bounded declared identifiers; absent when any referenced field is unreadable. */
@@ -882,6 +895,11 @@ export declare class BaseRegistryClient {
   ready(): Promise<CompleteOutcome<ProbeStatus>>
   openapi(accessProfile?: string | null): Promise<RawOutcome>
   registryMetadata(accessProfile?: string | null): Promise<RawOutcome>
+  /**
+   * The first revision of a record as `{recordId, revision, createdAt}` JSON
+   * text, or null when the caller may not read it (403 or 404).
+   */
+  occurrenceCreationRevision(entityRoute: string, recordIdentifier: string, accessProfile?: string | null): Promise<string | null>
   statisticsLive(dataset: string, from?: string | null, to?: string | null, accessProfile?: string | null, format?: StatisticsFormat | null): Promise<RawOutcome>
   statisticsReleases(dataset: string, top?: SafeInteger | null, skipToken?: string | null, accessProfile?: string | null): Promise<RawOutcome>
   statisticsLatestRelease(dataset: string, period: string, selection: StatisticsReleaseSelection, accessProfile?: string | null, format?: StatisticsFormat | null): Promise<RawOutcome>
