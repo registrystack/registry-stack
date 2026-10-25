@@ -243,6 +243,9 @@ fn cross_process_add_and_use_preserve_disjoint_store_changes() {
     )
     .expect("the combined saved store remains valid");
     let bytes = fs::read(&store_path).unwrap();
+    assert!(bytes.starts_with(
+        b"# yaml-language-server: $schema=https://id.registrystack.org/schemas/platform/cli-connections/cli-connections.v1alpha1.schema.json\n"
+    ));
     let saved = registry_platform_yaml::Reader::new(store_path.display().to_string())
         .scan(&bytes)
         .unwrap()
@@ -256,7 +259,7 @@ fn cross_process_add_and_use_preserve_disjoint_store_changes() {
     assert!(saved["selections"].as_array().unwrap().iter().any(|entry| {
         entry["product"] == "breg"
             && entry["connection"] == "production"
-            && entry["project"] == project.display().to_string()
+            && entry["project"] == project.canonicalize().unwrap().display().to_string()
     }));
 }
 

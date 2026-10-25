@@ -34,6 +34,7 @@ pub const CONNECTIONS_KIND: &str = "PlatformCliConnections";
 pub const CONNECTION_CHECK_REPORT_API_VERSION: &str =
     "id.registrystack.org/formats/platform/cli-connection-check-report/v1alpha1";
 pub const CONNECTION_CHECK_REPORT_KIND: &str = "PlatformCliConnectionCheckReport";
+const CONNECTIONS_SCHEMA_MODELINE: &str = "# yaml-language-server: $schema=https://id.registrystack.org/schemas/platform/cli-connections/cli-connections.v1alpha1.schema.json\n";
 const FORMAT: FormatSpec = FormatSpec {
     kind: CONNECTIONS_KIND,
     envelope: EnvelopeRule::ApiVersionKind {
@@ -1090,7 +1091,8 @@ fn write_store(path: &Path, store: &Store) -> Result<(), ApiError> {
         use std::os::unix::fs::PermissionsExt as _;
         fs::set_permissions(parent, fs::Permissions::from_mode(0o700)).map_err(|_| ApiError::Io)?;
     }
-    let document = serde_norway::to_string(store).map_err(|_| ApiError::Io)?;
+    let mut document = String::from(CONNECTIONS_SCHEMA_MODELINE);
+    document.push_str(&serde_norway::to_string(store).map_err(|_| ApiError::Io)?);
     let temporary = parent.join(format!(".connections.yaml.{}.tmp", std::process::id()));
     let mut options = fs::OpenOptions::new();
     options.write(true).create_new(true);
