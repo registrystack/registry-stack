@@ -27,12 +27,20 @@ entries:
       - {path: crates/registry-messagingctl/src/dev/tests.rs, name: borrowed_token_refuses_changed_principal}
       - {path: crates/registry-messagingctl/src/dev/tests.rs, name: borrowed_token_requires_ready_session}
       - {path: crates/registry-messagingctl/src/dev/tests.rs, name: paired_issuer_options_require_an_explicit_resource}
+      - {path: crates/registry-messagingctl/src/dev/tests.rs, name: api_origin_requires_the_ready_session_endpoint}
       - {path: crates/registry-messagingctl/src/dev/borrowed_tests.rs, name: a_refused_borrow_records_no_issuer_and_starts_no_container}
       - {path: crates/registry-messagingctl/src/dev/borrowed_tests.rs, name: an_issuer_that_is_not_one_exact_loopback_origin_is_refused}
       - {path: crates/registry-messagingctl/src/dev/borrowed_tests.rs, name: a_report_naming_another_client_is_refused}
       - {path: crates/registry-messagingctl/src/dev/borrowed_tests.rs, name: an_exported_client_id_file_that_is_not_the_client_is_refused}
       - {path: crates/registry-messagingctl/src/dev/borrowed_tests.rs, name: clients_reporting_different_issuers_are_refused}
       - {path: crates/registry-messagingctl/src/dev/borrowed_tests.rs, name: a_refused_token_refresh_writes_no_header_and_keeps_no_scratch_copy}
+      - {path: crates/registry-cli-api/tests/api_http.rs, name: automatic_credentials_cannot_be_replaced_by_a_repeated_header}
+      - {path: crates/registry-cli-api/tests/api_http.rs, name: paths_and_host_headers_cannot_escape_the_selected_endpoint}
+      - {path: crates/registry-cli-api/tests/api_http.rs, name: redirect_answers_are_returned_without_following_them}
+      - {path: crates/registry-platform-httputil/src/lib.rs, name: outbound_clients_ignore_ambient_proxy_variables_in_an_isolated_process}
+      - {path: crates/registry-bregctl/tests/api_cli.rs, name: raw_api_refuses_fifo_file_inputs_without_blocking}
+      - {path: crates/registry-bregctl/tests/api_cli.rs, name: raw_api_accepts_a_regular_token_file_and_request_body_from_standard_input}
+      - {path: crates/registry-bregctl/tests/api_cli.rs, name: connection_commands_refuse_fifo_stores_without_blocking}
   - id: MESSAGING-SEC-02
     tests:
       - {path: crates/registry-messaging-core/src/wire.rs, name: a_submission_is_closed_and_selects_exactly_one_content_source}

@@ -18,7 +18,12 @@ use reqwest::StatusCode;
 use url::Url;
 use zeroize::{Zeroize, Zeroizing};
 
-use crate::{connection, project::find_project, ApiError};
+use crate::{
+    connection,
+    file::{read_bounded_regular_file, FileReadError},
+    project::find_project,
+    ApiError,
+};
 
 const MAXIMUM_REQUEST_BYTES: u64 = 8 * 1024 * 1024;
 const MAXIMUM_RESPONSE_BYTES: u64 = 8 * 1024 * 1024;
@@ -573,16 +578,13 @@ fn read_header_file(path: &Path) -> Result<String, ApiError> {
 }
 
 fn read_bounded_file(path: &Path, maximum: u64) -> Result<Vec<u8>, ApiError> {
-    let file = fs::File::open(path).map_err(|_| ApiError::Io)?;
-    if file.metadata().map_err(|_| ApiError::Io)?.len() > maximum {
-        return Err(ApiError::Usage(
-            "an input file exceeds its accepted size".to_owned(),
-        ));
-    }
-    let mut bytes = Vec::new();
-    file.take(maximum + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|_| ApiError::Io)?;
+    let bytes = read_bounded_regular_file(path, maximum).map_err(|error| match error {
+        FileReadError::NotRegular => ApiError::Usage(
+            "an API file input must name a regular file; use --input - only to read the request body from standard input"
+                .to_owned(),
+        ),
+        FileReadError::NotFound | FileReadError::Unavailable => ApiError::Io,
+    })?;
     if bytes.len() as u64 > maximum {
         return Err(ApiError::Usage(
             "an input file exceeds its accepted size".to_owned(),

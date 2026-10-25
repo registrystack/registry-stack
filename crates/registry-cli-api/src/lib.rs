@@ -4,6 +4,7 @@
 mod api;
 mod connection;
 mod error;
+mod file;
 mod project;
 #[cfg(feature = "schema")]
 pub mod schema;

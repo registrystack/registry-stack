@@ -1006,6 +1006,26 @@ Messaging state and captures current public trust. Messaging never starts,
 stops, resets, or removes the owner session, and no owner UUID or private
 metadata becomes part of its lifecycle.
 
+`messagingctl api PATH --project PROJECT --client CLIENT` uses that same
+client-token acquisition path, but keeps the token in the request connection
+instead of publishing a header file. It requires a ready development session
+and takes its destination only from the exact nonzero
+`http://127.0.0.1:PORT` API origin retained in the typed session record. The
+shared CLI API transport appends only a relative path without changing that
+origin or its deployment prefix, owns the `Host` and automatic
+`Authorization` headers, follows no redirects, and ignores ambient proxy
+settings. The Messaging runtime still authenticates the token and applies its
+ordinary access-profile and operation authorization on every protected route;
+the raw tooling supplies no authority of its own. An explicit `--url` or saved
+remote connection instead uses the endpoint and credential the operator
+selected, under the same transport confinement. Direct file arguments for
+credentials, CA bundles, request bodies, and headers must be bounded regular
+files; saved-connection secret references retain the platform secret
+resolver's separate file and root policy. The saved-connections document uses
+the platform's separate bounded regular-file reader. Only an explicit
+`--input -` reads a request body from standard input. On Unix, both document
+readers refuse a FIFO without blocking rather than hanging the CLI.
+
 The mock gateway compares the static bearer token in constant time, signs
 each delivery report with the session's HMAC key, reads no field of a send,
 and logs nothing a send carries. Stopping the session removes only the
@@ -1026,10 +1046,14 @@ returns can leave a second owner-only copy under
 `.messaging/dev/.client-check-*` for the same time. These are development
 client keys for the borrowed loopback issuer.
 
-Tests: the `dev` unit tests in `crates/registry-messagingctl/src/dev/`,
+Tests: the `dev` unit tests in `crates/registry-messagingctl/src/dev/`, the
+shared raw-API transport tests in `crates/registry-cli-api/tests/api_http.rs`,
+the native-process regular-file tests in
+`crates/registry-bregctl/tests/api_cli.rs`,
 `products/messaging/scripts/test-dev.sh`, and
 `products/messaging/scripts/test-dev-shared-issuer.sh`. The contract mapping
-names the borrowed-issuer unit tests; this note does not claim they ran.
+names the borrowed-issuer and raw-API unit tests; this note does not claim
+they ran.
 
 ## AWS SMS request signing
 
