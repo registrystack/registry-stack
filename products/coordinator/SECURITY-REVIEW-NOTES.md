@@ -92,14 +92,17 @@ workflow authority by itself.
 
 Coordinator retains no local caller session, so `coordinatorctl api` refuses
 `--client`. The operator selects a saved connection or an explicit one-off
-URL. Saved authentication is exactly one of anonymous, a referenced opaque
-bearer, or renewable `private_key_jwt`, under the shared
+URL. A saved connection's automatic authentication is exactly one of
+anonymous, a referenced opaque bearer, or renewable `private_key_jwt`, under
+the shared
 [`registry-cli-api` security boundary](../../crates/registry-cli-api/README.md#security-boundary).
-The helper confines the destination and headers, acquires the selected
-credential, and releases only the raw bounded response. It carries no caller
-policy, workflow, run ownership, or downstream product authority. Coordinator
-still authenticates and authorizes each protected route, and every receiving
-product still decides an effect requested by a run.
+Anonymous supplies no automatic credential, but the raw command may still
+supply one explicit `Authorization` header. The helper confines the
+destination and headers, acquires any selected automatic credential, and
+releases only the raw bounded response. It carries no caller policy, workflow,
+run ownership, or downstream product authority. Coordinator still
+authenticates and authorizes each protected route, and every receiving product
+still decides an effect requested by a run.
 
 This path deliberately does not reuse the legacy reader described above.
 Legacy authenticated Coordinator commands keep their 16,384-byte compact-JWT
