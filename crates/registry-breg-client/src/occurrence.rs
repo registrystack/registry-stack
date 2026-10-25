@@ -531,12 +531,7 @@ impl BRegCreationRevision {
             .get("revisionIdentifier")
             .and_then(Value::as_str)
             .ok_or_else(|| wrong_evidence("the revision has no revision identifier"))?;
-        if revision != CREATION_REVISION {
-            return Err(BRegOccurrenceError::RevisionMismatch {
-                expected: CREATION_REVISION.to_owned(),
-                found: revision.to_owned(),
-            });
-        }
+        require_creation_revision(revision)?;
         if data
             .get("predecessorRevision")
             .is_some_and(|value| !value.is_null())
@@ -559,13 +554,13 @@ impl BRegCreationRevision {
         let object = value
             .as_object()
             .ok_or_else(|| wrong_evidence("the creation revision is not an object"))?;
-        if let Some(unknown) = object
+        if object
             .keys()
-            .find(|key| !matches!(key.as_str(), "recordId" | "revision" | "createdAt"))
+            .any(|key| !matches!(key.as_str(), "recordId" | "revision" | "createdAt"))
         {
-            return Err(wrong_evidence(format!(
-                "the creation revision has an unknown member {unknown}"
-            )));
+            return Err(wrong_evidence(
+                "the creation revision has an unknown member",
+            ));
         }
         let member = |name: &str| {
             object
@@ -573,13 +568,7 @@ impl BRegCreationRevision {
                 .and_then(Value::as_str)
                 .ok_or_else(|| wrong_evidence(format!("the creation revision has no {name}")))
         };
-        let revision = member("revision")?;
-        if revision != CREATION_REVISION {
-            return Err(BRegOccurrenceError::RevisionMismatch {
-                expected: CREATION_REVISION.to_owned(),
-                found: revision.to_owned(),
-            });
-        }
+        require_creation_revision(member("revision")?)?;
         Self::new(member("recordId")?, member("createdAt")?)
     }
 
@@ -605,6 +594,27 @@ impl BRegCreationRevision {
     pub fn created_at(&self) -> &str {
         &self.created_at
     }
+}
+
+/// Accept revision 1. Another revision number is a mismatch that names it; any
+/// other text is refused without echoing it, so errors stay value-free.
+fn require_creation_revision(revision: &str) -> Result<(), BRegOccurrenceError> {
+    if revision == CREATION_REVISION {
+        return Ok(());
+    }
+    let is_revision_number = !revision.is_empty()
+        && revision.len() <= 20
+        && !revision.starts_with('0')
+        && revision.bytes().all(|byte| byte.is_ascii_digit());
+    if !is_revision_number {
+        return Err(wrong_evidence(
+            "the revision identifier is not a revision number",
+        ));
+    }
+    Err(BRegOccurrenceError::RevisionMismatch {
+        expected: CREATION_REVISION.to_owned(),
+        found: revision.to_owned(),
+    })
 }
 
 impl Serialize for BRegCreationRevision {

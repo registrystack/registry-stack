@@ -1236,6 +1236,42 @@ fn invalid_input_errors_carry_no_supplied_value() {
 }
 
 #[test]
+fn creation_revision_errors_carry_no_supplied_value() {
+    let secret = "SECRET-EVIDENCE-VALUE";
+    let mut wrong_revision = incorporation_arguments();
+    wrong_revision.insert(
+        "creationRevision".into(),
+        json!({"recordId": INCORPORATION_ID, "revision": secret, "createdAt": CREATED_AT}),
+    );
+    let mut unknown_member = incorporation_arguments();
+    unknown_member.insert(
+        "creationRevision".into(),
+        json!({"recordId": INCORPORATION_ID, "revision": "1", "createdAt": CREATED_AT,
+            secret: true}),
+    );
+    let mut errors = Vec::new();
+    for arguments in [wrong_revision, unknown_member] {
+        errors.push(project(&arguments).expect_err("malformed creation revision is refused"));
+    }
+    errors.push(
+        BRegCreationRevision::from_document(
+            INCORPORATION_ID,
+            &creation_revision_envelope(INCORPORATION_ID, secret, Value::Null, "create"),
+        )
+        .expect_err("a malformed revision identifier is refused"),
+    );
+    for error in errors {
+        assert!(
+            matches!(error, BRegOccurrenceError::WrongRecordEvidence { .. }),
+            "{error}"
+        );
+        let message = error.to_string();
+        assert!(!message.contains("SECRET"), "{message}");
+        assert!(!format!("{error:?}").contains("SECRET"), "{error:?}");
+    }
+}
+
+#[test]
 fn a_record_id_that_is_not_a_uuid_is_wrong_record_evidence() {
     let mut arguments = incorporation_arguments();
     arguments["record"]["recordIdentifier"] = json!("not-a-uuid");
