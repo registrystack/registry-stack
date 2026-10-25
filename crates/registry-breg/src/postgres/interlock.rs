@@ -2605,7 +2605,12 @@ async fn begin_successor_in(
         .is_some();
     if fresh {
         verify_import_run_admission_state(transaction, current.activation_uuid()?).await?;
-        ensure_migration_statement_capacity(transaction).await?;
+        // A role change re-applies the active package, whose fingerprint
+        // covers the ledger constraint already in place; only a successor to
+        // a different package may widen it.
+        if target.package_digest != current.package_digest {
+            ensure_migration_statement_capacity(transaction).await?;
+        }
     }
     let changed = transaction
         .execute(

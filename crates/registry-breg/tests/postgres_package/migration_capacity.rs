@@ -251,6 +251,69 @@ fn preassertion_review_source(
     }
 }
 
+/// Puts back the 1,024-statement ledger constraint an earlier release
+/// installed, and returns the schema fingerprint of the catalog that leaves.
+async fn reinstall_legacy_statement_constraint(
+    database: &TestDatabase,
+    registry: &registry_breg::CompiledRegistry,
+) -> String {
+    database
+        .admin
+        .batch_execute(
+            "ALTER TABLE registry_internal.registry_migrations
+                 DROP CONSTRAINT registry_migrations_statement_checksums_bounded_v2;
+             ALTER TABLE registry_internal.registry_migrations
+                 ADD CONSTRAINT registry_migrations_checksums_nonempty
+                 CHECK (
+                     COALESCE(array_ndims(statement_checksums), 1) = 1
+                     AND cardinality(statement_checksums) BETWEEN 0 AND 1024
+                     AND array_position(statement_checksums, '') IS NULL
+                     AND (
+                         (migration_kind = 'metadata-only' AND cardinality(statement_checksums) = 0)
+                         OR (migration_kind = 'reviewed' AND cardinality(statement_checksums) = 0)
+                         OR (migration_kind IN ('compiled-additive', 'reviewed')
+                             AND cardinality(statement_checksums) BETWEEN 1 AND 1024)
+                     )
+                 );",
+        )
+        .await
+        .expect("fixture reinstalls the legacy statement constraint");
+    let (migration, migration_task) = database.connect_migration().await;
+    let legacy_fingerprint = managed_schema_fingerprint(
+        &migration,
+        &database.runtime_role,
+        &ExpectedManagedCatalog::compiled(registry),
+    )
+    .await
+    .expect("the legacy ledger catalog fingerprints");
+    drop(migration);
+    migration_task.abort();
+    legacy_fingerprint
+}
+
+/// The ledger statement constraints present: (v2, legacy).
+async fn ledger_statement_constraints(database: &TestDatabase) -> (bool, bool) {
+    let row = database
+        .admin
+        .query_one(
+            "SELECT
+                 EXISTS (
+                     SELECT 1 FROM pg_catalog.pg_constraint
+                     WHERE conrelid = 'registry_internal.registry_migrations'::regclass
+                       AND conname = 'registry_migrations_statement_checksums_bounded_v2'
+                 ),
+                 EXISTS (
+                     SELECT 1 FROM pg_catalog.pg_constraint
+                     WHERE conrelid = 'registry_internal.registry_migrations'::regclass
+                       AND conname = 'registry_migrations_checksums_nonempty'
+                 )",
+            &[],
+        )
+        .await
+        .expect("ledger constraints are inspectable");
+    (row.get(0), row.get(1))
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn reviewed_flow_package_beyond_the_old_statement_limit_prepares_and_activates() {
     let source = serde_json::to_vec(&reviewed_flow_project(4, PROPOSAL_OPERATIONS))
@@ -345,37 +408,7 @@ async fn reviewed_successor_upgrades_the_legacy_ledger_and_applies_more_than_102
     .await
     .expect("prior package activates");
 
-    database
-        .admin
-        .batch_execute(
-            "ALTER TABLE registry_internal.registry_migrations
-                 DROP CONSTRAINT registry_migrations_statement_checksums_bounded_v2;
-             ALTER TABLE registry_internal.registry_migrations
-                 ADD CONSTRAINT registry_migrations_checksums_nonempty
-                 CHECK (
-                     COALESCE(array_ndims(statement_checksums), 1) = 1
-                     AND cardinality(statement_checksums) BETWEEN 0 AND 1024
-                     AND array_position(statement_checksums, '') IS NULL
-                     AND (
-                         (migration_kind = 'metadata-only' AND cardinality(statement_checksums) = 0)
-                         OR (migration_kind = 'reviewed' AND cardinality(statement_checksums) = 0)
-                         OR (migration_kind IN ('compiled-additive', 'reviewed')
-                             AND cardinality(statement_checksums) BETWEEN 1 AND 1024)
-                     )
-                 );",
-        )
-        .await
-        .expect("fixture reinstalls the legacy statement constraint");
-    let (migration, migration_task) = database.connect_migration().await;
-    let legacy_fingerprint = managed_schema_fingerprint(
-        &migration,
-        &database.runtime_role,
-        &ExpectedManagedCatalog::compiled(&prior),
-    )
-    .await
-    .expect("the legacy ledger catalog fingerprints");
-    drop(migration);
-    migration_task.abort();
+    let legacy_fingerprint = reinstall_legacy_statement_constraint(&database, &prior).await;
     assert_ne!(
         legacy_fingerprint, current.schema_fingerprint,
         "the constraint version belongs to the managed schema fingerprint"
@@ -543,5 +576,95 @@ async fn reviewed_successor_upgrades_the_legacy_ledger_and_applies_more_than_102
         ledger.get::<_, bool>(2),
     );
     assert_eq!(ledger, (ledger_statement_count as i32, true, false));
+    database.cleanup().await;
+}
+
+/// A role change re-applies the active package and runs no DDL, so a registry
+/// an earlier release activated keeps the ledger constraint the schema
+/// fingerprint of that package covers. Only a successor widens the ledger.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn role_change_keeps_the_legacy_ledger_constraint_its_active_package_declares() {
+    let source = serde_json::to_vec(&reviewed_flow_project(1, &[])).expect("fixture serializes");
+    let project = parse_project_json(&source).expect("fixture project parses");
+    let compiled = compile_project(&project, &[], CompileProfile::Production)
+        .expect("fixture compiles in production");
+
+    let database = TestDatabase::create(1).await;
+    let fingerprint = measure_fresh_compiled_schema(&database, &compiled).await;
+    let prepared = prepare_package(capacity_request(
+        source.clone(),
+        fingerprint,
+        None,
+        PackageMigrationPlanInput::InitialCompiledDdl,
+    ))
+    .expect("package prepares");
+    let root = TempRoot::create();
+    prepared
+        .publish_to_directory(root.path())
+        .expect("package publishes");
+    let package = load_package(root.path(), &local_context()).expect("package verifies");
+    let active = apply_package(
+        &database,
+        &package,
+        ApplyPrecondition::InitialActivation,
+        Duration::from_secs(30),
+        Duration::from_secs(60),
+    )
+    .await
+    .expect("package activates");
+
+    // The registry as an earlier release left it: the legacy ledger
+    // constraint, and an active package whose declared schema fingerprint
+    // was measured with that constraint.
+    let legacy_fingerprint = reinstall_legacy_statement_constraint(&database, &compiled).await;
+    let legacy_prepared = prepare_package(capacity_request(
+        source,
+        legacy_fingerprint.clone(),
+        None,
+        PackageMigrationPlanInput::InitialCompiledDdl,
+    ))
+    .expect("the earlier release's package prepares");
+    let legacy_root = TempRoot::create();
+    legacy_prepared
+        .publish_to_directory(legacy_root.path())
+        .expect("the earlier release's package publishes");
+    let legacy_package = load_package(legacy_root.path(), &local_context())
+        .expect("the earlier release's package verifies");
+    database
+        .admin
+        .batch_execute(&format!(
+            "UPDATE registry_internal.registry_state
+             SET active_package_digest = '{digest}', schema_fingerprint = '{legacy_fingerprint}'
+             WHERE singleton AND active_activation_id = '{activation}'::uuid;
+             UPDATE registry_internal.registry_migrations
+             SET package_digest = '{digest}'
+             WHERE activation_id = '{activation}'::uuid;",
+            digest = legacy_package.package_digest(),
+            activation = active.activation_id,
+        ))
+        .await
+        .expect("fixture records the earlier release's active package");
+    let current = ExpectedRegistryIdentity {
+        package_digest: legacy_package.package_digest().to_owned(),
+        schema_fingerprint: legacy_fingerprint.clone(),
+        ..active
+    };
+
+    // The re-apply serves with the migration role alone, so it is a role
+    // change rather than a re-apply that leaves nothing to activate.
+    let reapplied = apply_verified_package(ApplyVerifiedPackageRequest::new(
+        &database.migration_config,
+        &legacy_package,
+        ActivationDeployment::new("local", INSTANCE, DATABASE),
+        ApplyPrecondition::RoleChange { current: &current },
+        ApplyRoles::new(&database.migration_role, &database.migration_role),
+        ApplyTimeouts::new(Duration::from_secs(30), Duration::from_secs(60))
+            .expect("role change timeouts are bounded"),
+        database.activation_audit(),
+    ))
+    .await
+    .expect("the role change re-applies the package the earlier release activated");
+    assert_eq!(reapplied.schema_fingerprint, legacy_fingerprint);
+    assert_eq!(ledger_statement_constraints(&database).await, (false, true));
     database.cleanup().await;
 }
