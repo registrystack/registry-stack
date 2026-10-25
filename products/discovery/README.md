@@ -41,6 +41,19 @@ traceability. The normal operator flow, owned by `discoveryctl`, is offline
 then restart. The runtime verifies `SHA256SUMS` and an optional
 `package.expectedDigest` pin before consuming the exact packaged index bytes.
 
+`discoveryctl api` has no local `--client` credential adapter. Discovery's
+endpoint is public, so the product resolver directs operators to an anonymous
+saved connection. The shared CLI also permits an operator to deliberately
+select an explicit or saved authenticated connection, but that credential is
+operator-supplied transport state: it is never derived from catalog metadata,
+creates no Discovery authority, and does not make Discovery a native-provider
+proxy. Endpoint and request handling follow the shared
+[`registry-cli-api` security boundary](../../crates/registry-cli-api/README.md#security-boundary).
+`api_and_saved_connections_are_available_without_a_runtime_config` in
+`crates/registry-discoveryctl/tests/api_cli.rs` pins the product surface; the
+shared README names the transport and credential tests. These are maintained
+references, not claims of execution here.
+
 ## Independent release installation
 
 For a published Discovery unit release, download its `discovery-vX.Y.Z-install.sh`
