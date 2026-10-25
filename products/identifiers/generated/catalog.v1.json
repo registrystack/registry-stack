@@ -4382,7 +4382,7 @@
       },
       "artifact": {
         "path": "products/breg/generated/authoring/registry-module.schema.json",
-        "sha256": "5037e3a25fb4b79abf2b405727e525d9d1b992c307c967734c0d7cf5f63dff52",
+        "sha256": "752911e19644db0a136884241b8ea150a227e28e625cbbed7d56aa8463a597a5",
         "mediaType": "application/schema+json"
       }
     },
@@ -4400,7 +4400,7 @@
       },
       "artifact": {
         "path": "products/breg/generated/authoring/registry-project.schema.json",
-        "sha256": "83f7c3edd3b1d62a4632573c52ed613d77d286c25d78b6665a3122b3d3e0f26c",
+        "sha256": "12cfc6b3b9d7af6c8be2e4ca493bd8ef3547a83bea8ade08dabb8991aa97b10e",
         "mediaType": "application/schema+json"
       }
     },

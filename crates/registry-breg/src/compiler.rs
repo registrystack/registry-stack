@@ -15,18 +15,18 @@ use crate::artifacts::{event_data_schema_binding, generate_artifacts};
 use crate::contract::{
     parsed_bbox, valid_decimal_bounds, valid_structured_schema, AccessProfileSource,
     ActionExecutionSource, ActionSource, Classification, ConstraintSource, DerivedExecutionSource,
-    DerivedFieldSource, DisplaySource, EntityExtensionSource, EntitySource, EventConditionSource,
-    EventTrigger, FieldGenerationSource, FieldSource, FieldTypeSource, GeoJsonSource,
-    HookAuthenticationProfile, HookDeadLetterMode, HookHandlerSource, HookPhase, LookupValueOrigin,
-    ManifestProjectionTextSource, ModuleAssetSource, MutationMode, Operation, PresentationSource,
-    ReadPathPermissionSource, RegistryModule, RegistryProject, SpatialBboxPermissionSource,
-    SpatialQueryPermissionSource, UniqueWhenPredicate, ValidTimeRole, DECIMAL_BOUNDS_REQUIREMENTS,
-    MAX_ACCESS_LOG_EXEMPTIONS, MAX_ACCESS_LOG_EXEMPTION_REASON_BYTES,
-    MAX_ACCESS_LOG_RETENTION_DAYS, MAX_ACCESS_LOG_SUBJECT_CHARACTERS,
-    MAX_ACCESS_LOG_TRUSTED_INTERMEDIARIES, MAX_ENCRYPTED_FIELD_PLAINTEXT_BYTES,
-    MAX_ENCRYPTED_FIELD_STRING_CHARACTERS, MAX_FIELD_LOOKUP_NORMALIZATION_STEPS,
-    MAX_GENERATED_IDENTIFIER_COMPONENT_LENGTH, MAX_GENERATED_IDENTIFIER_SCOPE_FIELDS,
-    MAX_STRUCTURED_VALUE_BYTES,
+    DerivedFieldSource, DisplayPurpose, DisplaySource, EntityExtensionSource, EntitySource,
+    EventConditionSource, EventTrigger, FieldGenerationSource, FieldSource, FieldTypeSource,
+    GeoJsonSource, HookAuthenticationProfile, HookDeadLetterMode, HookHandlerSource, HookPhase,
+    LookupValueOrigin, ManifestProjectionTextSource, ModelDisplaySource, ModuleAssetSource,
+    MutationMode, Operation, PresentationSource, ReadPathPermissionSource, RegistryModule,
+    RegistryProject, SpatialBboxPermissionSource, SpatialQueryPermissionSource,
+    UniqueWhenPredicate, ValidTimeRole, DECIMAL_BOUNDS_REQUIREMENTS, MAX_ACCESS_LOG_EXEMPTIONS,
+    MAX_ACCESS_LOG_EXEMPTION_REASON_BYTES, MAX_ACCESS_LOG_RETENTION_DAYS,
+    MAX_ACCESS_LOG_SUBJECT_CHARACTERS, MAX_ACCESS_LOG_TRUSTED_INTERMEDIARIES,
+    MAX_ENCRYPTED_FIELD_PLAINTEXT_BYTES, MAX_ENCRYPTED_FIELD_STRING_CHARACTERS,
+    MAX_FIELD_LOOKUP_NORMALIZATION_STEPS, MAX_GENERATED_IDENTIFIER_COMPONENT_LENGTH,
+    MAX_GENERATED_IDENTIFIER_SCOPE_FIELDS, MAX_STRUCTURED_VALUE_BYTES,
 };
 use crate::derived_sql::{derived_sql_dependencies, validate_derived_sql};
 use crate::diagnostics::{CompileFailure, Diagnostic};
@@ -325,6 +325,7 @@ pub fn compile_project_with_assets(
     crate::access::validate_access_requirements(&sources, &mut diagnostics);
     crate::membership::validate(&sources, &mut diagnostics);
     crate::consent::validate(project, &sources, &mut diagnostics);
+    crate::occurrence::validate(&sources, &mut diagnostics);
     findings.extend(crate::access::access_findings(&sources));
     findings.extend(crate::access::project_access_findings(project, &sources));
     findings.extend(crate::access::module_access_findings(
@@ -362,6 +363,7 @@ pub fn compile_project_with_assets(
     })?;
     crate::membership::compile(&mut entities);
     let recipients = crate::consent::compile(project, &sources, &mut entities);
+    crate::occurrence::compile(&sources, &mut entities);
     let mut action_inventory = compile_immediate_actions(
         &action_sources,
         &entities,
@@ -1544,7 +1546,14 @@ fn validate_authored_display_text(
 }
 
 fn validate_entity_display_text(entity: &EntitySource, path: &str, errors: &mut Vec<Diagnostic>) {
-    validate_display_source(&entity.display, &format!("{path}.display"), errors);
+    validate_model_display(&entity.display, &format!("{path}.display"), errors);
+    if entity.display.purpose == Some(DisplayPurpose::SyntheticSeed) {
+        errors.push(Diagnostic::error(
+            "breg.display.purpose-surface",
+            format!("{path}.display.purpose"),
+            "purpose \"synthetic-seed\" applies only to Actions",
+        ));
+    }
     for field in &entity.fields {
         validate_display_source(
             &field.display,
@@ -1581,7 +1590,7 @@ fn validate_entity_display_text(entity: &EntitySource, path: &str, errors: &mut 
 }
 
 fn validate_action_display_text(action: &ActionSource, path: &str, errors: &mut Vec<Diagnostic>) {
-    validate_display_source(&action.display, &format!("{path}.display"), errors);
+    validate_model_display(&action.display, &format!("{path}.display"), errors);
     for input in &action.inputs {
         validate_display_source(
             &input.display,
@@ -1609,6 +1618,13 @@ fn validate_display_source(display: &DisplaySource, path: &str, errors: &mut Vec
     }
 }
 
+fn validate_model_display(display: &ModelDisplaySource, path: &str, errors: &mut Vec<Diagnostic>) {
+    validate_display_source(&display.display(), path, errors);
+    if let Some(group) = display.group.as_deref() {
+        validate_display_text(group, &format!("{path}.group"), errors);
+    }
+}
+
 fn validate_presentation_source(
     display: &PresentationSource,
     path: &str,
@@ -1619,6 +1635,16 @@ fn validate_presentation_source(
     }
     if let Some(description) = display.description.as_deref() {
         validate_display_text(description, &format!("{path}.description"), errors);
+    }
+}
+
+pub(crate) fn validate_display_text_at(
+    value: Option<&str>,
+    path: &str,
+    errors: &mut Vec<Diagnostic>,
+) {
+    if let Some(value) = value {
+        validate_display_text(value, path, errors);
     }
 }
 
@@ -7145,7 +7171,9 @@ fn compile_entities(
                     .api_name
                     .clone()
                     .unwrap_or_else(|| type_api_name(&source.id)),
-                display: source.display.clone(),
+                display: source.display.display(),
+                grouping: source.display.grouping(),
+                occurrence: None,
                 definition_revision: record_definition_revision(source, &constraints),
                 id: source.id.clone(),
                 source_module,

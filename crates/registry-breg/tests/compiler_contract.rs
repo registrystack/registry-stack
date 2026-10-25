@@ -17,8 +17,9 @@ use registry_breg::contract::{
     parse_module_json, parse_module_yaml, parse_project_json, parse_project_yaml,
     ActionExecutionSource, ActionSource, BatchSource, Classification, ComparisonOperator,
     ConstraintSource, DerivedFieldSource, DerivedSource, DisplaySource, FieldTypeSource,
-    ModuleAssetSource, ModuleLockSource, Operation, PackageIdentitySource, ReferenceDelete,
-    RegistryModule, ReviewAuthoritySource, UniqueWhenPredicate, MODULE_API_VERSION, MODULE_KIND,
+    ModelDisplaySource, ModuleAssetSource, ModuleLockSource, Operation, PackageIdentitySource,
+    ReferenceDelete, RegistryModule, ReviewAuthoritySource, UniqueWhenPredicate,
+    MODULE_API_VERSION, MODULE_KIND,
 };
 use registry_breg::diagnostics::{CompileFailure, DiagnosticSeverity};
 use registry_breg::generated_ddl::DdlStatementKind;
@@ -228,7 +229,10 @@ fn directly_constructed_display_text_is_validated_across_source_shapes() {
         protocol: "id.registrystack.org/protocols/review/v1".to_owned(),
         display: invalid_label(),
     });
-    project.entities[0].display = invalid_description();
+    project.entities[0].display = ModelDisplaySource {
+        description: invalid_description().description,
+        ..ModelDisplaySource::default()
+    };
     project.entities[0].fields[0].display = invalid_label();
     project.entities[0].derived.push(DerivedSource {
         id: "summary".to_owned(),
@@ -260,7 +264,10 @@ fn directly_constructed_display_text_is_validated_across_source_shapes() {
         }]}
     }))
     .expect("a fixed action parses before direct display mutation");
-    action.display = invalid_label();
+    action.display = ModelDisplaySource {
+        label: invalid_label().label,
+        ..ModelDisplaySource::default()
+    };
     action.inputs[0].display = invalid_description();
     project.actions.push(action);
 

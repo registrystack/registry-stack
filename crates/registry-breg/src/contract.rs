@@ -140,6 +140,81 @@ pub struct DisplaySource {
     pub title_field: Option<String>,
 }
 
+/// How a Record or Action is presented in the declared-model view. It adds
+/// presentation-only grouping, which no runtime surface reads, to the plain
+/// display text members.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ModelDisplaySource {
+    #[serde(
+        default,
+        deserialize_with = "registry_platform_yaml::optional_display_text",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Option<registry_platform_yaml::DisplayText>")
+    )]
+    pub label: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "registry_platform_yaml::optional_display_text",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Option<registry_platform_yaml::DisplayText>")
+    )]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title_field: Option<String>,
+    /// What the object is for. Presentation only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub purpose: Option<DisplayPurpose>,
+    /// Display group; objects sharing the exact string are listed together.
+    #[serde(
+        default,
+        deserialize_with = "registry_platform_yaml::optional_display_text",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Option<registry_platform_yaml::DisplayText>")
+    )]
+    pub group: Option<String>,
+}
+
+impl ModelDisplaySource {
+    /// The words and title-field selection every runtime surface reads.
+    pub fn display(&self) -> DisplaySource {
+        DisplaySource {
+            label: self.label.clone(),
+            description: self.description.clone(),
+            title_field: self.title_field.clone(),
+        }
+    }
+
+    /// The presentation-only grouping, absent when neither member is authored.
+    pub fn grouping(&self) -> Option<crate::model::CompiledGrouping> {
+        (self.purpose.is_some() || self.group.is_some()).then(|| crate::model::CompiledGrouping {
+            purpose: self.purpose,
+            group: self.group.clone(),
+        })
+    }
+}
+
+/// The purpose a Record or Action declares for itself.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum DisplayPurpose {
+    Domain,
+    Processing,
+    Technical,
+    SyntheticSeed,
+}
+
 /// Authored words for an object without a Record's title-field selection.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
@@ -1268,7 +1343,7 @@ pub struct EntitySource {
     #[serde(default)]
     pub api_name: Option<String>,
     #[serde(default)]
-    pub display: DisplaySource,
+    pub display: ModelDisplaySource,
     #[serde(deserialize_with = "local_id")]
     #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub id: String,
@@ -1336,7 +1411,176 @@ pub struct EntitySource {
     /// `requireConsent` permissions check before returning a subject's row.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub consent_record: Option<ConsentRecordSource>,
+    /// Declares this record type's rows as domain occurrences: which fields
+    /// say what the row is about, when it happened, when it takes effect, what
+    /// it was recorded from and what it corrects. It adds no storage, endpoint
+    /// or authority.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub occurrence: Option<OccurrenceSource>,
 }
+
+/// The record-level mapping of stored fields onto occurrence roles.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct OccurrenceSource {
+    #[serde(
+        default,
+        deserialize_with = "registry_platform_yaml::optional_display_text",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Option<registry_platform_yaml::DisplayText>")
+    )]
+    pub label: Option<String>,
+    /// What the occurrence is about. At least one, at most 16. The serde
+    /// default only lets compilation report the stable emptiness diagnostic.
+    #[serde(default)]
+    #[cfg_attr(feature = "schema", schemars(!default))]
+    pub subjects: Vec<OccurrenceRoleSource>,
+    /// A `string` or `text` field holding a human summary.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub occurred_at: Option<OccurrenceTimeSource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effective: Option<EffectiveTimeSource>,
+    /// What the occurrence was recorded from. Recording a reference is not
+    /// verifying it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sources: Vec<OccurrenceRoleSource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub correction: Option<OccurrenceCorrectionSource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_event_id: Option<SourceEventIdSource>,
+}
+
+/// One named role played by a stored field.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct OccurrenceRoleSource {
+    pub role: String,
+    pub field: String,
+    #[serde(
+        default,
+        deserialize_with = "registry_platform_yaml::optional_display_text",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Option<registry_platform_yaml::DisplayText>")
+    )]
+    pub label: Option<String>,
+    /// Asserts the record type a native reference field points at.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
+    /// Marks the field as an opaque identifier owned by another system.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external: Option<ExternalReferenceSource>,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ExternalReferenceSource {
+    /// Absolute URI naming the system that owns the identifier.
+    pub namespace: String,
+}
+
+/// A point (`at`) or an interval (`start`, `end`, `meaning`). Flat optional
+/// members let the compiler address each shape error at its authored path.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct OccurrenceTimeSource {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub meaning: Option<IntervalMeaning>,
+}
+
+/// A point or a span of effect. An open end means the effect has no end.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct EffectiveTimeSource {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end: Option<String>,
+}
+
+/// What an occurrence interval says about the occurrence.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum IntervalMeaning {
+    /// The occurrence lasted from start to end.
+    Span,
+    /// One occurrence happened at an unknown instant between start and end.
+    Within,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct OccurrenceCorrectionSource {
+    /// A reference to a record type that also declares an occurrence.
+    pub field: String,
+    pub relation: CorrectionRelation,
+}
+
+/// How a later occurrence relates to the one it names.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CorrectionRelation {
+    /// Amends an error in the named occurrence.
+    Corrects,
+    /// Replaces the named occurrence as the current interpretation.
+    Supersedes,
+}
+
+/// The identifier an occurrence carries from the system it was recorded from.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct SourceEventIdSource {
+    pub field: String,
+    /// Absolute URI naming the identifier's namespace. Exactly one of
+    /// `namespace` and `namespaceField` is declared.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub namespace: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub namespace_field: Option<String>,
+    pub duplicates: DuplicatePolicy,
+    /// The authored unique constraint that enforces `duplicates: reject`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub constraint: Option<String>,
+}
+
+/// What the author says about the same source event arriving twice.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum DuplicatePolicy {
+    Reject,
+    Allow,
+}
+
+/// Maximum subjects or sources one occurrence declares.
+pub const MAX_OCCURRENCE_ROLES: usize = 16;
+
+/// Maximum UTF-8 bytes in an occurrence namespace.
+pub const MAX_OCCURRENCE_NAMESPACE_BYTES: usize = 512;
 
 /// Maximum retained subject-facing access-log window.
 pub const MAX_ACCESS_LOG_RETENTION_DAYS: u16 = 3_650;
@@ -1756,7 +2000,7 @@ pub struct ActionSource {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api_name: Option<String>,
     #[serde(default)]
-    pub display: DisplaySource,
+    pub display: ModelDisplaySource,
     pub execution: ActionExecutionSource,
     #[serde(default)]
     pub inputs: Vec<ActionInputSource>,

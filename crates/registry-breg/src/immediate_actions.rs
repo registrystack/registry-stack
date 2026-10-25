@@ -350,7 +350,8 @@ fn compile_action(
             .api_name
             .clone()
             .unwrap_or_else(|| default_api_name(&action.id)),
-        display: action.display.clone(),
+        display: action.display.display(),
+        grouping: action.display.grouping(),
         execution,
         definition_revision: String::new(),
         evidence: Vec::new(),
@@ -2934,6 +2935,7 @@ pub fn migration_review_revision(action: &CompiledAction) -> String {
     let mut action = action.clone();
     action.definition_revision.clear();
     action.display = Default::default();
+    action.grouping = None;
     for input in &mut action.inputs {
         input.display = Default::default();
     }

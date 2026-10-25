@@ -391,6 +391,10 @@ pub struct CompiledAction {
     pub consent_issuer: Option<crate::contract::ConsentIssuerSource>,
     pub api_name: String,
     pub display: crate::contract::DisplaySource,
+    /// Presentation-only purpose and group; excluded from every execution
+    /// identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grouping: Option<CompiledGrouping>,
     pub execution: CompiledActionExecution,
     pub definition_revision: String,
 }
@@ -968,7 +972,152 @@ pub struct CompiledEntity {
     pub module_origins: CompiledEntityModuleOrigins,
     pub api_name: String,
     pub display: crate::contract::DisplaySource,
+    /// Presentation-only purpose and group; excluded from every execution
+    /// identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grouping: Option<CompiledGrouping>,
+    /// The resolved occurrence descriptor; excluded from every execution
+    /// identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub occurrence: Option<CompiledOccurrence>,
     pub definition_revision: String,
+}
+
+/// The authored purpose and group of a Record or Action.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CompiledGrouping {
+    pub purpose: Option<crate::contract::DisplayPurpose>,
+    pub group: Option<String>,
+}
+
+/// The descriptor version this compiler emits.
+pub const OCCURRENCE_DESCRIPTOR_VERSION: &str = "1";
+
+/// A record type's occurrence mapping with every field resolved once. The
+/// serialized form is the descriptor shown in the model explanation; runtime
+/// metadata filters it per caller.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CompiledOccurrence {
+    pub descriptor_version: String,
+    pub label: String,
+    pub subjects: Vec<CompiledOccurrenceRole>,
+    pub summary: Option<CompiledOccurrenceField>,
+    pub occurred_at: Option<CompiledOccurrenceTime>,
+    pub effective: Option<CompiledOccurrenceTime>,
+    pub sources: Vec<CompiledOccurrenceRole>,
+    pub correction: Option<CompiledOccurrenceCorrection>,
+    pub source_event_id: Option<CompiledSourceEventId>,
+    pub recorded_time: CompiledRecordedTime,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CompiledOccurrenceRole {
+    pub role: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    pub kind: OccurrenceRoleKind,
+    /// The namespace of an external identifier.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub namespace: Option<String>,
+    pub field: CompiledOccurrenceField,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum OccurrenceRoleKind {
+    /// A reference to a record of this registry.
+    Native,
+    /// An opaque identifier owned by another system; never resolved.
+    External,
+}
+
+/// A stored field named by id and by its API name.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CompiledOccurrenceField {
+    pub id: String,
+    pub api_name: String,
+    #[serde(rename = "type")]
+    pub value_type: OccurrenceValueType,
+    /// The record type a `reference` field points at.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
+}
+
+/// The field types an occurrence role can map.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum OccurrenceValueType {
+    Reference,
+    String,
+    Text,
+    Date,
+    Timestamp,
+    Uuid,
+    VocabularyCode,
+}
+
+impl OccurrenceValueType {
+    /// The field type's kebab-case name, as authored.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Reference => "reference",
+            Self::String => "string",
+            Self::Text => "text",
+            Self::Date => "date",
+            Self::Timestamp => "timestamp",
+            Self::Uuid => "uuid",
+            Self::VocabularyCode => "vocabulary-code",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
+pub enum CompiledOccurrenceTime {
+    Point {
+        at: CompiledOccurrenceField,
+    },
+    Interval {
+        meaning: crate::contract::IntervalMeaning,
+        start: CompiledOccurrenceField,
+        /// Absent for an open-ended span.
+        end: Option<CompiledOccurrenceField>,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CompiledOccurrenceCorrection {
+    pub relation: crate::contract::CorrectionRelation,
+    pub field: CompiledOccurrenceField,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CompiledSourceEventId {
+    pub field: CompiledOccurrenceField,
+    pub namespace: Option<String>,
+    pub namespace_field: Option<CompiledOccurrenceField>,
+    pub duplicates: crate::contract::DuplicatePolicy,
+    pub constraint: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CompiledRecordedTime {
+    pub source: RecordedTimeSource,
+}
+
+/// Recorded time is never authored; it is read from native record history.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RecordedTimeSource {
+    /// The creation time of the record's first revision.
+    CreationRevision,
 }
 
 impl CompiledEntity {

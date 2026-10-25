@@ -1,0 +1,219 @@
+apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project: {id: occurrence-shapes, version: "1", defaultLanguage: en, canonicalBaseIri: https://occurrence-shapes.example.test}
+datasets: [{id: test-dataset}]
+vocabularies:
+  - {id: grant-status, values: [active, paused]}
+  - {id: custody-status, values: [held, released]}
+recordTypes:
+  - id: entry
+    primaryDataset: test-dataset
+    route: entries
+    mutationMode: mutable
+    classification: restricted
+    display: {label: Entry, purpose: domain, group: Register}
+    fields:
+      - {id: entry-number, type: string, minimumLength: 1, maximumLength: 40, required: true, classification: restricted}
+      - {id: name, type: string, minimumLength: 1, maximumLength: 200, required: true, classification: restricted}
+    constraints:
+      - {id: unique-entry-number, type: unique, fields: [entry-number]}
+  - id: entry-registration
+    primaryDataset: test-dataset
+    route: entry-registrations
+    mutationMode: create-only
+    classification: restricted
+    display: {label: Entry registration, purpose: domain, group: Register}
+    fields:
+      - {id: entry, type: reference, target: entry, required: true, classification: restricted}
+      - {id: source-reference, type: string, minimumLength: 1, maximumLength: 80, required: true, classification: restricted}
+      - {id: effective-at, type: timestamp, required: true, classification: restricted}
+      - {id: occurred-on, type: date, required: false, classification: restricted}
+      - {id: summary, type: text, maximumLength: 500, required: false, classification: restricted}
+      - {id: corrects, type: reference, target: entry-registration, required: false, classification: restricted}
+    constraints:
+      - {id: one-per-source, type: unique, fields: [source-reference]}
+    occurrence:
+      label: Entry registered
+      subjects:
+        - {role: entry, field: entry, label: Entry, target: entry}
+      summary: summary
+      occurredAt: {at: occurred-on}
+      effective: {at: effective-at}
+      sources:
+        - {role: source, field: source-reference, label: Source, external: {namespace: "urn:example:synthetic:sources"}}
+      correction: {field: corrects, relation: corrects}
+      sourceEventId:
+        field: source-reference
+        namespace: "urn:example:synthetic:sources"
+        duplicates: reject
+        constraint: one-per-source
+  - id: grant
+    primaryDataset: test-dataset
+    route: grants
+    mutationMode: mutable
+    classification: restricted
+    display: {label: Grant, purpose: domain, group: Grants}
+    mutationPolicy: {patch: proposal-required}
+    fields:
+      - {id: grant-number, type: string, minimumLength: 1, maximumLength: 40, required: true, classification: restricted}
+      - {id: status, type: vocabulary-code, vocabulary: grant-status, required: true, classification: restricted}
+  - id: grant-pause-decision
+    primaryDataset: test-dataset
+    route: grant-pause-decisions
+    mutationMode: create-only
+    classification: restricted
+    display: {label: Grant pause decision, purpose: domain, group: Grants}
+    fields:
+      - {id: grant, type: reference, target: grant, required: true, classification: restricted}
+      - {id: decided-on, type: date, required: true, classification: restricted}
+      - {id: effective-from, type: date, required: true, classification: restricted}
+      - {id: effective-until, type: date, required: false, classification: restricted}
+      - {id: basis-reference, type: string, maximumLength: 80, required: false, classification: restricted}
+      - {id: summary, type: text, maximumLength: 500, required: false, classification: restricted}
+      - {id: corrects, type: reference, target: grant-pause-decision, required: false, classification: restricted}
+    constraints:
+      - {id: effective-order, type: compare, left: effective-from, operator: less-than, right: effective-until}
+    occurrence:
+      label: Grant pause decided
+      subjects:
+        - {role: grant, field: grant, label: Grant, target: grant}
+      summary: summary
+      occurredAt: {at: decided-on}
+      effective: {start: effective-from, end: effective-until}
+      sources:
+        - {role: basis, field: basis-reference, label: Basis, external: {namespace: "urn:example:synthetic:notices"}}
+      correction: {field: corrects, relation: corrects}
+  - id: item
+    primaryDataset: test-dataset
+    route: items
+    mutationMode: mutable
+    classification: restricted
+    display: {label: Item, purpose: domain, group: Custody}
+    fields:
+      - {id: item-number, type: string, minimumLength: 1, maximumLength: 40, required: true, classification: restricted}
+      - {id: current-custody, type: reference, target: custody-record, required: false, classification: restricted}
+  - id: custody-record
+    primaryDataset: test-dataset
+    route: custody-records
+    mutationMode: mutable
+    classification: restricted
+    display: {label: Custody record, purpose: domain, group: Custody}
+    fields:
+      - {id: item, type: reference, target: item, required: true, classification: restricted}
+      - {id: holder-reference, type: string, minimumLength: 1, maximumLength: 80, required: true, classification: restricted}
+      - {id: status, type: vocabulary-code, vocabulary: custody-status, required: true, classification: restricted}
+  - id: custody-handover
+    primaryDataset: test-dataset
+    route: custody-handovers
+    mutationMode: create-only
+    classification: restricted
+    display: {label: Custody handover, purpose: domain, group: Custody}
+    fields:
+      - {id: item, type: reference, target: item, required: true, classification: restricted}
+      - {id: previous-custody, type: reference, target: custody-record, required: true, classification: restricted}
+      - {id: new-custody, type: reference, target: custody-record, required: true, classification: restricted}
+      - {id: agreed-not-before, type: date, required: false, classification: restricted}
+      - {id: agreed-before, type: date, required: false, classification: restricted}
+      - {id: effective-at, type: timestamp, required: true, classification: restricted}
+      - {id: deed-reference, type: string, minimumLength: 1, maximumLength: 80, required: true, classification: restricted}
+    constraints:
+      - {id: one-per-deed, type: unique, fields: [deed-reference]}
+      - {id: agreement-window, type: compare, left: agreed-not-before, operator: less-than, right: agreed-before}
+    occurrence:
+      label: Custody handed over
+      subjects:
+        - {role: item, field: item, label: Item, target: item}
+        - {role: previous-custody, field: previous-custody, label: Previous custody, target: custody-record}
+        - {role: new-custody, field: new-custody, label: New custody, target: custody-record}
+      occurredAt: {start: agreed-not-before, end: agreed-before, meaning: within}
+      effective: {at: effective-at}
+      sources:
+        - {role: deed, field: deed-reference, label: Deed, external: {namespace: "urn:example:synthetic:deeds"}}
+      sourceEventId:
+        field: deed-reference
+        namespace: "urn:example:synthetic:deeds"
+        duplicates: reject
+        constraint: one-per-deed
+  - id: review-note
+    primaryDataset: test-dataset
+    route: review-notes
+    mutationMode: mutable
+    classification: restricted
+    display: {label: Review note, purpose: processing, group: Register}
+    fields:
+      - {id: entry, type: reference, target: entry, required: true, classification: restricted}
+      - {id: noted-on, type: date, required: true, classification: restricted}
+      - {id: note, type: text, maximumLength: 2000, required: true, classification: restricted}
+actions:
+  - id: record-grant-pause
+    display: {label: Record grant pause, purpose: domain, group: Grants}
+    execution: {mode: immediate}
+    inputs:
+      - {id: grant-ref, apiName: grantId, type: reference, target: grant, required: true, classification: restricted}
+      - {id: decided-on, apiName: decidedOn, type: date, required: true, classification: restricted}
+      - {id: effective-from, apiName: effectiveFrom, type: date, required: true, classification: restricted}
+    plan:
+      type: fixed
+      effects:
+        - id: decision
+          target: {recordType: grant-pause-decision}
+          operation: create
+          set:
+            grant: {fromInput: grant-ref}
+            decided-on: {fromInput: decided-on}
+            effective-from: {fromInput: effective-from}
+  - id: seed-demonstration-entries
+    display: {label: Seed demonstration entries, purpose: synthetic-seed, group: Demonstration data}
+    execution: {mode: immediate}
+    inputs:
+      - {id: entry-number, apiName: entryNumber, type: string, minimumLength: 1, maximumLength: 40, required: true, classification: restricted}
+    plan:
+      type: fixed
+      effects:
+        - id: seeded
+          target: {recordType: entry}
+          operation: create
+          set:
+            entry-number: {fromInput: entry-number}
+            name: {value: Demonstration entry}
+  - id: correct-grant-number
+    display: {label: Correct grant number, purpose: processing, group: Grants}
+    execution:
+      mode: proposal
+      proposal:
+        review: {type: none}
+        application: {mode: automatic, maximumAttempts: 3}
+        retention: {mode: operator-erase}
+    inputs:
+      - {id: grant-ref, apiName: grantId, type: reference, target: grant, required: true, classification: restricted}
+      - {id: value, type: string, required: true, minimumLength: 1, maximumLength: 40, classification: restricted}
+    commitGuards: {targets: [{input: grant-ref, revision: unchanged}]}
+    plan:
+      type: fixed
+      effects:
+        - {id: number, target: {fromInput: grant-ref}, operation: patch, set: {grant-number: {fromInput: value}}}
+accessProfiles:
+  - id: registrar
+    default: true
+    principalClaim: registry_principal
+    requiredScopes: unrestricted
+    permissions:
+      actions:
+        - action: record-grant-pause
+          operations: [invoke]
+          targets:
+            - {recordType: grant, rowBoundaries: unrestricted}
+            - {recordType: grant-pause-decision, rowBoundaries: unrestricted}
+          results: [decision]
+        - action: seed-demonstration-entries
+          operations: [invoke]
+          targets: [{recordType: entry, rowBoundaries: unrestricted}]
+          results: [seeded]
+        - action: correct-grant-number
+          operations: [start]
+          targets: [{recordType: grant, rowBoundaries: unrestricted}]
+      proposals:
+        - action: correct-grant-number
+          operations: [get, list, edit, submit, revise, rebase, retry, cancel, apply]
+          ownership: caller
+          targets: [{recordType: grant, rowBoundaries: unrestricted}]
