@@ -298,6 +298,7 @@
           }
         }
       },
+      "grouping": null,
       "id": "correct-address",
       "inputs": [
         {
@@ -616,6 +617,7 @@
           "reviewContext": null
         }
       },
+      "grouping": null,
       "id": "deactivate-facility",
       "inputs": [
         {
@@ -751,6 +753,7 @@
       "execution": {
         "mode": "immediate"
       },
+      "grouping": null,
       "id": "register-facility",
       "inputs": [
         {
@@ -1068,7 +1071,7 @@
       "revision": "sha256:5b5de70fa9b8f831387fc08e520f16fccd71863f18f3efe8b7999728927910f6"
     }
   ],
-  "apiVersion": "id.registrystack.org/formats/breg/model-explanation/v1alpha6",
+  "apiVersion": "id.registrystack.org/formats/breg/model-explanation/v1alpha7",
   "authoring": {
     "documents": [
       {
@@ -2178,12 +2181,14 @@
         }
       ],
       "geojson": null,
+      "grouping": null,
       "hooks": {},
       "id": "directory-entry",
       "indexes": {},
       "moduleOrigins": {},
       "mutationMode": "mutable",
       "mutationPolicy": {},
+      "occurrence": null,
       "primaryDataset": "facility-registry",
       "readPaths": {},
       "relationships": {},
@@ -2360,6 +2365,7 @@
         }
       ],
       "geojson": null,
+      "grouping": null,
       "hooks": {},
       "id": "facility",
       "indexes": {},
@@ -2368,6 +2374,7 @@
       "mutationPolicy": {
         "patch": "proposal-required"
       },
+      "occurrence": null,
       "primaryDataset": "facility-registry",
       "readPaths": {
         "operators": {
@@ -2479,6 +2486,7 @@
         }
       ],
       "geojson": null,
+      "grouping": null,
       "hooks": {},
       "id": "facility-assignment",
       "indexes": {
@@ -2492,6 +2500,7 @@
       "moduleOrigins": {},
       "mutationMode": "create-only",
       "mutationPolicy": {},
+      "occurrence": null,
       "primaryDataset": "facility-registry",
       "readPaths": {},
       "relationships": {
@@ -2613,12 +2622,14 @@
         }
       ],
       "geojson": null,
+      "grouping": null,
       "hooks": {},
       "id": "operator",
       "indexes": {},
       "moduleOrigins": {},
       "mutationMode": "mutable",
       "mutationPolicy": {},
+      "occurrence": null,
       "primaryDataset": "facility-registry",
       "readPaths": {},
       "relationships": {

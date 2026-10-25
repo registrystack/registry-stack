@@ -8,7 +8,7 @@ own `breg/ctl-report/v1alpha1` version.
 
 | Subject | Format | Current version | Schema |
 |---|---|---|---|
-| `model` | `BRegModelExplanation` | `v1alpha6` | `ModelExplanation.schema.json` |
+| `model` | `BRegModelExplanation` | `v1alpha7` | `ModelExplanation.schema.json` |
 | `access` | `BRegAccessExplanation` | `v1alpha7` | `AccessExplanation.schema.json` |
 | `access --scenario` | `BRegAccessPreview` | `v1alpha4` | `AccessPreview.schema.json` |
 | `actions` | `BRegActionsExplanation` | `v1alpha7` | `ActionsExplanation.schema.json` |
@@ -21,7 +21,7 @@ own `breg/ctl-report/v1alpha1` version.
 Each format's identifier is
 `id.registrystack.org/formats/breg/<format>/<version>`, with the format name
 in lowercase kebab-case. For example, the model format is
-`id.registrystack.org/formats/breg/model-explanation/v1alpha6`.
+`id.registrystack.org/formats/breg/model-explanation/v1alpha7`.
 
 `lifecycle` accepts no project and describes the engine-owned Proposal state
 machine. Every other subject requires a project. `proposals` returns the
@@ -43,6 +43,18 @@ boundaries and an exact source path back to the grant.
 Lifecycle `v1alpha8` adds `recoveryReasons` to every transition. `retry`
 recovers `dependency-outage` and `lease-expired`; other transitions currently
 report an empty list.
+
+Model `v1alpha7` adds `recordTypes[].occurrence`, `recordTypes[].grouping` and
+`actions[].grouping`. `occurrence` is `null` unless the Record type declares a
+domain occurrence; otherwise it is the resolved descriptor (`descriptorVersion`
+`"1"`) naming the stored fields that say what a row is about, when it happened,
+when it takes effect, what it was recorded from and what it corrects. Undeclared
+optional members are explicit `null`; `recordedTime` is always
+`{"source": "creation-revision"}` because recorded time is read from record
+history and is never authored. `grouping` is `null` unless the Record type or
+Action authors `display.purpose` or `display.group`; it is presentation only and
+never changes identity, access or execution. Consumers must not infer a purpose
+or an occurrence from names, routes, dates or references.
 
 Model and Access `v1alpha6` add dataset and access-profile display inventories.
 Model also retains field display and module origins, and adds `authoring.documents`.

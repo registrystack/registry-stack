@@ -128,7 +128,12 @@ fn model_and_actions_share_the_compiled_definition_inspector() {
         assert!(relationship.get("targetEntityId").is_none());
     }
     let actions = explain("actions");
-    assert_eq!(actions["explanation"]["actions"], inspection["actions"]);
+    let mut inspected_actions = inspection["actions"].clone();
+    for action in inspected_actions.as_array_mut().unwrap() {
+        // Display grouping belongs to the model explanation only.
+        assert!(action.as_object_mut().unwrap().remove("grouping").is_some());
+    }
+    assert_eq!(actions["explanation"]["actions"], inspected_actions);
     assert!(actions["revision"].as_str().unwrap().starts_with("sha256:"));
     for action in actions["explanation"]["actions"].as_array().unwrap() {
         assert!(action["revision"].as_str().unwrap().starts_with("sha256:"));

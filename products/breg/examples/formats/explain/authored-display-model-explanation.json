@@ -107,6 +107,7 @@
           }
         }
       },
+      "grouping": null,
       "id": "register-entry",
       "inputs": [
         {
@@ -237,7 +238,7 @@
       "revision": "sha256:50148480ed74a0609df9d7a66a542007522705cfb17b1dd41181721f36f31d75"
     }
   ],
-  "apiVersion": "id.registrystack.org/formats/breg/model-explanation/v1alpha6",
+  "apiVersion": "id.registrystack.org/formats/breg/model-explanation/v1alpha7",
   "authoring": {
     "documents": [
       {
@@ -597,6 +598,7 @@
         }
       ],
       "geojson": null,
+      "grouping": null,
       "hooks": {
         "entry-created": {
           "display": {
@@ -620,6 +622,7 @@
       "moduleOrigins": {},
       "mutationMode": "create-only",
       "mutationPolicy": {},
+      "occurrence": null,
       "primaryDataset": "directory",
       "readPaths": {},
       "relationships": {},

@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://id.registrystack.org/schemas/breg/model-explanation/model-explanation.v1alpha6.schema.json",
+  "$id": "https://id.registrystack.org/schemas/breg/model-explanation/model-explanation.v1alpha7.schema.json",
   "title": "ModelExplanation",
   "description": "Wire shape of the native compiled model inspector and module closure.",
   "type": "object",
@@ -24,7 +24,7 @@
   ],
   "properties": {
     "apiVersion": {
-      "const": "id.registrystack.org/formats/breg/model-explanation/v1alpha6"
+      "const": "id.registrystack.org/formats/breg/model-explanation/v1alpha7"
     },
     "kind": {
       "const": "BRegModelExplanation"
@@ -96,7 +96,9 @@
           "readPaths",
           "hooks",
           "derivedRelations",
-          "moduleOrigins"
+          "moduleOrigins",
+          "grouping",
+          "occurrence"
         ],
         "properties": {
           "id": {
@@ -104,6 +106,26 @@
           },
           "revision": {
             "$ref": "#/$defs/Digest"
+          },
+          "grouping": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/$defs/RecordGrouping"
+              }
+            ]
+          },
+          "occurrence": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/$defs/Occurrence"
+              }
+            ]
           },
           "mutationMode": {
             "enum": [
@@ -276,6 +298,16 @@
           },
           "revision": {
             "$ref": "#/$defs/Digest"
+          },
+          "grouping": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/$defs/ActionGrouping"
+              }
+            ]
           },
           "inputs": {
             "type": "array",
@@ -553,6 +585,349 @@
         },
         "titleField": {
           "type": "string"
+        }
+      }
+    },
+    "RecordGrouping": {
+      "description": "Presentation-only grouping authored in a Record type's display.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "purpose",
+        "group"
+      ],
+      "properties": {
+        "purpose": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "enum": [
+                "domain",
+                "processing",
+                "technical"
+              ]
+            }
+          ]
+        },
+        "group": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "ActionGrouping": {
+      "description": "Presentation-only grouping authored in an Action's display.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "purpose",
+        "group"
+      ],
+      "properties": {
+        "purpose": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "enum": [
+                "domain",
+                "processing",
+                "technical",
+                "synthetic-seed"
+              ]
+            }
+          ]
+        },
+        "group": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "OccurrenceField": {
+      "description": "A stored field named by id and API name; `target` is present for a reference.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "apiName",
+        "type"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "apiName": {
+          "type": "string"
+        },
+        "type": {
+          "enum": [
+            "reference",
+            "string",
+            "text",
+            "date",
+            "timestamp",
+            "uuid",
+            "vocabulary-code"
+          ]
+        },
+        "target": {
+          "$ref": "#/$defs/LocalId"
+        }
+      }
+    },
+    "OccurrenceRole": {
+      "description": "A subject or source role. A native role references a record of this registry; an external role is an opaque identifier in the named namespace and is never resolved.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "role",
+        "kind",
+        "field"
+      ],
+      "properties": {
+        "role": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "label": {
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "native",
+            "external"
+          ]
+        },
+        "namespace": {
+          "type": "string"
+        },
+        "field": {
+          "$ref": "#/$defs/OccurrenceField"
+        }
+      }
+    },
+    "OccurrenceTime": {
+      "description": "A point, or an interval whose `end` is null when open.",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "at"
+          ],
+          "properties": {
+            "kind": {
+              "const": "point"
+            },
+            "at": {
+              "$ref": "#/$defs/OccurrenceField"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "meaning",
+            "start",
+            "end"
+          ],
+          "properties": {
+            "kind": {
+              "const": "interval"
+            },
+            "meaning": {
+              "enum": [
+                "span",
+                "within"
+              ]
+            },
+            "start": {
+              "$ref": "#/$defs/OccurrenceField"
+            },
+            "end": {
+              "oneOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "$ref": "#/$defs/OccurrenceField"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "Occurrence": {
+      "description": "A Record type's domain occurrence descriptor. It maps roles onto existing stored fields and adds no storage, endpoint or authority.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "descriptorVersion",
+        "label",
+        "subjects",
+        "summary",
+        "occurredAt",
+        "effective",
+        "sources",
+        "correction",
+        "sourceEventId",
+        "recordedTime"
+      ],
+      "properties": {
+        "descriptorVersion": {
+          "const": "1"
+        },
+        "label": {
+          "type": "string"
+        },
+        "subjects": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 16,
+          "items": {
+            "$ref": "#/$defs/OccurrenceRole"
+          }
+        },
+        "summary": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/OccurrenceField"
+            }
+          ]
+        },
+        "occurredAt": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/OccurrenceTime"
+            }
+          ]
+        },
+        "effective": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/OccurrenceTime"
+            }
+          ]
+        },
+        "sources": {
+          "type": "array",
+          "maxItems": 16,
+          "items": {
+            "$ref": "#/$defs/OccurrenceRole"
+          }
+        },
+        "correction": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "relation",
+                "field"
+              ],
+              "properties": {
+                "relation": {
+                  "enum": [
+                    "corrects",
+                    "supersedes"
+                  ]
+                },
+                "field": {
+                  "$ref": "#/$defs/OccurrenceField"
+                }
+              }
+            }
+          ]
+        },
+        "sourceEventId": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "field",
+                "namespace",
+                "namespaceField",
+                "duplicates",
+                "constraint"
+              ],
+              "properties": {
+                "field": {
+                  "$ref": "#/$defs/OccurrenceField"
+                },
+                "namespace": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "namespaceField": {
+                  "oneOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "$ref": "#/$defs/OccurrenceField"
+                    }
+                  ]
+                },
+                "duplicates": {
+                  "enum": [
+                    "reject",
+                    "allow"
+                  ]
+                },
+                "constraint": {
+                  "oneOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "$ref": "#/$defs/LocalId"
+                    }
+                  ]
+                }
+              }
+            }
+          ]
+        },
+        "recordedTime": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "source"
+          ],
+          "properties": {
+            "source": {
+              "const": "creation-revision"
+            }
+          }
         }
       }
     },

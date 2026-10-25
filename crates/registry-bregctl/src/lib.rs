@@ -8303,7 +8303,7 @@ struct ExplainFormat {
 }
 
 const MODEL_EXPLANATION: ExplainFormat = ExplainFormat {
-    api_version: "id.registrystack.org/formats/breg/model-explanation/v1alpha6",
+    api_version: "id.registrystack.org/formats/breg/model-explanation/v1alpha7",
     kind: "BRegModelExplanation",
 };
 const ACCESS_EXPLANATION: ExplainFormat = ExplainFormat {
@@ -9974,7 +9974,26 @@ fn explain_routes(compiled: &CompiledRegistry) -> serde_json::Result<Value> {
 }
 
 fn explain_actions(compiled: &CompiledRegistry) -> serde_json::Result<Value> {
-    Ok(registry_breg::artifacts::inspect_registry(compiled))
+    let mut inspection = registry_breg::artifacts::inspect_registry(compiled);
+    // Occurrence descriptors and display grouping are model-explanation members; the
+    // actions contract does not carry them.
+    for (collection, members) in [
+        ("actions", &["grouping"][..]),
+        ("recordTypes", &["grouping", "occurrence"][..]),
+    ] {
+        for item in inspection[collection]
+            .as_array_mut()
+            .expect("the registry inspection carries each collection as an array")
+        {
+            let item = item
+                .as_object_mut()
+                .expect("inspected collection items are objects");
+            for member in members {
+                item.remove(*member);
+            }
+        }
+    }
+    Ok(inspection)
 }
 
 fn explain_queries(compiled: &CompiledRegistry) -> serde_json::Result<Value> {
