@@ -3,14 +3,14 @@
   "correction": {
     "status": "unavailable"
   },
-  "descriptorVersion": "1",
+  "descriptorVersion": 1,
   "effective": {
     "at": {
       "status": "available",
       "type": "instant",
       "value": "2026-10-20T00:00:00+02:00"
     },
-    "kind": "point"
+    "type": "point"
   },
   "ignoredEvidence": [],
   "label": "Ownership transferred",
@@ -18,13 +18,13 @@
     "end": {
       "status": "declaredUnknown"
     },
-    "kind": "interval",
     "meaning": "within",
     "start": {
       "status": "available",
       "type": "date",
       "value": "2026-09-01"
-    }
+    },
+    "type": "interval"
   },
   "provenance": [],
   "recordedAt": {

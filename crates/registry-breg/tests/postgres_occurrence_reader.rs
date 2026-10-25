@@ -287,8 +287,8 @@ async fn one_reader_projects_three_schemas() {
             registration.clone(),
             "Entry registered",
             json!({
-                "occurredAt": {"kind": "point", "at": available("date", json!("2026-10-19"))},
-                "effective": {"kind": "point",
+                "occurredAt": {"type": "point", "at": available("date", json!("2026-10-19"))},
+                "effective": {"type": "point",
                     "at": available("instant", json!("2026-10-20T07:30:00+00:00"))},
             }),
             vec![("entry", entry.clone())],
@@ -300,8 +300,8 @@ async fn one_reader_projects_three_schemas() {
             decision.clone(),
             "Grant pause decided",
             json!({
-                "occurredAt": {"kind": "point", "at": available("date", json!("2026-10-21"))},
-                "effective": {"kind": "interval", "meaning": "span",
+                "occurredAt": {"type": "point", "at": available("date", json!("2026-10-21"))},
+                "effective": {"type": "interval", "meaning": "span",
                     "start": available("date", json!("2026-11-01")),
                     "end": {"status": "declaredUnknown"}},
             }),
@@ -314,10 +314,10 @@ async fn one_reader_projects_three_schemas() {
             handover,
             "Custody handed over",
             json!({
-                "occurredAt": {"kind": "interval", "meaning": "within",
+                "occurredAt": {"type": "interval", "meaning": "within",
                     "start": available("date", json!("2026-09-01")),
                     "end": {"status": "declaredUnknown"}},
-                "effective": {"kind": "point",
+                "effective": {"type": "point",
                     "at": available("instant", json!("2026-10-22T12:00:00+00:00"))},
             }),
             vec![
@@ -409,7 +409,7 @@ async fn one_reader_projects_three_schemas() {
         "{error:?}"
     );
     let mut unsupported = served;
-    unsupported["descriptorVersion"] = json!("2");
+    unsupported["descriptorVersion"] = json!(2);
     assert!(matches!(
         BRegOccurrenceDescriptor::from_value(&unsupported),
         Err(BRegOccurrenceError::UnsupportedVersion { .. })

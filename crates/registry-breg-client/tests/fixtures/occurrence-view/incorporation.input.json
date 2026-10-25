@@ -35,14 +35,14 @@
       },
       "relation": "corrects"
     },
-    "descriptorVersion": "1",
+    "descriptorVersion": 1,
     "effective": {
       "at": {
         "apiName": "effectiveAt",
         "id": "effective-at",
         "type": "timestamp"
       },
-      "kind": "point"
+      "type": "point"
     },
     "label": "Incorporation",
     "occurredAt": {
@@ -51,7 +51,7 @@
         "id": "occurred-on",
         "type": "date"
       },
-      "kind": "point"
+      "type": "point"
     },
     "recordedTime": {
       "source": "creation-revision"

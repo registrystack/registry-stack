@@ -1,13 +1,13 @@
 {
   "descriptor": {
-    "descriptorVersion": "1",
+    "descriptorVersion": 1,
     "effective": {
       "at": {
         "apiName": "effectiveAt",
         "id": "effective-at",
         "type": "timestamp"
       },
-      "kind": "point"
+      "type": "point"
     },
     "label": "Ownership transferred",
     "occurredAt": {
@@ -16,13 +16,13 @@
         "id": "agreed-before",
         "type": "date"
       },
-      "kind": "interval",
       "meaning": "within",
       "start": {
         "apiName": "agreedNotBefore",
         "id": "agreed-not-before",
         "type": "date"
-      }
+      },
+      "type": "interval"
     },
     "recordedTime": {
       "source": "creation-revision"

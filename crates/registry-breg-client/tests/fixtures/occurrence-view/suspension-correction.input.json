@@ -9,20 +9,20 @@
       },
       "relation": "corrects"
     },
-    "descriptorVersion": "1",
+    "descriptorVersion": 1,
     "effective": {
       "end": {
         "apiName": "effectiveUntil",
         "id": "effective-until",
         "type": "date"
       },
-      "kind": "interval",
       "meaning": "span",
       "start": {
         "apiName": "effectiveFrom",
         "id": "effective-from",
         "type": "date"
-      }
+      },
+      "type": "interval"
     },
     "label": "Suspension decided",
     "occurredAt": {
@@ -31,7 +31,7 @@
         "id": "decided-on",
         "type": "date"
       },
-      "kind": "point"
+      "type": "point"
     },
     "recordedTime": {
       "source": "creation-revision"

@@ -2472,14 +2472,14 @@ async fn occurrence_metadata_is_caller_filtered() {
     assert_eq!(
         find(full_types, "decision").expect("decision is visible")["occurrence"],
         json!({
-            "descriptorVersion": "1",
+            "descriptorVersion": 1,
             "label": "Decision recorded",
             "subjects": [{"role": "item", "label": "Item", "kind": "native",
                 "field": {"id": "item", "apiName": "item", "type": "reference", "target": "item"}}],
             "summary": {"id": "summary", "apiName": "summary", "type": "text"},
-            "occurredAt": {"kind": "point",
+            "occurredAt": {"type": "point",
                 "at": {"id": "decided-on", "apiName": "decidedOn", "type": "date"}},
-            "effective": {"kind": "interval", "meaning": "span",
+            "effective": {"type": "interval", "meaning": "span",
                 "start": {"id": "effective-from", "apiName": "effectiveFrom", "type": "date"},
                 "end": {"id": "effective-until", "apiName": "effectiveUntil", "type": "date"}},
             "sources": [{"role": "basis", "label": "Basis", "kind": "external",
@@ -2510,11 +2510,11 @@ async fn occurrence_metadata_is_caller_filtered() {
     assert_eq!(
         decision["occurrence"],
         json!({
-            "descriptorVersion": "1",
+            "descriptorVersion": 1,
             "label": "Decision recorded",
             "subjects": [{"role": "item", "label": "Item", "kind": "native",
                 "field": {"id": "item", "apiName": "item", "type": "reference"}}],
-            "occurredAt": {"kind": "point",
+            "occurredAt": {"type": "point",
                 "at": {"id": "decided-on", "apiName": "decidedOn", "type": "date"}},
             "sources": [],
             "recordedTime": {"source": "creation-revision"}

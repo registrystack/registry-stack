@@ -41,14 +41,14 @@ fn three_occurrence_shapes_and_an_ordinary_record_compile() {
     assert_eq!(
         occurrence_json(&registry, "entry-registration"),
         json!({
-            "descriptorVersion": "1",
+            "descriptorVersion": 1,
             "label": "Entry registered",
             "subjects": [{"role": "entry", "label": "Entry", "kind": "native",
                 "field": {"id": "entry", "apiName": "entry", "type": "reference", "target": "entry"}}],
             "summary": {"id": "summary", "apiName": "summary", "type": "text"},
-            "occurredAt": {"kind": "point",
+            "occurredAt": {"type": "point",
                 "at": {"id": "occurred-on", "apiName": "occurredOn", "type": "date"}},
-            "effective": {"kind": "point",
+            "effective": {"type": "point",
                 "at": {"id": "effective-at", "apiName": "effectiveAt", "type": "timestamp"}},
             "sources": [{"role": "source", "label": "Source", "kind": "external",
                 "namespace": "urn:example:synthetic:sources",
@@ -68,14 +68,14 @@ fn three_occurrence_shapes_and_an_ordinary_record_compile() {
     assert_eq!(
         occurrence_json(&registry, "grant-pause-decision"),
         json!({
-            "descriptorVersion": "1",
+            "descriptorVersion": 1,
             "label": "Grant pause decided",
             "subjects": [{"role": "grant", "label": "Grant", "kind": "native",
                 "field": {"id": "grant", "apiName": "grant", "type": "reference", "target": "grant"}}],
             "summary": {"id": "summary", "apiName": "summary", "type": "text"},
-            "occurredAt": {"kind": "point",
+            "occurredAt": {"type": "point",
                 "at": {"id": "decided-on", "apiName": "decidedOn", "type": "date"}},
-            "effective": {"kind": "interval", "meaning": "span",
+            "effective": {"type": "interval", "meaning": "span",
                 "start": {"id": "effective-from", "apiName": "effectiveFrom", "type": "date"},
                 "end": {"id": "effective-until", "apiName": "effectiveUntil", "type": "date"}},
             "sources": [{"role": "basis", "label": "Basis", "kind": "external",
@@ -91,7 +91,7 @@ fn three_occurrence_shapes_and_an_ordinary_record_compile() {
     assert_eq!(
         occurrence_json(&registry, "custody-handover"),
         json!({
-            "descriptorVersion": "1",
+            "descriptorVersion": 1,
             "label": "Custody handed over",
             "subjects": [
                 {"role": "item", "label": "Item", "kind": "native",
@@ -104,10 +104,10 @@ fn three_occurrence_shapes_and_an_ordinary_record_compile() {
                         "type": "reference", "target": "custody-record"}}
             ],
             "summary": null,
-            "occurredAt": {"kind": "interval", "meaning": "within",
+            "occurredAt": {"type": "interval", "meaning": "within",
                 "start": {"id": "agreed-not-before", "apiName": "agreedNotBefore", "type": "date"},
                 "end": {"id": "agreed-before", "apiName": "agreedBefore", "type": "date"}},
-            "effective": {"kind": "point",
+            "effective": {"type": "point",
                 "at": {"id": "effective-at", "apiName": "effectiveAt", "type": "timestamp"}},
             "sources": [{"role": "deed", "label": "Deed", "kind": "external",
                 "namespace": "urn:example:synthetic:deeds",
@@ -711,7 +711,7 @@ fn a_valid_occurrence_with_every_member_family_compiles() {
          sourceEventId: {field: ext-id, namespaceField: ns-code, duplicates: reject, constraint: u-ext-ns}}",
     );
     let descriptor = occurrence_json(&registry, "event");
-    assert_eq!(descriptor["effective"]["kind"], "interval");
+    assert_eq!(descriptor["effective"]["type"], "interval");
     assert_eq!(descriptor["effective"]["end"], Value::Null);
     assert_eq!(descriptor["correction"]["relation"], "supersedes");
     assert_eq!(

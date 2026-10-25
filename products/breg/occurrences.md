@@ -96,6 +96,10 @@ that the source exists or supports the statement.
 `effective` is span-only: it has no `meaning` member, and its `end` is optional
 for an open-ended effect.
 
+These are authored as flat members, with no tag. Where the explanation, the
+runtime metadata and the client view serve a time, a `type` member names the
+shape (`point` or `interval`) beside that shape's members.
+
 Rules that follow from this:
 
 - A null value in a mapped field means declared but unknown. The compiler does
@@ -220,7 +224,7 @@ type, filtered for the caller and profile. `metadataVersion` stays `"2"`; the
 member is additive and ignorable.
 
 - No `occurrence` member when the record type declares none.
-- `descriptorVersion` (`"1"`), `label` and `recordedTime` (`{source:
+- `descriptorVersion` (the integer `1`), `label` and `recordedTime` (`{source:
   creation-revision}`) are always present for a declaring, visible record type.
 - A subject or source item is omitted when its field is not readable by the
   profile. The lists may become empty.
@@ -269,7 +273,7 @@ which the client tests hold to the projection output.
 
 The view carries these members:
 
-- `contract`, `descriptorVersion` (`"1"`) and `registryRevision`, the revision
+- `contract`, `descriptorVersion` (the integer `1`) and `registryRevision`, the revision
   of the metadata that supplied the descriptor.
 - `source`: `recordType`, `recordId` and `revision` of the projected record
   revision.
@@ -278,9 +282,9 @@ The view carries these members:
   and `value`. A role whose kind this client does not know has no `kind` and no
   `namespace`, and its `value` is `unsupported`.
 - `summary`, `occurredAt`, `effective`, `correction` and `sourceEventId`. Each
-  is `unavailable` when the descriptor does not declare it. A time is a
-  `point` (`at`) or an `interval` (`meaning` `span` or `within`, `start`,
-  `end`). A correction names `relation` (`corrects` or `supersedes`) and a
+  is `unavailable` when the descriptor does not declare it. A time names its
+  shape in `type`: `point` (`at`) or `interval` (`meaning` `span` or `within`,
+  `start`, `end`). A correction names `relation` (`corrects` or `supersedes`) and a
   `reference` value. A source event identifier names `namespace`, `value` and
   `duplicates` (`reject` or `allow`).
 - `recordedAt` and `recordedAtSource`. Recorded time is `available` only when
@@ -306,7 +310,7 @@ degrades one member instead of failing the whole view.
 
 The reader refuses with a closed set of error codes, none of which carries a
 record value: `not-an-occurrence` (the record type declares no occurrence),
-`unsupported-version` (a descriptor version other than `"1"`),
+`unsupported-version` (a descriptor version other than the integer `1`),
 `malformed-descriptor`, `wrong-record-evidence` (evidence or a creation
 revision that belongs to another record, or a malformed identifier, revision or
 proposal application time), `revision-mismatch`, `incompatible-metadata` (a

@@ -992,7 +992,7 @@ pub struct CompiledGrouping {
 }
 
 /// The descriptor version this compiler emits.
-pub const OCCURRENCE_DESCRIPTOR_VERSION: &str = "1";
+pub const OCCURRENCE_DESCRIPTOR_VERSION: u64 = 1;
 
 /// A record type's occurrence mapping with every field resolved once. The
 /// serialized form is the descriptor shown in the model explanation; runtime
@@ -1000,7 +1000,7 @@ pub const OCCURRENCE_DESCRIPTOR_VERSION: &str = "1";
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct CompiledOccurrence {
-    pub descriptor_version: String,
+    pub descriptor_version: u64,
     pub label: String,
     pub subjects: Vec<CompiledOccurrenceRole>,
     pub summary: Option<CompiledOccurrenceField>,
@@ -1076,7 +1076,7 @@ impl OccurrenceValueType {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
+#[serde(tag = "type", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum CompiledOccurrenceTime {
     Point {
         at: CompiledOccurrenceField,

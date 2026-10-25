@@ -615,7 +615,7 @@ pub(crate) fn compile(
             .or_else(|| entity.display.label.clone())
             .unwrap_or_else(|| entity.id.clone());
         let compiled = CompiledOccurrence {
-            descriptor_version: OCCURRENCE_DESCRIPTOR_VERSION.to_owned(),
+            descriptor_version: OCCURRENCE_DESCRIPTOR_VERSION,
             label,
             subjects: compiled_roles(entity, &occurrence.subjects),
             summary: occurrence

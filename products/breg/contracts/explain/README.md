@@ -47,8 +47,10 @@ report an empty list.
 Model `v1alpha7` adds `recordTypes[].occurrence`, `recordTypes[].grouping` and
 `actions[].grouping`. `occurrence` is `null` unless the Record type declares a
 domain occurrence; otherwise it is the resolved descriptor (`descriptorVersion`
-`"1"`) naming the stored fields that say what a row is about, when it happened,
-when it takes effect, what it was recorded from and what it corrects. Undeclared
+`1`, an integer) naming the stored fields that say what a row is about, when it
+happened, when it takes effect, what it was recorded from and what it corrects.
+A declared `occurredAt` or `effective` names its shape in `type` (`point` or
+`interval`) beside that shape's members. Undeclared
 `summary`, `occurredAt`, `effective`, `correction` and `sourceEventId` are
 explicit `null`, as are an interval's open `end` and a `sourceEventId`'s unset
 `namespace`, `namespaceField` and `constraint`. A role's `label`, a native

@@ -51,7 +51,7 @@ class OccurrenceViewTests(unittest.TestCase):
 
     def test_refusals_are_described_occurrence_failures(self) -> None:
         arguments = fixture("incorporation.input.json")
-        arguments["descriptor"]["descriptorVersion"] = "2"
+        arguments["descriptor"]["descriptorVersion"] = 2
         with self.assertRaises(BaseRegistryClientError) as caught:
             occurrence_view(arguments)
         self.assertEqual(caught.exception.kind, "occurrence")

@@ -720,11 +720,11 @@
           "type": "object",
           "additionalProperties": false,
           "required": [
-            "kind",
+            "type",
             "at"
           ],
           "properties": {
-            "kind": {
+            "type": {
               "const": "point"
             },
             "at": {
@@ -736,13 +736,13 @@
           "type": "object",
           "additionalProperties": false,
           "required": [
-            "kind",
+            "type",
             "meaning",
             "start",
             "end"
           ],
           "properties": {
-            "kind": {
+            "type": {
               "const": "interval"
             },
             "meaning": {
@@ -786,7 +786,8 @@
       ],
       "properties": {
         "descriptorVersion": {
-          "const": "1"
+          "type": "integer",
+          "const": 1
         },
         "label": {
           "type": "string"

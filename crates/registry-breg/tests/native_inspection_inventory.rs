@@ -734,7 +734,7 @@ fn model_retains_occurrence_descriptor_and_display_grouping() {
     validates("model", with_modules);
 
     let registration = definition(&model["recordTypes"], "entry-registration");
-    assert_eq!(registration["occurrence"]["descriptorVersion"], "1");
+    assert_eq!(registration["occurrence"]["descriptorVersion"], 1);
     assert_eq!(registration["occurrence"]["label"], "Entry registered");
     assert_eq!(
         registration["occurrence"]["recordedTime"],

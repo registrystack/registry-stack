@@ -622,7 +622,7 @@ pub(super) fn occurrence_metadata(
     let time = |time: &crate::model::CompiledOccurrenceTime| match time {
         crate::model::CompiledOccurrenceTime::Point { at } => readable
             .contains(&at.id)
-            .then(|| json!({"kind": "point", "at": field(at)})),
+            .then(|| json!({"type": "point", "at": field(at)})),
         crate::model::CompiledOccurrenceTime::Interval {
             meaning,
             start,
@@ -632,7 +632,7 @@ pub(super) fn occurrence_metadata(
                 && end.as_ref().is_none_or(|end| readable.contains(&end.id));
             bounds_readable.then(|| {
                 let mut value =
-                    json!({"kind": "interval", "meaning": meaning, "start": field(start)});
+                    json!({"type": "interval", "meaning": meaning, "start": field(start)});
                 if let Some(end) = end {
                     value["end"] = field(end);
                 }
@@ -741,14 +741,14 @@ mod tests {
         assert_eq!(
             value,
             json!({
-                "descriptorVersion": "1",
+                "descriptorVersion": 1,
                 "label": "Entry registered",
                 "subjects": [{"role": "entry", "label": "Entry", "kind": "native",
                     "field": {"id": "entry", "apiName": "entry", "type": "reference", "target": "entry"}}],
                 "summary": {"id": "summary", "apiName": "summary", "type": "text"},
-                "occurredAt": {"kind": "point",
+                "occurredAt": {"type": "point",
                     "at": {"id": "occurred-on", "apiName": "occurredOn", "type": "date"}},
-                "effective": {"kind": "point",
+                "effective": {"type": "point",
                     "at": {"id": "effective-at", "apiName": "effectiveAt", "type": "timestamp"}},
                 "sources": [{"role": "source", "label": "Source", "kind": "external",
                     "namespace": "urn:example:synthetic:sources",
@@ -772,7 +772,7 @@ mod tests {
         assert_eq!(
             value,
             json!({
-                "descriptorVersion": "1",
+                "descriptorVersion": 1,
                 "label": "Entry registered",
                 "subjects": [],
                 "sources": [],
@@ -824,7 +824,7 @@ mod tests {
             )
         };
         let both = readable(&["effective-from", "effective-until"]);
-        assert_eq!(both["effective"]["kind"], "interval");
+        assert_eq!(both["effective"]["type"], "interval");
         assert_eq!(both["effective"]["start"]["id"], "effective-from");
         assert_eq!(both["effective"]["end"]["id"], "effective-until");
         assert!(readable(&["effective-from"]).get("effective").is_none());
