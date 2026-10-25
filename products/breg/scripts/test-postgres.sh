@@ -124,10 +124,10 @@ postgres_targets=(
   postgres_history_migration
   postgres_immediate_action_examples
   postgres_immediate_action_activation
-  postgres_occurrence_examples
-  postgres_occurrence_reader
   postgres_consent_examples
   postgres_registry_extensibility
+  postgres_occurrence_examples
+  postgres_occurrence_reader
   postgres_action_handlers
   postgres_field_encryption
   postgres_generated_identifier_batch_import
