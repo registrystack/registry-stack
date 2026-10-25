@@ -64,7 +64,7 @@ fn validates(subject: &str, mut value: Value) {
         "model" => (
             include_str!("../../../products/breg/contracts/explain/ModelExplanation.schema.json"),
             "BRegModelExplanation",
-            "v1alpha6",
+            "v1alpha7",
         ),
         "actions" => (
             include_str!("../../../products/breg/contracts/explain/ActionsExplanation.schema.json"),
@@ -83,6 +83,12 @@ fn validates(subject: &str, mut value: Value) {
         ),
         _ => unreachable!(),
     };
+    if subject == "actions" {
+        // Display grouping is a model-explanation member; the actions explanation omits it.
+        for action in value["actions"].as_array_mut().unwrap() {
+            action.as_object_mut().unwrap().remove("grouping");
+        }
+    }
     if subject == "model" {
         // The CLI adds source presence; this test covers the compiler projection.
         value["authoring"] = json!({"documents":[{
@@ -363,7 +369,11 @@ fn function_ceilings_fixed_clears_and_literal_null_remain_distinct() {
         );
     }
     let access = serde_json::to_value(registry_breg::access::explain_access(&registry)).unwrap();
-    assert_eq!(access["actions"]["actions"], model["actions"]);
+    let mut model_actions = model["actions"].clone();
+    for action in model_actions.as_array_mut().unwrap() {
+        action.as_object_mut().unwrap().remove("grouping");
+    }
+    assert_eq!(access["actions"]["actions"], model_actions);
     assert!(!function["permissions"].as_array().unwrap().is_empty());
     let public: Value = serde_json::from_slice(
         &registry
@@ -701,4 +711,72 @@ fn omitted_project_display_and_review_authorities_keep_empty_artifact_shape() {
     assert!(effective.get("reviewAuthorities").is_none());
     assert_eq!(inspect_registry(&registry)["display"], json!({}));
     assert_eq!(inspect_registry(&registry)["reviewAuthorities"], json!([]));
+}
+
+#[test]
+fn model_retains_occurrence_descriptor_and_display_grouping() {
+    let source = registry_platform_yaml::Reader::new("registry.yaml")
+        .scan(include_bytes!(
+            "fixtures/occurrence/shapes.yaml"
+        ))
+        .unwrap()
+        .unwrap()
+        .to_json_value();
+    let registry = registry_breg::compiler::compile_project(
+        &parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap(),
+        &[],
+        CompileProfile::Authoring,
+    )
+    .unwrap();
+    let model = inspect_registry(&registry);
+    let mut with_modules = model.clone();
+    with_modules["version"] = json!(registry.version());
+    with_modules["moduleOrder"] = json!(registry.module_order());
+    with_modules["moduleClosure"] = json!(registry.module_closure());
+    validates("model", with_modules);
+
+    let registration = definition(&model["recordTypes"], "entry-registration");
+    assert_eq!(registration["occurrence"]["descriptorVersion"], "1");
+    assert_eq!(registration["occurrence"]["label"], "Entry registered");
+    assert_eq!(
+        registration["occurrence"]["recordedTime"],
+        json!({"source": "creation-revision"})
+    );
+    assert_eq!(
+        registration["grouping"],
+        json!({"group": "Register", "purpose": "domain"})
+    );
+
+    let ordinary = definition(&model["recordTypes"], "entry");
+    assert_eq!(
+        ordinary["occurrence"],
+        Value::Null,
+        "an undeclared descriptor is an explicit null in the author view"
+    );
+    assert_eq!(
+        definition(&model["recordTypes"], "review-note")["grouping"],
+        json!({"group": "Register", "purpose": "processing"})
+    );
+    assert_eq!(
+        definition(&model["actions"], "seed-demonstration-entries")["grouping"],
+        json!({"group": "Demonstration data", "purpose": "synthetic-seed"})
+    );
+    for action in model["actions"].as_array().unwrap() {
+        assert!(
+            action.as_object().unwrap().contains_key("grouping"),
+            "every model action carries a grouping key: {}",
+            action["id"]
+        );
+    }
+
+    let grouped = registry
+        .actions()
+        .actions
+        .iter()
+        .find(|action| action.id == "seed-demonstration-entries")
+        .unwrap();
+    assert!(
+        inspect_action(grouped).get("grouping").is_none(),
+        "grouping is added around inspect_action, not inside it"
+    );
 }

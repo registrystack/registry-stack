@@ -4162,7 +4162,7 @@
       "description": "Base Registry Engine portable Action contract export schema, reproduced from the canonical compiled project.",
       "source": {
         "path": "crates/registry-breg/src/artifacts.rs",
-        "sha256": "ae7b5a80d551d09443eeafc558193bceba0e8dba2056109628f65faf6e464f83"
+        "sha256": "b36ee937859293bac226dd16d53c869f5ac21a1249aa2dd0855b99bc0cfd333d"
       },
       "artifact": {
         "path": "products/breg/generated/facility/generated/action-contracts.schema.json",
@@ -4333,20 +4333,20 @@
       }
     },
     {
-      "uri": "https://id.registrystack.org/schemas/breg/model-explanation/model-explanation.v1alpha6.schema.json",
+      "uri": "https://id.registrystack.org/schemas/breg/model-explanation/model-explanation.v1alpha7.schema.json",
       "kind": "schema",
       "status": "active",
-      "compatibilityLine": "v1alpha6",
+      "compatibilityLine": "v1alpha7",
       "owner": "breg",
       "title": "ModelExplanation",
       "description": "Base Registry Engine bregctl explain output JSON Schemas, written by hand and held to bregctl's output by its contract test.",
       "source": {
         "path": "products/breg/contracts/explain/ModelExplanation.schema.json",
-        "sha256": "dc11c8afacefd122e8568335b92a82ca255153c8366dda7dc77bf6dd6edc01b0"
+        "sha256": "c5c7939e3bcd0383617cf74f81c0ad49a85e2e7868779225724418529a20cd57"
       },
       "artifact": {
         "path": "products/breg/contracts/explain/ModelExplanation.schema.json",
-        "sha256": "dc11c8afacefd122e8568335b92a82ca255153c8366dda7dc77bf6dd6edc01b0",
+        "sha256": "c5c7939e3bcd0383617cf74f81c0ad49a85e2e7868779225724418529a20cd57",
         "mediaType": "application/schema+json"
       }
     },

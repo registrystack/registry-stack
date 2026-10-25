@@ -1086,17 +1086,17 @@ formats:
     audience: generated
     stability: promised
     current:
-      apiVersion: id.registrystack.org/formats/breg/model-explanation/v1alpha6
+      apiVersion: id.registrystack.org/formats/breg/model-explanation/v1alpha7
       kind: BRegModelExplanation
       checkedBy:
         file: crates/registry-bregctl/src/lib.rs
         symbol: MODEL_EXPLANATION
     target:
-      apiVersion: id.registrystack.org/formats/breg/model-explanation/v1alpha6
+      apiVersion: id.registrystack.org/formats/breg/model-explanation/v1alpha7
       kind: BRegModelExplanation
     schema:
       path: products/breg/contracts/explain/ModelExplanation.schema.json
-      id: https://id.registrystack.org/schemas/breg/model-explanation/model-explanation.v1alpha6.schema.json
+      id: https://id.registrystack.org/schemas/breg/model-explanation/model-explanation.v1alpha7.schema.json
       origin: hand-written
       differentialTest: crates/registry-bregctl/tests/explain_contract.rs
     reader: none

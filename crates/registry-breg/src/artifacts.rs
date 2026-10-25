@@ -658,6 +658,7 @@ pub fn inspect_registry(registry: &crate::model::CompiledRegistry) -> Value {
             json!({
                 "id": record_type.id, "apiName": record_type.api_name,
                 "revision": record_type.definition_revision, "display": record_type.display,
+                "grouping": record_type.grouping, "occurrence": record_type.occurrence,
                 "sourceModule": record_type.source_module,
                 "moduleOrigins": record_type.module_origins,
                 "primaryDataset": record_type.primary_dataset, "route": record_type.route,
@@ -708,7 +709,11 @@ pub fn inspect_registry(registry: &crate::model::CompiledRegistry) -> Value {
         "datasets": registry.datasets(), "accessProfiles": registry.access_profile_displays(),
         "recordTypes": record_types,
         "statisticalDatasets": registry.statistical_datasets().values().collect::<Vec<_>>(),
-        "actions": registry.actions().actions.iter().map(inspect_action).collect::<Vec<_>>()})
+        "actions": registry.actions().actions.iter().map(|action| {
+            let mut value = inspect_action(action);
+            value["grouping"] = json!(action.grouping);
+            value
+        }).collect::<Vec<_>>()})
 }
 
 pub(crate) fn openapi_action_input_schema_id(action_id: &str) -> String {

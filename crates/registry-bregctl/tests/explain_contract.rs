@@ -27,7 +27,7 @@ const ACCESS_SCENARIOS: &[(&str, &str)] = &[
 fn envelope(contract: &str) -> (&'static str, &'static str) {
     match contract {
         "ModelExplanation" => (
-            "id.registrystack.org/formats/breg/model-explanation/v1alpha6",
+            "id.registrystack.org/formats/breg/model-explanation/v1alpha7",
             "BRegModelExplanation",
         ),
         "AccessExplanation" => (
@@ -438,6 +438,92 @@ fn model_field_types_describe_unprojected_text_without_a_query_join() {
         .unwrap()
         .remove("fieldType");
     assert!(!schema.is_valid(&missing));
+}
+
+#[test]
+fn model_explanation_carries_occurrence_descriptor_and_display_grouping() {
+    let project = tempfile::tempdir().unwrap();
+    std::fs::copy(
+        repo_root().join("crates/registry-breg/tests/fixtures/occurrence/shapes.yaml"),
+        project.path().join("registry.yaml"),
+    )
+    .unwrap();
+    let model = explain("model", project.path());
+    assert_matches_contract("occurrence shapes", "ModelExplanation", &model);
+
+    let records = model["recordTypes"].as_array().unwrap();
+    let record = |id: &str| records.iter().find(|record| record["id"] == id).unwrap();
+    let registration = record("entry-registration");
+    assert_eq!(registration["occurrence"]["descriptorVersion"], "1");
+    assert_eq!(registration["occurrence"]["label"], "Entry registered");
+    assert_eq!(
+        registration["occurrence"]["subjects"][0]["field"]["target"],
+        "entry"
+    );
+    assert_eq!(
+        registration["grouping"],
+        json!({"group": "Register", "purpose": "domain"})
+    );
+    assert_eq!(record("entry")["occurrence"], Value::Null);
+    assert_eq!(
+        record("review-note")["grouping"]["purpose"],
+        "processing"
+    );
+    let seed = model["actions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|action| action["id"] == "seed-demonstration-entries")
+        .unwrap();
+    assert_eq!(
+        seed["grouping"],
+        json!({"group": "Demonstration data", "purpose": "synthetic-seed"})
+    );
+
+    // The actions explanation carries neither grouping nor occurrence descriptors.
+    let actions = explain("actions", project.path());
+    assert!(actions["actions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|action| action.get("grouping").is_none()));
+    assert!(actions["recordTypes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|record| record.get("grouping").is_none() && record.get("occurrence").is_none()));
+
+    let schema = load_schema("ModelExplanation");
+    let index = records
+        .iter()
+        .position(|record| record["id"] == "entry-registration")
+        .unwrap();
+    let mut invalid = Vec::new();
+    let mut missing = model.clone();
+    missing["recordTypes"][index]
+        .as_object_mut()
+        .unwrap()
+        .remove("occurrence");
+    invalid.push(("occurrence is required on a record type", missing));
+    let mut extra_member = model.clone();
+    extra_member["recordTypes"][index]["occurrence"]["recordedAt"] = json!("now");
+    invalid.push(("an unknown descriptor member", extra_member));
+    let mut bad_purpose = model.clone();
+    bad_purpose["recordTypes"][index]["grouping"]["purpose"] = json!("archival");
+    invalid.push(("an unknown display purpose", bad_purpose));
+    let mut bad_time = model.clone();
+    bad_time["recordTypes"][index]["occurrence"]["recordedTime"]["source"] = json!("wall-clock");
+    invalid.push(("an unknown recorded-time source", bad_time));
+    let mut bad_meaning = model.clone();
+    bad_meaning["recordTypes"][index]["occurrence"]["occurredAt"] = json!({
+        "kind": "interval", "meaning": "around",
+        "start": {"id": "a", "apiName": "a", "type": "date"},
+        "end": {"id": "b", "apiName": "b", "type": "date"}
+    });
+    invalid.push(("an unknown interval meaning", bad_meaning));
+    for (label, changed) in invalid {
+        assert!(!schema.is_valid(&changed), "{label} is refused");
+    }
 }
 
 #[test]
