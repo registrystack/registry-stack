@@ -62,8 +62,9 @@ recordTypes:
 | `correction` | no | A reference to an earlier occurrence record this one corrects or supersedes. |
 | `sourceEventId` | no | An identifier assigned by the originating system, with its namespace and a duplicate policy. |
 
-Subjects and sources share one role namespace. A role is a lowercase kebab-case
-identifier, unique across both lists. A role item maps either:
+Subjects and sources share one role namespace. A role starts with a lowercase
+letter, contains only lowercase letters, digits, hyphens and underscores, is at
+most 64 characters, and is unique across both lists. A role item maps either:
 
 - a `reference` field (a native relationship; optional `target` asserts the
   referenced record type), or

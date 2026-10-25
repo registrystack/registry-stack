@@ -200,7 +200,7 @@ impl Checker<'_> {
                     "breg.occurrence.role-invalid",
                     format!("{}.{list}[{index}].role", self.base),
                     format!(
-                        "role \"{}\" must be a lowercase kebab-case identifier",
+                        "role \"{}\" must start with a lowercase letter and contain only lowercase letters, digits, hyphens and underscores, at most 64 characters",
                         item.role
                     ),
                 );
@@ -512,17 +512,22 @@ fn validate_entity(
         &format!("{}.label", checker.base),
         checker.errors,
     );
-    for (index, item) in occurrence.subjects.iter().enumerate() {
-        let address = if valid_role(&item.role) {
-            format!("[role={}]", item.role)
-        } else {
-            format!("[{index}]")
-        };
-        crate::compiler::validate_display_text_at(
-            item.label.as_deref(),
-            &format!("{}.subjects{address}.label", checker.base),
-            checker.errors,
-        );
+    for (list, roles) in [
+        ("subjects", &occurrence.subjects),
+        ("sources", &occurrence.sources),
+    ] {
+        for (index, item) in roles.iter().enumerate() {
+            let address = if valid_role(&item.role) {
+                format!("[role={}]", item.role)
+            } else {
+                format!("[{index}]")
+            };
+            crate::compiler::validate_display_text_at(
+                item.label.as_deref(),
+                &format!("{}.{list}{address}.label", checker.base),
+                checker.errors,
+            );
+        }
     }
 }
 

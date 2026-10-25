@@ -261,7 +261,7 @@ fn invalid_mappings_fail_at_authored_paths() {
             vec![error(
                 "breg.occurrence.role-invalid",
                 ".subjects[0].role",
-                "role \"Bad_Role\" must be a lowercase kebab-case identifier",
+                "role \"Bad_Role\" must start with a lowercase letter and contain only lowercase letters, digits, hyphens and underscores, at most 64 characters",
             )],
         ),
         (
@@ -830,6 +830,7 @@ fn directly_constructed_occurrence_and_group_text_is_validated() {
     let occurrence = registration.occurrence.as_mut().unwrap();
     occurrence.label = Some(unsafe_text.clone());
     occurrence.subjects[0].label = Some(unsafe_text.clone());
+    occurrence.sources[0].label = Some(unsafe_text.clone());
     let action = project
         .actions
         .iter_mut()
@@ -851,6 +852,7 @@ fn directly_constructed_occurrence_and_group_text_is_validated() {
         vec![
             "actions[id=record-grant-pause].display.group",
             "recordTypes[id=entry-registration].occurrence.label",
+            "recordTypes[id=entry-registration].occurrence.sources[role=source].label",
             "recordTypes[id=entry-registration].occurrence.subjects[role=entry].label",
             "recordTypes[id=entry].display.group",
         ]
