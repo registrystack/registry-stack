@@ -454,7 +454,7 @@ fn model_explanation_carries_occurrence_descriptor_and_display_grouping() {
     let records = model["recordTypes"].as_array().unwrap();
     let record = |id: &str| records.iter().find(|record| record["id"] == id).unwrap();
     let registration = record("entry-registration");
-    assert_eq!(registration["occurrence"]["descriptorVersion"], "1");
+    assert_eq!(registration["occurrence"]["descriptorVersion"], 1);
     assert_eq!(registration["occurrence"]["label"], "Entry registered");
     assert_eq!(
         registration["occurrence"]["subjects"][0]["field"]["target"],
@@ -513,7 +513,7 @@ fn model_explanation_carries_occurrence_descriptor_and_display_grouping() {
     invalid.push(("an unknown recorded-time source", bad_time));
     let mut bad_meaning = model.clone();
     bad_meaning["recordTypes"][index]["occurrence"]["occurredAt"] = json!({
-        "kind": "interval", "meaning": "around",
+        "type": "interval", "meaning": "around",
         "start": {"id": "a", "apiName": "a", "type": "date"},
         "end": {"id": "b", "apiName": "b", "type": "date"}
     });

@@ -53,13 +53,13 @@ fn field_ref(id: &str, api_name: &str, value_type: &str, target: Option<&str>) -
 
 fn incorporation_descriptor() -> Value {
     json!({
-        "descriptorVersion": "1",
+        "descriptorVersion": 1,
         "label": "Incorporation",
         "subjects": [{"role": "company", "label": "Company", "kind": "native",
             "field": field_ref("company", "company", "reference", Some("company"))}],
         "summary": field_ref("summary", "summary", "text", None),
-        "occurredAt": {"kind": "point", "at": field_ref("occurred-on", "occurredOn", "date", None)},
-        "effective": {"kind": "point", "at": field_ref("effective-at", "effectiveAt", "timestamp", None)},
+        "occurredAt": {"type": "point", "at": field_ref("occurred-on", "occurredOn", "date", None)},
+        "effective": {"type": "point", "at": field_ref("effective-at", "effectiveAt", "timestamp", None)},
         "sources": [{"role": "application", "label": "Application", "kind": "external",
             "namespace": "urn:example:synthetic:applications",
             "field": field_ref("application-reference", "applicationReference", "string", None)}],
@@ -78,12 +78,12 @@ fn incorporation_descriptor() -> Value {
 /// summary: undeclared and withheld members are both omitted.
 fn suspension_descriptor() -> Value {
     json!({
-        "descriptorVersion": "1",
+        "descriptorVersion": 1,
         "label": "Suspension decided",
         "subjects": [{"role": "permit", "label": "Permit", "kind": "native",
             "field": field_ref("permit", "permit", "reference", Some("permit"))}],
-        "occurredAt": {"kind": "point", "at": field_ref("decided-on", "decidedOn", "date", None)},
-        "effective": {"kind": "interval", "meaning": "span",
+        "occurredAt": {"type": "point", "at": field_ref("decided-on", "decidedOn", "date", None)},
+        "effective": {"type": "interval", "meaning": "span",
             "start": field_ref("effective-from", "effectiveFrom", "date", None),
             "end": field_ref("effective-until", "effectiveUntil", "date", None)},
         "sources": [],
@@ -95,7 +95,7 @@ fn suspension_descriptor() -> Value {
 
 fn transfer_descriptor() -> Value {
     json!({
-        "descriptorVersion": "1",
+        "descriptorVersion": 1,
         "label": "Ownership transferred",
         "subjects": [
             {"role": "asset", "label": "Asset", "kind": "native",
@@ -105,10 +105,10 @@ fn transfer_descriptor() -> Value {
             {"role": "new-ownership", "label": "New ownership", "kind": "native",
                 "field": field_ref("new-ownership", "newOwnership", "reference", Some("ownership-record"))}
         ],
-        "occurredAt": {"kind": "interval", "meaning": "within",
+        "occurredAt": {"type": "interval", "meaning": "within",
             "start": field_ref("agreed-not-before", "agreedNotBefore", "date", None),
             "end": field_ref("agreed-before", "agreedBefore", "date", None)},
-        "effective": {"kind": "point", "at": field_ref("effective-at", "effectiveAt", "timestamp", None)},
+        "effective": {"type": "point", "at": field_ref("effective-at", "effectiveAt", "timestamp", None)},
         "sources": [{"role": "deed", "label": "Deed", "kind": "external",
             "namespace": "urn:example:synthetic:deeds",
             "field": field_ref("deed-reference", "deedReference", "string", None)}],
@@ -238,15 +238,15 @@ fn transfer_arguments() -> Map<String, Value> {
 fn expected_incorporation() -> Value {
     json!({
         "contract": "id.registrystack.org/formats/breg/occurrence-view/v1alpha1",
-        "descriptorVersion": "1",
+        "descriptorVersion": 1,
         "registryRevision": REGISTRY_REVISION,
         "source": {"recordType": "incorporation", "recordId": INCORPORATION_ID, "revision": "1"},
         "label": "Incorporation",
         "subjects": [{"role": "company", "label": "Company", "kind": "native",
             "value": reference(COMPANY_ID, "company")}],
         "summary": available("text", "Synthetic incorporation of a test company."),
-        "occurredAt": {"kind": "point", "at": declared_unknown()},
-        "effective": {"kind": "point", "at": available("instant", "2026-11-02T09:00:00Z")},
+        "occurredAt": {"type": "point", "at": declared_unknown()},
+        "effective": {"type": "point", "at": available("instant", "2026-11-02T09:00:00Z")},
         "recordedAt": available("instant", CREATED_AT),
         "recordedAtSource": "creation-revision",
         "sources": [{"role": "application", "label": "Application", "kind": "external",
@@ -266,15 +266,15 @@ fn expected_incorporation() -> Value {
 fn expected_decision() -> Value {
     json!({
         "contract": "id.registrystack.org/formats/breg/occurrence-view/v1alpha1",
-        "descriptorVersion": "1",
+        "descriptorVersion": 1,
         "registryRevision": REGISTRY_REVISION,
         "source": {"recordType": "suspension-decision", "recordId": DECISION_ID, "revision": "1"},
         "label": "Suspension decided",
         "subjects": [{"role": "permit", "label": "Permit", "kind": "native",
             "value": reference(PERMIT_ID, "permit")}],
         "summary": unavailable(),
-        "occurredAt": {"kind": "point", "at": available("date", "2026-10-26")},
-        "effective": {"kind": "interval", "meaning": "span",
+        "occurredAt": {"type": "point", "at": available("date", "2026-10-26")},
+        "effective": {"type": "interval", "meaning": "span",
             "start": available("date", "2026-12-01"), "end": declared_unknown()},
         "recordedAt": unavailable(),
         "recordedAtSource": "creation-revision",
@@ -289,8 +289,8 @@ fn expected_decision() -> Value {
 fn expected_correction() -> Value {
     let mut view = expected_decision();
     view["source"]["recordId"] = json!(CORRECTION_ID);
-    view["occurredAt"] = json!({"kind": "point", "at": available("date", "2026-10-27")});
-    view["effective"] = json!({"kind": "interval", "meaning": "span",
+    view["occurredAt"] = json!({"type": "point", "at": available("date", "2026-10-27")});
+    view["effective"] = json!({"type": "interval", "meaning": "span",
         "start": available("date", "2026-12-15"), "end": available("date", "2027-01-15")});
     view["correction"] = json!({"relation": "corrects",
         "reference": reference(DECISION_ID, "suspension-decision")});
@@ -300,7 +300,7 @@ fn expected_correction() -> Value {
 fn expected_transfer() -> Value {
     json!({
         "contract": "id.registrystack.org/formats/breg/occurrence-view/v1alpha1",
-        "descriptorVersion": "1",
+        "descriptorVersion": 1,
         "registryRevision": REGISTRY_REVISION,
         "source": {"recordType": "ownership-transfer", "recordId": TRANSFER_ID, "revision": "1"},
         "label": "Ownership transferred",
@@ -313,9 +313,9 @@ fn expected_transfer() -> Value {
                 "value": reference("8b3e0000-0000-4000-8000-000000000b12", "ownership-record")}
         ],
         "summary": unavailable(),
-        "occurredAt": {"kind": "interval", "meaning": "within",
+        "occurredAt": {"type": "interval", "meaning": "within",
             "start": available("date", "2026-09-01"), "end": declared_unknown()},
-        "effective": {"kind": "point", "at": available("instant", "2026-10-20T00:00:00+02:00")},
+        "effective": {"type": "point", "at": available("instant", "2026-10-20T00:00:00+02:00")},
         "recordedAt": unavailable(),
         "recordedAtSource": "creation-revision",
         "sources": [{"role": "deed", "label": "Deed", "kind": "external",
@@ -447,11 +447,11 @@ fn every_status_and_degraded_member_validates_against_the_view_schema() {
     let schema = view_schema();
 
     let mut descriptor = incorporation_descriptor();
-    descriptor["effective"] = json!({"kind": "recurrence", "rule": "weekly"});
+    descriptor["effective"] = json!({"type": "recurrence", "rule": "weekly"});
     descriptor["correction"]["relation"] = json!("supersedes");
     descriptor["sourceEventId"]["duplicates"] = json!("merge");
     descriptor["subjects"][0]["kind"] = json!("delegated");
-    descriptor["occurredAt"] = json!({"kind": "interval", "meaning": "around",
+    descriptor["occurredAt"] = json!({"type": "interval", "meaning": "around",
         "start": field_ref("occurred-on", "occurredOn", "date", None)});
     let mut arguments = arguments("incorporation", descriptor, incorporation_record());
     arguments["descriptor"]["summary"]["type"] = json!("duration");
@@ -668,9 +668,9 @@ fn an_unknown_field_type_makes_only_that_member_unsupported() {
 }
 
 #[test]
-fn unknown_time_kinds_relations_and_meanings_degrade_to_unsupported_members() {
+fn unknown_time_types_relations_and_meanings_degrade_to_unsupported_members() {
     let mut descriptor = incorporation_descriptor();
-    descriptor["effective"] = json!({"kind": "recurrence", "rule": "weekly"});
+    descriptor["effective"] = json!({"type": "recurrence", "rule": "weekly"});
     descriptor["correction"]["relation"] = json!("amends");
     descriptor["sourceEventId"]["duplicates"] = json!("merge");
     let view = expect_view(&arguments(
@@ -680,7 +680,7 @@ fn unknown_time_kinds_relations_and_meanings_degrade_to_unsupported_members() {
     ));
     assert_eq!(
         view["effective"],
-        json!({"status": "unsupported", "detail": "time kind recurrence"})
+        json!({"status": "unsupported", "detail": "time type recurrence"})
     );
     assert_eq!(
         view["correction"],
@@ -987,7 +987,7 @@ fn repeated_evidence_contributes_one_provenance_entry_in_first_seen_order() {
 #[test]
 fn descriptor_version_other_than_one_is_unsupported() {
     let mut descriptor = transfer_descriptor();
-    descriptor["descriptorVersion"] = json!("2");
+    descriptor["descriptorVersion"] = json!(2);
     let error = project(&arguments(
         "ownership-transfer",
         descriptor,
@@ -996,10 +996,24 @@ fn descriptor_version_other_than_one_is_unsupported() {
     .expect_err("version 2 is refused");
     assert!(matches!(
         error,
-        BRegOccurrenceError::UnsupportedVersion { ref found } if found == "2"
+        BRegOccurrenceError::UnsupportedVersion { found: 2 }
     ));
     assert_eq!(error.code(), "unsupported-version");
-    assert_eq!(OCCURRENCE_DESCRIPTOR_VERSION, "1");
+    assert_eq!(OCCURRENCE_DESCRIPTOR_VERSION, 1);
+}
+
+#[test]
+fn a_descriptor_version_that_is_not_a_positive_integer_is_malformed() {
+    for version in [json!("1"), json!(1.0), json!(-1), json!(null), json!(true)] {
+        let mut descriptor = transfer_descriptor();
+        descriptor["descriptorVersion"] = version.clone();
+        let error = BRegOccurrenceDescriptor::from_value(&descriptor)
+            .expect_err(&format!("{version} is not a descriptor version"));
+        assert!(
+            matches!(error, BRegOccurrenceError::MalformedDescriptor { ref path } if path == "descriptorVersion"),
+            "{version}: {error}"
+        );
+    }
 }
 
 #[test]
@@ -1030,7 +1044,7 @@ type DescriptorMutation = fn(&mut Value);
 
 #[test]
 fn malformed_nested_members_name_their_path() {
-    let cases: [(&str, DescriptorMutation); 6] = [
+    let cases: [(&str, DescriptorMutation); 8] = [
         ("subjects[0].kind", |d| {
             d["subjects"][0]
                 .as_object_mut()
@@ -1055,6 +1069,14 @@ fn malformed_nested_members_name_their_path() {
         ("sourceEventId", |d| {
             d["sourceEventId"]["namespaceField"] =
                 field_ref("applicant-system", "applicantSystem", "string", None);
+        }),
+        ("occurredAt.type", |d| {
+            d["occurredAt"].as_object_mut().expect("time").remove("type");
+        }),
+        ("effective.type", |d| {
+            let time = d["effective"].as_object_mut().expect("time");
+            time.remove("type");
+            time.insert("kind".into(), json!("point"));
         }),
         ("occurredAt.at", |d| {
             d["occurredAt"].as_object_mut().expect("time").remove("at");
@@ -1189,7 +1211,7 @@ fn error_codes_and_display_are_stable() {
     let cases = [
         (BRegOccurrenceError::NotAnOccurrence, "not-an-occurrence"),
         (
-            BRegOccurrenceError::UnsupportedVersion { found: "9".into() },
+            BRegOccurrenceError::UnsupportedVersion { found: 9 },
             "unsupported-version",
         ),
         (
@@ -1413,13 +1435,13 @@ fn metadata_exposes_the_descriptor_lazily_and_tolerates_a_bad_one() {
             Some(incorporation_descriptor())
         ),
         entity("review-note", "review-notes", None),
-        entity("broken", "brokens", Some(json!({"descriptorVersion": "1"}))),
+        entity("broken", "brokens", Some(json!({"descriptorVersion": 1}))),
         entity(
             "future",
             "futures",
             Some({
                 let mut descriptor = incorporation_descriptor();
-                descriptor["descriptorVersion"] = json!("2");
+                descriptor["descriptorVersion"] = json!(2);
                 descriptor
             })
         ),

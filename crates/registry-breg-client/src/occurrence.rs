@@ -23,7 +23,7 @@ pub const OCCURRENCE_VIEW_CONTRACT: &str =
     "id.registrystack.org/formats/breg/occurrence-view/v1alpha1";
 
 /// The only runtime descriptor version this client projects.
-pub const OCCURRENCE_DESCRIPTOR_VERSION: &str = "1";
+pub const OCCURRENCE_DESCRIPTOR_VERSION: u64 = 1;
 
 const CREATION_REVISION: &str = "1";
 const CREATION_REVISION_SOURCE: &str = "creation-revision";
@@ -35,8 +35,8 @@ const CREATION_REVISION_SOURCE: &str = "creation-revision";
 pub enum BRegOccurrenceError {
     #[error("the record type does not declare an occurrence")]
     NotAnOccurrence,
-    #[error("occurrence descriptor version {found:?} is not supported")]
-    UnsupportedVersion { found: String },
+    #[error("occurrence descriptor version {found} is not supported")]
+    UnsupportedVersion { found: u64 },
     #[error("the occurrence descriptor is malformed at {path}")]
     MalformedDescriptor { path: String },
     #[error("the evidence does not describe this record: {reason}")]
@@ -129,10 +129,10 @@ enum TimeDescriptor {
         start: FieldRef,
         end: Option<FieldRef>,
     },
-    /// A time kind this client does not know, retained for the descriptor
+    /// A time type this client does not know, retained for the descriptor
     /// round trip.
     Unsupported {
-        kind: String,
+        time_type: String,
         raw: Value,
     },
 }
@@ -253,8 +253,8 @@ fn parse_roles(value: &Value, path: &str) -> Result<Vec<RoleDescriptor>, BRegOcc
 fn parse_time(value: &Value, path: &str) -> Result<TimeDescriptor, BRegOccurrenceError> {
     let object = object_at(value, path)?;
     let child = |name: &str| format!("{path}.{name}");
-    let kind = text(required(object, "kind", &child("kind"))?, &child("kind"))?;
-    match kind.as_str() {
+    let time_type = text(required(object, "type", &child("type"))?, &child("type"))?;
+    match time_type.as_str() {
         "point" => Ok(TimeDescriptor::Point {
             at: parse_field(required(object, "at", &child("at"))?, &child("at"))?,
         }),
@@ -278,7 +278,7 @@ fn parse_time(value: &Value, path: &str) -> Result<TimeDescriptor, BRegOccurrenc
             })
         }
         _ => Ok(TimeDescriptor::Unsupported {
-            kind,
+            time_type,
             raw: value.clone(),
         }),
     }
@@ -334,14 +334,12 @@ impl BRegOccurrenceDescriptor {
     /// `unsupported` in a view.
     pub fn from_value(value: &Value) -> Result<Self, BRegOccurrenceError> {
         let root = object_at(value, "occurrence")?;
-        let version = match root.get("descriptorVersion") {
-            Some(Value::String(version)) => version,
+        let version = match root.get("descriptorVersion").map(Value::as_u64) {
+            Some(Some(version)) => version,
             _ => return Err(malformed("descriptorVersion")),
         };
         if version != OCCURRENCE_DESCRIPTOR_VERSION {
-            return Err(BRegOccurrenceError::UnsupportedVersion {
-                found: version.clone(),
-            });
+            return Err(BRegOccurrenceError::UnsupportedVersion { found: version });
         }
         let label = text(required(root, "label", "label")?, "label")?;
         let subjects = parse_roles(required(root, "subjects", "subjects")?, "subjects")?;
@@ -472,7 +470,7 @@ fn roles_value(roles: &[RoleDescriptor]) -> Value {
 fn time_value(time: &TimeDescriptor) -> Value {
     match time {
         TimeDescriptor::Point { at } => {
-            serde_json::json!({"kind": "point", "at": field_value(at)})
+            serde_json::json!({"type": "point", "at": field_value(at)})
         }
         TimeDescriptor::Interval {
             meaning,
@@ -480,7 +478,7 @@ fn time_value(time: &TimeDescriptor) -> Value {
             end,
         } => {
             let mut member = Map::new();
-            member.insert("kind".into(), Value::from("interval"));
+            member.insert("type".into(), Value::from("interval"));
             member.insert(
                 "meaning".into(),
                 Value::from(match meaning {
@@ -820,7 +818,7 @@ fn time_member(
     };
     match time {
         TimeDescriptor::Point { at } => Ok(serde_json::json!({
-            "kind": "point",
+            "type": "point",
             "at": value_member(at, record)?,
         })),
         TimeDescriptor::Interval {
@@ -840,13 +838,15 @@ fn time_member(
                 None => status("unavailable"),
             };
             Ok(serde_json::json!({
-                "kind": "interval",
+                "type": "interval",
                 "meaning": meaning,
                 "start": value_member(start, record)?,
                 "end": end,
             }))
         }
-        TimeDescriptor::Unsupported { kind, .. } => Ok(unsupported(&format!("time kind {kind}"))),
+        TimeDescriptor::Unsupported { time_type, .. } => {
+            Ok(unsupported(&format!("time type {time_type}")))
+        }
     }
 }
 

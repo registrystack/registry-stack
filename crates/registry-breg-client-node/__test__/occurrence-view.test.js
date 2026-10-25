@@ -31,7 +31,7 @@ test('occurrenceView projects every generated fixture to its recorded view', () 
 
 test('occurrenceView raises a described occurrence failure', () => {
   const input = JSON.parse(read('incorporation.input.json'));
-  input.descriptor.descriptorVersion = '2';
+  input.descriptor.descriptorVersion = 2;
   assert.throws(() => occurrenceView(JSON.stringify(input)), (error) => {
     assert.equal(error.kind, 'occurrence');
     assert.equal(error.code, 'unsupported-version');
@@ -106,7 +106,7 @@ test('the metadata accessor and the creation-revision read follow the declared c
     const client = new BaseRegistryClient({ baseUrl: `http://127.0.0.1:${server.address().port}` });
     const contract = await client.registryContract();
     const descriptor = JSON.parse(contract.occurrenceDescriptor('incorporation'));
-    assert.equal(descriptor.descriptorVersion, '1');
+    assert.equal(descriptor.descriptorVersion, 1);
     assert.equal(descriptor.label, 'Incorporation');
     for (const absent of ['note', 'unknown-type']) {
       assert.throws(() => contract.occurrenceDescriptor(absent), (error) => {

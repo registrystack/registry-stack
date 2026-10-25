@@ -4342,11 +4342,11 @@
       "description": "Base Registry Engine bregctl explain output JSON Schemas, written by hand and held to bregctl's output by its contract test.",
       "source": {
         "path": "products/breg/contracts/explain/ModelExplanation.schema.json",
-        "sha256": "c5c7939e3bcd0383617cf74f81c0ad49a85e2e7868779225724418529a20cd57"
+        "sha256": "75c265aa4e2511bd999753fa71f4690292f80ad5383b2b818655a23716220f4e"
       },
       "artifact": {
         "path": "products/breg/contracts/explain/ModelExplanation.schema.json",
-        "sha256": "c5c7939e3bcd0383617cf74f81c0ad49a85e2e7868779225724418529a20cd57",
+        "sha256": "75c265aa4e2511bd999753fa71f4690292f80ad5383b2b818655a23716220f4e",
         "mediaType": "application/schema+json"
       }
     },
@@ -4396,11 +4396,11 @@
       "description": "Base Registry Engine occurrence view JSON Schema, written by hand and held to the BReg client's projection output by its contract test.",
       "source": {
         "path": "products/breg/contracts/occurrence-view/OccurrenceView.schema.json",
-        "sha256": "65aa5cf54f0be0f5c208082b370628cf6924c9ce6ee7706a030331f5cd4bca00"
+        "sha256": "1f1d102ba8558ff08e32700ac28a8eba87682b65a12d00d546d96731bbc6f00a"
       },
       "artifact": {
         "path": "products/breg/contracts/occurrence-view/OccurrenceView.schema.json",
-        "sha256": "65aa5cf54f0be0f5c208082b370628cf6924c9ce6ee7706a030331f5cd4bca00",
+        "sha256": "1f1d102ba8558ff08e32700ac28a8eba87682b65a12d00d546d96731bbc6f00a",
         "mediaType": "application/schema+json"
       }
     },

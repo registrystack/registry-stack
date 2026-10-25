@@ -10,7 +10,8 @@
       "const": "id.registrystack.org/formats/breg/occurrence-view/v1alpha1"
     },
     "descriptorVersion": {
-      "const": "1"
+      "type": "integer",
+      "const": 1
     },
     "registryRevision": {
       "type": "string"
@@ -326,7 +327,7 @@
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "kind": {
+            "type": {
               "const": "point"
             },
             "at": {
@@ -334,7 +335,7 @@
             }
           },
           "required": [
-            "kind",
+            "type",
             "at"
           ]
         },
@@ -342,7 +343,7 @@
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "kind": {
+            "type": {
               "const": "interval"
             },
             "meaning": {
@@ -359,7 +360,7 @@
             }
           },
           "required": [
-            "kind",
+            "type",
             "meaning",
             "start",
             "end"
