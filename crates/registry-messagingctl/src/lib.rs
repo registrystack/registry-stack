@@ -1038,7 +1038,14 @@ fn check(args: &CheckArgs) -> Outcome {
     };
     let (given, mut refused) = match given {
         Some((root, Ok(loaded))) => (Some((root, loaded)), None),
-        Some((root, Err(error))) => (None, Some(package_refusal(root, &error))),
+        Some((root, Err(error))) => {
+            let exit = if error.is_read_failure() {
+                OPERATIONAL_FAILURE_EXIT
+            } else {
+                DOMAIN_REFUSAL_EXIT
+            };
+            (None, Some((exit, package_load_report(root, &error))))
+        }
         None => (None, None),
     };
     let absolute = match std::path::absolute(path) {
@@ -1060,29 +1067,22 @@ fn check(args: &CheckArgs) -> Outcome {
     };
     let runtime = check_runtime_file(&absolute, against, args.environment);
     let mut report = runtime_report(path, &absolute, &runtime);
+    if let Some((refused_exit, mut combined)) = refused.take() {
+        combined.extend(report);
+        if let Some(root) = &args.project {
+            registry_platform_config::apply_check_acceptances(root, &mut combined);
+        }
+        let exit = if runtime.unavailable {
+            OPERATIONAL_FAILURE_EXIT
+        } else {
+            refused_exit
+        };
+        return Outcome::diagnosed(exit, &combined);
+    }
     if let Some(root) = &args.project {
         registry_platform_config::apply_check_acceptances(root, &mut report);
     }
     let denied = report.has_errors() || (args.deny_warnings && report.warning_count() > 0);
-    if let Some(mut refused) = refused.take() {
-        let exit = if runtime.unavailable {
-            OPERATIONAL_FAILURE_EXIT
-        } else {
-            refused.exit
-        };
-        if let (Some(diagnostics), Value::Array(more)) = (
-            refused.report["diagnostics"].as_array_mut(),
-            Outcome::diagnosed(exit, &report).report["diagnostics"].take(),
-        ) {
-            diagnostics.extend(more);
-        }
-        let package_files = refused.report["filesChecked"].as_u64().unwrap_or(0);
-        refused.report["filesChecked"] =
-            json!(package_files + report.files_checked().map_or(0, |files| files as u64));
-        refused.exit = exit;
-        refused.view = View::Diagnostics;
-        return refused;
-    }
     if denied {
         let exit = if runtime.unavailable {
             OPERATIONAL_FAILURE_EXIT

@@ -1980,6 +1980,8 @@ fn assert_check_diagnostic(diagnostic: &Value, artifact: Option<&str>) {
                 "source",
                 "related",
                 "rank",
+                "scope",
+                "acceptedReason",
             ]
             .contains(&key.as_str()),
             "{key} in {diagnostic}"

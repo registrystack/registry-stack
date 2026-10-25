@@ -90,7 +90,7 @@ fn an_acceptance_symlink_cannot_import_decisions_from_outside_the_project() {
 }
 
 #[test]
-fn a_relative_source_is_resolved_from_the_project_before_the_process_directory() {
+fn a_bare_relative_source_ignores_a_process_file_outside_the_project() {
     assert!(
         std::path::Path::new("Cargo.toml").is_file(),
         "this regression requires Cargo's workspace working directory"
@@ -122,4 +122,26 @@ fn a_relative_source_is_resolved_from_the_project_before_the_process_directory()
         .expect("the project-relative source has a scope");
     assert_eq!(scope.file, "Cargo.toml");
     assert_eq!(scope.path, "/package/name");
+}
+
+#[test]
+fn a_project_root_warning_does_not_publish_an_empty_file_scope() {
+    let root = tempfile::tempdir().unwrap();
+    let canonical = root.path().canonicalize().unwrap();
+    let mut diagnostic = Diagnostic::warning(
+        "example.project.later-checks-skipped",
+        "",
+        "Later project checks did not run.",
+        "Correct the errors and check again.",
+    );
+    diagnostic.source = Some(Source {
+        file: canonical.display().to_string(),
+        line: None,
+        column: None,
+    });
+    let mut report = Report::new(vec![diagnostic]);
+
+    apply_check_acceptances(&canonical, &mut report);
+
+    assert!(report.diagnostics()[0].scope.is_none());
 }

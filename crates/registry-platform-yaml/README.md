@@ -177,6 +177,8 @@ Reader codes have two segments; product codes have three.
 | `config.out-of-range` | a number is outside its bounds |
 | `config.substitution` | a `${...}` expression cannot be filled: it is not well formed, its variable is unset or empty, `${NAME:?message}` refused, or the value holds a NUL byte (reported by a substitution hook) |
 | `config.substitution-not-allowed` | a `${...}` expression is written where substitution is not allowed, or an envelope member was substituted |
+| `config.check-acceptance-invalid` | an acceptance needs a valid check code, project-relative scope, and nonblank reason |
+| `config.check-acceptance-duplicate` | the same check code and scope have more than one acceptance |
 | `config.too-many-problems` | the file has more problems than the reader shows; this last diagnostic counts the rest |
 
 A test fails when a code in the source is missing from this table or the

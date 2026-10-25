@@ -49,21 +49,23 @@ fn unreadable(path: &Path) -> Diagnostic {
     diagnostic
 }
 
-fn source_path(root: &Path, file: &str) -> Option<PathBuf> {
+fn source_path(root: &Path, file: &str, cwd: Option<&Path>) -> Option<PathBuf> {
     let path = Path::new(file);
-    let resolved = if path.is_absolute() {
-        path.canonicalize()
-    } else {
-        // Some callers report a path relative to their working directory,
-        // others a file relative to their project.
-        root.join(path)
+    let within_project = |candidate: PathBuf| {
+        candidate
             .canonicalize()
-            .or_else(|_| path.canonicalize())
+            .ok()
+            .filter(|candidate| candidate.starts_with(root) && candidate != root)
     };
-    match resolved {
-        Ok(path) if path.starts_with(root) => Some(path),
-        _ => None,
+    if path.is_absolute() {
+        return within_project(path.to_path_buf());
     }
+    // A caller may report either the path it opened relative to the process
+    // directory (`project/registry.yaml`) or a path inside its project
+    // (`registry.yaml`). Prefer the former only when it resolves inside this
+    // project, so a same-named process file cannot capture a bare label.
+    cwd.and_then(|cwd| within_project(cwd.join(path)))
+        .or_else(|| within_project(root.join(path)))
 }
 
 /// Add portable scopes and apply the optional check-acceptances.yaml once
@@ -112,6 +114,7 @@ pub fn apply_check_acceptances(project_root: &Path, report: &mut Report) {
     };
     let mut documents: BTreeMap<PathBuf, Value> = BTreeMap::new();
     let mut failures = Vec::new();
+    let cwd = std::env::current_dir().ok();
     for diagnostic in report.diagnostics_mut() {
         if diagnostic.severity != Severity::Warning {
             continue;
@@ -119,7 +122,7 @@ pub fn apply_check_acceptances(project_root: &Path, report: &mut Report) {
         let Some(source) = &diagnostic.source else {
             continue;
         };
-        let Some(path) = source_path(&root, &source.file) else {
+        let Some(path) = source_path(&root, &source.file, cwd.as_deref()) else {
             continue;
         };
         let Ok(relative) = path.strip_prefix(&root) else {
@@ -158,5 +161,27 @@ pub fn apply_check_acceptances(project_root: &Path, report: &mut Report) {
     }
     if let Some(accepted) = accepted {
         accepted.apply(report);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::source_path;
+
+    #[test]
+    fn a_cwd_relative_source_wins_over_a_nested_project_relative_collision() {
+        let base = tempfile::tempdir().unwrap();
+        let root = base.path().join("project");
+        let actual = root.join("registry.yaml");
+        let decoy = root.join("project/registry.yaml");
+        std::fs::create_dir_all(decoy.parent().unwrap()).unwrap();
+        std::fs::write(&actual, "actual").unwrap();
+        std::fs::write(&decoy, "decoy").unwrap();
+        let root = root.canonicalize().unwrap();
+
+        assert_eq!(
+            source_path(&root, "project/registry.yaml", Some(base.path())),
+            Some(actual.canonicalize().unwrap())
+        );
     }
 }
