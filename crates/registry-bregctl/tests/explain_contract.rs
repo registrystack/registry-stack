@@ -465,10 +465,7 @@ fn model_explanation_carries_occurrence_descriptor_and_display_grouping() {
         json!({"group": "Register", "purpose": "domain"})
     );
     assert_eq!(record("entry")["occurrence"], Value::Null);
-    assert_eq!(
-        record("review-note")["grouping"]["purpose"],
-        "processing"
-    );
+    assert_eq!(record("review-note")["grouping"]["purpose"], "processing");
     let seed = model["actions"]
         .as_array()
         .unwrap()

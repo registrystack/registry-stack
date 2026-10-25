@@ -716,9 +716,7 @@ fn omitted_project_display_and_review_authorities_keep_empty_artifact_shape() {
 #[test]
 fn model_retains_occurrence_descriptor_and_display_grouping() {
     let source = registry_platform_yaml::Reader::new("registry.yaml")
-        .scan(include_bytes!(
-            "fixtures/occurrence/shapes.yaml"
-        ))
+        .scan(include_bytes!("fixtures/occurrence/shapes.yaml"))
         .unwrap()
         .unwrap()
         .to_json_value();
