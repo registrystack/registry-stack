@@ -300,7 +300,7 @@ pub(crate) async fn install_migration_ledger(
     migration: &impl GenericClient,
     runtime_role: &SqlIdentifier,
 ) -> Result<()> {
-    let ledger_ddl =
+    let ledger_ddl = format!(
         "CREATE TABLE IF NOT EXISTS registry_internal.registry_migrations (
                  activation_id uuid PRIMARY KEY,
                  apply_order bigint NOT NULL
@@ -309,10 +309,10 @@ pub(crate) async fn install_migration_ledger(
                      CHECK (apply_order > 0),
                  package_digest text NOT NULL
                      CONSTRAINT registry_migrations_package_digest_sha256
-                     CHECK (package_digest ~ '^sha256:[0-9a-f]{64}$'),
+                     CHECK (package_digest ~ '^sha256:[0-9a-f]{{64}}$'),
                  predecessor_package_digest text
                      CONSTRAINT registry_migrations_predecessor_digest_sha256
-                     CHECK (predecessor_package_digest ~ '^sha256:[0-9a-f]{64}$'),
+                     CHECK (predecessor_package_digest ~ '^sha256:[0-9a-f]{{64}}$'),
                  registry_revision text NOT NULL
                      CONSTRAINT registry_migrations_registry_revision_nonempty
                      CHECK (registry_revision <> ''),
@@ -372,6 +372,9 @@ pub(crate) async fn install_migration_ledger(
                  ),
                  CONSTRAINT registry_migrations_applied_at_consistent CHECK (
                      (outcome = 'applied') = (applied_at IS NOT NULL)
+                 ),
+                 CONSTRAINT registry_migrations_statement_checksums_bounded_v2 CHECK (
+                     {statement_checksums_bounded}
                  )
              );
              CREATE UNIQUE INDEX IF NOT EXISTS registry_migrations_one_open_activation_per_digest
@@ -404,9 +407,10 @@ pub(crate) async fn install_migration_ledger(
                  )
              );
              REVOKE ALL ON TABLE registry_internal.registry_migrations FROM PUBLIC;
-             REVOKE ALL ON TABLE registry_internal.registry_migration_steps FROM PUBLIC;";
-    migration.batch_execute(ledger_ddl).await?;
-    ensure_migration_statement_capacity(migration).await?;
+             REVOKE ALL ON TABLE registry_internal.registry_migration_steps FROM PUBLIC;",
+        statement_checksums_bounded = statement_checksums_bounded_check(),
+    );
+    migration.batch_execute(&ledger_ddl).await?;
     let revoke = RuntimeRevoke::detect(migration, runtime_role).await?;
     migration
         .batch_execute(&format!(
@@ -419,9 +423,28 @@ pub(crate) async fn install_migration_ledger(
     Ok(())
 }
 
+/// The body of `registry_migrations_statement_checksums_bounded_v2`, shared
+/// by a fresh ledger and the successor that widens a legacy one, so both
+/// catalogs fingerprint the same.
+fn statement_checksums_bounded_check() -> String {
+    format!(
+        "COALESCE(array_ndims(statement_checksums), 1) = 1
+         AND cardinality(statement_checksums) BETWEEN 0 AND {MAX_MIGRATION_STATEMENTS}
+         AND array_position(statement_checksums, '') IS NULL
+         AND (
+             (migration_kind = 'metadata-only' AND cardinality(statement_checksums) = 0)
+             OR (migration_kind = 'reviewed' AND cardinality(statement_checksums) = 0)
+             OR (migration_kind IN ('compiled-additive', 'reviewed')
+                 AND cardinality(statement_checksums) BETWEEN 1 AND {MAX_MIGRATION_STATEMENTS})
+         )"
+    )
+}
+
 /// Widens the legacy ledger statement bound inside the caller's
-/// migration-authorized transaction. The versioned constraint makes repeated
-/// startup, rehearsal, and successor retries no-ops after the first upgrade.
+/// migration-authorized transaction. Only a successor to a different package
+/// calls it: that package's fingerprint was measured on a fresh ledger, which
+/// already carries the versioned constraint. The versioned constraint makes
+/// successor retries and rehearsals no-ops after the first upgrade.
 pub(crate) async fn ensure_migration_statement_capacity(
     migration: &impl GenericClient,
 ) -> Result<()> {
@@ -444,20 +467,11 @@ pub(crate) async fn ensure_migration_statement_capacity(
                  ) THEN
                      ALTER TABLE registry_internal.registry_migrations
                          ADD CONSTRAINT registry_migrations_statement_checksums_bounded_v2
-                         CHECK (
-                             COALESCE(array_ndims(statement_checksums), 1) = 1
-                             AND cardinality(statement_checksums) BETWEEN 0 AND {MAX_MIGRATION_STATEMENTS}
-                             AND array_position(statement_checksums, '') IS NULL
-                             AND (
-                                 (migration_kind = 'metadata-only' AND cardinality(statement_checksums) = 0)
-                                 OR (migration_kind = 'reviewed' AND cardinality(statement_checksums) = 0)
-                                 OR (migration_kind IN ('compiled-additive', 'reviewed')
-                                     AND cardinality(statement_checksums) BETWEEN 1 AND {MAX_MIGRATION_STATEMENTS})
-                             )
-                         );
+                         CHECK ({statement_checksums_bounded});
                  END IF;
              END
-             $migration_statement_capacity$;"
+             $migration_statement_capacity$;",
+            statement_checksums_bounded = statement_checksums_bounded_check(),
         ))
         .await?;
     Ok(())
