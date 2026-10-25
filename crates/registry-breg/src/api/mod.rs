@@ -602,6 +602,7 @@ async fn registry_metadata(
                 }),
             });
     }
+    let visible_types: BTreeSet<String> = entities.keys().cloned().collect();
     let entities = entities
         .into_values()
         .map(|entity| {
@@ -628,6 +629,13 @@ async fn registry_metadata(
                     display.as_object_mut().expect("display is an object").remove("titleField");
                 }
                 metadata["display"] = display;
+                if let Some(occurrence) = &record_type.occurrence {
+                    metadata["occurrence"] = metadata::occurrence_metadata(
+                        occurrence,
+                        &entity.readable_fields,
+                        &visible_types,
+                    );
+                }
             }
             metadata
         })

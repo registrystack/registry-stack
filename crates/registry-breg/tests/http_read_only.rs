@@ -2380,6 +2380,174 @@ impl ReadinessProbe for ControlledReadiness {
     }
 }
 
+const OCCURRENCE_PROJECT: &str = r#"
+apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project: {id: occurrence-http-registry, version: "1", defaultLanguage: en, canonicalBaseIri: https://occurrence-http.example.test}
+datasets: [{id: test-dataset}]
+recordTypes:
+  - id: item
+    primaryDataset: test-dataset
+    route: items
+    mutationMode: mutable
+    classification: restricted
+    fields:
+      - {id: name, type: string, minimumLength: 1, maximumLength: 100, required: true, classification: restricted}
+  - id: decision
+    primaryDataset: test-dataset
+    route: decisions
+    mutationMode: create-only
+    classification: restricted
+    fields:
+      - {id: item, type: reference, target: item, required: true, classification: restricted}
+      - {id: decided-on, type: date, required: true, classification: restricted}
+      - {id: effective-from, type: date, required: true, classification: restricted}
+      - {id: effective-until, type: date, required: false, classification: restricted}
+      - {id: basis-reference, type: string, maximumLength: 80, required: false, classification: restricted}
+      - {id: summary, type: text, maximumLength: 500, required: false, classification: restricted}
+      - {id: corrects, type: reference, target: decision, required: false, classification: restricted}
+    occurrence:
+      label: Decision recorded
+      subjects:
+        - {role: item, field: item, label: Item, target: item}
+      summary: summary
+      occurredAt: {at: decided-on}
+      effective: {start: effective-from, end: effective-until}
+      sources:
+        - {role: basis, field: basis-reference, label: Basis, external: {namespace: "urn:example:synthetic:notices"}}
+      correction: {field: corrects, relation: corrects}
+accessProfiles:
+  - id: full
+    default: true
+    principalClaim: registry_principal
+    requiredScopes: unrestricted
+    requiredPurposes: [full-review]
+    permissions:
+      records:
+        - recordType: item
+          operations: [get, list]
+          readableFields: [name]
+          rowBoundaries: unrestricted
+        - recordType: decision
+          operations: [get, list]
+          readableFields: [item, decided-on, effective-from, effective-until, basis-reference, summary, corrects]
+          rowBoundaries: unrestricted
+  - id: narrow
+    principalClaim: registry_principal
+    requiredScopes: unrestricted
+    requiredPurposes: [narrow-review]
+    permissions:
+      records:
+        - recordType: decision
+          operations: [get, list]
+          readableFields: [item, decided-on, effective-from]
+          rowBoundaries: unrestricted
+"#;
+
+#[tokio::test]
+async fn occurrence_metadata_is_caller_filtered() {
+    let app = Harness::from_project(OCCURRENCE_PROJECT, true).app;
+
+    let full = send_to(
+        &app,
+        Method::GET,
+        "/v1/registry",
+        Some(registry_principal_claims("full-review")),
+    )
+    .await;
+    assert_eq!(full.status(), StatusCode::OK);
+    let full = body_json(full).await;
+    assert_eq!(full["metadataVersion"], "2");
+    let full_types = full["recordTypes"].as_array().expect("record types");
+    let find = |types: &'_ [Value], id: &str| -> Option<Value> {
+        types.iter().find(|record| record["id"] == id).cloned()
+    };
+    assert!(
+        find(full_types, "item")
+            .expect("the ordinary record type is visible")
+            .get("occurrence")
+            .is_none(),
+        "a record type without a descriptor carries no occurrence member"
+    );
+    assert_eq!(
+        find(full_types, "decision").expect("decision is visible")["occurrence"],
+        json!({
+            "descriptorVersion": "1",
+            "label": "Decision recorded",
+            "subjects": [{"role": "item", "label": "Item", "kind": "native",
+                "field": {"id": "item", "apiName": "item", "type": "reference", "target": "item"}}],
+            "summary": {"id": "summary", "apiName": "summary", "type": "text"},
+            "occurredAt": {"kind": "point",
+                "at": {"id": "decided-on", "apiName": "decidedOn", "type": "date"}},
+            "effective": {"kind": "interval", "meaning": "span",
+                "start": {"id": "effective-from", "apiName": "effectiveFrom", "type": "date"},
+                "end": {"id": "effective-until", "apiName": "effectiveUntil", "type": "date"}},
+            "sources": [{"role": "basis", "label": "Basis", "kind": "external",
+                "namespace": "urn:example:synthetic:notices",
+                "field": {"id": "basis-reference", "apiName": "basisReference", "type": "string"}}],
+            "correction": {"relation": "corrects",
+                "field": {"id": "corrects", "apiName": "corrects", "type": "reference", "target": "decision"}},
+            "recordedTime": {"source": "creation-revision"}
+        })
+    );
+
+    let narrow = send_to(
+        &app,
+        Method::GET,
+        "/v1/registry?accessProfile=narrow",
+        Some(registry_principal_claims("narrow-review")),
+    )
+    .await;
+    assert_eq!(narrow.status(), StatusCode::OK);
+    let narrow_bytes = body_bytes(narrow).await;
+    let narrow: Value = serde_json::from_slice(&narrow_bytes).expect("JSON response");
+    let narrow_types = narrow["recordTypes"].as_array().expect("record types");
+    assert!(
+        find(narrow_types, "item").is_none(),
+        "the narrow caller cannot see the item record type"
+    );
+    let decision = find(narrow_types, "decision").expect("decision is visible");
+    assert_eq!(
+        decision["occurrence"],
+        json!({
+            "descriptorVersion": "1",
+            "label": "Decision recorded",
+            "subjects": [{"role": "item", "label": "Item", "kind": "native",
+                "field": {"id": "item", "apiName": "item", "type": "reference"}}],
+            "occurredAt": {"kind": "point",
+                "at": {"id": "decided-on", "apiName": "decidedOn", "type": "date"}},
+            "sources": [],
+            "recordedTime": {"source": "creation-revision"}
+        }),
+        "unreadable members and invisible targets are absent, never null"
+    );
+    let narrow_text = String::from_utf8(narrow_bytes).expect("response is UTF-8");
+    for withheld in [
+        "basis-reference",
+        "basisReference",
+        "effective-until",
+        "effectiveUntil",
+        "urn:example:synthetic:notices",
+        "\"summary\"",
+        "\"corrects\"",
+    ] {
+        assert!(
+            !narrow_text.contains(withheld),
+            "{withheld} is not disclosed to the narrow caller"
+        );
+    }
+    let readable: BTreeSet<&str> = decision["readableFields"]
+        .as_array()
+        .expect("readable fields")
+        .iter()
+        .map(|field| field.as_str().expect("field id"))
+        .collect();
+    assert_eq!(
+        readable,
+        BTreeSet::from(["decided-on", "effective-from", "item"])
+    );
+}
+
 struct Harness {
     app: axum::Router,
     records: Arc<RecordingReadService>,
