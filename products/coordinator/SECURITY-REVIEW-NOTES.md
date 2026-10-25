@@ -80,6 +80,50 @@ value-free diagnostics remain unchanged. This check applies only to
   filesystem and directory-component races remain accepted for this adopter
   CLI rather than introducing a directory-descriptor traversal policy.
 
+## Raw API connection authentication
+
+### Threat
+
+An operator assumes the raw API command reuses the legacy Coordinator token
+reader, or assumes a saved bearer or `private_key_jwt` connection grants
+workflow authority by itself.
+
+### Enforcement and defaults
+
+Coordinator retains no local caller session, so `coordinatorctl api` refuses
+`--client`. The operator selects a saved connection or an explicit one-off
+URL. Saved authentication is exactly one of anonymous, a referenced opaque
+bearer, or renewable `private_key_jwt`, under the shared
+[`registry-cli-api` security boundary](../../crates/registry-cli-api/README.md#security-boundary).
+The helper confines the destination and headers, acquires the selected
+credential, and releases only the raw bounded response. It carries no caller
+policy, workflow, run ownership, or downstream product authority. Coordinator
+still authenticates and authorizes each protected route, and every receiving
+product still decides an effect requested by a run.
+
+This path deliberately does not reuse the legacy reader described above.
+Legacy authenticated Coordinator commands keep their 16,384-byte compact-JWT
+validation and, on Unix, `NOFOLLOW` token open. Direct
+`api --url --token-file` instead uses the shared opaque-bearer contract: at
+most 8 KiB and a symlink to a regular file is accepted. Saved bearer and
+private-key references use the platform secret resolver's separate strict
+file policy. These differences preserve both existing contracts rather than
+silently changing older commands.
+
+### Tests
+
+- `crates/registry-coordinator/tests/api_cli.rs`:
+  `api_and_saved_connections_are_available_without_a_runtime_config` and
+  `raw_api_refuses_report_format_before_network_access`.
+- The shared saved-credential, transport, regular-file, and process tests
+  named in the `registry-cli-api` security boundary.
+- The legacy reader remains pinned by
+  `token_file_refuses_symlinks_and_fifos_without_blocking` and
+  `a_relative_token_file_is_read_from_the_current_directory` in
+  `crates/registry-coordinator/tests/cli_remote.rs`.
+
+These are maintained references, not claims that the tests ran in this note.
+
 ## OIDC issuer transport and private addresses
 
 ### Threat

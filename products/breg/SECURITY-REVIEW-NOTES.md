@@ -4588,3 +4588,33 @@ traceability catalog records these proofs without claiming an execution run.
 - The route reads the known Proposal's Action identifier before body parsing so
   it can attribute an admitted refusal. It releases no Proposal or context
   values during that lookup or refusal.
+
+## Raw API caller credentials
+
+### Threat
+
+A local raw API request uses a client registered for another resource, or the
+tooling's bearer and endpoint selection is mistaken for BReg authorization.
+
+### Enforcement and defaults
+
+`bregctl api PATH --client CLIENT` requires a ready local development session,
+selects only a client admitted to that BReg resource, obtains a fresh bearer
+for the client's registered resource and scopes, and keeps it in memory. The
+adapter uses the API origin retained by that session and creates no reusable
+header file. A saved or explicit remote connection instead uses the endpoint
+and authentication the operator selected. Both paths use the
+[`registry-cli-api` security boundary](../../crates/registry-cli-api/README.md#security-boundary).
+
+The helper adds no BReg grant. The runtime still verifies the credential,
+resolves the configured access profile, and authorizes the requested route,
+record, fields, and operation.
+
+### Tests
+
+- `crates/registry-bregctl/src/dev/tests.rs`:
+  `local_api_accepts_only_clients_admitted_to_this_breg_resource`.
+- The shared transport, saved-credential, and process tests named in the
+  `registry-cli-api` security boundary.
+
+These are maintained test references, not claims of execution in this note.

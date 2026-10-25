@@ -1011,8 +1011,9 @@ client-token acquisition path, but keeps the token in the request connection
 instead of publishing a header file. It requires a ready development session
 and takes its destination only from the exact nonzero
 `http://127.0.0.1:PORT` API origin retained in the typed session record. The
-shared CLI API transport appends only a relative path without changing that
-origin or its deployment prefix, owns the `Host` and automatic
+shared [`registry-cli-api` security boundary](../../crates/registry-cli-api/README.md#security-boundary)
+appends only a relative path without changing that origin or its deployment
+prefix, owns the `Host` and automatic
 `Authorization` headers, follows no redirects, and ignores ambient proxy
 settings. The Messaging runtime still authenticates the token and applies its
 ordinary access-profile and operation authorization on every protected route;

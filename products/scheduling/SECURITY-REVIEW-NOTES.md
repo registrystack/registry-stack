@@ -1493,3 +1493,25 @@ remaining focused proofs and does not assert that they ran.
 - Detail readers receive the current attendance observation with the ordinary
   appointment document. Operational readers receive it only when their profile
   explicitly selects attendance.
+
+## Raw API connection authentication
+
+Threat: a generic diagnostic command is mistaken for Scheduling authority, or
+a credential selected for one connection is silently replaced on the request.
+
+Scheduling retains no local caller session, so `schedulingctl api` does not
+resolve `--client`. The operator selects a saved connection or an explicit
+one-off URL. A saved connection may be anonymous, a referenced bearer, or a
+renewable `private_key_jwt` client under the shared
+[`registry-cli-api` security boundary](../../crates/registry-cli-api/README.md#security-boundary).
+That boundary owns endpoint confinement, automatic authorization, credential
+resolution, redirects, proxies, bounds, and redaction; it carries no task
+grant, catalogue scope, appointment ownership, or capacity authority.
+
+The runtime continues to authenticate and authorize every protected request.
+An anonymous connection reaches only routes the runtime already makes public.
+`api_and_saved_connections_are_available_without_a_runtime_config` and
+`raw_api_refuses_report_format_before_network_access` in
+`crates/registry-schedulingctl/tests/api_cli.rs` pin the product surface. The
+shared README names the saved bearer, `private_key_jwt`, and transport proofs.
+These references do not assert an execution run here.

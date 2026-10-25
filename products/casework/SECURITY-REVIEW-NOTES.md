@@ -1123,3 +1123,29 @@ worker iteration that fails, such as a finish refused under a replaced lease,
 is logged without the row's `event_id` and `destination_id`, because the
 dispatch core reports it without its row. Dispatch operational events are not
 audited.
+
+## Raw API caller credentials and profiles
+
+Threat: a local diagnostic request presents one client's bearer with another
+client's Casework or Review profile, or treats a profile header as authority
+independent of runtime authorization.
+
+`caseworkctl api PATH --client CLIENT` requires a ready local development
+session. Its adapter selects the exact retained client and profile, obtains a
+fresh bearer for that client, and binds the same profile into the
+`Registry-Casework-Profile` and `Registry-Review-Profile` headers. The selected
+connection owns those headers and `Authorization`, so raw command-line headers
+cannot replace them. An integration client registered for another resource is
+refused. Saved and explicit remote connections remain operator-selected and
+follow the shared
+[`registry-cli-api` security boundary](../../crates/registry-cli-api/README.md#security-boundary).
+
+The tooling adds no queue, source, review, or task authority. Casework still
+authenticates the bearer, resolves the applicable caller policy, and decides
+each protected route. The maintained proofs are
+`api_client_selects_the_exact_retained_profile_and_refuses_unknown_clients`,
+`api_connection_sends_the_bearer_profiles_and_writes_only_response_bytes`, and
+`local_api_refuses_an_integration_client_bound_to_another_resource` in
+`crates/registry-caseworkctl/src/dev/tests.rs`, plus the shared tests named in
+the `registry-cli-api` README. This note records their obligations, not an
+execution result.
