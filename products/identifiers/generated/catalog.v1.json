@@ -4387,6 +4387,24 @@
       }
     },
     {
+      "uri": "https://id.registrystack.org/schemas/breg/occurrence-view/occurrence-view.v1alpha1.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "breg",
+      "title": "OccurrenceView",
+      "description": "Base Registry Engine occurrence view JSON Schema, written by hand and held to the BReg client's projection output by its contract test.",
+      "source": {
+        "path": "products/breg/contracts/occurrence-view/OccurrenceView.schema.json",
+        "sha256": "65aa5cf54f0be0f5c208082b370628cf6924c9ce6ee7706a030331f5cd4bca00"
+      },
+      "artifact": {
+        "path": "products/breg/contracts/occurrence-view/OccurrenceView.schema.json",
+        "sha256": "65aa5cf54f0be0f5c208082b370628cf6924c9ce6ee7706a030331f5cd4bca00",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
       "uri": "https://id.registrystack.org/schemas/breg/project/project.v1alpha1.schema.json",
       "kind": "schema",
       "status": "active",

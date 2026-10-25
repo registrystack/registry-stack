@@ -3736,6 +3736,8 @@ outOfScope:
     reason: Generated Evidence wire schemas, governed by the API contract.
   - files: products/coordinator/generated/operations/*.schema.json
     reason: Coordinator operation input and output contracts, wire payloads governed by each product's API contract.
+  - files: products/breg/contracts/occurrence-view/OccurrenceView.schema.json
+    reason: Occurrence view, an inert client projection output governed by the client contract rather than a configuration format.
   - files: products/discovery/profile/schema/*.schema.json
     reason: Discovery provider description, a published wire resource.
   - files: products/identifiers/contracts/*.schema.json

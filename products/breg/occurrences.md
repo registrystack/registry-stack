@@ -259,10 +259,58 @@ never converts a value to another zone.
 
 The Rust, Node and Python clients project a record plus its creation revision
 into an occurrence view for any declared record type through one reader. The
-client guide, [CLIENTS.md](../../crates/CLIENTS.md), documents the view. The
-reader refuses a record type that declares no occurrence, a descriptor version
-other than `"1"`, a malformed descriptor, and creation-revision evidence that
-belongs to another record.
+client guide, [CLIENTS.md](../../crates/CLIENTS.md), documents the clients.
+The view is inert data. Its format identifier is
+`id.registrystack.org/formats/breg/occurrence-view/v1alpha1`, and its JSON
+Schema is
+[`OccurrenceView.schema.json`](contracts/occurrence-view/OccurrenceView.schema.json),
+which the client tests hold to the projection output.
+
+The view carries these members:
+
+- `contract`, `descriptorVersion` (`"1"`) and `registryRevision`, the revision
+  of the metadata that supplied the descriptor.
+- `source`: `recordType`, `recordId` and `revision` of the projected record
+  revision.
+- `label`, `subjects` and `sources`. Each role lists `role`, an optional
+  `label`, `kind` (`native` or `external`), `namespace` for an external role,
+  and `value`. A role whose kind this client does not know has no `kind` and no
+  `namespace`, and its `value` is `unsupported`.
+- `summary`, `occurredAt`, `effective`, `correction` and `sourceEventId`. Each
+  is `unavailable` when the descriptor does not declare it. A time is a
+  `point` (`at`) or an `interval` (`meaning` `span` or `within`, `start`,
+  `end`). A correction names `relation` (`corrects` or `supersedes`) and a
+  `reference` value. A source event identifier names `namespace`, `value` and
+  `duplicates` (`reject` or `allow`).
+- `recordedAt` and `recordedAtSource`. Recorded time is `available` only when
+  the caller supplied the creation revision of the projected record; otherwise
+  it is `unavailable`. `recordedAtSource` is always `creation-revision`.
+- `provenance`: one entry for each distinct item of supplied evidence that
+  names this exact record revision. An action receipt entry carries `action`,
+  `applicationId` and `effect`. A proposal application entry carries
+  `applicationId`, `submissionVersion`, and `appliedAt` (an RFC 3339 instant,
+  normalized like every other instant) and `appliedBy` when stated. Evidence
+  repeated by the caller yields one entry, in first-seen order.
+- `ignoredEvidence`: evidence that does not name this exact record revision,
+  with `reason` `revision-mismatch` (same record, other revision) or
+  `no-matching-result`. Ignored evidence never contributes provenance.
+
+A value member states what the client could say, never a guess. `available`
+carries `type` (`date`, `instant`, `text`, `uuid` or `reference`), `value`, and
+for a reference its `target` record type. `declaredUnknown` means the record
+holds an explicit null. `unavailable` means the record has no such key.
+`unsupported` carries a `detail` naming the type, kind, relation, meaning or
+policy the client does not know, so a descriptor that is newer than the client
+degrades one member instead of failing the whole view.
+
+The reader refuses with a closed set of error codes, none of which carries a
+record value: `not-an-occurrence` (the record type declares no occurrence),
+`unsupported-version` (a descriptor version other than `"1"`),
+`malformed-descriptor`, `wrong-record-evidence` (evidence or a creation
+revision that belongs to another record, or a malformed identifier, revision or
+proposal application time), `revision-mismatch`, `incompatible-metadata` (a
+record member that contradicts its declared type) and `invalid-input` (the
+language-binding arguments are not exact JSON or do not match the contract).
 
 ## Changing a descriptor while work is in flight
 
