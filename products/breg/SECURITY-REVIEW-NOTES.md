@@ -480,30 +480,33 @@ state, and the instance claim.
    (before readiness) refuse a runtime role that could write the ledger or the
    registry state, each naming its exact fix: a superuser (`ALTER ROLE ..
    NOSUPERUSER`), a member of the migration role (`REVOKE <migration> FROM
-   <runtime>`), the owner of a registry table, sequence, view, or function,
-   or a member of that owner (`REASSIGN OWNED BY <runtime> TO <migration>`
-   followed by `bregctl apply`, or `REVOKE <owner> FROM <runtime>`), a holder
-   of a write privilege or of `CREATE` on a registry schema, directly or
-   through `PUBLIC` (`REVOKE .. FROM <grantee>`), and a trigger on a product
-   table that no compiled migration creates (`DROP TRIGGER`). The `REVOKE`
-   and `DROP` fixes end with "then rerun the refused command". The reason for
-   the ownership check: an owner of a table apply touches can add a deferred
-   constraint trigger that runs as the migration role when apply commits and
-   writes the ledger. Apply issues the runtime grants the active package
-   gives and treats missing split grants as a change pending, so a
-   reassignment that strips them is repaired by the next apply; split startup
-   refuses missing grants, naming `bregctl apply`. A change of runtime role or
-   role mode over the active package is recorded as its own successor
-   activation (`metadata-only`, a fresh activation id), and apply revokes
-   every privilege of a runtime role the activation stops serving with. A
-   one-role runtime file is refused against a database last activated for a
-   separate runtime role. In either mode, a runtime role with superuser,
-   `BYPASSRLS`, `CREATEDB`, `CREATEROLE`, or database `CREATE` is refused at
-   startup. `bregctl doctor` and the startup log
+   <runtime>`), the owner of a registry schema, relation, or routine (one
+   `ALTER .. OWNER TO <migration>` for each object the runtime role owns in a
+   registry schema, run as a database administrator and followed by `bregctl
+   apply`, so the fix leaves what the runtime role owns elsewhere in the
+   database alone), a member of such an owner (`REVOKE <owner> FROM
+   <runtime>`), a holder of a write privilege or of `CREATE` on a registry
+   schema, directly or through `PUBLIC` (`REVOKE .. FROM <grantee>`), and a
+   trigger on a product table that no compiled migration creates (`DROP
+   TRIGGER`). The `REVOKE` and `DROP` fixes end with "then rerun the refused
+   command". The reason for the ownership check: an owner of a table apply
+   touches can add a deferred constraint trigger that runs as the migration
+   role when apply commits and writes the ledger. Apply issues the runtime
+   grants the active package gives and treats missing split grants as a change
+   pending, so an ownership change that strips them is repaired by the next
+   apply; split startup refuses missing grants, naming `bregctl apply`. A
+   change of runtime role or role mode over the active package is recorded as
+   its own successor activation (`metadata-only`, a fresh activation id), and
+   apply revokes every privilege of a runtime role the activation stops
+   serving with. A one-role runtime file is refused against a database last
+   activated for a separate runtime role. In either mode, a runtime role with
+   superuser, `BYPASSRLS`, `CREATEDB`, `CREATEROLE`, or database `CREATE` is
+   refused at startup. `bregctl doctor` and the startup log
    (`startup.role_mode.single`) say that single mode catches mistakes but not
    someone holding the credential. Tests:
    `crates/registry-breg/tests/postgres_migration.rs`:
    `real_postgres_split_apply_refuses_a_runtime_role_that_owns_a_model_table`,
+   `real_postgres_split_apply_names_an_ownership_change_for_every_kind_of_owned_object`,
    `real_postgres_split_apply_refuses_a_runtime_role_that_holds_schema_create`,
    `real_postgres_split_apply_names_the_fix_for_every_runtime_write_authority`,
    `real_postgres_a_role_change_reapply_of_the_active_package_is_its_own_activation`.
@@ -4572,3 +4575,58 @@ malformed, and duplicate HTTP credentials, the fixed diagnostic, generic 401,
 and zero record reads. The shared OIDC lifetime test covers missing, nonpositive,
 and overlong time bounds. These are operational diagnostics, with no new audit
 release condition or authentication authority.
+
+## Proposal task-grant context disclosure and audited request parsing
+
+### Threat
+
+- A service substitutes another Review request, subject, policy or context
+  contract, or asks for fields outside the source-authored projection.
+- A context read survives withdrawal or a change in current Record, row or
+  consent authority.
+- An authenticated caller sends a malformed body or unsupported media type
+  after the route and authority are known, but receives a refusal that bypasses
+  the Proposal refusal journal or remains available when that journal fails.
+
+### Enforcement and defaults
+
+`get-task-grant-context` is a separate Proposal operation. Its selected
+profile must admit the verified service actor, requester client, scope,
+purpose, Action and target boundaries. The read then requires the exact
+accepted Review request, concrete policy and subject binding, intersects the
+requested fields with `readableContextFields`, resolves current Record
+authority, and holds the Review row lock through disclosure. It neither
+borrows human review-context authority nor grants another Proposal operation.
+
+`task_grant_context` in `crates/registry-breg/src/api/proposals.rs` resolves the
+known Proposal, Action and selected authority before it validates the request
+media and body. It accepts one `application/json` Content-Type, reads a bounded
+body, applies strict JSON and typed request decoding, and routes every admitted
+media or body refusal through `admitted_http_refusal`. The audit record carries
+the fixed Action, operation and method, not request values. If the refusal
+append fails, the route returns service unavailable instead of releasing the
+ordinary refusal. An unknown Proposal remains concealed before Action
+attribution.
+
+### Tests
+
+`review_status_service_reads_only_its_exact_frozen_review_binding` in
+`crates/registry-breg/tests/postgres_proposal_security.rs` exercises the exact
+accepted request and policy, field projection, current authority and both
+withdrawal race orders. `task_grant_context_malformed_requests_are_audited_and_fail_closed`
+uses the real router for malformed JSON and an unsupported Content-Type,
+checks one minimized refusal record for each, and refuses the HTTP answer when
+the audit writer rejects that record. The public-client test
+`task_context_refuses_invalid_or_cross_source_authority_before_credentials`
+holds the earlier client-side binding and validation boundary. The product
+traceability catalog records these proofs without claiming an execution run.
+
+### Accepted residuals
+
+- A valid selected profile authorizes the service for the configured Action
+  and target boundaries, not for one caller-supplied Review request. Exact
+  accepted Review correlation and current disclosure checks remain runtime
+  conditions on every read.
+- The route reads the known Proposal's Action identifier before body parsing so
+  it can attribute an admitted refusal. It releases no Proposal or context
+  values during that lookup or refusal.

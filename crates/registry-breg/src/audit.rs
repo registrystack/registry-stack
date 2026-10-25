@@ -631,7 +631,15 @@ fn proposal_pre_io_record(
         ),
         HttpMethod::Post => matches!(
             operation,
-            "start" | "edit" | "submit" | "revise" | "rebase" | "retry" | "cancel" | "apply"
+            "start"
+                | "edit"
+                | "submit"
+                | "revise"
+                | "rebase"
+                | "retry"
+                | "cancel"
+                | "apply"
+                | "get-task-grant-context"
         ),
         HttpMethod::Patch | HttpMethod::Delete => operation == "edit",
     };

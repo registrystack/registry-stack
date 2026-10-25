@@ -20,12 +20,11 @@ Add `taskTemplates` to the Casework project. Each template declares:
   `{type: scheduling, permissions: [{service: ..., location: ...,
   actions: [...]}]}`.
 - `subjects`, mapping token identity keys to governed source logical fields.
-  The review policy's source must serve task-grant context. BReg does not
-  serve it yet ([#2062](https://github.com/registrystack/registry-stack/issues/2062)),
-  so a template bound to a BReg-backed review policy cannot declare
-  `subjects`: `caseworkctl check` and the runtime refuse it as
-  `casework.task-template.unserved-capability`. Remove `subjects`, or bind
-  the template to a source that serves task-grant context.
+  The review policy's source must serve task-grant context. A BReg-backed
+  policy needs the provider's distinct `task-grant-context` capability and a
+  source profile granting `get-task-grant-context` for the exact fields. When
+  that capability is absent, `caseworkctl check` and the runtime refuse the
+  template as `casework.task-template.unserved-capability`.
 - `lifetimeSeconds`, an explicit approved duration. Omitted `authorizationMode`
   means `immediate`, with a 900-second ceiling. Opt in with
   `authorizationMode: deferred` for a duration of at most 604800 seconds
@@ -51,10 +50,14 @@ BReg checks its own governed operation and the current grant status before
 commit.
 Required current-source fields must be disclosed to the approving human and
 available through the provider's separate `task-grant-context` capability for
-later checks. A BReg provider does not offer that capability yet
-([#2062](https://github.com/registrystack/registry-stack/issues/2062)). Submitted-context grants use the admitted snapshot. Callers
-cannot supply subject values. Changing a template requires a new version. Retiring a version
-invalidates its live grants; reactivation does not restore those grants.
+later checks. For BReg, Casework uses the provider's separately authored
+`taskGrantProfile`; there is no fallback to its human display or status
+profiles. BReg verifies the frozen Proposal identity and contract, the exact
+accepted review-policy binding, the current non-withdrawn source acceptance,
+and current disclosure for every requested field. Submitted-context grants use
+the admitted snapshot. Callers cannot supply subject values. Changing a
+template requires a new version. Retiring a version invalidates its live
+grants; reactivation does not restore those grants.
 
 Scheduling permissions use the same strict claim grammar its runtime verifies:
 one to 64 unique `(service, location)` pairs, each with one to 32 unique action

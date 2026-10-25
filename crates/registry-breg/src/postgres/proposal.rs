@@ -9,7 +9,7 @@ use crate::model::ProposalOperation;
 use crate::mutation::{CheckedProposalTaskAuthority, ProposalApplyPreflight};
 use crate::postgres::{begin_proposal_transaction, ProposalAuthority, ProposalAuthorityOperation};
 use crate::proposal_store;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 // Keep status selection in the single candidate query before its scan bound.
 // Caller ownership is exact here, so another holder's Proposal never reaches a
@@ -67,9 +67,18 @@ impl PostgresRecordMutationService {
         }
     }
 
+    #[cfg(feature = "postgres-test")]
+    async fn pause_task_context_for_test(&self) {
+        if let Some(barrier) = &self.task_context_barrier_for_test {
+            barrier.loaded.notify_one();
+            barrier.resume.notified().await;
+        }
+    }
+
     async fn admitted_proposal_read_client(
         &self,
         authority: &ProposalAuthority,
+        method: crate::model::HttpMethod,
         correlation: &crate::correlation::RequestCorrelation,
         deadline: tokio::time::Instant,
     ) -> Result<deadpool_postgres::Client, MutationError> {
@@ -87,7 +96,7 @@ impl PostgresRecordMutationService {
         .and_then(|result| result);
         if result.is_err() {
             self.coordinator
-                .record_proposal_refusal(authority, crate::model::HttpMethod::Get, correlation)
+                .record_proposal_refusal(authority, method, correlation)
                 .await?;
         }
         result
@@ -305,11 +314,16 @@ impl PostgresRecordMutationService {
     ) -> Result<(String, Vec<u8>), MutationError> {
         let _attempt = self
             .coordinator
-            .begin_proposal_read_audit(authority, correlation)
+            .begin_proposal_read_audit(authority, crate::model::HttpMethod::Get, correlation)
             .await?;
         let deadline = tokio::time::Instant::now() + self.action_timeout;
         let client = self
-            .admitted_proposal_read_client(authority, correlation, deadline)
+            .admitted_proposal_read_client(
+                authority,
+                crate::model::HttpMethod::Get,
+                correlation,
+                deadline,
+            )
             .await?;
         let mut guard = QueryCancellationGuard::new(self.pool.clone(), client);
         let result = tokio::time::timeout_at(deadline, async {
@@ -369,6 +383,7 @@ impl PostgresRecordMutationService {
                 // and membership, under this same transaction before any bytes.
                 let context = self.coordinator.proposal_review_value(
                     guarded.transaction(), &self.registry, &document, authority, review.records,
+                    None, None,
                 ).await?;
                 if context["effectDigest"].as_str() != Some(review.effect_digest)
                     || context["context"]["contract"]["schemaDigest"].as_str() != Some(review.schema_digest)
@@ -418,7 +433,7 @@ impl PostgresRecordMutationService {
                 .await
                 .map_err(|_| MutationError::Unavailable)?;
             self.coordinator
-                .finish_proposal_read_audit(authority, Some(&document), 1, false, correlation)
+                .finish_proposal_read_audit(authority, crate::model::HttpMethod::Get, Some(&document), 1, false, correlation)
                 .await?;
             Ok((attachment.metadata.content_type, bytes))
         })
@@ -638,11 +653,16 @@ impl PostgresRecordMutationService {
     ) -> Result<(Value, String), MutationError> {
         let _attempt = self
             .coordinator
-            .begin_proposal_read_audit(authority, correlation)
+            .begin_proposal_read_audit(authority, crate::model::HttpMethod::Get, correlation)
             .await?;
         let deadline = tokio::time::Instant::now() + self.action_timeout;
         let client = self
-            .admitted_proposal_read_client(authority, correlation, deadline)
+            .admitted_proposal_read_client(
+                authority,
+                crate::model::HttpMethod::Get,
+                correlation,
+                deadline,
+            )
             .await?;
         let mut guard = QueryCancellationGuard::new(self.pool.clone(), client);
         let result = tokio::time::timeout_at(deadline, async {
@@ -704,6 +724,7 @@ impl PostgresRecordMutationService {
             self.coordinator
                 .finish_proposal_read_audit(
                     authority,
+                    crate::model::HttpMethod::Get,
                     Some(&document),
                     1,
                     value.pointer("/decision/publicReason").is_some(),
@@ -743,11 +764,16 @@ impl PostgresRecordMutationService {
     ) -> Result<Option<Value>, MutationError> {
         let _attempt = self
             .coordinator
-            .begin_proposal_read_audit(authority, correlation)
+            .begin_proposal_read_audit(authority, crate::model::HttpMethod::Get, correlation)
             .await?;
         let deadline = tokio::time::Instant::now() + self.action_timeout;
         let client = self
-            .admitted_proposal_read_client(authority, correlation, deadline)
+            .admitted_proposal_read_client(
+                authority,
+                crate::model::HttpMethod::Get,
+                correlation,
+                deadline,
+            )
             .await?;
         let mut guard = QueryCancellationGuard::new(self.pool.clone(), client);
         let result = tokio::time::timeout_at(deadline, async {
@@ -806,6 +832,7 @@ impl PostgresRecordMutationService {
             self.coordinator
                 .finish_proposal_read_audit(
                     authority,
+                    crate::model::HttpMethod::Get,
                     Some(&document),
                     usize::from(value.is_some()),
                     value
@@ -844,11 +871,16 @@ impl PostgresRecordMutationService {
     ) -> Result<(Value, String), MutationError> {
         let _attempt = self
             .coordinator
-            .begin_proposal_read_audit(authority, correlation)
+            .begin_proposal_read_audit(authority, crate::model::HttpMethod::Get, correlation)
             .await?;
         let deadline = tokio::time::Instant::now() + self.action_timeout;
         let client = self
-            .admitted_proposal_read_client(authority, correlation, deadline)
+            .admitted_proposal_read_client(
+                authority,
+                crate::model::HttpMethod::Get,
+                correlation,
+                deadline,
+            )
             .await?;
         let mut guard = QueryCancellationGuard::new(self.pool.clone(), client);
         let result = tokio::time::timeout_at(deadline, async {
@@ -891,6 +923,8 @@ impl PostgresRecordMutationService {
                     &document,
                     authority,
                     records,
+                    None,
+                    None,
                 )
                 .await?;
             let etag = self.coordinator.proposal_etag(&document, authority)?;
@@ -906,7 +940,14 @@ impl PostgresRecordMutationService {
                 .await
                 .map_err(|_| MutationError::Unavailable)?;
             self.coordinator
-                .finish_proposal_read_audit(authority, Some(&document), 1, false, correlation)
+                .finish_proposal_read_audit(
+                    authority,
+                    crate::model::HttpMethod::Get,
+                    Some(&document),
+                    1,
+                    false,
+                    correlation,
+                )
                 .await?;
             Ok((value, etag))
         })
@@ -929,6 +970,118 @@ impl PostgresRecordMutationService {
         result
     }
 
+    pub(crate) async fn proposal_task_context_read(
+        &self,
+        id: Uuid,
+        authority: &ProposalAuthority,
+        records: &BTreeMap<String, crate::api::proposals::ProposalRecordReadAuthority>,
+        request: &crate::api::proposals::ProposalTaskContextRequest,
+        selected_fields: &BTreeSet<String>,
+        correlation: &crate::correlation::RequestCorrelation,
+    ) -> Result<(Value, String), MutationError> {
+        let _attempt = self
+            .coordinator
+            .begin_proposal_read_audit(authority, crate::model::HttpMethod::Post, correlation)
+            .await?;
+        let deadline = tokio::time::Instant::now() + self.action_timeout;
+        let client = self
+            .admitted_proposal_read_client(
+                authority,
+                crate::model::HttpMethod::Post,
+                correlation,
+                deadline,
+            )
+            .await?;
+        let mut guard = QueryCancellationGuard::new(self.pool.clone(), client);
+        let result = tokio::time::timeout_at(deadline, async {
+            let guarded = begin_proposal_transaction(
+                guard.client(),
+                self.lock_key,
+                self.lock_timeout,
+                &self.expected,
+                authority,
+            )
+            .await
+            .map_err(|_| MutationError::Unavailable)?;
+            guarded
+                .set_statement_budget(
+                    deadline.saturating_duration_since(tokio::time::Instant::now()),
+                )
+                .await
+                .map_err(|_| MutationError::Unavailable)?;
+            let document = proposal_store::load_document(
+                guarded.transaction(),
+                id,
+                proposal_store::DocumentLock::Share,
+            )
+            .await?;
+            #[cfg(feature = "postgres-test")]
+            self.pause_proposal_read_for_test().await;
+            self.coordinator
+                .authorize_proposal_review_read(
+                    guarded.transaction(),
+                    &self.registry,
+                    &document,
+                    authority,
+                )
+                .await?;
+            let value = self
+                .coordinator
+                .proposal_review_value(
+                    guarded.transaction(),
+                    &self.registry,
+                    &document,
+                    authority,
+                    records,
+                    Some(selected_fields),
+                    Some(request),
+                )
+                .await?;
+            #[cfg(feature = "postgres-test")]
+            self.pause_task_context_for_test().await;
+            let etag = self.coordinator.proposal_etag(&document, authority)?;
+            if authority
+                .task_grant
+                .as_ref()
+                .is_some_and(|binding| !binding.is_current())
+            {
+                return Err(MutationError::PreconditionFailed);
+            }
+            guarded
+                .commit()
+                .await
+                .map_err(|_| MutationError::Unavailable)?;
+            self.coordinator
+                .finish_proposal_read_audit(
+                    authority,
+                    crate::model::HttpMethod::Post,
+                    Some(&document),
+                    1,
+                    false,
+                    correlation,
+                )
+                .await?;
+            Ok((value, etag))
+        })
+        .await;
+        let result = match result {
+            Ok(result) => {
+                guard.disarm();
+                result
+            }
+            Err(_) => {
+                guard.cancel_and_discard().await;
+                Err(MutationError::Unavailable)
+            }
+        };
+        if result.is_err() {
+            self.coordinator
+                .record_proposal_refusal(authority, crate::model::HttpMethod::Post, correlation)
+                .await?;
+        }
+        result
+    }
+
     pub(crate) async fn list_proposals(
         &self,
         authorities: &[ProposalAuthority],
@@ -941,7 +1094,11 @@ impl PostgresRecordMutationService {
         for authority in authorities {
             attempts.push(
                 self.coordinator
-                    .begin_proposal_read_audit(authority, correlation)
+                    .begin_proposal_read_audit(
+                        authority,
+                        crate::model::HttpMethod::Get,
+                        correlation,
+                    )
                     .await?,
             );
         }
@@ -1232,6 +1389,7 @@ impl PostgresRecordMutationService {
             self.coordinator
                 .finish_proposal_read_audit(
                     authority,
+                    crate::model::HttpMethod::Get,
                     None,
                     value["items"].as_array().map_or(0, |items| {
                         items

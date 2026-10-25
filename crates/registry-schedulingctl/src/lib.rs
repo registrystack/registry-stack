@@ -92,7 +92,7 @@ struct InitArgs {
     /// New directory for the authored scheduling project.
     #[arg(value_name = "PROJECT")]
     project: PathBuf,
-    /// Project template: standalone-exact-time or standalone-arrival-window.
+    /// Project template: standalone-exact-time, standalone-arrival-window, or resource-reservations.
     #[arg(long, value_name = "NAME")]
     template: String,
 }
@@ -1574,7 +1574,11 @@ mod tests {
 
     #[test]
     fn every_template_initializes_checks_tests_and_explains_green() {
-        for template in ["standalone-exact-time", "standalone-arrival-window"] {
+        for template in [
+            "standalone-exact-time",
+            "standalone-arrival-window",
+            "resource-reservations",
+        ] {
             let root = tempfile::tempdir().unwrap();
             let project = root.path().join("project");
             let project_string = project.to_str().unwrap().to_owned();

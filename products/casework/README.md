@@ -279,15 +279,13 @@ The canonical project pins a BReg Proposal review-context export. Its
 `context.mode: current-source`, one provider and exact contract, and a vendored bounded
 display schema. Casework keeps the request binding and derived task metadata,
 not the current-source business projection. The provider exposes only the
-capabilities a compiled policy uses: human display and service status here;
-task-grant context and routing context are separate purpose-bound reads when
-configured. An unsupported required capability is a compile refusal. BReg
-serves human display and service status only: it does not serve task-grant
-context yet
-([#2062](https://github.com/registrystack/registry-stack/issues/2062)), so
-`caseworkctl check` and the runtime refuse a task template with `subjects`
-bound to this policy, naming the template and the capability. Remove
-`subjects`, or bind the template to a source that serves task-grant context.
+capabilities a compiled policy uses. Human display, service status, and
+task-grant context are separate purpose-bound reads; routing context remains a
+separate capability. A BReg provider can expose task-grant context only when
+the paired package declares a distinct `get-task-grant-context` service
+profile with the exact source fields. `caseworkctl check` and the runtime
+refuse a task template with `subjects` when the provider or runtime binding
+omits that capability. There is no fallback to human display or service status.
 
 Build the matching BReg package, then pair and verify its native export:
 

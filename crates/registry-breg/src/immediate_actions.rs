@@ -2745,6 +2745,19 @@ fn compile_execution(
                     "context grants must name fields in this Action's declared review context",
                 ));
             }
+            if grant
+                .operations
+                .contains(&ProposalOperation::GetTaskGrantContext)
+                && (profile.actor_kind != Some(ActorKindSource::Service)
+                    || grant.readable_context_fields.is_empty()
+                    || proposal.review_context.is_none())
+            {
+                errors.push(Diagnostic::error(
+                    "breg.proposal.task-context-grant-invalid",
+                    "accessProfiles[].permissions.proposals[]",
+                    "get-task-grant-context requires a service profile and a non-empty subset of the Action's declared review-context fields",
+                ));
+            }
             let input_ids = action
                 .inputs
                 .iter()

@@ -65,7 +65,7 @@ const analytics = docsAnalyticsConfig({
 
         const docsJourneyUrl = (anchor, targetSite) => {
           const url = new URL(anchor.href);
-          if (targetSite === 'marketing' || targetSite === 'lab') {
+          if (targetSite === 'lab') {
             url.searchParams.set('utm_source', 'registry_docs');
             url.searchParams.set('utm_medium', 'docs');
             url.searchParams.set('utm_campaign', 'cross_site');

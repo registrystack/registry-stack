@@ -1,0 +1,478 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/breg/journeys/journeys.v1.schema.json
+apiVersion: id.registrystack.org/formats/breg/journeys/v1
+kind: BRegJourneys
+journeys:
+- id: invitation-claim-boundary
+  steps:
+  - id: issue-eligible
+    action: issue-invitation
+    accessProfile: invitation-workflow
+    claims:
+      principal: $localClientSubject
+      scopes:
+      - invitations:workflow
+      actorKind: service
+      requesterClient: invitation-source-agent
+      directClaims:
+        invitation_source: invitation-source-agent
+    request:
+      type: invoke
+      idempotencyKey: source-issue-eligible
+      input:
+        acceptanceId: acceptance-native-eligible
+        beneficiaryReference: beneficiary-native
+        notificationDestination: person@example.invalid
+        offering: consultation
+        location: service-centre
+        searchStart: '2099-01-02T09:00:00Z'
+        searchEnd: '2099-01-02T12:00:00Z'
+        durationMinutes: 30
+        resourceRequired: false
+        acceptanceAuthorized: true
+        relationshipValidThrough: '9999-12-31'
+        expiresOn: '9999-12-31'
+    expect:
+      outcome: success
+      status: 200
+    captureResults:
+      invitation: eligible-invitation
+  - id: retry-issued-response
+    action: issue-invitation
+    accessProfile: invitation-workflow
+    claims:
+      principal: $localClientSubject
+      scopes:
+      - invitations:workflow
+      actorKind: service
+      requesterClient: invitation-source-agent
+      directClaims:
+        invitation_source: invitation-source-agent
+    request:
+      type: invoke
+      idempotencyKey: source-issue-eligible
+      input:
+        acceptanceId: acceptance-native-eligible
+        beneficiaryReference: beneficiary-native
+        notificationDestination: person@example.invalid
+        offering: consultation
+        location: service-centre
+        searchStart: '2099-01-02T09:00:00Z'
+        searchEnd: '2099-01-02T12:00:00Z'
+        durationMinutes: 30
+        resourceRequired: false
+        acceptanceAuthorized: true
+        relationshipValidThrough: '9999-12-31'
+        expiresOn: '9999-12-31'
+    expect:
+      outcome: success
+      status: 200
+    captureResults:
+      invitation: replayed-eligible-invitation
+  - id: obtain-eligible-claim-condition
+    action: claim-invitation
+    accessProfile: invitation-workflow
+    claims:
+      principal: $localClientSubject
+      scopes:
+      - invitations:workflow
+      actorKind: service
+      requesterClient: invitation-source-agent
+      directClaims:
+        invitation_source: invitation-source-agent
+    request:
+      type: target-conditions
+      input:
+        invitationId:
+          recordCapture: eligible-invitation
+    expect:
+      outcome: success
+      status: 200
+    capture: eligible-claim-condition
+  - id: claim-eligible
+    action: claim-invitation
+    accessProfile: invitation-workflow
+    claims:
+      principal: $localClientSubject
+      scopes:
+      - invitations:workflow
+      actorKind: service
+      requesterClient: invitation-source-agent
+      directClaims:
+        invitation_source: invitation-source-agent
+    request:
+      type: invoke
+      idempotencyKey: source-claim-eligible
+      input:
+        invitationId:
+          recordCapture: eligible-invitation
+      preconditions:
+        invitationId:
+          conditionCapture: eligible-claim-condition
+    expect:
+      outcome: success
+      status: 200
+    captureResults:
+      invitation: claimed-invitation
+  - id: second-claim-is-refused
+    action: claim-invitation
+    accessProfile: invitation-workflow
+    claims:
+      principal: $localClientSubject
+      scopes:
+      - invitations:workflow
+      actorKind: service
+      requesterClient: invitation-source-agent
+      directClaims:
+        invitation_source: invitation-source-agent
+    request:
+      type: invoke
+      idempotencyKey: source-second-claim
+      input:
+        invitationId:
+          recordCapture: eligible-invitation
+      preconditions:
+        invitationId:
+          conditionCapture: eligible-claim-condition
+    expect:
+      outcome: refusal
+      status: 412
+      problemCode: precondition.failed
+  - id: obtain-no-capacity-condition
+    action: record-no-capacity
+    accessProfile: invitation-workflow
+    claims:
+      principal: $localClientSubject
+      scopes:
+      - invitations:workflow
+      actorKind: service
+      requesterClient: invitation-source-agent
+      directClaims:
+        invitation_source: invitation-source-agent
+    request:
+      type: target-conditions
+      input:
+        invitationId:
+          recordCapture: eligible-invitation
+    expect:
+      outcome: success
+      status: 200
+    capture: no-capacity-condition
+  - id: record-no-capacity
+    action: record-no-capacity
+    accessProfile: invitation-workflow
+    claims:
+      principal: $localClientSubject
+      scopes:
+      - invitations:workflow
+      actorKind: service
+      requesterClient: invitation-source-agent
+      directClaims:
+        invitation_source: invitation-source-agent
+    request:
+      type: invoke
+      idempotencyKey: source-no-capacity
+      input:
+        invitationId:
+          recordCapture: eligible-invitation
+        acceptanceId: acceptance-native-eligible
+      preconditions:
+        invitationId:
+          conditionCapture: no-capacity-condition
+    expect:
+      outcome: success
+      status: 200
+    captureResults:
+      invitation: no-capacity-invitation
+  - id: read-no-capacity
+    recordType: invitation
+    accessProfile: invitation-workflow
+    claims:
+      principal: $localClientSubject
+      scopes:
+      - invitations:workflow
+      actorKind: service
+      requesterClient: invitation-source-agent
+      directClaims:
+        invitation_source: invitation-source-agent
+    request:
+      type: get
+      recordCapture: no-capacity-invitation
+    expect:
+      outcome: success
+      status: 200
+      fields:
+        state: no-capacity
+        acceptanceId: acceptance-native-eligible
+  - id: issue-expired
+    action: issue-invitation
+    accessProfile: invitation-workflow
+    claims:
+      principal: $localClientSubject
+      scopes:
+      - invitations:workflow
+      actorKind: service
+      requesterClient: invitation-source-agent
+      directClaims:
+        invitation_source: invitation-source-agent
+    request:
+      type: invoke
+      idempotencyKey: source-issue-expired
+      input:
+        acceptanceId: acceptance-native-expired
+        beneficiaryReference: beneficiary-native
+        notificationDestination: person@example.invalid
+        offering: consultation
+        location: service-centre
+        searchStart: '2099-01-02T09:00:00Z'
+        searchEnd: '2099-01-02T12:00:00Z'
+        durationMinutes: 30
+        resourceRequired: false
+        acceptanceAuthorized: true
+        relationshipValidThrough: '2000-01-01'
+        expiresOn: '2000-01-01'
+    expect:
+      outcome: success
+      status: 200
+    captureResults:
+      invitation: expired-invitation
+  - id: obtain-expired-claim-condition
+    action: claim-invitation
+    accessProfile: invitation-workflow
+    claims:
+      principal: $localClientSubject
+      scopes:
+      - invitations:workflow
+      actorKind: service
+      requesterClient: invitation-source-agent
+      directClaims:
+        invitation_source: invitation-source-agent
+    request:
+      type: target-conditions
+      input:
+        invitationId:
+          recordCapture: expired-invitation
+    expect:
+      outcome: success
+      status: 200
+    capture: expired-claim-condition
+  - id: claim-expired-is-refused
+    action: claim-invitation
+    accessProfile: invitation-workflow
+    claims:
+      principal: $localClientSubject
+      scopes:
+      - invitations:workflow
+      actorKind: service
+      requesterClient: invitation-source-agent
+      directClaims:
+        invitation_source: invitation-source-agent
+    request:
+      type: invoke
+      idempotencyKey: source-claim-expired
+      input:
+        invitationId:
+          recordCapture: expired-invitation
+      preconditions:
+        invitationId:
+          conditionCapture: expired-claim-condition
+    expect:
+      outcome: refusal
+      status: 412
+      problemCode: precondition.failed
+  - id: issue-ineligible
+    action: issue-invitation
+    accessProfile: invitation-workflow
+    claims:
+      principal: $localClientSubject
+      scopes:
+      - invitations:workflow
+      actorKind: service
+      requesterClient: invitation-source-agent
+      directClaims:
+        invitation_source: invitation-source-agent
+    request:
+      type: invoke
+      idempotencyKey: source-issue-ineligible
+      input:
+        acceptanceId: acceptance-native-ineligible
+        beneficiaryReference: beneficiary-native
+        notificationDestination: person@example.invalid
+        offering: consultation
+        location: service-centre
+        searchStart: '2099-01-02T09:00:00Z'
+        searchEnd: '2099-01-02T12:00:00Z'
+        durationMinutes: 30
+        resourceRequired: false
+        acceptanceAuthorized: false
+        relationshipValidThrough: '9999-12-31'
+        expiresOn: '9999-12-31'
+    expect:
+      outcome: success
+      status: 200
+    captureResults:
+      invitation: ineligible-invitation
+  - id: obtain-ineligible-claim-condition
+    action: claim-invitation
+    accessProfile: invitation-workflow
+    claims:
+      principal: $localClientSubject
+      scopes:
+      - invitations:workflow
+      actorKind: service
+      requesterClient: invitation-source-agent
+      directClaims:
+        invitation_source: invitation-source-agent
+    request:
+      type: target-conditions
+      input:
+        invitationId:
+          recordCapture: ineligible-invitation
+    expect:
+      outcome: success
+      status: 200
+    capture: ineligible-claim-condition
+  - id: claim-ineligible-is-refused
+    action: claim-invitation
+    accessProfile: invitation-workflow
+    claims:
+      principal: $localClientSubject
+      scopes:
+      - invitations:workflow
+      actorKind: service
+      requesterClient: invitation-source-agent
+      directClaims:
+        invitation_source: invitation-source-agent
+    request:
+      type: invoke
+      idempotencyKey: source-claim-ineligible
+      input:
+        invitationId:
+          recordCapture: ineligible-invitation
+      preconditions:
+        invitationId:
+          conditionCapture: ineligible-claim-condition
+    expect:
+      outcome: refusal
+      status: 412
+      problemCode: precondition.failed
+  - id: issue-revocable
+    action: issue-invitation
+    accessProfile: invitation-workflow
+    claims:
+      principal: $localClientSubject
+      scopes:
+      - invitations:workflow
+      actorKind: service
+      requesterClient: invitation-source-agent
+      directClaims:
+        invitation_source: invitation-source-agent
+    request:
+      type: invoke
+      idempotencyKey: source-issue-revocable
+      input:
+        acceptanceId: acceptance-native-revoked
+        beneficiaryReference: beneficiary-native
+        notificationDestination: person@example.invalid
+        offering: consultation
+        location: service-centre
+        searchStart: '2099-01-02T09:00:00Z'
+        searchEnd: '2099-01-02T12:00:00Z'
+        durationMinutes: 30
+        resourceRequired: false
+        acceptanceAuthorized: true
+        relationshipValidThrough: '9999-12-31'
+        expiresOn: '9999-12-31'
+    expect:
+      outcome: success
+      status: 200
+    captureResults:
+      invitation: revocable-invitation
+  - id: obtain-revocable-claim-condition
+    action: claim-invitation
+    accessProfile: invitation-workflow
+    claims:
+      principal: $localClientSubject
+      scopes:
+      - invitations:workflow
+      actorKind: service
+      requesterClient: invitation-source-agent
+      directClaims:
+        invitation_source: invitation-source-agent
+    request:
+      type: target-conditions
+      input:
+        invitationId:
+          recordCapture: revocable-invitation
+    expect:
+      outcome: success
+      status: 200
+    capture: revocable-claim-condition
+  - id: obtain-revoke-condition
+    action: revoke-invitation
+    accessProfile: invitation-workflow
+    claims:
+      principal: $localClientSubject
+      scopes:
+      - invitations:workflow
+      actorKind: service
+      requesterClient: invitation-source-agent
+      directClaims:
+        invitation_source: invitation-source-agent
+    request:
+      type: target-conditions
+      input:
+        invitationId:
+          recordCapture: revocable-invitation
+    expect:
+      outcome: success
+      status: 200
+    capture: revoke-condition
+  - id: revoke-invitation
+    action: revoke-invitation
+    accessProfile: invitation-workflow
+    claims:
+      principal: $localClientSubject
+      scopes:
+      - invitations:workflow
+      actorKind: service
+      requesterClient: invitation-source-agent
+      directClaims:
+        invitation_source: invitation-source-agent
+    request:
+      type: invoke
+      idempotencyKey: source-revoke
+      input:
+        invitationId:
+          recordCapture: revocable-invitation
+      preconditions:
+        invitationId:
+          conditionCapture: revoke-condition
+    expect:
+      outcome: success
+      status: 200
+    captureResults:
+      invitation: revoked-invitation
+  - id: claim-revoked-is-refused
+    action: claim-invitation
+    accessProfile: invitation-workflow
+    claims:
+      principal: $localClientSubject
+      scopes:
+      - invitations:workflow
+      actorKind: service
+      requesterClient: invitation-source-agent
+      directClaims:
+        invitation_source: invitation-source-agent
+    request:
+      type: invoke
+      idempotencyKey: source-claim-revoked
+      input:
+        invitationId:
+          recordCapture: revocable-invitation
+      preconditions:
+        invitationId:
+          conditionCapture: revocable-claim-condition
+    expect:
+      outcome: refusal
+      status: 412
+      problemCode: precondition.failed

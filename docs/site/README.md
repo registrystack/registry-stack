@@ -92,6 +92,31 @@ them into the Pages artifact. Earlier Pages-only fallback bundles age out with t
 machine-readable corpora are sealed into the canonical-root release tree, so the canonical site does
 not depend on unreleased `/dev/` content.
 
+## Optional visit tracking
+
+Canonical released pages and the public `/dev/` tree offer optional tracking shared
+with the main website.
+The hidden main-origin bridge owns the version-2 consent choice and native Mautic
+identity. Documentation sends minimized public page views and cannot request an
+identifier. Rejection, expiry, privacy signals, or a blocked bridge keep optional
+tracking off. Ordinary local builds, versioned archives, and error pages do not take
+part. Aggregate Umami analytics remains limited to canonical released pages.
+Tracking acceptance does not subscribe anyone to marketing email.
+
+The website and docs copies of `src/lib/shared-tracking-client.mjs` and
+`src/lib/tracking-protocol.mjs` must stay identical. Coordinate changes with the
+website's bridge before publishing a new docs-bearing release. The Pages workflow
+updates `/dev/` when docs source changes merge. It cannot change the sealed
+canonical-root release asset. The `build:dev` command checks the built
+tracking controls and 404 output, requiring shared tracking and forbidding Umami.
+
+Run the docs tests and build checks, then the website repository's
+`scripts/check-marketing-tracking.mjs` with `DOCS_TRACKING_DIST` set to the
+canonical docs build directory. Set `TRACKING_BROWSERS=chromium,firefox,webkit`
+for the complete browser matrix. That check intercepts network requests and
+verifies the built website to docs to starter request journey. Native Mautic
+acceptance is a separate isolated fixture check in the website repository.
+
 ## Content Sources
 
 Data-backed reference tables are generated from:

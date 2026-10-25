@@ -73,6 +73,8 @@ pub struct BregBinding {
     #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::Url"))]
     pub base_url: String,
     pub status_profile: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_grant_profile: Option<String>,
     #[serde(deserialize_with = "registry_casework_core::typed::url")]
     #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::Url"))]
     pub token_endpoint: String,
@@ -115,6 +117,10 @@ pub fn build_provider(
     if description.is_empty()
         || description.len() > 1024 * 1024
         || !registry_casework_core::valid_profile_identifier(&binding.status_profile)
+        || binding.task_grant_profile.as_ref().is_some_and(|profile| {
+            !registry_casework_core::valid_profile_identifier(profile)
+                || profile == &binding.status_profile
+        })
     {
         return Err(ReviewContextError::Invalid);
     }
@@ -124,11 +130,19 @@ pub fn build_provider(
     )
     .map_err(|_| ReviewContextError::Invalid)?;
     export.check()?;
+    let task_capability = policy
+        .capabilities
+        .contains(&registry_casework_core::ReviewContextCapability::TaskGrantContext);
+    let task_profile = policy
+        .service_profiles
+        .get(&registry_casework_core::ReviewContextCapability::TaskGrantContext);
     if export.source_namespace != policy.source_namespace
         || policy
             .service_profiles
             .get(&registry_casework_core::ReviewContextCapability::ServiceStatus)
             != Some(&binding.status_profile)
+        || task_capability != binding.task_grant_profile.is_some()
+        || task_profile != binding.task_grant_profile.as_ref()
         || policy
             .capabilities
             .iter()
@@ -174,12 +188,16 @@ pub fn build_provider(
     .with_attempt_timeout(Duration::from_secs(30))
     .with_connect_timeout(Duration::from_secs(10));
     let client = BaseRegistryClient::new(config).map_err(|_| ReviewContextError::Invalid)?;
-    crate::BregContextProvider::new(
+    let provider = crate::BregContextProvider::new(
         policy.id.clone(),
         export,
         client,
         binding.status_profile.clone(),
-    )
+    )?;
+    match &binding.task_grant_profile {
+        Some(profile) => provider.with_task_grant_profile(profile.clone()),
+        None => Ok(provider),
+    }
 }
 
 fn secret_reference<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {

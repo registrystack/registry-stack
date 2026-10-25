@@ -7,6 +7,86 @@ note: >-
   a disposable database; tests in schema.rs run only under the schema feature.
   This file records the obligation, not a passing run.
 entries:
+  - id: SCHEDULING-SEC-39
+    tests:
+      - {path: crates/registry-schedulingctl/tests/activation_postgres.rs, name: writer_fences_require_unconditional_triggers_and_unconfigured_functions}
+      - {path: crates/registry-scheduling/tests/postgres_commitments/atomic_allocations.rs, name: failed_bundle_reschedule_keeps_every_prior_allocation}
+      - {path: crates/registry-scheduling/tests/postgres_commitments/atomic_allocations.rs, name: a_single_request_and_bundle_contend_for_the_same_physical_capacity}
+      - {path: crates/registry-scheduling/tests/postgres_commitments/atomic_allocations.rs, name: stock_drop_blocks_confirmation_when_live_holds_no_longer_fit}
+      - {path: crates/registry-scheduling/tests/postgres_commitments/atomic_allocations.rs, name: operational_projection_exposes_allocation_spans_and_attenuates_resources}
+      - {path: crates/registry-scheduling/tests/postgres_commitments/atomic_allocations.rs, name: operational_allocation_projection_is_one_revision_snapshot}
+      - {path: crates/registry-scheduling/tests/postgres_commitments/atomic_allocations.rs, name: operational_occupied_filter_does_not_match_an_unselected_allocation}
+      - {path: crates/registry-scheduling/tests/postgres_commitments/atomic_allocations.rs, name: operational_occupied_pagination_orders_by_the_selected_resource}
+  - id: SCHEDULING-SEC-40
+    tests:
+      - {path: crates/registry-scheduling/tests/postgres_commitments/source_busy.rs, name: source_owned_reconciliation_is_cas_bounded_private_and_capacity_effective}
+      - {path: crates/registry-scheduling/tests/postgres_commitments/source_busy.rs, name: older_observation_at_the_current_revision_cannot_replace_newer_busy_state}
+      - {path: crates/registry-scheduling/tests/postgres_commitments/source_busy.rs, name: equal_observation_cannot_replace_overlapping_busy_state}
+      - {path: crates/registry-scheduling/tests/postgres_commitments/source_busy.rs, name: exact_digest_replay_returns_the_original_bounded_outcome}
+      - {path: crates/registry-scheduling/tests/postgres_commitments/source_busy.rs, name: exact_digest_replay_without_the_original_outcome_is_unresolved}
+  - id: SCHEDULING-SEC-41
+    tests:
+      - {path: crates/registry-scheduling/tests/postgres_commitments/multi_window.rs, name: a_window_cannot_reserve_a_resource_an_exact_booking_holds}
+      - {path: crates/registry-scheduling/tests/postgres_commitments/multi_window.rs, name: window_resources_are_reserved_once_and_bookings_carry_only_units}
+      - {path: crates/registry-scheduling/tests/postgres_commitments/multi_window.rs, name: a_window_cannot_take_a_room_another_window_holds_or_an_unavailable_room}
+      - {path: crates/registry-scheduling/tests/postgres_commitments/multi_window.rs, name: a_move_into_a_full_window_is_refused_and_leaves_the_booking_in_place}
+      - {path: crates/registry-scheduling/tests/postgres_commitments/multi_window.rs, name: crossing_reschedules_between_two_windows_neither_deadlock_nor_overbook}
+      - {path: crates/registry-scheduling/tests/postgres_commitments/multi_window.rs, name: fresh_source_busy_time_blocks_a_window_room_reservation}
+      - {path: crates/registry-scheduling/tests/postgres_commitments/multi_window.rs, name: resource_supply_impacts_list_a_window_room_reservation_once}
+      - {path: crates/registry-scheduling/tests/postgres_commitments/multi_window.rs, name: a_policy_publication_leaves_a_window_room_to_its_record}
+      - {path: crates/registry-scheduling/tests/postgres_commitments/multi_window.rs, name: a_policy_publication_does_not_move_a_window_to_another_room}
+      - {path: crates/registry-scheduling/tests/postgres_commitments/multi_window.rs, name: a_window_that_drops_its_room_or_goes_away_frees_the_room}
+      - {path: crates/registry-scheduling/tests/postgres_commitments/multi_window.rs, name: a_moved_window_releases_its_old_span_and_holds_the_new_one}
+      - {path: crates/registry-scheduling/tests/postgres_commitments/multi_window.rs, name: window_admission_and_records_publication_follow_one_lock_order}
+      - {path: crates/registry-scheduling/tests/postgres_commitments/multi_window.rs, name: records_apply_refuses_a_window_room_requirement_the_policy_cannot_reserve}
+      - {path: crates/registry-scheduling/tests/postgres_commitments/multi_window.rs, name: a_policy_publication_refuses_to_strand_a_window_room_requirement}
+      - {path: crates/registry-scheduling/tests/postgres_commitments/multi_window.rs, name: a_policy_publication_cannot_retire_a_window_room_offering}
+      - {path: crates/registry-scheduling-core/src/policy.rs, name: window_resource_requirements_answer_to_the_policy}
+      - {path: crates/registry-scheduling/tests/postgres_commitments/source_busy.rs, name: source_busy_impacts_include_window_room_reservations}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: records_replacement_refuses_to_move_a_window_with_standing_commitments}
+  - id: SCHEDULING-SEC-42
+    tests:
+      - {path: crates/registry-scheduling/tests/postgres_commitments/attendance.rs, name: only_the_exact_task_action_records_and_corrects_an_observation_idempotently}
+      - {path: crates/registry-scheduling/tests/postgres_commitments/attendance.rs, name: concurrent_corrections_accept_exactly_one_observed_revision}
+      - {path: crates/registry-scheduling/tests/postgres_commitments/attendance.rs, name: rescheduling_mints_a_new_visit_and_rejects_the_old_appointment_revision}
+      - {path: crates/registry-scheduling/tests/postgres_commitments/attendance.rs, name: cancelled_and_elapsed_bookings_keep_corrigible_attendance_without_capacity_effects}
+      - {path: crates/registry-scheduling/tests/postgres_commitments/attendance.rs, name: attendance_is_off_by_default_and_explicit_in_operational_projection}
+      - {path: crates/registry-scheduling/tests/postgres_commitments/attendance.rs, name: recording_time_is_observed_after_the_claim_lock_and_replay_keeps_one_event}
+      - {path: crates/registry-scheduling/tests/postgres_commitments/attendance.rs, name: attendance_commit_captures_one_minimized_signed_after_event}
+  - id: SCHEDULING-SEC-43
+    tests:
+      - {path: crates/registry-scheduling-client/tests/calendar_export.rs, name: default_projection_omits_private_and_operational_details}
+      - {path: crates/registry-scheduling-client/tests/calendar_export.rs, name: owner_authorized_current_detail_is_the_export_source}
+      - {path: crates/registry-scheduling-client/tests/calendar_export.rs, name: event_count_is_a_hard_error_instead_of_truncation}
+      - {path: crates/registry-scheduling-client/tests/calendar_export.rs, name: conflicting_rows_at_one_revision_are_refused}
+  - id: SCHEDULING-SEC-36
+    tests:
+      - {path: crates/registry-scheduling/src/auth.rs, name: appointment_detail_accepts_its_explicit_grant_without_opening_other_reads}
+      - {path: crates/registry-scheduling/tests/postgres_commitments/booking_party.rs, name: an_assisted_manager_is_selected_only_from_fresh_exact_source_authority}
+      - {path: crates/registry-scheduling/tests/postgres_commitments/booking_party.rs, name: assisted_manager_authority_is_bound_into_idempotency_and_retention}
+      - {path: crates/registry-scheduling/tests/postgres_commitments/booking_party.rs, name: a_current_appointment_read_grant_reads_a_self_booked_appointment_only_within_its_bounds}
+  - id: SCHEDULING-SEC-37
+    tests:
+      - {path: crates/registry-scheduling/tests/postgres_commitments/operational_reads.rs, name: operational_pages_require_one_profile_and_bind_every_authority_dimension}
+      - {path: crates/registry-scheduling/tests/postgres_commitments/operational_reads.rs, name: a_later_offering_move_does_not_relabel_a_closed_appointment}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: the_ledger_refuses_a_claim_or_an_allocation_without_an_operational_mode}
+  - id: SCHEDULING-SEC-38
+    tests:
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_signed_reminder_uses_the_shared_event_delivery_contract}
+      - {path: crates/registry-scheduling/src/config.rs, name: invalid_reminder_purpose_urls_are_refused_without_repeating_values}
+      - {path: crates/registry-scheduling/src/runtime.rs, name: reminders_use_the_fallback_or_the_selected_purpose_url}
+      - {path: crates/registry-scheduling/src/runtime.rs, name: reminder_signature_binds_the_selected_exact_target}
+      - {path: crates/registry-scheduling/src/runtime.rs, name: reminder_delivery_times_are_canonical_for_every_millisecond_shape}
+      - {path: crates/registry-scheduling/src/runtime.rs, name: reminder_idempotency_is_stable_across_rendered_retry_attempts}
+      - {path: crates/registry-coordinator/tests/scheduling_event_native.rs, name: native_signed_scheduling_confirmation_drives_one_deduplicated_message, features: [postgres-test]}
+      - {path: crates/registry-coordinator/tests/scheduling_event_native.rs, name: native_authored_scheduling_reminder_drives_one_deduplicated_message, features: [postgres-test]}
+  - id: SCHEDULING-SEC-35
+    tests:
+      - {path: crates/registry-scheduling-core/src/admission.rs, name: dated_resource_supply_controls_the_whole_occupied_interval}
+      - {path: crates/registry-scheduling-core/src/resource_availability.rs, name: dated_supply_distinguishes_omitted_empty_continuous_and_closed_intervals}
+      - {path: crates/registry-scheduling-core/src/resource_availability.rs, name: invalid_or_excessive_resource_facts_never_publish_supply}
+      - {path: crates/registry-scheduling/tests/postgres_commitments/resource_availability.rs, name: dated_resource_supply_persists_blocks_new_capacity_and_reports_existing_bookings}
+      - {path: crates/registry-scheduling/tests/postgres_commitments/resource_availability.rs, name: hold_confirmation_rechecks_location_and_required_resource_capabilities}
   - id: SCHEDULING-SEC-01
     tests:
       - {path: crates/registry-scheduling-core/src/admission.rs, name: the_second_caller_against_the_last_unit_is_refused}
@@ -255,7 +335,7 @@ entries:
     tests:
       - {path: crates/registry-schedulingctl/tests/activation_postgres.rs, name: split_roles_deny_the_runtime_a_ledger_write_and_the_service_still_serves, features: [postgres-test]}
       - {path: crates/registry-schedulingctl/tests/activation_postgres.rs, name: a_runtime_role_that_can_write_the_ledger_is_refused_at_startup_until_apply_reissues_its_grants, features: [postgres-test]}
-      - {path: crates/registry-schedulingctl/tests/activation_postgres.rs, name: a_runtime_role_owning_a_scheduling_table_is_refused_in_split_mode_naming_reassign_owned, features: [postgres-test]}
+      - {path: crates/registry-schedulingctl/tests/activation_postgres.rs, name: a_runtime_role_owning_a_scheduling_table_is_refused_with_an_exact_owner_fix, features: [postgres-test]}
       - {path: crates/registry-schedulingctl/tests/activation_postgres.rs, name: a_runtime_role_with_create_on_the_schema_is_refused_in_split_mode_naming_revoke_create, features: [postgres-test]}
       - {path: crates/registry-schedulingctl/tests/activation_postgres.rs, name: a_runtime_role_holding_trigger_on_a_scheduling_table_is_refused_in_split_mode_naming_revoke_trigger, features: [postgres-test]}
       - {path: crates/registry-schedulingctl/tests/activation_postgres.rs, name: a_runtime_role_holding_the_migration_role_is_recorded_as_single, features: [postgres-test]}
@@ -284,6 +364,7 @@ entries:
       - {path: crates/registry-schedulingctl/tests/activation_postgres.rs, name: fresh_attempt_storage_preserves_digests_and_refuses_partial_erasure, features: [postgres-test]}
   - id: SCHEDULING-SEC-34
     tests:
+      - {path: crates/registry-scheduling/tests/postgres_commitments/reservation_review.rs, name: a_three_day_hold_has_one_fixed_deadline_and_retains_its_owner_from_expiry}
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: claim_owner_retention_clears_only_elapsed_claims_and_preserves_the_ledger}
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_cleared_claim_owner_cannot_read_list_or_observe_a_retained_receipt}
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: an_erased_hold_owner_cannot_replay_a_retained_release_receipt}

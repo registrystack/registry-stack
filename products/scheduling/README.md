@@ -140,8 +140,9 @@ runtime credential can now write the ledger, naming `schedulingctl apply` to
 reissue the grants. With two roles, `plan`, `apply`, and `serve` refuse a
 runtime role that owns a Scheduling object, holds TRIGGER on a Scheduling
 table, or holds CREATE on the schema, and a trigger attached to a Scheduling
-table, naming `REASSIGN OWNED BY` then `schedulingctl apply`, or `REVOKE
-TRIGGER`, `REVOKE CREATE ON SCHEMA`, or `DROP TRIGGER` then a rerun of the
+table, naming object-scoped `ALTER ... OWNER TO` corrections then
+`schedulingctl apply`, or `REVOKE TRIGGER`, `REVOKE CREATE ON SCHEMA`, or
+`DROP TRIGGER` then a rerun of the
 refused command. `serve` also refuses a split runtime role missing a grant
 apply issues, naming `schedulingctl apply`. A `serve` that finds a schema older than the one its
 binary carries refuses at the readiness check rather than serving against it,
@@ -151,6 +152,7 @@ upgrade one release at a time; a release that starts a fresh baseline says so
 in its release notes and is applied to a new database. Availability cursors last
 at most 15 minutes; callers should deduplicate entries by their start when a
 policy, records, or runtime change overlaps an in-flight listing.
+
 `records apply` is the one attributable operator write of a deployment's
 environment records: the locations with their time zones, the resource pools
 and their members, the published arrival windows, and the dated exceptions
@@ -164,10 +166,45 @@ transport security is not configurable in production: the runtime requires
 TLS on both connections, and the plaintext escape is a `postgres-test` build
 switch documented in [RUNTIME-CONFIG.md](RUNTIME-CONFIG.md).
 
-The served routes are the published catalogue, availability and the
-separately authorized explain read, holds, and appointments with their
-reschedule, cancel, and history routes. Every call presents a bearer access
-token, and one of three authority profiles decides what it must carry; the
+Individual pool members may add `availability` with dated `openings` and
+`closures`, each a bounded list of `{start, end}` instants. Omitted openings
+add no opening constraint; `openings: []` publishes no supply. Intersect their
+union with the member's static `available` flag and the offering's location
+calendar. Overlapping or adjacent openings form continuous supply, closures
+win, and every interval is half-open. Supply must cover the complete occupied
+interval, including setup and cleanup. Resolve local calendars and ambiguous
+or nonexistent local times at the source before sending RFC 3339 instants.
+Each list contains at most 256 intervals, each positive and at most 3,650 days.
+
+Recording an absence blocks new admissions, rescheduling into that absence,
+and confirmation of an affected hold. Existing bookings and holds are not
+cancelled or reassigned. `records apply --format json` includes
+`resourceImpacts`: the first 256 affected live resource allocations, their
+claim identifiers and occupied intervals, and the exact total from a current
+database snapshot after the apply. A reservation can appear once for each
+affected resource; a window appears through its own resource reservation,
+without counting each booking in it again. Removed resources and stock
+reductions below simultaneous commitments are included alongside absences. It
+contains no owner identity or absence reason. This is a current impact read,
+not a promise that supply stayed unchanged after publication. Operators can
+use scoped appointment reads to inspect further bookings and arrange an
+authorized reschedule or cancellation; affected holds can be released or
+expire normally. Resource catalogue and ordinary availability responses do
+not disclose these dated facts or personnel information.
+
+The [`resource-reservations` starter](examples/resource-reservations/README.md)
+demonstrates named selection and policy-bounded intervals, including a
+25-hour local day and multi-day bookings. Create it with
+`schedulingctl init PROJECT --template resource-reservations`. Existing
+offerings retain fixed duration and fungible allocation unless they opt in.
+
+The served routes are the published catalogue (service, offering, resource
+and location lists), availability with its preview and the separately
+authorized explain read, holds, and appointments with their receipt,
+reschedule, cancel, history, and attendance routes. The operational
+appointment work list, and the source busy preview and apply routes, are served
+only under the runtime profiles that grant them. Every call presents a bearer access
+token, and the route's explicit authority decides what it must carry; the
 published reference is
 [Registry Scheduling API](https://docs.registrystack.org/reference/apis/registry-scheduling/).
 
@@ -211,12 +248,15 @@ declares, each due a fixed number of minutes before the appointment, and a
 worker renders every due intent as one
 shared hook envelope in canonical JSON, the same envelope an appointment
 observer receives, and POSTs it to the configured reminder destination with
-`content-type: application/json`, once per claim. Delivery runs on the
+`content-type: application/json`. Delivery runs on the
 shared dispatch core: each attempt is bounded at five seconds, a transport
 failure retries after thirty seconds, doubling to about thirty-two minutes,
 a refusal the retry classes do not cover sets the intent aside for the
 operator, and the eighth failed attempt sets it aside. A worker that stops
 mid-attempt leaves its lease to lapse, and the attempt counts as a failure.
+If the destination accepts an event but the runtime cannot record that
+outcome, recovery applies the retry schedule and may send the event again.
+Retries are bounded, so successful delivery is not guaranteed.
 A cancellation or reschedule cancels the appointment's reminders no attempt
 has started on, in the same transaction. Just before each send the runtime
 reads, under the attempt's lease, whether the intent still describes the
@@ -238,8 +278,22 @@ Every event carries the same envelope:
 | `data` | the payload the runtime committed |
 | `causation` | a root chain: `root` is the event's own `id` and `hop` is `0` |
 
-A reminder is not signed: the destination authenticates the runtime through
-the optional bearer credential `destinations.reminders.bearerTokenRef` names.
+A reminder can be signed using the optional
+`destinations.reminders.hmacSha256KeyRef`. Signed delivery uses the shared
+CloudEvents delivery headers and HMAC-SHA-256 signature, binding the request
+target, envelope bytes and delivery metadata. `destinations.reminders.url` is
+the fallback for every purpose. The optional closed `purposeUrls` block can
+select separate `confirmation`, `change`, `cancellation`, and `reminder`
+endpoints on that fallback URL's origin. Missing purpose entries keep using the
+fallback. The runtime compiles every effective endpoint at startup and signs
+the exact selected path, so a proxy cannot reroute a signed event to another
+typed receiver. Its event identity and idempotency key stay fixed
+across retries; the attempt and delivery time change. Configure the matching
+trusted source and key at the receiver. The optional
+`destinations.reminders.bearerTokenRef` independently authenticates access to the
+destination and can be used with signing. Omitting the signing key preserves
+bearer-only delivery. A valid event signature proves origin and integrity; it
+does not grant appointment-read or message-send authority.
 
 There are four purposes, so four types: `confirmation` and `change` carry the
 committed appointment's identifier, revision, offering, start, end, and the
@@ -254,13 +308,17 @@ delivered.
 Adopting the product does not require wiring a notification bus first.
 
 Appointment observers are governed hooks. A policy may declare `phase: after`
-with a URL handler for exactly three triggers:
+with a URL handler for exactly four triggers:
 
 | Trigger | Allowed projected fields |
 | --- | --- |
 | `appointment.confirmed` | `appointmentId`, `revision`, `offering`, `start`, `end`, `state`, `policyRevision` |
 | `appointment.rescheduled` | `appointmentId`, `revision`, `offering`, `start`, `end`, `state`, `policyRevision` |
 | `appointment.cancelled` | `appointmentId`, `revision`, `state` |
+| `appointment.attendance-observed` | `appointmentId`, `appointmentRevision`, `attendanceRevision`, `attendanceState`, `observedAt`, `recordedAt`, `policyRevision` |
+
+See [attendance observations](ATTENDANCE.md) for the observation and correction
+contract behind the attendance event.
 
 The runtime refuses conditions, principals, Rhai or Wasm handlers, unknown
 triggers, and fields outside that table. It captures one canonical event and
@@ -297,16 +355,19 @@ exclusions rather than accidents:
 
 - Reassignment: no route moves an appointment to another party, and no
   evaluator takes a substitute recipient.
-- Attendance routes: no check-in, arrival, or fulfilment surface exists, and
-  the runtime records nothing about whether a party attended.
 - Closure routes: closures are environment records the operator applies, and
   no route creates or lifts one.
 - Remediation workflows: a refused or expired commitment ends at its problem
   answer, and nothing reopens it.
-- Reports: no occupancy, utilization, or waiting-list reporting surface.
-- Guest booking: a holder other than the verified caller cannot book on
-  someone's behalf. Every commitment's grant names the caller, and the party
-  a request carries is the party the caller commits.
+- Reports: no occupancy, utilization, or waiting-list reporting surface. The
+  operational appointment work list is a bounded read, not a report.
+- Guest booking: a caller cannot book for an arbitrary other party. Every
+  commitment's grant names the caller, and the party a request carries is the
+  party the caller commits. The one exception is source-managed assisted
+  booking, where a task grant carrying `hold.create-for` and
+  `appointment.create-for` lets an actor book while the source manager from
+  the signed grant is retained as the appointment's manager (see
+  [Task grants](TASK_GRANTS.md#source-managed-assisted-bookings)).
 
 ## External record references
 
@@ -344,16 +405,15 @@ the expired grant cannot do this, because an expired grant refuses the whole
 token, read scope included. A hold is not listed; one that is never confirmed
 expires and returns its capacity.
 
-Listing is per principal by design. A hold or appointment is owned by the
-verified token issuer and subject that booked it, so another principal sees an
-empty page even when it serves the same product, and an orchestrator that must
+Ordinary listing is per principal by design. By default a hold or appointment
+is owned by the verified token issuer and subject that booked it, so another
+principal sees an empty page even when it serves the same product, and an orchestrator that must
 observe its own outcomes books and reads under one principal. An appointment
 an orchestrator books for a party is therefore the orchestrator's, not the
-party's: the party cannot see, reschedule, or cancel it in Scheduling. The
+party's: an external party reference alone permits no read or change. The
 official books for the party, and changes go through the process that booked
-it. History and
-audit carry the keyed pseudonym of that pair instead, derived with the audit
-hash key (`audit.hashKeyRef`), and decide nothing: rotating that key leaves
+it. History and audit carry the keyed pseudonym of that pair instead, derived
+with the audit hash key (`audit.hashKeyRef`), and decide nothing: rotating that key leaves
 every live claim with its owner. After an appointment ends or is cancelled,
 or a hold expires, is released, or is consumed, the configured
 `retention.claimOwnerRetentionDays` window bounds the raw pair. It defaults to
@@ -362,6 +422,34 @@ inert digest; the former owner can no longer list, read, act on, or recover a
 receipt for that claim. The claim, its history, and audit stay. The published
 [Registry Scheduling API reference](https://docs.registrystack.org/reference/apis/registry-scheduling/)
 gives the full recovery rules for an unknown outcome.
+
+## Booking parties and management
+
+An exact-time offering may opt into `partyCounts: optional`. Room and equipment
+bookings can then omit `party` without inventing a recipient or attendee.
+Omitted policy configuration keeps required counts, as do arrival windows.
+Supplied counts are validated and retained independently from capacity units;
+a booking that omits `party` under `partyCounts: optional` records no counts.
+
+`partyReferences` can record up to sixteen typed `beneficiary` or `organization`
+references to source-owned records. Use opaque identifiers without names or
+contact details; these references grant no authority. They are retained through confirmation and rescheduling,
+and follow identity retention. Changing the booking's time does not change its
+recorded parties or manager.
+
+Assisted booking can explicitly select `manager: schedulingManager`, using a
+fixed value from the source grant's signed identity rather than a caller-supplied
+person identifier. The actor and manager are then separate. Additional exact
+actions, fresh online grant status and the retained source-manager binding
+authorize creation, management and current-detail reads. This path grants no
+list or history access. See [Task grants](TASK_GRANTS.md#source-managed-assisted-bookings)
+for the complete authority and recovery contract.
+
+Operational staff can use a separate bounded appointment work list when runtime
+configuration grants an explicit role scope and service/location/resource
+profile. Its projection contains only permitted scheduling data, not booking
+identity or contact data. See
+[Operational appointment read profiles](RUNTIME-CONFIG.md#operational-appointment-read-profiles).
 
 ## Arrival windows and channel subquotas
 
@@ -372,6 +460,21 @@ subquota, then checks the request against the window's published total, so an
 unclaimed subquota stays available to the window's other channels up to that
 total. A channel the policy declares but gives no subquota draws from the
 total alone, and a request naming an undeclared channel is refused.
+
+A records window may also list `resources`, each naming an exact-time
+requirement offering at the window's location with `partyCounts: optional`
+that sells the window's whole span, an optional resource, and physical units.
+The window reserves them once for its whole span through a parent claim in
+the allocation ledger, so the reservation conflicts with exact-time bookings
+and other windows that need the same resource, and `records apply` refuses a
+window whose resource is unavailable, busy, or not freshly covered by a
+configured busy source. `records apply` and a policy publication both refuse
+a requirement the deployed policy cannot reserve that way with
+`mismatched-reference`.
+A window whose record is unchanged keeps what it holds across later records
+applies and policy publications; a later absence of its resource shows in
+`resourceImpacts` instead. Bookings in the window consume only the window's
+units.
 
 Nothing in the current grammar reserves capacity for a channel. Reserved
 floors are an open Phase 2 product question: they change what "the last unit"

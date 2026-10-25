@@ -269,6 +269,20 @@ check_source_commit_absent() {
   printf 'no staged binary embeds the source commit %s\n' "${commit}"
 }
 
+# Compare a staged executable's version line with the release identity and
+# name both when they differ, so a failed check says which binary and why.
+check_version() {
+  local executable="$1"
+  local expected="$2"
+  local observed
+  observed="$("${executable}" --version)"
+  if [[ "${observed}" != "${expected}" ]]; then
+    printf '%s reports "%s"; the release identity expects "%s"\n' \
+      "$(basename -- "${executable}")" "${observed}" "${expected}" >&2
+    return 1
+  fi
+}
+
 build_payload() {
   export RUSTFLAGS="${RELEASE_RUSTFLAGS:?RELEASE_RUSTFLAGS is required}"
   prepare_zig_toolchain
@@ -277,13 +291,13 @@ build_payload() {
     if [[ "${include_rstack}" -eq 1 ]]; then
       cargo build --release --locked -p registry-rstack --bin rstack
       cp target/release/rstack "dist/bin/rstack-${RELEASE_TAG}-linux-amd64"
-      test "$("dist/bin/rstack-${RELEASE_TAG}-linux-amd64" --version)" = \
+      check_version "dist/bin/rstack-${RELEASE_TAG}-linux-amd64" \
         "rstack ${RELEASE_TAG#v}"
     fi
     cargo build --release --locked \
       -p registry-manifest-cli
     cp target/release/registry-manifest "dist/bin/registry-manifest-${RELEASE_TAG}-linux-amd64"
-    test "$("dist/bin/registry-manifest-${RELEASE_TAG}-linux-amd64" --version)" = \
+    check_version "dist/bin/registry-manifest-${RELEASE_TAG}-linux-amd64" \
       "registry-manifest ${RELEASE_TAG#v}"
 
     cargo build --release --locked \

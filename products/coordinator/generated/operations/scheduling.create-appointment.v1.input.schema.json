@@ -1,9 +1,47 @@
 {
   "$defs": {
+    "AdditionalAllocationRequest": {
+      "additionalProperties": false,
+      "description": "One secondary physical allocation in a logical reservation. Its displayed\ninterval is the primary request's interval; its offering supplies its own\noccupied buffers and resource policy.",
+      "properties": {
+        "offering": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "resource": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LocalId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "An exact member selection. Omission requests fungible selection."
+        },
+        "units": {
+          "description": "Physical resource units, independent of party counts.",
+          "maximum": 2147483647,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "offering"
+      ],
+      "type": "object"
+    },
     "AdmissionRequest": {
       "additionalProperties": false,
-      "description": "A request for one admission decision. The evaluator is pure: it resolves\nnothing, fetches nothing, and reads exactly what it is handed.",
+      "description": "A request for one logical admission decision. The evaluator is pure: it\nresolves nothing, fetches nothing, and reads exactly what it is handed.",
       "properties": {
+        "additionalAllocations": {
+          "description": "Secondary requirements committed atomically with the primary line.\nTheir order carries no meaning; hashing and resolution canonicalize it.",
+          "items": {
+            "$ref": "#/$defs/AdditionalAllocationRequest"
+          },
+          "maxItems": 15,
+          "type": "array"
+        },
         "capabilities": {
           "description": "The party's held capability references, matched against the offering's\nrequirements.",
           "items": {
@@ -25,6 +63,15 @@
             "null"
           ]
         },
+        "durationMinutes": {
+          "description": "The displayed interval selected by the caller. Omitted, exact-time\nadmission uses the offering's `durationMinutes`; arrival-window\nadmission refuses this member as out of policy.",
+          "maximum": 10080,
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "externalReferences": {
           "default": [],
           "description": "Opaque record links Scheduling retains with the hold or booking. Their\norder is not significant.",
@@ -33,11 +80,37 @@
           },
           "type": "array"
         },
+        "manager": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ManagerSelection"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Select the fixed signed source manager subject. Omission leaves the\nverified caller as manager."
+        },
         "offering": {
           "type": "string"
         },
         "party": {
-          "$ref": "#/$defs/PartyCounts"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PartyCounts"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The declared people whose booking-time counts participate in policy.\nExact-time policy may explicitly allow this to be omitted for a\nresource reservation; arrival-window admission always requires it."
+        },
+        "partyReferences": {
+          "description": "Typed source-owned party links retained as booking data. They prove no\nrelationship and confer no read or mutation authority.",
+          "items": {
+            "$ref": "#/$defs/PartyReference"
+          },
+          "type": "array"
         },
         "policyRevision": {
           "description": "The policy revision the caller resolved the offering under.",
@@ -51,6 +124,23 @@
             "type": "string"
           },
           "type": "array"
+        },
+        "resource": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LocalId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The exact pool member the caller requires. This is a hard constraint\nonly when the offering opts into named selection; omission preserves\nfungible allocation."
+        },
+        "resourceUnits": {
+          "description": "Physical units required from the primary offering's pool. Omitted or\none preserves the legacy single-resource request and idempotency hash.",
+          "maximum": 2147483647,
+          "minimum": 1,
+          "type": "integer"
         },
         "start": {
           "format": "date-time",
@@ -69,7 +159,6 @@
       "required": [
         "offering",
         "start",
-        "party",
         "policyRevision",
         "capabilities",
         "prerequisites"
@@ -85,7 +174,7 @@
           "description": "The direct-create admission request."
         },
         "hold": {
-          "description": "Hold confirmation is not offered by Coordinator.",
+          "description": "Hold confirmation is not accepted by this operation.",
           "type": "null"
         }
       },
@@ -135,9 +224,21 @@
       ],
       "type": "object"
     },
+    "LocalId": {
+      "description": "A local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`.",
+      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+      "type": "string"
+    },
+    "ManagerSelection": {
+      "description": "An explicit selector for a source-bound managing authority.\n\nThe selector carries no identity. Scheduling resolves the fixed signed\ntask-grant subject of the same name and verifies its current status.",
+      "enum": [
+        "schedulingManager"
+      ],
+      "type": "string"
+    },
     "PartyCounts": {
       "additionalProperties": false,
-      "description": "The party summary capacity is derived from. Recipients are the people the\nservice is delivered to; attendees are everyone present, recipients\nincluded. A parent accompanying two children is three attendees and two\nrecipients, and consumes recipient units, never attendee counts.",
+      "description": "The declared party counts committed with a hold or appointment.\n\nRecipients are the people the service is delivered to; attendees are\neveryone expected to be present, recipients included. These values explain\na capacity decision. They are not an observation that attendance occurred,\nand neither value is an inventory quantity.",
       "properties": {
         "attendees": {
           "maximum": 4294967295,
@@ -155,6 +256,31 @@
         "attendees"
       ],
       "type": "object"
+    },
+    "PartyReference": {
+      "additionalProperties": false,
+      "description": "A typed reference to a party record owned by another product.\n\nScheduling retains this value as booking data. It proves no relationship\nand grants no read or mutation authority.",
+      "properties": {
+        "reference": {
+          "$ref": "#/$defs/ExternalReference"
+        },
+        "role": {
+          "$ref": "#/$defs/PartyReferenceRole"
+        }
+      },
+      "required": [
+        "role",
+        "reference"
+      ],
+      "type": "object"
+    },
+    "PartyReferenceRole": {
+      "description": "The source-owned meaning of an opaque party reference.",
+      "enum": [
+        "beneficiary",
+        "organization"
+      ],
+      "type": "string"
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",

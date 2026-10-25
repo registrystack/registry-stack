@@ -26,9 +26,10 @@
 //!
 //! The consequences of holding all of this in one process are real and are
 //! accepted rather than engineered around: a restart invalidates every
-//! outstanding offer, and single use is enforced per process, so a second
-//! replica would not see the first one's spent codes. A single replica is the
-//! deployment this service supports.
+//! outstanding offer. An independent process has neither this store's random
+//! tagging key nor its live entries, so it refuses another process's codes and
+//! tokens as unknown. A single replica is the supported deployment because the
+//! process that creates an exchange must receive every later request for it.
 
 use std::{
     collections::HashMap,
@@ -79,6 +80,7 @@ pub enum StoreError {
 // this type should invite.
 #[cfg_attr(test, derive(Eq, PartialEq))]
 pub struct PreparedRequest {
+    exchange_id: String,
     kind: String,
     body: String,
     maximum_holder_keys: usize,
@@ -88,12 +90,20 @@ redacted_debug!(PreparedRequest);
 
 impl PreparedRequest {
     #[must_use]
-    pub fn new(kind: &str, body: &str, maximum_holder_keys: usize) -> Self {
+    pub fn new(exchange_id: &str, kind: &str, body: &str, maximum_holder_keys: usize) -> Self {
         Self {
+            exchange_id: exchange_id.to_owned(),
             kind: kind.to_owned(),
             body: body.to_owned(),
             maximum_holder_keys,
         }
+    }
+
+    /// The server-generated opaque identifier joining offer attribution to
+    /// the terminal delivery outcome. It carries no caller or credential data.
+    #[must_use]
+    pub fn exchange_id(&self) -> &str {
+        &self.exchange_id
     }
 
     /// The Evidence assertion kind this offer will request.
@@ -641,6 +651,7 @@ mod tests {
 
     fn prepared() -> PreparedRequest {
         PreparedRequest::new(
+            "exchange-1",
             "urn:example:kind",
             r#"{"selector":"held-by-the-adopter"}"#,
             4,
@@ -985,6 +996,31 @@ mod tests {
             .expect("the offer is remembered");
 
         assert_ne!(first.held_key_material(), second.held_key_material());
+    }
+
+    #[test]
+    fn an_independent_store_refuses_another_stores_live_and_spent_exchange() {
+        let owner = store();
+        let independent = store();
+        owner
+            .remember_offer("code-1", None, prepared(), NOW)
+            .expect("the owner remembers the offer");
+
+        assert_eq!(
+            independent.redeem_offer("code-1", None, NOW),
+            Err(StoreError::Unknown)
+        );
+        owner
+            .redeem_offer_for_access_token("code-1", None, "token-1", NOW)
+            .expect("the owner redeems the offer");
+        assert_eq!(
+            independent.redeem_offer("code-1", None, NOW),
+            Err(StoreError::Unknown)
+        );
+        assert_eq!(
+            independent.claim_access_token("token-1", NOW),
+            Err(StoreError::Unknown)
+        );
     }
 
     /// A nonce is a freshness challenge, so what it must survive is the window

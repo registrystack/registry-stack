@@ -59,6 +59,7 @@ pub(super) fn target_policies(
                     ProposalOperation::Cancel => "cancel",
                     ProposalOperation::Apply => "apply",
                     ProposalOperation::GetReviewContext => "get-review-context",
+                    ProposalOperation::GetTaskGrantContext => "get-task-grant-context",
                     ProposalOperation::GetReviewStatus => "get-review-status",
                     ProposalOperation::GetApplicationActor => continue,
                 };

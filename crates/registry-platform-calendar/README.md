@@ -23,6 +23,14 @@ silent shift, so no caller can derive an invisible duplicate or shifted
 capacity commitment. An interval that spans a transition keeps its real
 elapsed length.
 
+Interval ends may use `24:00` for the following local midnight. Starts remain
+`00:00` through `23:59`. A `00:00` to `24:00` opening covers the actual local
+date, including a 23-hour or 25-hour daylight-saving day. Consecutive full-day
+openings join without a gap. Overnight hours can be expressed as an opening
+ending at `24:00` and another on the following date starting at `00:00`;
+holidays and dated closures retain their own local-date boundaries. Midnight
+endpoints still reject a daylight-saving gap or fold instead of shifting it.
+
 Refusals are neutral: they name the value, its limit, and the fix, and never a
 caller's configuration keys. Each product attaches its own configuration
 pointer to the refusal it reports. Authored spans are bounded to ten years so

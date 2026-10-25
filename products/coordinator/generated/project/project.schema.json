@@ -709,11 +709,18 @@
         "scheduling.read-service/v1",
         "scheduling.read-availability/v1",
         "scheduling.create-appointment/v1",
+        "scheduling.read-appointment/v1",
+        "scheduling.create-hold/v1",
+        "scheduling.release-hold/v1",
+        "scheduling.confirm-hold/v1",
+        "scheduling.reschedule-appointment/v1",
+        "scheduling.cancel-appointment/v1",
         "breg.invoke-action/v1",
         "external.get/v1",
         "evaluation.evaluate/v1",
         "casework.submit-review-request/v1",
-        "casework.cancel-review-request/v1"
+        "casework.cancel-review-request/v1",
+        "scheduling.preview-availability/v1"
       ],
       "type": "string"
     },

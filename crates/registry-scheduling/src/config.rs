@@ -27,13 +27,14 @@ pub use registry_platform_config::{
     PrivateListenerConfig as ListenerConfig, SecretProvidersConfig, TaskGrantStatusConfig,
     TlsTermination, UrlHookDestinationConfig,
 };
+use registry_platform_httputil::destination::validate_fixed_destination_path;
 use registry_platform_oidc::task_grant::{TaskGrantStatusEndpoint, TaskGrantStatusRegistry};
 use registry_platform_oidc::{
     access_token_typ_set, fetch_discovery_for_issuer, parse_static_jwks, IssuerNetworkPolicy,
     JwksFetcher, JwksFetcherConfig, OidcDiscoveryConfig, TokenVerifierConfig,
 };
 use registry_platform_yaml::{
-    escape_pointer_segment, Diagnostic, Invalid, Report, RetiredApiVersion,
+    escape_pointer_segment, Diagnostic, Invalid, LocalId, Report, RetiredApiVersion,
 };
 use registry_scheduling_core::{
     bounded_u32, ObserverHandler, SchedulingPolicy, AUTHORED_POLICY_FILE,
@@ -42,6 +43,9 @@ use registry_scheduling_core::{
 };
 use serde::{Deserialize, Deserializer};
 use thiserror::Error;
+
+use crate::operational::{validate_operational_read_profiles, OperationalReadProfileConfig};
+use crate::source_busy::{validate_busy_import_profiles, BusyImportProfileConfig};
 
 const MAXIMUM_POLICY_FILE_BYTES: usize = 1024 * 1024;
 
@@ -369,6 +373,65 @@ pub struct OidcConfig {
     /// The scope the separately authorized explain path requires.
     #[serde(default = "default_explain_scope")]
     pub explain_scope: String,
+    /// Opt-in cross-owner operational appointment read roles. An omitted or
+    /// empty map grants no operational appointment authority.
+    #[serde(
+        default,
+        deserialize_with = "local_id_keys",
+        skip_serializing_if = "BTreeMap::is_empty"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(schema_with = "appointment_read_profiles_schema")
+    )]
+    pub appointment_read_profiles: BTreeMap<String, OperationalReadProfileConfig>,
+    /// Opt-in source-owned busy import roles. Each selected profile binds one
+    /// stable source id and an explicit resource ceiling.
+    #[serde(
+        default,
+        deserialize_with = "local_id_keys",
+        skip_serializing_if = "BTreeMap::is_empty"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(schema_with = "busy_import_profiles_schema")
+    )]
+    pub busy_import_profiles: BTreeMap<String, BusyImportProfileConfig>,
+}
+
+/// A mapping keyed by local identifiers (CFG-ID-1), with keys kept as
+/// ordinary strings after the reader has checked them.
+fn local_id_keys<'de, D, V>(deserializer: D) -> Result<BTreeMap<String, V>, D::Error>
+where
+    D: Deserializer<'de>,
+    V: Deserialize<'de>,
+{
+    BTreeMap::<LocalId, V>::deserialize(deserializer).map(|map| {
+        map.into_iter()
+            .map(|(key, value)| (key.into_string(), value))
+            .collect()
+    })
+}
+
+#[cfg(feature = "schema")]
+fn appointment_read_profiles_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    local_id_map_schema::<OperationalReadProfileConfig>(generator)
+}
+
+#[cfg(feature = "schema")]
+fn busy_import_profiles_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    local_id_map_schema::<BusyImportProfileConfig>(generator)
+}
+
+#[cfg(feature = "schema")]
+fn local_id_map_schema<V: schemars::JsonSchema>(
+    generator: &mut schemars::SchemaGenerator,
+) -> schemars::Schema {
+    schemars::json_schema!({
+        "type": "object",
+        "propertyNames": generator.subschema_for::<LocalId>(),
+        "additionalProperties": generator.subschema_for::<V>()
+    })
 }
 
 /// The RFC 9068 access-token media type this runtime verifies. The pair of
@@ -469,9 +532,68 @@ pub struct ReminderDestinationConfig {
     #[serde(deserialize_with = "registry_scheduling_core::url")]
     #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::Url"))]
     pub url: String,
+    /// Optional endpoints for individual reminder purposes. Any omitted
+    /// purpose uses `url`; every override must share that URL's origin.
+    #[serde(default)]
+    pub purpose_urls: ReminderPurposeUrls,
     #[serde(default, deserialize_with = "optional_secret_reference")]
     #[cfg_attr(feature = "schema", schemars(with = "Option<SecretReference>"))]
     pub bearer_token_ref: Option<String>,
+    /// Optional HMAC-SHA-256 key for the shared signed event-delivery
+    /// contract. Bearer authentication, when configured, remains independent.
+    #[serde(default, deserialize_with = "optional_secret_reference")]
+    #[cfg_attr(feature = "schema", schemars(with = "Option<SecretReference>"))]
+    pub hmac_sha256_key_ref: Option<String>,
+}
+
+/// Optional endpoint overrides named for the four reminder intent purposes
+/// Scheduling emits.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReminderPurposeUrls {
+    #[serde(default, deserialize_with = "optional_url")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Option<registry_platform_yaml::Url>")
+    )]
+    pub confirmation: Option<String>,
+    #[serde(default, deserialize_with = "optional_url")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Option<registry_platform_yaml::Url>")
+    )]
+    pub change: Option<String>,
+    #[serde(default, deserialize_with = "optional_url")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Option<registry_platform_yaml::Url>")
+    )]
+    pub cancellation: Option<String>,
+    #[serde(default, deserialize_with = "optional_url")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Option<registry_platform_yaml::Url>")
+    )]
+    pub reminder: Option<String>,
+}
+
+impl ReminderPurposeUrls {
+    fn iter(&self) -> [(&'static str, Option<&str>); 4] {
+        [
+            ("confirmation", self.confirmation.as_deref()),
+            ("change", self.change.as_deref()),
+            ("cancellation", self.cancellation.as_deref()),
+            ("reminder", self.reminder.as_deref()),
+        ]
+    }
+}
+
+fn optional_url<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    registry_scheduling_core::url(deserializer).map(Some)
 }
 
 /// Retention periods the retention sweep enforces. Every value is deployment
@@ -773,6 +895,17 @@ impl RuntimeConfig {
                 reference,
             ));
         }
+        if let Some(reference) = self
+            .destinations
+            .reminders
+            .as_ref()
+            .and_then(|reminders| reminders.hmac_sha256_key_ref.as_deref())
+        {
+            references.push((
+                "destinations.reminders.hmacSha256KeyRef".to_owned(),
+                reference,
+            ));
+        }
         for (field, raw) in references {
             if let Err(error) = self.secret_providers.check_reference(&field, raw) {
                 findings.push(error.into());
@@ -852,6 +985,28 @@ impl RuntimeConfig {
                 reason: "must differ from authentication.oidc.readsScope",
             });
         }
+        findings.extend(
+            validate_operational_read_profiles(
+                &oidc.appointment_read_profiles,
+                &oidc.reads_scope,
+                &oidc.explain_scope,
+            )
+            .into_iter()
+            .map(|error| RuntimeConfigError::InvalidOperationalReadProfile {
+                path: error.path().to_owned(),
+                reason: error.reason(),
+            }),
+        );
+        let reserved_scopes = std::iter::once(oidc.reads_scope.clone())
+            .chain(std::iter::once(oidc.explain_scope.clone()))
+            .chain(
+                oidc.appointment_read_profiles
+                    .values()
+                    .map(|profile| profile.scope.clone()),
+            );
+        if validate_busy_import_profiles(&oidc.busy_import_profiles, reserved_scopes).is_err() {
+            findings.push(RuntimeConfigError::InvalidBusyImportProfile);
+        }
     }
 
     fn check_task_grant_status(&self, findings: &mut Vec<RuntimeConfigError>) {
@@ -885,12 +1040,31 @@ impl RuntimeConfig {
 
     fn check_destinations(&self, findings: &mut Vec<RuntimeConfigError>) {
         if let Some(reminders) = &self.destinations.reminders {
-            if !valid_destination_url(&reminders.url) {
+            let fallback = reminder_destination_origin_and_path(&reminders.url);
+            if fallback.is_none() {
                 findings.push(RuntimeConfigError::invalid_destination_url(&[
                     "destinations",
                     "reminders",
                     "url",
                 ]));
+            }
+            for (purpose, configured) in reminders.purpose_urls.iter() {
+                let Some(configured) = configured else {
+                    continue;
+                };
+                let segments = ["destinations", "reminders", "purposeUrls", purpose];
+                match reminder_destination_origin_and_path(configured) {
+                    None => findings.push(RuntimeConfigError::invalid_destination_url(&segments)),
+                    Some(_)
+                        if fallback.is_some()
+                            && !same_reminder_destination_origin(&reminders.url, configured) =>
+                    {
+                        findings.push(RuntimeConfigError::reminder_destination_origin_mismatch(
+                            &segments,
+                        ));
+                    }
+                    Some(_) => {}
+                }
             }
         }
         for (id, destination) in &self.destinations.hooks {
@@ -1093,6 +1267,36 @@ fn valid_destination_url(value: &str) -> bool {
     } else {
         false
     }
+}
+
+/// The normalized origin and parsed path of a reminder destination. The path
+/// stays structural ASCII so one reviewed endpoint cannot be widened through
+/// a retained percent escape or separator alias.
+pub(crate) fn reminder_destination_origin_and_path(value: &str) -> Option<(String, String)> {
+    if !valid_destination_url(value) {
+        return None;
+    }
+    let parsed = url::Url::parse(value).ok()?;
+    let path = parsed.path().to_owned();
+    if validate_fixed_destination_path(&path).is_err() {
+        return None;
+    }
+    let mut origin = parsed;
+    origin.set_path("");
+    origin.set_query(None);
+    origin.set_fragment(None);
+    Some((origin.to_string(), path))
+}
+
+/// Whether two validated reminder endpoints name the same parsed origin. An
+/// omitted default port and its explicit spelling compare equal.
+pub(crate) fn same_reminder_destination_origin(left: &str, right: &str) -> bool {
+    let (Ok(left), Ok(right)) = (url::Url::parse(left), url::Url::parse(right)) else {
+        return false;
+    };
+    left.scheme() == right.scheme()
+        && left.host() == right.host()
+        && left.port_or_known_default() == right.port_or_known_default()
 }
 
 /// A logical hook destination id is a lowercase ASCII letter followed by up
@@ -1304,6 +1508,7 @@ fn stand_in_for(pointer: &str) -> &'static str {
         | ["authentication", "oidc", "issuer"]
         | ["authentication", "oidc", "jwksSource", "uri"]
         | ["destinations", "reminders", "url"]
+        | ["destinations", "reminders", "purposeUrls", _]
         | ["destinations", "hooks", _, "url"] => "https://deferred.invalid",
         ["taskGrantStatus", _, "sourceIssuer"]
         | ["taskGrantStatus", _, "statusResource"]
@@ -1370,6 +1575,10 @@ pub enum RuntimeConfigError {
         path: &'static str,
         reason: &'static str,
     },
+    #[error("{path} {reason}")]
+    InvalidOperationalReadProfile { path: String, reason: &'static str },
+    #[error("authentication.oidc.busyImportProfiles must bind unique source ids, explicit resource sets, bounded coverage and freshness, and a write scope distinct from read profiles")]
+    InvalidBusyImportProfile,
     #[error(
         "authentication.oidc.allowedClients must name every client the deployment admits; unrestricted would admit every client the issuer verifies"
     )]
@@ -1387,9 +1596,11 @@ pub enum RuntimeConfigError {
     #[error("{}", audit_message(.0))]
     InvalidAuditDestination(#[source] AuditDestinationError),
     #[error(
-        "{path} must be an https URL, or an http URL on 127.0.0.1, localhost, or [::1], with a nonzero port and no query or fragment"
+        "{path} must be an https URL, or an http URL on 127.0.0.1, localhost, or [::1], with a nonzero port, a safe path, and no query or fragment"
     )]
     InvalidDestinationUrl { path: String, pointer: String },
+    #[error("{path} must use the same origin as destinations.reminders.url")]
+    ReminderDestinationOriginMismatch { path: String, pointer: String },
     #[error(
         "destinations.hooks must bind every destination scheduling.yaml hooks[].handler.destinationId names"
     )]
@@ -1418,6 +1629,13 @@ impl RuntimeConfigError {
         }
     }
 
+    fn reminder_destination_origin_mismatch(segments: &[&str]) -> Self {
+        Self::ReminderDestinationOriginMismatch {
+            path: segments.join("."),
+            pointer: pointer_to(segments),
+        }
+    }
+
     /// The member this refusal concerns, as a dotted name (`listener.bind`).
     /// Three kinds of refusal return something else, and `pointer` answers
     /// them before it splits this name into a JSON Pointer: `Load` returns
@@ -1434,7 +1652,10 @@ impl RuntimeConfigError {
             Self::HookDestinationIdCollision => "destinations.hooks",
             Self::RelativeOperatedPath(path) => path,
             Self::InvalidOidcClaim { path, .. } => path,
+            Self::InvalidOperationalReadProfile { path, .. } => path,
+            Self::InvalidBusyImportProfile => "authentication.oidc.busyImportProfiles",
             Self::InvalidDestinationUrl { path, .. } => path,
+            Self::ReminderDestinationOriginMismatch { path, .. } => path,
             Self::Oidc => "authentication.oidc",
             Self::AllowedClientsRequired => "authentication.oidc.allowedClients",
             Self::MissingTaskGrantStatus | Self::InvalidTaskGrantStatus => "taskGrantStatus",
@@ -1459,9 +1680,9 @@ impl RuntimeConfigError {
     pub fn pointer(&self) -> String {
         match self {
             Self::Load(error) => error.deciding_diagnostic().path.clone(),
-            Self::BindingSecret { pointer, .. } | Self::InvalidDestinationUrl { pointer, .. } => {
-                pointer.clone()
-            }
+            Self::BindingSecret { pointer, .. }
+            | Self::InvalidDestinationUrl { pointer, .. }
+            | Self::ReminderDestinationOriginMismatch { pointer, .. } => pointer.clone(),
             Self::MissingIdentity => "/identity".to_owned(),
             Self::Policy(_)
             | Self::PolicyUnreadable
@@ -1492,12 +1713,19 @@ impl RuntimeConfigError {
             Self::PolicyChanged => "scheduling.package.file-changed",
             Self::InvalidListener => "scheduling.runtime.invalid-listener",
             Self::InvalidOidcClaim { .. } => "scheduling.runtime.invalid-oidc-claim",
+            Self::InvalidOperationalReadProfile { .. } => {
+                "scheduling.runtime.invalid-operational-read-profile"
+            }
+            Self::InvalidBusyImportProfile => "scheduling.runtime.invalid-busy-import-profile",
             Self::AllowedClientsRequired => "scheduling.runtime.allowed-clients-required",
             Self::MissingTaskGrantStatus => "scheduling.runtime.missing-task-grant-status",
             Self::InvalidTaskGrantStatus => "scheduling.runtime.invalid-task-grant-status",
             Self::InvalidDatabaseReference => "scheduling.runtime.invalid-database-reference",
             Self::InvalidAuditDestination(_) => "scheduling.runtime.invalid-audit",
             Self::InvalidDestinationUrl { .. } => "scheduling.runtime.invalid-destination-url",
+            Self::ReminderDestinationOriginMismatch { .. } => {
+                "scheduling.runtime.reminder-destination-origin-mismatch"
+            }
             Self::HookDestinationInventoryMismatch => "scheduling.runtime.unbound-hook-destination",
             Self::PlaintextDatabase => "scheduling.runtime.plaintext-database",
             Self::Oidc => "scheduling.runtime-dependency.unavailable",
@@ -1543,6 +1771,12 @@ impl RuntimeConfigError {
             Self::InvalidOidcClaim { .. } => {
                 "Name a non-empty value, with explainScope distinct from readsScope, or remove the member to use its default."
             }
+            Self::InvalidOperationalReadProfile { .. } => {
+                "Give each profile one distinct OAuth scope, bounded time limits, explicit service/location/resource permissions, and an explicit projection; never reuse readsScope or explainScope."
+            }
+            Self::InvalidBusyImportProfile => {
+                "Give each busy import profile one unique sourceId, at least one explicit resource, bounded past/future/span/freshness limits, and a write scope distinct from read scopes."
+            }
             Self::MissingTaskGrantStatus => {
                 "Add taskGrantStatus listing the task authorities whose grant status Scheduling checks, or write taskGrantStatus: unchecked-final-fifteen-minutes to accept only a grant with at most fifteen minutes left, without a revocation check."
             }
@@ -1557,7 +1791,10 @@ impl RuntimeConfigError {
             }
             Self::InvalidAuditDestination(error) => audit_action(error),
             Self::InvalidDestinationUrl { .. } => {
-                "Write an https URL with a host, or an http URL on 127.0.0.1, localhost, or [::1] for local development, without a query or fragment."
+                "Write an https URL with a host, or an http URL on 127.0.0.1, localhost, or [::1] for local development, with a safe path and without a query or fragment."
+            }
+            Self::ReminderDestinationOriginMismatch { .. } => {
+                "Use the same scheme, host, and effective port as destinations.reminders.url."
             }
             Self::HookDestinationInventoryMismatch => {
                 "Add a destinations.hooks entry for each destination scheduling.yaml hooks[].handler.destinationId names."
@@ -1732,6 +1969,7 @@ pub(crate) fn reads_block<T: serde::de::DeserializeOwned>(block: &serde_json::Va
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::source_busy::{MAX_BUSY_IMPORT_FRESHNESS_MINUTES, MAX_BUSY_IMPORT_SPAN_DAYS};
     use registry_platform_config::package::write_sum_file;
     use registry_platform_config::SUM_FILE;
     use registry_platform_config::{
@@ -1948,12 +2186,277 @@ holdPolicy:
             config.authentication.oidc.explain_scope,
             "scheduling:explain"
         );
+        assert!(config
+            .authentication
+            .oidc
+            .appointment_read_profiles
+            .is_empty());
         assert_eq!(config.retention.receipt_retention_days, 7);
         assert_eq!(config.retention.hook_payload_retention_days, 7);
         assert!(config.destinations.reminders.is_none());
         assert!(config.destinations.hooks.is_empty());
         let policy = config.load_policy().expect("policy loads").policy;
         assert_eq!(&*policy.project.id, "registry-updates");
+    }
+
+    #[test]
+    fn an_operational_read_profile_is_explicit_and_does_not_reuse_catalogue_scope() {
+        let root = canonical_tempdir();
+        let (_, mut document) = development(root.path());
+        document["authentication"]["oidc"]["appointmentReadProfiles"] = serde_json::json!({
+            "north-desk": {
+                "scope": "scheduling:appointments:north",
+                "maximumPastDays": 7,
+                "maximumFutureDays": 31,
+                "maximumSpanDays": 1,
+                "permissions": [{
+                    "service": "registry-update",
+                    "location": "north-counter",
+                    "resources": {"type": "exact", "ids": ["station-1", "station-2"]}
+                }],
+                "projection": {
+                    "fields": ["resource", "units"],
+                    "externalReferenceProducts": ["casework"]
+                }
+            }
+        });
+        let config = parse_runtime(&document).expect("the explicit profile decodes");
+        assert!(config.findings(None).iter().all(|finding| !matches!(
+            finding,
+            RuntimeConfigError::InvalidOperationalReadProfile { .. }
+        )));
+
+        document["authentication"]["oidc"]["appointmentReadProfiles"]["north-desk"]["scope"] =
+            serde_json::json!("scheduling:read");
+        let config = parse_runtime(&document).expect("the structurally valid profile decodes");
+        let error = config
+            .findings(None)
+            .into_iter()
+            .find(|finding| {
+                matches!(
+                    finding,
+                    RuntimeConfigError::InvalidOperationalReadProfile { .. }
+                )
+            })
+            .expect("catalogue scope reuse is refused");
+        assert_eq!(
+            refusal(&error),
+            (
+                "scheduling.runtime.invalid-operational-read-profile".to_owned(),
+                "/authentication/oidc/appointmentReadProfiles/north-desk/scope".to_owned()
+            )
+        );
+    }
+
+    #[test]
+    fn runtime_profile_map_keys_are_local_identifiers() {
+        let root = canonical_tempdir();
+        let (_, base) = development(root.path());
+        for member in ["appointmentReadProfiles", "busyImportProfiles"] {
+            let mut document = base.clone();
+            document["authentication"]["oidc"][member] = serde_json::json!({"North Desk": {}});
+            let error = parse_runtime(&document).expect_err("an invalid profile id was accepted");
+            assert_eq!(
+                refusal(&error),
+                (
+                    "config.invalid-value".to_owned(),
+                    format!("/authentication/oidc/{member}/North Desk")
+                )
+            );
+        }
+    }
+
+    #[test]
+    fn operational_projection_fields_refuse_duplicates_at_the_repeated_item() {
+        let root = canonical_tempdir();
+        let (_, mut document) = development(root.path());
+        document["authentication"]["oidc"]["appointmentReadProfiles"] = serde_json::json!({
+            "north-desk": {
+                "scope": "scheduling:appointments:north",
+                "maximumPastDays": 7,
+                "maximumFutureDays": 31,
+                "maximumSpanDays": 1,
+                "permissions": [{
+                    "service": "registry-update",
+                    "location": "north-counter",
+                    "resources": {"type": "unrestricted"}
+                }],
+                "projection": {"fields": ["resource", "resource"]}
+            }
+        });
+        let error = parse_runtime(&document).expect_err("a repeated projection field was accepted");
+        assert_eq!(
+            refusal(&error),
+            (
+                "config.duplicate-item".to_owned(),
+                "/authentication/oidc/appointmentReadProfiles/north-desk/projection/fields/1"
+                    .to_owned()
+            )
+        );
+    }
+
+    #[test]
+    fn runtime_identifier_sets_refuse_duplicates_at_the_repeated_item() {
+        let root = canonical_tempdir();
+        let (_, base) = development(root.path());
+
+        let mut exact_resources = base.clone();
+        exact_resources["authentication"]["oidc"]["appointmentReadProfiles"] = serde_json::json!({
+            "north-desk": {
+                "scope": "scheduling:appointments:north",
+                "maximumPastDays": 7,
+                "maximumFutureDays": 31,
+                "maximumSpanDays": 1,
+                "permissions": [{
+                    "service": "registry-update",
+                    "location": "north-counter",
+                    "resources": {"type": "exact", "ids": ["station-1", "station-1"]}
+                }],
+                "projection": {"fields": ["resource"]}
+            }
+        });
+        let error = parse_runtime(&exact_resources)
+            .expect_err("a repeated exact resource identifier was accepted");
+        assert_eq!(
+            refusal(&error),
+            (
+                "config.duplicate-item".to_owned(),
+                "/authentication/oidc/appointmentReadProfiles/north-desk/permissions/0/resources/ids/1"
+                    .to_owned()
+            )
+        );
+
+        let mut reference_products = base.clone();
+        reference_products["authentication"]["oidc"]["appointmentReadProfiles"] = serde_json::json!({
+            "north-desk": {
+                "scope": "scheduling:appointments:north",
+                "maximumPastDays": 7,
+                "maximumFutureDays": 31,
+                "maximumSpanDays": 1,
+                "permissions": [{
+                    "service": "registry-update",
+                    "location": "north-counter",
+                    "resources": {"type": "unrestricted"}
+                }],
+                "projection": {
+                    "fields": ["resource"],
+                    "externalReferenceProducts": ["casework", "casework"]
+                }
+            }
+        });
+        let error = parse_runtime(&reference_products)
+            .expect_err("a repeated external reference product was accepted");
+        assert_eq!(
+            refusal(&error),
+            (
+                "config.duplicate-item".to_owned(),
+                "/authentication/oidc/appointmentReadProfiles/north-desk/projection/externalReferenceProducts/1"
+                    .to_owned()
+            )
+        );
+
+        let mut busy_resources = base;
+        busy_resources["authentication"]["oidc"]["busyImportProfiles"] = serde_json::json!({
+            "staff-calendar": {
+                "scope": "scheduling:busy:staff",
+                "sourceId": "staff-calendar",
+                "resources": ["staff-a", "staff-a"],
+                "maximumPastDays": 7,
+                "maximumFutureDays": 62,
+                "maximumSpanDays": 31,
+                "maximumFreshnessMinutes": 240
+            }
+        });
+        let error =
+            parse_runtime(&busy_resources).expect_err("a repeated busy resource was accepted");
+        assert_eq!(
+            refusal(&error),
+            (
+                "config.duplicate-item".to_owned(),
+                "/authentication/oidc/busyImportProfiles/staff-calendar/resources/1".to_owned()
+            )
+        );
+    }
+
+    #[test]
+    fn busy_import_quantities_are_bounded_by_the_reader() {
+        let root = canonical_tempdir();
+        let (_, base) = development(root.path());
+        let profile = serde_json::json!({
+            "scope": "scheduling:busy:staff",
+            "sourceId": "staff-calendar",
+            "resources": ["staff-a"],
+            "maximumPastDays": 7,
+            "maximumFutureDays": 62,
+            "maximumSpanDays": 31,
+            "maximumFreshnessMinutes": 240
+        });
+        for (member, value) in [
+            (
+                "maximumPastDays",
+                registry_scheduling_core::MAXIMUM_HORIZON_DAYS + 1,
+            ),
+            (
+                "maximumFutureDays",
+                registry_scheduling_core::MAXIMUM_HORIZON_DAYS + 1,
+            ),
+            ("maximumSpanDays", MAX_BUSY_IMPORT_SPAN_DAYS + 1),
+            (
+                "maximumFreshnessMinutes",
+                MAX_BUSY_IMPORT_FRESHNESS_MINUTES + 1,
+            ),
+        ] {
+            let mut document = base.clone();
+            let mut refused = profile.clone();
+            refused[member] = serde_json::json!(value);
+            document["authentication"]["oidc"]["busyImportProfiles"] =
+                serde_json::json!({"staff-calendar": refused});
+            let error =
+                parse_runtime(&document).expect_err("an out-of-range quantity was accepted");
+            assert_eq!(error.code(), "config.out-of-range", "{member}: {error}");
+            assert_eq!(
+                error.pointer(),
+                format!("/authentication/oidc/busyImportProfiles/staff-calendar/{member}")
+            );
+        }
+        for member in ["maximumSpanDays", "maximumFreshnessMinutes"] {
+            let mut document = base.clone();
+            let mut refused = profile.clone();
+            refused[member] = serde_json::json!(0);
+            document["authentication"]["oidc"]["busyImportProfiles"] =
+                serde_json::json!({"staff-calendar": refused});
+            let error = parse_runtime(&document).expect_err("a zero lower bound was accepted");
+            assert_eq!(error.code(), "config.out-of-range", "{member}: {error}");
+        }
+    }
+
+    #[test]
+    fn operational_resource_scope_keeps_unknown_member_positions() {
+        let root = canonical_tempdir();
+        let (_, mut document) = development(root.path());
+        document["authentication"]["oidc"]["appointmentReadProfiles"] = serde_json::json!({
+            "north-desk": {
+                "scope": "scheduling:appointments:north",
+                "maximumPastDays": 7,
+                "maximumFutureDays": 31,
+                "maximumSpanDays": 1,
+                "permissions": [{
+                    "service": "registry-update",
+                    "location": "north-counter",
+                    "resources": {"type": "unrestricted", "ids": ["station-1"]}
+                }],
+                "projection": {"fields": ["resource"]}
+            }
+        });
+        let error = parse_runtime(&document).expect_err("an unknown variant member was accepted");
+        assert_eq!(
+            refusal(&error),
+            (
+                "config.unknown-key".to_owned(),
+                "/authentication/oidc/appointmentReadProfiles/north-desk/permissions/0/resources/ids"
+                    .to_owned()
+            )
+        );
     }
 
     #[test]
@@ -2751,6 +3254,85 @@ holdPolicy:
     }
 
     #[test]
+    fn reminder_purpose_urls_are_typed_and_optional() {
+        let root = canonical_tempdir();
+        let (_, mut document) = development(root.path());
+        document["destinations"]["reminders"] = serde_json::json!({
+            "url": "https://events.example.test:443/fallback",
+            "purposeUrls": {
+                "confirmation": "https://events.example.test/confirmed",
+                "change": "https://events.example.test/rescheduled",
+                "cancellation": "https://events.example.test/cancelled",
+                "reminder": "https://events.example.test/reminder"
+            }
+        });
+        let config = parse_runtime(&document).expect("purpose-specific URLs are accepted");
+        let reminders = config.destinations.reminders.expect("reminder destination");
+        assert_eq!(
+            reminders.purpose_urls.confirmation.as_deref(),
+            Some("https://events.example.test/confirmed")
+        );
+        assert_eq!(
+            reminders.purpose_urls.change.as_deref(),
+            Some("https://events.example.test/rescheduled")
+        );
+        assert_eq!(
+            reminders.purpose_urls.cancellation.as_deref(),
+            Some("https://events.example.test/cancelled")
+        );
+        assert_eq!(
+            reminders.purpose_urls.reminder.as_deref(),
+            Some("https://events.example.test/reminder")
+        );
+    }
+
+    #[test]
+    fn invalid_reminder_purpose_urls_are_refused_without_repeating_values() {
+        let root = canonical_tempdir();
+        let (_, base) = development(root.path());
+        for (purpose_urls, code, pointer, canary) in [
+            (
+                serde_json::json!({"unknown": "https://events.example.test/unknown-canary"}),
+                "config.unknown-key",
+                "/destinations/reminders/purposeUrls/unknown",
+                "unknown-canary",
+            ),
+            (
+                serde_json::json!({"confirmation": "https://other.example.test/origin-canary"}),
+                "scheduling.runtime.reminder-destination-origin-mismatch",
+                "/destinations/reminders/purposeUrls/confirmation",
+                "other.example.test",
+            ),
+            (
+                serde_json::json!({"change": "https://events.example.test/path?query-canary=1"}),
+                "scheduling.runtime.invalid-destination-url",
+                "/destinations/reminders/purposeUrls/change",
+                "query-canary",
+            ),
+            (
+                serde_json::json!({"cancellation": "https://events.example.test/a/%2Funsafe-canary"}),
+                "scheduling.runtime.invalid-destination-url",
+                "/destinations/reminders/purposeUrls/cancellation",
+                "unsafe-canary",
+            ),
+        ] {
+            let mut document = base.clone();
+            document["destinations"]["reminders"] = serde_json::json!({
+                "url": "https://events.example.test/fallback",
+                "purposeUrls": purpose_urls
+            });
+            let error = RuntimeConfig::load(write_operator(root.path(), document))
+                .expect_err("the purpose URL is refused");
+            assert_eq!(
+                refusal(&error),
+                (code.to_owned(), pointer.to_owned()),
+                "{error}"
+            );
+            assert!(!error.to_string().contains(canary), "{error}");
+        }
+    }
+
+    #[test]
     fn more_hook_destinations_than_the_bound_are_refused_with_the_bound_named() {
         let root = canonical_tempdir();
         let (_, mut document) = development(root.path());
@@ -2801,6 +3383,34 @@ holdPolicy:
             [(
                 "scheduling.runtime.secret-provider-disabled".to_owned(),
                 "/destinations/hooks/appointment-events/hmacSha256KeyRef".to_owned()
+            )]
+        );
+    }
+
+    #[test]
+    fn a_reminder_signing_secret_is_checked_against_the_enabled_providers() {
+        let root = canonical_tempdir();
+        let (_, mut document) = development(root.path());
+        document["secretProviders"]
+            .as_object_mut()
+            .unwrap()
+            .remove("environment");
+        document["destinations"]["reminders"] = serde_json::json!({
+            "url": "https://reminders.example.test/due",
+            "hmacSha256KeyRef": "secret:env/REMINDER_KEY"
+        });
+        document["database"] = serde_json::json!({
+            "runtimeUrlRef": "secret:file/runtime",
+            "migrationUrlRef": "secret:file/migration"
+        });
+        let config = parse_runtime(&document).expect("the document decodes");
+        let findings = config.findings(None);
+        let found: Vec<(String, String)> = findings.iter().map(refusal).collect();
+        assert_eq!(
+            found,
+            [(
+                "scheduling.runtime.secret-provider-disabled".to_owned(),
+                "/destinations/reminders/hmacSha256KeyRef".to_owned()
             )]
         );
     }

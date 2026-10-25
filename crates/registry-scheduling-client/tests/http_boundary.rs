@@ -6,14 +6,15 @@ use axum::body::Bytes;
 use axum::extract::State;
 use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, Uri};
 use axum::response::IntoResponse;
-use axum::routing::{delete, get, post};
+use axum::routing::{delete, get, post, put};
 use axum::Router;
 use chrono::{TimeZone as _, Utc};
 use registry_scheduling_client::{
-    type_uri, AdmissionRequest, AvailabilityEntry, BearerToken, CancelAppointmentRequest,
-    CreateAppointmentRequest, ExternalReference, PartyCounts, ProblemCode,
-    RescheduleAppointmentRequest, SchedulingAuth, SchedulingClient, SchedulingClientConfig,
-    SchedulingClientError, SchedulingProtocolFailure, TransportKind,
+    type_uri, AdmissionRequest, AttendanceState, AvailabilityEntry, AvailabilitySelection,
+    BearerToken, CancelAppointmentRequest, CreateAppointmentRequest, ExternalReference,
+    OperationalAppointmentQuery, OperationalTimeBasis, PartyCounts, ProblemCode,
+    RecordAttendanceRequest, RescheduleAppointmentRequest, SchedulingAuth, SchedulingClient,
+    SchedulingClientConfig, SchedulingClientError, SchedulingProtocolFailure, TransportKind,
 };
 use url::Url;
 
@@ -138,10 +139,16 @@ fn admission() -> AdmissionRequest {
     AdmissionRequest {
         offering: "registry-update-30".to_owned(),
         start: Utc.with_ymd_and_hms(2026, 10, 5, 2, 0, 0).unwrap(),
-        party: PartyCounts {
+        duration_minutes: None,
+        resource: None,
+        resource_units: 1,
+        additional_allocations: Vec::new(),
+        party: Some(PartyCounts {
             recipients: 1,
             attendees: 2,
-        },
+        }),
+        manager: None,
+        party_references: Vec::new(),
         channel: Some("public".to_owned()),
         duplicate_key: Some("subject:one".to_owned()),
         policy_revision: 4,
@@ -328,6 +335,110 @@ async fn appointment_listing_forwards_the_exact_external_reference_and_bounds_it
 }
 
 #[tokio::test]
+async fn capacity_preview_posts_a_complete_physical_bundle_without_a_mutation_key() {
+    let observations: Observations = Arc::new(Mutex::new(Vec::new()));
+    let body = serde_json::json!({
+        "offering": "room", "start": "2026-10-05T09:00:00Z",
+        "additionalAllocations": [{ "offering": "chairs", "units": 30 }]
+    });
+    let answer = serde_json::json!({
+        "offering": "room", "start": "2026-10-05T09:00:00Z",
+        "end": "2026-10-05T10:00:00Z", "capacityAvailable": true
+    });
+    let app = Router::new()
+        .route("/v1/availability/preview", post(capture_call))
+        .with_state(Fixture::json(
+            &observations,
+            StatusCode::OK,
+            &answer.to_string(),
+        ));
+    let (address, server) = spawn(app).await;
+    let client = client(&address);
+    let token = BearerToken::new("fixture-secret").unwrap();
+    let mut request: registry_scheduling_client::AvailabilityPreviewRequest =
+        serde_json::from_value(body.clone()).unwrap();
+    let response = client
+        .preview_availability(auth(&token), &request)
+        .await
+        .unwrap();
+    assert!(response.value.capacity_available);
+    assert_eq!(response.trace_id, TRACE_ID);
+    request.resource_units = 0;
+    assert!(client
+        .preview_availability(auth(&token), &request)
+        .await
+        .is_err());
+    let captured = observations.lock().unwrap();
+    assert_eq!(captured.len(), 1);
+    assert_eq!(captured[0].method, "POST");
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&captured[0].body).unwrap(),
+        body
+    );
+    assert!(!captured[0].headers.contains_key("idempotency-key"));
+    server.abort();
+}
+
+#[tokio::test]
+async fn source_busy_uses_one_profile_and_validates_rust_structs_before_http() {
+    let observations: Observations = Arc::new(Mutex::new(Vec::new()));
+    let body = serde_json::json!({
+        "expectedRevision": 0, "observedAt": "2026-10-05T08:00:00Z",
+        "freshUntil": "2026-10-05T09:00:00Z", "status": "fresh",
+        "coverage": {"start": "2026-10-05T00:00:00Z", "end": "2026-10-06T00:00:00Z", "resources": ["room-a"]},
+        "records": []
+    });
+    let answer = serde_json::json!({
+        "sourceId": "calendar-a", "expectedRevision": 0, "currentRevision": 0,
+        "kind": "applied", "revision": 1, "requestDigest": "sha256:abc",
+        "added": 0, "changed": 0, "deleted": 0,
+        "retainedOutsideAuthority": 0, "retainedAcrossCoverageBoundary": 0,
+        "impacts": {"total": 0, "detailsAvailable": false, "truncated": false}
+    });
+    let app = Router::new()
+        .route("/v1/source-busy/preview", post(capture_call))
+        .route("/v1/source-busy/apply", post(capture_call))
+        .with_state(Fixture::json(
+            &observations,
+            StatusCode::OK,
+            &answer.to_string(),
+        ));
+    let (address, server) = spawn(app).await;
+    let client = client(&address);
+    let token = BearerToken::new("fixture-secret").unwrap();
+    let mut request: registry_scheduling_client::BusyReconciliationRequest =
+        serde_json::from_value(body.clone()).unwrap();
+    let preview = client
+        .preview_source_busy(auth(&token), "calendar-main", &request)
+        .await
+        .unwrap();
+    assert_eq!(preview.value.current_revision, 0);
+    let applied = client
+        .apply_source_busy(auth(&token), "calendar-main", &request)
+        .await
+        .unwrap();
+    assert_eq!(applied.value.revision, 1);
+    request.coverage.resources.clear();
+    assert!(matches!(
+        client
+            .apply_source_busy(auth(&token), "calendar-main", &request)
+            .await,
+        Err(SchedulingClientError::InvalidRequest { .. })
+    ));
+    let captured = observations.lock().unwrap();
+    assert_eq!(captured.len(), 2);
+    for sent in captured.iter() {
+        assert_eq!(sent.method, "POST");
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&sent.body).unwrap(),
+            body
+        );
+        assert!(!sent.headers.contains_key("idempotency-key"));
+    }
+    server.abort();
+}
+
+#[tokio::test]
 async fn availability_forwards_the_exact_query_and_validates_its_selectors_locally() {
     let observations: Observations = Arc::new(Mutex::new(Vec::new()));
     let first_page = concat!(
@@ -367,6 +478,7 @@ async fn availability_forwards_the_exact_query_and_validates_its_selectors_local
     assert_eq!(
         first.value.items,
         vec![AvailabilityEntry::Slot {
+            available_units: None,
             start,
             end,
             free: 2,
@@ -395,12 +507,57 @@ async fn availability_forwards_the_exact_query_and_validates_its_selectors_local
     );
     assert_eq!(second.trace_id, TRACE_ID);
 
+    client
+        .availability_with_selection(
+            auth(&token),
+            "registry-update-30",
+            Some(start),
+            Some(end),
+            None,
+            Some(25),
+            &AvailabilitySelection {
+                duration_minutes: Some(1_500),
+                resource: Some("station-2".to_owned()),
+            },
+        )
+        .await
+        .expect("selected availability reaches the server");
+
     assert!(matches!(
         client
             .availability(auth(&token), "", None, None, None, None)
             .await,
         Err(SchedulingClientError::InvalidRequest { .. })
     ));
+    for selection in [
+        AvailabilitySelection {
+            duration_minutes: Some(0),
+            resource: None,
+        },
+        AvailabilitySelection {
+            duration_minutes: Some(10_081),
+            resource: None,
+        },
+        AvailabilitySelection {
+            duration_minutes: Some(30),
+            resource: Some("station/2".to_owned()),
+        },
+    ] {
+        assert!(matches!(
+            client
+                .availability_with_selection(
+                    auth(&token),
+                    "registry-update-30",
+                    None,
+                    None,
+                    None,
+                    None,
+                    &selection,
+                )
+                .await,
+            Err(SchedulingClientError::InvalidRequest { .. })
+        ));
+    }
     assert!(matches!(
         client
             .availability(
@@ -451,7 +608,7 @@ async fn availability_forwards_the_exact_query_and_validates_its_selectors_local
         .expect("reversed bounds reach the runtime for normalization");
 
     let observations = observations.lock().expect("observations");
-    assert_eq!(observations.len(), 4);
+    assert_eq!(observations.len(), 5);
     assert_eq!(
         observations[0].uri,
         "/v1/availability?offering=registry-update-30&start=2026-10-05T02%3A00%3A00Z&end=2026-10-05T02%3A30%3A00Z&limit=25"
@@ -462,10 +619,14 @@ async fn availability_forwards_the_exact_query_and_validates_its_selectors_local
     );
     assert_eq!(
         observations[2].uri,
-        "/v1/availability?offering=registry-update-30&start=2026-10-05T02%3A00%3A00Z&end=2026-10-05T02%3A00%3A00Z"
+        "/v1/availability?offering=registry-update-30&start=2026-10-05T02%3A00%3A00Z&end=2026-10-05T02%3A30%3A00Z&durationMinutes=1500&resource=station-2&limit=25"
     );
     assert_eq!(
         observations[3].uri,
+        "/v1/availability?offering=registry-update-30&start=2026-10-05T02%3A00%3A00Z&end=2026-10-05T02%3A00%3A00Z"
+    );
+    assert_eq!(
+        observations[4].uri,
         "/v1/availability?offering=registry-update-30&start=2026-10-05T02%3A30%3A00Z&end=2026-10-05T02%3A00%3A00Z"
     );
     server.abort();
@@ -499,11 +660,44 @@ async fn explain_forwards_offering_and_start() {
         Some("resource.unavailable")
     );
 
+    client(&address)
+        .explain_with_selection(
+            auth(&token),
+            "registry-update-30",
+            start,
+            &AvailabilitySelection {
+                duration_minutes: Some(45),
+                resource: Some("station-2".to_owned()),
+            },
+        )
+        .await
+        .expect("selected explain document");
+    for duration_minutes in [0, 10_081] {
+        assert!(matches!(
+            client(&address)
+                .explain_with_selection(
+                    auth(&token),
+                    "registry-update-30",
+                    start,
+                    &AvailabilitySelection {
+                        duration_minutes: Some(duration_minutes),
+                        resource: None,
+                    },
+                )
+                .await,
+            Err(SchedulingClientError::InvalidRequest { .. })
+        ));
+    }
+
     let observations = observations.lock().expect("observations");
-    assert_eq!(observations.len(), 1);
+    assert_eq!(observations.len(), 2);
     assert_eq!(
         observations[0].uri,
         "/v1/availability/explain?offering=registry-update-30&start=2026-10-05T02%3A00%3A00Z"
+    );
+    assert_eq!(
+        observations[1].uri,
+        "/v1/availability/explain?offering=registry-update-30&start=2026-10-05T02%3A00%3A00Z&durationMinutes=45&resource=station-2"
     );
     server.abort();
 }
@@ -566,6 +760,66 @@ async fn release_hold_deletes_and_accepts_an_exactly_empty_answer() {
     assert_eq!(captured.uri, "/v1/holds/hold-7");
     assert!(captured.body.is_empty());
     assert!(!captured.headers.contains_key("idempotency-key"));
+    server.abort();
+}
+
+#[tokio::test]
+async fn operational_listing_forwards_one_bounded_role_query() {
+    let observations: Observations = Arc::new(Mutex::new(Vec::new()));
+    let page = concat!(
+        r#"{"items":[{"appointmentId":"appt-1","revision":2,"service":"registry-update","#,
+        r#""location":"north-counter","offering":"registry-update-30","state":"confirmed","#,
+        r#""displayedStart":"2026-10-05T02:00:00Z","displayedEnd":"2026-10-06T03:00:00Z","#,
+        r#""resource":"station-2","units":1,"externalReferences":[]}],"nextCursor":"next"}"#
+    );
+    let app = Router::new()
+        .route("/v1/operational/appointments", get(capture_get))
+        .with_state(Fixture::json(&observations, StatusCode::OK, page));
+    let (address, server) = spawn(app).await;
+    let token = BearerToken::new("fixture-secret").expect("fixture token");
+    let query = OperationalAppointmentQuery {
+        service: "registry-update".to_owned(),
+        location: "north-counter".to_owned(),
+        start: Utc.with_ymd_and_hms(2026, 10, 5, 2, 0, 0).unwrap(),
+        end: Utc.with_ymd_and_hms(2026, 10, 7, 2, 0, 0).unwrap(),
+        time_basis: OperationalTimeBasis::Occupied,
+        offering: Some("registry-update-30".to_owned()),
+        state: Some(registry_scheduling_client::AppointmentStateDocument::Confirmed),
+        resource: Some("station-2".to_owned()),
+        external_reference: Some(ExternalReference {
+            product: "registry-casework".to_owned(),
+            record_type: "case".to_owned(),
+            identifier: "case:42".to_owned(),
+        }),
+        profile: Some("desk".to_owned()),
+        cursor: Some("next".to_owned()),
+        limit: Some(25),
+    };
+    let complete = client(&address)
+        .list_operational_appointments(auth(&token), &query)
+        .await
+        .expect("operational page");
+    assert_eq!(
+        complete.value.items[0].resource.as_deref(),
+        Some("station-2")
+    );
+    assert_eq!(complete.value.items[0].units, Some(1));
+    {
+        let captured = observations.lock().expect("observations");
+        assert_eq!(captured.len(), 1);
+        assert_eq!(
+            captured[0].uri,
+            "/v1/operational/appointments?service=registry-update&location=north-counter&start=2026-10-05T02%3A00%3A00Z&end=2026-10-07T02%3A00%3A00Z&timeBasis=occupied&offering=registry-update-30&state=confirmed&resource=station-2&externalReferenceProduct=registry-casework&externalReferenceRecordType=case&externalReferenceIdentifier=case%3A42&profile=desk&cursor=next&limit=25"
+        );
+    }
+    let mut invalid = query;
+    invalid.resource = Some("station/2".to_owned());
+    assert!(matches!(
+        client(&address)
+            .list_operational_appointments(auth(&token), &invalid)
+            .await,
+        Err(SchedulingClientError::InvalidRequest { .. })
+    ));
     server.abort();
 }
 
@@ -989,4 +1243,46 @@ async fn unresolved_or_unavailable_appointment_receipt_lookup_never_retries() {
         assert_eq!(observations.lock().unwrap().len(), 1);
         server.abort();
     }
+}
+
+#[tokio::test]
+async fn attendance_uses_put_and_preserves_the_observed_visit_and_correction_revision() {
+    let appointment_id = "0199d0e0-8f2a-7c3b-9d4e-5f6a7b8c9d0f";
+    let observed_at = Utc.with_ymd_and_hms(2026, 10, 5, 9, 5, 0).unwrap();
+    let response = serde_json::json!({
+        "appointmentId": appointment_id, "appointmentRevision": 7, "revision": 3,
+        "state": "arrived", "observedAt": observed_at,
+        "recordedAt": "2026-10-05T09:06:00Z"
+    });
+    let observations: Observations = Arc::default();
+    let fixture = Fixture::json(&observations, StatusCode::OK, &response.to_string());
+    let path = format!("/v1/appointments/{appointment_id}/attendance");
+    let app = Router::new()
+        .route(&path, put(capture_call))
+        .with_state(fixture);
+    let (address, server) = spawn(app).await;
+    let token = BearerToken::new("staff-token").unwrap();
+    let request = RecordAttendanceRequest {
+        observed_appointment_revision: 7,
+        observed_revision: 0,
+        state: AttendanceState::Arrived,
+        observed_at,
+    };
+    let answer = client(&address)
+        .record_attendance(auth(&token), appointment_id, "observation-1", &request)
+        .await
+        .unwrap();
+    assert_eq!(answer.value.appointment_revision, 7);
+    assert_eq!(answer.value.revision, 3);
+    assert_eq!(answer.value.state, AttendanceState::Arrived);
+    let seen = observations.lock().unwrap();
+    assert_eq!(seen.len(), 1);
+    assert_eq!(seen[0].method, "PUT");
+    assert_eq!(seen[0].uri, path);
+    assert_eq!(seen[0].headers["idempotency-key"], "observation-1");
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&seen[0].body).unwrap(),
+        serde_json::to_value(request).unwrap()
+    );
+    server.abort();
 }

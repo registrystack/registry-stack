@@ -38,21 +38,28 @@ use std::collections::HashMap;
 use std::str::FromStr;
 #[cfg(feature = "postgres-test")]
 use std::sync::atomic::{AtomicBool, Ordering};
-#[cfg(feature = "postgres-test")]
 use std::sync::Arc;
 use std::time::Duration;
+#[cfg(feature = "postgres-test")]
+use tokio::sync::Notify;
 
 use chrono::{DateTime, TimeDelta, Utc};
-use deadpool_postgres::{Manager, ManagerConfig, Pool, RecyclingMethod, Runtime};
+use deadpool_postgres::{
+    GenericClient as DeadpoolGenericClient, Manager, ManagerConfig, Pool, RecyclingMethod, Runtime,
+};
 use registry_platform_calendar::CalendarInterval;
 use registry_platform_config::SecretResolver;
 use registry_platform_dispatch::postgres::{cancel_unattempted, JobKey, JobTable};
 use registry_scheduling_core::{
-    assess_window_record_impact, evaluate_exact_time_admission, evaluate_hold_state,
-    evaluate_window_admission, AdmissionRefusal, ExactTimeContext, ExternalReference, LedgerClaim,
-    LedgerKind, LedgerSnapshot, PolicyCheckReason, PoolMember, PublishedWindow,
-    SchedulingDiagnostic, SchedulingFacts, SchedulingPolicy, APPOINTMENT_CANCELLED_TRIGGER,
-    APPOINTMENT_CONFIRMED_TRIGGER, APPOINTMENT_RESCHEDULED_TRIGGER,
+    assess_window_record_impact, evaluate_exact_time_bundle, evaluate_exact_time_physical_bundle,
+    evaluate_hold_state, evaluate_window_admission, location_closure_intervals,
+    location_open_intervals, maximum_concurrent_units, AdditionalAllocationRequest,
+    AdmissionRefusal, AllocationDocument, AllocationError, AllocationInterval, AllocationLimits,
+    AllocationRequirementDocument, BundleAdmission, BundleAllocation, BundleEvaluationError,
+    ExactTimeBundleContext, ExactTimeBundleLineContext, ExternalReference, LedgerClaim, LedgerKind,
+    LedgerSnapshot, PartyCounts, PartyReference, PolicyCheckReason, PoolMember, PublishedWindow,
+    SchedulingDiagnostic, SchedulingFacts, SchedulingPolicy, StandingAllocation,
+    APPOINTMENT_CANCELLED_TRIGGER, APPOINTMENT_CONFIRMED_TRIGGER, APPOINTMENT_RESCHEDULED_TRIGGER,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -65,12 +72,19 @@ use crate::hooks::{ActivatedHooks, HookCaptureError};
 
 mod activation;
 mod attempt_key;
+mod attendance;
+mod operational;
+mod resource_availability;
+mod source_busy;
 pub use activation::{
     activation_layout, policy_pool_ids, Activation, ActivationOutcome, ActivationPlan,
     ActivationRequest, ActivePackage, DeployedPolicy, RoleMode, SchemaState, SINGLE_ROLE_STATEMENT,
 };
 use activation::{apply_migrations_in, check_active_package_in, schema_state_in};
 pub use attempt_key::attempt_key_reference;
+pub use operational::OperationalAppointmentRow;
+pub use resource_availability::{ResourceSupplyImpact, ResourceSupplyImpacts};
+pub use source_busy::{resource_interval_is_available, BusyStoreError};
 
 const SCHEDULING_MIGRATION: &str = include_str!("../migrations/0200_scheduling.sql");
 /// Every schema version, in the order it is applied. The baseline is
@@ -147,6 +161,18 @@ fn system_clock() -> SharedClock {
     std::sync::Arc::new(std::sync::RwLock::new(std::sync::Arc::new(Utc::now)))
 }
 
+/// Mark one runtime transaction as understanding the atomic allocation
+/// ledger. The migration-owned triggers refuse writers that omit this local
+/// marker, and PostgreSQL clears it at commit or rollback.
+async fn mark_allocation_writer(
+    transaction: &deadpool_postgres::Transaction<'_>,
+) -> Result<(), StoreError> {
+    transaction
+        .batch_execute("SET LOCAL registry_scheduling.allocation_writer = 'v2'")
+        .await?;
+    Ok(())
+}
+
 #[derive(Debug, Error)]
 pub enum StoreError {
     #[error("PostgreSQL 17 or newer is required; upgrade the database server before activating or serving a package")]
@@ -159,6 +185,8 @@ pub enum StoreError {
     SecretConfiguration(String),
     #[error("the Scheduling database is not in the state this runtime expects")]
     Corrupt,
+    #[error("the bounded Scheduling capacity snapshot is too large to evaluate")]
+    CapacitySnapshotTooLarge,
     #[error(
         "the Scheduling database uses a pre-1.0 schema (versions {}); this release supports fresh installs only. Create a fresh database and apply the package",
         schema_versions(versions)
@@ -330,15 +358,47 @@ impl StoreError {
 pub struct PostgresStore {
     pool: Pool,
     clock: SharedClock,
+    busy_source_bindings: Arc<std::collections::BTreeMap<String, Vec<String>>>,
     /// Test switches that report the next capacity commit that took effect
     /// as unacknowledged, and the next read-back of one as unreadable.
     #[cfg(feature = "postgres-test")]
     lose_acknowledgment: Arc<AtomicBool>,
     #[cfg(feature = "postgres-test")]
     fail_read_back: Arc<AtomicBool>,
+    #[cfg(feature = "postgres-test")]
+    pause_operational_page: Arc<AtomicBool>,
+    #[cfg(feature = "postgres-test")]
+    operational_page_paused: Arc<Notify>,
+    #[cfg(feature = "postgres-test")]
+    resume_operational_page: Arc<Notify>,
 }
 
 impl PostgresStore {
+    /// Bind each resource to the configured source ids whose fresh coverage
+    /// every new allocation must satisfy. Profiles remain the authority
+    /// source; this derived index contains no credentials or caller data.
+    #[must_use]
+    pub fn with_busy_source_profiles(
+        mut self,
+        profiles: &std::collections::BTreeMap<String, crate::source_busy::BusyImportProfileConfig>,
+    ) -> Self {
+        let mut bindings = std::collections::BTreeMap::<String, Vec<String>>::new();
+        for profile in profiles.values() {
+            for resource in &profile.resources {
+                bindings
+                    .entry(resource.clone())
+                    .or_default()
+                    .push(profile.source_id.clone());
+            }
+        }
+        for sources in bindings.values_mut() {
+            sources.sort();
+            sources.dedup();
+        }
+        self.busy_source_bindings = Arc::new(bindings);
+        self
+    }
+
     /// One observation of the store's clock: a request's own `now` at the
     /// edge, and the time an authorization re-check inside a transaction is
     /// decided under. Production observes the system clock.
@@ -387,6 +447,36 @@ impl PostgresStore {
     #[cfg(feature = "postgres-test")]
     pub fn fail_next_read_back(&self) {
         self.fail_read_back.store(true, Ordering::SeqCst);
+    }
+
+    /// Pause the next operational page after its parent rows are read and
+    /// before its allocation rows are read. Test-only: this makes a
+    /// concurrent lifecycle write deterministic when proving snapshot
+    /// coherence.
+    #[cfg(feature = "postgres-test")]
+    pub fn pause_next_operational_page_between_queries(&self) {
+        self.pause_operational_page.store(true, Ordering::SeqCst);
+    }
+
+    /// Wait until the armed operational page reaches its between-query
+    /// pause. Test-only.
+    #[cfg(feature = "postgres-test")]
+    pub async fn wait_for_operational_page_pause(&self) {
+        self.operational_page_paused.notified().await;
+    }
+
+    /// Let a paused operational page finish. Test-only.
+    #[cfg(feature = "postgres-test")]
+    pub fn release_operational_page_pause(&self) {
+        self.resume_operational_page.notify_one();
+    }
+
+    async fn pause_operational_page_if_requested(&self) {
+        #[cfg(feature = "postgres-test")]
+        if self.pause_operational_page.swap(false, Ordering::SeqCst) {
+            self.operational_page_paused.notify_one();
+            self.resume_operational_page.notified().await;
+        }
     }
 
     /// Whether the test switch reports this commit as unacknowledged. Always
@@ -534,6 +624,16 @@ pub struct ClaimRow {
     pub occupied_start: DateTime<Utc>,
     pub occupied_end: DateTime<Utc>,
     pub units: i32,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allocations: Vec<AllocationDocument>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub party: Option<PartyCounts>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub party_references: Vec<PartyReference>,
+    /// A source-bound manager selected from the fixed signed task subject.
+    /// Absence means the verified owner pair remains the manager.
+    #[serde(skip)]
+    pub source_manager: Option<SourceBoundManager>,
     pub duplicate_key: Option<String>,
     #[serde(default)]
     pub external_references: Vec<ExternalReference>,
@@ -567,6 +667,14 @@ pub struct ClaimOwner {
     pub subject: String,
 }
 
+/// A stable source-local manager identity. Only an exact current task grant
+/// from the same source can exercise it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SourceBoundManager {
+    pub source_issuer: String,
+    pub subject: String,
+}
+
 impl ClaimRow {
     /// Whether the verified `issuer` and `subject` own this claim. A claim
     /// with no stored owner is owned by nobody.
@@ -575,6 +683,15 @@ impl ClaimRow {
         self.owner
             .as_ref()
             .is_some_and(|owner| owner.issuer == issuer && owner.subject == subject)
+    }
+
+    /// Whether a commitment carries the authority that manages this claim.
+    /// Source-bound claims never fall back to their creating actor.
+    fn is_managed_by(&self, commitment: &Commitment<'_>) -> bool {
+        match &self.source_manager {
+            Some(expected) => commitment.source_manager.as_ref() == Some(expected),
+            None => self.is_owned_by(commitment.actor_issuer, commitment.actor_subject),
+        }
     }
 
     /// Whether this claim holds its offering's terms still. This is the Rust
@@ -589,7 +706,7 @@ impl ClaimRow {
     pub fn pins_its_offering(&self, now: DateTime<Utc>) -> bool {
         self.state == ClaimState::Active
             && match self.kind {
-                LedgerKind::Booking => true,
+                LedgerKind::Booking | LedgerKind::Window => true,
                 LedgerKind::Hold => self.hold_expires_at.is_some_and(|expiry| expiry > now),
             }
     }
@@ -644,6 +761,9 @@ pub struct Commitment<'c> {
     /// attempt while that attempt's receipt is retained.
     pub actor_issuer: &'c str,
     pub actor_subject: &'c str,
+    /// The exact fresh source authority presented for this operation, or none
+    /// when the verified actor manages the claim directly.
+    pub source_manager: Option<SourceBoundManager>,
     pub idempotency_key: &'c str,
     /// The idempotent hash of the request payload.
     pub request_hash: &'c str,
@@ -666,28 +786,61 @@ impl Commitment<'_> {
     }
 }
 
-/// The policy-resolved supply an admission runs against.
-pub enum SupplyContext<'p> {
-    ExactTime {
-        exact: &'p registry_scheduling_core::ExactTimeOffering,
-        members: &'p [PoolMember],
-        open: &'p [CalendarInterval],
-        closures: &'p [CalendarInterval],
+/// The policy-resolved window a single-supply admission runs against. An
+/// exact-time admission commits as bundle lines ([`BundleSupplyLine`]).
+pub struct SupplyContext<'p> {
+    pub window: &'p registry_scheduling_core::PublishedWindow,
+    pub lead_time_minutes: u32,
+    pub horizon_days: u32,
+    pub channels: &'p [registry_scheduling_core::Channel],
+    pub open: &'p [CalendarInterval],
+    pub closures: &'p [CalendarInterval],
+}
+
+/// One policy-resolved exact-time requirement in a logical reservation.
+/// Every line is built from one facts revision and passed to one transaction.
+pub struct BundleSupplyLine<'p> {
+    pub requirement_id: String,
+    pub offering: &'p registry_scheduling_core::OfferingPolicy,
+    pub exact: &'p registry_scheduling_core::ExactTimeOffering,
+    pub members: &'p [PoolMember],
+    pub open: &'p [CalendarInterval],
+    pub closures: &'p [CalendarInterval],
+    pub resource: Option<&'p str>,
+    pub stored_resource: bool,
+    pub units: u32,
+}
+
+/// The policy-resolved supply one capacity commitment places its claim on:
+/// one window offering, or every line of an exact-time bundle.
+#[derive(Clone, Copy)]
+pub enum CommitSupply<'p> {
+    Single {
+        offering: &'p registry_scheduling_core::OfferingPolicy,
+        supply: &'p SupplyContext<'p>,
     },
-    Window {
-        window: &'p registry_scheduling_core::PublishedWindow,
-        lead_time_minutes: u32,
-        horizon_days: u32,
-        channels: &'p [registry_scheduling_core::Channel],
-        open: &'p [CalendarInterval],
-        closures: &'p [CalendarInterval],
-    },
+    Bundle(&'p [BundleSupplyLine<'p>]),
+}
+
+const MAXIMUM_CAPACITY_SNAPSHOT_ROWS: usize = 4_096;
+
+struct NewClaimAllocation<'p> {
+    requirement: &'p str,
+    offering: &'p str,
+    operational_service: &'p str,
+    operational_location: &'p str,
+    anchor_id: &'p str,
+    resource_id: &'p str,
+    occupied_start: DateTime<Utc>,
+    occupied_end: DateTime<Utc>,
+    units: u32,
 }
 
 /// What one committed operation produced.
 #[derive(Clone, Debug)]
 pub enum CommitOutcome {
     Booking(ClaimRow),
+    Attendance(crate::attendance::AttendanceObservation),
     Hold(ClaimRow),
     Cancelled(ClaimRow),
     Released,
@@ -730,6 +883,8 @@ pub enum CommitError {
     Unauthorized,
     #[error("the observed revision does not match the current revision")]
     RevisionMismatch,
+    #[error("the attendance observation time is in the future")]
+    ObservationInFuture,
     #[error("the cancellation cutoff has passed")]
     CutoffPassed,
     /// The environment records were replaced after this request resolved
@@ -844,10 +999,17 @@ impl PostgresStore {
         Ok(Self {
             pool,
             clock: system_clock(),
+            busy_source_bindings: Arc::default(),
             #[cfg(feature = "postgres-test")]
             lose_acknowledgment: Arc::default(),
             #[cfg(feature = "postgres-test")]
             fail_read_back: Arc::default(),
+            #[cfg(feature = "postgres-test")]
+            pause_operational_page: Arc::default(),
+            #[cfg(feature = "postgres-test")]
+            operational_page_paused: Arc::default(),
+            #[cfg(feature = "postgres-test")]
+            resume_operational_page: Arc::default(),
         })
     }
 
@@ -874,6 +1036,7 @@ impl PostgresStore {
     pub async fn migrate(&self) -> Result<Vec<i64>, StoreError> {
         let mut client = self.client().await?;
         let transaction = client.transaction().await?;
+        mark_allocation_writer(&transaction).await?;
         transaction
             .execute("SELECT pg_advisory_xact_lock($1)", &[&MIGRATION_LOCK_KEY])
             .await?;
@@ -914,6 +1077,7 @@ impl PostgresStore {
     pub async fn adopt(&self, scheduling_id: &str) -> Result<(), StoreError> {
         let mut client = self.client().await?;
         let transaction = client.transaction().await?;
+        mark_allocation_writer(&transaction).await?;
         let row = transaction
             .query_one(
                 "SELECT scheduling_id FROM scheduling_meta WHERE singleton FOR UPDATE",
@@ -972,6 +1136,7 @@ impl PostgresStore {
         }
         let mut client = self.client().await?;
         let transaction = client.transaction().await?;
+        mark_allocation_writer(&transaction).await?;
         lock_publication(&transaction).await?;
         let stored_id: String = transaction
             .query_one(
@@ -999,6 +1164,7 @@ impl PostgresStore {
     pub async fn facts(&self) -> Result<(SchedulingFacts, i64), StoreError> {
         let mut client = self.client().await?;
         let transaction = client.transaction().await?;
+        mark_allocation_writer(&transaction).await?;
         transaction
             .batch_execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
             .await?;
@@ -1017,7 +1183,7 @@ impl PostgresStore {
             .await?;
         let members = transaction
             .query(
-                "SELECT resource_id, pool_id, capabilities, available \
+                "SELECT resource_id, pool_id, capabilities, available, capacity_units, availability \
                  FROM scheduling_pool_members ORDER BY pool_id, resource_id",
                 &[],
             )
@@ -1055,19 +1221,30 @@ impl PostgresStore {
                 .collect(),
             pools: pools
                 .iter()
-                .map(|pool| registry_scheduling_core::ResourcePool {
-                    id: pool.get(0),
-                    members: members
-                        .iter()
-                        .filter(|member| member.get::<_, String>(1) == pool.get::<_, String>(0))
-                        .map(|member| registry_scheduling_core::PoolMember {
-                            resource_id: member.get(0),
-                            capabilities: member.get(2),
-                            available: member.get(3),
-                        })
-                        .collect(),
+                .map(|pool| {
+                    Ok(registry_scheduling_core::ResourcePool {
+                        id: pool.get(0),
+                        members: members
+                            .iter()
+                            .filter(|member| member.get::<_, String>(1) == pool.get::<_, String>(0))
+                            .map(|member| {
+                                Ok(registry_scheduling_core::PoolMember {
+                                    resource_id: member.get(0),
+                                    capabilities: member.get(2),
+                                    available: member.get(3),
+                                    capacity_units: u32::try_from(member.get::<_, i32>(4))
+                                        .map_err(|_| StoreError::Corrupt)?,
+                                    availability: member
+                                        .get::<_, Option<Value>>(5)
+                                        .map(serde_json::from_value)
+                                        .transpose()
+                                        .map_err(|_| StoreError::Corrupt)?,
+                                })
+                            })
+                            .collect::<Result<Vec<_>, StoreError>>()?,
+                    })
                 })
-                .collect(),
+                .collect::<Result<Vec<_>, StoreError>>()?,
             windows,
             exceptions: exceptions
                 .iter()
@@ -1099,7 +1276,15 @@ impl PostgresStore {
     ) -> Result<(), StoreError> {
         let mut client = self.client().await?;
         let transaction = client.transaction().await?;
-        replace_facts_in_transaction(&transaction, scheduling_id, facts, None).await?;
+        mark_allocation_writer(&transaction).await?;
+        replace_facts_in_transaction(
+            &transaction,
+            scheduling_id,
+            facts,
+            None,
+            &self.busy_source_bindings,
+        )
+        .await?;
         // The swap takes every supply anchor, so its commit is read back
         // like a capacity commit when its acknowledgment is lost.
         self.commit_publication(transaction).await
@@ -1118,7 +1303,15 @@ impl PostgresStore {
     ) -> Result<(), StoreError> {
         let mut client = self.client().await?;
         let transaction = client.transaction().await?;
-        replace_facts_in_transaction(&transaction, scheduling_id, facts, Some(expected)).await?;
+        mark_allocation_writer(&transaction).await?;
+        replace_facts_in_transaction(
+            &transaction,
+            scheduling_id,
+            facts,
+            Some(expected),
+            &self.busy_source_bindings,
+        )
+        .await?;
         self.commit_publication(transaction).await
     }
 
@@ -1181,7 +1374,12 @@ impl PostgresStore {
     pub async fn claim(&self, claim_id: Uuid) -> Result<Option<ClaimRow>, StoreError> {
         let client = self.client().await?;
         let row = client.query_opt(SELECT_CLAIM, &[&claim_id]).await?;
-        row.map(map_claim_row).transpose()
+        let Some(row) = row else {
+            return Ok(None);
+        };
+        let mut claims = vec![map_claim_row(row)?];
+        load_claim_allocations(&client, &mut claims).await?;
+        Ok(claims.pop())
     }
 
     /// Appointments owned by the verified `issuer` and `subject` that carry
@@ -1202,15 +1400,22 @@ impl PostgresStore {
                 "SELECT claim_id, kind, state, offering, supply_id, channel, \
                  displayed_start, displayed_end, occupied_start, occupied_end, units, duplicate_key, \
                  external_references, hold_expires_at, revision, policy_revision, actor, reason, \
-                 created_at, closed_at, owner_issuer, owner_subject FROM scheduling_claims \
+                 created_at, closed_at, owner_issuer, owner_subject, recipient_count, attendee_count, \
+                 party_references, manager_source_issuer, manager_subject FROM scheduling_claims \
                  WHERE kind='booking' AND owner_issuer=$1 AND owner_subject=$2 \
+                   AND manager_source_issuer IS NULL \
                    AND external_references @> $3::jsonb \
                    AND ($4::uuid IS NULL OR claim_id > $4) \
                  ORDER BY claim_id LIMIT $5",
                 &[&issuer, &subject, &reference, &after_id, &limit],
             )
             .await?;
-        rows.into_iter().map(map_claim_row).collect()
+        let mut claims = rows
+            .into_iter()
+            .map(map_claim_row)
+            .collect::<Result<Vec<_>, _>>()?;
+        load_claim_allocations(&client, &mut claims).await?;
+        Ok(claims)
     }
 
     /// The offering as the policy revision `policy_revision` published it.
@@ -1283,21 +1488,28 @@ impl PostgresStore {
         &self,
         after_id: Option<&str>,
         limit: i64,
-    ) -> Result<Vec<(String, String, Vec<String>, bool)>, StoreError> {
+    ) -> Result<Vec<(String, String, Vec<String>, bool, u32)>, StoreError> {
         let client = self.client().await?;
         let rows = client
             .query(
-                "SELECT resource_id, pool_id, capabilities, available \
+                "SELECT resource_id, pool_id, capabilities, available, capacity_units \
                  FROM scheduling_pool_members \
                  WHERE ($1::text IS NULL OR resource_id > $1) \
                  ORDER BY resource_id LIMIT $2",
                 &[&after_id, &limit],
             )
             .await?;
-        Ok(rows
-            .iter()
-            .map(|row| (row.get(0), row.get(1), row.get(2), row.get(3)))
-            .collect())
+        rows.iter()
+            .map(|row| {
+                Ok((
+                    row.get(0),
+                    row.get(1),
+                    row.get(2),
+                    row.get(3),
+                    u32::try_from(row.get::<_, i32>(4)).map_err(|_| StoreError::Corrupt)?,
+                ))
+            })
+            .collect::<Result<Vec<_>, StoreError>>()
     }
 
     /// List locations page-wise, resuming after `after_id`.
@@ -1331,7 +1543,64 @@ impl PostgresStore {
         let rows = client
             .query(CONSUMING_CLAUSES, &[&members, &from, &to, &now])
             .await?;
-        Ok(snapshot_from_rows(rows))
+        let mut snapshot = snapshot_from_rows(rows);
+        source_busy::append_busy_search_blocks(
+            &client,
+            &self.busy_source_bindings,
+            members,
+            from,
+            to,
+            now,
+            &mut snapshot,
+        )
+        .await
+        .map_err(source_busy::as_store_error)?;
+        Ok(snapshot)
+    }
+
+    /// A bounded read-only snapshot for atomic capacity preview. Unlike a
+    /// commitment it acquires no allocation locks and therefore promises
+    /// advice at the observed instant, not a reservation.
+    pub async fn bundle_preview_snapshot(
+        &self,
+        members: &[String],
+        from: DateTime<Utc>,
+        to: DateTime<Utc>,
+        now: DateTime<Utc>,
+    ) -> Result<LedgerSnapshot, StoreError> {
+        let client = self.client().await?;
+        let limit =
+            i64::try_from(MAXIMUM_CAPACITY_SNAPSHOT_ROWS + 1).map_err(|_| StoreError::Corrupt)?;
+        let rows = client
+            .query(
+                "SELECT c.claim_id, a.offering, a.resource_id, c.kind, c.channel, \
+             a.occupied_start, a.occupied_end, a.units, c.duplicate_key, c.hold_expires_at \
+             FROM scheduling_claim_allocations AS a \
+             JOIN scheduling_claims AS c ON c.claim_id=a.claim_id \
+             WHERE c.state='active' \
+               AND (c.kind IN ('booking','window') OR (c.kind='hold' AND c.hold_expires_at > $4)) \
+               AND a.resource_id=ANY($1) \
+               AND a.occupied_start < $3 AND $2 < a.occupied_end \
+             ORDER BY a.occupied_start, a.claim_id, a.resource_id LIMIT $5",
+                &[&members, &from, &to, &now, &limit],
+            )
+            .await?;
+        if rows.len() > MAXIMUM_CAPACITY_SNAPSHOT_ROWS {
+            return Err(StoreError::CapacitySnapshotTooLarge);
+        }
+        let mut snapshot = snapshot_from_rows(rows);
+        source_busy::append_busy_search_blocks(
+            &client,
+            &self.busy_source_bindings,
+            members,
+            from,
+            to,
+            now,
+            &mut snapshot,
+        )
+        .await
+        .map_err(source_busy::as_store_error)?;
+        Ok(snapshot)
     }
 
     /// A read-only window snapshot for availability and explain.
@@ -1359,55 +1628,29 @@ impl PostgresStore {
     /// Mint a hold through the full capacity transaction.
     pub async fn create_hold(
         &self,
-        offering: &registry_scheduling_core::OfferingPolicy,
-        supply: &SupplyContext<'_>,
+        supply: &CommitSupply<'_>,
         request: &registry_scheduling_core::AdmissionRequest,
         ttl_minutes: u32,
         max_per_caller: u32,
         commitment: Commitment<'_>,
     ) -> Result<CommitOutcome, CommitError> {
+        let primary = supply.primary()?;
         let mut client = self.client().await?;
         let transaction = client.transaction().await?;
-        match replay_stored_attempt(&transaction, &commitment, "hold:create").await? {
-            Some(ReplayOutcome::Replay {
-                status_code,
-                receipt,
-            }) => {
-                transaction.commit().await?;
-                return Ok(CommitOutcome::Replay {
-                    status_code,
-                    receipt,
-                });
-            }
-            Some(ReplayOutcome::Refused(error)) => return Err(error),
-            None => {}
+        if let Some(replay) = open_commitment(&transaction, &commitment, "hold:create").await? {
+            transaction.commit().await?;
+            return Ok(replay);
         }
-        check_grant_current(&commitment)?;
-        let mut snapshot = lock_and_snapshot(&transaction, supply, commitment.now).await?;
-        include_active_duplicate(
+        let locked = lock_commitment(
             &transaction,
-            &mut snapshot,
-            offering,
-            request.duplicate_key.as_deref(),
-            commitment.now,
+            supply,
+            Some(request),
+            ClaimLock::CallerHolds { max_per_caller },
+            &commitment,
+            &self.busy_source_bindings,
         )
         .await?;
-        // The caller lock is taken after the supply lock, never before: every
-        // hold transaction acquires the two in that one order, so no pair of
-        // them can hold what the other is waiting for.
-        if transaction
-            .lock_caller_and_count_active_holds(
-                commitment.actor_issuer,
-                commitment.actor_subject,
-                commitment.now,
-            )
-            .await?
-            >= i64::from(max_per_caller)
-        {
-            return Err(CommitError::HoldCeiling);
-        }
-        guard_revisions(&transaction, &commitment).await?;
-        let admission = evaluate(offering, supply, request, &snapshot, &commitment, None)?;
+        let placement = supply.evaluate(request, &locked.snapshot, &commitment, None)?;
         // One observation of the store's clock, after the supply and caller
         // locks and immediately before the hold is written: the grant must
         // still stand at the instant this transaction decides, and the hold's
@@ -1418,42 +1661,29 @@ impl PostgresStore {
         let expires_at = decided_at
             .checked_add_signed(TimeDelta::minutes(i64::from(ttl_minutes)))
             .ok_or(AdmissionRefusal::ScheduleUnpublished)?;
-        let hold_id = Uuid::new_v4();
-        let claim = transaction
-            .insert_claim(&NewClaim {
-                claim_id: hold_id,
-                kind: LedgerKind::Hold,
-                state: ClaimState::Active,
-                offering: &admission.offering,
-                supply_id: admission
-                    .resource
-                    .as_deref()
-                    .unwrap_or(window_supply_id(supply)),
-                channel: request.channel.as_deref(),
-                displayed_start: admission.start,
-                displayed_end: admission.end,
-                occupied_start: admission.occupied_start,
-                occupied_end: admission.occupied_end,
-                units: i32::try_from(admission.units).map_err(|_| StoreError::Corrupt)?,
-                duplicate_key: request.duplicate_key.as_deref(),
-                external_references: &request.external_references,
-                hold_expires_at: Some(expires_at),
-                revision: 1,
-                policy_revision: commitment.policy_revision,
-                actor: commitment.actor,
-                owner_issuer: commitment.actor_issuer,
-                owner_subject: commitment.actor_subject,
-                reason: None,
-            })
+        let mut claim = transaction
+            .insert_claim(&placement.new_claim(
+                LedgerKind::Hold,
+                primary,
+                request,
+                Some(expires_at),
+                &commitment,
+            ))
+            .await?;
+        placement
+            .insert_allocations(&transaction, &mut claim)
             .await?;
         transaction
             .insert_history(
-                hold_id,
+                claim.claim_id,
                 1,
                 "held",
                 commitment.now,
                 commitment.actor,
-                json!({"expiresAt": expires_at, "offering": admission.offering}),
+                with_allocations(
+                    json!({"expiresAt": expires_at, "offering": placement.offering}),
+                    placement.documents(),
+                ),
             )
             .await?;
         transaction
@@ -1466,7 +1696,7 @@ impl PostgresStore {
                 claim_receipt(
                     "hold",
                     &claim,
-                    matches!(supply, SupplyContext::ExactTime { .. }),
+                    supply.resource_is_member(),
                     commitment.policy_revision,
                 ),
             )
@@ -1475,97 +1705,60 @@ impl PostgresStore {
         Ok(CommitOutcome::Hold(claim))
     }
 
-    /// Create an appointment directly, through the full capacity
-    /// transaction.
+    /// Create an appointment directly, with every physical allocation of a
+    /// bundle, through the full capacity transaction.
     pub async fn create_appointment(
         &self,
-        offering: &registry_scheduling_core::OfferingPolicy,
-        supply: &SupplyContext<'_>,
+        supply: &CommitSupply<'_>,
         request: &registry_scheduling_core::AdmissionRequest,
         commitment: Commitment<'_>,
     ) -> Result<CommitOutcome, CommitError> {
+        let primary = supply.primary()?;
         let mut client = self.client().await?;
         let transaction = client.transaction().await?;
-        match replay_stored_attempt(&transaction, &commitment, "appointment:create").await? {
-            Some(ReplayOutcome::Replay {
-                status_code,
-                receipt,
-            }) => {
-                transaction.commit().await?;
-                return Ok(CommitOutcome::Replay {
-                    status_code,
-                    receipt,
-                });
-            }
-            Some(ReplayOutcome::Refused(error)) => return Err(error),
-            None => {}
+        if let Some(replay) =
+            open_commitment(&transaction, &commitment, "appointment:create").await?
+        {
+            transaction.commit().await?;
+            return Ok(replay);
         }
-        check_grant_current(&commitment)?;
-        let mut snapshot = lock_and_snapshot(&transaction, supply, commitment.now).await?;
-        include_active_duplicate(
+        let locked = lock_commitment(
             &transaction,
-            &mut snapshot,
-            offering,
-            request.duplicate_key.as_deref(),
-            commitment.now,
+            supply,
+            Some(request),
+            ClaimLock::NoClaim,
+            &commitment,
+            &self.busy_source_bindings,
         )
         .await?;
-        guard_revisions(&transaction, &commitment).await?;
-        let admission = evaluate(offering, supply, request, &snapshot, &commitment, None)?;
+        let placement = supply.evaluate(request, &locked.snapshot, &commitment, None)?;
         self.recheck_grant(&commitment)?;
-        let appointment_id = Uuid::new_v4();
-        let claim = transaction
-            .insert_claim(&NewClaim {
-                claim_id: appointment_id,
-                kind: LedgerKind::Booking,
-                state: ClaimState::Active,
-                offering: &admission.offering,
-                supply_id: admission
-                    .resource
-                    .as_deref()
-                    .unwrap_or(window_supply_id(supply)),
-                channel: request.channel.as_deref(),
-                displayed_start: admission.start,
-                displayed_end: admission.end,
-                occupied_start: admission.occupied_start,
-                occupied_end: admission.occupied_end,
-                units: i32::try_from(admission.units).map_err(|_| StoreError::Corrupt)?,
-                duplicate_key: request.duplicate_key.as_deref(),
-                external_references: &request.external_references,
-                hold_expires_at: None,
-                revision: 1,
-                policy_revision: commitment.policy_revision,
-                actor: commitment.actor,
-                owner_issuer: commitment.actor_issuer,
-                owner_subject: commitment.actor_subject,
-                reason: None,
-            })
+        let mut claim = transaction
+            .insert_claim(&placement.new_claim(
+                LedgerKind::Booking,
+                primary,
+                request,
+                None,
+                &commitment,
+            ))
+            .await?;
+        placement
+            .insert_allocations(&transaction, &mut claim)
             .await?;
         transaction
             .insert_history(
-                appointment_id,
+                claim.claim_id,
                 1,
                 "confirmed",
                 commitment.now,
                 commitment.actor,
-                json!({"offering": admission.offering, "start": admission.start}),
+                with_allocations(
+                    json!({"offering": placement.offering, "start": placement.start}),
+                    placement.documents(),
+                ),
             )
             .await?;
-        transaction
-            .insert_outbox(
-                "confirmation",
-                appointment_id,
-                1,
-                commitment.now,
-                confirmation_payload(&claim, commitment.policy_revision),
-            )
-            .await?;
-        mint_reminders(&transaction, &claim, offering, commitment.now).await?;
-        if let Some(hooks) = commitment.hooks {
-            hooks
-                .capture(&transaction, APPOINTMENT_CONFIRMED_TRIGGER, &claim)
-                .await?;
-        }
+        announce_booking(&transaction, &claim, primary, &commitment).await?;
         transaction
             .insert_attempt(
                 Uuid::new_v4(),
@@ -1576,7 +1769,7 @@ impl PostgresStore {
                 claim_receipt(
                     "booking",
                     &claim,
-                    matches!(supply, SupplyContext::ExactTime { .. }),
+                    supply.resource_is_member(),
                     commitment.policy_revision,
                 ),
             )
@@ -1586,49 +1779,37 @@ impl PostgresStore {
     }
 
     /// Confirm a held allocation: the hold converts to an appointment in one
-    /// transaction. The hold's own allocation is the reservation; the
-    /// confirm re-checks expiry, policy identity, and the grant, then
-    /// consumes the hold and writes the booking beside it.
+    /// transaction, preserving every exact resource assignment. The hold's
+    /// own allocation is the reservation; the confirm re-checks expiry,
+    /// policy identity, and the grant, then consumes the hold and writes the
+    /// booking beside it. A bundle confirmation carries the admission request
+    /// its hold's allocations are checked under; a single-supply
+    /// confirmation carries none.
     pub async fn confirm_hold(
         &self,
         hold_id: Uuid,
-        offering: &registry_scheduling_core::OfferingPolicy,
-        supply: &SupplyContext<'_>,
+        supply: &CommitSupply<'_>,
+        request: Option<&registry_scheduling_core::AdmissionRequest>,
         commitment: Commitment<'_>,
     ) -> Result<CommitOutcome, CommitError> {
         let scope = format!("hold:{hold_id}:confirm");
+        let primary = supply.primary()?;
         let mut client = self.client().await?;
         let transaction = client.transaction().await?;
-        match replay_stored_attempt(&transaction, &commitment, &scope).await? {
-            Some(ReplayOutcome::Replay {
-                status_code,
-                receipt,
-            }) => {
-                transaction.commit().await?;
-                return Ok(CommitOutcome::Replay {
-                    status_code,
-                    receipt,
-                });
-            }
-            Some(ReplayOutcome::Refused(error)) => return Err(error),
-            None => {}
+        if let Some(replay) = open_commitment(&transaction, &commitment, &scope).await? {
+            transaction.commit().await?;
+            return Ok(replay);
         }
-        check_grant_current(&commitment)?;
-        // The snapshot is read under the lock for serialization order, but
-        // admission is not re-evaluated: the hold's own reservation transfers
-        // to the booking in this same transaction, so capacity does not
-        // change. What must hold is identity (the policy revision the hold
-        // was admitted under is still current), checked with the other
-        // revision guards below, under the anchor.
-        let _snapshot = lock_and_snapshot(&transaction, supply, commitment.now).await?;
-        let hold = transaction
-            .claim_in_transaction(hold_id)
-            .await?
-            .ok_or(AdmissionRefusal::HoldReleased)?;
-        if hold.kind != LedgerKind::Hold || hold.state != ClaimState::Active {
-            return Err(AdmissionRefusal::HoldReleased.into());
-        }
-        guard_revisions(&transaction, &commitment).await?;
+        let locked = lock_commitment(
+            &transaction,
+            supply,
+            request,
+            ClaimLock::Hold(hold_id),
+            &commitment,
+            &self.busy_source_bindings,
+        )
+        .await?;
+        let hold = locked.claim.ok_or(StoreError::Corrupt)?;
         // A confirmation request may have entered while the hold was live but
         // reached this anchor after its capacity was reclaimed. Re-read the
         // clock only after taking the anchor: accepting the older request time
@@ -1639,26 +1820,32 @@ impl PostgresStore {
         if hold.policy_revision != commitment.policy_revision {
             return Err(AdmissionRefusal::PolicyChanged.into());
         }
-        if !hold.is_owned_by(commitment.actor_issuer, commitment.actor_subject) {
+        if !hold.is_managed_by(&commitment) {
             // Confirming another caller's hold is never a state error: it is
             // an authorization refusal the audit entries record.
             return Err(CommitError::Unauthorized);
         }
+        let placement = supply.confirm(&hold, request, &locked.snapshot, &commitment)?;
         self.recheck_grant(&commitment)?;
-        let appointment_id = Uuid::new_v4();
-        let claim = transaction
+        let mut claim = transaction
             .insert_claim(&NewClaim {
-                claim_id: appointment_id,
+                claim_id: Uuid::new_v4(),
                 kind: LedgerKind::Booking,
                 state: ClaimState::Active,
-                offering: &hold.offering,
-                supply_id: &hold.supply_id,
+                offering: &placement.offering,
+                operational_service: &primary.service,
+                operational_location: &primary.location,
+                operational_mode: primary.mode,
+                supply_id: &placement.supply_id,
                 channel: hold.channel.as_deref(),
-                displayed_start: hold.displayed_start,
-                displayed_end: hold.displayed_end,
-                occupied_start: hold.occupied_start,
-                occupied_end: hold.occupied_end,
-                units: hold.units,
+                displayed_start: placement.start,
+                displayed_end: placement.end,
+                occupied_start: placement.occupied_start,
+                occupied_end: placement.occupied_end,
+                units: placement.units,
+                party: hold.party,
+                party_references: &hold.party_references,
+                source_manager: hold.source_manager.as_ref(),
                 duplicate_key: hold.duplicate_key.as_deref(),
                 external_references: &hold.external_references,
                 hold_expires_at: None,
@@ -1669,6 +1856,9 @@ impl PostgresStore {
                 owner_subject: commitment.actor_subject,
                 reason: None,
             })
+            .await?;
+        placement
+            .insert_allocations(&transaction, &mut claim)
             .await?;
         if !transaction
             .close_claim(hold_id, ClaimState::Consumed, None, hold.revision)
@@ -1681,12 +1871,15 @@ impl PostgresStore {
         }
         transaction
             .insert_history(
-                appointment_id,
+                claim.claim_id,
                 1,
                 "confirmed",
                 commitment.now,
                 commitment.actor,
-                json!({"confirmedFrom": hold_id, "start": claim.displayed_start}),
+                with_allocations(
+                    json!({"confirmedFrom": hold_id, "start": claim.displayed_start}),
+                    placement.documents(),
+                ),
             )
             .await?;
         transaction
@@ -1696,24 +1889,10 @@ impl PostgresStore {
                 "consumed",
                 commitment.now,
                 commitment.actor,
-                json!({"appointment": appointment_id}),
+                json!({"appointment": claim.claim_id}),
             )
             .await?;
-        transaction
-            .insert_outbox(
-                "confirmation",
-                appointment_id,
-                1,
-                commitment.now,
-                confirmation_payload(&claim, commitment.policy_revision),
-            )
-            .await?;
-        mint_reminders(&transaction, &claim, offering, commitment.now).await?;
-        if let Some(hooks) = commitment.hooks {
-            hooks
-                .capture(&transaction, APPOINTMENT_CONFIRMED_TRIGGER, &claim)
-                .await?;
-        }
+        announce_booking(&transaction, &claim, primary, &commitment).await?;
         transaction
             .insert_attempt(
                 Uuid::new_v4(),
@@ -1724,13 +1903,45 @@ impl PostgresStore {
                 claim_receipt(
                     "booking",
                     &claim,
-                    matches!(supply, SupplyContext::ExactTime { .. }),
+                    supply.resource_is_member(),
                     commitment.policy_revision,
                 ),
             )
             .await?;
         self.commit_capacity(transaction, Some(&commitment)).await?;
         Ok(CommitOutcome::Booking(claim))
+    }
+
+    /// Answer the confirmation of a hold on an exact-time offering that
+    /// carries no allocation rows. Every exact-time hold this runtime writes
+    /// carries them, so such a hold is a window hold that ended before its
+    /// offering was republished as exact time: it has nothing to place and
+    /// nothing to consume. The transaction answers a stored attempt, then
+    /// refuses on the guards [`Self::confirm_hold`] applies, in its order. A
+    /// hold that passes them all is still live, an inconsistent ledger, and
+    /// fails without writing.
+    pub async fn confirm_unallocated_hold(
+        &self,
+        hold_id: Uuid,
+        commitment: Commitment<'_>,
+    ) -> Result<CommitOutcome, CommitError> {
+        let scope = format!("hold:{hold_id}:confirm");
+        let mut client = self.client().await?;
+        let transaction = client.transaction().await?;
+        if let Some(replay) = open_commitment(&transaction, &commitment, &scope).await? {
+            transaction.commit().await?;
+            return Ok(replay);
+        }
+        let hold = active_claim(&transaction, hold_id, LedgerKind::Hold).await?;
+        guard_revisions(&transaction, &commitment).await?;
+        evaluate_hold_state(&hold_ledger_claim(&hold), self.observed_now())?;
+        if hold.policy_revision != commitment.policy_revision {
+            return Err(AdmissionRefusal::PolicyChanged.into());
+        }
+        if !hold.is_managed_by(&commitment) {
+            return Err(CommitError::Unauthorized);
+        }
+        Err(StoreError::Corrupt.into())
     }
 
     /// Release a hold early.
@@ -1742,21 +1953,10 @@ impl PostgresStore {
         let scope = format!("hold:{hold_id}:release");
         let mut client = self.client().await?;
         let transaction = client.transaction().await?;
-        match replay_stored_attempt(&transaction, &commitment, &scope).await? {
-            Some(ReplayOutcome::Replay {
-                status_code,
-                receipt,
-            }) => {
-                transaction.commit().await?;
-                return Ok(CommitOutcome::Replay {
-                    status_code,
-                    receipt,
-                });
-            }
-            Some(ReplayOutcome::Refused(error)) => return Err(error),
-            None => {}
+        if let Some(replay) = open_commitment(&transaction, &commitment, &scope).await? {
+            transaction.commit().await?;
+            return Ok(replay);
         }
-        check_grant_current(&commitment)?;
         let hold = transaction
             .claim_in_transaction(hold_id)
             .await?
@@ -1764,7 +1964,7 @@ impl PostgresStore {
         if hold.kind != LedgerKind::Hold || hold.state != ClaimState::Active {
             return Err(AdmissionRefusal::HoldReleased.into());
         }
-        if !hold.is_owned_by(commitment.actor_issuer, commitment.actor_subject) {
+        if !hold.is_managed_by(&commitment) {
             return Err(CommitError::Unauthorized);
         }
         self.recheck_grant(&commitment)?;
@@ -1798,92 +1998,73 @@ impl PostgresStore {
         Ok(CommitOutcome::Released)
     }
 
-    /// Reschedule an appointment to a new time, keeping its identity.
+    /// Reschedule an appointment to a new time, keeping its identity. A
+    /// bundle moves every exact allocation to the new interval; a refusal
+    /// rolls back both the parent movement and the child replacement.
     pub async fn reschedule_appointment(
         &self,
         appointment_id: Uuid,
-        offering: &registry_scheduling_core::OfferingPolicy,
-        supply: &SupplyContext<'_>,
+        supply: &CommitSupply<'_>,
         request: &registry_scheduling_core::AdmissionRequest,
         observed_revision: u64,
         commitment: Commitment<'_>,
     ) -> Result<CommitOutcome, CommitError> {
         let scope = format!("appointment:{appointment_id}:reschedule");
+        let primary = supply.primary()?;
         let mut client = self.client().await?;
         let transaction = client.transaction().await?;
-        match replay_stored_attempt(&transaction, &commitment, &scope).await? {
-            Some(ReplayOutcome::Replay {
-                status_code,
-                receipt,
-            }) => {
-                transaction.commit().await?;
-                return Ok(CommitOutcome::Replay {
-                    status_code,
-                    receipt,
-                });
-            }
-            Some(ReplayOutcome::Refused(error)) => return Err(error),
-            None => {}
+        if let Some(replay) = open_commitment(&transaction, &commitment, &scope).await? {
+            transaction.commit().await?;
+            return Ok(replay);
         }
-        check_grant_current(&commitment)?;
-        let mut snapshot = lock_and_snapshot(&transaction, supply, commitment.now).await?;
-        include_active_duplicate(
+        let locked = lock_commitment(
             &transaction,
-            &mut snapshot,
-            offering,
-            request.duplicate_key.as_deref(),
-            commitment.now,
+            supply,
+            Some(request),
+            ClaimLock::Appointment(appointment_id),
+            &commitment,
+            &self.busy_source_bindings,
         )
         .await?;
-        let appointment = transaction
-            .claim_in_transaction(appointment_id)
-            .await?
-            .ok_or(AdmissionRefusal::HoldReleased)?;
-        if appointment.kind != LedgerKind::Booking || appointment.state != ClaimState::Active {
-            return Err(AdmissionRefusal::HoldReleased.into());
-        }
-        guard_revisions(&transaction, &commitment).await?;
+        let appointment = locked.claim.ok_or(StoreError::Corrupt)?;
         // The policy guard wins over the revision guard: a caller whose
         // observed revision is also stale learns the policy moved first.
         if request.policy_revision != u64::try_from(commitment.policy_revision).unwrap_or(u64::MAX)
         {
             return Err(AdmissionRefusal::PolicyChanged.into());
         }
-        if !appointment.is_owned_by(commitment.actor_issuer, commitment.actor_subject) {
+        if !appointment.is_managed_by(&commitment) {
             return Err(CommitError::Unauthorized);
         }
         if u64::try_from(appointment.revision) != Ok(observed_revision) {
+            return Err(CommitError::RevisionMismatch);
+        }
+        // The window the appointment occupies now must be one this
+        // transaction holds: a concurrent move between the read above and
+        // the locks is answered as the revision race it is.
+        if !supply.holds_claim_anchor(&locked.current_anchors, &appointment) {
             return Err(CommitError::RevisionMismatch);
         }
         // The appointment's own allocation is the exclusion: a reschedule
         // never competes with the booking it moves. It is read from the row
         // this transaction locked, never from the request.
         let own_claim_id = appointment.claim_id.to_string();
-        let admission = evaluate(
-            offering,
-            supply,
-            request,
-            &snapshot,
-            &commitment,
-            Some(&own_claim_id),
-        )?;
+        let placement =
+            supply.evaluate(request, &locked.snapshot, &commitment, Some(&own_claim_id))?;
         self.recheck_grant(&commitment)?;
         let next_revision = appointment.revision + 1;
-        let next_units = i32::try_from(admission.units).map_err(|_| StoreError::Corrupt)?;
         if !transaction
             .move_claim(
                 &ClaimMove {
                     claim_id: appointment_id,
-                    supply_id: admission
-                        .resource
-                        .as_deref()
-                        .unwrap_or(&appointment.supply_id),
-                    displayed_start: admission.start,
-                    displayed_end: admission.end,
-                    occupied_start: admission.occupied_start,
-                    occupied_end: admission.occupied_end,
+                    supply_id: &placement.supply_id,
+                    displayed_start: placement.start,
+                    displayed_end: placement.end,
+                    occupied_start: placement.occupied_start,
+                    occupied_end: placement.occupied_end,
                     channel: request.channel.as_deref(),
-                    units: next_units,
+                    units: placement.units,
+                    party: request.party,
                     policy_revision: commitment.policy_revision,
                     next_revision,
                 },
@@ -1896,31 +2077,53 @@ impl PostgresStore {
             // refusal.
             return Err(CommitError::RevisionMismatch);
         }
+        placement
+            .replace_allocations(&transaction, appointment_id)
+            .await?;
+        let left_allocations = placement
+            .documents()
+            .map(|_| appointment.allocations.as_slice());
         transaction
-            .insert_history(appointment_id, next_revision, "rescheduled", commitment.now,
+            .insert_history(
+                appointment_id,
+                next_revision,
+                "rescheduled",
+                commitment.now,
                 commitment.actor,
                 json!({
-                    "from": {"start": appointment.displayed_start, "end": appointment.displayed_end},
-                    "to": {"start": admission.start, "end": admission.end},
-                }))
+                    "from": with_allocations(
+                        json!({"start": appointment.displayed_start, "end": appointment.displayed_end}),
+                        left_allocations,
+                    ),
+                    "to": with_allocations(
+                        json!({"start": placement.start, "end": placement.end}),
+                        placement.documents(),
+                    ),
+                }),
+            )
             .await?;
         // A stale unsent reminder describes an appointment that no longer
         // exists in this form; it is cancelled here, and one a dispatcher
         // already holds is set aside at its send, never sent (INT-02).
         transaction.cancel_unsent_reminders(appointment_id).await?;
         let moved = ClaimRow {
-            displayed_start: admission.start,
-            displayed_end: admission.end,
-            occupied_start: admission.occupied_start,
-            occupied_end: admission.occupied_end,
-            supply_id: admission.resource.unwrap_or(appointment.supply_id.clone()),
+            displayed_start: placement.start,
+            displayed_end: placement.end,
+            occupied_start: placement.occupied_start,
+            occupied_end: placement.occupied_end,
+            supply_id: placement.supply_id.clone(),
             channel: request.channel.clone(),
-            units: next_units,
+            units: placement.units,
+            allocations: match placement.documents() {
+                Some(documents) => documents.to_vec(),
+                None => appointment.allocations.clone(),
+            },
+            party: request.party,
             revision: next_revision,
             policy_revision: commitment.policy_revision,
             ..appointment.clone()
         };
-        mint_reminders(&transaction, &moved, offering, commitment.now).await?;
+        mint_reminders(&transaction, &moved, primary, commitment.now).await?;
         transaction
             .insert_outbox(
                 "change",
@@ -1945,7 +2148,7 @@ impl PostgresStore {
                 claim_receipt(
                     "booking",
                     &moved,
-                    matches!(supply, SupplyContext::ExactTime { .. }),
+                    supply.resource_is_member(),
                     commitment.policy_revision,
                 ),
             )
@@ -1970,21 +2173,10 @@ impl PostgresStore {
         let scope = format!("appointment:{appointment_id}:cancel");
         let mut client = self.client().await?;
         let transaction = client.transaction().await?;
-        match replay_stored_attempt(&transaction, &commitment, &scope).await? {
-            Some(ReplayOutcome::Replay {
-                status_code,
-                receipt,
-            }) => {
-                transaction.commit().await?;
-                return Ok(CommitOutcome::Replay {
-                    status_code,
-                    receipt,
-                });
-            }
-            Some(ReplayOutcome::Refused(error)) => return Err(error),
-            None => {}
+        if let Some(replay) = open_commitment(&transaction, &commitment, &scope).await? {
+            transaction.commit().await?;
+            return Ok(replay);
         }
-        check_grant_current(&commitment)?;
         let appointment = transaction
             .claim_in_transaction(appointment_id)
             .await?
@@ -1992,7 +2184,7 @@ impl PostgresStore {
         if appointment.kind != LedgerKind::Booking || appointment.state != ClaimState::Active {
             return Err(AdmissionRefusal::HoldReleased.into());
         }
-        if !appointment.is_owned_by(commitment.actor_issuer, commitment.actor_subject) {
+        if !appointment.is_managed_by(&commitment) {
             return Err(CommitError::Unauthorized);
         }
         if u64::try_from(appointment.revision) != Ok(observed_revision) {
@@ -2116,6 +2308,7 @@ impl PostgresStore {
     ) -> Result<u64, StoreError> {
         let mut client = self.client().await?;
         let transaction = client.transaction().await?;
+        mark_allocation_writer(&transaction).await?;
         let rows = transaction
             .query(
                 "UPDATE scheduling_claims SET state='expired', revision=revision + 1, \
@@ -2219,6 +2412,7 @@ impl PostgresStore {
     ) -> Result<Option<(u16, Value)>, CommitError> {
         let mut client = self.client().await?;
         let transaction = client.transaction().await?;
+        mark_allocation_writer(&transaction).await?;
         let written = transaction
             .execute(
                 "INSERT INTO scheduling_attempts(attempt_id, key_reference, actor_issuer, \
@@ -2277,18 +2471,23 @@ impl PostgresStore {
         let cutoff = now
             .checked_sub_signed(TimeDelta::days(i64::from(retention_days)))
             .ok_or(StoreError::Configuration)?;
-        let client = self.client().await?;
-        Ok(client.execute(
+        let mut client = self.client().await?;
+        let transaction = client.transaction().await?;
+        mark_allocation_writer(&transaction).await?;
+        let erased = transaction.execute(
             "UPDATE scheduling_claims SET owner_reference='sha256:' || encode(sha256(\
              convert_to('scheduling-claim-owner-v1','UTF8') || uuid_send(claim_id) || \
              int8send(octet_length(convert_to(owner_issuer,'UTF8'))::bigint) || convert_to(owner_issuer,'UTF8') || \
              int8send(octet_length(convert_to(owner_subject,'UTF8'))::bigint) || convert_to(owner_subject,'UTF8')), 'hex'), \
-             owner_issuer=NULL, owner_subject=NULL, owner_erased_at=$1 \
+             owner_issuer=NULL, owner_subject=NULL, owner_erased_at=$1, \
+             party_references='[]'::jsonb, manager_source_issuer=NULL, manager_subject=NULL \
              WHERE owner_issuer IS NOT NULL AND \
              CASE WHEN kind='booking' THEN LEAST(displayed_end, closed_at) \
                   ELSE LEAST(hold_expires_at, closed_at) END <= $2",
             &[&now, &cutoff],
-        ).await?)
+        ).await?;
+        transaction.commit().await?;
+        Ok(erased)
     }
 
     /// Prune at most 256 settled outbox intents of any purpose
@@ -2311,6 +2510,7 @@ impl PostgresStore {
             .ok_or(StoreError::Configuration)?;
         let mut client = self.client().await?;
         let transaction = client.transaction().await?;
+        mark_allocation_writer(&transaction).await?;
         let schema = current_schema_in(&*transaction).await?;
         let reminders = transaction
             .execute(
@@ -2362,28 +2562,33 @@ impl PostgresStore {
 const SELECT_CLAIM: &str = "SELECT claim_id, kind, state, offering, supply_id, channel, \
      displayed_start, displayed_end, occupied_start, occupied_end, units, duplicate_key, \
      external_references, hold_expires_at, revision, policy_revision, actor, reason, created_at, closed_at, \
-     owner_issuer, owner_subject FROM scheduling_claims WHERE claim_id=$1";
+     owner_issuer, owner_subject, recipient_count, attendee_count, party_references, \
+     manager_source_issuer, manager_subject \
+     FROM scheduling_claims WHERE claim_id=$1";
 
 /// The consuming-claim filter, with hold expiry evaluated in the query. This
 /// is the sentence the whole capacity contract turns on: an expired hold
 /// stops consuming capacity at its expiry, whether or not any worker has
 /// touched it.
 const CONSUMING_CLAUSES: &str =
-    "SELECT claim_id, offering, supply_id, kind, channel, occupied_start, \
-     occupied_end, units, duplicate_key, hold_expires_at \
-     FROM scheduling_claims \
-     WHERE state='active' \
-       AND (kind='booking' OR (kind='hold' AND hold_expires_at > $4)) \
-       AND supply_id = ANY($1) \
-       AND occupied_start < $3::timestamptz AND $2::timestamptz < occupied_end \
-     ORDER BY occupied_start";
+    "SELECT c.claim_id, a.offering, a.resource_id, c.kind, c.channel, a.occupied_start, \
+     a.occupied_end, a.units, c.duplicate_key, c.hold_expires_at \
+     FROM scheduling_claim_allocations AS a \
+     JOIN scheduling_claims AS c ON c.claim_id=a.claim_id \
+     WHERE c.state='active' \
+       AND (c.kind IN ('booking','window') OR (c.kind='hold' AND c.hold_expires_at > $4)) \
+       AND a.resource_id = ANY($1) \
+       AND a.occupied_start < $3::timestamptz AND $2::timestamptz < a.occupied_end \
+     ORDER BY a.occupied_start, a.claim_id, a.resource_id";
 
 fn map_claim_row(row: Row) -> Result<ClaimRow, StoreError> {
     Ok(ClaimRow {
         claim_id: row.get(0),
         kind: match row.get::<_, String>(1).as_str() {
             "booking" => LedgerKind::Booking,
-            _ => LedgerKind::Hold,
+            "hold" => LedgerKind::Hold,
+            "window" => LedgerKind::Window,
+            _ => return Err(StoreError::Corrupt),
         },
         state: match row.get::<_, String>(2).as_str() {
             "active" => ClaimState::Active,
@@ -2400,6 +2605,7 @@ fn map_claim_row(row: Row) -> Result<ClaimRow, StoreError> {
         occupied_start: row.get(8),
         occupied_end: row.get(9),
         units: row.get(10),
+        allocations: Vec::new(),
         duplicate_key: row.get(11),
         external_references: serde_json::from_value(row.get(12))
             .map_err(|_| StoreError::Corrupt)?,
@@ -2414,7 +2620,70 @@ fn map_claim_row(row: Row) -> Result<ClaimRow, StoreError> {
             (Some(issuer), Some(subject)) => Some(ClaimOwner { issuer, subject }),
             _ => None,
         },
+        party: match (row.get::<_, Option<i32>>(22), row.get::<_, Option<i32>>(23)) {
+            (Some(recipients), Some(attendees)) => Some(PartyCounts {
+                recipients: u32::try_from(recipients).map_err(|_| StoreError::Corrupt)?,
+                attendees: u32::try_from(attendees).map_err(|_| StoreError::Corrupt)?,
+            }),
+            (None, None) => None,
+            _ => return Err(StoreError::Corrupt),
+        },
+        party_references: serde_json::from_value(row.get(24)).map_err(|_| StoreError::Corrupt)?,
+        source_manager: match (row.get(25), row.get(26)) {
+            (Some(source_issuer), Some(subject)) => Some(SourceBoundManager {
+                source_issuer,
+                subject,
+            }),
+            (None, None) => None,
+            _ => return Err(StoreError::Corrupt),
+        },
     })
+}
+
+/// Attach each claim's allocation rows to it: the primary requirement first,
+/// then each additional requirement in index order, every part in order.
+async fn load_claim_allocations(
+    client: &impl DeadpoolGenericClient,
+    claims: &mut [ClaimRow],
+) -> Result<(), StoreError> {
+    if claims.is_empty() {
+        return Ok(());
+    }
+    let claim_ids: Vec<Uuid> = claims.iter().map(|claim| claim.claim_id).collect();
+    let rows = client
+        .query(
+            "SELECT claim_id, requirement_kind, requirement_index, offering, resource_id, \
+             units, occupied_start, occupied_end \
+             FROM scheduling_claim_allocations \
+             WHERE claim_id = ANY($1) AND operational_mode='exact-time' \
+             ORDER BY claim_id, CASE requirement_kind WHEN 'primary' THEN -1 ELSE requirement_index END, \
+                      part_index",
+            &[&claim_ids],
+        )
+        .await?;
+    for row in rows {
+        let claim_id: Uuid = row.get(0);
+        let claim = claims
+            .iter_mut()
+            .find(|claim| claim.claim_id == claim_id)
+            .ok_or(StoreError::Corrupt)?;
+        let requirement = match row.get::<_, String>(1).as_str() {
+            "primary" => AllocationRequirementDocument::Primary,
+            "additional" => AllocationRequirementDocument::Additional {
+                index: u8::try_from(row.get::<_, i16>(2)).map_err(|_| StoreError::Corrupt)?,
+            },
+            _ => return Err(StoreError::Corrupt),
+        };
+        claim.allocations.push(AllocationDocument {
+            requirement,
+            offering: row.get(3),
+            resource: row.get(4),
+            units: u32::try_from(row.get::<_, i32>(5)).map_err(|_| StoreError::Corrupt)?,
+            occupied_start: row.get(6),
+            occupied_end: row.get(7),
+        });
+    }
+    Ok(())
 }
 
 fn snapshot_from_rows(rows: Vec<Row>) -> LedgerSnapshot {
@@ -2427,7 +2696,9 @@ fn snapshot_from_rows(rows: Vec<Row>) -> LedgerSnapshot {
                 supply_id: row.get(2),
                 kind: match row.get::<_, String>(3).as_str() {
                     "booking" => LedgerKind::Booking,
-                    _ => LedgerKind::Hold,
+                    "hold" => LedgerKind::Hold,
+                    "window" => LedgerKind::Window,
+                    _ => unreachable!("database claim-kind constraint rejected this value"),
                 },
                 channel: row.get(4),
                 start: row.get(5),
@@ -2440,92 +2711,915 @@ fn snapshot_from_rows(rows: Vec<Row>) -> LedgerSnapshot {
     }
 }
 
-/// The window id a window admission's claim occupies.
-fn window_supply_id<'a>(supply: &'a SupplyContext<'a>) -> &'a str {
-    match supply {
-        SupplyContext::Window { window, .. } => &window.id,
-        SupplyContext::ExactTime { .. } => "",
+impl<'a> CommitSupply<'a> {
+    /// The offering whose operational labels, reminders, and duplicate rule
+    /// the logical claim carries: a bundle's primary line.
+    fn primary(&self) -> Result<&'a registry_scheduling_core::OfferingPolicy, StoreError> {
+        match *self {
+            Self::Single { offering, .. } => Ok(offering),
+            Self::Bundle(lines) => Ok(lines.first().ok_or(StoreError::Corrupt)?.offering),
+        }
+    }
+
+    /// Whether the claim names a pool member: every placement except a
+    /// window's.
+    fn resource_is_member(&self) -> bool {
+        matches!(self, Self::Bundle(_))
+    }
+
+    fn snapshot_plan(
+        &self,
+        request: Option<&'a registry_scheduling_core::AdmissionRequest>,
+    ) -> Result<SnapshotPlan<'a>, CommitError> {
+        match *self {
+            Self::Single { supply, .. } => Ok(SnapshotPlan::Single(supply)),
+            Self::Bundle(lines) => SnapshotPlan::bundle(lines, request.ok_or(StoreError::Corrupt)?),
+        }
+    }
+
+    /// The supply anchors an appointment occupies now and a move may leave,
+    /// read before any lock is taken so the move can hold them with the
+    /// anchors it enters.
+    async fn current_anchors(
+        &self,
+        transaction: &deadpool_postgres::Transaction<'_>,
+        appointment_id: Uuid,
+    ) -> Result<Vec<String>, CommitError> {
+        match *self {
+            Self::Single { supply, .. } => Ok(transaction
+                .query_opt(
+                    "SELECT supply_id FROM scheduling_claims WHERE claim_id=$1 AND kind='booking'",
+                    &[&appointment_id],
+                )
+                .await
+                .map_err(StoreError::from)?
+                .map(|row| row.get::<_, String>(0))
+                .filter(|current| *current != supply.window.id)
+                .into_iter()
+                .collect()),
+            Self::Bundle(_) => Ok(transaction
+                .query(
+                    "SELECT DISTINCT anchor_id FROM scheduling_claim_allocations \
+                     WHERE claim_id=$1 AND anchor_id IS NOT NULL ORDER BY anchor_id",
+                    &[&appointment_id],
+                )
+                .await?
+                .into_iter()
+                .map(|row| row.get::<_, String>(0))
+                .collect()),
+        }
+    }
+
+    async fn include_duplicates(
+        &self,
+        transaction: &deadpool_postgres::Transaction<'_>,
+        snapshot: &mut LedgerSnapshot,
+        request: &registry_scheduling_core::AdmissionRequest,
+        now: DateTime<Utc>,
+    ) -> Result<(), StoreError> {
+        match *self {
+            Self::Single { offering, .. } => {
+                include_active_duplicate(
+                    transaction,
+                    snapshot,
+                    offering,
+                    request.duplicate_key.as_deref(),
+                    now,
+                )
+                .await
+            }
+            Self::Bundle(lines) => {
+                include_bundle_active_duplicates(
+                    transaction,
+                    snapshot,
+                    lines,
+                    request.duplicate_key.as_deref(),
+                    now,
+                )
+                .await
+            }
+        }
+    }
+
+    /// Admit `request` against the locked snapshot and place its claim.
+    fn evaluate(
+        &self,
+        request: &registry_scheduling_core::AdmissionRequest,
+        snapshot: &LedgerSnapshot,
+        commitment: &Commitment<'_>,
+        exclude: Option<&str>,
+    ) -> Result<Placement<'a>, CommitError> {
+        match *self {
+            Self::Single { offering, supply } => {
+                let admission = evaluate(offering, supply, request, snapshot, commitment, exclude)?;
+                Ok(Placement {
+                    // A window admission names no resource: the claim
+                    // occupies the window it was admitted to, which a
+                    // reschedule may change.
+                    supply_id: admission
+                        .resource
+                        .unwrap_or_else(|| supply.window.id.clone()),
+                    units: i32::try_from(admission.units).map_err(|_| StoreError::Corrupt)?,
+                    offering: admission.offering,
+                    start: admission.start,
+                    end: admission.end,
+                    occupied_start: admission.occupied_start,
+                    occupied_end: admission.occupied_end,
+                    allocations: None,
+                })
+            }
+            Self::Bundle(lines) => Placement::bundle(
+                lines,
+                evaluate_bundle(lines, request, snapshot, commitment, exclude, false)?,
+            ),
+        }
+    }
+
+    /// Place the booking a confirmed hold becomes, on the hold's own terms.
+    fn confirm(
+        &self,
+        hold: &ClaimRow,
+        request: Option<&registry_scheduling_core::AdmissionRequest>,
+        snapshot: &LedgerSnapshot,
+        commitment: &Commitment<'_>,
+    ) -> Result<Placement<'a>, CommitError> {
+        match *self {
+            Self::Single { .. } => {
+                // The snapshot is read under the lock for serialization
+                // order, but admission is not re-evaluated: the hold's own
+                // reservation transfers to the booking in this same
+                // transaction, so capacity does not change. What must hold is
+                // identity (the policy revision the hold was admitted under
+                // is still current), checked with the other revision guards
+                // under the anchor.
+                Ok(Placement {
+                    offering: hold.offering.clone(),
+                    start: hold.displayed_start,
+                    end: hold.displayed_end,
+                    supply_id: hold.supply_id.clone(),
+                    occupied_start: hold.occupied_start,
+                    occupied_end: hold.occupied_end,
+                    units: hold.units,
+                    allocations: None,
+                })
+            }
+            Self::Bundle(lines) => {
+                let request = request.ok_or(StoreError::Corrupt)?;
+                let placement = Placement::bundle(
+                    lines,
+                    confirm_stored_bundle(lines, request, snapshot, commitment, hold)?,
+                )?;
+                if placement.documents() != Some(hold.allocations.as_slice()) {
+                    return Err(StoreError::Corrupt.into());
+                }
+                Ok(Placement {
+                    offering: hold.offering.clone(),
+                    start: hold.displayed_start,
+                    end: hold.displayed_end,
+                    ..placement
+                })
+            }
+        }
+    }
+
+    /// Whether the supply an appointment occupies now is one this
+    /// transaction holds. Only a window move can leave its anchor; every
+    /// other placement's anchor is the one it decides against.
+    fn holds_claim_anchor(&self, current_anchors: &[String], claim: &ClaimRow) -> bool {
+        match *self {
+            Self::Single { supply, .. } => {
+                claim.supply_id == supply.window.id || current_anchors.contains(&claim.supply_id)
+            }
+            Self::Bundle(_) => true,
+        }
     }
 }
 
-/// Steps 1 and 2: lock the anchor row, then read the ledger snapshot with
-/// expiry evaluated in the query.
-async fn lock_and_snapshot(
+/// What a commitment's snapshot reads, resolved before any lock is taken so
+/// that a request the policy refuses outright waits on nothing.
+enum SnapshotPlan<'a> {
+    Single(&'a SupplyContext<'a>),
+    Bundle {
+        lines: &'a [BundleSupplyLine<'a>],
+        request: &'a registry_scheduling_core::AdmissionRequest,
+        duration_minutes: u32,
+    },
+}
+
+impl<'a> SnapshotPlan<'a> {
+    fn bundle(
+        lines: &'a [BundleSupplyLine<'a>],
+        request: &'a registry_scheduling_core::AdmissionRequest,
+    ) -> Result<Self, CommitError> {
+        let Some(primary) = lines.first() else {
+            return Err(StoreError::Corrupt.into());
+        };
+        let duration_minutes = primary
+            .exact
+            .selected_duration_minutes(request.duration_minutes)
+            .ok_or(AdmissionRefusal::DurationOutOfPolicy)?;
+        Ok(Self::Bundle {
+            lines,
+            request,
+            duration_minutes,
+        })
+    }
+
+    /// The supply anchors to lock, with `also_held`, in supply-id order and
+    /// without repeats.
+    fn anchors(&self, also_held: &[String]) -> Vec<String> {
+        let mut anchors = match self {
+            Self::Single(supply) => vec![supply.window.id.clone()],
+            // The anchor is the pool, not the members: two offerings on one
+            // pool sell the same members and must serialize against each
+            // other, and `apply_policy` anchors pool ids only.
+            Self::Bundle { lines, .. } => {
+                lines.iter().map(|line| line.exact.pool.clone()).collect()
+            }
+        };
+        anchors.extend(also_held.iter().cloned());
+        anchors.sort();
+        anchors.dedup();
+        anchors
+    }
+
+    async fn read(
+        &self,
+        transaction: &deadpool_postgres::Transaction<'_>,
+        now: DateTime<Utc>,
+        busy_source_bindings: &std::collections::BTreeMap<String, Vec<String>>,
+    ) -> Result<LedgerSnapshot, CommitError> {
+        match *self {
+            Self::Single(supply) => Ok(single_snapshot(transaction, supply, now).await?),
+            Self::Bundle {
+                lines,
+                request,
+                duration_minutes,
+            } => {
+                bundle_snapshot(
+                    transaction,
+                    lines,
+                    request,
+                    duration_minutes,
+                    now,
+                    busy_source_bindings,
+                )
+                .await
+            }
+        }
+    }
+}
+
+/// The claim lock a commitment takes after its supply anchors.
+#[derive(Clone, Copy)]
+enum ClaimLock {
+    /// A direct appointment creates its claim and locks none.
+    NoClaim,
+    /// A hold takes the caller's hold-ceiling lock and counts the caller's
+    /// active holds under it.
+    CallerHolds { max_per_caller: u32 },
+    /// A confirmation locks the active hold it consumes.
+    Hold(Uuid),
+    /// A reschedule locks the active appointment it moves.
+    Appointment(Uuid),
+}
+
+/// What a commitment holds once every lock is taken.
+struct Locked {
+    snapshot: LedgerSnapshot,
+    /// The claim the commitment acts on, locked `FOR UPDATE`.
+    claim: Option<ClaimRow>,
+    /// The anchors a moved appointment occupied before this transaction.
+    current_anchors: Vec<String>,
+}
+
+/// Take every lock one capacity commitment needs and read the ledger
+/// snapshot it decides against. This is the one place the commitment lock
+/// order is written:
+///
+/// 1. Every supply anchor, all at once and in supply-id order: the anchors
+///    the commitment decides against and, for a reschedule, the anchors the
+///    appointment occupies now. A move between two windows of one offering
+///    releases units in the window it leaves and takes them in the one it
+///    enters, so both are held before the snapshot and before any claim row,
+///    and two moves in opposite directions serialize instead of
+///    deadlocking.
+/// 2. The claim row the commitment acts on, `FOR UPDATE`, or for a new hold
+///    the caller's hold-ceiling advisory lock. The caller lock is taken after
+///    the supply lock, never before: every hold transaction acquires the two
+///    in that one order, so no pair of them can hold what the other is
+///    waiting for.
+/// 3. The revision guard's share lock on the meta row, matching records
+///    publication's supply-then-meta order.
+///
+/// No commitment takes a supply anchor after a claim lock. Confirming a hold
+/// that carries no allocation rows (`confirm_unallocated_hold`) places
+/// nothing, so it takes no anchor: only steps 2 and 3, in that order.
+async fn lock_commitment(
+    transaction: &deadpool_postgres::Transaction<'_>,
+    supply: &CommitSupply<'_>,
+    request: Option<&registry_scheduling_core::AdmissionRequest>,
+    lock: ClaimLock,
+    commitment: &Commitment<'_>,
+    busy_source_bindings: &std::collections::BTreeMap<String, Vec<String>>,
+) -> Result<Locked, CommitError> {
+    let current_anchors = match lock {
+        ClaimLock::Appointment(appointment_id) => {
+            supply.current_anchors(transaction, appointment_id).await?
+        }
+        ClaimLock::NoClaim | ClaimLock::CallerHolds { .. } | ClaimLock::Hold(_) => Vec::new(),
+    };
+    let plan = supply.snapshot_plan(request)?;
+    transaction
+        .lock_supply(&plan.anchors(&current_anchors))
+        .await?;
+    let mut snapshot = plan
+        .read(transaction, commitment.now, busy_source_bindings)
+        .await?;
+    if let Some(request) = request {
+        supply
+            .include_duplicates(transaction, &mut snapshot, request, commitment.now)
+            .await?;
+    }
+    let claim = match lock {
+        ClaimLock::NoClaim => None,
+        ClaimLock::CallerHolds { max_per_caller } => {
+            if transaction
+                .lock_caller_and_count_active_holds(
+                    commitment.actor_issuer,
+                    commitment.actor_subject,
+                    commitment.now,
+                )
+                .await?
+                >= i64::from(max_per_caller)
+            {
+                return Err(CommitError::HoldCeiling);
+            }
+            None
+        }
+        ClaimLock::Hold(hold_id) => {
+            Some(active_claim(transaction, hold_id, LedgerKind::Hold).await?)
+        }
+        ClaimLock::Appointment(appointment_id) => {
+            Some(active_claim(transaction, appointment_id, LedgerKind::Booking).await?)
+        }
+    };
+    guard_revisions(transaction, commitment).await?;
+    Ok(Locked {
+        snapshot,
+        claim,
+        current_anchors,
+    })
+}
+
+/// The active claim of `kind` a commitment acts on, locked. A claim that is
+/// gone, closed, or of another kind is answered as released.
+async fn active_claim(
+    transaction: &deadpool_postgres::Transaction<'_>,
+    claim_id: Uuid,
+    kind: LedgerKind,
+) -> Result<ClaimRow, CommitError> {
+    let claim = transaction
+        .claim_in_transaction(claim_id)
+        .await?
+        .ok_or(AdmissionRefusal::HoldReleased)?;
+    if claim.kind != kind || claim.state != ClaimState::Active {
+        return Err(AdmissionRefusal::HoldReleased.into());
+    }
+    Ok(claim)
+}
+
+/// Open a commitment's capacity transaction: mark it as an allocation
+/// writer, answer a stored attempt under the same key, and refuse a grant
+/// that already lapsed before any lock is taken. `Some` is the stored answer,
+/// which the caller commits and returns.
+async fn open_commitment(
+    transaction: &deadpool_postgres::Transaction<'_>,
+    commitment: &Commitment<'_>,
+    scope: &str,
+) -> Result<Option<CommitOutcome>, CommitError> {
+    mark_allocation_writer(transaction).await?;
+    match replay_stored_attempt(transaction, commitment, scope).await? {
+        Some(ReplayOutcome::Replay {
+            status_code,
+            receipt,
+        }) => {
+            return Ok(Some(CommitOutcome::Replay {
+                status_code,
+                receipt,
+            }))
+        }
+        Some(ReplayOutcome::Refused(error)) => return Err(error),
+        None => {}
+    }
+    check_grant_current(commitment)?;
+    Ok(None)
+}
+
+/// Announce a booking a commitment wrote: its confirmation intent, its
+/// reminders, and its confirmed hook event, in the booking's transaction.
+async fn announce_booking(
+    transaction: &deadpool_postgres::Transaction<'_>,
+    claim: &ClaimRow,
+    offering: &registry_scheduling_core::OfferingPolicy,
+    commitment: &Commitment<'_>,
+) -> Result<(), CommitError> {
+    transaction
+        .insert_outbox(
+            "confirmation",
+            claim.claim_id,
+            1,
+            commitment.now,
+            confirmation_payload(claim, commitment.policy_revision),
+        )
+        .await?;
+    mint_reminders(transaction, claim, offering, commitment.now).await?;
+    if let Some(hooks) = commitment.hooks {
+        hooks
+            .capture(transaction, APPOINTMENT_CONFIRMED_TRIGGER, claim)
+            .await?;
+    }
+    Ok(())
+}
+
+/// Where one commitment places its claim, decided under the commitment's
+/// locks: the claim row's terms and, for a bundle, every physical allocation
+/// beside it.
+struct Placement<'a> {
+    offering: String,
+    start: DateTime<Utc>,
+    end: DateTime<Utc>,
+    supply_id: String,
+    occupied_start: DateTime<Utc>,
+    occupied_end: DateTime<Utc>,
+    units: i32,
+    allocations: Option<PlacedAllocations<'a>>,
+}
+
+/// The physical allocations of a bundle placement.
+struct PlacedAllocations<'a> {
+    lines: &'a [BundleSupplyLine<'a>],
+    admission: BundleAdmission,
+    documents: Vec<AllocationDocument>,
+}
+
+impl<'a> Placement<'a> {
+    /// A bundle's claim row carries its primary allocation.
+    fn bundle(
+        lines: &'a [BundleSupplyLine<'a>],
+        admission: BundleAdmission,
+    ) -> Result<Self, CommitError> {
+        let primary = admission
+            .allocations
+            .iter()
+            .find(|allocation| allocation.requirement_id == "primary")
+            .ok_or(StoreError::Corrupt)?;
+        let supply_id = primary.resource.clone();
+        let occupied_start = primary.occupied_start;
+        let occupied_end = primary.occupied_end;
+        let units = i32::try_from(primary.units).map_err(|_| StoreError::Corrupt)?;
+        let documents = allocation_documents(&admission)?;
+        Ok(Self {
+            offering: admission.offering.clone(),
+            start: admission.start,
+            end: admission.end,
+            supply_id,
+            occupied_start,
+            occupied_end,
+            units,
+            allocations: Some(PlacedAllocations {
+                lines,
+                admission,
+                documents,
+            }),
+        })
+    }
+
+    /// The allocations a bundle placement records; none for a single
+    /// supply.
+    fn documents(&self) -> Option<&[AllocationDocument]> {
+        self.allocations
+            .as_ref()
+            .map(|allocations| allocations.documents.as_slice())
+    }
+
+    /// The claim a create writes from this placement and its request.
+    fn new_claim<'c>(
+        &'c self,
+        kind: LedgerKind,
+        operational: &'c registry_scheduling_core::OfferingPolicy,
+        request: &'c registry_scheduling_core::AdmissionRequest,
+        hold_expires_at: Option<DateTime<Utc>>,
+        commitment: &'c Commitment<'_>,
+    ) -> NewClaim<'c> {
+        NewClaim {
+            claim_id: Uuid::new_v4(),
+            kind,
+            state: ClaimState::Active,
+            offering: &self.offering,
+            operational_service: &operational.service,
+            operational_location: &operational.location,
+            operational_mode: operational.mode,
+            supply_id: &self.supply_id,
+            channel: request.channel.as_deref(),
+            displayed_start: self.start,
+            displayed_end: self.end,
+            occupied_start: self.occupied_start,
+            occupied_end: self.occupied_end,
+            units: self.units,
+            party: request.party,
+            party_references: &request.party_references,
+            source_manager: commitment.source_manager.as_ref(),
+            duplicate_key: request.duplicate_key.as_deref(),
+            external_references: &request.external_references,
+            hold_expires_at,
+            revision: 1,
+            policy_revision: commitment.policy_revision,
+            actor: commitment.actor,
+            owner_issuer: commitment.actor_issuer,
+            owner_subject: commitment.actor_subject,
+            reason: None,
+        }
+    }
+
+    /// Write a bundle's allocation rows beside the claim just inserted.
+    async fn insert_allocations(
+        &self,
+        transaction: &deadpool_postgres::Transaction<'_>,
+        claim: &mut ClaimRow,
+    ) -> Result<(), CommitError> {
+        if let Some(allocations) = &self.allocations {
+            let stored = stored_bundle_allocations(&allocations.admission, allocations.lines)?;
+            transaction
+                .insert_claim_allocations(claim.claim_id, &stored)
+                .await?;
+            claim.allocations = allocations.documents.clone();
+        }
+        Ok(())
+    }
+
+    /// Replace a moved bundle's allocation rows with this placement's.
+    async fn replace_allocations(
+        &self,
+        transaction: &deadpool_postgres::Transaction<'_>,
+        claim_id: Uuid,
+    ) -> Result<(), CommitError> {
+        if let Some(allocations) = &self.allocations {
+            let stored = stored_bundle_allocations(&allocations.admission, allocations.lines)?;
+            transaction
+                .replace_claim_allocations(claim_id, &stored)
+                .await?;
+        }
+        Ok(())
+    }
+}
+
+/// A history entry's detail, with a bundle commitment's allocations recorded
+/// beside it.
+fn with_allocations(mut detail: Value, allocations: Option<&[AllocationDocument]>) -> Value {
+    if let Some(allocations) = allocations {
+        detail["allocations"] = json!(allocations);
+    }
+    detail
+}
+
+/// Step 2: read the ledger snapshot of one single-supply admission, with
+/// expiry evaluated in the query, under the anchor `lock_commitment` holds.
+async fn single_snapshot(
     transaction: &deadpool_postgres::Transaction<'_>,
     supply: &SupplyContext<'_>,
     now: DateTime<Utc>,
 ) -> Result<LedgerSnapshot, StoreError> {
-    match supply {
-        SupplyContext::ExactTime {
-            exact,
-            members,
-            open,
-            ..
-        } => {
-            // The anchor is the pool, not the members: two offerings on one
-            // pool sell the same members and must serialize against each
-            // other, and `apply_policy` anchors pool ids only.
-            transaction
-                .lock_supply(std::slice::from_ref(&exact.pool))
-                .await?;
-            // Claims occupy a member, so the snapshot reads member ids even
-            // though the lock is the pool's.
-            let member_ids: Vec<String> = members
-                .iter()
-                .map(|member| member.resource_id.clone())
-                .collect();
-            let earliest = open
-                .iter()
-                .map(|interval| interval.start)
-                .min()
-                .unwrap_or(now);
-            let latest = open
-                .iter()
-                .map(|interval| interval.end)
-                .max()
-                .unwrap_or(now);
-            let buffer = TimeDelta::minutes(
-                i64::from(exact.buffer_before_minutes) + i64::from(exact.buffer_after_minutes),
-            );
-            let duration = TimeDelta::minutes(i64::from(exact.duration_minutes));
-            let earliest = earliest
-                .checked_sub_signed(buffer)
-                .ok_or(StoreError::Corrupt)?;
-            let latest = latest
-                .checked_add_signed(duration + buffer)
-                .ok_or(StoreError::Corrupt)?;
-            let rows = transaction
-                .query(CONSUMING_CLAUSES, &[&member_ids, &earliest, &latest, &now])
-                .await?;
-            Ok(snapshot_from_rows(rows))
+    let rows = transaction
+        .query(
+            "SELECT claim_id, offering, supply_id, kind, channel, occupied_start, occupied_end, \
+             units, duplicate_key, hold_expires_at \
+             FROM scheduling_claims \
+             WHERE state='active' \
+               AND (kind='booking' OR (kind='hold' AND hold_expires_at > $2)) \
+               AND supply_id = $1 \
+             ORDER BY occupied_start",
+            &[&supply.window.id, &now],
+        )
+        .await?;
+    Ok(snapshot_from_rows(rows))
+}
+
+/// Lock a bundle's supply anchors and read its snapshot, for a records swap
+/// that re-places a standing claim's physical allocations.
+async fn lock_bundle_and_snapshot(
+    transaction: &deadpool_postgres::Transaction<'_>,
+    lines: &[BundleSupplyLine<'_>],
+    request: &registry_scheduling_core::AdmissionRequest,
+    now: DateTime<Utc>,
+    busy_source_bindings: &std::collections::BTreeMap<String, Vec<String>>,
+) -> Result<LedgerSnapshot, CommitError> {
+    let plan = SnapshotPlan::bundle(lines, request)?;
+    transaction.lock_supply(&plan.anchors(&[])).await?;
+    plan.read(transaction, now, busy_source_bindings).await
+}
+
+/// Read a bundle's ledger snapshot under the anchors its caller holds.
+async fn bundle_snapshot(
+    transaction: &deadpool_postgres::Transaction<'_>,
+    lines: &[BundleSupplyLine<'_>],
+    request: &registry_scheduling_core::AdmissionRequest,
+    duration_minutes: u32,
+    now: DateTime<Utc>,
+    busy_source_bindings: &std::collections::BTreeMap<String, Vec<String>>,
+) -> Result<LedgerSnapshot, CommitError> {
+    let mut resources: Vec<String> = lines
+        .iter()
+        .flat_map(|line| line.members.iter().map(|member| member.resource_id.clone()))
+        .collect();
+    resources.sort();
+    resources.dedup();
+    let maximum_before = lines
+        .iter()
+        .map(|line| line.exact.buffer_before_minutes)
+        .max()
+        .unwrap_or(0);
+    let maximum_after = lines
+        .iter()
+        .map(|line| line.exact.buffer_after_minutes)
+        .max()
+        .unwrap_or(0);
+    let from = request
+        .start
+        .checked_sub_signed(TimeDelta::minutes(i64::from(maximum_before)))
+        .ok_or(AdmissionRefusal::ScheduleUnpublished)?;
+    let to = request
+        .start
+        .checked_add_signed(TimeDelta::minutes(
+            i64::from(duration_minutes) + i64::from(maximum_after),
+        ))
+        .ok_or(AdmissionRefusal::ScheduleUnpublished)?;
+    let limit =
+        i64::try_from(MAXIMUM_CAPACITY_SNAPSHOT_ROWS + 1).map_err(|_| StoreError::Corrupt)?;
+    let rows = transaction
+        .query(
+            "SELECT c.claim_id, a.offering, a.resource_id, c.kind, c.channel, \
+             a.occupied_start, a.occupied_end, a.units, c.duplicate_key, c.hold_expires_at \
+             FROM scheduling_claim_allocations AS a \
+             JOIN scheduling_claims AS c ON c.claim_id=a.claim_id \
+             WHERE c.state='active' \
+               AND (c.kind IN ('booking','window') OR (c.kind='hold' AND c.hold_expires_at > $4)) \
+               AND a.resource_id = ANY($1) \
+               AND a.occupied_start < $3 AND $2 < a.occupied_end \
+             ORDER BY a.occupied_start, a.claim_id, a.resource_id LIMIT $5",
+            &[&resources, &from, &to, &now, &limit],
+        )
+        .await?;
+    if rows.len() > MAXIMUM_CAPACITY_SNAPSHOT_ROWS {
+        return Err(StoreError::CapacitySnapshotTooLarge.into());
+    }
+    let mut snapshot = snapshot_from_rows(rows);
+    source_busy::append_busy_allocation_blocks(
+        transaction,
+        busy_source_bindings,
+        lines,
+        request,
+        now,
+        &mut snapshot,
+    )
+    .await
+    .map_err(source_busy::as_store_error)?;
+    Ok(snapshot)
+}
+
+fn evaluate_bundle(
+    lines: &[BundleSupplyLine<'_>],
+    request: &registry_scheduling_core::AdmissionRequest,
+    snapshot: &LedgerSnapshot,
+    commitment: &Commitment<'_>,
+    exclude: Option<&str>,
+    confirming_hold: bool,
+) -> Result<BundleAdmission, CommitError> {
+    let contexts: Vec<_> = lines
+        .iter()
+        .map(|line| ExactTimeBundleLineContext {
+            requirement_id: line.requirement_id.clone(),
+            offering: line.offering,
+            exact: line.exact,
+            members: line.members,
+            open: line.open,
+            closures: line.closures,
+            resource: line.resource,
+            stored_resource: line.stored_resource,
+            units: line.units,
+        })
+        .collect();
+    match evaluate_exact_time_bundle(
+        &ExactTimeBundleContext {
+            lines: &contexts,
+            snapshot,
+            policy_revision: u64::try_from(commitment.policy_revision).unwrap_or(u64::MAX),
+            now: commitment.now,
+            exclude_reservation: exclude,
+            confirming_hold,
+            limits: AllocationLimits {
+                maximum_requirements: registry_scheduling_core::MAXIMUM_ALLOCATION_REQUIREMENTS,
+                maximum_units_per_requirement: registry_scheduling_core::MAXIMUM_RESOURCE_UNITS,
+                maximum_candidate_resources: 4_096,
+                maximum_standing_allocations: MAXIMUM_CAPACITY_SNAPSHOT_ROWS,
+            },
+        },
+        request,
+    ) {
+        Ok(admission) => Ok(admission),
+        Err(BundleEvaluationError::Admission(refusal)) => Err(refusal.into()),
+        Err(BundleEvaluationError::Allocation(AllocationError::CapacityExhausted { .. })) => {
+            Err(AdmissionRefusal::CapacityExhausted.into())
         }
-        SupplyContext::Window { window, .. } => {
-            transaction
-                .lock_supply(std::slice::from_ref(&window.id))
-                .await?;
-            let rows = transaction
-                .query(
-                    "SELECT claim_id, offering, supply_id, kind, channel, occupied_start, occupied_end, \
-                     units, duplicate_key, hold_expires_at \
-                     FROM scheduling_claims \
-                     WHERE state='active' \
-                       AND (kind='booking' OR (kind='hold' AND hold_expires_at > $2)) \
-                       AND supply_id = $1 \
-                     ORDER BY occupied_start",
-                    &[&window.id, &now],
-                )
-                .await?;
-            Ok(snapshot_from_rows(rows))
+        Err(BundleEvaluationError::Allocation(AllocationError::SnapshotTooLarge { .. })) => {
+            Err(StoreError::CapacitySnapshotTooLarge.into())
+        }
+        Err(BundleEvaluationError::Shape) => Err(StoreError::Corrupt.into()),
+        Err(error) => {
+            tracing::info!(error = %error, "an atomic allocation request was invalid");
+            Err(AdmissionRefusal::AtomicBundleRequired.into())
         }
     }
 }
 
+fn confirm_stored_bundle(
+    lines: &[BundleSupplyLine<'_>],
+    request: &registry_scheduling_core::AdmissionRequest,
+    snapshot: &LedgerSnapshot,
+    commitment: &Commitment<'_>,
+    hold: &ClaimRow,
+) -> Result<BundleAdmission, CommitError> {
+    let evaluated = evaluate_bundle(
+        lines,
+        request,
+        snapshot,
+        commitment,
+        Some(&hold.claim_id.to_string()),
+        true,
+    )?;
+    if evaluated.start != hold.displayed_start || evaluated.end != hold.displayed_end {
+        return Err(StoreError::Corrupt.into());
+    }
+
+    let standing_allocations = snapshot
+        .consuming(commitment.now)
+        .map(|claim| StandingAllocation {
+            reservation_id: claim.id.clone(),
+            resource_id: claim.supply_id.clone(),
+            interval: AllocationInterval {
+                start: claim.start,
+                end: claim.end,
+            },
+            units: claim.units,
+        })
+        .collect::<Vec<_>>();
+    let mut totals = HashMap::<String, u32>::new();
+    let mut resources = HashMap::<(String, String), ()>::new();
+    let mut allocations = Vec::with_capacity(hold.allocations.len());
+    for allocation in &hold.allocations {
+        let requirement_id = match allocation.requirement {
+            AllocationRequirementDocument::Primary => "primary".to_owned(),
+            AllocationRequirementDocument::Additional { index } => {
+                format!("additional:{index}")
+            }
+        };
+        let line = lines
+            .iter()
+            .find(|line| line.requirement_id == requirement_id)
+            .ok_or(StoreError::Corrupt)?;
+        let expected = evaluated
+            .allocations
+            .iter()
+            .find(|part| part.requirement_id == requirement_id)
+            .ok_or(StoreError::Corrupt)?;
+        if allocation.offering != line.offering.id
+            || allocation.offering != expected.offering
+            || allocation.occupied_start != expected.occupied_start
+            || allocation.occupied_end != expected.occupied_end
+            || resources
+                .insert((requirement_id.clone(), allocation.resource.clone()), ())
+                .is_some()
+        {
+            return Err(StoreError::Corrupt.into());
+        }
+        let member = line
+            .members
+            .iter()
+            .find(|member| member.resource_id == allocation.resource)
+            .ok_or(AdmissionRefusal::CapacityExhausted)?;
+        if !member.serves(&line.offering.requires_capabilities)
+            || member.capacity_units == 0
+            || !member.available_during(allocation.occupied_start, allocation.occupied_end)
+        {
+            return Err(AdmissionRefusal::CapacityExhausted.into());
+        }
+        let interval = AllocationInterval {
+            start: allocation.occupied_start,
+            end: allocation.occupied_end,
+        };
+        let other_units = maximum_concurrent_units(
+            &allocation.resource,
+            &interval,
+            &standing_allocations,
+            Some(&hold.claim_id.to_string()),
+        )
+        .map_err(|_| StoreError::Corrupt)?;
+        if other_units
+            .checked_add(allocation.units)
+            .is_none_or(|units| units > member.capacity_units)
+        {
+            return Err(AdmissionRefusal::CapacityExhausted.into());
+        }
+        let total = totals.entry(requirement_id.clone()).or_default();
+        *total = total
+            .checked_add(allocation.units)
+            .ok_or(StoreError::Corrupt)?;
+        allocations.push(BundleAllocation {
+            requirement_id,
+            offering: allocation.offering.clone(),
+            resource: allocation.resource.clone(),
+            units: allocation.units,
+            occupied_start: allocation.occupied_start,
+            occupied_end: allocation.occupied_end,
+        });
+    }
+    if lines
+        .iter()
+        .any(|line| totals.get(&line.requirement_id).copied() != Some(line.units))
+        || totals.len() != lines.len()
+    {
+        return Err(StoreError::Corrupt.into());
+    }
+    Ok(BundleAdmission {
+        offering: evaluated.offering,
+        start: evaluated.start,
+        end: evaluated.end,
+        allocations,
+    })
+}
+
+fn stored_bundle_allocations<'a>(
+    admission: &'a BundleAdmission,
+    lines: &'a [BundleSupplyLine<'a>],
+) -> Result<Vec<NewClaimAllocation<'a>>, StoreError> {
+    admission
+        .allocations
+        .iter()
+        .map(|allocation| {
+            let line = lines
+                .iter()
+                .find(|line| line.requirement_id == allocation.requirement_id)
+                .ok_or(StoreError::Corrupt)?;
+            Ok(NewClaimAllocation {
+                requirement: &allocation.requirement_id,
+                offering: &allocation.offering,
+                operational_service: &line.offering.service,
+                operational_location: &line.offering.location,
+                anchor_id: &line.exact.pool,
+                resource_id: &allocation.resource,
+                occupied_start: allocation.occupied_start,
+                occupied_end: allocation.occupied_end,
+                units: allocation.units,
+            })
+        })
+        .collect()
+}
+
+fn allocation_documents(
+    admission: &BundleAdmission,
+) -> Result<Vec<AllocationDocument>, StoreError> {
+    admission
+        .allocations
+        .iter()
+        .map(|allocation| {
+            let requirement = if allocation.requirement_id == "primary" {
+                AllocationRequirementDocument::Primary
+            } else {
+                let index = allocation
+                    .requirement_id
+                    .strip_prefix("additional:")
+                    .and_then(|index| index.parse::<u8>().ok())
+                    .ok_or(StoreError::Corrupt)?;
+                AllocationRequirementDocument::Additional { index }
+            };
+            Ok(AllocationDocument {
+                requirement,
+                offering: allocation.offering.clone(),
+                resource: allocation.resource.clone(),
+                units: allocation.units,
+                occupied_start: allocation.occupied_start,
+                occupied_end: allocation.occupied_end,
+            })
+        })
+        .collect()
+}
+
 /// Add the offering-wide duplicate fact that a time-bounded capacity snapshot
 /// may omit. The existing supply lock serializes this read with every writer
-/// for the offering's frozen supply; the supporting partial index carries the
-/// offering and the booking's end beside the key, so the lookup stays
-/// independent of the age or span of its openings and of the elapsed bookings
-/// the party has accumulated under the same key.
+/// for the offering's frozen supply. The bounded lookup covers both the
+/// logical claim's primary offering and its indexed allocation rows, so a
+/// secondary bundle line remains a duplicate fact when it is later requested
+/// as either a primary or secondary line.
 ///
 /// A booking counts while its own time has not passed. The guard is there so
 /// one party holds one live booking per offering, and a booking that has
@@ -2545,24 +3639,103 @@ async fn include_active_duplicate(
     let Some(duplicate_key) = duplicate_key else {
         return Ok(());
     };
+    include_active_duplicates_for_offerings(
+        transaction,
+        snapshot,
+        std::slice::from_ref(&offering.id),
+        duplicate_key,
+        now,
+    )
+    .await
+}
+
+/// Add the offering-wide duplicate facts for every keyed line in one bundle.
+///
+/// A bundle stores one logical claim whose top-level offering is the primary
+/// line. Additional line offerings live on allocation rows, so the global
+/// lookup must consider both places. Duplicate-only snapshot rows use an
+/// internal resource name outside the published candidate set: they inform
+/// the pure duplicate check without counting physical capacity a second time.
+async fn include_bundle_active_duplicates(
+    transaction: &deadpool_postgres::Transaction<'_>,
+    snapshot: &mut LedgerSnapshot,
+    lines: &[BundleSupplyLine<'_>],
+    duplicate_key: Option<&str>,
+    now: DateTime<Utc>,
+) -> Result<(), StoreError> {
+    let Some(duplicate_key) = duplicate_key else {
+        return Ok(());
+    };
+    let mut offerings = lines
+        .iter()
+        .filter(|line| line.offering.duplicate_active_key.is_some())
+        .map(|line| line.offering.id.clone())
+        .collect::<Vec<_>>();
+    offerings.sort();
+    offerings.dedup();
+    if offerings.is_empty() {
+        return Ok(());
+    }
+    include_active_duplicates_for_offerings(transaction, snapshot, &offerings, duplicate_key, now)
+        .await
+}
+
+async fn include_active_duplicates_for_offerings(
+    transaction: &deadpool_postgres::Transaction<'_>,
+    snapshot: &mut LedgerSnapshot,
+    offerings: &[String],
+    duplicate_key: &str,
+    now: DateTime<Utc>,
+) -> Result<(), StoreError> {
+    let limit =
+        i64::try_from(MAXIMUM_CAPACITY_SNAPSHOT_ROWS + 1).map_err(|_| StoreError::Corrupt)?;
     let rows = transaction
         .query(
-            "SELECT claim_id, offering, supply_id, kind, channel, occupied_start, \
-             occupied_end, units, duplicate_key, hold_expires_at \
-             FROM scheduling_claims \
-             WHERE state='active' AND kind='booking' AND offering=$1 AND duplicate_key=$2 \
-               AND occupied_end > $3",
-            &[&offering.id, &duplicate_key, &now],
+            "SELECT DISTINCT ON (claim_id,offering) \
+               claim_id,offering,occupied_start,occupied_end,duplicate_key,hold_expires_at \
+             FROM ( \
+               SELECT c.claim_id,c.offering,c.occupied_start,c.occupied_end, \
+                      c.duplicate_key,c.hold_expires_at \
+               FROM scheduling_claims AS c \
+               WHERE c.state='active' AND c.kind='booking' \
+                 AND c.offering=ANY($1) AND c.duplicate_key=$2 AND c.occupied_end > $3 \
+               UNION ALL \
+               SELECT c.claim_id,a.offering,a.occupied_start,a.occupied_end, \
+                      c.duplicate_key,c.hold_expires_at \
+               FROM scheduling_claims AS c \
+               JOIN scheduling_claim_allocations AS a ON a.claim_id=c.claim_id \
+               WHERE c.state='active' AND c.kind='booking' \
+                 AND a.offering=ANY($1) AND c.duplicate_key=$2 AND a.occupied_end > $3 \
+             ) AS matched \
+             ORDER BY claim_id,offering,occupied_end DESC LIMIT $4",
+            &[&offerings, &duplicate_key, &now, &limit],
         )
         .await?;
-    for claim in snapshot_from_rows(rows).claims {
-        if !snapshot
+    for row in rows {
+        let id = row.get::<_, Uuid>(0).to_string();
+        let offering: String = row.get(1);
+        if snapshot
             .claims
             .iter()
-            .any(|existing| existing.id == claim.id)
+            .any(|existing| existing.id == id && existing.offering == offering)
         {
-            snapshot.claims.push(claim);
+            continue;
         }
+        if snapshot.claims.len() >= MAXIMUM_CAPACITY_SNAPSHOT_ROWS {
+            return Err(StoreError::CapacitySnapshotTooLarge);
+        }
+        snapshot.claims.push(LedgerClaim {
+            id,
+            supply_id: format!("duplicate-only:{offering}"),
+            offering,
+            kind: LedgerKind::Booking,
+            channel: None,
+            start: row.get(2),
+            end: row.get(3),
+            units: 1,
+            duplicate_key: row.get(4),
+            expires_at: row.get(5),
+        });
     }
     Ok(())
 }
@@ -2602,50 +3775,22 @@ fn evaluate(
     commitment: &Commitment<'_>,
     exclude: Option<&str>,
 ) -> Result<registry_scheduling_core::Admission, AdmissionRefusal> {
-    match supply {
-        SupplyContext::ExactTime {
-            exact,
-            members,
-            open,
-            closures,
-        } => evaluate_exact_time_admission(
-            &ExactTimeContext {
-                offering,
-                exact,
-                members,
-                open,
-                closures,
-                snapshot,
-                policy_revision: u64::try_from(commitment.policy_revision).unwrap_or(u64::MAX),
-                now: commitment.now,
-            },
-            request,
-            exclude,
-        ),
-        SupplyContext::Window {
-            window,
-            lead_time_minutes,
-            horizon_days,
-            channels,
-            open,
-            closures,
-        } => evaluate_window_admission(
-            &registry_scheduling_core::WindowContext {
-                offering,
-                window,
-                open,
-                closures,
-                lead_time_minutes: *lead_time_minutes,
-                horizon_days: *horizon_days,
-                snapshot,
-                policy_revision: u64::try_from(commitment.policy_revision).unwrap_or(u64::MAX),
-                channels,
-                now: commitment.now,
-            },
-            request,
-            exclude,
-        ),
-    }
+    evaluate_window_admission(
+        &registry_scheduling_core::WindowContext {
+            offering,
+            window: supply.window,
+            open: supply.open,
+            closures: supply.closures,
+            lead_time_minutes: supply.lead_time_minutes,
+            horizon_days: supply.horizon_days,
+            snapshot,
+            policy_revision: u64::try_from(commitment.policy_revision).unwrap_or(u64::MAX),
+            channels: supply.channels,
+            now: commitment.now,
+        },
+        request,
+        exclude,
+    )
 }
 
 fn hold_ledger_claim(hold: &ClaimRow) -> LedgerClaim {
@@ -2663,8 +3808,7 @@ fn hold_ledger_claim(hold: &ClaimRow) -> LedgerClaim {
     }
 }
 
-/// The revision guards, read under the transaction after the supply anchor
-/// it holds is locked.
+/// The revision guard and its transaction-wide share lock.
 ///
 /// A commitment may only land under the policy revision this process
 /// actually evaluated and the records revision the request actually
@@ -2672,8 +3816,10 @@ fn hold_ledger_claim(hold: &ClaimRow) -> LedgerClaim {
 /// policy published by another process, or a records swap another operator
 /// wrote, makes the caller's whole evaluation stale, and the commitment is
 /// refused rather than stamped with a revision whose rules it never saw.
-/// The share lock holds both revisions still for the life of the
-/// transaction, so they cannot move again between the guard and the commit.
+/// The share lock holds both revisions still for the life of the transaction,
+/// so they cannot move again between the guard and the commit. Exact and
+/// arrival commitments take it after their supply anchor, matching records
+/// publication's supply-then-meta order.
 async fn guard_revisions(
     transaction: &deadpool_postgres::Transaction<'_>,
     commitment: &Commitment<'_>,
@@ -2813,10 +3959,16 @@ async fn check_policy_publication(
         let current = retained_policy(current_document)?;
         let active_offerings = transaction
             .query(
-                "SELECT DISTINCT offering FROM scheduling_claims \
-                 WHERE state='active' \
-                   AND (kind='booking' OR (kind='hold' AND hold_expires_at > $1)) \
-                 ORDER BY offering",
+                "SELECT offering FROM ( \
+                   SELECT c.offering FROM scheduling_claims AS c \
+                   WHERE c.state='active' \
+                     AND (c.kind IN ('booking','window') OR (c.kind='hold' AND c.hold_expires_at > $1)) \
+                   UNION \
+                   SELECT a.offering FROM scheduling_claim_allocations AS a \
+                   JOIN scheduling_claims AS c ON c.claim_id=a.claim_id \
+                   WHERE c.state='active' \
+                     AND (c.kind IN ('booking','window') OR (c.kind='hold' AND c.hold_expires_at > $1)) \
+                 ) active_offerings ORDER BY offering",
                 &[&now],
             )
             .await?;
@@ -2910,6 +4062,10 @@ fn retained_policy(document: Value) -> Result<SchedulingPolicy, StoreError> {
 /// - `UnknownOffering` is a deployed window whose offering this publication
 ///   retires. Refusing it would make an arrival offering impossible to
 ///   withdraw, since the window records could only be removed afterwards.
+///   A window resource requirement's offering is no exception: the
+///   reservation the window holds through it is an active commitment, so the
+///   publication is refused as `PolicyInUse` instead, and a records apply
+///   that reserves through an unknown offering is refused when it reserves.
 ///
 /// Everything that remains is a statement one side makes that the other
 /// contradicts, and no ordering of the two writes makes it safe. In
@@ -3137,6 +4293,7 @@ fn claim_receipt(
         "kind": kind,
         "claim": claim,
         "resource": resource_is_member.then(|| claim.supply_id.clone()),
+        "manager": claim.source_manager.as_ref().map(|_| "schedulingManager"),
         "policyRevision": policy_revision,
     })
 }
@@ -3146,7 +4303,23 @@ pub(crate) async fn replace_facts_in_transaction(
     scheduling_id: &str,
     facts: &SchedulingFacts,
     expected: Option<&ActivePackage<'_>>,
+    busy_source_bindings: &std::collections::BTreeMap<String, Vec<String>>,
 ) -> Result<(), StoreError> {
+    if facts
+        .pools
+        .iter()
+        .flat_map(|pool| &pool.members)
+        .any(|member| {
+            member
+                .availability
+                .as_ref()
+                .is_some_and(|availability| !availability.is_valid())
+        })
+    {
+        return Err(StoreError::CombinedInvariant(
+            "resource availability requires at most 256 positive intervals per list, each spanning at most 3650 days".to_owned(),
+        ));
+    }
     // Take every supply anchor before reading a claim. A capacity
     // transaction holds its own anchor from its snapshot until it commits,
     // so holding all of them means no commitment is mid-evaluation against
@@ -3178,8 +4351,10 @@ pub(crate) async fn replace_facts_in_transaction(
     // deployment whose records are being seeded before any policy exists,
     // and there is nothing yet for them to contradict.
     let policy_digest: String = meta.get(2);
-    if !policy_digest.is_empty() {
-        let policy_revision: i64 = meta.get(1);
+    let policy_revision: i64 = meta.get(1);
+    let deployed_policy = if policy_digest.is_empty() {
+        None
+    } else {
         let document: Option<Value> = transaction
             .query_opt(
                 "SELECT policy_document FROM scheduling_policy_revisions \
@@ -3194,8 +4369,10 @@ pub(crate) async fn replace_facts_in_transaction(
                     .to_owned(),
             ));
         };
-        refuse_combined_conflicts(&retained_policy(document)?, &facts.windows)?;
-    }
+        let policy = retained_policy(document)?;
+        refuse_combined_conflicts(&policy, &facts.windows)?;
+        Some(policy)
+    };
     let occupied = occupied_resources_changed_by(transaction, facts).await?;
     if !occupied.is_empty() {
         return Err(StoreError::FactsInUse(occupied.join(", ")));
@@ -3306,15 +4483,23 @@ pub(crate) async fn replace_facts_in_transaction(
             )
             .await?;
         for member in &pool.members {
+            let availability = member
+                .availability
+                .as_ref()
+                .map(serde_json::to_value)
+                .transpose()
+                .map_err(|_| StoreError::Corrupt)?;
             transaction
                 .execute(
                     "INSERT INTO scheduling_pool_members(resource_id, pool_id, capabilities, \
-                     available) VALUES($1,$2,$3,$4)",
+                     available, capacity_units, availability) VALUES($1,$2,$3,$4,$5,$6)",
                     &[
                         &member.resource_id,
                         &pool.id,
                         &member.capabilities,
                         &member.available,
+                        &i32::try_from(member.capacity_units).map_err(|_| StoreError::Corrupt)?,
+                        &availability,
                     ],
                 )
                 .await?;
@@ -3362,6 +4547,16 @@ pub(crate) async fn replace_facts_in_transaction(
             )
             .await?;
     }
+    replace_window_resource_claims(
+        transaction,
+        facts,
+        &revision_heads,
+        deployed_policy.as_ref(),
+        policy_revision,
+        now,
+        busy_source_bindings,
+    )
+    .await?;
     // The records revision moves last, inside the same transaction that
     // holds every supply anchor: a capacity transaction that acquires its
     // anchor after this commit reads the new revision and refuses to
@@ -3376,14 +4571,351 @@ pub(crate) async fn replace_facts_in_transaction(
     Ok(())
 }
 
-/// The resources live claims occupy that the incoming records retire or move.
-///
-/// An exact-time claim names its member in `supply_id`, so a swap that drops
-/// a member out from under a live booking would leave that booking pointing
-/// at a resource the deployment no longer has: invisible to every pool
-/// snapshot, counted against nothing, and still promised to its caller. A
-/// Window claims are assessed separately against the incoming window records,
-/// so this helper reports only moved or retired pool members.
+struct ResolvedParentRequirement<'a> {
+    offering: &'a registry_scheduling_core::OfferingPolicy,
+    exact: &'a registry_scheduling_core::ExactTimeOffering,
+    members: &'a [PoolMember],
+    open: Vec<CalendarInterval>,
+    closures: Vec<CalendarInterval>,
+    resource: Option<&'a str>,
+    units: u32,
+}
+
+/// One physical requirement a parent claim reserves for a whole published
+/// window.
+struct ParentRequirement<'a> {
+    requirement: &'a str,
+    offering: &'a str,
+    resource: Option<&'a str>,
+    units: u32,
+}
+
+/// A parent claim and the span and requirements it reserves once on behalf
+/// of every booking it serves. `subject` names it in refusals.
+struct ParentReservation<'a> {
+    claim_id: Uuid,
+    subject: String,
+    start: DateTime<Utc>,
+    end: DateTime<Utc>,
+    requirements: &'a [ParentRequirement<'a>],
+}
+
+/// Reserve a parent's physical requirements through the claim-allocation
+/// ledger, under the same supply locks and evaluator as an exact-time bundle,
+/// replacing whatever the parent held before.
+async fn replace_parent_allocations(
+    transaction: &deadpool_postgres::Transaction<'_>,
+    parent: &ParentReservation<'_>,
+    facts: &SchedulingFacts,
+    policy: &SchedulingPolicy,
+    policy_revision: i64,
+    now: DateTime<Utc>,
+    busy_source_bindings: &std::collections::BTreeMap<String, Vec<String>>,
+) -> Result<(), StoreError> {
+    let subject = &parent.subject;
+    let duration = parent.end.signed_duration_since(parent.start);
+    let duration_seconds = duration.num_seconds();
+    if duration.subsec_nanos() != 0 || duration_seconds <= 0 || duration_seconds % 60 != 0 {
+        return Err(StoreError::CombinedInvariant(format!(
+            "{subject} must span whole positive minutes"
+        )));
+    }
+    let duration_minutes = u32::try_from(duration_seconds / 60).map_err(|_| StoreError::Corrupt)?;
+    let mut resolved = Vec::with_capacity(parent.requirements.len());
+    for requirement in parent.requirements {
+        let offering = policy.offering(requirement.offering).ok_or_else(|| {
+            StoreError::CombinedInvariant(format!(
+                "{subject} requirement {} names unknown offering {}",
+                requirement.requirement, requirement.offering
+            ))
+        })?;
+        let exact = offering.exact_time.as_ref().ok_or_else(|| {
+            StoreError::CombinedInvariant(format!(
+                "{subject} requirement {} is not exact-time",
+                requirement.requirement
+            ))
+        })?;
+        let pool = facts.pool(&exact.pool).ok_or_else(|| {
+            StoreError::CombinedInvariant(format!(
+                "{subject} requirement {} names unavailable pool {}",
+                requirement.requirement, exact.pool
+            ))
+        })?;
+        let location = facts.location(&offering.location).ok_or_else(|| {
+            StoreError::CombinedInvariant(format!(
+                "{subject} requirement {} names unavailable location {}",
+                requirement.requirement, offering.location
+            ))
+        })?;
+        let exceptions = facts
+            .exceptions
+            .iter()
+            .filter(|exception| exception.location == offering.location)
+            .map(|exception| exception.borrowed())
+            .collect::<Vec<_>>();
+        let open =
+            location_open_intervals(policy, &offering.location, &location.timezone, &exceptions)
+                .map_err(|error| StoreError::CombinedInvariant(error.to_string()))?;
+        let closures = location_closure_intervals(facts, &offering.location, &location.timezone)
+            .map_err(|error| StoreError::CombinedInvariant(error.to_string()))?;
+        resolved.push(ResolvedParentRequirement {
+            offering,
+            exact,
+            members: &pool.members,
+            open,
+            closures,
+            resource: requirement.resource,
+            units: requirement.units,
+        });
+    }
+    let lines = resolved
+        .iter()
+        .enumerate()
+        .map(|(index, line)| BundleSupplyLine {
+            requirement_id: if index == 0 {
+                "primary".to_owned()
+            } else {
+                format!("additional:{}", index - 1)
+            },
+            offering: line.offering,
+            exact: line.exact,
+            members: line.members,
+            open: &line.open,
+            closures: &line.closures,
+            resource: line.resource,
+            stored_resource: true,
+            units: line.units,
+        })
+        .collect::<Vec<_>>();
+    let primary = resolved.first().ok_or(StoreError::Corrupt)?;
+    let request = registry_scheduling_core::AdmissionRequest {
+        offering: primary.offering.id.clone(),
+        start: parent.start,
+        duration_minutes: Some(duration_minutes),
+        resource: primary.resource.map(str::to_owned),
+        resource_units: primary.units,
+        additional_allocations: resolved
+            .iter()
+            .skip(1)
+            .map(|line| AdditionalAllocationRequest {
+                offering: line.offering.id.clone(),
+                resource: line.resource.map(str::to_owned),
+                units: line.units,
+            })
+            .collect(),
+        party: None,
+        manager: None,
+        channel: None,
+        duplicate_key: None,
+        policy_revision: u64::try_from(policy_revision).map_err(|_| StoreError::Corrupt)?,
+        window_revision: None,
+        capabilities: Vec::new(),
+        prerequisites: Vec::new(),
+        external_references: Vec::new(),
+        party_references: Vec::new(),
+    };
+    let mut snapshot =
+        lock_bundle_and_snapshot(transaction, &lines, &request, now, busy_source_bindings)
+            .await
+            .map_err(|error| {
+                StoreError::FactsInUse(format!("{subject} physical allocation refused: {error}"))
+            })?;
+    // The parent may already own allocations while its safe source
+    // revision is being replaced. Exclude only that stable parent claim.
+    let parent_id = parent.claim_id.to_string();
+    snapshot.claims.retain(|claim| claim.id != parent_id);
+    let contexts = lines
+        .iter()
+        .map(|line| ExactTimeBundleLineContext {
+            requirement_id: line.requirement_id.clone(),
+            offering: line.offering,
+            exact: line.exact,
+            members: line.members,
+            open: line.open,
+            closures: line.closures,
+            resource: line.resource,
+            stored_resource: line.stored_resource,
+            units: line.units,
+        })
+        .collect::<Vec<_>>();
+    let physical = evaluate_exact_time_physical_bundle(
+        &ExactTimeBundleContext {
+            lines: &contexts,
+            snapshot: &snapshot,
+            policy_revision: u64::try_from(policy_revision).map_err(|_| StoreError::Corrupt)?,
+            now,
+            exclude_reservation: Some(&parent_id),
+            confirming_hold: false,
+            limits: AllocationLimits {
+                maximum_requirements: registry_scheduling_core::MAXIMUM_ALLOCATION_REQUIREMENTS,
+                maximum_units_per_requirement: registry_scheduling_core::MAXIMUM_RESOURCE_UNITS,
+                maximum_candidate_resources: 4_096,
+                maximum_standing_allocations: MAXIMUM_CAPACITY_SNAPSHOT_ROWS,
+            },
+        },
+        parent.start,
+        duration_minutes,
+    );
+    let admission = match physical {
+        Ok(admission) => admission,
+        Err(BundleEvaluationError::Allocation(AllocationError::SnapshotTooLarge { .. })) => {
+            return Err(StoreError::CapacitySnapshotTooLarge)
+        }
+        Err(error) => {
+            return Err(StoreError::FactsInUse(format!(
+                "{subject} physical allocation refused: {error}"
+            )))
+        }
+    };
+    let stored = stored_bundle_allocations(&admission, &lines)?;
+    transaction
+        .replace_claim_allocations(parent.claim_id, &stored)
+        .await
+}
+
+/// Reserve each published window's physical `resources` once, through one
+/// parent claim per window that every booking in the window shares. Bookings
+/// carry only units; the parent carries the room, facilitator, or equipment,
+/// so its allocations conflict with exact bookings and other parents under
+/// the same supply locks. A parent is recomputed only when its window record
+/// changed, so an unchanged window keeps what it holds across policy
+/// publications and records applies alike, as an exact booking keeps its
+/// allocations, and every parent that moves or goes away releases its
+/// allocations before any other parent reserves.
+#[allow(clippy::too_many_arguments)]
+async fn replace_window_resource_claims(
+    transaction: &deadpool_postgres::Transaction<'_>,
+    facts: &SchedulingFacts,
+    prior_records: &[PublishedWindow],
+    policy: Option<&SchedulingPolicy>,
+    policy_revision: i64,
+    now: DateTime<Utc>,
+    busy_source_bindings: &std::collections::BTreeMap<String, Vec<String>>,
+) -> Result<(), StoreError> {
+    let existing = transaction
+        .query(
+            "SELECT supply_id, claim_id FROM scheduling_claims \
+             WHERE kind='window' ORDER BY supply_id",
+            &[],
+        )
+        .await?
+        .into_iter()
+        .map(|row| (row.get::<_, String>(0), row.get::<_, Uuid>(1)))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    for (window_id, claim_id) in &existing {
+        let reserves = facts
+            .windows
+            .iter()
+            .any(|window| &window.id == window_id && !window.resources.is_empty());
+        if reserves {
+            continue;
+        }
+        transaction
+            .replace_claim_allocations(*claim_id, &[])
+            .await?;
+        transaction
+            .execute(
+                "DELETE FROM scheduling_claims WHERE claim_id=$1 AND kind='window'",
+                &[claim_id],
+            )
+            .await?;
+    }
+    let mut changed = Vec::new();
+    for window in facts
+        .windows
+        .iter()
+        .filter(|window| !window.resources.is_empty())
+    {
+        let policy = policy.ok_or_else(|| {
+            StoreError::CombinedInvariant("window resources require a deployed policy".to_owned())
+        })?;
+        let offering = policy.offering(&window.offering).ok_or_else(|| {
+            StoreError::CombinedInvariant(format!(
+                "window {} reserves resources for unknown offering {}",
+                window.id, window.offering
+            ))
+        })?;
+        let prior = existing.get(&window.id);
+        let unchanged = prior.is_some() && prior_records.iter().any(|record| record == window);
+        let claim_id = prior.copied().unwrap_or_else(Uuid::new_v4);
+        let revision = i64::try_from(window.revision).map_err(|_| StoreError::Corrupt)?;
+        let written = transaction
+            .execute(
+                "INSERT INTO scheduling_claims( \
+                    claim_id, kind, state, offering, \
+                    operational_service, operational_location, operational_mode, supply_id, \
+                    displayed_start, displayed_end, occupied_start, occupied_end, units, revision, \
+                    policy_revision, actor, external_references, party_references) \
+                 VALUES($1,'window','active',$2,$3,$4,'arrival-window',$5,$6,$7,$6,$7,1,$8,$9,'records','[]','[]') \
+                 ON CONFLICT(claim_id) DO UPDATE SET offering=EXCLUDED.offering, \
+                    operational_service=EXCLUDED.operational_service, \
+                    operational_location=EXCLUDED.operational_location, \
+                    displayed_start=EXCLUDED.displayed_start, displayed_end=EXCLUDED.displayed_end, \
+                    occupied_start=EXCLUDED.occupied_start, occupied_end=EXCLUDED.occupied_end, \
+                    revision=EXCLUDED.revision, policy_revision=EXCLUDED.policy_revision, \
+                    changed_at=now() \
+                 WHERE scheduling_claims.kind='window' \
+                   AND scheduling_claims.supply_id=EXCLUDED.supply_id",
+                &[
+                    &claim_id,
+                    &window.offering,
+                    &offering.service,
+                    &offering.location,
+                    &window.id,
+                    &window.start,
+                    &window.end,
+                    &revision,
+                    &policy_revision,
+                ],
+            )
+            .await?;
+        if written != 1 {
+            return Err(StoreError::Corrupt);
+        }
+        if !unchanged {
+            transaction.replace_claim_allocations(claim_id, &[]).await?;
+            changed.push((claim_id, window));
+        }
+    }
+    let Some(policy) = policy else {
+        return Ok(());
+    };
+    for (claim_id, window) in changed {
+        let requirements = window
+            .resources
+            .iter()
+            .map(|requirement| ParentRequirement {
+                requirement: &requirement.requirement,
+                offering: &requirement.offering,
+                resource: requirement.resource.as_deref(),
+                units: requirement.units,
+            })
+            .collect::<Vec<_>>();
+        replace_parent_allocations(
+            transaction,
+            &ParentReservation {
+                claim_id,
+                subject: format!("window {}", window.id),
+                start: window.start,
+                end: window.end,
+                requirements: &requirements,
+            },
+            facts,
+            policy,
+            policy_revision,
+            now,
+            busy_source_bindings,
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+/// The currently known resources live allocations occupy that the incoming
+/// records move between pools. Physical loss is representable: removing a
+/// member leaves its child allocation intact, reports a current shortage, and
+/// blocks new use until stock returns. Moving a present member would instead
+/// change which independently locked pool sells it, so remains refused.
 async fn occupied_resources_changed_by(
     transaction: &deadpool_postgres::Transaction<'_>,
     facts: &SchedulingFacts,
@@ -3399,11 +4931,12 @@ async fn occupied_resources_changed_by(
         .collect();
     let rows = transaction
         .query(
-            "SELECT DISTINCT c.supply_id, m.pool_id FROM scheduling_claims AS c \
-             JOIN scheduling_pool_members AS m ON m.resource_id = c.supply_id \
+            "SELECT DISTINCT a.resource_id, m.pool_id FROM scheduling_claim_allocations AS a \
+             JOIN scheduling_claims AS c ON c.claim_id = a.claim_id \
+             JOIN scheduling_pool_members AS m ON m.resource_id = a.resource_id \
              WHERE c.state='active' \
-               AND (c.kind='booking' OR (c.kind='hold' AND c.hold_expires_at > now())) \
-             ORDER BY c.supply_id",
+               AND (c.kind IN ('booking','window') OR (c.kind='hold' AND c.hold_expires_at > now())) \
+             ORDER BY a.resource_id",
             &[],
         )
         .await?;
@@ -3417,7 +4950,7 @@ async fn occupied_resources_changed_by(
                 Some(incoming_pool) => {
                     Some(format!("{resource} from {current_pool} to {incoming_pool}"))
                 }
-                None => Some(resource),
+                None => None,
             }
         })
         .collect())
@@ -3429,6 +4962,9 @@ struct NewClaim<'c> {
     kind: LedgerKind,
     state: ClaimState,
     offering: &'c str,
+    operational_service: &'c str,
+    operational_location: &'c str,
+    operational_mode: registry_scheduling_core::SchedulingMode,
     supply_id: &'c str,
     channel: Option<&'c str>,
     displayed_start: DateTime<Utc>,
@@ -3436,6 +4972,9 @@ struct NewClaim<'c> {
     occupied_start: DateTime<Utc>,
     occupied_end: DateTime<Utc>,
     units: i32,
+    party: Option<PartyCounts>,
+    party_references: &'c [PartyReference],
+    source_manager: Option<&'c SourceBoundManager>,
     duplicate_key: Option<&'c str>,
     external_references: &'c [ExternalReference],
     hold_expires_at: Option<DateTime<Utc>>,
@@ -3457,6 +4996,7 @@ struct ClaimMove<'c> {
     occupied_end: DateTime<Utc>,
     channel: Option<&'c str>,
     units: i32,
+    party: Option<PartyCounts>,
     policy_revision: i64,
     next_revision: i64,
 }
@@ -3468,6 +5008,16 @@ struct ClaimMove<'c> {
 trait CapacityStatements {
     async fn lock_supply(&self, supply_ids: &[String]) -> Result<(), StoreError>;
     async fn insert_claim(&self, claim: &NewClaim<'_>) -> Result<ClaimRow, StoreError>;
+    async fn insert_claim_allocations(
+        &self,
+        claim_id: Uuid,
+        allocations: &[NewClaimAllocation<'_>],
+    ) -> Result<(), StoreError>;
+    async fn replace_claim_allocations(
+        &self,
+        claim_id: Uuid,
+        allocations: &[NewClaimAllocation<'_>],
+    ) -> Result<(), StoreError>;
     async fn close_claim(
         &self,
         claim_id: Uuid,
@@ -3538,7 +5088,8 @@ impl CapacityStatements for deadpool_postgres::Transaction<'_> {
     async fn lock_supply(&self, supply_ids: &[String]) -> Result<(), StoreError> {
         let rows = self
             .query(
-                "SELECT supply_id FROM scheduling_supply WHERE supply_id = ANY($1) FOR UPDATE",
+                "SELECT supply_id FROM scheduling_supply WHERE supply_id = ANY($1) \
+                 ORDER BY supply_id FOR UPDATE",
                 &[&supply_ids],
             )
             .await?;
@@ -3558,20 +5109,39 @@ impl CapacityStatements for deadpool_postgres::Transaction<'_> {
         let kind = match claim.kind {
             LedgerKind::Booking => "booking",
             LedgerKind::Hold => "hold",
+            LedgerKind::Window => "window",
         };
+        let recipient_count = claim
+            .party
+            .map(|party| i32::try_from(party.recipients))
+            .transpose()
+            .map_err(|_| StoreError::Corrupt)?;
+        let attendee_count = claim
+            .party
+            .map(|party| i32::try_from(party.attendees))
+            .transpose()
+            .map_err(|_| StoreError::Corrupt)?;
         let row = self
             .query_one(
-                "INSERT INTO scheduling_claims(claim_id, kind, state, offering, supply_id, \
+                "INSERT INTO scheduling_claims(claim_id, kind, state, offering, \
+                 operational_service, operational_location, operational_mode, supply_id, \
                  channel, displayed_start, displayed_end, occupied_start, occupied_end, units, \
                  duplicate_key, external_references, hold_expires_at, revision, policy_revision, actor, reason, \
-                 owner_issuer, owner_subject) \
-                 VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20) \
+                 owner_issuer, owner_subject, recipient_count, attendee_count, party_references, \
+                 manager_source_issuer, manager_subject) \
+                 VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28) \
                  RETURNING created_at",
                 &[
                     &claim.claim_id,
                     &kind,
                     &claim.state.as_str(),
                     &claim.offering,
+                    &claim.operational_service,
+                    &claim.operational_location,
+                    &match claim.operational_mode {
+                        registry_scheduling_core::SchedulingMode::ExactTime => "exact-time",
+                        registry_scheduling_core::SchedulingMode::ArrivalWindow => "arrival-window",
+                    },
                     &claim.supply_id,
                     &claim.channel,
                     &claim.displayed_start,
@@ -3588,6 +5158,12 @@ impl CapacityStatements for deadpool_postgres::Transaction<'_> {
                     &claim.reason,
                     &claim.owner_issuer,
                     &claim.owner_subject,
+                    &recipient_count,
+                    &attendee_count,
+                    &serde_json::to_value(claim.party_references)
+                        .map_err(|_| StoreError::Corrupt)?,
+                    &claim.source_manager.map(|manager| manager.source_issuer.as_str()),
+                    &claim.source_manager.map(|manager| manager.subject.as_str()),
                 ],
             )
             .await?;
@@ -3603,6 +5179,10 @@ impl CapacityStatements for deadpool_postgres::Transaction<'_> {
             occupied_start: claim.occupied_start,
             occupied_end: claim.occupied_end,
             units: claim.units,
+            allocations: Vec::new(),
+            party: claim.party,
+            party_references: claim.party_references.to_vec(),
+            source_manager: claim.source_manager.cloned(),
             duplicate_key: claim.duplicate_key.map(str::to_owned),
             external_references: claim.external_references.to_vec(),
             hold_expires_at: claim.hold_expires_at,
@@ -3617,6 +5197,81 @@ impl CapacityStatements for deadpool_postgres::Transaction<'_> {
                 subject: claim.owner_subject.to_owned(),
             }),
         })
+    }
+
+    async fn insert_claim_allocations(
+        &self,
+        claim_id: Uuid,
+        allocations: &[NewClaimAllocation<'_>],
+    ) -> Result<(), StoreError> {
+        let mut ordered = Vec::with_capacity(allocations.len());
+        for allocation in allocations {
+            let (kind, index) = if allocation.requirement == "primary" {
+                ("primary", 0_i16)
+            } else {
+                let index = allocation
+                    .requirement
+                    .strip_prefix("additional:")
+                    .and_then(|index| index.parse::<i16>().ok())
+                    .ok_or(StoreError::Corrupt)?;
+                ("additional", index)
+            };
+            ordered.push((kind, index, allocation));
+        }
+        ordered.sort_by(|left, right| {
+            let left_requirement = (left.0 != "primary", left.1);
+            let right_requirement = (right.0 != "primary", right.1);
+            left_requirement
+                .cmp(&right_requirement)
+                .then_with(|| left.2.resource_id.cmp(right.2.resource_id))
+        });
+        let mut previous_requirement = None;
+        let mut part_index = 0_i16;
+        for (kind, index, allocation) in ordered {
+            let requirement = (kind, index);
+            if previous_requirement == Some(requirement) {
+                part_index = part_index.checked_add(1).ok_or(StoreError::Corrupt)?;
+            } else {
+                previous_requirement = Some(requirement);
+                part_index = 0;
+            }
+            self.execute(
+                "INSERT INTO scheduling_claim_allocations( \
+                 claim_id, requirement_kind, requirement_index, part_index, \
+                 offering, operational_service, operational_location, \
+                 operational_mode, anchor_id, resource_id, occupied_start, occupied_end, units) \
+                 VALUES($1,$2,$3,$4,$5,$6,$7,'exact-time',$8,$9,$10,$11,$12)",
+                &[
+                    &claim_id,
+                    &kind,
+                    &index,
+                    &part_index,
+                    &allocation.offering,
+                    &allocation.operational_service,
+                    &allocation.operational_location,
+                    &allocation.anchor_id,
+                    &allocation.resource_id,
+                    &allocation.occupied_start,
+                    &allocation.occupied_end,
+                    &i32::try_from(allocation.units).map_err(|_| StoreError::Corrupt)?,
+                ],
+            )
+            .await?;
+        }
+        Ok(())
+    }
+
+    async fn replace_claim_allocations(
+        &self,
+        claim_id: Uuid,
+        allocations: &[NewClaimAllocation<'_>],
+    ) -> Result<(), StoreError> {
+        self.execute(
+            "DELETE FROM scheduling_claim_allocations WHERE claim_id=$1",
+            &[&claim_id],
+        )
+        .await?;
+        self.insert_claim_allocations(claim_id, allocations).await
     }
 
     /// Close the claim under the revision its caller observed. The
@@ -3646,12 +5301,22 @@ impl CapacityStatements for deadpool_postgres::Transaction<'_> {
         movement: &ClaimMove<'_>,
         observed_revision: i64,
     ) -> Result<bool, StoreError> {
+        let recipient_count = movement
+            .party
+            .map(|party| i32::try_from(party.recipients))
+            .transpose()
+            .map_err(|_| StoreError::Corrupt)?;
+        let attendee_count = movement
+            .party
+            .map(|party| i32::try_from(party.attendees))
+            .transpose()
+            .map_err(|_| StoreError::Corrupt)?;
         let moved = self
             .execute(
                 "UPDATE scheduling_claims SET supply_id=$2, displayed_start=$3, displayed_end=$4, \
-                 occupied_start=$5, occupied_end=$6, channel=$7, units=$8, policy_revision=$9, \
-                 revision=$10, changed_at=now() \
-                 WHERE claim_id=$1 AND state='active' AND revision=$11",
+                 occupied_start=$5, occupied_end=$6, channel=$7, units=$8, recipient_count=$9, \
+                 attendee_count=$10, policy_revision=$11, revision=$12, changed_at=now() \
+                 WHERE claim_id=$1 AND state='active' AND revision=$13",
                 &[
                     &movement.claim_id,
                     &movement.supply_id,
@@ -3661,6 +5326,8 @@ impl CapacityStatements for deadpool_postgres::Transaction<'_> {
                     &movement.occupied_end,
                     &movement.channel,
                     &movement.units,
+                    &recipient_count,
+                    &attendee_count,
                     &movement.policy_revision,
                     &movement.next_revision,
                     &observed_revision,
@@ -3792,7 +5459,12 @@ impl CapacityStatements for deadpool_postgres::Transaction<'_> {
         let row = self
             .query_opt(&format!("{SELECT_CLAIM} FOR UPDATE"), &[&claim_id])
             .await?;
-        row.map(map_claim_row).transpose()
+        let Some(row) = row else {
+            return Ok(None);
+        };
+        let mut claims = vec![map_claim_row(row)?];
+        load_claim_allocations(self, &mut claims).await?;
+        Ok(claims.pop())
     }
 
     async fn lock_caller_and_count_active_holds(

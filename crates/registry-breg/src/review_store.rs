@@ -1360,6 +1360,34 @@ pub(crate) async fn load_status_binding(
     Ok(accepted)
 }
 
+/// Load the accepted binding only while the source still owns a current,
+/// non-withdrawn review acceptance. Status reads intentionally retain their
+/// historical correlation through cancellation; task context must not.
+pub(crate) async fn load_task_context_binding(
+    client: &impl GenericClient,
+    registry: &CompiledRegistry,
+    action_id: &str,
+    proposal_id: Uuid,
+    frozen: &ProposalSnapshot,
+) -> Result<ReviewRequestAccepted, MutationError> {
+    let accepted = load_status_binding(client, registry, action_id, proposal_id, frozen)
+        .await?
+        .ok_or(MutationError::PreconditionFailed)?;
+    let row = client
+        .query_opt(
+            "SELECT state,withdrawn FROM registry_internal.registry_proposal_review_submissions
+            WHERE action_id=$1 AND proposal_id=$2 AND submission_version=$3 FOR SHARE",
+            &[&action_id, &proposal_id, &i64::from(frozen.version().get())],
+        )
+        .await
+        .map_err(|_| MutationError::Unavailable)?
+        .ok_or(MutationError::PreconditionFailed)?;
+    if row.get::<_, String>(0) != "accepted" || row.get::<_, bool>(1) {
+        return Err(MutationError::PreconditionFailed);
+    }
+    Ok(accepted)
+}
+
 pub(crate) async fn load_accepted_binding(
     client: &impl GenericClient,
     action_id: &str,

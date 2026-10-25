@@ -223,6 +223,20 @@ const fn declared_mutation(
     }
 }
 
+const fn unkeyed_mutation(id: &'static str, product: &'static str) -> OperationDescriptor {
+    OperationDescriptor {
+        id,
+        version: 1,
+        product,
+        effect: EffectKind::Mutation,
+        key_requirement: KeyRequirement::None,
+        requires_preparation: false,
+        recovery: RecoverySemantics::HoldAfterDispatch,
+        read_receipt: false,
+        declared_refusal: false,
+    }
+}
+
 const fn evaluation(id: &'static str, product: &'static str) -> OperationDescriptor {
     OperationDescriptor {
         id,
@@ -247,11 +261,18 @@ macro_rules! operation_catalog {
             ReadScheduling => "scheduling.read-service/v1", read("scheduling"), read_scheduling;
             ReadAvailability => "scheduling.read-availability/v1", read("scheduling"), read_availability;
             CreateAppointment => "scheduling.create-appointment/v1", mutation("scheduling", true, false), create_appointment;
+            ReadAppointment => "scheduling.read-appointment/v1", read("scheduling"), read_appointment;
+            CreateHold => "scheduling.create-hold/v1", mutation("scheduling", false, false), create_hold;
+            ReleaseHold => "scheduling.release-hold/v1", unkeyed_mutation("scheduling"), release_hold;
+            ConfirmHold => "scheduling.confirm-hold/v1", mutation("scheduling", true, false), confirm_hold;
+            RescheduleAppointment => "scheduling.reschedule-appointment/v1", mutation("scheduling", false, false), reschedule_appointment;
+            CancelAppointment => "scheduling.cancel-appointment/v1", mutation("scheduling", false, false), cancel_appointment;
             InvokeBregAction => "breg.invoke-action/v1", declared_mutation("breg", false, true), invoke_breg_action;
             ExternalGet => "external.get/v1", read("external-http"), external_get;
             EvaluateDecision => "evaluation.evaluate/v1", evaluation("evaluation"), evaluate;
             SubmitReviewRequest => "casework.submit-review-request/v1", mutation("casework", false, false), submit_review_request;
             CancelReviewRequest => "casework.cancel-review-request/v1", mutation("casework", false, false), cancel_review_request;
+            PreviewAvailability => "scheduling.preview-availability/v1", read("scheduling"), preview_availability;
         }
     };
 }
@@ -330,6 +351,18 @@ mod tests {
                 Operation::CreateAppointment,
                 "scheduling.create-appointment/v1",
             ),
+            (Operation::ReadAppointment, "scheduling.read-appointment/v1"),
+            (Operation::CreateHold, "scheduling.create-hold/v1"),
+            (Operation::ReleaseHold, "scheduling.release-hold/v1"),
+            (Operation::ConfirmHold, "scheduling.confirm-hold/v1"),
+            (
+                Operation::RescheduleAppointment,
+                "scheduling.reschedule-appointment/v1",
+            ),
+            (
+                Operation::CancelAppointment,
+                "scheduling.cancel-appointment/v1",
+            ),
             (Operation::InvokeBregAction, "breg.invoke-action/v1"),
             (Operation::ExternalGet, "external.get/v1"),
             (Operation::EvaluateDecision, "evaluation.evaluate/v1"),
@@ -340,6 +373,10 @@ mod tests {
             (
                 Operation::CancelReviewRequest,
                 "casework.cancel-review-request/v1",
+            ),
+            (
+                Operation::PreviewAvailability,
+                "scheduling.preview-availability/v1",
             ),
         ];
         assert_eq!(
@@ -395,6 +432,34 @@ mod tests {
         );
         assert!(!Operation::InvokeBregAction.supports_read_receipt());
         assert!(Operation::InvokeBregAction.requires_preparation());
+        assert!(Operation::ReadAppointment.is_read());
+        assert_eq!(
+            Operation::ReadAppointment.recovery(),
+            RecoverySemantics::ReadAgain
+        );
+        for operation in [
+            Operation::CreateHold,
+            Operation::RescheduleAppointment,
+            Operation::CancelAppointment,
+        ] {
+            assert!(operation.is_mutating());
+            assert!(operation.requires_key());
+            assert_eq!(operation.recovery(), RecoverySemantics::SameCommand);
+            assert!(!operation.supports_read_receipt());
+        }
+        assert!(Operation::ReleaseHold.is_mutating());
+        assert!(!Operation::ReleaseHold.requires_key());
+        assert_eq!(
+            Operation::ReleaseHold.recovery(),
+            RecoverySemantics::HoldAfterDispatch
+        );
+        assert!(!Operation::ReleaseHold.can_retry_after_unknown());
+        assert!(Operation::ConfirmHold.requires_key());
+        assert_eq!(
+            Operation::ConfirmHold.recovery(),
+            RecoverySemantics::SameCommandAndReceipt
+        );
+        assert!(Operation::ConfirmHold.supports_read_receipt());
         assert!(Operation::ExternalGet.is_read());
         assert!(!Operation::ExternalGet.requires_key());
         assert!(!Operation::ExternalGet.requires_preparation());

@@ -473,6 +473,7 @@ export interface BRegProposalActionDescriptor {
   readonly accessProfile: string
   readonly operations: ReadonlyArray<string>
   readonly readableInputs: ReadonlyArray<string>
+  readonly readableContextFields: ReadonlyArray<string>
 }
 
 export interface BRegActionAttachmentDescriptor {

@@ -681,6 +681,10 @@ async fn successor_activation_checks_retained_hook_bindings_on_the_version_100_b
         occupied_start: start - TimeDelta::minutes(5),
         occupied_end: start + TimeDelta::minutes(35),
         units: 1,
+        allocations: Vec::new(),
+        party: None,
+        party_references: Vec::new(),
+        source_manager: None,
         duplicate_key: None,
         external_references: Vec::new(),
         hold_expires_at: None,
@@ -940,13 +944,14 @@ async fn fresh_claim_storage_refuses_a_partial_owner() {
     deployment
         .admin
         .batch_execute(&format!(
-            "INSERT INTO {schema}.scheduling_claims
+            "SET registry_scheduling.allocation_writer = 'v2';
+             INSERT INTO {schema}.scheduling_claims
                 (claim_id, kind, state, offering, supply_id, displayed_start,
                  displayed_end, occupied_start, occupied_end, units, revision,
-                 policy_revision, actor)
+                 policy_revision, actor, operational_service, operational_location, operational_mode)
              VALUES ('00000000-0000-4000-8000-000000001930', 'booking', 'active',
                      'registry-update-30', 'update-stations', now(), now() + interval '30 minutes',
-                     now(), now() + interval '30 minutes', 1, 1, 1, 'ownerless-actor');",
+                     now(), now() + interval '30 minutes', 1, 1, 1, 'ownerless-actor', 'registry-update', 'main-office', 'exact-time');",
             schema = deployment.schema
         ))
         .await
@@ -1743,10 +1748,13 @@ async fn holds(deployment: &Deployment, role: &str, table: &str, privilege: &str
 }
 
 #[tokio::test]
-async fn a_runtime_role_owning_a_scheduling_table_is_refused_in_split_mode_naming_reassign_owned() {
+async fn a_runtime_role_owning_a_scheduling_table_is_refused_with_an_exact_owner_fix() {
     let deployment = Deployment::split("activation_owner").await;
     let (runtime_role, migration_role) = (deployment.roles[0].clone(), deployment.roles[1].clone());
-    let fix = format!("REASSIGN OWNED BY {runtime_role} TO {migration_role}");
+    let fix = format!(
+        "ALTER TABLE {}.scheduling_supply OWNER TO {migration_role}",
+        deployment.schema
+    );
     let package = deployment.package("package", POLICY);
     let config = deployment.config("runtime.yaml", &package, ConfigOptions::default());
     assert_eq!(
@@ -1790,15 +1798,9 @@ async fn a_runtime_role_owning_a_scheduling_table_is_refused_in_split_mode_namin
         "a weakened split was recorded"
     );
 
-    // Reassigning the table leaves the trigger the runtime role attached,
+    // Moving the table leaves the trigger the runtime role attached,
     // and apply still refuses, naming it.
-    deployment
-        .admin
-        .batch_execute(&format!(
-            "REASSIGN OWNED BY {runtime_role} TO {migration_role}"
-        ))
-        .await
-        .unwrap();
+    deployment.admin.batch_execute(&fix).await.unwrap();
     let drop_trigger = format!("DROP TRIGGER planted ON {schema}.scheduling_supply");
     let error = refusal(apply(&config));
     assert!(names_fix(&error, &drop_trigger, THEN_RERUN), "{error}");
@@ -1820,7 +1822,7 @@ async fn a_runtime_role_owning_a_scheduling_table_is_refused_in_split_mode_namin
     assert!(
         names_fix(
             &error,
-            &format!("REASSIGN OWNED BY {owner} TO {migration_role}"),
+            &format!("ALTER TABLE {schema}.scheduling_meta OWNER TO {migration_role}"),
             THEN_APPLY
         ),
         "{error}"
@@ -1830,7 +1832,7 @@ async fn a_runtime_role_owning_a_scheduling_table_is_refused_in_split_mode_namin
     deployment
         .admin
         .batch_execute(&format!(
-            "REASSIGN OWNED BY {owner} TO {migration_role}; DROP ROLE {owner}"
+            "ALTER TABLE {schema}.scheduling_meta OWNER TO {migration_role}; DROP ROLE {owner}"
         ))
         .await
         .unwrap();
@@ -2226,5 +2228,83 @@ async fn an_apply_whose_response_audit_entry_is_refused_reports_it_applied_unaud
         "{message}"
     );
     assert_eq!(deployment.ledger_rows().await, 1, "the activation stands");
+    deployment.drop().await;
+}
+
+#[tokio::test]
+async fn writer_fences_require_unconditional_triggers_and_unconfigured_functions() {
+    async fn assert_refused(config: &Path, runtime_config: &Path) {
+        let report = plan(config);
+        assert_eq!(
+            report["refusals"][0]["code"], "schedulingctl.activation.split-role-weakened",
+            "{report}"
+        );
+        let error = apply(config).expect_err("apply refuses an altered writer fence");
+        assert!(format!("{error:#}").contains("writer fence"), "{error:#}");
+        let error = startup_refusal(runtime_config).await;
+        assert!(error.contains("writer fence"), "{error}");
+    }
+    let deployment = Deployment::split("activation_exact_fences").await;
+    let package = deployment.package("package", POLICY);
+    let config = deployment.config("runtime.yaml", &package, ConfigOptions::default());
+    apply(&config).expect("all migration-owned fences permit split activation");
+    let runtime_config = config.clone();
+    let package = deployment.package("successor", &successor_policy());
+    let config = deployment.config("successor.yaml", &package, ConfigOptions::default());
+    let schema = &deployment.schema;
+    let clean = plan(&config);
+    assert_eq!(clean["refusals"], serde_json::json!([]));
+
+    for (relation, trigger) in [
+        (
+            "scheduling_claim_allocations",
+            "scheduling_claim_allocations_writer_v2",
+        ),
+        (
+            "scheduling_attendance_observations",
+            "scheduling_attendance_observations_writer_v1",
+        ),
+    ] {
+        deployment
+            .admin
+            .batch_execute(&format!(
+                "ALTER TABLE {schema}.{relation} DISABLE TRIGGER {trigger}"
+            ))
+            .await
+            .expect("disable a fixture fence");
+        assert_refused(&config, &runtime_config).await;
+        deployment
+            .admin
+            .batch_execute(&format!(
+                "ALTER TABLE {schema}.{relation} ENABLE TRIGGER {trigger}"
+            ))
+            .await
+            .expect("restore a fixture fence");
+    }
+
+    deployment.admin.batch_execute(&format!(
+        "ALTER FUNCTION {schema}.scheduling_require_allocation_writer_v2() SET registry_scheduling.allocation_writer TO 'v2'"
+    )).await.expect("configure the fixture function to bypass its writer check");
+    assert_refused(&config, &runtime_config).await;
+    deployment.admin.batch_execute(&format!(
+        "ALTER FUNCTION {schema}.scheduling_require_allocation_writer_v2() RESET ALL; \
+         DROP TRIGGER scheduling_claim_allocations_writer_v2 ON {schema}.scheduling_claim_allocations; \
+         CREATE TRIGGER scheduling_claim_allocations_writer_v2 BEFORE INSERT OR UPDATE OR DELETE \
+         ON {schema}.scheduling_claim_allocations FOR EACH ROW WHEN (false) \
+         EXECUTE FUNCTION {schema}.scheduling_require_allocation_writer_v2()"
+    )).await.expect("install a conditional fixture fence");
+    assert_refused(&config, &runtime_config).await;
+    deployment.admin.batch_execute(&format!(
+        "DROP TRIGGER scheduling_claim_allocations_writer_v2 ON {schema}.scheduling_claim_allocations; \
+         CREATE TRIGGER scheduling_claim_allocations_writer_v2 BEFORE INSERT OR UPDATE OF units OR DELETE \
+         ON {schema}.scheduling_claim_allocations FOR EACH ROW \
+         EXECUTE FUNCTION {schema}.scheduling_require_allocation_writer_v2()"
+    )).await.expect("install a column-restricted fixture fence");
+    assert_refused(&config, &runtime_config).await;
+    assert_eq!(
+        deployment.ledger_rows().await,
+        1,
+        "refused operations never activate"
+    );
     deployment.drop().await;
 }

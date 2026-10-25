@@ -2,7 +2,7 @@
 // Replay a tutorial page the way a reader follows it.
 //
 //   node scripts/run-tutorial.mjs [--dry-run] [--keep-failed] [--toolset breg|casework|coordinator|evidence|none] <page.mdx>...
-//   node scripts/run-tutorial.mjs [--dry-run] [--keep-failed] --gate breg|casework|coordinator|discovery|evidence|scheduling
+//   node scripts/run-tutorial.mjs [--dry-run] [--keep-failed] --gate breg|casework|coordinator|discovery|evidence|scheduling [--shard I/N]
 //
 // The page is the specification (see tutorial-runner/page.mjs): its sh fences
 // run in document order in one bash shell, from an empty reader directory
@@ -73,16 +73,22 @@ function usageError(message) {
 }
 
 function parseArgs(argv) {
-  const options = { dryRun: false, keepFailed: false, toolset: 'none', pages: [] };
+  const options = { dryRun: false, keepFailed: false, toolset: 'none', shard: '1/1', pages: [] };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === '--dry-run') options.dryRun = true;
     else if (arg === '--keep-failed') options.keepFailed = true;
     else if (arg === '--toolset') options.toolset = argv[++i];
     else if (arg === '--gate') options.gate = options.toolset = argv[++i];
+    else if (arg === '--shard') options.shard = argv[++i];
     else if (arg.startsWith('-')) usageError(`unknown option: ${arg}`);
     else options.pages.push(arg);
   }
+  const shardMatch = /^(1\/1|[1-9][0-9]*\/[2-9][0-9]*)$/u.exec(options.shard);
+  if (shardMatch === null) usageError(`--shard is I/N with I from 1 to N and N at least 2, or absent: ${options.shard}`);
+  const [shardIndex, shardCount] = options.shard.split('/').map(Number);
+  if (shardIndex > shardCount) usageError(`--shard ${options.shard}: I is beyond N`);
+  if (options.shard !== '1/1' && options.gate === undefined) usageError('--shard needs --gate; pages given on the command line already name what runs');
   if (options.gate !== undefined && options.pages.length > 0) usageError('--gate takes no pages; they come from frontmatter');
   if (options.gate === undefined && options.pages.length === 0) usageError('missing page');
   if (!Object.hasOwn(TOOLSETS, options.toolset ?? '')) {
@@ -445,7 +451,7 @@ async function readPages(paths) {
   return annotationErrors > 0 ? null : { pages, checkout };
 }
 
-async function runGate(toolsetName, dryRun, keepFailed) {
+async function runGate(toolsetName, dryRun, keepFailed, shard) {
   const toolset = TOOLSETS[toolsetName];
   const { journeys, checkout, skipped, errors } = await planGate(DOCS_ROOT, toolsetName, TOOLSETS);
   for (const error of errors) console.error(error);
@@ -456,9 +462,19 @@ async function runGate(toolsetName, dryRun, keepFailed) {
     if (!read) return 2;
     planned.push({ journey, pages: read.pages, checkout: checkout.includes(journey[0]) });
   }
+  // Journeys are independent of each other, so a shard runs its round-robin
+  // share of them; across the whole shard set every journey still runs exactly
+  // once. An empty shard is a misconfigured count, not a pass.
+  const [shardIndex, shardCount] = shard.split('/').map(Number);
+  const own = planned.filter((_, index) => index % shardCount + 1 === shardIndex);
+  if (own.length === 0) {
+    console.error(`gate shard ${shard} would replay none of the ${planned.length} journeys; lower the shard count`);
+    return 2;
+  }
+  if (shardCount > 1) console.log(`gate shard ${shard}: ${own.length} of ${planned.length} journeys`);
   for (const { slug, reason } of skipped) console.log(`skip  page ${slug}: ${reason}`);
   const failed = [];
-  for (const { journey, pages, checkout: fromCheckout } of planned) {
+  for (const { journey, pages, checkout: fromCheckout } of own) {
     console.log(`\njourney ${journey.join(' -> ')}`);
     if (dryRun) {
       printPlan(pages.flat(), fromCheckout);
@@ -471,7 +487,8 @@ async function runGate(toolsetName, dryRun, keepFailed) {
   }
   if (dryRun) return 0;
   const count = (n, noun) => `${n} ${noun}${n === 1 ? '' : 's'}`;
-  const summary = `${count(planned.length, 'journey')} replayed, ${count(skipped.length, 'page')} skipped`;
+  const shardNote = shardCount > 1 ? ` of shard ${shard}` : '';
+  const summary = `${count(own.length, 'journey')} replayed${shardNote}, ${count(skipped.length, 'page')} skipped`;
   if (failed.length === 0) {
     console.log(`\ngate PASS: ${summary}`);
     return 0;
@@ -481,7 +498,9 @@ async function runGate(toolsetName, dryRun, keepFailed) {
 }
 
 const options = parseArgs(process.argv.slice(2));
-if (options.gate !== undefined) process.exit(await runGate(options.gate, options.dryRun, options.keepFailed));
+if (options.gate !== undefined) {
+  process.exit(await runGate(options.gate, options.dryRun, options.keepFailed, options.shard));
+}
 const read = await readPages(options.pages);
 if (!read) process.exit(2);
 if (options.dryRun) {

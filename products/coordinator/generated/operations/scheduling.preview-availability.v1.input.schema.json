@@ -1,0 +1,160 @@
+{
+  "$defs": {
+    "AdditionalAllocationRequest": {
+      "additionalProperties": false,
+      "description": "One secondary physical allocation in a logical reservation. Its displayed\ninterval is the primary request's interval; its offering supplies its own\noccupied buffers and resource policy.",
+      "properties": {
+        "offering": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "resource": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LocalId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "An exact member selection. Omission requests fungible selection."
+        },
+        "units": {
+          "description": "Physical resource units, independent of party counts.",
+          "maximum": 2147483647,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "offering"
+      ],
+      "type": "object"
+    },
+    "AvailabilityPreviewRequest": {
+      "additionalProperties": false,
+      "description": "A bounded, read-scope capacity question. This shape deliberately excludes\nmanager selection, duplicate keys, references and eligibility assertions:\na positive answer is physical advice, never authorization or admission.",
+      "properties": {
+        "additionalAllocations": {
+          "items": {
+            "$ref": "#/$defs/AdditionalAllocationRequest"
+          },
+          "maxItems": 15,
+          "type": "array"
+        },
+        "durationMinutes": {
+          "maximum": 10080,
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "offering": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "party": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PartyCounts"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "resource": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LocalId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "resourceUnits": {
+          "maximum": 2147483647,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "start": {
+          "format": "date-time",
+          "type": "string"
+        }
+      },
+      "required": [
+        "offering",
+        "start"
+      ],
+      "type": "object"
+    },
+    "GrantReference": {
+      "additionalProperties": false,
+      "description": "An approval reference, never an assertion or bearer credential. The shared\nCasework source requires the signed authority's original deadline to match.",
+      "properties": {
+        "expiresAt": {
+          "maximum": 9007199254740991,
+          "minimum": -9007199254740991,
+          "type": "integer"
+        },
+        "id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "expiresAt"
+      ],
+      "type": "object"
+    },
+    "LocalId": {
+      "description": "A local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`.",
+      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+      "type": "string"
+    },
+    "PartyCounts": {
+      "additionalProperties": false,
+      "description": "The declared party counts committed with a hold or appointment.\n\nRecipients are the people the service is delivered to; attendees are\neveryone expected to be present, recipients included. These values explain\na capacity decision. They are not an observation that attendance occurred,\nand neither value is an inventory quantity.",
+      "properties": {
+        "attendees": {
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "recipients": {
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "recipients",
+        "attendees"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "grant": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/GrantReference"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "preview": {
+      "$ref": "#/$defs/AvailabilityPreviewRequest"
+    }
+  },
+  "required": [
+    "preview"
+  ],
+  "title": "scheduling.preview-availability/v1 input",
+  "type": "object"
+}

@@ -1,0 +1,141 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/scheduling/fixture/fixture.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/scheduling/fixture/v1alpha1
+kind: SchedulingFixture
+name: named-interval-reservations
+now: 2026-10-31T00:00:00Z
+facts:
+  locations:
+    - id: community-hall
+      timezone: America/New_York
+  pools:
+    - id: meeting-rooms
+      members:
+        - resourceId: room-a
+          available: true
+        - resourceId: room-b
+          available: true
+  exceptions:
+    - id: maintenance-day
+      location: community-hall
+      kind: closure
+      date: "2026-11-06"
+      startTime: "00:00"
+      endTime: "24:00"
+cases:
+  - name: local-day-a
+    request:
+      offering: meeting-room
+      start: 2026-11-01T04:00:00Z
+      durationMinutes: 1500
+      resource: room-a
+      policyRevision: 1
+    expect:
+      type: admitted
+      units: 1
+      resource: room-a
+  - name: last-hour-still-occupied
+    request:
+      offering: meeting-room
+      start: 2026-11-02T04:30:00Z
+      durationMinutes: 60
+      resource: room-a
+      policyRevision: 1
+    expect:
+      type: refused
+      code: capacity.exhausted
+  - name: same-interval-other-room
+    request:
+      offering: meeting-room
+      start: 2026-11-01T04:00:00Z
+      durationMinutes: 1500
+      resource: room-b
+      policyRevision: 1
+    expect:
+      type: admitted
+      units: 1
+      resource: room-b
+  - name: cleanup-blocks-an-adjacent-display
+    request:
+      offering: meeting-room
+      start: 2026-11-02T05:00:00Z
+      durationMinutes: 60
+      resource: room-b
+      policyRevision: 1
+    expect:
+      type: refused
+      code: capacity.exhausted
+  - name: after-cleanup-is-free
+    request:
+      offering: meeting-room
+      start: 2026-11-02T05:30:00Z
+      durationMinutes: 60
+      resource: room-b
+      policyRevision: 1
+    expect:
+      type: admitted
+      units: 1
+      resource: room-b
+  - name: three-elapsed-days
+    request:
+      offering: meeting-room
+      start: 2026-11-02T05:30:00Z
+      durationMinutes: 4320
+      resource: room-a
+      policyRevision: 1
+    expect:
+      type: admitted
+      units: 1
+      resource: room-a
+  - name: maintenance-interrupts-a-long-reservation
+    request:
+      offering: meeting-room
+      start: 2026-11-05T06:00:00Z
+      durationMinutes: 4320
+      resource: room-a
+      policyRevision: 1
+    expect:
+      type: refused
+      code: location.closed
+  - name: duration-outside-the-lattice
+    request:
+      offering: meeting-room
+      start: 2026-11-09T06:00:00Z
+      durationMinutes: 90
+      resource: room-a
+      policyRevision: 1
+    expect:
+      type: refused
+      code: request.unprocessable
+  - name: resource-outside-the-pool
+    request:
+      offering: meeting-room
+      start: 2026-11-09T06:00:00Z
+      durationMinutes: 60
+      resource: room-c
+      policyRevision: 1
+    expect:
+      type: refused
+      code: request.unprocessable
+  - name: reschedule-the-local-day
+    request:
+      offering: meeting-room
+      start: 2026-11-08T05:30:00Z
+      durationMinutes: 2880
+      resource: room-a
+      policyRevision: 1
+      rescheduleOf: case:local-day-a
+    expect:
+      type: admitted
+      units: 1
+      resource: room-a
+  - name: original-local-day-is-free
+    request:
+      offering: meeting-room
+      start: 2026-11-01T04:00:00Z
+      durationMinutes: 1500
+      resource: room-a
+      policyRevision: 1
+    expect:
+      type: admitted
+      units: 1
+      resource: room-a

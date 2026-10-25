@@ -92,6 +92,9 @@ pub const OFFERINGS_PATH: &str = "/v1/offerings";
 /// Route answering bounded availability searches.
 pub const AVAILABILITY_PATH: &str = "/v1/availability";
 
+/// Route answering read-scoped physical bundle capacity advice.
+pub const AVAILABILITY_PREVIEW_PATH: &str = "/v1/availability/preview";
+
 /// Route answering the separately authorized explanation of one refusal.
 pub const AVAILABILITY_EXPLAIN_PATH: &str = "/v1/availability/explain";
 
@@ -199,6 +202,7 @@ mod tests {
         assert_eq!(SERVICES_PATH, "/v1/services");
         assert_eq!(OFFERINGS_PATH, "/v1/offerings");
         assert_eq!(AVAILABILITY_PATH, "/v1/availability");
+        assert_eq!(AVAILABILITY_PREVIEW_PATH, "/v1/availability/preview");
         assert_eq!(AVAILABILITY_EXPLAIN_PATH, "/v1/availability/explain");
         assert_eq!(HOLDS_PATH, "/v1/holds");
         assert_eq!(APPOINTMENTS_PATH, "/v1/appointments");

@@ -330,8 +330,12 @@ class CiChangesTest(unittest.TestCase):
 
         self.assertEqual(expected, direct)
         slots = sum(self.static_matrix_slots(self.workflow_jobs[name]) for name in direct)
-        self.assertLessEqual(slots, 15)
-        self.assertEqual(15, slots)
+        # The budget admits the parallel PostgreSQL shard lanes and the split
+        # contracts-journeys lane: they replace the longest serial integration
+        # jobs, so the pool trades extra directly-eligible slots for the
+        # shorter critical path.
+        self.assertLessEqual(slots, 18)
+        self.assertEqual(18, slots)
 
     def test_deferred_ci_work_keeps_its_selector_and_explicit_status_guard(
         self,
@@ -1265,7 +1269,20 @@ class CiChangesTest(unittest.TestCase):
         self.assertNotIn("coordinator", self.workflow_jobs["messaging-postgres"]["if"])
         self.assertIn("COORDINATOR_TEST_DATABASE_URL", proof["env"])
         self.assertIn("COORDINATOR_MESSAGING_TEST_DATABASE_URL", proof["env"])
-        self.assertNotEqual(proof["env"]["COORDINATOR_TEST_DATABASE_URL"], proof["env"]["COORDINATOR_MESSAGING_TEST_DATABASE_URL"])
+        self.assertIn("COORDINATOR_SCHEDULING_TEST_DATABASE_URL", proof["env"])
+        database_urls = (
+            proof["env"]["COORDINATOR_TEST_DATABASE_URL"],
+            proof["env"]["COORDINATOR_MESSAGING_TEST_DATABASE_URL"],
+            proof["env"]["COORDINATOR_SCHEDULING_TEST_DATABASE_URL"],
+        )
+        self.assertEqual(len(set(database_urls)), 3)
+        database_preparation = "\n".join(
+            step.get("run", "") for step in job["steps"]
+        )
+        self.assertTrue(database_urls[1].endswith("/coordinator_messaging"))
+        self.assertIn("createdb coordinator_messaging", database_preparation)
+        self.assertTrue(database_urls[2].endswith("/coordinator_scheduling"))
+        self.assertIn("createdb coordinator_scheduling", database_preparation)
         script = Path("products/coordinator/scripts/test-postgres.sh").read_text()
         self.assertRegex(script, r"cargo test --locked -p registry-coordinator[^\n]*--lib")
         self.assertIn("--test messaging_integration", script)
@@ -1572,7 +1589,7 @@ class CiChangesTest(unittest.TestCase):
             "\n  scheduling-contracts:\n", 1
         )[0]
         self.assertIn(
-            "if: matrix.lane == 'contracts'\n"
+            "if: matrix.lane == 'contracts-journeys'\n"
             "        env:\n"
             '          BREG_SKIP_BUILD: "1"\n'
             "        run: products/breg/scripts/test-backup-restore.sh",
@@ -2489,7 +2506,12 @@ class CiChangesTest(unittest.TestCase):
                     self.workspace, (path,), pull_request=True, ci_full=True
                 )
                 self.assertTrue(outputs["breg_contracts"])
-                self.assertIn("postgres", outputs["breg_contracts_lanes"])
+                self.assertTrue(
+                    any(
+                        lane.startswith("postgres:")
+                        for lane in outputs["breg_contracts_lanes"]
+                    )
+                )
 
     def test_native_citizen_journey_runs_with_built_services_and_owned_postgres(self) -> None:
         workflow = Path(".github/workflows/ci.yml").read_text()
@@ -2499,7 +2521,8 @@ class CiChangesTest(unittest.TestCase):
         step = job.split(
             "      - name: Native citizen gateway and review authority journey\n", 1
         )[1].split("\n      # The native worker", 1)[0]
-        self.assertIn("if: matrix.lane == 'postgres'", step)
+        # The journey runs exactly once, on the second PostgreSQL shard.
+        self.assertIn("if: matrix.lane == 'postgres:2/3'", step)
         self.assertIn("shell: bash", step)
         # The fixture reads the job-wide BREG_TEST_DATABASE_URL directly.
         self.assertIn('echo "BREG_TEST_DATABASE_URL=', job)
@@ -3684,9 +3707,11 @@ class EventScopedSelectionTest(unittest.TestCase):
         for name in heavy:
             with self.subTest(event="pull_request", output=name):
                 self.assertFalse(reviewed[name])
-        # Review keeps the plain Base Registry Engine contracts lane.
+        # Review keeps the validator and adopter-journeys contract lanes.
         self.assertTrue(reviewed["breg_contracts"])
-        self.assertEqual(["contracts"], reviewed["breg_contracts_lanes"])
+        self.assertEqual(
+            ["contracts", "contracts-journeys"], reviewed["breg_contracts_lanes"]
+        )
         self.assertTrue(reviewed["rust"])
 
         for event, outputs in (

@@ -1,0 +1,213 @@
+apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project:
+  id: invitation-source
+  version: "1"
+  canonicalBaseIri: https://example.invalid/invitation-source
+  defaultLanguage: en
+package:
+  sourceRevision: invitation-source-v1
+datasets:
+  - {id: invitations}
+vocabularies:
+  - id: invitation-state
+    values: [issued, accepting, booked, no-capacity, expired, revoked]
+recordTypes:
+  - id: invitation
+    primaryDataset: invitations
+    route: invitations
+    mutationMode: mutable
+    classification: restricted
+    fields:
+      - {id: issuer, type: string, required: true, minimumLength: 1, maximumLength: 120, classification: internal}
+      - {id: acceptance-id, apiName: acceptanceId, type: string, required: true, minimumLength: 1, maximumLength: 120, classification: internal}
+      - {id: beneficiary-reference, apiName: beneficiaryReference, type: string, required: true, minimumLength: 1, maximumLength: 200, classification: restricted}
+      - {id: notification-destination, apiName: notificationDestination, type: string, required: true, minimumLength: 3, maximumLength: 254, classification: restricted}
+      - {id: offering, type: string, required: true, minimumLength: 1, maximumLength: 120, classification: internal}
+      - {id: location, type: string, required: true, minimumLength: 1, maximumLength: 120, classification: internal}
+      - {id: search-start, apiName: searchStart, type: timestamp, required: true, classification: internal}
+      - {id: search-end, apiName: searchEnd, type: timestamp, required: true, classification: internal}
+      - {id: duration-minutes, apiName: durationMinutes, type: int64, required: true, classification: internal}
+      - {id: resource-required, apiName: resourceRequired, type: boolean, required: true, classification: internal}
+      - {id: resource-id, apiName: resourceId, type: string, required: false, minimumLength: 1, maximumLength: 120, classification: internal}
+      - {id: acceptance-authorized, apiName: acceptanceAuthorized, type: boolean, required: true, classification: internal}
+      - {id: relationship-valid-through, apiName: relationshipValidThrough, type: date, required: true, classification: internal}
+      - {id: expires-on, apiName: expiresOn, type: date, required: true, classification: internal}
+      - {id: state, type: vocabulary-code, vocabulary: invitation-state, required: true, classification: internal}
+      - {id: appointment-id, apiName: appointmentId, type: string, required: false, minimumLength: 1, maximumLength: 200, classification: internal}
+    constraints:
+      - {id: invitation-acceptance-identity, type: unique, fields: [issuer, acceptance-id]}
+actions:
+  - id: issue-invitation
+    execution: {mode: immediate}
+    inputs:
+      - {id: acceptance-id, apiName: acceptanceId, type: string, required: true, minimumLength: 1, maximumLength: 120, classification: internal}
+      - {id: beneficiary-reference, apiName: beneficiaryReference, type: string, required: true, minimumLength: 1, maximumLength: 200, classification: restricted}
+      - {id: notification-destination, apiName: notificationDestination, type: string, required: true, minimumLength: 3, maximumLength: 254, classification: restricted}
+      - {id: offering, type: string, required: true, minimumLength: 1, maximumLength: 120, classification: internal}
+      - {id: location, type: string, required: true, minimumLength: 1, maximumLength: 120, classification: internal}
+      - {id: search-start, apiName: searchStart, type: timestamp, required: true, classification: internal}
+      - {id: search-end, apiName: searchEnd, type: timestamp, required: true, classification: internal}
+      - {id: duration-minutes, apiName: durationMinutes, type: int64, required: true, classification: internal}
+      - {id: resource-required, apiName: resourceRequired, type: boolean, required: true, classification: internal}
+      - {id: resource-id, apiName: resourceId, type: string, required: false, minimumLength: 1, maximumLength: 120, classification: internal}
+      - {id: acceptance-authorized, apiName: acceptanceAuthorized, type: boolean, required: true, classification: internal}
+      - {id: relationship-valid-through, apiName: relationshipValidThrough, type: date, required: true, classification: internal}
+      - {id: expires-on, apiName: expiresOn, type: date, required: true, classification: internal}
+    plan:
+      type: fixed
+      effects:
+        - id: invitation
+          target: {recordType: invitation}
+          operation: create
+          set:
+            issuer: {value: invitation-source-agent}
+            acceptance-id: {fromInput: acceptance-id}
+            beneficiary-reference: {fromInput: beneficiary-reference}
+            notification-destination: {fromInput: notification-destination}
+            offering: {fromInput: offering}
+            location: {fromInput: location}
+            search-start: {fromInput: search-start}
+            search-end: {fromInput: search-end}
+            duration-minutes: {fromInput: duration-minutes}
+            resource-required: {fromInput: resource-required}
+            resource-id: {fromInput: resource-id}
+            acceptance-authorized: {fromInput: acceptance-authorized}
+            relationship-valid-through: {fromInput: relationship-valid-through}
+            expires-on: {fromInput: expires-on}
+            state: {value: issued}
+  - id: claim-invitation
+    execution: {mode: immediate}
+    inputs:
+      - {id: invitation, apiName: invitationId, type: reference, target: invitation, required: true, classification: internal}
+    commitGuards:
+      targets:
+        - {input: invitation, field: state, equals: issued}
+        - {input: invitation, field: acceptance-authorized, equals: true}
+        - {input: invitation, field: relationship-valid-through, currentDate: on-or-after}
+        - {input: invitation, field: expires-on, currentDate: on-or-after}
+    plan:
+      type: fixed
+      effects:
+        - id: invitation
+          target: {fromInput: invitation}
+          operation: patch
+          set:
+            state: {value: accepting}
+  - id: record-booking-result
+    execution: {mode: immediate}
+    inputs:
+      - {id: invitation, apiName: invitationId, type: reference, target: invitation, required: true, classification: internal}
+      - {id: acceptance-id, apiName: acceptanceId, type: string, required: true, minimumLength: 1, maximumLength: 120, classification: internal}
+      - {id: appointment-id, apiName: appointmentId, type: string, required: true, minimumLength: 1, maximumLength: 200, classification: internal}
+    commitGuards:
+      targets:
+        - {input: invitation, field: state, equals: accepting}
+        - {input: invitation, field: acceptance-id, equalsFromInput: acceptance-id}
+    plan:
+      type: fixed
+      effects:
+        - id: invitation
+          target: {fromInput: invitation}
+          operation: patch
+          set:
+            state: {value: booked}
+            appointment-id: {fromInput: appointment-id}
+  - id: record-no-capacity
+    execution: {mode: immediate}
+    inputs:
+      - {id: invitation, apiName: invitationId, type: reference, target: invitation, required: true, classification: internal}
+      - {id: acceptance-id, apiName: acceptanceId, type: string, required: true, minimumLength: 1, maximumLength: 120, classification: internal}
+    commitGuards:
+      targets:
+        - {input: invitation, field: state, equals: accepting}
+        - {input: invitation, field: acceptance-id, equalsFromInput: acceptance-id}
+    plan:
+      type: fixed
+      effects:
+        - id: invitation
+          target: {fromInput: invitation}
+          operation: patch
+          set:
+            state: {value: no-capacity}
+  - id: revoke-invitation
+    execution: {mode: immediate}
+    inputs:
+      - {id: invitation, apiName: invitationId, type: reference, target: invitation, required: true, classification: internal}
+    commitGuards:
+      targets:
+        - {input: invitation, field: state, equals: issued}
+    plan:
+      type: fixed
+      effects:
+        - id: invitation
+          target: {fromInput: invitation}
+          operation: patch
+          set:
+            state: {value: revoked}
+  - id: expire-invitation
+    execution: {mode: immediate}
+    inputs:
+      - {id: invitation, apiName: invitationId, type: reference, target: invitation, required: true, classification: internal}
+    commitGuards:
+      targets:
+        - {input: invitation, field: state, equals: issued}
+        - {input: invitation, field: expires-on, currentDate: on-or-before}
+    plan:
+      type: fixed
+      effects:
+        - id: invitation
+          target: {fromInput: invitation}
+          operation: patch
+          set:
+            state: {value: expired}
+accessProfiles:
+  - id: invitation-workflow
+    default: true
+    principalClaim: sub
+    actorKind: service
+    requesterClients: [invitation-source-agent]
+    requiredScopes: [invitations:workflow]
+    permissions:
+      records:
+        - recordType: invitation
+          operations: [get]
+          readableFields: [acceptance-id, beneficiary-reference, notification-destination, offering, location, search-start, search-end, duration-minutes, resource-required, resource-id, acceptance-authorized, relationship-valid-through, expires-on, state, appointment-id]
+          rowBoundaries: [{field: issuer, claim: invitation_source, operator: equals}]
+      actions:
+        - action: issue-invitation
+          operations: [invoke]
+          targets:
+            - recordType: invitation
+              rowBoundaries: [{field: issuer, claim: invitation_source, operator: equals}]
+          results: [invitation]
+        - action: claim-invitation
+          operations: [invoke]
+          targets:
+            - recordType: invitation
+              rowBoundaries: [{field: issuer, claim: invitation_source, operator: equals}]
+          results: [invitation]
+        - action: record-booking-result
+          operations: [invoke]
+          targets:
+            - recordType: invitation
+              rowBoundaries: [{field: issuer, claim: invitation_source, operator: equals}]
+          results: [invitation]
+        - action: record-no-capacity
+          operations: [invoke]
+          targets:
+            - recordType: invitation
+              rowBoundaries: [{field: issuer, claim: invitation_source, operator: equals}]
+          results: [invitation]
+        - action: revoke-invitation
+          operations: [invoke]
+          targets:
+            - recordType: invitation
+              rowBoundaries: [{field: issuer, claim: invitation_source, operator: equals}]
+          results: [invitation]
+        - action: expire-invitation
+          operations: [invoke]
+          targets:
+            - recordType: invitation
+              rowBoundaries: [{field: issuer, claim: invitation_source, operator: equals}]
+          results: [invitation]

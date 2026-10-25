@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Split-mode refusals for a runtime role that owns Casework objects name an
+  exact `ALTER ... OWNER TO` statement for each Casework schema object, run as
+  a database administrator, then `caseworkctl apply`, in place of
+  `REASSIGN OWNED BY`, which also moves the role's objects outside the
+  Casework schema. A runtime role that is a member of the schema owner is now
+  refused with the schema correction.
 - Startup reports an unreadable activation ledger before attempting schema
   reads, matching the existing plan/status diagnostic for a runtime role that
   lost schema usage or ledger read access.
@@ -60,6 +66,11 @@
   destination is no longer configured stops without a send. A database
   created by an earlier release must be recreated, not upgraded: apply this
   release to a fresh database.
+
+- Support BReg's distinct, field-limited Proposal task-grant context profile
+  for current-source template subjects. Provider pairing, runtime configuration,
+  and development integration require the exact authored profile and do not
+  fall back to human display or review status.
 
 ## 0.43.0 - 2026-10-21
 

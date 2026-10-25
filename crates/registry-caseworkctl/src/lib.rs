@@ -989,51 +989,12 @@ taskTemplates:
     }
 
     #[test]
-    fn check_refuses_task_grant_subjects_a_breg_source_does_not_serve() {
+    fn check_accepts_task_grant_subjects_when_the_breg_provider_declares_the_capability() {
         let (_temp, project) = canonical_with_subject_template(true);
         let (exit, report) = json_check(&project);
-        assert_eq!(exit, ExitCode::from(1), "{report}");
-        let diagnostics = report["diagnostics"].as_array().unwrap();
-        let template = diagnostics
-            .iter()
-            .find(|diagnostic| diagnostic["path"] == "/taskTemplates/address-summary/subjects")
-            .unwrap_or_else(|| panic!("the template is named at its subjects: {report}"));
-        assert_eq!(
-            template["code"],
-            "casework.task-template.unserved-capability"
-        );
-        assert_eq!(
-            template["message"],
-            "task template address-summary declares subjects, which need the \
-             task-grant-context capability, and BReg, the source behind context provider \
-             facility-proposal-context, does not serve task-grant context yet; see \
-             https://github.com/registrystack/registry-stack/issues/2062"
-        );
-        assert_eq!(
-            template["suggestedAction"],
-            "Remove `subjects` from task template address-summary, or bind the template \
-             to review policies whose source serves task-grant context."
-        );
-        assert_eq!(
-            template["source"]["file"],
-            project.join("casework.yaml").display().to_string()
-        );
-        let provider = diagnostics
-            .iter()
-            .find(|diagnostic| {
-                diagnostic["path"] == "/contextProviders/facility-proposal-context/capabilities"
-            })
-            .unwrap_or_else(|| panic!("the provider declaration is named too: {report}"));
-        assert_eq!(
-            provider["code"],
-            "casework.context-provider.unserved-capability"
-        );
-        assert_eq!(
-            provider["suggestedAction"],
-            "Remove task-grant-context from the capabilities and serviceProfiles of context \
-             provider facility-proposal-context."
-        );
-        assert_eq!(diagnostics.len(), 2, "{report}");
+        assert_eq!(exit, ExitCode::SUCCESS, "{report}");
+        assert_eq!(report["ok"], true, "{report}");
+        assert_eq!(report["diagnostics"], json!([]), "{report}");
     }
 
     #[test]

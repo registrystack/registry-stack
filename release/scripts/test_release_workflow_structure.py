@@ -585,13 +585,7 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         ci_timeouts = []
         for name, job in protected_workflow["jobs"].items():
             timeout = job.get("timeout-minutes", 0)
-            if name == "breg-contracts":
-                self.assertEqual(
-                    timeout,
-                    "${{ matrix.lane == 'postgres' && 45 || 30 }}",
-                )
-                timeout = 45
-            self.assertIsInstance(timeout, int)
+            self.assertIsInstance(timeout, int, name)
             ci_timeouts.append(timeout)
         longest_ci_job = max(ci_timeouts)
         self.assertGreater(ci["timeout-minutes"], longest_ci_job)

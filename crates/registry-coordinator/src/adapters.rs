@@ -17,8 +17,10 @@ use registry_platform_httputil::{
     ExchangeAuthorization, ExchangeContext, FetchUrlPolicy,
 };
 use registry_scheduling_client::{
-    CreateAppointmentRequest, ProblemCode as SchedulingProblemCode, SchedulingAuth,
-    SchedulingClient, SchedulingClientConfig, SchedulingClientError,
+    AdmissionRequest, AvailabilityPreviewRequest, AvailabilitySelection, CancelAppointmentRequest,
+    CreateAppointmentRequest, ProblemCode as SchedulingProblemCode, RescheduleAppointmentRequest,
+    SchedulingAuth, SchedulingClient, SchedulingClientConfig, SchedulingClientError,
+    MAXIMUM_BOOKING_DURATION_MINUTES,
 };
 use serde::Deserialize;
 use url::Url;
@@ -794,7 +796,10 @@ impl AdapterSet for HttpAdapters {
                     Err(_) => unresolved("observation-unavailable"),
                 }
             }
-            (Some(Connection::Scheduling(connection)), Operation::CreateAppointment) => {
+            (
+                Some(Connection::Scheduling(connection)),
+                Operation::CreateAppointment | Operation::ConfirmHold,
+            ) => {
                 let SchedulingConnection {
                     client,
                     authorization,
@@ -807,8 +812,7 @@ impl AdapterSet for HttpAdapters {
                     Err(_) => return unresolved("invalid-command"),
                 };
                 if authorization.task_authority.is_none()
-                    || input.appointment.hold.is_some()
-                    || input.appointment.admission.is_none()
+                    || !valid_appointment_shape(request.operation, &input.appointment)
                 {
                     return unresolved("invalid-command");
                 }
@@ -866,6 +870,20 @@ pub(crate) struct AvailabilityRequest {
     #[cfg_attr(feature = "schema", schemars(range(min = 1, max = 100)))]
     limit: u32,
     #[serde(default)]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Option<registry_platform_yaml::LocalId>")
+    )]
+    resource: Option<String>,
+    #[serde(default)]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(
+            with = "Option<registry_platform_yaml::BoundedU32<1, MAXIMUM_BOOKING_DURATION_MINUTES>>"
+        )
+    )]
+    duration_minutes: Option<u32>,
+    #[serde(default)]
     grant: Option<GrantReference>,
 }
 
@@ -875,6 +893,62 @@ pub(crate) struct AvailabilityRequest {
 pub(crate) struct AppointmentRequest {
     grant: GrantReference,
     appointment: CreateAppointmentRequest,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub(crate) struct CapacityPreviewRequest {
+    preview: AvailabilityPreviewRequest,
+    #[serde(default)]
+    grant: Option<GrantReference>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub(crate) struct AppointmentReadRequest {
+    #[cfg_attr(feature = "schema", schemars(with = "uuid::Uuid"))]
+    appointment_id: String,
+    #[serde(default)]
+    grant: Option<GrantReference>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub(crate) struct HoldRequest {
+    grant: GrantReference,
+    admission: AdmissionRequest,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub(crate) struct ReleaseHoldRequest {
+    grant: GrantReference,
+    #[cfg_attr(feature = "schema", schemars(with = "uuid::Uuid"))]
+    hold_id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub(crate) struct RescheduleRequest {
+    grant: GrantReference,
+    #[cfg_attr(feature = "schema", schemars(with = "uuid::Uuid"))]
+    appointment_id: String,
+    reschedule: RescheduleAppointmentRequest,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub(crate) struct CancellationRequest {
+    grant: GrantReference,
+    #[cfg_attr(feature = "schema", schemars(with = "uuid::Uuid"))]
+    appointment_id: String,
+    cancellation: CancelAppointmentRequest,
 }
 
 async fn scheduling_token(
@@ -901,8 +975,8 @@ async fn scheduling_token(
     }
 }
 
-fn scheduling_failure(error: SchedulingClientError, mutation: bool) -> CallOutcome {
-    if mutation
+fn scheduling_failure(error: SchedulingClientError, operation: Operation) -> CallOutcome {
+    if operation.requires_key()
         && matches!(
             &error,
             SchedulingClientError::Problem {
@@ -913,7 +987,7 @@ fn scheduling_failure(error: SchedulingClientError, mutation: bool) -> CallOutco
     {
         return CallOutcome::ReceiptExpired;
     }
-    if mutation && error.is_outcome_unknown() {
+    if operation.has_dispatch_risk() && error.is_outcome_unknown() {
         return CallOutcome::Uncertain {
             code: "transport-uncertain".into(),
         };
@@ -940,10 +1014,10 @@ fn scheduling_failure(error: SchedulingClientError, mutation: bool) -> CallOutco
     }
 }
 
-fn scheduling_success<T: serde::Serialize>(value: T, mutation: bool) -> CallOutcome {
+fn scheduling_success<T: serde::Serialize>(value: T, operation: Operation) -> CallOutcome {
     match serde_json::to_value(value) {
         Ok(value) => CallOutcome::Success(value),
-        Err(_) if mutation => CallOutcome::Uncertain {
+        Err(_) if operation.has_dispatch_risk() => CallOutcome::Uncertain {
             code: "invalid-response".into(),
         },
         Err(_) => refused("invalid-response"),
@@ -968,8 +1042,26 @@ async fn scheduling_call(
                 Err(outcome) => return outcome,
             };
             match client.get_scheduling(SchedulingAuth::new(&token)).await {
-                Ok(answer) => scheduling_success(answer.value, false),
-                Err(error) => scheduling_failure(error, false),
+                Ok(answer) => scheduling_success(answer.value, request.operation),
+                Err(error) => scheduling_failure(error, request.operation),
+            }
+        }
+        Operation::PreviewAvailability => {
+            let input: CapacityPreviewRequest = match serde_json::from_value(request.input.clone())
+            {
+                Ok(input) => input,
+                Err(_) => return refused("invalid-command"),
+            };
+            let token = match scheduling_token(auth, key, standing, input.grant.as_ref()).await {
+                Ok(token) => token,
+                Err(outcome) => return outcome,
+            };
+            match client
+                .preview_availability(SchedulingAuth::new(&token), &input.preview)
+                .await
+            {
+                Ok(answer) => scheduling_success(answer.value, request.operation),
+                Err(error) => scheduling_failure(error, request.operation),
             }
         }
         Operation::ReadAvailability => {
@@ -981,6 +1073,9 @@ async fn scheduling_call(
             if input.start >= input.end
                 || input.end - input.start > chrono::Duration::days(31)
                 || !(1..=100).contains(&input.limit)
+                || input.duration_minutes.is_some_and(|minutes| {
+                    !(1..=MAXIMUM_BOOKING_DURATION_MINUTES).contains(&minutes)
+                })
             {
                 return refused("invalid-command");
             }
@@ -988,22 +1083,95 @@ async fn scheduling_call(
                 Ok(token) => token,
                 Err(outcome) => return outcome,
             };
+            let selection = AvailabilitySelection {
+                resource: input.resource,
+                duration_minutes: input.duration_minutes,
+            };
             match client
-                .availability(
+                .availability_with_selection(
                     SchedulingAuth::new(&token),
                     &input.offering,
                     Some(input.start),
                     Some(input.end),
                     None,
                     Some(input.limit),
+                    &selection,
                 )
                 .await
             {
-                Ok(answer) => scheduling_success(answer.value, false),
-                Err(error) => scheduling_failure(error, false),
+                Ok(answer) => scheduling_success(answer.value, request.operation),
+                Err(error) => scheduling_failure(error, request.operation),
             }
         }
-        Operation::CreateAppointment => {
+        Operation::ReadAppointment => {
+            let input: AppointmentReadRequest = match serde_json::from_value(request.input.clone())
+            {
+                Ok(input) => input,
+                Err(_) => return refused("invalid-command"),
+            };
+            let token = match scheduling_token(auth, key, standing, input.grant.as_ref()).await {
+                Ok(token) => token,
+                Err(outcome) => return outcome,
+            };
+            match client
+                .get_appointment(SchedulingAuth::new(&token), &input.appointment_id)
+                .await
+            {
+                Ok(answer) => scheduling_success(answer.value, request.operation),
+                Err(error) => scheduling_failure(error, request.operation),
+            }
+        }
+        Operation::CreateHold => {
+            let input: HoldRequest = match serde_json::from_value(request.input.clone()) {
+                Ok(input) => input,
+                Err(_) => return refused("invalid-command"),
+            };
+            let Some(idempotency_key) = request.idempotency_key.as_deref() else {
+                return refused("invalid-command");
+            };
+            if auth.task_authority.is_none() || !valid_key(idempotency_key) {
+                return refused("invalid-command");
+            }
+            let token = match scheduling_token(auth, key, None, Some(&input.grant)).await {
+                Ok(token) => token,
+                Err(outcome) => return outcome,
+            };
+            match client
+                .create_hold(
+                    SchedulingAuth::new(&token),
+                    idempotency_key,
+                    &input.admission,
+                )
+                .await
+            {
+                Ok(answer) => scheduling_success(answer.value, request.operation),
+                Err(error) => scheduling_failure(error, request.operation),
+            }
+        }
+        Operation::ReleaseHold => {
+            let input: ReleaseHoldRequest = match serde_json::from_value(request.input.clone()) {
+                Ok(input) => input,
+                Err(_) => return refused("invalid-command"),
+            };
+            if auth.task_authority.is_none() || request.idempotency_key.is_some() {
+                return refused("invalid-command");
+            }
+            let token = match scheduling_token(auth, key, None, Some(&input.grant)).await {
+                Ok(token) => token,
+                Err(outcome) => return outcome,
+            };
+            match client
+                .release_hold(SchedulingAuth::new(&token), &input.hold_id)
+                .await
+            {
+                Ok(answer) => {
+                    let _: () = answer.value;
+                    scheduling_success((), request.operation)
+                }
+                Err(error) => scheduling_failure(error, request.operation),
+            }
+        }
+        Operation::CreateAppointment | Operation::ConfirmHold => {
             let input: AppointmentRequest = match serde_json::from_value(request.input.clone()) {
                 Ok(input) => input,
                 Err(_) => return refused("invalid-command"),
@@ -1013,8 +1181,7 @@ async fn scheduling_call(
             };
             if auth.task_authority.is_none()
                 || !valid_key(idempotency_key)
-                || input.appointment.hold.is_some()
-                || input.appointment.admission.is_none()
+                || !valid_appointment_shape(request.operation, &input.appointment)
             {
                 return refused("invalid-command");
             }
@@ -1030,11 +1197,75 @@ async fn scheduling_call(
                 )
                 .await
             {
-                Ok(answer) => scheduling_success(answer.value, true),
-                Err(error) => scheduling_failure(error, true),
+                Ok(answer) => scheduling_success(answer.value, request.operation),
+                Err(error) => scheduling_failure(error, request.operation),
+            }
+        }
+        Operation::RescheduleAppointment => {
+            let input: RescheduleRequest = match serde_json::from_value(request.input.clone()) {
+                Ok(input) => input,
+                Err(_) => return refused("invalid-command"),
+            };
+            let Some(idempotency_key) = request.idempotency_key.as_deref() else {
+                return refused("invalid-command");
+            };
+            if auth.task_authority.is_none() || !valid_key(idempotency_key) {
+                return refused("invalid-command");
+            }
+            let token = match scheduling_token(auth, key, None, Some(&input.grant)).await {
+                Ok(token) => token,
+                Err(outcome) => return outcome,
+            };
+            match client
+                .reschedule_appointment(
+                    SchedulingAuth::new(&token),
+                    &input.appointment_id,
+                    idempotency_key,
+                    &input.reschedule,
+                )
+                .await
+            {
+                Ok(answer) => scheduling_success(answer.value, request.operation),
+                Err(error) => scheduling_failure(error, request.operation),
+            }
+        }
+        Operation::CancelAppointment => {
+            let input: CancellationRequest = match serde_json::from_value(request.input.clone()) {
+                Ok(input) => input,
+                Err(_) => return refused("invalid-command"),
+            };
+            let Some(idempotency_key) = request.idempotency_key.as_deref() else {
+                return refused("invalid-command");
+            };
+            if auth.task_authority.is_none() || !valid_key(idempotency_key) {
+                return refused("invalid-command");
+            }
+            let token = match scheduling_token(auth, key, None, Some(&input.grant)).await {
+                Ok(token) => token,
+                Err(outcome) => return outcome,
+            };
+            match client
+                .cancel_appointment(
+                    SchedulingAuth::new(&token),
+                    &input.appointment_id,
+                    idempotency_key,
+                    &input.cancellation,
+                )
+                .await
+            {
+                Ok(answer) => scheduling_success(answer.value, request.operation),
+                Err(error) => scheduling_failure(error, request.operation),
             }
         }
         _ => refused("operation-unbound"),
+    }
+}
+
+fn valid_appointment_shape(operation: Operation, request: &CreateAppointmentRequest) -> bool {
+    match operation {
+        Operation::CreateAppointment => request.admission.is_some() && request.hold.is_none(),
+        Operation::ConfirmHold => request.hold.is_some() && request.admission.is_none(),
+        _ => false,
     }
 }
 

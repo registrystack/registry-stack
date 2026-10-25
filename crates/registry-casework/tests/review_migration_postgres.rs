@@ -1181,7 +1181,10 @@ async fn a_runtime_role_that_owns_a_casework_table_is_refused_by_apply_and_at_st
         .await
         .expect("migration role");
     let runtime_user = fixture.runtime_user.clone();
-    let fix = format!("REASSIGN OWNED BY {runtime_user} TO {migration_user}");
+    let fix = format!(
+        "ALTER TABLE {}.casework_task_templates OWNER TO {migration_user}",
+        fixture.schema
+    );
     let runtime = fixture.runtime();
     fixture
         .client
@@ -1580,7 +1583,9 @@ async fn a_trigger_left_by_a_runtime_role_that_owned_a_table_is_refused_after_re
         .expect("the owning runtime role attaches a trigger");
     fixture
         .client
-        .batch_execute(&format!("REASSIGN OWNED BY {role} TO {migration_user}"))
+        .batch_execute(&format!(
+            "ALTER TABLE {schema}.casework_teams OWNER TO {migration_user}"
+        ))
         .await
         .expect("reassign the runtime role's objects");
     let fix = format!("DROP TRIGGER stray_touch ON {schema}.casework_teams");

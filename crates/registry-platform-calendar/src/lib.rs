@@ -29,7 +29,7 @@ mod working_day;
 pub use weekly::*;
 pub use working_day::*;
 
-use chrono::{DateTime, LocalResult, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
+use chrono::{DateTime, Days, LocalResult, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
 use chrono_tz::Tz;
 
 /// A calendar evaluation refused the input instead of guessing.
@@ -201,6 +201,8 @@ fn first_instant_at_or_after(
 
 /// Convert one local wall-clock interval on a date into its half-open UTC
 /// interval, in a named IANA timezone.
+/// An end of `24:00` means the following local midnight; starts remain
+/// `00:00` through `23:59` on the authored date.
 ///
 /// A start or end instant that falls in a daylight-saving gap or fold is an
 /// explicit error, never a silent shift. This is the record-side companion of
@@ -217,28 +219,101 @@ pub fn local_interval(
         .map_err(|_| CalendarEvaluationError::InvalidTimezone)?;
     let date = parse_date(date).ok_or(CalendarEvaluationError::InvalidIntervalDate)?;
     let start = parse_hh_mm(start_time).ok_or(CalendarEvaluationError::InvalidIntervalTimes)?;
-    let end = parse_hh_mm(end_time).ok_or(CalendarEvaluationError::InvalidIntervalTimes)?;
-    if start >= end {
+    let end = parse_interval_end(end_time).ok_or(CalendarEvaluationError::InvalidIntervalTimes)?;
+    if !end.follows(start) {
         return Err(CalendarEvaluationError::InvalidIntervalTimes);
     }
     day_interval(date, start, end, zone)
 }
 
+/// An interval may end at the following midnight, written `24:00` on its
+/// authored date. It is never a valid start or an ambiguous local-time fix.
+#[derive(Clone, Copy)]
+enum IntervalEnd {
+    SameDate(NaiveTime),
+    FollowingMidnight,
+}
+
+impl IntervalEnd {
+    fn follows(self, start: NaiveTime) -> bool {
+        match self {
+            Self::SameDate(end) => start < end,
+            Self::FollowingMidnight => true,
+        }
+    }
+}
+
+fn parse_interval_end(value: &str) -> Option<IntervalEnd> {
+    if value == "24:00" {
+        Some(IntervalEnd::FollowingMidnight)
+    } else {
+        parse_hh_mm(value).map(IntervalEnd::SameDate)
+    }
+}
+
 fn day_interval(
     date: NaiveDate,
     start: NaiveTime,
-    end: NaiveTime,
+    end: IntervalEnd,
     timezone: Tz,
 ) -> Result<CalendarInterval, CalendarEvaluationError> {
+    let (end_date, end_time) = match end {
+        IntervalEnd::SameDate(time) => (date, time),
+        IntervalEnd::FollowingMidnight => (
+            date.checked_add_days(Days::new(1))
+                .ok_or(CalendarEvaluationError::Overflow)?,
+            NaiveTime::MIN,
+        ),
+    };
     Ok(CalendarInterval {
         start: local_instant(date, start, timezone)?,
-        end: local_instant(date, end, timezone)?,
+        end: local_instant(end_date, end_time, timezone)?,
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn end_of_day_boundaries_preserve_actual_dst_day_lengths() {
+        for (date, start, end, minutes) in [
+            (
+                "2026-03-08",
+                "2026-03-08T05:00:00Z",
+                "2026-03-09T04:00:00Z",
+                1380,
+            ),
+            (
+                "2026-11-01",
+                "2026-11-01T04:00:00Z",
+                "2026-11-02T05:00:00Z",
+                1500,
+            ),
+        ] {
+            let interval = local_interval(date, "00:00", "24:00", "America/New_York")
+                .expect("the end of a local date is the following local midnight");
+            assert_eq!(interval.start, instant(start));
+            assert_eq!(interval.end, instant(end));
+            assert_eq!((interval.end - interval.start).num_minutes(), minutes);
+        }
+        let late = local_interval("2026-10-10", "22:00", "24:00", "UTC").unwrap();
+        let early = local_interval("2026-10-11", "00:00", "06:00", "UTC").unwrap();
+        assert_eq!(
+            late.end, early.start,
+            "adjacent dates have no artificial gap"
+        );
+        for (start, end) in [
+            ("24:00", "24:00"),
+            ("00:00", "24:01"),
+            ("00:00", "24:00:00"),
+        ] {
+            assert_eq!(
+                local_interval("2026-10-10", start, end, "UTC"),
+                Err(CalendarEvaluationError::InvalidIntervalTimes)
+            );
+        }
+    }
 
     fn instant(value: &str) -> DateTime<Utc> {
         value

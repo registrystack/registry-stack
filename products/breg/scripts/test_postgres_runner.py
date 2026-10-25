@@ -28,7 +28,7 @@ ACTION_EXAMPLES_RUNNER = SCRIPT_DIR / "test-immediate-action-examples.sh"
 
 
 class PostgresRunnerTests(unittest.TestCase):
-    def run_lane(self, *arguments: str, database: bool = True, fail: bool = False, fail_build: bool = False, runner: Path = RUNNER):
+    def run_lane(self, *arguments: str, database: bool = True, fail: bool = False, fail_build: bool = False, runner: Path = RUNNER, shell: Path | None = None):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             log = root / "cargo.jsonl"
@@ -76,11 +76,21 @@ class PostgresRunnerTests(unittest.TestCase):
             if database:
                 environment["BREG_TEST_DATABASE_URL"] = "postgresql://fixture.invalid/test"
             result = subprocess.run(
-                [str(runner), *arguments], env=environment,
+                [*([str(shell)] if shell else []), str(runner), *arguments], env=environment,
                 capture_output=True, text=True, check=False,
             )
             calls = [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
         return result, calls
+
+    def load_ci_changes(self):
+        spec = importlib.util.spec_from_file_location(
+            "ci_changes", SCRIPT_DIR.parents[2] / ".github/scripts/ci_changes.py"
+        )
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+        return module
 
     def inventory(self, calls):
         commands = []
@@ -129,6 +139,62 @@ class PostgresRunnerTests(unittest.TestCase):
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertFalse(any(call[0] == "build" for call in calls))
 
+    def test_sharded_lanes_partition_every_owned_target_exactly_once(self):
+        ci_changes = self.load_ci_changes()
+        shard_lanes = [
+            lane for lane in ci_changes.BREG_CONTRACTS_LANES if lane.startswith("postgres:")
+        ]
+        self.assertGreaterEqual(len(shard_lanes), 2)
+        full_result, full_calls = self.run_lane("--lane", "postgres")
+        self.assertEqual(0, full_result.returncode, full_result.stderr)
+        expected = self.inventory(full_calls)
+        union = Counter()
+        inventories = []
+        for lane in shard_lanes:
+            result, calls = self.run_lane("--lane", lane)
+            self.assertEqual(0, result.returncode, result.stderr)
+            inventory = self.inventory(calls)
+            self.assertTrue(inventory)
+            inventories.append(inventory)
+            union += inventory
+            # The real Evidence build and its three-target proof stay on the
+            # first shard; the others neither build nor run it.
+            builds = [call for call in calls if call[0] == "build"]
+            evidence = Counter(
+                command for command in inventory if "postgres_action_evidence" in command
+            )
+            if lane == shard_lanes[0]:
+                self.assertEqual(1, len(builds))
+                self.assertEqual(3, sum(evidence.values()))
+            else:
+                self.assertEqual([], builds)
+                self.assertFalse(evidence)
+        self.assertEqual(expected, union)
+        for index, inventory in enumerate(inventories):
+            for other in inventories[index + 1:]:
+                self.assertFalse(inventory & other)
+
+    def test_runner_runs_under_the_bash_3_macos_ships(self):
+        # A stock macOS `/usr/bin/env bash` finds bash 3.2, so the documented
+        # local gate keeps to constructs it runs.
+        source = RUNNER.read_text(encoding="utf-8")
+        for construct in ("mapfile", "readarray", "declare -A", "local -A"):
+            self.assertFalse(construct in source, f"test-postgres.sh uses {construct}, which bash 3.2 lacks")
+        stock_bash = Path("/bin/bash")
+        version = subprocess.run(
+            [str(stock_bash), "-c", 'printf %s "${BASH_VERSINFO[0]}"'],
+            capture_output=True, text=True, check=False,
+        ).stdout if stock_bash.exists() else ""
+        if version != "3":
+            self.skipTest("/bin/bash is not bash 3, so there is no stock macOS shell to run")
+        for lane in ("all", "postgres:1/3", "postgres:3/3", "immediate-actions"):
+            with self.subTest(lane=lane):
+                stock, stock_calls = self.run_lane("--lane", lane, shell=stock_bash)
+                current, current_calls = self.run_lane("--lane", lane)
+                self.assertEqual(0, stock.returncode, stock.stderr)
+                self.assertEqual(0, current.returncode, current.stderr)
+                self.assertEqual(current_calls, stock_calls)
+
     def test_evidence_build_failure_prevents_proof_instead_of_skipping_real_runtime(self):
         result, calls = self.run_lane("--lane", "postgres", fail_build=True)
         self.assertNotEqual(0, result.returncode)
@@ -139,6 +205,10 @@ class PostgresRunnerTests(unittest.TestCase):
         for arguments in (
             ("--lane",), ("--lane", ""), ("--lane", "unknown"), ("postgres",),
             ("--lane", "postgres", "extra"), ("--lane", "postgres", "--lane", "all"),
+            ("--lane", "postgres:"), ("--lane", "postgres:1"), ("--lane", "postgres:1/1"),
+            ("--lane", "postgres:0/3"), ("--lane", "postgres:4/3"), ("--lane", "postgres:2/1"),
+            ("--lane", "postgres:1/x"), ("--lane", "postgres:x/3"), ("--lane", "postgres:/3"),
+            ("--lane", "postgres:1/0"), ("--lane", "all:1/3"), ("--lane", "immediate-actions:1/3"),
         ):
             with self.subTest(arguments=arguments):
                 result, calls = self.run_lane(*arguments)
@@ -147,7 +217,7 @@ class PostgresRunnerTests(unittest.TestCase):
                 self.assertEqual([], calls)
 
     def test_each_lane_requires_database_and_propagates_cargo_failure(self):
-        for lane in ("all", "postgres", "immediate-actions"):
+        for lane in ("all", "postgres", "postgres:2/3", "immediate-actions"):
             with self.subTest(lane=lane):
                 result, calls = self.run_lane("--lane", lane, database=False)
                 self.assertEqual(2, result.returncode)
@@ -182,14 +252,30 @@ class PostgresRunnerTests(unittest.TestCase):
 
     def test_inventory_validator_rejects_lost_duplicate_filtered_or_wrong_feature_targets(self):
         source = RUNNER.read_text(encoding="utf-8")
-        for changed in (
-            source.replace("--test http_auth", "--test missing_http_auth"),
-            source.replace("--test http_auth", '--test "http_auth'),
-            source.replace("--test http_auth", "--test http_auth --test http_auth"),
-            source.replace("--test http_auth", "--test http_auth selected_test"),
-            source.replace("--features runtime,tooling,schema ", "--features postgres-test,tooling,schema ", 1),
-        ):
-            with self.subTest(changed=changed[:40]), tempfile.TemporaryDirectory() as directory:
+        for index, changed in enumerate((
+            source.replace("  http_auth\n", "  missing_http_auth\n"),
+            source.replace("  http_auth\n", "  http_auth\n  http_auth\n"),
+            source.replace("  http_auth\n", '  "http_auth\n'),
+            source.replace("  http_auth\n", "  http_auth selected_test\n"),
+            source.replace("runtime_targets=(\n  http_auth", "postgres_targets=(\n  http_auth"),
+            source + "\n cargo test --locked -p registry-breg --features schema --test stray_target\n",
+            source + "\nFOO=1 cargo test --locked -p registry-breg --features schema --test stray_target\n",
+            source + "\ncommand cargo test --locked -p registry-breg --features schema --test stray_target\n",
+            source + "\nuv run --no-project --with PyYAML==6.0.2 cargo test --locked -p registry-breg"
+            " --features postgres-test,tooling,schema --test stray_target\n",
+            source + "\ncargo test --locked -p registry-breg --features schema --test=stray_target\n",
+            source.replace("      --test postgres_action_evidence_targets \\\n", ""),
+            source.replace('  run_sharded_targets runtime,tooling,schema "${runtime_targets[@]}"\n', ""),
+            source.replace(
+                'run_sharded_targets runtime,tooling,schema "${runtime_targets[@]}"',
+                'run_sharded_targets postgres-test,tooling,schema "${runtime_targets[@]}"',
+            ),
+            source.replace(
+                '  run_sharded_targets runtime,tooling,schema "${runtime_targets[@]}"\n',
+                '  run_sharded_targets runtime,tooling,schema "${runtime_targets[@]}"\n' * 2,
+            ),
+        )):
+            with self.subTest(mutation=index), tempfile.TemporaryDirectory() as directory:
                 candidate = Path(directory) / "runner.sh"
                 candidate.write_text(changed, encoding="utf-8")
                 candidate.chmod(0o755)
@@ -201,32 +287,61 @@ class PostgresRunnerTests(unittest.TestCase):
     def test_ci_keeps_all_lanes_and_tls_adopter_order(self):
         workflow = yaml.safe_load((SCRIPT_DIR.parents[2] / ".github/workflows/ci.yml").read_text())
         job = workflow["jobs"]["breg-contracts"]
-        # The change classifier owns the lane list: review runs only the first
-        # lane, and the merge queue and nightly sweep run all of them.
+        # The change classifier owns the lane list: review runs the first two
+        # lanes, and the merge queue and nightly sweep run all of them.
         self.assertEqual("${{ fromJSON(needs.changes.outputs.breg_contracts_lanes) }}", job["strategy"]["matrix"]["lane"])
-        spec = importlib.util.spec_from_file_location("ci_changes", SCRIPT_DIR.parents[2] / ".github/scripts/ci_changes.py")
-        assert spec is not None and spec.loader is not None
-        ci_changes = importlib.util.module_from_spec(spec)
-        sys.modules[spec.name] = ci_changes
-        spec.loader.exec_module(ci_changes)
-        self.assertEqual(("contracts", "postgres", "immediate-actions"), ci_changes.BREG_CONTRACTS_LANES)
+        ci_changes = self.load_ci_changes()
+        # The PostgreSQL lane runs as parallel shard lanes; the shard count is
+        # pinned here so a change is a reviewed decision, not silent drift.
+        self.assertGreaterEqual(ci_changes.BREG_POSTGRES_SHARDS, 2)
+        self.assertEqual(
+            (
+                "contracts",
+                "contracts-journeys",
+                "postgres:1/3",
+                "postgres:2/3",
+                "postgres:3/3",
+                "immediate-actions",
+            ),
+            ci_changes.BREG_CONTRACTS_LANES,
+        )
         self.assertFalse(job["strategy"]["fail-fast"])
         self.assertIn("postgres", job["services"])
+        # Each single-copy proof is pinned to exactly one shard, balancing
+        # measured wall time: evidence build on the first, the citizen journey
+        # on the second, worker and S3 runs on the third.
+        steps = {step["name"]: step for step in job["steps"]}
+        for name, condition in (
+            ("Native citizen gateway and review authority journey", "matrix.lane == 'postgres:2/3'"),
+            ("Base Registry Engine PostgreSQL worker and startup tests", "matrix.lane == 'postgres:3/3'"),
+            ("Base Registry Engine real S3 attachment storage", "matrix.lane == 'postgres:3/3'"),
+        ):
+            self.assertEqual(condition, steps[name]["if"])
         runs = {step["run"]: step for step in job["steps"] if "run" in step}
-        contract_commands = (
-            "uv run --no-project --with PyYAML==6.0.2 products/breg/scripts/check-contracts.sh",
-            "products/breg/scripts/check-client-contract.sh",
-            "products/breg/scripts/test-postgres-tls.sh",
-            "products/breg/scripts/test-adopter-workflow.sh",
-            "products/breg/quickstart/run.sh --smoke",
-            "products/breg/quickstart/run.sh --spatial --smoke",
-            "products/breg/scripts/check-mcp-gateway-boundary.sh",
-            "products/breg/scripts/check-service-dependencies.sh",
-            "products/breg/scripts/test-immediate-action-examples.sh",
+        # The validator lane keeps the static contract checks; the adopter
+        # journeys and their TLS-only database run in their own parallel lane.
+        lane_commands = (
+            ("contracts", (
+                "uv run --no-project --with PyYAML==6.0.2 products/breg/scripts/check-contracts.sh",
+                "products/breg/scripts/check-client-contract.sh",
+                "products/breg/scripts/check-mcp-gateway-boundary.sh",
+                "products/breg/scripts/check-service-dependencies.sh",
+            )),
+            ("contracts-journeys", (
+                "products/breg/scripts/test-postgres-tls.sh",
+                "products/breg/scripts/test-adopter-workflow.sh",
+                "products/breg/quickstart/run.sh --smoke",
+                "products/breg/quickstart/run.sh --spatial --smoke",
+                "products/breg/scripts/test-immediate-action-examples.sh",
+            )),
         )
-        for command in contract_commands:
-            self.assertEqual("matrix.lane == 'contracts'", runs[command]["if"])
-        self.assertLess(list(runs).index(contract_commands[2]), list(runs).index(contract_commands[3]))
+        for lane, commands in lane_commands:
+            for command in commands:
+                self.assertEqual(f"matrix.lane == '{lane}'", runs[command]["if"])
+        self.assertLess(
+            list(runs).index("products/breg/scripts/test-postgres-tls.sh"),
+            list(runs).index("products/breg/scripts/test-adopter-workflow.sh"),
+        )
         # The native Action harness uses a plain administrator connection. The
         # TLS proof changes this shared service to TLS-only for adopter checks.
         self.assertLess(
@@ -236,8 +351,21 @@ class PostgresRunnerTests(unittest.TestCase):
         uv = next(step for step in job["steps"] if step.get("name") == "Install uv")
         self.assertEqual("matrix.lane != 'immediate-actions'", uv["if"])
         postgres = runs['products/breg/scripts/test-postgres.sh --lane "$BREG_POSTGRES_LANE"']
-        self.assertEqual("matrix.lane != 'contracts'", postgres["if"])
+        self.assertEqual(
+            "startsWith(matrix.lane, 'postgres:') || matrix.lane == 'immediate-actions'", postgres["if"]
+        )
         self.assertEqual("${{ matrix.lane }}", postgres["env"]["BREG_POSTGRES_LANE"])
+        # The step hands the runner exactly the lanes it accepts; a lane added
+        # to the classifier cannot reach the runner by matching a negation.
+        selected = {
+            lane for lane in ci_changes.BREG_CONTRACTS_LANES
+            if lane.startswith("postgres:") or lane == "immediate-actions"
+        }
+        accepted = {
+            lane for lane in ci_changes.BREG_CONTRACTS_LANES
+            if self.run_lane("--lane", lane)[0].returncode == 0
+        }
+        self.assertEqual(selected, accepted)
 
     def test_ci_has_a_focused_postgresql_18_portability_lane(self):
         workflow = yaml.safe_load((SCRIPT_DIR.parents[2] / ".github/workflows/ci.yml").read_text())

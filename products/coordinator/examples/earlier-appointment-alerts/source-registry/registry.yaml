@@ -1,0 +1,220 @@
+apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project:
+  id: earlier-appointment-alert-source
+  version: "1"
+  canonicalBaseIri: https://example.invalid/earlier-appointment-alerts
+  defaultLanguage: en
+package:
+  sourceRevision: earlier-appointment-alert-source-v1
+datasets:
+  - {id: alert-subscriptions}
+vocabularies:
+  - id: alert-scope
+    values: [appointment]
+  - id: alert-state
+    values: [active, claimed, dispatching, notified, withdrawn]
+recordTypes:
+  - id: alert-subscription
+    primaryDataset: alert-subscriptions
+    route: alert-subscriptions
+    mutationMode: mutable
+    classification: restricted
+    fields:
+      - {id: source, type: string, required: true, minimumLength: 1, maximumLength: 80, classification: internal}
+      - {id: condition-id, apiName: conditionId, type: string, required: true, minimumLength: 1, maximumLength: 120, classification: internal}
+      - {id: scope, type: vocabulary-code, vocabulary: alert-scope, required: true, classification: internal}
+      - {id: state, type: vocabulary-code, vocabulary: alert-state, required: true, classification: internal}
+      - {id: consent, type: boolean, required: true, classification: restricted}
+      - {id: expires-at, apiName: expiresAt, type: timestamp, required: true, classification: restricted}
+      - {id: expires-on, apiName: expiresOn, type: date, required: true, classification: internal}
+      - {id: destination, type: string, required: true, minimumLength: 3, maximumLength: 254, classification: restricted}
+      - {id: appointment-id, apiName: appointmentId, type: string, required: true, minimumLength: 1, maximumLength: 120, classification: internal}
+      - {id: appointment-revision, apiName: appointmentRevision, type: int64, required: true, classification: internal}
+      - {id: appointment-start, apiName: appointmentStart, type: timestamp, required: true, classification: internal}
+      - {id: appointment-end, apiName: appointmentEnd, type: timestamp, required: true, classification: internal}
+      - {id: desired-start, apiName: desiredStart, type: timestamp, required: true, classification: internal}
+      - {id: duration-minutes, apiName: durationMinutes, type: int64, required: true, classification: internal}
+      - {id: offering, type: string, required: true, minimumLength: 1, maximumLength: 64, classification: internal}
+      - {id: resource, type: string, required: false, minimumLength: 1, maximumLength: 64, classification: internal}
+      - {id: resource-units, apiName: resourceUnits, type: int64, required: true, classification: internal}
+      - {id: party-recipients, apiName: partyRecipients, type: int64, required: true, classification: internal}
+      - {id: party-attendees, apiName: partyAttendees, type: int64, required: true, classification: internal}
+      - {id: additional-offering, apiName: additionalOffering, type: string, required: true, minimumLength: 1, maximumLength: 64, classification: internal}
+      - {id: additional-resource, apiName: additionalResource, type: string, required: true, minimumLength: 1, maximumLength: 64, classification: internal}
+      - {id: additional-units, apiName: additionalUnits, type: int64, required: true, classification: internal}
+      - {id: message-id, apiName: messageId, type: string, required: false, minimumLength: 1, maximumLength: 120, classification: internal}
+    constraints:
+      - {id: alert-condition-identity, type: unique, fields: [condition-id]}
+actions:
+  - id: create-alert-subscription
+    execution: {mode: immediate}
+    inputs:
+      - {id: condition-id, apiName: conditionId, type: string, required: true, minimumLength: 1, maximumLength: 120, classification: internal}
+      - {id: consent, type: boolean, required: true, classification: restricted}
+      - {id: expires-at, apiName: expiresAt, type: timestamp, required: true, classification: restricted}
+      - {id: expires-on, apiName: expiresOn, type: date, required: true, classification: internal}
+      - {id: destination, type: string, required: true, minimumLength: 3, maximumLength: 254, classification: restricted}
+      - {id: appointment-id, apiName: appointmentId, type: string, required: true, minimumLength: 1, maximumLength: 120, classification: internal}
+      - {id: appointment-revision, apiName: appointmentRevision, type: int64, required: true, classification: internal}
+      - {id: appointment-start, apiName: appointmentStart, type: timestamp, required: true, classification: internal}
+      - {id: appointment-end, apiName: appointmentEnd, type: timestamp, required: true, classification: internal}
+      - {id: desired-start, apiName: desiredStart, type: timestamp, required: true, classification: internal}
+      - {id: duration-minutes, apiName: durationMinutes, type: int64, required: true, classification: internal}
+      - {id: offering, type: string, required: true, minimumLength: 1, maximumLength: 64, classification: internal}
+      - {id: resource, type: string, required: false, minimumLength: 1, maximumLength: 64, classification: internal}
+      - {id: resource-units, apiName: resourceUnits, type: int64, required: true, classification: internal}
+      - {id: party-recipients, apiName: partyRecipients, type: int64, required: true, classification: internal}
+      - {id: party-attendees, apiName: partyAttendees, type: int64, required: true, classification: internal}
+      - {id: additional-offering, apiName: additionalOffering, type: string, required: true, minimumLength: 1, maximumLength: 64, classification: internal}
+      - {id: additional-resource, apiName: additionalResource, type: string, required: true, minimumLength: 1, maximumLength: 64, classification: internal}
+      - {id: additional-units, apiName: additionalUnits, type: int64, required: true, classification: internal}
+    plan:
+      type: fixed
+      effects:
+        - id: subscription
+          target: {recordType: alert-subscription}
+          operation: create
+          set:
+            source: {value: earlier-alert-source}
+            condition-id: {fromInput: condition-id}
+            scope: {value: appointment}
+            state: {value: active}
+            consent: {fromInput: consent}
+            expires-at: {fromInput: expires-at}
+            expires-on: {fromInput: expires-on}
+            destination: {fromInput: destination}
+            appointment-id: {fromInput: appointment-id}
+            appointment-revision: {fromInput: appointment-revision}
+            appointment-start: {fromInput: appointment-start}
+            appointment-end: {fromInput: appointment-end}
+            desired-start: {fromInput: desired-start}
+            duration-minutes: {fromInput: duration-minutes}
+            offering: {fromInput: offering}
+            resource: {fromInput: resource}
+            resource-units: {fromInput: resource-units}
+            party-recipients: {fromInput: party-recipients}
+            party-attendees: {fromInput: party-attendees}
+            additional-offering: {fromInput: additional-offering}
+            additional-resource: {fromInput: additional-resource}
+            additional-units: {fromInput: additional-units}
+  - id: claim-alert
+    execution: {mode: immediate}
+    inputs:
+      - {id: subscription, apiName: subscriptionId, type: reference, target: alert-subscription, required: true, classification: internal}
+      - {id: condition-id, apiName: conditionId, type: string, required: true, minimumLength: 1, maximumLength: 120, classification: internal}
+    commitGuards:
+      targets:
+        - {input: subscription, field: state, equals: active}
+        - {input: subscription, field: condition-id, equalsFromInput: condition-id}
+        - {input: subscription, field: consent, equals: true}
+        - {input: subscription, field: expires-on, currentDate: on-or-after}
+    plan:
+      type: fixed
+      effects:
+        - id: subscription
+          target: {fromInput: subscription}
+          operation: patch
+          set: {state: {value: claimed}}
+  - id: authorize-alert-dispatch
+    execution: {mode: immediate}
+    inputs:
+      - {id: subscription, apiName: subscriptionId, type: reference, target: alert-subscription, required: true, classification: internal}
+      - {id: condition-id, apiName: conditionId, type: string, required: true, minimumLength: 1, maximumLength: 120, classification: internal}
+    commitGuards:
+      targets:
+        - {input: subscription, field: state, equals: claimed}
+        - {input: subscription, field: condition-id, equalsFromInput: condition-id}
+        - {input: subscription, field: consent, equals: true}
+        - {input: subscription, field: expires-on, currentDate: on-or-after}
+    plan:
+      type: fixed
+      effects:
+        - id: subscription
+          target: {fromInput: subscription}
+          operation: patch
+          set: {state: {value: dispatching}}
+  - id: record-alert-submission
+    execution: {mode: immediate}
+    inputs:
+      - {id: subscription, apiName: subscriptionId, type: reference, target: alert-subscription, required: true, classification: internal}
+      - {id: condition-id, apiName: conditionId, type: string, required: true, minimumLength: 1, maximumLength: 120, classification: internal}
+      - {id: message-id, apiName: messageId, type: string, required: true, minimumLength: 1, maximumLength: 120, classification: internal}
+    commitGuards:
+      targets:
+        - {input: subscription, field: state, equals: dispatching}
+        - {input: subscription, field: condition-id, equalsFromInput: condition-id}
+    plan:
+      type: fixed
+      effects:
+        - id: subscription
+          target: {fromInput: subscription}
+          operation: patch
+          set:
+            state: {value: notified}
+            message-id: {fromInput: message-id}
+  - id: withdraw-alert
+    execution: {mode: immediate}
+    inputs:
+      - {id: subscription, apiName: subscriptionId, type: reference, target: alert-subscription, required: true, classification: internal}
+    plan:
+      type: fixed
+      effects:
+        - id: subscription
+          target: {fromInput: subscription}
+          operation: patch
+          set:
+            state: {value: withdrawn}
+            consent: {value: false}
+accessProfiles:
+  - id: alert-administration
+    default: true
+    principalClaim: sub
+    requiredScopes: [alerts:manage]
+    actorKind: service
+    requesterClients: [alert-administrator]
+    permissions:
+      records: []
+      actions:
+        - action: create-alert-subscription
+          operations: [invoke]
+          targets:
+            - recordType: alert-subscription
+              rowBoundaries: [{field: source, claim: alert_source, operator: equals}]
+          results: [subscription]
+        - action: withdraw-alert
+          operations: [invoke]
+          targets:
+            - recordType: alert-subscription
+              rowBoundaries: [{field: source, claim: alert_source, operator: equals}]
+          results: [subscription]
+  - id: alert-workflow
+    principalClaim: sub
+    requiredScopes: [alerts:workflow]
+    actorKind: service
+    requesterClients: [earlier-alert-coordinator]
+    permissions:
+      records:
+        - recordType: alert-subscription
+          operations: [get]
+          readableFields: [condition-id, scope, state, consent, expires-at, expires-on, destination, appointment-id, appointment-revision, appointment-start, appointment-end, desired-start, duration-minutes, offering, resource, resource-units, party-recipients, party-attendees, additional-offering, additional-resource, additional-units, message-id]
+          rowBoundaries: [{field: source, claim: alert_source, operator: equals}]
+      actions:
+        - action: claim-alert
+          operations: [invoke]
+          targets:
+            - recordType: alert-subscription
+              rowBoundaries: [{field: source, claim: alert_source, operator: equals}]
+          results: [subscription]
+        - action: authorize-alert-dispatch
+          operations: [invoke]
+          targets:
+            - recordType: alert-subscription
+              rowBoundaries: [{field: source, claim: alert_source, operator: equals}]
+          results: [subscription]
+        - action: record-alert-submission
+          operations: [invoke]
+          targets:
+            - recordType: alert-subscription
+              rowBoundaries: [{field: source, claim: alert_source, operator: equals}]
+          results: [subscription]

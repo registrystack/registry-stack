@@ -21,27 +21,39 @@
 //! protocol types.
 
 mod admission;
+mod allocation;
+mod attendance;
 mod diagnostics;
 mod fixture;
 mod model;
 mod naming;
+mod operational;
+mod party;
 mod policy;
 mod problem;
 mod resolve;
+mod resource_availability;
 #[cfg(feature = "schema")]
 pub mod schema;
+mod source_busy;
 mod typed;
 mod units;
 mod wire;
 
 pub use admission::*;
+pub use allocation::*;
+pub use attendance::*;
 pub use diagnostics::*;
 pub use fixture::*;
 pub use model::*;
 pub use naming::*;
+pub use operational::*;
+pub use party::*;
 pub use policy::*;
 pub use problem::*;
 pub use resolve::*;
+pub use resource_availability::*;
+pub use source_busy::*;
 pub use typed::*;
 pub use units::*;
 pub use wire::*;

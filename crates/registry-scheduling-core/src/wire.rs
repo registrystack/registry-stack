@@ -25,7 +25,12 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::model::AdmissionRequest;
+use crate::model::{AdditionalAllocationRequest, AdmissionRequest};
+use crate::party::{ManagerSelection, PartyCounts, PartyCountsRequirement, PartyReference};
+use crate::policy::OpeningCoverage;
+use crate::typed::{
+    MAXIMUM_ADDITIONAL_ALLOCATIONS, MAXIMUM_BOOKING_DURATION_MINUTES, MAXIMUM_RESOURCE_UNITS,
+};
 
 /// What `GET /v1/scheduling` answers: which deployment and which policy.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
@@ -54,24 +59,56 @@ pub struct OfferingDocument {
     pub label: String,
     pub mode: SchedulingModeDocument,
     pub location: String,
+    /// The resource pool an exact-time offering draws from. Omitted when the
+    /// offering has no independently selectable pool members.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pool: Option<String>,
     pub lead_time_minutes: u32,
     pub horizon_days: u32,
     pub cancellation_cutoff_minutes: u32,
     /// Present for exact-time offerings.
     pub duration_minutes: Option<u32>,
+    /// Present when an exact-time offering permits the caller to choose its
+    /// duration from a bounded lattice.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_selection: Option<DurationSelectionDocument>,
+    /// Present only when openings constrain the full occupied interval.
+    #[serde(default, skip_serializing_if = "OpeningCoverage::is_service_interval")]
+    pub opening_coverage: OpeningCoverage,
+    /// True when an exact-time request may constrain allocation to one pool
+    /// member. Omitted false preserves the legacy catalogue shape.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub allow_resource_selection: bool,
     /// Present for exact-time offerings.
     pub buffer_before_minutes: Option<u32>,
     /// Present for exact-time offerings.
     pub buffer_after_minutes: Option<u32>,
     /// Present for exact-time offerings.
     pub start_increment_minutes: Option<u32>,
+    /// Whether exact-time admission may omit human counts. Required is the
+    /// default and omitted to preserve the legacy catalogue shape.
+    #[serde(default, skip_serializing_if = "PartyCountsRequirement::is_required")]
+    pub party_counts: PartyCountsRequirement,
     /// Present for exact-time offerings.
     pub max_recipients: Option<u32>,
-    /// Present for arrival-window offerings.
+    /// Present for an arrival-window offering that names its window.
     pub window: Option<WindowDocument>,
+    /// Every records-published window an arrival-window offering that names
+    /// no window serves, in start order. A request picks one by its start.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub windows: Vec<WindowDocument>,
     pub reminders: Vec<ReminderDocument>,
     pub requires_capabilities: Vec<String>,
     pub prerequisites: Vec<String>,
+}
+
+/// The bounded duration lattice an exact-time offering publishes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DurationSelectionDocument {
+    pub minimum_minutes: u32,
+    pub maximum_minutes: u32,
+    pub increment_minutes: u32,
 }
 
 /// How an offering delivers its service, on the wire.
@@ -109,6 +146,10 @@ pub struct ResourceDocument {
     pub pool: String,
     pub capabilities: Vec<String>,
     pub available: bool,
+    /// Current physical stock. Omitted one preserves the legacy catalogue
+    /// shape; zero reports complete current loss without erasing identity.
+    #[serde(default = "one", skip_serializing_if = "is_one")]
+    pub capacity_units: u32,
 }
 
 /// One location in the location listing, with the IANA timezone identifier
@@ -135,6 +176,10 @@ pub enum AvailabilityEntry {
         start: DateTime<Utc>,
         end: DateTime<Utc>,
         free: u32,
+        /// Physical units available across the capable members. `free`
+        /// remains the member count for backward compatibility.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        available_units: Option<u32>,
     },
     /// A published window and its remaining recipient units, the caller's
     /// channel slice included when the window reserves one for it.
@@ -145,6 +190,108 @@ pub enum AvailabilityEntry {
         remaining: u32,
         channel_remaining: Option<u32>,
     },
+}
+
+/// Optional exact-time choices applied while reading availability. Omission
+/// preserves the offering's default duration and fungible pool selection.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AvailabilitySelection {
+    #[serde(
+        default,
+        deserialize_with = "crate::typed::optional_bounded_u32::<_, 1, MAXIMUM_BOOKING_DURATION_MINUTES>",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(
+            with = "Option<registry_platform_yaml::BoundedU32<1, MAXIMUM_BOOKING_DURATION_MINUTES>>"
+        )
+    )]
+    pub duration_minutes: Option<u32>,
+    #[serde(
+        default,
+        deserialize_with = "crate::typed::optional_local_id",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Option<registry_platform_yaml::LocalId>")
+    )]
+    pub resource: Option<String>,
+}
+
+/// A bounded, read-scope capacity question. This shape deliberately excludes
+/// manager selection, duplicate keys, references and eligibility assertions:
+/// a positive answer is physical advice, never authorization or admission.
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AvailabilityPreviewRequest {
+    #[serde(deserialize_with = "crate::typed::local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
+    pub offering: String,
+    pub start: DateTime<Utc>,
+    #[serde(
+        default,
+        deserialize_with = "crate::typed::optional_bounded_u32::<_, 1, MAXIMUM_BOOKING_DURATION_MINUTES>",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(
+            with = "Option<registry_platform_yaml::BoundedU32<1, MAXIMUM_BOOKING_DURATION_MINUTES>>"
+        )
+    )]
+    pub duration_minutes: Option<u32>,
+    #[serde(
+        default,
+        deserialize_with = "crate::typed::optional_local_id",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Option<registry_platform_yaml::LocalId>")
+    )]
+    pub resource: Option<String>,
+    #[serde(
+        default = "one",
+        deserialize_with = "crate::typed::bounded_u32::<_, 1, MAXIMUM_RESOURCE_UNITS>",
+        skip_serializing_if = "is_one"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "registry_platform_yaml::BoundedU32<1, MAXIMUM_RESOURCE_UNITS>")
+    )]
+    pub resource_units: u32,
+    #[serde(
+        default,
+        deserialize_with = "crate::typed::bounded_list::<_, _, MAXIMUM_ADDITIONAL_ALLOCATIONS>",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(length(max = MAXIMUM_ADDITIONAL_ALLOCATIONS))
+    )]
+    pub additional_allocations: Vec<AdditionalAllocationRequest>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub party: Option<PartyCounts>,
+}
+
+/// Capacity advice for one complete physical bundle. A false answer carries
+/// only the public refusal code and never identifies a hidden resource or
+/// implies authorization, eligibility, or a durable reservation.
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct AvailabilityPreviewDocument {
+    pub offering: String,
+    pub start: DateTime<Utc>,
+    pub end: DateTime<Utc>,
+    pub capacity_available: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub public_code: Option<String>,
 }
 
 /// One page of a bounded listing, with the opaque cursor that continues it.
@@ -170,10 +317,38 @@ pub struct ExternalReference {
     pub identifier: String,
 }
 
+/// Which canonical request line produced one concrete allocation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum AllocationRequirementDocument {
+    Primary,
+    Additional { index: u8 },
+}
+
+/// One concrete part of an authorized logical reservation. A counted line
+/// may have several rows when capacity is split across members.
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct AllocationDocument {
+    pub requirement: AllocationRequirementDocument,
+    pub offering: String,
+    pub resource: String,
+    pub units: u32,
+    pub occupied_start: DateTime<Utc>,
+    pub occupied_end: DateTime<Utc>,
+}
+
 /// A minted hold, the answer to `POST /v1/holds`. The hold request body is
 /// the same admission request shape a direct create carries: a hold is an
 /// admission ask that reserves instead of committing.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct HoldDocument {
     pub hold_id: String,
@@ -183,6 +358,16 @@ pub struct HoldDocument {
     /// The pool member held, for exact-time offerings.
     pub resource: Option<String>,
     pub units: u32,
+    /// Present for a quantity or multi-line reservation. Omitted on the
+    /// legacy single-resource path.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allocations: Vec<AllocationDocument>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub party: Option<PartyCounts>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub manager: Option<ManagerSelection>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub party_references: Vec<PartyReference>,
     pub expires_at: DateTime<Utc>,
     pub policy_revision: u64,
     pub external_references: Vec<ExternalReference>,
@@ -219,6 +404,16 @@ pub struct AppointmentDocument {
     /// The pool member serving the appointment, for exact-time offerings.
     pub resource: Option<String>,
     pub units: u32,
+    /// Present for a quantity or multi-line reservation. Omitted on the
+    /// legacy single-resource path.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allocations: Vec<AllocationDocument>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub party: Option<PartyCounts>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub manager: Option<ManagerSelection>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub party_references: Vec<PartyReference>,
     pub channel: Option<String>,
     pub revision: u64,
     pub state: AppointmentStateDocument,
@@ -226,6 +421,10 @@ pub struct AppointmentDocument {
     pub created_at: DateTime<Utc>,
     pub cancelled_at: Option<DateTime<Utc>>,
     pub external_references: Vec<ExternalReference>,
+    /// The current observation for this appointment's current visit, when an
+    /// exact-detail authority is reading it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attendance: Option<crate::AttendanceDocument>,
 }
 
 /// The request behind `POST /v1/appointments`: confirm a held allocation, or
@@ -242,6 +441,7 @@ pub struct CreateAppointmentRequest {
 
 /// The request behind `POST /v1/appointments/{id}/reschedule`.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RescheduleAppointmentRequest {
     pub observed_revision: u64,
@@ -250,6 +450,7 @@ pub struct RescheduleAppointmentRequest {
 
 /// The request behind `POST /v1/appointments/{id}/cancel`.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CancelAppointmentRequest {
     pub observed_revision: u64,
@@ -292,10 +493,22 @@ pub struct ExplainDocument {
     pub explanation: Option<String>,
 }
 
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
+const fn one() -> u32 {
+    1
+}
+
+const fn is_one(value: &u32) -> bool {
+    *value == 1
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::PartyCounts;
+    use crate::PartyCounts;
     use chrono::TimeZone as _;
 
     fn utc(day: u32, hour: u32) -> DateTime<Utc> {
@@ -310,15 +523,25 @@ mod tests {
             label: "30-minute counter update".to_owned(),
             mode: SchedulingModeDocument::ExactTime,
             location: "north-counter".to_owned(),
+            pool: Some("counters".to_owned()),
             lead_time_minutes: 120,
             horizon_days: 60,
             cancellation_cutoff_minutes: 240,
             duration_minutes: Some(30),
+            duration_selection: Some(DurationSelectionDocument {
+                minimum_minutes: 15,
+                maximum_minutes: 60,
+                increment_minutes: 15,
+            }),
+            opening_coverage: OpeningCoverage::OccupiedInterval,
+            allow_resource_selection: true,
             buffer_before_minutes: Some(5),
             buffer_after_minutes: Some(5),
             start_increment_minutes: Some(30),
+            party_counts: PartyCountsRequirement::Optional,
             max_recipients: Some(1),
             window: None,
+            windows: Vec::new(),
             reminders: vec![ReminderDocument {
                 minutes_before: 1440,
             }],
@@ -327,7 +550,68 @@ mod tests {
         };
         let json = serde_json::to_value(&offering).unwrap();
         assert_eq!(json["mode"], "exact-time");
+        assert_eq!(json["pool"], "counters");
         assert_eq!(json["leadTimeMinutes"], 120);
+        assert_eq!(json["durationSelection"]["minimumMinutes"], 15);
+        assert_eq!(json["openingCoverage"], "occupied-interval");
+        assert_eq!(json["allowResourceSelection"], true);
+        assert_eq!(json["partyCounts"], "optional");
+        let parsed: OfferingDocument = serde_json::from_value(json).unwrap();
+        assert_eq!(parsed, offering);
+
+        let mut legacy = offering;
+        legacy.pool = None;
+        legacy.duration_selection = None;
+        legacy.opening_coverage = OpeningCoverage::ServiceInterval;
+        legacy.allow_resource_selection = false;
+        legacy.party_counts = PartyCountsRequirement::Required;
+        let json = serde_json::to_value(legacy).unwrap();
+        assert!(json.get("durationSelection").is_none());
+        assert!(json.get("pool").is_none());
+        assert!(json.get("openingCoverage").is_none());
+        assert!(json.get("allowResourceSelection").is_none());
+        assert!(json.get("partyCounts").is_none());
+        assert!(json.get("windows").is_none());
+    }
+
+    #[test]
+    fn an_offering_naming_no_window_publishes_every_window_it_serves() {
+        let window = |id: &str, day: u32| WindowDocument {
+            id: id.to_owned(),
+            revision: 1,
+            start: utc(day, 8),
+            end: utc(day, 10),
+            units: 12,
+        };
+        let offering = OfferingDocument {
+            id: "distribution-day".to_owned(),
+            service: "food-distribution".to_owned(),
+            label: "Distribution day".to_owned(),
+            mode: SchedulingModeDocument::ArrivalWindow,
+            location: "north-counter".to_owned(),
+            pool: None,
+            lead_time_minutes: 60,
+            horizon_days: 60,
+            cancellation_cutoff_minutes: 0,
+            duration_minutes: None,
+            duration_selection: None,
+            opening_coverage: OpeningCoverage::ServiceInterval,
+            allow_resource_selection: false,
+            buffer_before_minutes: None,
+            buffer_after_minutes: None,
+            start_increment_minutes: None,
+            party_counts: PartyCountsRequirement::Required,
+            max_recipients: None,
+            window: None,
+            windows: vec![window("day-one", 10), window("day-two", 17)],
+            reminders: Vec::new(),
+            requires_capabilities: Vec::new(),
+            prerequisites: Vec::new(),
+        };
+        let json = serde_json::to_value(&offering).unwrap();
+        assert!(json["window"].is_null());
+        assert_eq!(json["windows"][0]["id"], "day-one");
+        assert_eq!(json["windows"][1]["id"], "day-two");
         let parsed: OfferingDocument = serde_json::from_value(json).unwrap();
         assert_eq!(parsed, offering);
     }
@@ -380,15 +664,21 @@ mod tests {
             label: "30-minute counter update".to_owned(),
             mode: SchedulingModeDocument::ArrivalWindow,
             location: "north-counter".to_owned(),
+            pool: None,
             lead_time_minutes: 120,
             horizon_days: 60,
             cancellation_cutoff_minutes: 240,
             duration_minutes: None,
+            duration_selection: None,
+            opening_coverage: OpeningCoverage::ServiceInterval,
+            allow_resource_selection: false,
             buffer_before_minutes: None,
             buffer_after_minutes: None,
             start_increment_minutes: None,
+            party_counts: PartyCountsRequirement::Required,
             max_recipients: None,
             window: Some(window.clone()),
+            windows: Vec::new(),
             reminders: vec![ReminderDocument {
                 minutes_before: 1440,
             }],
@@ -400,6 +690,7 @@ mod tests {
             pool: "counters".to_owned(),
             capabilities: vec!["sign-language".to_owned()],
             available: true,
+            capacity_units: 1,
         });
         tolerates_a_later_member(&LocationDocument {
             location_id: "north-counter".to_owned(),
@@ -409,6 +700,7 @@ mod tests {
             start: utc(5, 2),
             end: utc(5, 3),
             free: 2,
+            available_units: None,
         });
         tolerates_a_later_member(&AvailabilityEntry::Window {
             window: "household-morning-window".to_owned(),
@@ -428,6 +720,10 @@ mod tests {
             end: utc(5, 3),
             resource: Some("station-1".to_owned()),
             units: 1,
+            allocations: Vec::new(),
+            party: None,
+            manager: None,
+            party_references: Vec::new(),
             expires_at: utc(5, 1),
             policy_revision: 1,
             external_references: Vec::new(),
@@ -439,6 +735,10 @@ mod tests {
             end: utc(5, 3),
             resource: Some("station-1".to_owned()),
             units: 1,
+            allocations: Vec::new(),
+            party: None,
+            manager: None,
+            party_references: Vec::new(),
             channel: None,
             revision: 2,
             state: AppointmentStateDocument::Confirmed,
@@ -446,6 +746,7 @@ mod tests {
             created_at: utc(4, 9),
             cancelled_at: None,
             external_references: Vec::new(),
+            attendance: None,
         });
         tolerates_a_later_member(&AppointmentHistoryEntryDocument {
             event_id: "b31c0f4e-cc7f-4ba8-88f2-9c1a9102f0a1".to_owned(),
@@ -489,6 +790,7 @@ mod tests {
             start: utc(5, 2),
             end: utc(5, 3),
             free: 2,
+            available_units: None,
         };
         let json = serde_json::to_value(&slot).unwrap();
         assert_eq!(json["kind"], "slot");
@@ -511,14 +813,55 @@ mod tests {
     }
 
     #[test]
+    fn availability_selection_is_optional_bounded_and_closed() {
+        assert_eq!(
+            serde_json::to_value(AvailabilitySelection::default()).unwrap(),
+            serde_json::json!({})
+        );
+        let selected: AvailabilitySelection = serde_json::from_value(serde_json::json!({
+            "durationMinutes": 1500,
+            "resource": "station-2"
+        }))
+        .unwrap();
+        assert_eq!(selected.duration_minutes, Some(1500));
+        assert_eq!(selected.resource.as_deref(), Some("station-2"));
+        for invalid in [
+            serde_json::json!({"durationMinutes": 0}),
+            serde_json::json!({"durationMinutes": 10081}),
+            serde_json::json!({"durationMinutes": -1}),
+            serde_json::json!({"durationMinutes": 1.5}),
+            serde_json::json!({"durationMinutes": true}),
+            serde_json::json!({"resource": "station/2"}),
+            serde_json::json!({"fallback": true}),
+        ] {
+            assert!(serde_json::from_value::<AvailabilitySelection>(invalid).is_err());
+        }
+    }
+
+    #[cfg(feature = "schema")]
+    #[test]
+    fn availability_selection_schema_keeps_choices_optional_and_bounded() {
+        let schema = serde_json::to_value(schemars::schema_for!(AvailabilitySelection)).unwrap();
+        let required = schema["required"].as_array();
+        assert!(required.is_none_or(Vec::is_empty));
+        assert_eq!(schema["properties"]["durationMinutes"]["minimum"], 1);
+        assert_eq!(schema["properties"]["durationMinutes"]["maximum"], 10_080);
+    }
+
+    #[test]
     fn create_requests_enforce_their_exclusive_shape() {
         let admission = AdmissionRequest {
             offering: "registry-update-30".to_owned(),
             start: utc(5, 2),
-            party: PartyCounts {
+            duration_minutes: None,
+            resource: None,
+            resource_units: 1,
+            additional_allocations: Vec::new(),
+            party: Some(PartyCounts {
                 recipients: 1,
                 attendees: 1,
-            },
+            }),
+            manager: None,
             channel: None,
             duplicate_key: Some("subject:one".to_owned()),
             policy_revision: 1,
@@ -526,6 +869,7 @@ mod tests {
             capabilities: Vec::new(),
             prerequisites: Vec::new(),
             external_references: Vec::new(),
+            party_references: Vec::new(),
         };
 
         let direct = CreateAppointmentRequest {
@@ -563,6 +907,10 @@ mod tests {
             end: utc(5, 3),
             resource: Some("station-1".to_owned()),
             units: 1,
+            allocations: Vec::new(),
+            party: None,
+            manager: None,
+            party_references: Vec::new(),
             channel: None,
             revision: 2,
             state: AppointmentStateDocument::Confirmed,
@@ -570,6 +918,7 @@ mod tests {
             created_at: utc(4, 9),
             cancelled_at: None,
             external_references: Vec::new(),
+            attendance: None,
         };
         let json = serde_json::to_value(&appointment).unwrap();
         assert_eq!(json["state"], "confirmed");

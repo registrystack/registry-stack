@@ -87,12 +87,16 @@ fn undelivered(config: &Path, limit: i64) -> Value {
 
 async fn seed_claim(client: &tokio_postgres::Client, claim_id: Uuid) {
     client
+        .batch_execute("SET registry_scheduling.allocation_writer = 'v2'")
+        .await
+        .expect("the fixture uses the current allocation writer contract");
+    client
         .execute(
             "INSERT INTO scheduling_claims(claim_id, kind, state, offering, supply_id, \
              displayed_start, displayed_end, occupied_start, occupied_end, units, \
-             revision, policy_revision, actor) \
+             revision, policy_revision, actor, operational_service, operational_location, operational_mode) \
              VALUES($1,'booking','active','registry-update-30','station-1', \
-             now(), now(), now(), now(), 1, 1, 1, 'actor-pseudonym')",
+             now(), now(), now(), now(), 1, 1, 1, 'actor-pseudonym', 'registry-update', 'main-office', 'exact-time')",
             &[&claim_id],
         )
         .await

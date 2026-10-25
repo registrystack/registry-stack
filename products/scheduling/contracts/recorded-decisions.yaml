@@ -164,37 +164,45 @@ decisions:
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_direct_create_books_without_a_hold_and_exhausts_capacity}
       - {path: crates/registry-scheduling-core/src/admission.rs, name: the_second_caller_against_the_last_unit_is_refused}
   - id: SCHEDULING-DEC-08
-    subject: An environment-records swap is refused whole when it retires occupied supply
+    subject: Source facts preserve commitment truth and guard changes to occupied supply
     decision: >-
       `records apply` replaces the environment facts wholesale, but not
       unconditionally. The swap takes every supply anchor in the anchor's own
       order before it reads a claim, and refuses the whole apply when any
       active booking, or any hold whose lifetime is still ahead, occupies a
-      pool member the incoming records remove or move, or when incoming window
+      pool member the incoming records move between pools, or when incoming window
       records remove, move, or reduce capacity below standing commitments.
-      The operator keeps the supply or closes what stands on it first; nothing
-      partial is written.
+      Physical inventory loss and dated unavailability remain representable:
+      existing allocation rows survive and continue to consume the same
+      resource identity if it returns. New allocation and hold confirmation
+      recheck actual supply. Nothing partial is written and source updates
+      never silently cancel commitments.
     reasoning: >-
       The ledger's claims name their supply by id and the records give that id
-      its pool membership or published window capacity. Changing those records
-      under a live claim can strand promised capacity that availability no
-      longer counts. Taking the anchors first is what makes
+      its pool membership or published window capacity. Reassigning those
+      identities under a live claim can hide promised capacity from subsequent
+      availability. Losing physical stock, however, is a fact the source must
+      be able to report without erasing that commitment. Taking the anchors first makes
       the guard honest rather than advisory: a capacity transaction holds its
       own anchor from its snapshot until it commits, so holding all of them
       means no commitment is mid-evaluation against a member about to be
       deleted, and a claim written a moment later is seen by the guard rather
-      than stranded behind it. A capacity transaction takes exactly one anchor
-      and the swap takes them in order, so the two cannot cycle.
+      than stranded behind it. Exact, bundle, and window transactions lock their
+      supply anchors in order before the revision guard, and the swap reserves
+      window resources while it holds every anchor.
     alsoTrue: >-
       Window facts and their lock anchors are replaced in the same transaction
       as locations, pools, members, and exceptions. An expired hold occupies
       nothing, matching the live-predicate rule the rest of the ledger uses,
       so it never blocks a swap.
     residual: >-
-      Emergency capacity reduction remains a separate incident operation and
-      does not pass through ordinary records replacement.
+      Applying physical loss does not resolve its operational impact. The
+      institution still arranges replacement resources or explicitly changes
+      affected appointments; source publication performs neither action.
     evidence:
-      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_records_swap_refuses_to_strand_a_resource_an_active_claim_occupies}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_records_swap_preserves_an_active_allocation_when_physical_inventory_is_lost}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_records_swap_waits_for_the_capacity_transaction_holding_the_pool}
+      - {path: crates/registry-scheduling/tests/postgres_commitments/multi_window.rs, name: window_admission_and_records_publication_follow_one_lock_order}
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_records_swap_refuses_to_move_an_occupied_resource_between_pools}
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: records_replacement_refuses_to_move_a_window_with_standing_commitments}
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_records_swap_waits_for_the_capacity_transaction_holding_the_pool}

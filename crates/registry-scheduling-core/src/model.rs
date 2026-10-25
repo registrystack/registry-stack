@@ -18,12 +18,16 @@ use registry_platform_yaml::{
 
 use crate::diagnostics::{FindingArea, PolicyCheckReason, SchedulingDiagnostic};
 use crate::naming::{SCHEDULING_RECORDS_API_VERSION, SCHEDULING_RECORDS_KIND};
+use crate::party::{ManagerSelection, PartyCounts, PartyReference};
 use crate::policy::{
-    valid_hh_mm, valid_iso_date, Channel, PublishedWindow, SchedulingPolicy,
+    valid_hh_mm, valid_interval_end, valid_iso_date, Channel, PublishedWindow, SchedulingPolicy,
     MAXIMUM_COLLECTION_ENTRIES,
 };
 use crate::resolve::{location_open_intervals, ResolveError};
-use crate::typed::MAXIMUM_UNITS;
+use crate::typed::{
+    MAXIMUM_ADDITIONAL_ALLOCATIONS, MAXIMUM_BOOKING_DURATION_MINUTES, MAXIMUM_RESOURCE_UNITS,
+    MAXIMUM_UNITS,
+};
 use crate::wire::ExternalReference;
 
 /// Lifecycle of a temporary hold. An expired hold stops consuming capacity the
@@ -45,30 +49,6 @@ pub enum BookingState {
     Cancelled,
 }
 
-/// Recorded attendance of a booking.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub enum AttendanceState {
-    NotRecorded,
-    Arrived,
-    InService,
-    Completed,
-    NoShow,
-    LeftWithoutService,
-}
-
-/// The party summary capacity is derived from. Recipients are the people the
-/// service is delivered to; attendees are everyone present, recipients
-/// included. A parent accompanying two children is three attendees and two
-/// recipients, and consumes recipient units, never attendee counts.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct PartyCounts {
-    pub recipients: u32,
-    pub attendees: u32,
-}
-
 /// What a ledger entry allocates supply for.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -78,6 +58,10 @@ pub enum LedgerKind {
     Booking,
     /// A temporary hold.
     Hold,
+    /// A published window's own reservation of the physical `resources` it
+    /// declares. Its allocations are shared by every booking in the window
+    /// and consume once; it never consumes the window's units.
+    Window,
 }
 
 /// One entry in the authoritative supply ledger.
@@ -192,7 +176,8 @@ impl LedgerSnapshot {
     ) -> u32 {
         self.consuming(now)
             .filter(|claim| {
-                claim.supply_id == window_id
+                matches!(claim.kind, LedgerKind::Booking | LedgerKind::Hold)
+                    && claim.supply_id == window_id
                     && Some(claim.id.as_str()) != exclude
                     && channel.is_none_or(|wanted| claim.channel == Some(wanted.to_owned()))
             })
@@ -231,7 +216,7 @@ impl LedgerClaim {
     /// expires.
     pub fn consumes_at(&self, now: DateTime<Utc>) -> bool {
         match self.kind {
-            LedgerKind::Booking => true,
+            LedgerKind::Booking | LedgerKind::Window => true,
             LedgerKind::Hold => self.expires_at.is_some_and(|expiry| expiry > now),
         }
     }
@@ -283,9 +268,35 @@ pub struct PoolMember {
     )]
     pub capabilities: Vec<String>,
     pub available: bool,
+    /// Physical units this member contributes. Omitted legacy records carry
+    /// one unit. Zero records complete current loss without erasing the
+    /// resource identifier from retained allocations.
+    #[serde(
+        default = "one_resource_unit",
+        deserialize_with = "crate::typed::bounded_u32::<_, 0, MAXIMUM_RESOURCE_UNITS>",
+        skip_serializing_if = "is_one_resource_unit"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "registry_platform_yaml::BoundedU32<0, MAXIMUM_RESOURCE_UNITS>")
+    )]
+    pub capacity_units: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub availability: Option<crate::ResourceAvailability>,
 }
 
 impl PoolMember {
+    /// Static and dated supply must cover the complete occupied interval.
+    #[must_use]
+    pub fn available_during(&self, start: DateTime<Utc>, end: DateTime<Utc>) -> bool {
+        self.available
+            && start < end
+            && self
+                .availability
+                .as_ref()
+                .is_none_or(|facts| facts.covers(start, end))
+    }
+
     /// Whether this member carries every capability an offering requires.
     /// Availability counting and admission share this one predicate, so a
     /// free count never advertises a member admission would refuse.
@@ -501,6 +512,31 @@ impl SchedulingFacts {
                 ));
             }
             for (member_index, member) in pool.members.iter().enumerate() {
+                if let Some(availability) = &member.availability {
+                    for (kind, intervals) in [
+                        ("openings", availability.openings.as_deref().unwrap_or(&[])),
+                        ("closures", availability.closures.as_slice()),
+                    ] {
+                        let pointer =
+                            format!("/pools/{index}/members/{member_index}/availability/{kind}");
+                        if intervals.len() > MAXIMUM_COLLECTION_ENTRIES {
+                            findings
+                                .push(finding(pointer.clone(), PolicyCheckReason::TooManyEntries));
+                        }
+                        for (interval_index, interval) in intervals.iter().enumerate() {
+                            if !interval.is_valid() {
+                                findings.push(finding(
+                                    format!("{pointer}/{interval_index}/end"),
+                                    if interval.start >= interval.end {
+                                        PolicyCheckReason::InvertedRange
+                                    } else {
+                                        PolicyCheckReason::PatternSpanTooLarge
+                                    },
+                                ));
+                            }
+                        }
+                    }
+                }
                 if !resources.insert(member.resource_id.as_str()) {
                     findings.push(finding(
                         format!("/pools/{index}/members/{member_index}/resourceId"),
@@ -531,6 +567,7 @@ impl SchedulingFacts {
                     ));
                 }
             }
+            findings.extend(self.check_window_resources(policy, index, window));
         }
         for (index, exception) in self.exceptions.iter().enumerate() {
             if !locations.contains(exception.location.as_str()) {
@@ -549,7 +586,11 @@ impl SchedulingFacts {
                 ("startTime", &exception.start_time),
                 ("endTime", &exception.end_time),
             ] {
-                if !valid_hh_mm(time) {
+                if !(if member == "endTime" {
+                    valid_interval_end(time)
+                } else {
+                    valid_hh_mm(time)
+                }) {
                     findings.push(finding(
                         format!("/exceptions/{index}/{member}"),
                         PolicyCheckReason::MalformedValue,
@@ -559,7 +600,7 @@ impl SchedulingFacts {
             // Both times are zero-padded `HH:MM`, so their text orders as the
             // times do.
             if valid_hh_mm(&exception.start_time)
-                && valid_hh_mm(&exception.end_time)
+                && valid_interval_end(&exception.end_time)
                 && exception.end_time <= exception.start_time
             {
                 findings.push(finding(
@@ -596,6 +637,39 @@ impl SchedulingFacts {
                         );
                     findings.push(finding(path, PolicyCheckReason::CalendarRefused));
                 }
+            }
+        }
+        findings
+    }
+
+    /// Whether each resource one window's `resources` names is a member of
+    /// the pool the requirement's exact-time offering sells. The policy
+    /// checks the requirements themselves in `check_window_records`, which
+    /// the database writes run too; only the records carry the pools.
+    fn check_window_resources(
+        &self,
+        policy: &SchedulingPolicy,
+        index: usize,
+        window: &PublishedWindow,
+    ) -> Vec<SchedulingDiagnostic> {
+        let mut findings = Vec::new();
+        for (requirement_index, requirement) in window.resources.iter().enumerate() {
+            let (Some(resource), Some(exact)) = (
+                &requirement.resource,
+                policy.window_resource_supply(window, requirement),
+            ) else {
+                continue;
+            };
+            let known = self.pool(&exact.pool).is_some_and(|pool| {
+                pool.members
+                    .iter()
+                    .any(|member| &member.resource_id == resource)
+            });
+            if !known {
+                findings.push(SchedulingDiagnostic::records(
+                    format!("/windows/{index}/resources/{requirement_index}/resource"),
+                    PolicyCheckReason::UnknownResource,
+                ));
             }
         }
         findings
@@ -894,15 +968,109 @@ pub(crate) fn facts_integrity_diagnostics(
         .collect()
 }
 
-/// A request for one admission decision. The evaluator is pure: it resolves
-/// nothing, fetches nothing, and reads exactly what it is handed.
+/// One secondary physical allocation in a logical reservation. Its displayed
+/// interval is the primary request's interval; its offering supplies its own
+/// occupied buffers and resource policy.
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AdditionalAllocationRequest {
+    #[serde(deserialize_with = "crate::typed::local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
+    pub offering: String,
+    /// An exact member selection. Omission requests fungible selection.
+    #[serde(
+        default,
+        deserialize_with = "crate::typed::optional_local_id",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Option<registry_platform_yaml::LocalId>")
+    )]
+    pub resource: Option<String>,
+    /// Physical resource units, independent of party counts.
+    #[serde(
+        default = "one_resource_unit",
+        deserialize_with = "crate::typed::bounded_u32::<_, 1, MAXIMUM_RESOURCE_UNITS>",
+        skip_serializing_if = "is_one_resource_unit"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "registry_platform_yaml::BoundedU32<1, MAXIMUM_RESOURCE_UNITS>")
+    )]
+    pub units: u32,
+}
+
+/// A request for one logical admission decision. The evaluator is pure: it
+/// resolves nothing, fetches nothing, and reads exactly what it is handed.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AdmissionRequest {
     pub offering: String,
     pub start: DateTime<Utc>,
-    pub party: PartyCounts,
+    /// The displayed interval selected by the caller. Omitted, exact-time
+    /// admission uses the offering's `durationMinutes`; arrival-window
+    /// admission refuses this member as out of policy.
+    #[serde(
+        default,
+        deserialize_with = "crate::typed::optional_bounded_u32::<_, 1, MAXIMUM_BOOKING_DURATION_MINUTES>",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(
+            with = "Option<registry_platform_yaml::BoundedU32<1, MAXIMUM_BOOKING_DURATION_MINUTES>>"
+        )
+    )]
+    pub duration_minutes: Option<u32>,
+    /// The exact pool member the caller requires. This is a hard constraint
+    /// only when the offering opts into named selection; omission preserves
+    /// fungible allocation.
+    #[serde(
+        default,
+        deserialize_with = "crate::typed::optional_local_id",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Option<registry_platform_yaml::LocalId>")
+    )]
+    pub resource: Option<String>,
+    /// Physical units required from the primary offering's pool. Omitted or
+    /// one preserves the legacy single-resource request and idempotency hash.
+    #[serde(
+        default = "one_resource_unit",
+        deserialize_with = "crate::typed::bounded_u32::<_, 1, MAXIMUM_RESOURCE_UNITS>",
+        skip_serializing_if = "is_one_resource_unit"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "registry_platform_yaml::BoundedU32<1, MAXIMUM_RESOURCE_UNITS>")
+    )]
+    pub resource_units: u32,
+    /// Secondary requirements committed atomically with the primary line.
+    /// Their order carries no meaning; hashing and resolution canonicalize it.
+    #[serde(
+        default,
+        deserialize_with = "crate::typed::bounded_list::<_, _, MAXIMUM_ADDITIONAL_ALLOCATIONS>",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(length(max = MAXIMUM_ADDITIONAL_ALLOCATIONS))
+    )]
+    pub additional_allocations: Vec<AdditionalAllocationRequest>,
+    /// The declared people whose booking-time counts participate in policy.
+    /// Exact-time policy may explicitly allow this to be omitted for a
+    /// resource reservation; arrival-window admission always requires it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub party: Option<PartyCounts>,
+    /// Select the fixed signed source manager subject. Omission leaves the
+    /// verified caller as manager.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub manager: Option<ManagerSelection>,
     /// The authenticated channel, when the deployment allocates supply
     /// through channel subquotas.
     pub channel: Option<String>,
@@ -923,6 +1091,10 @@ pub struct AdmissionRequest {
     /// order is not significant.
     #[serde(default)]
     pub external_references: Vec<ExternalReference>,
+    /// Typed source-owned party links retained as booking data. They prove no
+    /// relationship and confer no read or mutation authority.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub party_references: Vec<PartyReference>,
 }
 
 /// The idempotent hash of an admission request.
@@ -945,27 +1117,41 @@ pub fn admission_request_hash(request: &AdmissionRequest) -> String {
     prerequisites.sort();
     let mut external_references = request.external_references.clone();
     external_references.sort();
-    // Preserve the pre-external-reference tuple for requests without links.
+    let mut party_references = request.party_references.clone();
+    party_references.sort();
+    let mut additional_allocations = request.additional_allocations.clone();
+    additional_allocations.sort();
+    // Preserve the pre-selection tuples when both new choices are absent.
     // Their stored idempotency hashes must remain replayable across upgrade.
-    let value = if external_references.is_empty() {
+    let value = if request.resource_units != 1 || !additional_allocations.is_empty() {
         serde_json::to_value((
-            &request.offering,
-            request.start.to_rfc3339(),
-            request.party.recipients,
-            request.party.attendees,
-            &request.channel,
-            &request.duplicate_key,
-            request.policy_revision,
-            request.window_revision,
-            &capabilities,
-            &prerequisites,
+            "scheduling-admission-v6",
+            (
+                &request.offering,
+                request.start.to_rfc3339(),
+                request.party,
+                request.manager,
+                &request.channel,
+                &request.duplicate_key,
+                request.policy_revision,
+                request.window_revision,
+                &capabilities,
+                &prerequisites,
+                &external_references,
+                request.duration_minutes,
+                &request.resource,
+                &party_references,
+            ),
+            request.resource_units,
+            &additional_allocations,
         ))
-    } else {
+    } else if request.manager.is_some() {
         serde_json::to_value((
+            "scheduling-admission-v5",
             &request.offering,
             request.start.to_rfc3339(),
-            request.party.recipients,
-            request.party.attendees,
+            request.party,
+            request.manager,
             &request.channel,
             &request.duplicate_key,
             request.policy_revision,
@@ -973,6 +1159,74 @@ pub fn admission_request_hash(request: &AdmissionRequest) -> String {
             &capabilities,
             &prerequisites,
             &external_references,
+            request.duration_minutes,
+            &request.resource,
+            &party_references,
+        ))
+    } else if let Some(party) = request.party.filter(|_| party_references.is_empty()) {
+        if request.duration_minutes.is_none()
+            && request.resource.is_none()
+            && external_references.is_empty()
+        {
+            serde_json::to_value((
+                &request.offering,
+                request.start.to_rfc3339(),
+                party.recipients,
+                party.attendees,
+                &request.channel,
+                &request.duplicate_key,
+                request.policy_revision,
+                request.window_revision,
+                &capabilities,
+                &prerequisites,
+            ))
+        } else if request.duration_minutes.is_none() && request.resource.is_none() {
+            serde_json::to_value((
+                &request.offering,
+                request.start.to_rfc3339(),
+                party.recipients,
+                party.attendees,
+                &request.channel,
+                &request.duplicate_key,
+                request.policy_revision,
+                request.window_revision,
+                &capabilities,
+                &prerequisites,
+                &external_references,
+            ))
+        } else {
+            serde_json::to_value((
+                &request.offering,
+                request.start.to_rfc3339(),
+                party.recipients,
+                party.attendees,
+                &request.channel,
+                &request.duplicate_key,
+                request.policy_revision,
+                request.window_revision,
+                &capabilities,
+                &prerequisites,
+                &external_references,
+                request.duration_minutes,
+                &request.resource,
+            ))
+        }
+    } else {
+        serde_json::to_value((
+            "scheduling-admission-v4",
+            &request.offering,
+            request.start.to_rfc3339(),
+            request.party,
+            &request.channel,
+            &request.duplicate_key,
+            request.policy_revision,
+            request.window_revision,
+            &capabilities,
+            &prerequisites,
+            &external_references,
+            request.duration_minutes,
+            &request.resource,
+            &party_references,
         ))
     }
     .expect("the fixed tuple always serializes");
@@ -992,6 +1246,14 @@ fn hex(bytes: &[u8]) -> String {
     rendered
 }
 
+const fn one_resource_unit() -> u32 {
+    1
+}
+
+const fn is_one_resource_unit(value: &u32) -> bool {
+    *value == 1
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(
@@ -1009,10 +1271,15 @@ mod tests {
         AdmissionRequest {
             offering: "registry-update-30".to_owned(),
             start: utc(2, 0),
-            party: PartyCounts {
+            duration_minutes: None,
+            resource: None,
+            resource_units: 1,
+            additional_allocations: Vec::new(),
+            party: Some(PartyCounts {
                 recipients: 1,
                 attendees: 1,
-            },
+            }),
+            manager: None,
             channel: Some("public".to_owned()),
             duplicate_key: Some("subject:one".to_owned()),
             policy_revision: 4,
@@ -1020,6 +1287,7 @@ mod tests {
             capabilities: Vec::new(),
             prerequisites: Vec::new(),
             external_references: Vec::new(),
+            party_references: Vec::new(),
         }
     }
 
@@ -1258,10 +1526,10 @@ mod tests {
         assert_ne!(base, admission_request_hash(&moved_start));
 
         let grew_party = AdmissionRequest {
-            party: PartyCounts {
+            party: Some(PartyCounts {
                 recipients: 2,
                 attendees: 3,
-            },
+            }),
             ..request()
         };
         assert_ne!(base, admission_request_hash(&grew_party));
@@ -1277,6 +1545,53 @@ mod tests {
             ..request()
         };
         assert_ne!(base, admission_request_hash(&other_channel));
+
+        let other_duration = AdmissionRequest {
+            duration_minutes: Some(45),
+            ..request()
+        };
+        assert_ne!(base, admission_request_hash(&other_duration));
+
+        let selected_resource = AdmissionRequest {
+            resource: Some("station-2".to_owned()),
+            ..request()
+        };
+        assert_ne!(base, admission_request_hash(&selected_resource));
+
+        let assisted_manager = AdmissionRequest {
+            manager: Some(ManagerSelection::SchedulingManager),
+            ..request()
+        };
+        assert_ne!(base, admission_request_hash(&assisted_manager));
+    }
+
+    #[test]
+    fn omitted_interval_and_resource_preserve_the_legacy_request_shape_and_hash() {
+        let json = serde_json::to_value(request()).expect("request serializes");
+        assert!(json.get("durationMinutes").is_none());
+        assert!(json.get("resource").is_none());
+        assert_eq!(
+            admission_request_hash(&request()),
+            "sha256:2e9fc6fb84480aff3532f84255ef1ac3a40d46ac60d4eb528671fae633852f69"
+        );
+
+        let parsed: AdmissionRequest = serde_json::from_value(serde_json::json!({
+            "offering": "registry-update-30",
+            "start": "2026-10-05T02:00:00Z",
+            "durationMinutes": 45,
+            "resource": "station-2",
+            "party": { "recipients": 1, "attendees": 1 },
+            "channel": "public",
+            "duplicateKey": "subject:one",
+            "policyRevision": 4,
+            "windowRevision": null,
+            "capabilities": [],
+            "prerequisites": [],
+            "externalReferences": []
+        }))
+        .expect("bounded interval and exact resource are accepted request members");
+        assert_eq!(parsed.duration_minutes, Some(45));
+        assert_eq!(parsed.resource.as_deref(), Some("station-2"));
     }
 
     #[test]
@@ -1302,10 +1617,6 @@ mod tests {
         let hold: HoldState = serde_norway::from_str("active").unwrap();
         assert_eq!(hold, HoldState::Active);
         assert!(serde_norway::from_str::<HoldState>("parked").is_err());
-
-        let attendance: AttendanceState = serde_norway::from_str("leftWithoutService").unwrap();
-        assert_eq!(attendance, AttendanceState::LeftWithoutService);
-        assert!(serde_norway::from_str::<AttendanceState>("no-show").is_err());
 
         let booking: BookingState = serde_norway::from_str("confirmed").unwrap();
         assert_eq!(booking, BookingState::Confirmed);
@@ -1487,6 +1798,122 @@ holdPolicy:
                 .into_facts();
         assert_eq!(facts.pools[0].members.len(), 1);
         assert_eq!(facts.exceptions[0].id, "training");
+    }
+
+    /// An arrival-window workshop that names no window, and the exact-time
+    /// room hire whose rooms its windows reserve.
+    const WORKSHOP_PROJECT: &str = r#"
+apiVersion: id.registrystack.org/formats/scheduling/project/v1alpha1
+kind: SchedulingProject
+project:
+  id: workshops
+  version: "1"
+services:
+  - id: workshop
+    label: Household workshop
+offerings:
+  - id: workshop
+    service: workshop
+    label: Household workshop session
+    mode: arrival-window
+    location: north-counter
+    because: Households attend a dated workshop session together.
+    arrival:
+      leadTimeMinutes: 60
+      horizonDays: 60
+    cancellationCutoffMinutes: 60
+  - id: room-hire
+    service: workshop
+    label: Room hire
+    mode: exact-time
+    location: north-counter
+    because: Rooms are reserved by the hour.
+    exactTime:
+      durationMinutes: 60
+      bufferBeforeMinutes: 0
+      bufferAfterMinutes: 0
+      leadTimeMinutes: 60
+      horizonDays: 60
+      pool: rooms
+      startIncrementMinutes: 30
+      maximumRecipients: 1
+      partyCounts: optional
+    cancellationCutoffMinutes: 60
+holidaySets:
+  - id: office-holidays
+    revision: 1
+    because: Public holidays observed by the registry office.
+openings:
+  - id: counter-hours
+    location: north-counter
+    holidaySet: office-holidays
+    weekdays: [mon, tue, wed, thu, fri]
+    startTime: "09:00"
+    endTime: "12:30"
+    effectiveFrom: "2026-10-01"
+    effectiveUntil: "2026-12-31"
+    because: Counter opening hours reviewed by the office manager.
+channels: [public, assisted]
+holdPolicy:
+  ttlMinutes: 5
+  maximumPerCaller: 3
+  because: Holds are short because counter capacity is scarce.
+"#;
+
+    fn workshop_records(resource: &str) -> String {
+        format!(
+            "{RECORDS_HEAD}pools:\n  - id: rooms\n    members:\n      - resourceId: room-a\n\
+             \x20       capabilities: []\n        available: true\n\
+             windows:\n  - id: workshop-12\n    revision: 1\n    offering: workshop\n\
+             \x20   location: north-counter\n    start: 2026-10-12T03:00:00Z\n\
+             \x20   end: 2026-10-12T04:00:00Z\n    units: 12\n\
+             \x20   unitsPolicy:\n      type: fixed\n      units: 1\n      because: One unit per booking.\n\
+             \x20   resources:\n      - requirement: room\n        offering: room-hire\n\
+             \x20       resource: {resource}\n        units: 1\n\
+             \x20   because: The October workshop session.\n"
+        )
+    }
+
+    fn workshop_refusals(yaml: &str) -> Vec<String> {
+        let policy =
+            SchedulingPolicy::read(crate::AUTHORED_POLICY_FILE, WORKSHOP_PROJECT.as_bytes())
+                .unwrap_or_else(|report| panic!("{}", report.render_human()))
+                .value;
+        match SchedulingRecords::read(SCHEDULING_RECORDS_FILE, yaml.as_bytes(), &policy) {
+            Ok(_) => Vec::new(),
+            Err(report) => report
+                .diagnostics()
+                .iter()
+                .map(|diagnostic| format!("{} {}", diagnostic.path, diagnostic.code))
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn a_window_reserves_named_resources_from_an_exact_time_pool() {
+        assert_eq!(
+            workshop_refusals(&workshop_records("room-a")),
+            Vec::<String>::new()
+        );
+        let refused = workshop_refusals(&workshop_records("room-z"));
+        assert!(
+            refused.contains(
+                &"/windows/0/resources/0/resource scheduling.records.unknown-resource".to_owned()
+            ),
+            "{refused:?}"
+        );
+        let unknown_offering =
+            workshop_records("room-a").replace("offering: room-hire", "offering: room-rental");
+        assert!(workshop_refusals(&unknown_offering).contains(
+            &"/windows/0/resources/0/offering scheduling.records.unknown-offering".to_owned()
+        ));
+        // The parent reservation spans the window, so the resource offering
+        // must sell that duration.
+        let unsellable = workshop_records("room-a")
+            .replace("end: 2026-10-12T04:00:00Z", "end: 2026-10-12T04:30:00Z");
+        assert!(workshop_refusals(&unsellable).contains(
+            &"/windows/0/resources/0/offering scheduling.records.mismatched-reference".to_owned()
+        ));
     }
 
     #[test]

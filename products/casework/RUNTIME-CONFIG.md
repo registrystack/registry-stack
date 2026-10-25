@@ -197,10 +197,17 @@ reviews continue to work. Each binding provides the BReg base URL,
 `tokenEndpoint`, `clientIdRef`, `clientAssertionKeyRef`, and
 `statusProfile`. The status profile must equal the authored
 `serviceProfiles.service-status` for that provider. Optional
+`taskGrantProfile` must equal the provider's separately authored
+`serviceProfiles.task-grant-context` profile. Its absence disables current
+source task-grant context; the runtime never falls back to `statusProfile` or
+to the human display profile. This selection does not require the source access
+profile to be a singleton permission. The configured service client must be
+authorized for each selected profile at BReg. Optional
 `clientAssertionAudience`, `resource`, and `scopes` configure the OAuth
-client-assertion and token request for the status reader; use the exact values
+client-assertion and token request for the service reader; use the exact values
 registered by the issuer and BReg deployment. The status credential reads only
-review status. It does not supply fields shown to a human reviewer.
+the operations and fields its source profiles grant. It does not supply fields
+shown to a human reviewer.
 
 For a current-source review, the human request selects a BReg source profile
 with the `Registry-Source-Profile` header. Casework forwards that human's

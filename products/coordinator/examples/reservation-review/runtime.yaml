@@ -1,0 +1,103 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/coordinator/runtime/runtime.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/coordinator/runtime/v1alpha1
+kind: CoordinatorRuntimeConfig
+secretProviders:
+  file: {root: /run/registry-coordinator/secrets}
+  environment: {}
+database:
+  runtimeUrlRef: secret:env/COORDINATOR_DATABASE_URL
+  migrationUrlRef: secret:env/COORDINATOR_MIGRATION_URL
+  trustedRootCertificateRef: secret:file/postgres-root.pem
+namespace: coordinator_reservation_review
+connections:
+  reservations:
+    type: breg
+    baseUrl: https://breg.example.org
+    profile: reservation-workflow
+    authorization:
+      tokenEndpoint: https://issuer.example.org/oauth/token
+      clientId: reservation-source-agent
+      signingKeyRef: secret:file/reservation-source-agent-jwk
+      resource: urn:example:reservation-source
+      scopes: [reservations:workflow]
+  review:
+    type: casework-review-producer
+    baseUrl: https://casework.example.org
+    profile: reservation-producer
+    producer: reservation-source
+    authorization:
+      tokenEndpoint: https://issuer.example.org/oauth/token
+      clientId: reservation-review-producer
+      signingKeyRef: secret:file/reservation-review-producer-jwk
+      resource: urn:example:casework
+      scopes: [casework:review]
+    completion:
+      recipientBinding: reservation-review-v1
+      bearerTokenRef: secret:file/review-completion-token
+    resultCheckSeconds: 900
+  catalogue:
+    type: scheduling
+    baseUrl: https://scheduling.example.org
+    authorization:
+      tokenEndpoint: https://issuer.example.org/oauth/token
+      clientId: reservation-catalogue
+      signingKeyRef: secret:file/reservation-catalogue-jwk
+      resource: urn:example:scheduling
+      scopes: [scheduling:read]
+  bookings:
+    type: scheduling
+    baseUrl: https://scheduling.example.org
+    authorization:
+      tokenEndpoint: https://issuer.example.org/oauth/token
+      clientId: reservation-booking-agent
+      signingKeyRef: secret:file/reservation-booking-agent-jwk
+      resource: urn:example:scheduling
+      scopes: [scheduling:commit]
+      taskAuthority:
+        baseUrl: https://casework.example.org
+        issuer: https://casework.example.org
+        subject: reservation-booking-agent
+        exchangeAudience: https://issuer.example.org/oauth/token
+        bootstrapResource: urn:example:casework
+    observationAuthorization:
+      tokenEndpoint: https://issuer.example.org/oauth/token
+      clientId: reservation-booking-agent
+      signingKeyRef: secret:file/reservation-booking-agent-jwk
+      resource: urn:example:scheduling
+      scopes: [scheduling:read]
+  notices:
+    type: messaging
+    baseUrl: https://messaging.example.org
+    authorization:
+      tokenEndpoint: https://issuer.example.org/oauth/token
+      clientId: reservation-notices
+      signingKeyRef: secret:file/reservation-notices-jwk
+      resource: urn:example:messaging
+      scopes: [messaging:send]
+deployment:
+  databaseId: coordinator-institution-reservation-review
+  runtimeRole: coordinator_runtime
+  packages:
+    - root: /opt/registry-coordinator/package/request-only
+      expectedDigest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+  listener: {bind: '127.0.0.1:8108', tlsTermination: operator-controlled-upstream}
+  authentication:
+    issuer: https://issuer.example.org
+    audience: urn:example:coordinator
+    jwksSource: {type: discovery}
+    policies:
+      reservation-producer:
+        requiredScopes: [coordinator:reservation-review]
+        workflows: [reservation-review-request-only]
+        actions: [start, status]
+      reservation-operator:
+        requiredScopes: [coordinator:operate]
+        workflows: [reservation-review-request-only]
+        actions: [status, inspect, retry-same, cancel, reconcile, doctor, restore-hold, release-restore-hold, release-admission-hold, complete-execution-recovery, retain]
+        operator: true
+  auditFile: /var/lib/registry-coordinator/audit.jsonl
+  auditKeyRef: secret:file/audit-key
+  activeStateKey: 1
+  stateKeys:
+    "1": {keyRef: secret:file/state-key-1}
+  admissionKeyRef: secret:file/admission-key

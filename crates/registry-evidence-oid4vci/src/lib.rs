@@ -26,14 +26,17 @@
 //! Everything the service remembers lives in [`store`], in memory, bounded, and
 //! for minutes. There is no database here and none anywhere beneath this
 //! service. A restart therefore invalidates every offer outstanding in a
-//! minutes-wide window, and single use is enforced per process. Both are
-//! documented limits of a single-replica deployment rather than defects.
+//! minutes-wide window. An independent process fails closed on another
+//! process's exchange because it has different keyed tags and no matching
+//! state. The supported single-replica deployment keeps every exchange routed
+//! to its owning process.
 
 #[cfg(not(unix))]
 compile_error!(
     "registry-evidence-oid4vci requires a Unix target for owner-only client key guarantees"
 );
 
+pub mod audit;
 pub mod authorizer;
 #[doc(hidden)]
 pub mod cli;

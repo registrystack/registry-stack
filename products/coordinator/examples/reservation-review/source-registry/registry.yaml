@@ -1,0 +1,368 @@
+apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project:
+  id: reservation-request-source
+  version: "1"
+  canonicalBaseIri: https://example.invalid/reservation-request-source
+  defaultLanguage: en
+package:
+  sourceRevision: reservation-request-source-v1
+datasets:
+  - {id: reservation-requests}
+vocabularies:
+  - id: capacity-policy
+    values: [request-only, temporary-commitment]
+  - id: request-state
+    values: [received, withdrawn]
+  - id: review-state
+    values: [pending, approved, rejected]
+  - id: agreement-state
+    values: [not-required, not-started, pending, completed, failed, withdrawn]
+  - id: capacity-state
+    values: [uncommitted, held, released, expired, confirmed]
+  - id: reservation-outcome
+    values: [pending, confirmed, capacity-conflict, rejected, agreement-failed, withdrawn, hold-expired]
+recordTypes:
+  - id: reservation-request
+    primaryDataset: reservation-requests
+    route: reservation-requests
+    mutationMode: mutable
+    classification: restricted
+    fields:
+      - {id: issuer, type: string, required: true, minimumLength: 1, maximumLength: 120, classification: internal}
+      - {id: request-key, apiName: requestKey, type: string, required: true, minimumLength: 1, maximumLength: 120, classification: internal}
+      - {id: requester-reference, apiName: requesterReference, type: string, required: true, minimumLength: 1, maximumLength: 200, classification: restricted}
+      - {id: notification-destination, apiName: notificationDestination, type: string, required: true, minimumLength: 3, maximumLength: 254, classification: restricted}
+      - {id: offering, type: string, required: true, minimumLength: 1, maximumLength: 120, classification: internal}
+      - {id: start, type: timestamp, required: true, classification: internal}
+      - {id: duration-minutes, apiName: durationMinutes, type: int64, required: true, classification: internal}
+      - {id: resource-id, apiName: resourceId, type: string, required: true, minimumLength: 1, maximumLength: 120, classification: internal}
+      - {id: attendees, type: int64, required: true, classification: restricted}
+      - {id: agreement-required, apiName: agreementRequired, type: boolean, required: true, classification: internal}
+      - {id: capacity-policy, apiName: capacityPolicy, type: vocabulary-code, vocabulary: capacity-policy, required: true, classification: internal}
+      - {id: request-state, apiName: requestState, type: vocabulary-code, vocabulary: request-state, required: true, classification: internal}
+      - {id: review-state, apiName: reviewState, type: vocabulary-code, vocabulary: review-state, required: true, classification: internal}
+      - {id: review-result-id, apiName: reviewResultId, type: string, required: false, minimumLength: 1, maximumLength: 120, classification: internal}
+      - {id: agreement-state, apiName: agreementState, type: vocabulary-code, vocabulary: agreement-state, required: true, classification: internal}
+      - {id: agreement-callback-id, apiName: agreementCallbackId, type: string, required: false, minimumLength: 1, maximumLength: 120, classification: internal}
+      - {id: capacity-state, apiName: capacityState, type: vocabulary-code, vocabulary: capacity-state, required: true, classification: internal}
+      - {id: decision-deadline, apiName: decisionDeadline, type: timestamp, required: false, classification: internal}
+      - {id: hold-id, apiName: holdId, type: string, required: false, minimumLength: 1, maximumLength: 120, classification: internal}
+      - {id: reservation-outcome, apiName: reservationOutcome, type: vocabulary-code, vocabulary: reservation-outcome, required: true, classification: internal}
+      - {id: appointment-id, apiName: appointmentId, type: string, required: false, minimumLength: 1, maximumLength: 120, classification: internal}
+      - {id: message-id, apiName: messageId, type: string, required: false, minimumLength: 1, maximumLength: 120, classification: internal}
+    constraints:
+      - {id: reservation-request-key, type: unique, fields: [issuer, request-key]}
+actions:
+  - id: submit-reservation-request
+    execution: {mode: immediate}
+    inputs:
+      - {id: request-key, apiName: requestKey, type: string, required: true, minimumLength: 1, maximumLength: 120, classification: internal}
+      - {id: requester-reference, apiName: requesterReference, type: string, required: true, minimumLength: 1, maximumLength: 200, classification: restricted}
+      - {id: notification-destination, apiName: notificationDestination, type: string, required: true, minimumLength: 3, maximumLength: 254, classification: restricted}
+      - {id: offering, type: string, required: true, minimumLength: 1, maximumLength: 120, classification: internal}
+      - {id: start, type: timestamp, required: true, classification: internal}
+      - {id: duration-minutes, apiName: durationMinutes, type: int64, required: true, classification: internal}
+      - {id: resource-id, apiName: resourceId, type: string, required: true, minimumLength: 1, maximumLength: 120, classification: internal}
+      - {id: attendees, type: int64, required: true, classification: restricted}
+      - {id: agreement-required, apiName: agreementRequired, type: boolean, required: true, classification: internal}
+      - {id: capacity-policy, apiName: capacityPolicy, type: vocabulary-code, vocabulary: capacity-policy, required: true, classification: internal}
+    plan:
+      type: fixed
+      effects:
+        - id: reservation
+          target: {recordType: reservation-request}
+          operation: create
+          set:
+            issuer: {value: reservation-source-agent}
+            request-key: {fromInput: request-key}
+            requester-reference: {fromInput: requester-reference}
+            notification-destination: {fromInput: notification-destination}
+            offering: {fromInput: offering}
+            start: {fromInput: start}
+            duration-minutes: {fromInput: duration-minutes}
+            resource-id: {fromInput: resource-id}
+            attendees: {fromInput: attendees}
+            agreement-required: {fromInput: agreement-required}
+            capacity-policy: {fromInput: capacity-policy}
+            request-state: {value: received}
+            review-state: {value: pending}
+            agreement-state: {value: not-started}
+            capacity-state: {value: uncommitted}
+            reservation-outcome: {value: pending}
+  - id: record-capacity-held
+    execution: {mode: immediate}
+    inputs:
+      - {id: reservation, apiName: reservationId, type: reference, target: reservation-request, required: true, classification: internal}
+      - {id: hold-id, apiName: holdId, type: string, required: true, minimumLength: 1, maximumLength: 120, classification: internal}
+      - {id: decision-deadline, apiName: decisionDeadline, type: timestamp, required: true, classification: internal}
+    commitGuards:
+      targets:
+        - {input: reservation, field: capacity-policy, equals: temporary-commitment}
+        - {input: reservation, field: capacity-state, equals: uncommitted}
+        - {input: reservation, field: reservation-outcome, equals: pending}
+    plan:
+      type: fixed
+      effects:
+        - id: reservation
+          target: {fromInput: reservation}
+          operation: patch
+          set:
+            capacity-state: {value: held}
+            hold-id: {fromInput: hold-id}
+            decision-deadline: {fromInput: decision-deadline}
+  - id: record-review-approved
+    execution: {mode: immediate}
+    inputs:
+      - {id: reservation, apiName: reservationId, type: reference, target: reservation-request, required: true, classification: internal}
+      - {id: review-result-id, apiName: reviewResultId, type: string, required: true, minimumLength: 1, maximumLength: 120, classification: internal}
+    commitGuards:
+      targets:
+        - {input: reservation, field: review-state, equals: pending}
+        - {input: reservation, field: agreement-required, equals: true}
+        - {input: reservation, field: reservation-outcome, equals: pending}
+    plan:
+      type: fixed
+      effects:
+        - id: reservation
+          target: {fromInput: reservation}
+          operation: patch
+          set:
+            review-state: {value: approved}
+            review-result-id: {fromInput: review-result-id}
+            agreement-state: {value: pending}
+  - id: record-review-rejected
+    execution: {mode: immediate}
+    inputs:
+      - {id: reservation, apiName: reservationId, type: reference, target: reservation-request, required: true, classification: internal}
+      - {id: review-result-id, apiName: reviewResultId, type: string, required: true, minimumLength: 1, maximumLength: 120, classification: internal}
+    commitGuards:
+      targets:
+        - {input: reservation, field: review-state, equals: pending}
+        - {input: reservation, field: reservation-outcome, equals: pending}
+    plan:
+      type: fixed
+      effects:
+        - id: reservation
+          target: {fromInput: reservation}
+          operation: patch
+          set:
+            review-state: {value: rejected}
+            review-result-id: {fromInput: review-result-id}
+            reservation-outcome: {value: rejected}
+  - id: record-agreement-completed
+    execution: {mode: immediate}
+    inputs:
+      - {id: reservation, apiName: reservationId, type: reference, target: reservation-request, required: true, classification: internal}
+      - {id: callback-id, apiName: callbackId, type: string, required: true, minimumLength: 1, maximumLength: 120, classification: internal}
+    commitGuards:
+      targets:
+        - {input: reservation, field: review-state, equals: approved}
+        - {input: reservation, field: agreement-state, equals: pending}
+        - {input: reservation, field: reservation-outcome, equals: pending}
+    plan:
+      type: fixed
+      effects:
+        - id: reservation
+          target: {fromInput: reservation}
+          operation: patch
+          set:
+            agreement-state: {value: completed}
+            agreement-callback-id: {fromInput: callback-id}
+  - id: record-agreement-failed
+    execution: {mode: immediate}
+    inputs:
+      - {id: reservation, apiName: reservationId, type: reference, target: reservation-request, required: true, classification: internal}
+      - {id: callback-id, apiName: callbackId, type: string, required: true, minimumLength: 1, maximumLength: 120, classification: internal}
+    commitGuards:
+      targets:
+        - {input: reservation, field: review-state, equals: approved}
+        - {input: reservation, field: agreement-state, equals: pending}
+        - {input: reservation, field: reservation-outcome, equals: pending}
+    plan:
+      type: fixed
+      effects:
+        - id: reservation
+          target: {fromInput: reservation}
+          operation: patch
+          set:
+            agreement-state: {value: failed}
+            agreement-callback-id: {fromInput: callback-id}
+            reservation-outcome: {value: agreement-failed}
+  - id: record-direct-confirmed
+    execution: {mode: immediate}
+    inputs:
+      - {id: reservation, apiName: reservationId, type: reference, target: reservation-request, required: true, classification: internal}
+      - {id: appointment-id, apiName: appointmentId, type: string, required: true, minimumLength: 1, maximumLength: 120, classification: internal}
+    commitGuards:
+      targets:
+        - {input: reservation, field: capacity-policy, equals: request-only}
+        - {input: reservation, field: review-state, equals: approved}
+        - {input: reservation, field: agreement-state, equals: completed}
+        - {input: reservation, field: capacity-state, equals: uncommitted}
+        - {input: reservation, field: reservation-outcome, equals: pending}
+    plan:
+      type: fixed
+      effects:
+        - id: reservation
+          target: {fromInput: reservation}
+          operation: patch
+          set:
+            capacity-state: {value: confirmed}
+            reservation-outcome: {value: confirmed}
+            appointment-id: {fromInput: appointment-id}
+  - id: record-held-confirmed
+    execution: {mode: immediate}
+    inputs:
+      - {id: reservation, apiName: reservationId, type: reference, target: reservation-request, required: true, classification: internal}
+      - {id: appointment-id, apiName: appointmentId, type: string, required: true, minimumLength: 1, maximumLength: 120, classification: internal}
+    commitGuards:
+      targets:
+        - {input: reservation, field: capacity-policy, equals: temporary-commitment}
+        - {input: reservation, field: review-state, equals: approved}
+        - {input: reservation, field: agreement-state, equals: completed}
+        - {input: reservation, field: capacity-state, equals: held}
+        - {input: reservation, field: reservation-outcome, equals: pending}
+    plan:
+      type: fixed
+      effects:
+        - id: reservation
+          target: {fromInput: reservation}
+          operation: patch
+          set:
+            capacity-state: {value: confirmed}
+            reservation-outcome: {value: confirmed}
+            appointment-id: {fromInput: appointment-id}
+  - id: record-capacity-conflict
+    execution: {mode: immediate}
+    inputs:
+      - {id: reservation, apiName: reservationId, type: reference, target: reservation-request, required: true, classification: internal}
+    commitGuards:
+      targets:
+        - {input: reservation, field: capacity-policy, equals: request-only}
+        - {input: reservation, field: review-state, equals: approved}
+        - {input: reservation, field: agreement-state, equals: completed}
+        - {input: reservation, field: capacity-state, equals: uncommitted}
+        - {input: reservation, field: reservation-outcome, equals: pending}
+    plan:
+      type: fixed
+      effects:
+        - id: reservation
+          target: {fromInput: reservation}
+          operation: patch
+          set:
+            reservation-outcome: {value: capacity-conflict}
+  - id: record-hold-expired
+    execution: {mode: immediate}
+    inputs:
+      - {id: reservation, apiName: reservationId, type: reference, target: reservation-request, required: true, classification: internal}
+    commitGuards:
+      targets:
+        - {input: reservation, field: capacity-policy, equals: temporary-commitment}
+        - {input: reservation, field: capacity-state, equals: held}
+        - {input: reservation, field: reservation-outcome, equals: pending}
+    plan:
+      type: fixed
+      effects:
+        - id: reservation
+          target: {fromInput: reservation}
+          operation: patch
+          set:
+            capacity-state: {value: expired}
+            reservation-outcome: {value: hold-expired}
+  - id: record-capacity-released
+    execution: {mode: immediate}
+    inputs:
+      - {id: reservation, apiName: reservationId, type: reference, target: reservation-request, required: true, classification: internal}
+      - {id: outcome, type: vocabulary-code, vocabulary: reservation-outcome, required: true, classification: internal}
+    commitGuards:
+      targets:
+        - {input: reservation, field: capacity-state, equals: held}
+        - {input: reservation, field: reservation-outcome, equalsFromInput: outcome}
+    plan:
+      type: fixed
+      effects:
+        - id: reservation
+          target: {fromInput: reservation}
+          operation: patch
+          set:
+            capacity-state: {value: released}
+  - id: withdraw-reservation-request
+    execution: {mode: immediate}
+    inputs:
+      - {id: reservation, apiName: reservationId, type: reference, target: reservation-request, required: true, classification: internal}
+    commitGuards:
+      targets:
+        - {input: reservation, field: reservation-outcome, equals: pending}
+    plan:
+      type: fixed
+      effects:
+        - id: reservation
+          target: {fromInput: reservation}
+          operation: patch
+          set:
+            request-state: {value: withdrawn}
+            agreement-state: {value: withdrawn}
+            reservation-outcome: {value: withdrawn}
+accessProfiles:
+  - id: reservation-workflow
+    default: true
+    principalClaim: sub
+    actorKind: service
+    requesterClients: [reservation-source-agent]
+    requiredScopes: [reservations:workflow]
+    permissions:
+      records:
+        - recordType: reservation-request
+          operations: [get]
+          readableFields: [request-key, requester-reference, notification-destination, offering, start, duration-minutes, resource-id, attendees, agreement-required, capacity-policy, request-state, review-state, review-result-id, agreement-state, agreement-callback-id, capacity-state, decision-deadline, hold-id, reservation-outcome, appointment-id, message-id]
+          rowBoundaries: [{field: issuer, claim: reservation_source, operator: equals}]
+      actions:
+        - action: submit-reservation-request
+          operations: [invoke]
+          targets: [{recordType: reservation-request, rowBoundaries: [{field: issuer, claim: reservation_source, operator: equals}]}]
+          results: [reservation]
+        - action: record-capacity-held
+          operations: [invoke]
+          targets: [{recordType: reservation-request, rowBoundaries: [{field: issuer, claim: reservation_source, operator: equals}]}]
+          results: [reservation]
+        - action: record-review-approved
+          operations: [invoke]
+          targets: [{recordType: reservation-request, rowBoundaries: [{field: issuer, claim: reservation_source, operator: equals}]}]
+          results: [reservation]
+        - action: record-review-rejected
+          operations: [invoke]
+          targets: [{recordType: reservation-request, rowBoundaries: [{field: issuer, claim: reservation_source, operator: equals}]}]
+          results: [reservation]
+        - action: record-agreement-completed
+          operations: [invoke]
+          targets: [{recordType: reservation-request, rowBoundaries: [{field: issuer, claim: reservation_source, operator: equals}]}]
+          results: [reservation]
+        - action: record-agreement-failed
+          operations: [invoke]
+          targets: [{recordType: reservation-request, rowBoundaries: [{field: issuer, claim: reservation_source, operator: equals}]}]
+          results: [reservation]
+        - action: record-direct-confirmed
+          operations: [invoke]
+          targets: [{recordType: reservation-request, rowBoundaries: [{field: issuer, claim: reservation_source, operator: equals}]}]
+          results: [reservation]
+        - action: record-held-confirmed
+          operations: [invoke]
+          targets: [{recordType: reservation-request, rowBoundaries: [{field: issuer, claim: reservation_source, operator: equals}]}]
+          results: [reservation]
+        - action: record-capacity-conflict
+          operations: [invoke]
+          targets: [{recordType: reservation-request, rowBoundaries: [{field: issuer, claim: reservation_source, operator: equals}]}]
+          results: [reservation]
+        - action: record-hold-expired
+          operations: [invoke]
+          targets: [{recordType: reservation-request, rowBoundaries: [{field: issuer, claim: reservation_source, operator: equals}]}]
+          results: [reservation]
+        - action: record-capacity-released
+          operations: [invoke]
+          targets: [{recordType: reservation-request, rowBoundaries: [{field: issuer, claim: reservation_source, operator: equals}]}]
+          results: [reservation]
+        - action: withdraw-reservation-request
+          operations: [invoke]
+          targets: [{recordType: reservation-request, rowBoundaries: [{field: issuer, claim: reservation_source, operator: equals}]}]
+          results: [reservation]

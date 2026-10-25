@@ -489,9 +489,19 @@ NATIVE_BINDING_PACKAGES = (
     | frozenset({"registry-render-client-node", "registry-render-client-py"})
 )
 
-# The breg-contracts matrix lanes. Review runs the first; the merge queue, the
-# nightly sweep and a `ci:full` pull request run every lane.
-BREG_CONTRACTS_LANES = ("contracts", "postgres", "immediate-actions")
+# The breg-contracts matrix lanes. Review runs the first two; the merge
+# queue, the nightly sweep and a `ci:full` pull request run every lane. The
+# validator lane and the adopter-journeys lane split so their wall times run
+# in parallel instead of serially in one job, and the PostgreSQL journeys
+# spread across parallel `postgres:i/N` shard lanes — the runner's owned
+# target lists cover every test exactly once across the shard set.
+BREG_POSTGRES_SHARDS = 3
+BREG_CONTRACTS_LANES = (
+    "contracts",
+    "contracts-journeys",
+    *(f"postgres:{index}/{BREG_POSTGRES_SHARDS}" for index in range(1, BREG_POSTGRES_SHARDS + 1)),
+    "immediate-actions",
+)
 
 # A package is exempt from the tutorial trigger only while no tutorial runs it.
 # The Python binding is what `request-evidence-from-an-application` imports, so
@@ -662,6 +672,7 @@ DOCS_ARCHIVE_INPUTS = frozenset(
         "docs/site/src/lib/docset-retention.mjs",
         "docs/site/src/lib/generated-api-bases.mjs",
         "docs/site/src/lib/page-markdown.ts",
+        "docs/site/src/lib/tracking-protocol.mjs",
     }
 )
 
@@ -1565,7 +1576,7 @@ def classify(
         # every input of the BReg product gate and of the Scheduling runtime.
         "breg_integration": integration and breg_contracts,
         "breg_contracts_lanes": list(
-            BREG_CONTRACTS_LANES if integration else BREG_CONTRACTS_LANES[:1]
+            BREG_CONTRACTS_LANES if integration else BREG_CONTRACTS_LANES[:2]
         ),
         "casework_postgres": (integration or "registry-platform-activation" in affected)
         and (

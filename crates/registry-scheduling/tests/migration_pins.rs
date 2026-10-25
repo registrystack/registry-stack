@@ -10,7 +10,7 @@ use registry_platform_testing::assert_migration_pins;
 
 const PINS: &[(&str, &str)] = &[(
     "0200_scheduling.sql",
-    "fa913d96b69dd2636bd02d7048906e3c58ed59715331ea26caaf54ba08cbabfe",
+    "0e488c27a47818f21455292f030940bccc6dd82878fd6fe5baeef7dddda84b6f",
 )];
 
 #[test]

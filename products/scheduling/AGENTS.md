@@ -19,9 +19,12 @@ product.
   reach a scheduling crate. Run `scripts/check_dependency_direction.py` after
   dependency changes.
 - Each directory under `examples/` is exactly what `schedulingctl init` writes
-  for the template with the same name, and the checkpoint fails if either pair
-  drifts apart. When `schedulingctl init` starts emitting or changing a file,
-  copy that output into both applicable committed examples in the same commit.
+  for the template with the same name (the `resource-reservations` example also
+  keeps a README the template does not write), and the checkpoint fails if any
+  of the three pairs drifts apart. When `schedulingctl init` starts emitting or
+  changing a file, copy that output into every applicable committed example
+  (`standalone-exact-time`, `standalone-arrival-window`, and
+  `resource-reservations`) in the same commit.
 - Keep authored examples and the checkpoint demo small. Do not add a
   later-wave surface to close a documentation obligation; record the exclusion
   instead.

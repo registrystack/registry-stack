@@ -26,40 +26,57 @@ use registry_platform_oidc::{
     GrantClaims,
 };
 use registry_scheduling_core::{
-    admission_request_hash, evaluate_exact_time_admission, evaluate_window_admission,
-    location_closure_intervals, location_open_intervals, type_uri, AdmissionRequest,
-    AppointmentDocument, AppointmentHistoryEntryDocument, AppointmentStateDocument,
-    AvailabilityEntry, CancelAppointmentRequest, Channel, CreateAppointmentRequest,
-    ExactTimeContext, ExactTimeOffering, ExternalReference, LedgerKind, LedgerSnapshot,
-    OfferingDocument, OfferingPolicy, PageDocument, PoolMember, ProblemCode, PublishedWindow,
-    ReminderDocument, RescheduleAppointmentRequest, ResourceDocument, SchedulingFacts,
-    SchedulingMode, SchedulingModeDocument, SchedulingPolicy, SchedulingServiceDocument,
-    ServiceDocument, WindowContext, WindowDocument,
+    admission_request_hash, evaluate_exact_time_admission, evaluate_exact_time_physical_bundle,
+    evaluate_window_admission, location_closure_intervals, location_open_intervals, type_uri,
+    AdditionalAllocationRequest, AdmissionRequest, AllocationInterval, AllocationLimits,
+    AllocationRequirementDocument, AppointmentDocument, AppointmentHistoryEntryDocument,
+    AppointmentStateDocument, AttendanceDocument, AvailabilityEntry, AvailabilityPreviewDocument,
+    AvailabilityPreviewRequest, AvailabilitySelection, BundleEvaluationError,
+    CancelAppointmentRequest, Channel, CreateAppointmentRequest, ExactTimeBundleContext,
+    ExactTimeBundleLineContext, ExactTimeContext, ExactTimeOffering, ExternalReference, LedgerKind,
+    LedgerSnapshot, ManagerSelection, OfferingDocument, OfferingPolicy,
+    OperationalAllocationDocument, OperationalAppointmentDocument, PageDocument, PartyCounts,
+    PoolMember, ProblemCode, PublishedWindow, RecordAttendanceRequest, ReminderDocument,
+    RescheduleAppointmentRequest, ResourceDocument, SchedulingFacts, SchedulingMode,
+    SchedulingModeDocument, SchedulingPolicy, SchedulingServiceDocument, ServiceDocument,
+    StandingAllocation, WindowContext, WindowDocument,
 };
 use serde_json::{json, Value};
 use sha2::{Digest as _, Sha256};
 use std::borrow::Cow;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use uuid::Uuid;
 
+use crate::attendance::AttendanceObservation;
 use crate::audit::{request_record, unfinished_record, with_event_id, SchedulingAudit};
 use crate::cursors::{
     bind_stored, cursor_expiry, decode_cursor, encode_cursor, CursorError, ListingPosition,
     StoredCursor,
 };
 use crate::hooks::ActivatedHooks;
+use crate::operational::AuthorizedOperationalRead;
+use crate::source_busy::{
+    busy_reconciliation_request_digest, AuthorizedBusySource, BusyApplyOutcome,
+    BusyReconciliationPreview, BusyReconciliationRequest,
+};
 use crate::store::{
-    ClaimRow, CommitError, CommitOutcome, Commitment, PostgresStore, StoreError, SupplyContext,
+    BundleSupplyLine, BusyStoreError, ClaimRow, ClaimState, CommitError, CommitOutcome,
+    CommitSupply, Commitment, PostgresStore, SourceBoundManager, StoreError, SupplyContext,
 };
 
 /// The closed action vocabulary a task grant's scheduling permissions carry.
 /// A permission names a service, a location, and the actions it allows there;
 /// these are the actions the runtime knows.
 pub const HOLD_CREATE_ACTION: &str = "hold.create";
+pub const HOLD_CREATE_FOR_ACTION: &str = "hold.create-for";
 pub const HOLD_RELEASE_ACTION: &str = "hold.release";
 pub const APPOINTMENT_CREATE_ACTION: &str = "appointment.create";
+pub const APPOINTMENT_CREATE_FOR_ACTION: &str = "appointment.create-for";
+pub const APPOINTMENT_READ_ACTION: &str = "appointment.read";
 pub const APPOINTMENT_RESCHEDULE_ACTION: &str = "appointment.reschedule";
 pub const APPOINTMENT_CANCEL_ACTION: &str = "appointment.cancel";
+pub const ATTENDANCE_RECORD_ACTION: &str = "attendance.record";
 
 /// The default and maximum page sizes for every listing.
 pub const DEFAULT_PAGE_LIMIT: usize = 50;
@@ -87,6 +104,7 @@ const PRINCIPAL_CLASS: &str = "scheduling-principal-v1";
 /// class is a different keyed domain, so a digest written under it can never
 /// be mistaken for the pseudonym of a client that actually presented a grant.
 const ISSUER_CLASS: &str = "scheduling-issuer-v1";
+const SCHEDULING_MANAGER_SUBJECT: &str = "schedulingManager";
 
 /// One verified caller, as the authenticator resolved them.
 pub struct Caller {
@@ -230,6 +248,23 @@ impl SchedulingService {
         self.policy_revision
     }
 
+    /// The instant requests are decided under: the store's clock, which is
+    /// the system clock in production. Handlers read time here so that none
+    /// reaches around the service to the store.
+    pub(crate) fn observed_now(&self) -> DateTime<Utc> {
+        self.store.observed_now()
+    }
+
+    /// Whether the database is at this release's schema and the audit
+    /// destination still accepts entries.
+    pub async fn ready(&self) -> Result<(), ServiceError> {
+        self.store
+            .ready()
+            .await
+            .map_err(|_| ServiceError::Problem(ProblemCode::ServiceUnavailable))?;
+        self.audit_ready().await
+    }
+
     /// Whether the audit destination every commitment writes to still accepts
     /// entries. A stopped writer refuses every commitment, so this answers
     /// unavailable rather than let readiness report a process that cannot
@@ -309,11 +344,12 @@ impl SchedulingService {
             .into_iter()
             .take(limit)
             .map(
-                |(resource_id, pool, capabilities, available)| ResourceDocument {
+                |(resource_id, pool, capabilities, available, capacity_units)| ResourceDocument {
                     resource_id,
                     pool,
                     capabilities,
                     available,
+                    capacity_units,
                 },
             )
             .collect();
@@ -363,6 +399,134 @@ impl SchedulingService {
         Ok(PageDocument { items, next_cursor })
     }
 
+    /// Preview one source-owned busy reconciliation through the same
+    /// fail-closed audit destination as other attributable operations.
+    pub async fn preview_source_busy(
+        &self,
+        authority: &AuthorizedBusySource,
+        request: &BusyReconciliationRequest,
+    ) -> Result<BusyReconciliationPreview, BusyStoreError> {
+        let request_digest = busy_reconciliation_request_digest(request, authority)
+            .map_err(|_| BusyStoreError::AuditUnavailable)?;
+        let record = self.busy_source_audit_record(
+            authority,
+            request,
+            &request_digest,
+            "source-busy.preview",
+        )?;
+        let mut audit = self
+            .audit
+            .begin(
+                Uuid::new_v4(),
+                record.clone(),
+                busy_source_audit_response(record.clone(), "unfinished", "audit.unfinished"),
+            )
+            .await
+            .map_err(|_| BusyStoreError::AuditUnavailable)?;
+        let result = self
+            .store
+            .preview_busy_reconciliation(authority, request)
+            .await;
+        let response = match &result {
+            Ok(preview) => busy_source_audit_result(
+                record,
+                "previewed",
+                preview.current_revision,
+                preview.added,
+                preview.changed,
+                preview.deleted,
+                &preview.impacts,
+            ),
+            Err(error) => {
+                busy_source_audit_response(record, "refused", busy_source_audit_reason(error))
+            }
+        };
+        audit
+            .respond(response)
+            .await
+            .map_err(|_| BusyStoreError::AuditUnavailable)?;
+        result
+    }
+
+    /// Apply one source-owned snapshot only after its request audit is
+    /// accepted, then gate the response on the matching outcome entry.
+    pub async fn apply_source_busy(
+        &self,
+        authority: &AuthorizedBusySource,
+        request: &BusyReconciliationRequest,
+    ) -> Result<BusyApplyOutcome, BusyStoreError> {
+        let request_digest = busy_reconciliation_request_digest(request, authority)
+            .map_err(|_| BusyStoreError::AuditUnavailable)?;
+        let record = self.busy_source_audit_record(
+            authority,
+            request,
+            &request_digest,
+            "source-busy.apply",
+        )?;
+        let mut audit = self
+            .audit
+            .begin(
+                Uuid::new_v4(),
+                record.clone(),
+                busy_source_audit_response(record.clone(), "unfinished", "audit.unfinished"),
+            )
+            .await
+            .map_err(|_| BusyStoreError::AuditUnavailable)?;
+        let result = self
+            .store
+            .apply_busy_reconciliation(authority, request)
+            .await;
+        let response = match &result {
+            Ok(applied) => busy_source_audit_result(
+                record,
+                match applied.kind {
+                    crate::source_busy::BusyApplyOutcomeKind::Applied => "applied",
+                    crate::source_busy::BusyApplyOutcomeKind::AlreadyApplied => "already-applied",
+                },
+                applied.revision,
+                applied.added,
+                applied.changed,
+                applied.deleted,
+                &applied.impacts,
+            ),
+            Err(error) => {
+                busy_source_audit_response(record, "refused", busy_source_audit_reason(error))
+            }
+        };
+        audit
+            .respond(response)
+            .await
+            .map_err(|_| BusyStoreError::AuditUnavailable)?;
+        result
+    }
+
+    fn busy_source_audit_record(
+        &self,
+        authority: &AuthorizedBusySource,
+        request: &BusyReconciliationRequest,
+        request_digest: &str,
+        operation: &str,
+    ) -> Result<Value, BusyStoreError> {
+        let actor = authority
+            .actor_pseudonym(&self.hasher, &self.scheduling_id)
+            .map_err(|_| BusyStoreError::AuditUnavailable)?;
+        Ok(json!({
+            "event": operation,
+            "actor": actor,
+            "profile": authority.profile_id(),
+            "requestDigest": request_digest,
+            "expectedRevision": request.expected_revision,
+            "status": match request.status {
+                crate::source_busy::BusySourceStatus::Fresh => "fresh",
+                crate::source_busy::BusySourceStatus::Unavailable => "unavailable",
+            },
+            "coverageStart": request.coverage.start,
+            "coverageEnd": request.coverage.end,
+            "resourceCount": request.coverage.resources.len(),
+            "recordCount": request.records.len(),
+        }))
+    }
+
     /// Bounded availability. Exact-time offerings answer in grid slots,
     /// arrival-window offerings in windows. Only entries with capacity left
     /// are listed: a slot nobody can serve or a window with no units left is
@@ -376,8 +540,38 @@ impl SchedulingService {
         limit: Option<usize>,
         now: DateTime<Utc>,
     ) -> Result<PageDocument<AvailabilityEntry>, ServiceError> {
+        self.availability_with_selection(
+            offering_id,
+            start,
+            end,
+            cursor,
+            limit,
+            &AvailabilitySelection::default(),
+            now,
+        )
+        .await
+    }
+
+    /// Availability for the exact duration and resource the caller intends
+    /// to request. A cursor belongs to those choices as well as its bounds.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn availability_with_selection(
+        &self,
+        offering_id: &str,
+        start: Option<DateTime<Utc>>,
+        end: Option<DateTime<Utc>>,
+        cursor: Option<&str>,
+        limit: Option<usize>,
+        selection: &AvailabilitySelection,
+        now: DateTime<Utc>,
+    ) -> Result<PageDocument<AvailabilityEntry>, ServiceError> {
         let limit = page_limit(limit);
         let offering = self.published_offering(offering_id)?;
+        if offering.exact_time.is_none()
+            && (selection.duration_minutes.is_some() || selection.resource.is_some())
+        {
+            return Err(ServiceError::Problem(ProblemCode::RequestUnprocessable));
+        }
         let span = TimeDelta::days(MAXIMUM_AVAILABILITY_SPAN_DAYS);
         // A continuation restores the effective interval of the request that
         // minted its cursor. A default availability request, with neither
@@ -408,7 +602,13 @@ impl SchedulingService {
                 .map(|(_, to)| to)
                 .unwrap_or(saturating_later(from, span)),
         };
-        let context = format!("availability:{offering_id}:{}:{to}", from.to_rfc3339());
+        let mut context = format!("availability:{offering_id}:{}:{to}", from.to_rfc3339());
+        if selection.duration_minutes.is_some() || selection.resource.is_some() {
+            let choices = serde_json::to_string(selection)
+                .map_err(|_| ServiceError::internal("availability choices could not be encoded"))?;
+            context.push_str(":selection:");
+            context.push_str(&choices);
+        }
         let position = match stored {
             Some(ref row) => Some(bind_stored(row, &context, now)?),
             None => None,
@@ -420,11 +620,23 @@ impl SchedulingService {
         };
         let entries = match self.supply(offering).await?.0 {
             ResolvedSupply::ExactTime {
-                exact,
-                members,
+                mut exact,
+                mut members,
                 open,
                 ..
             } => {
+                exact.duration_minutes = exact
+                    .selected_duration_minutes(selection.duration_minutes)
+                    .ok_or(ServiceError::Problem(ProblemCode::RequestUnprocessable))?;
+                if let Some(resource) = &selection.resource {
+                    if !exact.allow_resource_selection {
+                        return Err(ServiceError::Problem(ProblemCode::RequestUnprocessable));
+                    }
+                    members.retain(|member| member.resource_id == *resource);
+                    if members.is_empty() {
+                        return Err(ServiceError::Problem(ProblemCode::RequestUnprocessable));
+                    }
+                }
                 let duration = TimeDelta::minutes(i64::from(exact.duration_minutes));
                 let buffer = TimeDelta::minutes(
                     i64::from(exact.buffer_before_minutes) + i64::from(exact.buffer_after_minutes),
@@ -454,23 +666,32 @@ impl SchedulingService {
                 )
             }
             ResolvedSupply::Window {
-                window,
+                windows,
                 lead_time_minutes,
                 horizon_days,
                 open,
                 ..
             } => {
-                let snapshot = self.store.window_snapshot(&window.id, now).await?;
-                window_entries(
-                    &window,
-                    &snapshot,
-                    from,
-                    to,
-                    now,
-                    lead_time_minutes,
-                    horizon_days,
-                    &open,
-                )
+                // Each served window is its own capacity, read from its own
+                // anchor; a window outside the range is never read.
+                let mut entries = Vec::new();
+                for window in windows
+                    .iter()
+                    .filter(|window| window.start >= from && window.start < to)
+                {
+                    let snapshot = self.store.window_snapshot(&window.id, now).await?;
+                    entries.extend(window_entries(
+                        window,
+                        &snapshot,
+                        from,
+                        to,
+                        now,
+                        lead_time_minutes,
+                        horizon_days,
+                        &open,
+                    ));
+                }
+                entries
             }
         };
         let selected: Vec<_> = entries
@@ -509,14 +730,32 @@ impl SchedulingService {
         start: DateTime<Utc>,
         now: DateTime<Utc>,
     ) -> Result<registry_scheduling_core::ExplainDocument, ServiceError> {
+        self.explain_with_selection(offering_id, start, &AvailabilitySelection::default(), now)
+            .await
+    }
+
+    /// Explain the same explicit duration and resource choices used by
+    /// availability and admission, without reserving capacity.
+    pub async fn explain_with_selection(
+        &self,
+        offering_id: &str,
+        start: DateTime<Utc>,
+        selection: &AvailabilitySelection,
+        now: DateTime<Utc>,
+    ) -> Result<registry_scheduling_core::ExplainDocument, ServiceError> {
         let offering = self.published_offering(offering_id)?;
         let probe = AdmissionRequest {
             offering: offering.id.clone(),
             start,
-            party: registry_scheduling_core::PartyCounts {
+            duration_minutes: selection.duration_minutes,
+            resource: selection.resource.clone(),
+            resource_units: 1,
+            additional_allocations: Vec::new(),
+            party: Some(registry_scheduling_core::PartyCounts {
                 recipients: 1,
                 attendees: 1,
-            },
+            }),
+            manager: None,
             channel: None,
             duplicate_key: None,
             policy_revision: self.revision(),
@@ -524,6 +763,7 @@ impl SchedulingService {
             capabilities: offering.requires_capabilities.clone(),
             prerequisites: offering.prerequisites.clone(),
             external_references: Vec::new(),
+            party_references: Vec::new(),
         };
         let refusal = match self.supply(offering).await?.0 {
             ResolvedSupply::ExactTime {
@@ -532,7 +772,11 @@ impl SchedulingService {
                 open,
                 closures,
             } => {
-                let duration = TimeDelta::minutes(i64::from(exact.duration_minutes));
+                let duration = TimeDelta::minutes(i64::from(
+                    exact
+                        .selected_duration_minutes(selection.duration_minutes)
+                        .unwrap_or(exact.duration_minutes),
+                ));
                 let buffer = TimeDelta::minutes(
                     i64::from(exact.buffer_before_minutes) + i64::from(exact.buffer_after_minutes),
                 );
@@ -565,40 +809,46 @@ impl SchedulingService {
                 .err()
             }
             ResolvedSupply::Window {
-                window,
+                windows,
                 lead_time_minutes,
                 horizon_days,
                 channels,
                 open,
                 closures,
-            } => {
-                // The probe carries the window's current revision, the way a
-                // booking request would: window admission checks capacity
-                // only under a revision the caller actually observed, and an
-                // explain that never names one answers every window with a
-                // revision mismatch instead of explaining the start.
-                let mut probe = probe.clone();
-                probe.window_revision = Some(window.revision);
-                let snapshot = self.store.window_snapshot(&window.id, now).await?;
-                evaluate_window_admission(
-                    &WindowContext {
-                        offering,
-                        window: &window,
-                        open: &open,
-                        closures: &closures,
-                        lead_time_minutes,
-                        horizon_days,
-                        snapshot: &snapshot,
-                        policy_revision: self.revision(),
-                        channels: &channels,
-                        now,
-                    },
-                    &probe,
-                    // A probe replaces nothing here either.
-                    None,
-                )
-                .err()
-            }
+            } => match offering.arrival_window(&windows, start) {
+                Some(window) => {
+                    // The probe carries the window's current revision, the
+                    // way a booking request would: window admission checks
+                    // capacity only under a revision the caller actually
+                    // observed, and an explain that never names one answers
+                    // every window with a revision mismatch instead of
+                    // explaining the start.
+                    let mut probe = probe.clone();
+                    probe.window_revision = Some(window.revision);
+                    let snapshot = self.store.window_snapshot(&window.id, now).await?;
+                    evaluate_window_admission(
+                        &WindowContext {
+                            offering,
+                            window,
+                            open: &open,
+                            closures: &closures,
+                            lead_time_minutes,
+                            horizon_days,
+                            snapshot: &snapshot,
+                            policy_revision: self.revision(),
+                            channels: &channels,
+                            now,
+                        },
+                        &probe,
+                        // A probe replaces nothing here either.
+                        None,
+                    )
+                    .err()
+                }
+                // No served window opens at the start: the refusal a booking
+                // there receives.
+                None => Some(registry_scheduling_core::AdmissionRefusal::ScheduleUnpublished),
+            },
         };
         Ok(registry_scheduling_core::ExplainDocument {
             offering: offering.id.clone(),
@@ -613,6 +863,126 @@ impl SchedulingService {
         })
     }
 
+    /// Read-scoped physical capacity advice for a complete exact-time bundle.
+    /// This path checks the bundle's physical requirements directly, without
+    /// asking for or inferring caller eligibility.
+    pub async fn preview_availability(
+        &self,
+        preview: &AvailabilityPreviewRequest,
+        now: DateTime<Utc>,
+    ) -> Result<AvailabilityPreviewDocument, ServiceError> {
+        let (bundle, _facts_revision) = self.preview_supply(preview).await?;
+        let lines = bundle.contexts()?;
+        let primary = lines
+            .first()
+            .ok_or(ServiceError::Problem(ProblemCode::RequestUnprocessable))?;
+        let duration_minutes = primary
+            .exact
+            .selected_duration_minutes(preview.duration_minutes)
+            .ok_or(ServiceError::Problem(ProblemCode::RequestUnprocessable))?;
+        let end = preview
+            .start
+            .checked_add_signed(TimeDelta::minutes(i64::from(duration_minutes)))
+            .ok_or(ServiceError::Problem(ProblemCode::RequestUnprocessable))?;
+        let maximum_before = lines
+            .iter()
+            .map(|line| line.exact.buffer_before_minutes)
+            .max()
+            .unwrap_or(0);
+        let maximum_after = lines
+            .iter()
+            .map(|line| line.exact.buffer_after_minutes)
+            .max()
+            .unwrap_or(0);
+        let from = preview
+            .start
+            .checked_sub_signed(TimeDelta::minutes(i64::from(maximum_before)))
+            .ok_or(ServiceError::Problem(ProblemCode::RequestUnprocessable))?;
+        let to = end
+            .checked_add_signed(TimeDelta::minutes(i64::from(maximum_after)))
+            .ok_or(ServiceError::Problem(ProblemCode::RequestUnprocessable))?;
+        let mut resources: Vec<_> = lines
+            .iter()
+            .flat_map(|line| line.members.iter().map(|member| member.resource_id.clone()))
+            .collect();
+        resources.sort();
+        resources.dedup();
+        let snapshot = self
+            .store
+            .bundle_preview_snapshot(&resources, from, to, now)
+            .await?;
+
+        let contexts: Vec<_> = lines
+            .iter()
+            .map(|line| ExactTimeBundleLineContext {
+                requirement_id: line.requirement_id.clone(),
+                offering: line.offering,
+                exact: line.exact,
+                members: line.members,
+                open: line.open,
+                closures: line.closures,
+                resource: line.resource,
+                stored_resource: false,
+                units: line.units,
+            })
+            .collect();
+        let within_horizon = lines.iter().all(|line| {
+            start_is_within_horizon(
+                preview.start,
+                now,
+                line.exact.lead_time_minutes,
+                line.exact.horizon_days,
+            )
+        });
+        let party_fits = preview.party.is_none_or(|party| {
+            lines
+                .iter()
+                .all(|line| party_fits_exact_time(party, line.exact))
+        });
+        let capacity_available = if within_horizon && party_fits {
+            match evaluate_exact_time_physical_bundle(
+                &ExactTimeBundleContext {
+                    lines: &contexts,
+                    snapshot: &snapshot,
+                    policy_revision: self.revision(),
+                    now,
+                    exclude_reservation: None,
+                    confirming_hold: false,
+                    limits: AllocationLimits {
+                        maximum_requirements:
+                            registry_scheduling_core::MAXIMUM_ALLOCATION_REQUIREMENTS,
+                        maximum_units_per_requirement:
+                            registry_scheduling_core::MAXIMUM_RESOURCE_UNITS,
+                        maximum_candidate_resources: 256,
+                        maximum_standing_allocations: 4_096,
+                    },
+                },
+                preview.start,
+                duration_minutes,
+            ) {
+                Ok(_) => true,
+                Err(BundleEvaluationError::Allocation(
+                    registry_scheduling_core::AllocationError::CapacityExhausted { .. },
+                )) => false,
+                Err(BundleEvaluationError::Admission(refusal))
+                    if refusal.public_code() != ProblemCode::RequestUnprocessable =>
+                {
+                    false
+                }
+                Err(_) => return Err(ServiceError::Problem(ProblemCode::RequestUnprocessable)),
+            }
+        } else {
+            false
+        };
+        Ok(AvailabilityPreviewDocument {
+            offering: preview.offering.clone(),
+            start: preview.start,
+            end,
+            capacity_available,
+            public_code: (!capacity_available).then(|| "capacity.exhausted".to_owned()),
+        })
+    }
+
     /// Reserve an admission instead of committing it.
     pub async fn create_hold(
         &self,
@@ -622,13 +992,27 @@ impl SchedulingService {
         now: DateTime<Utc>,
     ) -> Result<CommitmentAnswer<registry_scheduling_core::HoldDocument>, ServiceError> {
         let offering = self.published_offering(&request.offering)?;
-        let grant = self
-            .require_permission(caller, offering, HOLD_CREATE_ACTION)
-            .await?;
+        let assisted = request.manager == Some(ManagerSelection::SchedulingManager);
+        let operation = if assisted {
+            HOLD_CREATE_FOR_ACTION
+        } else {
+            HOLD_CREATE_ACTION
+        };
+        let grant = self.require_permission(caller, offering, operation).await?;
+        let source_manager = if assisted {
+            Some(
+                self.require_source_manager(caller, &grant, None, operation)
+                    .await?,
+            )
+        } else {
+            None
+        };
         let actor = caller.actor_pseudonym(&self.hasher, &self.scheduling_id)?;
-        let (supply, facts_revision) = self.supply(offering).await?;
+        let (supply, facts_revision) = self
+            .request_supply(caller, operation, assisted, request, false)
+            .await?;
         let request_hash = admission_request_hash(request);
-        let commitment = self.commitment(
+        let mut commitment = self.commitment(
             caller,
             &actor,
             &grant,
@@ -637,20 +1021,43 @@ impl SchedulingService {
             now,
             facts_revision,
         )?;
+        commitment.source_manager = source_manager;
         let (correlation, _request) = self
-            .audit_request(caller, &grant, HOLD_CREATE_ACTION, now)
+            .audit_request(caller, &grant, operation, now, assisted)
             .await?;
-        let outcome = self
-            .store
-            .create_hold(
-                offering,
-                &supply.context(),
-                request,
-                self.policy.hold_policy.ttl_minutes,
-                self.policy.hold_policy.maximum_per_caller,
-                commitment,
-            )
-            .await;
+        let outcome = match &supply {
+            ResolvedRequestSupply::Exact(bundle) => {
+                let contexts = bundle.contexts()?;
+                self.store
+                    .create_hold(
+                        &CommitSupply::Bundle(&contexts),
+                        request,
+                        self.policy.hold_policy.ttl_minutes,
+                        self.policy.hold_policy.maximum_per_caller,
+                        commitment,
+                    )
+                    .await
+            }
+            ResolvedRequestSupply::Window(supply) => {
+                match supply.context_at(offering, request.start) {
+                    Some(context) => {
+                        self.store
+                            .create_hold(
+                                &CommitSupply::Single {
+                                    offering,
+                                    supply: &context,
+                                },
+                                request,
+                                self.policy.hold_policy.ttl_minutes,
+                                self.policy.hold_policy.maximum_per_caller,
+                                commitment,
+                            )
+                            .await
+                    }
+                    None => Err(no_window_at_start()),
+                }
+            }
+        };
         let answer = self
             .commitment_outcome(
                 outcome,
@@ -661,7 +1068,7 @@ impl SchedulingService {
                 idempotency_key,
                 &request_hash,
                 "hold:create",
-                HOLD_CREATE_ACTION,
+                operation,
                 now,
                 facts_revision,
             )
@@ -688,6 +1095,13 @@ impl SchedulingService {
         let grant = self
             .require_permission(caller, &offering, HOLD_RELEASE_ACTION)
             .await?;
+        let source_manager = match hold.source_manager.as_ref() {
+            Some(expected) => Some(
+                self.require_source_manager(caller, &grant, Some(expected), HOLD_RELEASE_ACTION)
+                    .await?,
+            ),
+            None => None,
+        };
         let actor = caller.actor_pseudonym(&self.hasher, &self.scheduling_id)?;
         let request_hash = canonical_hash(&json!({"hold": hold_id}))?;
         // The release carries no caller-chosen key, so the hold's own id is
@@ -695,10 +1109,17 @@ impl SchedulingService {
         let release_key = hold_id.to_string();
         // A release evaluates no supply, so no records revision guards it:
         // closing a hold cannot name a resource.
-        let commitment =
+        let mut commitment =
             self.commitment(caller, &actor, &grant, &release_key, &request_hash, now, 0)?;
+        commitment.source_manager = source_manager;
         let (correlation, _request) = self
-            .audit_request(caller, &grant, HOLD_RELEASE_ACTION, now)
+            .audit_request(
+                caller,
+                &grant,
+                HOLD_RELEASE_ACTION,
+                now,
+                hold.source_manager.is_some(),
+            )
             .await?;
         let outcome = self.store.release_hold(hold_id, commitment).await;
         self.commitment_outcome(
@@ -763,13 +1184,48 @@ impl SchedulingService {
         let offering = self.policy.offering(&hold.offering).ok_or_else(|| {
             ServiceError::internal("a committed hold names no offering in the policy")
         })?;
-        let grant = self
-            .require_permission(caller, offering, APPOINTMENT_CREATE_ACTION)
-            .await?;
+        let assisted = hold.source_manager.is_some();
+        let operation = if assisted {
+            APPOINTMENT_CREATE_FOR_ACTION
+        } else {
+            APPOINTMENT_CREATE_ACTION
+        };
+        let grant = self.require_permission(caller, offering, operation).await?;
+        let source_manager = match hold.source_manager.as_ref() {
+            Some(expected) => Some(
+                self.require_source_manager(caller, &grant, Some(expected), operation)
+                    .await?,
+            ),
+            None => None,
+        };
         let actor = caller.actor_pseudonym(&self.hasher, &self.scheduling_id)?;
-        let (supply, facts_revision) = self.supply(offering).await?;
+        let confirmation_request = self.confirmation_request(&hold)?;
+        // Every exact-time hold this runtime writes carries allocation rows,
+        // and a publication refuses to change the mode of an offering with
+        // an active hold. An active exact-time hold without any rows is
+        // therefore an inconsistent ledger: confirming it would write a
+        // booking with no allocation, and consuming the hold would release
+        // its capacity to a second booking. A closed or expired hold
+        // consumes nothing, so it keeps the store's replay and refusal
+        // answers.
+        if confirmation_request.is_none()
+            && offering.mode == SchedulingMode::ExactTime
+            && hold.state == ClaimState::Active
+            && hold.hold_expires_at.is_some_and(|expiry| expiry > now)
+        {
+            return Err(ServiceError::internal(
+                "an active exact-time hold has no allocation rows; the claim ledger is inconsistent",
+            ));
+        }
+        let (supply, facts_revision) = if let Some(request) = confirmation_request.as_ref() {
+            self.request_supply(caller, operation, assisted, request, true)
+                .await?
+        } else {
+            let (supply, revision) = self.supply(offering).await?;
+            (ResolvedRequestSupply::Window(supply), revision)
+        };
         let request_hash = canonical_hash(&json!({"hold": hold_id}))?;
-        let commitment = self.commitment(
+        let mut commitment = self.commitment(
             caller,
             &actor,
             &grant,
@@ -778,13 +1234,50 @@ impl SchedulingService {
             now,
             facts_revision,
         )?;
+        commitment.source_manager = source_manager;
         let (correlation, _request) = self
-            .audit_request(caller, &grant, APPOINTMENT_CREATE_ACTION, now)
+            .audit_request(caller, &grant, operation, now, assisted)
             .await?;
-        let outcome = self
-            .store
-            .confirm_hold(hold_id, offering, &supply.context(), commitment)
-            .await;
+        let outcome = match (&supply, confirmation_request.as_ref()) {
+            (ResolvedRequestSupply::Exact(bundle), Some(request)) => {
+                let contexts = bundle.contexts()?;
+                self.store
+                    .confirm_hold(
+                        hold_id,
+                        &CommitSupply::Bundle(&contexts),
+                        Some(request),
+                        commitment,
+                    )
+                    .await
+            }
+            // An exact-time hold without allocation rows has ended: the
+            // check above refuses a live one. The store answers its replay
+            // or refusal and consumes nothing.
+            (ResolvedRequestSupply::Window(ResolvedSupply::ExactTime { .. }), None) => {
+                self.store
+                    .confirm_unallocated_hold(hold_id, commitment)
+                    .await
+            }
+            (ResolvedRequestSupply::Window(supply), _) => {
+                match supply.context_for_hold(offering, &hold) {
+                    Some(context) => {
+                        self.store
+                            .confirm_hold(
+                                hold_id,
+                                &CommitSupply::Single {
+                                    offering,
+                                    supply: &context,
+                                },
+                                None,
+                                commitment,
+                            )
+                            .await
+                    }
+                    None => Err(no_window_at_start()),
+                }
+            }
+            _ => Err(StoreError::Corrupt.into()),
+        };
         self.commitment_outcome(
             outcome,
             correlation,
@@ -794,11 +1287,102 @@ impl SchedulingService {
             idempotency_key,
             &request_hash,
             &format!("hold:{hold_id}:confirm"),
-            APPOINTMENT_CREATE_ACTION,
+            operation,
             now,
             facts_revision,
         )
         .await
+    }
+
+    fn confirmation_request(
+        &self,
+        hold: &ClaimRow,
+    ) -> Result<Option<AdmissionRequest>, ServiceError> {
+        if hold.allocations.is_empty() {
+            return Ok(None);
+        }
+        let mut grouped = BTreeMap::<u16, Vec<_>>::new();
+        for allocation in &hold.allocations {
+            let key = match allocation.requirement {
+                AllocationRequirementDocument::Primary => 0,
+                AllocationRequirementDocument::Additional { index } => u16::from(index) + 1,
+            };
+            grouped.entry(key).or_default().push(allocation);
+        }
+        let primary_parts = grouped
+            .remove(&0)
+            .ok_or_else(|| ServiceError::internal("an exact hold has no primary allocation"))?;
+        let duration_minutes = hold
+            .displayed_end
+            .signed_duration_since(hold.displayed_start)
+            .num_minutes();
+        let duration_minutes = u32::try_from(duration_minutes).map_err(|_| {
+            ServiceError::internal("a committed hold has an invalid displayed interval")
+        })?;
+        let grouped_request = |parts: Vec<&registry_scheduling_core::AllocationDocument>| {
+            let first = parts[0];
+            if parts.iter().any(|part| part.offering != first.offering) {
+                return Err(ServiceError::internal(
+                    "one committed requirement names multiple offerings",
+                ));
+            }
+            let units = parts.iter().try_fold(0_u32, |total, part| {
+                total.checked_add(part.units).ok_or_else(|| {
+                    ServiceError::internal("a committed requirement quantity overflows")
+                })
+            })?;
+            Ok((
+                first.offering.clone(),
+                (parts.len() == 1).then(|| first.resource.clone()),
+                units,
+            ))
+        };
+        let (primary_offering, primary_resource, primary_units) = grouped_request(primary_parts)?;
+        let mut additional_allocations = Vec::with_capacity(grouped.len());
+        for (expected, (key, parts)) in grouped.into_iter().enumerate() {
+            if usize::from(key) != expected + 1 {
+                return Err(ServiceError::internal(
+                    "an exact hold has non-contiguous additional allocation identities",
+                ));
+            }
+            let (offering, resource, units) = grouped_request(parts)?;
+            additional_allocations.push(AdditionalAllocationRequest {
+                offering,
+                resource,
+                units,
+            });
+        }
+        let mut capabilities = Vec::new();
+        let mut prerequisites = Vec::new();
+        for allocation in &hold.allocations {
+            let offering = self.policy.offering(&allocation.offering).ok_or_else(|| {
+                ServiceError::internal("a committed hold allocation names no current offering")
+            })?;
+            capabilities.extend(offering.requires_capabilities.iter().cloned());
+            prerequisites.extend(offering.prerequisites.iter().cloned());
+        }
+        capabilities.sort();
+        capabilities.dedup();
+        prerequisites.sort();
+        prerequisites.dedup();
+        Ok(Some(AdmissionRequest {
+            offering: primary_offering,
+            start: hold.displayed_start,
+            duration_minutes: Some(duration_minutes),
+            resource: primary_resource,
+            resource_units: primary_units,
+            additional_allocations,
+            party: hold.party,
+            manager: None,
+            channel: hold.channel.clone(),
+            duplicate_key: hold.duplicate_key.clone(),
+            policy_revision: self.revision(),
+            window_revision: None,
+            capabilities,
+            prerequisites,
+            external_references: hold.external_references.clone(),
+            party_references: hold.party_references.clone(),
+        }))
     }
 
     async fn direct_create_appointment(
@@ -809,13 +1393,27 @@ impl SchedulingService {
         now: DateTime<Utc>,
     ) -> Result<CommitmentAnswer<ClaimRow>, ServiceError> {
         let offering = self.published_offering(&request.offering)?;
-        let grant = self
-            .require_permission(caller, offering, APPOINTMENT_CREATE_ACTION)
-            .await?;
+        let assisted = request.manager == Some(ManagerSelection::SchedulingManager);
+        let operation = if assisted {
+            APPOINTMENT_CREATE_FOR_ACTION
+        } else {
+            APPOINTMENT_CREATE_ACTION
+        };
+        let grant = self.require_permission(caller, offering, operation).await?;
+        let source_manager = if assisted {
+            Some(
+                self.require_source_manager(caller, &grant, None, operation)
+                    .await?,
+            )
+        } else {
+            None
+        };
         let actor = caller.actor_pseudonym(&self.hasher, &self.scheduling_id)?;
-        let (supply, facts_revision) = self.supply(offering).await?;
+        let (supply, facts_revision) = self
+            .request_supply(caller, operation, assisted, request, false)
+            .await?;
         let request_hash = admission_request_hash(request);
-        let commitment = self.commitment(
+        let mut commitment = self.commitment(
             caller,
             &actor,
             &grant,
@@ -824,13 +1422,35 @@ impl SchedulingService {
             now,
             facts_revision,
         )?;
+        commitment.source_manager = source_manager;
         let (correlation, _request) = self
-            .audit_request(caller, &grant, APPOINTMENT_CREATE_ACTION, now)
+            .audit_request(caller, &grant, operation, now, assisted)
             .await?;
-        let outcome = self
-            .store
-            .create_appointment(offering, &supply.context(), request, commitment)
-            .await;
+        let outcome = match &supply {
+            ResolvedRequestSupply::Exact(bundle) => {
+                let contexts = bundle.contexts()?;
+                self.store
+                    .create_appointment(&CommitSupply::Bundle(&contexts), request, commitment)
+                    .await
+            }
+            ResolvedRequestSupply::Window(supply) => {
+                match supply.context_at(offering, request.start) {
+                    Some(context) => {
+                        self.store
+                            .create_appointment(
+                                &CommitSupply::Single {
+                                    offering,
+                                    supply: &context,
+                                },
+                                request,
+                                commitment,
+                            )
+                            .await
+                    }
+                    None => Err(no_window_at_start()),
+                }
+            }
+        };
         self.commitment_outcome(
             outcome,
             correlation,
@@ -840,7 +1460,7 @@ impl SchedulingService {
             idempotency_key,
             &request_hash,
             "appointment:create",
-            APPOINTMENT_CREATE_ACTION,
+            operation,
             now,
             facts_revision,
         )
@@ -919,22 +1539,56 @@ impl SchedulingService {
         result
     }
 
-    /// One appointment by id, visible to the caller that owns it.
+    /// One appointment by id under retained ownership or a current detail grant.
+    /// Detail grants name the service and location; source-managed claims also
+    /// require their retained manager binding. They do not bind an appointment id.
     pub async fn get_appointment(
         &self,
         caller: &Caller,
         appointment_id: Uuid,
+        now: DateTime<Utc>,
     ) -> Result<AppointmentDocument, ServiceError> {
         let claim = self
-            .owned_booking(caller, appointment_id)
+            .booking(appointment_id)
             .await?
             .ok_or(ServiceError::Problem(ProblemCode::OperationNotAuthorized))?;
-        Ok(appointment_document(
-            &claim,
-            &self.policy,
-            self.revision(),
-            None,
-        ))
+        match claim.source_manager.as_ref() {
+            None if claim.is_owned_by(&caller.issuer, &caller.subject) => {}
+            None if claim.owner.is_some() => {
+                let offering = self.claim_offering(&claim, now).await?;
+                let grant = self
+                    .require_permission(caller, &offering, APPOINTMENT_READ_ACTION)
+                    .await?;
+                self.require_current_task_grant(caller, &grant, APPOINTMENT_READ_ACTION, now, true)
+                    .await?;
+            }
+            None => return Err(ServiceError::Problem(ProblemCode::OperationNotAuthorized)),
+            Some(expected) => {
+                let offering = self.claim_offering(&claim, now).await?;
+                let grant = self
+                    .require_permission(caller, &offering, APPOINTMENT_READ_ACTION)
+                    .await?;
+                self.require_source_manager(
+                    caller,
+                    &grant,
+                    Some(expected),
+                    APPOINTMENT_READ_ACTION,
+                )
+                .await?;
+                self.require_current_task_grant(caller, &grant, APPOINTMENT_READ_ACTION, now, true)
+                    .await?;
+            }
+        }
+        let mut document = appointment_document(&claim, &self.policy, self.revision(), None);
+        document.attendance = self
+            .store
+            .current_attendance(appointment_id)
+            .await?
+            .as_ref()
+            .map(|observation| observation.document())
+            .transpose()
+            .map_err(|_| ServiceError::internal("stored attendance is invalid"))?;
+        Ok(document)
     }
 
     /// List this caller's appointments carrying one opaque external record
@@ -994,6 +1648,112 @@ impl SchedulingService {
         })
     }
 
+    /// List appointments under one freshly authorized operational profile.
+    /// The cursor context includes the handle digest, so every continuation is
+    /// rebound to the same caller, profile revision and normalized filters.
+    pub async fn list_operational_appointments(
+        &self,
+        authority: &AuthorizedOperationalRead,
+        cursor: Option<&str>,
+        limit: Option<usize>,
+        now: DateTime<Utc>,
+    ) -> Result<PageDocument<OperationalAppointmentDocument>, ServiceError> {
+        let context = format!("operational-appointments:{}", authority.context_digest());
+        let position = self.resolve_position(cursor, &context, now).await?;
+        let after = match position {
+            Some(ListingPosition::OperationalAfter { after, last_id }) => Some((
+                after,
+                Uuid::parse_str(&last_id)
+                    .map_err(|_| ServiceError::Problem(ProblemCode::CursorInvalid))?,
+            )),
+            Some(_) => return Err(ServiceError::Problem(ProblemCode::CursorInvalid)),
+            None => None,
+        };
+        let limit = page_limit(limit);
+        let mut rows = self
+            .store
+            .list_operational_appointments(
+                authority,
+                after,
+                i64::try_from(limit + 1).unwrap_or(i64::MAX),
+            )
+            .await?;
+        let more = rows.len() > limit;
+        rows.truncate(limit);
+        let next_cursor = if more {
+            let last = rows.last().expect("a page with more rows has one row");
+            Some(
+                self.mint_cursor(
+                    &context,
+                    &ListingPosition::OperationalAfter {
+                        after: last.position_start,
+                        last_id: last.appointment_id.to_string(),
+                    },
+                    now,
+                )
+                .await?,
+            )
+        } else {
+            None
+        };
+        let items = rows
+            .into_iter()
+            .map(|row| {
+                Ok(OperationalAppointmentDocument {
+                    appointment_id: row.appointment_id.to_string(),
+                    revision: u64::try_from(row.revision).map_err(|_| {
+                        ServiceError::internal("an operational appointment revision is invalid")
+                    })?,
+                    service: row.service,
+                    location: row.location,
+                    offering: row.offering,
+                    state: row.state,
+                    displayed_start: row.displayed_start,
+                    displayed_end: row.displayed_end,
+                    occupied_start: row.occupied_start,
+                    occupied_end: row.occupied_end,
+                    resource: row.resource,
+                    units: row
+                        .units
+                        .map(u32::try_from)
+                        .transpose()
+                        .map_err(|_| ServiceError::internal("operational units are invalid"))?,
+                    party: row.party,
+                    allocations: row
+                        .allocations
+                        .map(|allocations| {
+                            allocations
+                                .into_iter()
+                                .map(|allocation| {
+                                    Ok(OperationalAllocationDocument {
+                                        requirement: allocation.requirement,
+                                        offering: allocation.offering,
+                                        resource: allocation.resource,
+                                        units: u32::try_from(allocation.units).map_err(|_| {
+                                            ServiceError::internal(
+                                                "operational allocation units are invalid",
+                                            )
+                                        })?,
+                                        occupied_start: allocation.occupied_start,
+                                        occupied_end: allocation.occupied_end,
+                                    })
+                                })
+                                .collect::<Result<Vec<_>, ServiceError>>()
+                        })
+                        .transpose()?,
+                    attendance: row
+                        .attendance
+                        .as_ref()
+                        .map(|observation| observation.document())
+                        .transpose()
+                        .map_err(|_| ServiceError::internal("stored attendance is invalid"))?,
+                    external_references: row.external_references,
+                })
+            })
+            .collect::<Result<Vec<_>, ServiceError>>()?;
+        Ok(PageDocument { items, next_cursor })
+    }
+
     pub async fn reschedule_appointment(
         &self,
         caller: &Caller,
@@ -1015,19 +1775,42 @@ impl SchedulingService {
         let grant = self
             .require_permission(caller, offering, APPOINTMENT_RESCHEDULE_ACTION)
             .await?;
+        let source_manager = match appointment.source_manager.as_ref() {
+            Some(expected) => Some(
+                self.require_source_manager(
+                    caller,
+                    &grant,
+                    Some(expected),
+                    APPOINTMENT_RESCHEDULE_ACTION,
+                )
+                .await?,
+            ),
+            None => None,
+        };
         if request.admission.offering != appointment.offering {
             return Err(ServiceError::Problem(ProblemCode::RequestUnprocessable));
         }
-        if !request.admission.external_references.is_empty() {
+        if !request.admission.external_references.is_empty()
+            || !request.admission.party_references.is_empty()
+            || request.admission.manager.is_some()
+        {
             return Err(ServiceError::Problem(ProblemCode::RequestUnprocessable));
         }
         let actor = caller.actor_pseudonym(&self.hasher, &self.scheduling_id)?;
-        let (supply, facts_revision) = self.supply(offering).await?;
+        let (supply, facts_revision) = self
+            .request_supply(
+                caller,
+                APPOINTMENT_RESCHEDULE_ACTION,
+                appointment.source_manager.is_some(),
+                &request.admission,
+                false,
+            )
+            .await?;
         let request_hash = canonical_hash(&json!({
             "observedRevision": request.observed_revision,
             "admissionHash": admission_request_hash(&request.admission),
         }))?;
-        let commitment = self.commitment(
+        let mut commitment = self.commitment(
             caller,
             &actor,
             &grant,
@@ -1036,20 +1819,49 @@ impl SchedulingService {
             now,
             facts_revision,
         )?;
+        commitment.source_manager = source_manager;
         let (correlation, _request) = self
-            .audit_request(caller, &grant, APPOINTMENT_RESCHEDULE_ACTION, now)
-            .await?;
-        let outcome = self
-            .store
-            .reschedule_appointment(
-                appointment_id,
-                offering,
-                &supply.context(),
-                &request.admission,
-                request.observed_revision,
-                commitment,
+            .audit_request(
+                caller,
+                &grant,
+                APPOINTMENT_RESCHEDULE_ACTION,
+                now,
+                appointment.source_manager.is_some(),
             )
-            .await;
+            .await?;
+        let outcome = match &supply {
+            ResolvedRequestSupply::Exact(bundle) => {
+                let contexts = bundle.contexts()?;
+                self.store
+                    .reschedule_appointment(
+                        appointment_id,
+                        &CommitSupply::Bundle(&contexts),
+                        &request.admission,
+                        request.observed_revision,
+                        commitment,
+                    )
+                    .await
+            }
+            ResolvedRequestSupply::Window(supply) => {
+                match supply.context_at(offering, request.admission.start) {
+                    Some(context) => {
+                        self.store
+                            .reschedule_appointment(
+                                appointment_id,
+                                &CommitSupply::Single {
+                                    offering,
+                                    supply: &context,
+                                },
+                                &request.admission,
+                                request.observed_revision,
+                                commitment,
+                            )
+                            .await
+                    }
+                    None => Err(no_window_at_start()),
+                }
+            }
+        };
         let answer = self
             .commitment_outcome(
                 outcome,
@@ -1070,6 +1882,89 @@ impl SchedulingService {
         }))
     }
 
+    /// Append or correct the explicit attendance observation for the current
+    /// logical visit. This never changes the booking or its capacity claim.
+    pub async fn record_attendance(
+        &self,
+        caller: &Caller,
+        appointment_id: Uuid,
+        idempotency_key: &str,
+        request: &RecordAttendanceRequest,
+        now: DateTime<Utc>,
+    ) -> Result<CommitmentAnswer<AttendanceDocument>, ServiceError> {
+        if request.observed_at > now {
+            return Err(ServiceError::Problem(ProblemCode::RequestUnprocessable));
+        }
+        let appointment = self
+            .booking(appointment_id)
+            .await?
+            .ok_or(ServiceError::Problem(ProblemCode::OperationNotAuthorized))?;
+        let offering = self.claim_offering(&appointment, now).await?;
+        let grant = self
+            .require_permission(caller, &offering, ATTENDANCE_RECORD_ACTION)
+            .await?;
+        let actor = caller.actor_pseudonym(&self.hasher, &self.scheduling_id)?;
+        let grant_reference = format!(
+            "sha256:{}",
+            hex(&Sha256::digest(
+                [
+                    b"scheduling-attendance-grant-v1\0".as_slice(),
+                    self.scheduling_id.as_bytes(),
+                    b"\0",
+                    grant.id().as_bytes(),
+                ]
+                .concat()
+            ))
+        );
+        let request_hash = canonical_hash(
+            &serde_json::to_value(request)
+                .map_err(|_| ServiceError::internal("attendance could not be canonicalized"))?,
+        )?;
+        let commitment = self.commitment(
+            caller,
+            &actor,
+            &grant,
+            idempotency_key,
+            &request_hash,
+            now,
+            0,
+        )?;
+        let (correlation, _request) = self
+            .audit_request(caller, &grant, ATTENDANCE_RECORD_ACTION, now, false)
+            .await?;
+        let outcome = self
+            .store
+            .record_attendance(appointment_id, request, &grant_reference, commitment)
+            .await;
+        let answer: CommitmentAnswer<AttendanceObservation> = self
+            .commitment_outcome(
+                outcome,
+                correlation,
+                caller,
+                &grant,
+                &actor,
+                idempotency_key,
+                &request_hash,
+                &format!("appointment:{appointment_id}:attendance"),
+                ATTENDANCE_RECORD_ACTION,
+                now,
+                0,
+            )
+            .await?;
+        match answer {
+            CommitmentAnswer::Minted(observation) => {
+                Ok(CommitmentAnswer::Minted(observation.document().map_err(
+                    |_| ServiceError::internal("stored attendance is invalid"),
+                )?))
+            }
+            CommitmentAnswer::Replay { receipt, .. } => {
+                let document = serde_json::from_value::<AttendanceDocument>(receipt)
+                    .map_err(|_| ServiceError::internal("stored attendance receipt is invalid"))?;
+                Ok(CommitmentAnswer::Minted(document))
+            }
+        }
+    }
+
     pub async fn cancel_appointment(
         &self,
         caller: &Caller,
@@ -1086,6 +1981,18 @@ impl SchedulingService {
         let grant = self
             .require_permission(caller, &offering, APPOINTMENT_CANCEL_ACTION)
             .await?;
+        let source_manager = match appointment.source_manager.as_ref() {
+            Some(expected) => Some(
+                self.require_source_manager(
+                    caller,
+                    &grant,
+                    Some(expected),
+                    APPOINTMENT_CANCEL_ACTION,
+                )
+                .await?,
+            ),
+            None => None,
+        };
         let actor = caller.actor_pseudonym(&self.hasher, &self.scheduling_id)?;
         let request_hash = canonical_hash(&json!({
             "observedRevision": request.observed_revision,
@@ -1093,7 +2000,7 @@ impl SchedulingService {
         }))?;
         // A cancellation evaluates no supply, so no records revision guards
         // it: closing an appointment cannot name a resource.
-        let commitment = self.commitment(
+        let mut commitment = self.commitment(
             caller,
             &actor,
             &grant,
@@ -1102,8 +2009,15 @@ impl SchedulingService {
             now,
             0,
         )?;
+        commitment.source_manager = source_manager;
         let (correlation, _request) = self
-            .audit_request(caller, &grant, APPOINTMENT_CANCEL_ACTION, now)
+            .audit_request(
+                caller,
+                &grant,
+                APPOINTMENT_CANCEL_ACTION,
+                now,
+                appointment.source_manager.is_some(),
+            )
             .await?;
         let outcome = self
             .store
@@ -1224,7 +2138,7 @@ impl SchedulingService {
         let Some(claim) = self.booking(appointment_id).await? else {
             return Ok(None);
         };
-        if !claim.is_owned_by(&caller.issuer, &caller.subject) {
+        if claim.source_manager.is_some() || !claim.is_owned_by(&caller.issuer, &caller.subject) {
             return Ok(None);
         }
         Ok(Some(claim))
@@ -1250,20 +2164,32 @@ impl SchedulingService {
                 ),
                 None => (None, None, None, None, None),
             };
-        let window = offering
-            .arrival
-            .as_ref()
-            .map(|arrival| {
-                let window = bound_window(facts, offering, &arrival.window)?;
-                Ok::<WindowDocument, ServiceError>(WindowDocument {
-                    id: window.id.clone(),
-                    revision: window.revision,
-                    start: window.start,
-                    end: window.end,
-                    units: window.units,
-                })
-            })
-            .transpose()?;
+        let window_document = |window: &PublishedWindow| WindowDocument {
+            id: window.id.clone(),
+            revision: window.revision,
+            start: window.start,
+            end: window.end,
+            units: window.units,
+        };
+        // An offering that names its window publishes it as `window`, as it
+        // always has; one that names none publishes every window it serves
+        // as `windows`.
+        let (window, windows) = match &offering.arrival {
+            Some(arrival) if arrival.window.is_some() => (
+                served_windows(facts, offering)?
+                    .first()
+                    .map(window_document),
+                Vec::new(),
+            ),
+            Some(_) => (
+                None,
+                served_windows(facts, offering)?
+                    .iter()
+                    .map(window_document)
+                    .collect(),
+            ),
+            None => (None, Vec::new()),
+        };
         let (lead_time_minutes, horizon_days) = match (&offering.exact_time, &offering.arrival) {
             (Some(exact), None) => (exact.lead_time_minutes, exact.horizon_days),
             (None, Some(arrival)) => (arrival.lead_time_minutes, arrival.horizon_days),
@@ -1279,11 +2205,38 @@ impl SchedulingService {
             horizon_days,
             cancellation_cutoff_minutes: offering.cancellation_cutoff_minutes,
             duration_minutes: duration,
+            duration_selection: offering.exact_time.as_ref().and_then(|exact| {
+                exact.duration_selection.as_ref().map(|selection| {
+                    registry_scheduling_core::DurationSelectionDocument {
+                        minimum_minutes: selection.minimum_minutes,
+                        maximum_minutes: selection.maximum_minutes,
+                        increment_minutes: selection.increment_minutes,
+                    }
+                })
+            }),
+            opening_coverage: offering
+                .exact_time
+                .as_ref()
+                .map(|exact| exact.opening_coverage)
+                .unwrap_or_default(),
+            allow_resource_selection: offering
+                .exact_time
+                .as_ref()
+                .is_some_and(|exact| exact.allow_resource_selection),
+            pool: offering
+                .exact_time
+                .as_ref()
+                .and_then(|exact| exact.allow_resource_selection.then(|| exact.pool.clone())),
             buffer_before_minutes: buffer_before,
             buffer_after_minutes: buffer_after,
             start_increment_minutes: increment,
+            party_counts: offering
+                .exact_time
+                .as_ref()
+                .map_or(Default::default(), |exact| exact.party_counts),
             max_recipients,
             window,
+            windows,
             reminders: offering
                 .reminders
                 .iter()
@@ -1369,6 +2322,47 @@ impl SchedulingService {
         }
     }
 
+    /// Resolve the only source-bound manager Scheduling understands. The
+    /// request selects the fixed subject name, while the signed grant supplies
+    /// its value and source. A caller-provided record reference is never used.
+    async fn require_source_manager(
+        &self,
+        caller: &Caller,
+        grant: &GrantClaims,
+        expected: Option<&SourceBoundManager>,
+        operation: &str,
+    ) -> Result<SourceBoundManager, ServiceError> {
+        let manager = caller
+            .task_grant_subjects
+            .as_ref()
+            .and_then(|subjects| subjects.get(SCHEDULING_MANAGER_SUBJECT))
+            .and_then(Value::as_str)
+            .filter(|value| {
+                !value.is_empty() && value.len() <= 512 && !value.chars().any(char::is_control)
+            })
+            .map(|subject| SourceBoundManager {
+                source_issuer: grant.source_issuer().to_owned(),
+                subject: subject.to_owned(),
+            });
+        if let Some(manager) = manager.filter(|manager| expected.is_none_or(|it| it == manager)) {
+            return Ok(manager);
+        }
+        self.record_refusal(
+            Uuid::new_v4(),
+            audit_record(
+                &self.hasher,
+                &self.scheduling_id,
+                caller,
+                grant,
+                operation,
+                AuthorizationOutcome::Denied,
+                "authorization.refused",
+            ),
+        )
+        .await?;
+        Err(ServiceError::Problem(ProblemCode::OperationNotAuthorized))
+    }
+
     /// Write one refusal, or one commitment nothing decided, as the
     /// `response` entry of `correlation`, whose identity it also carries as
     /// `eventId`. It fails closed like an allowed response: a refusal whose
@@ -1402,17 +2396,22 @@ impl SchedulingService {
         grant: &GrantClaims,
         operation: &str,
         now: DateTime<Utc>,
+        online_required: bool,
     ) -> Result<(), ServiceError> {
         let now = u64::try_from(now.timestamp()).map_err(|_| {
             ServiceError::internal("the task-grant clock observation is not representable")
         })?;
-        let verdict = task_grant_verdict(
-            self.task_grant_status.as_deref(),
-            caller.task_grant_subjects.clone(),
-            grant,
-            now,
-        )
-        .await;
+        let verdict = if online_required && self.task_grant_status.is_none() {
+            Err(TaskGrantError::Refused)
+        } else {
+            task_grant_verdict(
+                self.task_grant_status.as_deref(),
+                caller.task_grant_subjects.clone(),
+                grant,
+                now,
+            )
+            .await
+        };
         match verdict {
             Ok(()) => Ok(()),
             Err(TaskGrantError::Refused) => {
@@ -1456,8 +2455,9 @@ impl SchedulingService {
         grant: &GrantClaims,
         operation: &str,
         now: DateTime<Utc>,
+        online_required: bool,
     ) -> Result<(Uuid, AuditRequest), ServiceError> {
-        self.require_current_task_grant(caller, grant, operation, now)
+        self.require_current_task_grant(caller, grant, operation, now, online_required)
             .await?;
         let record = audit_record(
             &self.hasher,
@@ -1600,6 +2600,100 @@ impl SchedulingService {
         ))
     }
 
+    async fn request_supply<'a>(
+        &'a self,
+        caller: &Caller,
+        operation: &str,
+        assisted: bool,
+        request: &AdmissionRequest,
+        stored_resources: bool,
+    ) -> Result<(ResolvedRequestSupply<'a>, i64), ServiceError> {
+        let (facts, revision) = self.store.facts().await?;
+        let primary = self.published_offering(&request.offering)?;
+        let primary_supply = ResolvedSupply::resolve(&self.policy, &facts, primary)?;
+        if matches!(primary_supply, ResolvedSupply::Window { .. }) {
+            if request.resource_units != 1 || !request.additional_allocations.is_empty() {
+                return Err(ServiceError::Problem(ProblemCode::RequestUnprocessable));
+            }
+            return Ok((ResolvedRequestSupply::Window(primary_supply), revision));
+        }
+
+        validate_bundle_width(request.additional_allocations.len())?;
+        let mut lines =
+            Vec::with_capacity(registry_scheduling_core::MAXIMUM_ALLOCATION_REQUIREMENTS);
+        lines.push(ResolvedExactBundleLine {
+            requirement_id: "primary".to_owned(),
+            offering: primary,
+            supply: primary_supply,
+            resource: request.resource.clone(),
+            stored_resource: stored_resources,
+            units: request.resource_units,
+        });
+        for (index, additional) in request.additional_allocations.iter().enumerate() {
+            let offering = self.published_offering(&additional.offering)?;
+            let grant = self.require_permission(caller, offering, operation).await?;
+            if assisted {
+                self.require_source_manager(caller, &grant, None, operation)
+                    .await?;
+            }
+            let supply = ResolvedSupply::resolve(&self.policy, &facts, offering)?;
+            if !matches!(supply, ResolvedSupply::ExactTime { .. }) {
+                return Err(ServiceError::Problem(ProblemCode::RequestUnprocessable));
+            }
+            lines.push(ResolvedExactBundleLine {
+                requirement_id: format!("additional:{index}"),
+                offering,
+                supply,
+                resource: additional.resource.clone(),
+                stored_resource: stored_resources,
+                units: additional.units,
+            });
+        }
+        Ok((
+            ResolvedRequestSupply::Exact(ResolvedExactBundle { lines }),
+            revision,
+        ))
+    }
+
+    async fn preview_supply<'a>(
+        &'a self,
+        request: &AvailabilityPreviewRequest,
+    ) -> Result<(ResolvedExactBundle<'a>, i64), ServiceError> {
+        let (facts, revision) = self.store.facts().await?;
+        let primary = self.published_offering(&request.offering)?;
+        let primary_supply = ResolvedSupply::resolve(&self.policy, &facts, primary)?;
+        if !matches!(primary_supply, ResolvedSupply::ExactTime { .. }) {
+            return Err(ServiceError::Problem(ProblemCode::RequestUnprocessable));
+        }
+        validate_bundle_width(request.additional_allocations.len())?;
+        let mut lines =
+            Vec::with_capacity(registry_scheduling_core::MAXIMUM_ALLOCATION_REQUIREMENTS);
+        lines.push(ResolvedExactBundleLine {
+            requirement_id: "primary".to_owned(),
+            offering: primary,
+            supply: primary_supply,
+            resource: request.resource.clone(),
+            stored_resource: false,
+            units: request.resource_units,
+        });
+        for (index, additional) in request.additional_allocations.iter().enumerate() {
+            let offering = self.published_offering(&additional.offering)?;
+            let supply = ResolvedSupply::resolve(&self.policy, &facts, offering)?;
+            if !matches!(supply, ResolvedSupply::ExactTime { .. }) {
+                return Err(ServiceError::Problem(ProblemCode::RequestUnprocessable));
+            }
+            lines.push(ResolvedExactBundleLine {
+                requirement_id: format!("additional:{index}"),
+                offering,
+                supply,
+                resource: additional.resource.clone(),
+                stored_resource: false,
+                units: additional.units,
+            });
+        }
+        Ok((ResolvedExactBundle { lines }, revision))
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn commitment<'a>(
         &'a self,
@@ -1623,6 +2717,7 @@ impl SchedulingService {
             actor,
             actor_issuer: &caller.issuer,
             actor_subject: &caller.subject,
+            source_manager: None,
             idempotency_key,
             request_hash,
             attempt_expires_at,
@@ -1719,6 +2814,7 @@ impl SchedulingService {
                     CommitError::Refused(_)
                     | CommitError::HoldCeiling
                     | CommitError::RevisionMismatch
+                    | CommitError::ObservationInFuture
                     | CommitError::CutoffPassed => Unanswered::Denied("authorization.profile"),
                 };
                 // A refusal writes its receipt so a replay of the key answers
@@ -1901,8 +2997,18 @@ impl FromMinted for ClaimRow {
         match outcome {
             CommitOutcome::Booking(claim) | CommitOutcome::Hold(claim) => claim,
             CommitOutcome::Cancelled(claim) => claim,
+            CommitOutcome::Attendance(_) => unreachable!("attendance is not a minted claim"),
             CommitOutcome::Released => unreachable!("a release is not a minted claim"),
             CommitOutcome::Replay { .. } => unreachable!("a replay is not a minted claim"),
+        }
+    }
+}
+
+impl FromMinted for AttendanceObservation {
+    fn from_minted(outcome: CommitOutcome) -> Self {
+        match outcome {
+            CommitOutcome::Attendance(observation) => observation,
+            _ => unreachable!("a non-attendance commitment is not an attendance answer"),
         }
     }
 }
@@ -1946,6 +3052,13 @@ fn claim_or_replay<T>(
     }
 }
 
+fn validate_bundle_width(additional_allocations: usize) -> Result<(), ServiceError> {
+    if additional_allocations > registry_scheduling_core::MAXIMUM_ADDITIONAL_ALLOCATIONS {
+        return Err(ServiceError::Problem(ProblemCode::RequestUnprocessable));
+    }
+    Ok(())
+}
+
 /// The resolved supply an offering runs against, owned here and borrowed into
 /// the store's context.
 enum ResolvedSupply {
@@ -1956,13 +3069,62 @@ enum ResolvedSupply {
         closures: Vec<CalendarInterval>,
     },
     Window {
-        window: Box<PublishedWindow>,
+        /// Every window the offering serves, in start order: the one it
+        /// names, or each records-published window naming it.
+        windows: Vec<PublishedWindow>,
         lead_time_minutes: u32,
         horizon_days: u32,
         channels: Vec<Channel>,
         open: Vec<CalendarInterval>,
         closures: Vec<CalendarInterval>,
     },
+}
+
+enum ResolvedRequestSupply<'p> {
+    Exact(ResolvedExactBundle<'p>),
+    Window(ResolvedSupply),
+}
+
+struct ResolvedExactBundleLine<'p> {
+    requirement_id: String,
+    offering: &'p OfferingPolicy,
+    supply: ResolvedSupply,
+    resource: Option<String>,
+    stored_resource: bool,
+    units: u32,
+}
+
+struct ResolvedExactBundle<'p> {
+    lines: Vec<ResolvedExactBundleLine<'p>>,
+}
+
+impl ResolvedExactBundle<'_> {
+    fn contexts(&self) -> Result<Vec<BundleSupplyLine<'_>>, ServiceError> {
+        self.lines
+            .iter()
+            .map(|line| match &line.supply {
+                ResolvedSupply::ExactTime {
+                    exact,
+                    members,
+                    open,
+                    closures,
+                } => Ok(BundleSupplyLine {
+                    requirement_id: line.requirement_id.clone(),
+                    offering: line.offering,
+                    exact,
+                    members,
+                    open,
+                    closures,
+                    resource: line.resource.as_deref(),
+                    stored_resource: line.stored_resource,
+                    units: line.units,
+                }),
+                ResolvedSupply::Window { .. } => {
+                    Err(ServiceError::Problem(ProblemCode::RequestUnprocessable))
+                }
+            })
+            .collect()
+    }
 }
 
 impl ResolvedSupply {
@@ -2013,9 +3175,9 @@ impl ResolvedSupply {
                 })
             }
             (None, Some(arrival)) => {
-                let window = bound_window(facts, offering, &arrival.window)?;
+                let windows = served_windows(facts, offering)?;
                 Ok(Self::Window {
-                    window: Box::new(window.clone()),
+                    windows,
                     lead_time_minutes: arrival.lead_time_minutes,
                     horizon_days: arrival.horizon_days,
                     channels: policy.channels.clone(),
@@ -2036,36 +3198,102 @@ impl ResolvedSupply {
         }
     }
 
-    fn context(&self) -> SupplyContext<'_> {
+    /// The context a request starting at `start` runs against. A named
+    /// window answers every start, so admission refuses a start that is not
+    /// its own as it always has; an offering serving several windows answers
+    /// with the one opening at `start`, or with none.
+    fn context_at<'a>(
+        &'a self,
+        offering: &'a OfferingPolicy,
+        start: DateTime<Utc>,
+    ) -> Option<SupplyContext<'a>> {
+        self.context_where(|windows| offering.arrival_window(windows, start))
+    }
+
+    /// The context a hold is confirmed under. A named window answers every
+    /// hold, as it always has; an offering serving several windows answers
+    /// with the window the hold occupies, which stays its identity even when
+    /// the records move that window's start.
+    fn context_for_hold(
+        &self,
+        offering: &OfferingPolicy,
+        hold: &ClaimRow,
+    ) -> Option<SupplyContext<'_>> {
+        let names_one = offering
+            .arrival
+            .as_ref()
+            .is_some_and(|arrival| arrival.window.is_some());
+        self.context_where(|windows| {
+            windows
+                .iter()
+                .find(|window| names_one || window.id == hold.supply_id)
+        })
+    }
+
+    fn context_where<'a>(
+        &'a self,
+        pick: impl FnOnce(&'a [PublishedWindow]) -> Option<&'a PublishedWindow>,
+    ) -> Option<SupplyContext<'a>> {
         match self {
-            Self::ExactTime {
-                exact,
-                members,
-                open,
-                closures,
-            } => SupplyContext::ExactTime {
-                exact,
-                members,
-                open,
-                closures,
-            },
+            // Exact-time supply commits as bundle lines and has no
+            // single-supply context.
+            Self::ExactTime { .. } => None,
             Self::Window {
-                window,
+                windows,
                 lead_time_minutes,
                 horizon_days,
                 channels,
                 open,
                 closures,
-            } => SupplyContext::Window {
+            } => pick(windows).map(|window| SupplyContext {
                 window,
                 lead_time_minutes: *lead_time_minutes,
                 horizon_days: *horizon_days,
                 channels: channels.as_slice(),
                 open,
                 closures,
-            },
+            }),
         }
     }
+}
+
+/// The refusal a start meets on an offering serving several windows when no
+/// window opens at it: the same schedule refusal a named window gives a start
+/// that is not its own, receipted and audited like any admission refusal.
+fn no_window_at_start() -> CommitError {
+    CommitError::Refused(registry_scheduling_core::AdmissionRefusal::ScheduleUnpublished)
+}
+
+/// Resolve every published window an arrival-window offering serves, in start
+/// order: the window it names, bound as [`bound_window`] binds it, or each
+/// records-published window naming the offering. A served window at another
+/// location is an operator gap, never capacity a caller may consume.
+fn served_windows(
+    facts: &SchedulingFacts,
+    offering: &OfferingPolicy,
+) -> Result<Vec<PublishedWindow>, ServiceError> {
+    if let Some(named) = offering
+        .arrival
+        .as_ref()
+        .and_then(|arrival| arrival.window.as_deref())
+    {
+        return Ok(vec![bound_window(facts, offering, named)?.clone()]);
+    }
+    let mut windows: Vec<PublishedWindow> =
+        offering.served_windows(&facts.windows).cloned().collect();
+    if let Some(window) = windows
+        .iter()
+        .find(|window| window.location != offering.location)
+    {
+        tracing::error!(
+            offering = %offering.id,
+            reference = %window.id,
+            "the window record is not bound to the offering and location"
+        );
+        return Err(ServiceError::Problem(ProblemCode::ServiceUnavailable));
+    }
+    windows.sort_by_key(|window| window.start);
+    Ok(windows)
 }
 
 /// Resolve a published window only when its operator record belongs to the
@@ -2119,6 +3347,19 @@ fn exact_time_slots(
     let increment = TimeDelta::minutes(i64::from(exact.start_increment_minutes).max(1));
     let earliest = saturating_later(now, TimeDelta::minutes(i64::from(exact.lead_time_minutes)));
     let latest = saturating_later(now, TimeDelta::days(i64::from(exact.horizon_days)));
+    let standing: Vec<_> = snapshot
+        .claims
+        .iter()
+        .map(|claim| StandingAllocation {
+            reservation_id: claim.id.clone(),
+            resource_id: claim.supply_id.clone(),
+            interval: AllocationInterval {
+                start: claim.start,
+                end: claim.end,
+            },
+            units: claim.units,
+        })
+        .collect();
     let mut entries = Vec::new();
     for interval in open {
         // Slots anchor on each published opening's own start. Jump directly
@@ -2139,23 +3380,36 @@ fn exact_time_slots(
             let occupied_start =
                 slot_start - TimeDelta::minutes(i64::from(exact.buffer_before_minutes));
             let occupied_end = slot_end + TimeDelta::minutes(i64::from(exact.buffer_after_minutes));
-            let free = members
+            let coverage_fits = exact.opening_coverage
+                == registry_scheduling_core::OpeningCoverage::ServiceInterval
+                || (interval.start <= occupied_start && occupied_end <= interval.end);
+            let remaining: Vec<u32> = members
                 .iter()
-                .filter(|member| member.available)
+                .filter(|member| member.available_during(occupied_start, occupied_end))
                 .filter(|member| member.serves(requires_capabilities))
-                .filter(|member| {
-                    snapshot.claims.iter().all(|claim| {
-                        claim.supply_id != member.resource_id
-                            || claim.end <= occupied_start
-                            || occupied_end <= claim.start
-                    })
+                .map(|member| {
+                    let occupied = registry_scheduling_core::maximum_concurrent_units(
+                        &member.resource_id,
+                        &AllocationInterval {
+                            start: occupied_start,
+                            end: occupied_end,
+                        },
+                        &standing,
+                        None,
+                    )
+                    .expect("bounded positive ledger allocations produce coherent occupancy");
+                    member.capacity_units.saturating_sub(occupied)
                 })
-                .count();
-            if free > 0 {
+                .filter(|remaining| *remaining > 0)
+                .collect();
+            let free = remaining.len();
+            let available_units = remaining.iter().copied().fold(0_u32, u32::saturating_add);
+            if coverage_fits && free > 0 {
                 entries.push(AvailabilityEntry::Slot {
                     start: slot_start,
                     end: slot_end,
                     free: u32::try_from(free).unwrap_or(u32::MAX),
+                    available_units: Some(available_units),
                 });
             }
             slot_start += increment;
@@ -2204,6 +3458,23 @@ fn window_entries(
     } else {
         Vec::new()
     }
+}
+
+fn start_is_within_horizon(
+    start: DateTime<Utc>,
+    now: DateTime<Utc>,
+    lead_time_minutes: u32,
+    horizon_days: u32,
+) -> bool {
+    let lead = start.signed_duration_since(now);
+    lead >= TimeDelta::minutes(i64::from(lead_time_minutes))
+        && lead <= TimeDelta::days(i64::from(horizon_days))
+}
+
+fn party_fits_exact_time(party: PartyCounts, exact: &ExactTimeOffering) -> bool {
+    party.is_coherent()
+        && party.recipients <= exact.maximum_recipients
+        && (!exact.party_counts.is_required() || party.recipients > 0)
 }
 
 /// `instant` moved later by `delta`, or the last representable instant when
@@ -2343,6 +3614,10 @@ fn hold_document(
         end: claim.displayed_end,
         resource: projected_resource(claim, policy, receipt),
         units: u32::try_from(claim.units).unwrap_or(u32::MAX),
+        allocations: claim.allocations.clone(),
+        party: claim.party,
+        manager: projected_manager(claim, receipt),
+        party_references: claim.party_references.clone(),
         expires_at: claim.hold_expires_at.unwrap_or(claim.created_at),
         policy_revision: projected_policy_revision(policy_revision, receipt),
         external_references: claim.external_references.clone(),
@@ -2362,6 +3637,10 @@ fn appointment_document(
         end: claim.displayed_end,
         resource: projected_resource(claim, policy, receipt),
         units: u32::try_from(claim.units).unwrap_or(u32::MAX),
+        allocations: claim.allocations.clone(),
+        party: claim.party,
+        manager: projected_manager(claim, receipt),
+        party_references: claim.party_references.clone(),
         channel: claim.channel.clone(),
         revision: u64::try_from(claim.revision).unwrap_or(u64::MAX),
         state: if claim.state == crate::store::ClaimState::Cancelled {
@@ -2373,6 +3652,7 @@ fn appointment_document(
         created_at: claim.created_at,
         cancelled_at: claim.closed_at,
         external_references: claim.external_references.clone(),
+        attendance: None,
     }
 }
 
@@ -2382,6 +3662,19 @@ fn projected_policy_revision(current: u64, receipt: Option<&Value>) -> u64 {
         .and_then(Value::as_i64)
         .and_then(|revision| u64::try_from(revision).ok())
         .unwrap_or(current)
+}
+
+fn projected_manager(claim: &ClaimRow, receipt: Option<&Value>) -> Option<ManagerSelection> {
+    if receipt
+        .and_then(|value| value.get("manager"))
+        .and_then(Value::as_str)
+        == Some("schedulingManager")
+        || claim.source_manager.is_some()
+    {
+        Some(ManagerSelection::SchedulingManager)
+    } else {
+        None
+    }
 }
 
 fn projected_resource(
@@ -2444,6 +3737,7 @@ fn problem_of(error: &CommitError) -> ProblemCode {
         CommitError::HoldCeiling => ProblemCode::CapacityExhausted,
         CommitError::Unauthorized => ProblemCode::OperationNotAuthorized,
         CommitError::RevisionMismatch => ProblemCode::RevisionMismatch,
+        CommitError::ObservationInFuture => ProblemCode::RequestUnprocessable,
         CommitError::CutoffPassed => ProblemCode::CancellationCutoffPassed,
         // Nothing was decided: the caller retries against the current records.
         CommitError::FactsStale => ProblemCode::ServiceUnavailable,
@@ -2490,6 +3784,49 @@ fn canonical_hash(value: &Value) -> Result<String, ServiceError> {
         .map_err(|_| ServiceError::internal("a request body could not be canonicalized"))?;
     let digest = Sha256::digest(&canonical);
     Ok(format!("sha256:{}", hex(&digest)))
+}
+
+fn busy_source_audit_response(mut record: Value, outcome: &str, reason: &str) -> Value {
+    if let Some(fields) = record.as_object_mut() {
+        fields.insert("outcome".to_owned(), Value::String(outcome.to_owned()));
+        fields.insert("reason".to_owned(), Value::String(reason.to_owned()));
+    }
+    record
+}
+
+#[allow(clippy::too_many_arguments)]
+fn busy_source_audit_result(
+    mut record: Value,
+    outcome: &str,
+    revision: u64,
+    added: u64,
+    changed: u64,
+    deleted: u64,
+    impacts: &crate::source_busy::BusyImpactSummary,
+) -> Value {
+    if let Some(fields) = record.as_object_mut() {
+        fields.insert("outcome".to_owned(), Value::String(outcome.to_owned()));
+        fields.insert("reason".to_owned(), Value::String("allowed".to_owned()));
+        fields.insert("revision".to_owned(), json!(revision));
+        fields.insert("added".to_owned(), json!(added));
+        fields.insert("changed".to_owned(), json!(changed));
+        fields.insert("deleted".to_owned(), json!(deleted));
+        fields.insert("impactTotal".to_owned(), json!(impacts.total));
+        fields.insert("impactTruncated".to_owned(), json!(impacts.truncated));
+    }
+    record
+}
+
+fn busy_source_audit_reason(error: &BusyStoreError) -> &'static str {
+    match error {
+        BusyStoreError::RevisionMismatch { .. } => "revision.mismatch",
+        BusyStoreError::CoverageBoundary => "coverage.boundary",
+        BusyStoreError::ObservationConflict => "observation.conflict",
+        BusyStoreError::RecoveryUnavailable => "recovery.unavailable",
+        BusyStoreError::ResourceMissing => "resource.missing",
+        BusyStoreError::AuditUnavailable => "audit.unavailable",
+        BusyStoreError::Query(_) | BusyStoreError::Store(_) => "store.unavailable",
+    }
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -2583,6 +3920,42 @@ mod tests {
     use super::*;
     use chrono::TimeZone as _;
 
+    #[test]
+    fn bundle_width_is_bounded_before_service_allocation() {
+        assert!(
+            validate_bundle_width(registry_scheduling_core::MAXIMUM_ADDITIONAL_ALLOCATIONS).is_ok()
+        );
+        assert!(matches!(
+            validate_bundle_width(registry_scheduling_core::MAXIMUM_ADDITIONAL_ALLOCATIONS + 1),
+            Err(ServiceError::Problem(ProblemCode::RequestUnprocessable))
+        ));
+    }
+
+    #[test]
+    fn source_busy_audit_records_only_counts_not_impact_details() {
+        let record = json!({
+            "event": "source-busy.apply",
+            "actor": "pseudonym",
+            "requestDigest": "sha256:digest",
+        });
+        let impacts = crate::source_busy::BusyImpactSummary {
+            total: 1,
+            details_available: true,
+            truncated: false,
+            items: vec![crate::source_busy::BusyCommitmentImpact {
+                kind: "booking".to_owned(),
+                resource: "staff-a".to_owned(),
+                occupied_start: Utc.with_ymd_and_hms(2026, 10, 23, 9, 0, 0).unwrap(),
+                occupied_end: Utc.with_ymd_and_hms(2026, 10, 23, 10, 0, 0).unwrap(),
+            }],
+        };
+        let audited = busy_source_audit_result(record, "applied", 2, 1, 0, 0, &impacts);
+        assert_eq!(audited["impactTotal"], 1);
+        assert!(audited.get("items").is_none());
+        assert!(audited.get("resource").is_none());
+        assert!(audited.get("occupiedStart").is_none());
+    }
+
     fn interval(start_hour: u32, end_hour: u32) -> CalendarInterval {
         let day = Utc.with_ymd_and_hms(2026, 10, 5, 0, 0, 0).unwrap();
         CalendarInterval {
@@ -2593,7 +3966,11 @@ mod tests {
 
     fn exact() -> ExactTimeOffering {
         ExactTimeOffering {
+            party_counts: Default::default(),
             duration_minutes: 30,
+            duration_selection: None,
+            opening_coverage: registry_scheduling_core::OpeningCoverage::ServiceInterval,
+            allow_resource_selection: false,
             buffer_before_minutes: 5,
             buffer_after_minutes: 5,
             lead_time_minutes: 60,
@@ -2610,6 +3987,8 @@ mod tests {
                 resource_id: format!("station-{index}"),
                 capabilities: Vec::new(),
                 available: true,
+                capacity_units: 1,
+                availability: None,
             })
             .collect()
     }
@@ -2648,7 +4027,7 @@ mod tests {
             because: "test".to_owned(),
             exact_time: None,
             arrival: Some(registry_scheduling_core::ArrivalOffering {
-                window: "morning-arrivals".to_owned(),
+                window: Some("morning-arrivals".to_owned()),
                 lead_time_minutes: 60,
                 horizon_days: 30,
             }),
@@ -2677,6 +4056,7 @@ mod tests {
                 subquotas: Vec::new(),
                 leftover: None,
                 staffing: None,
+                resources: Vec::new(),
                 because: "test".to_owned(),
             }],
             ..SchedulingFacts::default()
@@ -2821,6 +4201,83 @@ mod tests {
     }
 
     #[test]
+    fn a_slot_reports_total_fungible_units_across_free_members() {
+        let mut supply = members(2);
+        for member in &mut supply {
+            member.capacity_units = 2;
+        }
+        let entries = exact_time_slots(
+            &exact(),
+            &supply,
+            &[],
+            &[interval(2, 4)],
+            &LedgerSnapshot { claims: Vec::new() },
+            at(1, 0),
+            at(5, 0),
+            at(0, 0),
+        );
+        let first = entries.first().expect("the slot is available");
+        assert!(matches!(
+            first,
+            AvailabilityEntry::Slot {
+                free: 2,
+                available_units: Some(4),
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn physical_preview_horizon_is_inclusive() {
+        let now = at(0, 0);
+        assert!(start_is_within_horizon(
+            now + TimeDelta::days(30),
+            now,
+            60,
+            30,
+        ));
+        assert!(!start_is_within_horizon(
+            now + TimeDelta::minutes(59),
+            now,
+            60,
+            30,
+        ));
+        assert!(!start_is_within_horizon(
+            now + TimeDelta::days(30) + TimeDelta::seconds(1),
+            now,
+            60,
+            30,
+        ));
+    }
+
+    #[test]
+    fn physical_preview_party_must_fit_each_offering() {
+        let mut policy = exact();
+        policy.maximum_recipients = 2;
+        assert!(party_fits_exact_time(
+            PartyCounts {
+                recipients: 2,
+                attendees: 3,
+            },
+            &policy,
+        ));
+        assert!(!party_fits_exact_time(
+            PartyCounts {
+                recipients: 3,
+                attendees: 3,
+            },
+            &policy,
+        ));
+        assert!(!party_fits_exact_time(
+            PartyCounts {
+                recipients: 2,
+                attendees: 1,
+            },
+            &policy,
+        ));
+    }
+
+    #[test]
     fn slots_follow_the_effective_openings_a_reopening_restored() {
         // The openings are the effective-open truth: a closure that an
         // authorized reopening partly restores has already been subtracted
@@ -2854,6 +4311,8 @@ mod tests {
             resource_id: "station-1".to_owned(),
             capabilities: vec!["interpreter".to_owned()],
             available: true,
+            capacity_units: 1,
+            availability: None,
         }];
         let requires = vec!["interpreter".to_owned()];
         // Only an incapable member is free: the slot is not listed, because
@@ -3049,6 +4508,10 @@ mod tests {
             occupied_start: at(1, 55),
             occupied_end: at(2, 35),
             units: 1,
+            allocations: Vec::new(),
+            party: None,
+            party_references: Vec::new(),
+            source_manager: None,
             duplicate_key: None,
             external_references: Vec::new(),
             hold_expires_at: None,

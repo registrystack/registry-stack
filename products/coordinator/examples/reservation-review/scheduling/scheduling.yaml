@@ -1,0 +1,41 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/scheduling/project/project.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/scheduling/project/v1alpha1
+kind: SchedulingProject
+project: {id: reservation-review, version: "1"}
+services:
+  - {id: room-reservation, label: Reviewed room reservation}
+offerings:
+  - id: room-reservation
+    service: room-reservation
+    label: Reviewed room reservation
+    mode: exact-time
+    location: community-hall
+    because: The institution accepts reviewed reservation requests for this room.
+    cancellationCutoffMinutes: 240
+    exactTime:
+      durationMinutes: 240
+      bufferBeforeMinutes: 0
+      bufferAfterMinutes: 0
+      leadTimeMinutes: 60
+      horizonDays: 60
+      pool: reservable-rooms
+      allowResourceSelection: true
+      startIncrementMinutes: 60
+      maximumRecipients: 1
+holidaySets:
+  - {id: institution-holidays, revision: 1, because: The operator reviews this calendar.}
+openings:
+  - id: reservation-hours
+    location: community-hall
+    holidaySet: institution-holidays
+    weekdays: [mon, tue, wed, thu, fri]
+    startTime: "08:00"
+    endTime: "18:00"
+    effectiveFrom: "2026-01-01"
+    effectiveUntil: "2026-12-31"
+    because: Reviewed reservations use the institution's published service hours.
+channels: [public, assisted]
+holdPolicy:
+  ttlMinutes: 15
+  maximumPerCaller: 2
+  because: The reviewed workflow admits directly and holds no capacity during review.

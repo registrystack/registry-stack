@@ -9,10 +9,17 @@
 //! kind does it claim, and does it carry a complete task grant? And does the
 //! caller hold the scope the route's authentication profile demands?
 //!
-//! The three profiles mirror the route families. Readable routes take callers
-//! holding the reads scope; the separately authorized explain path takes
-//! callers holding its own scope; mutating routes demand no extra scope at
-//! all, because their authority is the task grant, whose scheduling
+//! The profiles mirror the route families. Catalogue, availability and
+//! ordinary owner reads take callers holding the reads scope. One appointment
+//! detail also accepts an explicit `appointment.read` task action so a
+//! source-bound manager does not need catalogue authority; the service then
+//! checks its exact retained service, location, manager and current status.
+//! A current grant for the appointment's service and location can also read a
+//! self-booked appointment by id (see SECURITY-REVIEW-NOTES.md, accepted
+//! residuals).
+//! The explain path takes its own scope; cross-owner operational reads take
+//! exactly one configured profile scope; mutating routes demand no extra
+//! product scope because their authority is the task grant, whose scheduling
 //! permissions the service checks per offering.
 //!
 //! The task grant is extracted with the platform's contextual-authorization
@@ -25,6 +32,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use chrono::{DateTime, Utc};
 use registry_platform_authcommon::validate_compact_access_token;
 use registry_platform_oidc::{
     actor_kind, grant_claims, ClaimNames, JwksFetcher, OidcError, TokenVerifier,
@@ -34,7 +42,14 @@ use serde_json::Value;
 use thiserror::Error;
 
 use crate::config::OidcConfig;
-use crate::service::Caller;
+use crate::operational::{
+    authorize_operational_read, AuthorizedOperationalRead, OperationalIdentity,
+    OperationalReadFilter, OperationalReadProfileConfig,
+};
+use crate::service::{Caller, APPOINTMENT_READ_ACTION};
+use crate::source_busy::{
+    authorize_busy_source, AuthorizedBusySource, BusyImportProfileConfig, BusySourceIdentity,
+};
 
 pub struct SchedulingAuthenticator {
     verifier: TokenVerifier,
@@ -42,6 +57,8 @@ pub struct SchedulingAuthenticator {
     audience: String,
     reads_scope: String,
     explain_scope: String,
+    appointment_read_profiles: BTreeMap<String, OperationalReadProfileConfig>,
+    busy_import_profiles: BTreeMap<String, BusyImportProfileConfig>,
     /// Whether the deployment declared any assertion authority at all.
     binds_assertion_issuers: bool,
 }
@@ -69,6 +86,8 @@ impl SchedulingAuthenticator {
             audience: oidc.provider.audience.clone(),
             reads_scope: oidc.reads_scope.clone(),
             explain_scope: oidc.explain_scope.clone(),
+            appointment_read_profiles: oidc.appointment_read_profiles.clone(),
+            busy_import_profiles: oidc.busy_import_profiles.clone(),
             binds_assertion_issuers: !oidc.clients.assertion_issuers.is_empty(),
         }
     }
@@ -76,14 +95,47 @@ impl SchedulingAuthenticator {
     /// The profile every catalogue, availability, and owned-record read
     /// demands: the caller holds the configured reads scope.
     pub async fn authenticate_read(&self, token: &str) -> Result<Caller, AuthenticationError> {
-        let (caller, scopes) = self.verified_caller(token).await?;
+        let (caller, scopes, _) = self.verified_caller(token).await?;
         self.require_scope(caller, &scopes, &self.reads_scope, "readsScope")
+    }
+
+    /// Authenticate the one appointment-detail route. Ordinary owner reads
+    /// keep the configured reads scope. An assisted manager may instead
+    /// present a structurally valid task grant carrying `appointment.read`;
+    /// the service still binds that action to the appointment's retained
+    /// service and location under fresh online status, and for a
+    /// source-managed appointment to the stored manager. For a self-booked
+    /// appointment a current grant for that service and location reads it by
+    /// id (accepted residual in SECURITY-REVIEW-NOTES.md).
+    pub async fn authenticate_appointment_detail(
+        &self,
+        token: &str,
+    ) -> Result<Caller, AuthenticationError> {
+        let (caller, scopes, _) = self.verified_caller(token).await?;
+        if scopes.iter().any(|scope| scope == &self.reads_scope)
+            || caller.grant.as_ref().is_some_and(|grant| {
+                grant
+                    .bounds()
+                    .scheduling_permissions()
+                    .is_some_and(|permissions| {
+                        permissions.iter().any(|permission| {
+                            permission
+                                .actions()
+                                .iter()
+                                .any(|action| action == APPOINTMENT_READ_ACTION)
+                        })
+                    })
+            })
+        {
+            return Ok(caller);
+        }
+        Err(AuthenticationError::Profile)
     }
 
     /// The profile the separately authorized explain path demands: the caller
     /// holds the explain scope, which is never the reads scope.
     pub async fn authenticate_explain(&self, token: &str) -> Result<Caller, AuthenticationError> {
-        let (caller, scopes) = self.verified_caller(token).await?;
+        let (caller, scopes, _) = self.verified_caller(token).await?;
         self.require_scope(caller, &scopes, &self.explain_scope, "explainScope")
     }
 
@@ -112,7 +164,54 @@ impl SchedulingAuthenticator {
     /// authority for a mutation is the task grant the service checks against
     /// the offering's service, location, and action.
     pub async fn authenticate_mutate(&self, token: &str) -> Result<Caller, AuthenticationError> {
-        self.verified_caller(token).await.map(|(caller, _)| caller)
+        self.verified_caller(token)
+            .await
+            .map(|(caller, _, _)| caller)
+    }
+
+    /// Select exactly one operator-configured busy source profile. Holding a
+    /// second profile's scope does not union either source or resource set.
+    pub async fn authenticate_busy_source(
+        &self,
+        token: &str,
+        profile_selector: &str,
+    ) -> Result<AuthorizedBusySource, AuthenticationError> {
+        let (caller, scopes, client) = self.verified_caller(token).await?;
+        let client = client.ok_or(AuthenticationError::Claims)?;
+        let identity = BusySourceIdentity::new(caller.issuer, caller.subject, client)
+            .map_err(|_| AuthenticationError::Profile)?;
+        authorize_busy_source(
+            &self.busy_import_profiles,
+            &scopes,
+            Some(profile_selector),
+            identity,
+        )
+        .map_err(|_| AuthenticationError::Profile)
+    }
+
+    /// Verify one token and authorize exactly one opt-in operational profile
+    /// for the already-normalized request. Neither the catalogue scope nor a
+    /// task grant participates in this decision.
+    pub async fn authenticate_operational_read(
+        &self,
+        token: &str,
+        profile_selector: Option<&str>,
+        filter: OperationalReadFilter,
+        now: DateTime<Utc>,
+    ) -> Result<AuthorizedOperationalRead, AuthenticationError> {
+        let (caller, scopes, client) = self.verified_caller(token).await?;
+        let client = client.ok_or(AuthenticationError::Claims)?;
+        let identity = OperationalIdentity::new(caller.issuer, caller.subject, client)
+            .map_err(|_| AuthenticationError::Claims)?;
+        authorize_operational_read(
+            &self.appointment_read_profiles,
+            &scopes,
+            profile_selector,
+            identity,
+            filter,
+            now,
+        )
+        .map_err(|_| AuthenticationError::Profile)
     }
 
     /// Verify one credential and resolve its caller. A present grant is bound
@@ -121,7 +220,7 @@ impl SchedulingAuthenticator {
     async fn verified_caller(
         &self,
         token: &str,
-    ) -> Result<(Caller, Vec<String>), AuthenticationError> {
+    ) -> Result<(Caller, Vec<String>, Option<String>), AuthenticationError> {
         validate_compact_access_token(token).map_err(|_| {
             self.record_header_refusal();
             AuthenticationError::Refused
@@ -156,6 +255,11 @@ impl SchedulingAuthenticator {
                 .verify_context(&verified, &self.audience)
                 .map_err(|_| AuthenticationError::Profile)?;
         }
+        let client = verified
+            .matched_client_id()
+            .map_err(|_| AuthenticationError::Claims)?
+            .filter(|client| !client.is_empty())
+            .map(str::to_owned);
         // A task-grant exchange preserves the subjects its source authority
         // approved in the signed `identity` object. Keep only an object-shaped value. The shared
         // binding validates its field and value bounds before any use. The
@@ -199,6 +303,7 @@ impl SchedulingAuthenticator {
                 task_grant_subjects,
             },
             verified.scopes,
+            client,
         ))
     }
 }
@@ -211,6 +316,10 @@ impl std::fmt::Debug for SchedulingAuthenticator {
             .field("audience", &"<redacted>")
             .field("reads_scope", &self.reads_scope)
             .field("explain_scope", &self.explain_scope)
+            .field(
+                "appointment_read_profile_count",
+                &self.appointment_read_profiles.len(),
+            )
             .finish()
     }
 }
@@ -317,7 +426,66 @@ mod tests {
             scope_claim: "registry_scopes".to_owned(),
             reads_scope: "scheduling-read".to_owned(),
             explain_scope: "scheduling-explain".to_owned(),
+            appointment_read_profiles: BTreeMap::new(),
+            busy_import_profiles: BTreeMap::new(),
         }
+    }
+
+    fn oidc_with_operational_profiles() -> OidcConfig {
+        let mut oidc = oidc();
+        oidc.appointment_read_profiles = BTreeMap::from([
+            (
+                "north-desk".to_owned(),
+                crate::operational::OperationalReadProfileConfig {
+                    scope: "scheduling:appointments:north".to_owned(),
+                    maximum_past_days: 7,
+                    maximum_future_days: 31,
+                    maximum_span_days: 1,
+                    permissions: vec![crate::operational::OperationalReadPermissionConfig {
+                        service: "registry-update".to_owned(),
+                        location: "north-counter".to_owned(),
+                        resources: crate::operational::OperationalResourceScope::Exact {
+                            ids: vec!["station-1".to_owned()],
+                        },
+                    }],
+                    projection: crate::operational::OperationalProjectionConfig {
+                        fields: vec![crate::operational::OperationalProjectionField::Resource],
+                        external_reference_products: Vec::new(),
+                    },
+                },
+            ),
+            (
+                "south-desk".to_owned(),
+                crate::operational::OperationalReadProfileConfig {
+                    scope: "scheduling:appointments:south".to_owned(),
+                    maximum_past_days: 7,
+                    maximum_future_days: 31,
+                    maximum_span_days: 1,
+                    permissions: vec![crate::operational::OperationalReadPermissionConfig {
+                        service: "registry-update".to_owned(),
+                        location: "south-counter".to_owned(),
+                        resources: crate::operational::OperationalResourceScope::Unrestricted {},
+                    }],
+                    projection: crate::operational::OperationalProjectionConfig {
+                        fields: vec![crate::operational::OperationalProjectionField::Resource],
+                        external_reference_products: Vec::new(),
+                    },
+                },
+            ),
+        ]);
+        oidc
+    }
+
+    fn operational_filter() -> crate::operational::OperationalReadFilter {
+        crate::operational::OperationalReadFilter::new(
+            "registry-update".to_owned(),
+            "north-counter".to_owned(),
+            None,
+            crate::operational::OperationalTimeBasis::Displayed,
+            Utc::now() - chrono::TimeDelta::hours(1),
+            Utc::now() + chrono::TimeDelta::hours(1),
+        )
+        .unwrap()
     }
 
     fn keys() -> Arc<JwksFetcher> {
@@ -437,6 +605,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn appointment_detail_accepts_its_explicit_grant_without_opening_other_reads() {
+        let mut grant = grant_claims_value(AUDIENCE);
+        grant["registry_grant_bounds"]["permissions"][0]["actions"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!(APPOINTMENT_READ_ACTION));
+        let credential = token(merged("scheduling-explain", grant));
+        let authenticator = authenticator();
+        authenticator
+            .authenticate_appointment_detail(&credential)
+            .await
+            .expect("the explicit detail action opens only the detail profile");
+        assert!(matches!(
+            authenticator.authenticate_read(&credential).await,
+            Err(AuthenticationError::Profile)
+        ));
+
+        let without_action = token(merged("scheduling-explain", grant_claims_value(AUDIENCE)));
+        assert!(matches!(
+            authenticator
+                .authenticate_appointment_detail(&without_action)
+                .await,
+            Err(AuthenticationError::Profile)
+        ));
+    }
+
+    #[tokio::test]
     async fn a_read_without_the_reads_scope_is_a_profile_refusal_but_still_mutates() {
         let credential = token(json!({
             "sub": "principal-1",
@@ -455,6 +650,59 @@ mod tests {
             .authenticate_mutate(&credential)
             .await
             .expect("a caller without the reads scope still reaches a mutation");
+    }
+
+    #[tokio::test]
+    async fn operational_authority_comes_only_from_one_selected_profile_scope() {
+        let authenticator = authenticator_with(oidc_with_operational_profiles());
+        let catalogue_reader = token(json!({
+            "sub": "principal-1",
+            "azp": CLIENT,
+            "registry_scopes": "scheduling-read",
+            "registry_actor_kind": "service",
+        }));
+        assert_eq!(
+            authenticator
+                .authenticate_operational_read(
+                    &catalogue_reader,
+                    None,
+                    operational_filter(),
+                    Utc::now(),
+                )
+                .await,
+            Err(AuthenticationError::Profile)
+        );
+
+        let grant_only = token(merged("", grant_claims_value(AUDIENCE)));
+        assert_eq!(
+            authenticator
+                .authenticate_operational_read(&grant_only, None, operational_filter(), Utc::now(),)
+                .await,
+            Err(AuthenticationError::Profile)
+        );
+
+        let two_roles = token(json!({
+            "sub": "principal-1",
+            "azp": CLIENT,
+            "registry_scopes": "scheduling:appointments:north scheduling:appointments:south",
+            "registry_actor_kind": "service",
+        }));
+        assert_eq!(
+            authenticator
+                .authenticate_operational_read(&two_roles, None, operational_filter(), Utc::now(),)
+                .await,
+            Err(AuthenticationError::Profile)
+        );
+        let authorized = authenticator
+            .authenticate_operational_read(
+                &two_roles,
+                Some("north-desk"),
+                operational_filter(),
+                Utc::now(),
+            )
+            .await
+            .expect("the selector chooses one already-authorized role");
+        assert_eq!(authorized.profile_id(), "north-desk");
     }
 
     #[tokio::test]

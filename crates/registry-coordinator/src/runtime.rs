@@ -868,7 +868,8 @@ impl RuntimeConfig {
                         .at("workflow.yaml", format!("/workflow/steps/{name}/operation"))
                         .suggest("Use a separately authorized BReg connection without taskAuthority for this operation; task authority cannot fall back to service authority."));
                 }
-                if call.operation == crate::protocol::Operation::CreateAppointment
+                if call.operation.product() == "scheduling"
+                    && call.operation.is_mutating()
                     && self
                         .connections
                         .get(&call.connection)
@@ -880,7 +881,7 @@ impl RuntimeConfig {
                 {
                     return Err(CoordinatorError::new(
                         "workflow-binding",
-                        "appointment creation requires task-bound Scheduling authorization",
+                        "Scheduling commitments require task-bound Scheduling authorization",
                     )
                     .at("workflow.yaml", format!("steps.{name}.call"))
                     .suggest(format!(

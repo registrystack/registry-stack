@@ -1,5 +1,7 @@
 ---
 import docsetsManifest from '../data/generated/docsets.json';
+import RegistryTrackingPreferences from './RegistryTrackingPreferences.astro';
+import { docsSharedTrackingEnabled } from '../lib/docs-shared-tracking.mjs';
 import { reviewStatusLabel } from '../lib/review-status.mjs';
 
 const base = import.meta.env.BASE_URL;
@@ -8,6 +10,8 @@ const activeDocset =
   docsetsManifest.docsets.find((docset) => docset.id === activeDocsetId) ??
   docsetsManifest.docsets.find((docset) => docset.id === docsetsManifest.current);
 const isArchived = activeDocset?.status === 'archived';
+const isReleasedArchiveBuild =
+  isArchived && process.env.DOCS_RELEASED_ARCHIVE === 'true';
 
 // Per-page affordances driven by the route. On the built-in 404 page `entry`
 // (and therefore its frontmatter) may be undefined, so every field is read
@@ -27,6 +31,16 @@ const hasPagination = Boolean(prev || next);
 
 const pageTitle = entryData?.title ?? 'this page';
 const pagePath = Astro.url.pathname;
+const isNotFound = route.entry?.id === '404' || route.entry?.id.endsWith('/404');
+const showSharedTracking =
+  !isNotFound &&
+  docsSharedTrackingEnabled({
+    isReleasedArchiveBuild,
+    isCurrentDocsetBuild: activeDocset?.id === docsetsManifest.current,
+    base,
+    path: '/',
+  });
+const canonicalOrigin = new URL('/', Astro.site ?? 'https://docs.registrystack.org').toString();
 const issueUrl =
   'https://github.com/registrystack/registry-stack/issues/new?title=' +
   encodeURIComponent(`Docs issue: ${pageTitle}`) +
@@ -104,8 +118,17 @@ const showPageFooter = hasPagination || hasMeta || showFeedback;
     <a href={`${base}privacy/`}>Privacy</a>
     <a href={`${base}accessibility/`}>Accessibility</a>
     {!isArchived && <a href={`${base}llms.txt`}>llms.txt</a>}
+    {
+      showSharedTracking && (
+        <button type="button" data-tracking-preferences-open hidden>
+          Tracking preferences
+        </button>
+      )
+    }
   </nav>
 </footer>
+
+{showSharedTracking && <RegistryTrackingPreferences canonicalOrigin={canonicalOrigin} privacyUrl={`${base}privacy/`} />}
 
 <script>
   // Wire the per-page "Was this helpful?" controls on each full page load.

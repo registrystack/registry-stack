@@ -129,6 +129,9 @@
         "statusProfile": {
           "type": "string"
         },
+        "taskGrantProfile": {
+          "type": "string"
+        },
         "tokenEndpoint": {
           "$ref": "#/$defs/Url"
         }

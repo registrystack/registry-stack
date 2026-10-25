@@ -432,6 +432,7 @@ impl ProposalAuthority {
                 ProposalAuthorityOperation::Lifecycle(ProposalOperation::Retry) => "retry",
                 ProposalAuthorityOperation::Lifecycle(ProposalOperation::GetReviewStatus) => "get-review-status",
                 ProposalAuthorityOperation::Lifecycle(ProposalOperation::GetReviewContext) => "get-review-context",
+                ProposalAuthorityOperation::Lifecycle(ProposalOperation::GetTaskGrantContext) => "get-task-grant-context",
                 ProposalAuthorityOperation::Lifecycle(ProposalOperation::GetApplicationActor) => "get-application-actor",
             },
             "phase": match phase {ProposalTargetPhase::Preparation=>"preparation",ProposalTargetPhase::Application=>"application",ProposalTargetPhase::Inspection=>"inspection"},

@@ -6,6 +6,15 @@
         {
           "description": "A grid slot and how many pool members are still free across it.",
           "properties": {
+            "availableUnits": {
+              "description": "Physical units available across the capable members. `free`\nremains the member count for backward compatibility.",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
             "end": {
               "format": "date-time",
               "type": "string"

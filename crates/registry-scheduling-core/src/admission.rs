@@ -21,8 +21,15 @@ use chrono::{DateTime, Duration, Utc};
 
 use registry_platform_calendar::CalendarInterval;
 
+use crate::allocation::{
+    allocate_bundle, AllocatedResource, AllocationCandidate, AllocationContext, AllocationError,
+    AllocationInterval, AllocationLimits, AllocationRequirement, StandingAllocation,
+};
 use crate::model::{AdmissionRequest, LedgerClaim, LedgerKind, LedgerSnapshot, PoolMember};
-use crate::policy::{Channel, ExactTimeOffering, OfferingPolicy, PublishedWindow};
+use crate::policy::{
+    check_additional_allocation_policy, AdditionalAllocationPolicyError, Channel,
+    ExactTimeOffering, OfferingPolicy, OpeningCoverage, PublishedWindow,
+};
 use crate::problem::ProblemCode;
 use crate::units::UnitsEvaluationError;
 
@@ -43,6 +50,68 @@ pub struct Admission {
     pub resource: Option<String>,
     /// The recipient units consumed.
     pub units: u32,
+}
+
+/// One exact-time line resolved by the service from the same policy and facts
+/// revisions as every other line in an atomic bundle.
+pub struct ExactTimeBundleLineContext<'a> {
+    pub requirement_id: String,
+    pub offering: &'a OfferingPolicy,
+    pub exact: &'a ExactTimeOffering,
+    pub members: &'a [PoolMember],
+    pub open: &'a [CalendarInterval],
+    pub closures: &'a [CalendarInterval],
+    pub resource: Option<&'a str>,
+    /// True only when the resource is a stored assignment being confirmed.
+    pub stored_resource: bool,
+    pub units: u32,
+}
+
+/// The complete pure input for exact-time bundle evaluation.
+pub struct ExactTimeBundleContext<'a> {
+    pub lines: &'a [ExactTimeBundleLineContext<'a>],
+    pub snapshot: &'a LedgerSnapshot,
+    pub policy_revision: u64,
+    pub now: DateTime<Utc>,
+    pub exclude_reservation: Option<&'a str>,
+    /// True only when confirming a held start. An earlier admission already
+    /// accepted that start, so the booking horizon (lead time included) and
+    /// the start grid are not checked again.
+    pub confirming_hold: bool,
+    pub limits: AllocationLimits,
+}
+
+/// One concrete member allocation in an admitted logical bundle.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BundleAllocation {
+    pub requirement_id: String,
+    pub offering: String,
+    pub resource: String,
+    pub units: u32,
+    pub occupied_start: DateTime<Utc>,
+    pub occupied_end: DateTime<Utc>,
+}
+
+/// A granted logical bundle. Every member allocation must be stored or none
+/// of them may be stored.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BundleAdmission {
+    pub offering: String,
+    pub start: DateTime<Utc>,
+    pub end: DateTime<Utc>,
+    pub allocations: Vec<BundleAllocation>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
+pub enum BundleEvaluationError {
+    #[error(transparent)]
+    Admission(#[from] AdmissionRefusal),
+    #[error(transparent)]
+    Policy(#[from] AdditionalAllocationPolicyError),
+    #[error(transparent)]
+    Allocation(#[from] AllocationError),
+    #[error("the resolved bundle lines do not match the request")]
+    Shape,
 }
 
 /// Which side of the booking horizon the request fell on.
@@ -76,6 +145,12 @@ pub enum AdmissionRefusal {
     ChannelUnknown,
     #[error("the party or backing supply lacks a required capability")]
     CapabilityUnmatched,
+    #[error("the requested duration is outside the offering's selection policy")]
+    DurationOutOfPolicy,
+    #[error("the offering does not permit exact resource selection")]
+    ResourceSelectionNotAllowed,
+    #[error("the selected resource is not a member of the offering's pool")]
+    ResourceNotInPool,
     #[error("an active booking already holds this party's duplicate key")]
     DuplicateActiveBooking,
     #[error("the offering keys duplicate actives, so the request must carry a key")]
@@ -84,6 +159,8 @@ pub enum AdmissionRefusal {
     ResourceUnavailable,
     #[error("the supply is fully committed for that interval")]
     CapacityExhausted,
+    #[error("the request requires the atomic bundle evaluator")]
+    AtomicBundleRequired,
     #[error("the hold expired before confirmation")]
     HoldExpired,
     #[error("the claim is not an active hold")]
@@ -105,6 +182,10 @@ impl AdmissionRefusal {
             Self::PrerequisiteMissing { .. } => ProblemCode::PrerequisiteMissing,
             Self::ChannelUnknown => ProblemCode::RequestUnprocessable,
             Self::CapabilityUnmatched { .. } => ProblemCode::CapabilityUnmatched,
+            Self::DurationOutOfPolicy
+            | Self::ResourceSelectionNotAllowed
+            | Self::ResourceNotInPool
+            | Self::AtomicBundleRequired => ProblemCode::RequestUnprocessable,
             Self::DuplicateActiveBooking { .. } => ProblemCode::BookingDuplicateActive,
             Self::DuplicateKeyRequired { .. } => ProblemCode::PreconditionRequired,
             Self::CapacityExhausted { .. } => ProblemCode::CapacityExhausted,
@@ -181,6 +262,9 @@ pub fn evaluate_exact_time_admission(
     request: &AdmissionRequest,
     exclude: Option<&str>,
 ) -> Result<Admission, AdmissionRefusal> {
+    if request.resource_units != 1 || !request.additional_allocations.is_empty() {
+        return Err(AdmissionRefusal::AtomicBundleRequired);
+    }
     let ExactTimeContext {
         offering,
         exact,
@@ -202,29 +286,60 @@ pub fn evaluate_exact_time_admission(
         exact.horizon_days,
     )?;
 
-    if request.party.recipients == 0 || request.party.recipients > exact.maximum_recipients {
-        return Err(AdmissionRefusal::PartyCapacityInadequate);
+    match request.party {
+        Some(party)
+            if party.is_coherent()
+                && party.recipients <= exact.maximum_recipients
+                && (!exact.party_counts.is_required() || party.recipients > 0) => {}
+        None if !exact.party_counts.is_required() => {}
+        _ => return Err(AdmissionRefusal::PartyCapacityInadequate),
     }
     check_capabilities(offering, request)?;
     check_prerequisites(offering, request)?;
     check_duplicate(offering, request, snapshot, exclude, *now)?;
+
+    let duration_minutes = exact
+        .selected_duration_minutes(request.duration_minutes)
+        .ok_or(AdmissionRefusal::DurationOutOfPolicy)?;
+    if request.resource.is_some() && !exact.allow_resource_selection {
+        return Err(AdmissionRefusal::ResourceSelectionNotAllowed);
+    }
 
     // Interval arithmetic that leaves representable time is a horizon
     // refusal, never a mislabeled capacity answer: a start whose service or
     // occupied interval cannot exist is outside every bookable horizon.
     let end = request
         .start
-        .checked_add_signed(Duration::minutes(i64::from(exact.duration_minutes)))
+        .checked_add_signed(Duration::minutes(i64::from(duration_minutes)))
         .ok_or(AdmissionRefusal::HorizonOutside {
             kind: HorizonKind::TooFar,
         })?;
+
+    // Buffers reaching past representable time refuse rather than clamp: a
+    // clamped buffer would silently shrink the occupied interval the ledger
+    // records.
+    let occupied_start = request
+        .start
+        .checked_sub_signed(Duration::minutes(i64::from(exact.buffer_before_minutes)))
+        .ok_or(AdmissionRefusal::HorizonOutside {
+            kind: HorizonKind::TooSoon,
+        })?;
+    let occupied_end = end
+        .checked_add_signed(Duration::minutes(i64::from(exact.buffer_after_minutes)))
+        .ok_or(AdmissionRefusal::HorizonOutside {
+            kind: HorizonKind::TooFar,
+        })?;
+    let (coverage_start, coverage_end) = match exact.opening_coverage {
+        OpeningCoverage::ServiceInterval => (request.start, end),
+        OpeningCoverage::OccupiedInterval => (occupied_start, occupied_end),
+    };
     let covered = open
         .iter()
-        .find(|interval| interval.start <= request.start && end <= interval.end);
+        .find(|interval| interval.start <= coverage_start && coverage_end <= interval.end);
     let Some(covering) = covered else {
         let overlaps_closure = closures
             .iter()
-            .any(|closure| request.start < closure.end && closure.start < end);
+            .any(|closure| coverage_start < closure.end && closure.start < coverage_end);
         return Err(if overlaps_closure {
             AdmissionRefusal::LocationClosed
         } else {
@@ -248,23 +363,17 @@ pub fn evaluate_exact_time_admission(
         return Err(AdmissionRefusal::ScheduleUnpublished);
     }
 
-    // Buffers reaching past representable time refuse rather than clamp: a
-    // clamped buffer would silently shrink the occupied interval the ledger
-    // records.
-    let occupied_start = request
-        .start
-        .checked_sub_signed(Duration::minutes(i64::from(exact.buffer_before_minutes)))
-        .ok_or(AdmissionRefusal::HorizonOutside {
-            kind: HorizonKind::TooSoon,
-        })?;
-    let occupied_end = end
-        .checked_add_signed(Duration::minutes(i64::from(exact.buffer_after_minutes)))
-        .ok_or(AdmissionRefusal::HorizonOutside {
-            kind: HorizonKind::TooFar,
-        })?;
-
-    let capable: Vec<&PoolMember> = members
-        .iter()
+    let candidate_members: Vec<&PoolMember> = if let Some(selected) = request.resource.as_deref() {
+        let member = members
+            .iter()
+            .find(|member| member.resource_id == selected)
+            .ok_or(AdmissionRefusal::ResourceNotInPool)?;
+        vec![member]
+    } else {
+        members.iter().collect()
+    };
+    let capable: Vec<&PoolMember> = candidate_members
+        .into_iter()
         .filter(|member| member.serves(&offering.requires_capabilities))
         .collect();
     if capable.is_empty() {
@@ -273,7 +382,9 @@ pub fn evaluate_exact_time_admission(
     let available: Vec<&PoolMember> = capable
         .iter()
         .copied()
-        .filter(|member| member.available)
+        .filter(|member| {
+            member.capacity_units > 0 && member.available_during(occupied_start, occupied_end)
+        })
         .collect();
     if available.is_empty() {
         return Err(AdmissionRefusal::ResourceUnavailable);
@@ -311,6 +422,341 @@ pub fn evaluate_exact_time_admission(
     })
 }
 
+#[derive(Clone, Debug)]
+struct ResolvedBundleLine {
+    requirement_id: String,
+    offering: String,
+    interval: AllocationInterval,
+    requirement: AllocationRequirement,
+}
+
+/// Evaluate every exact-time line against one displayed interval and one
+/// standing snapshot, then allocate physical quantities atomically.
+pub fn evaluate_exact_time_bundle(
+    context: &ExactTimeBundleContext<'_>,
+    request: &AdmissionRequest,
+) -> Result<BundleAdmission, BundleEvaluationError> {
+    if context.lines.len() != request.additional_allocations.len() + 1 {
+        return Err(BundleEvaluationError::Shape);
+    }
+    let Some(primary) = context.lines.first() else {
+        return Err(BundleEvaluationError::Shape);
+    };
+    if primary.requirement_id != "primary"
+        || primary.offering.id != request.offering
+        || primary.resource != request.resource.as_deref()
+        || primary.units != request.resource_units
+    {
+        return Err(BundleEvaluationError::Shape);
+    }
+    let displayed_duration = primary
+        .exact
+        .selected_duration_minutes(request.duration_minutes)
+        .ok_or(AdmissionRefusal::DurationOutOfPolicy)?;
+
+    let mut resolved = Vec::with_capacity(context.lines.len());
+    for (index, line) in context.lines.iter().enumerate() {
+        if index > 0 {
+            let additional = &request.additional_allocations[index - 1];
+            if line.offering.id != additional.offering
+                || line.resource != additional.resource.as_deref()
+                || line.units != additional.units
+                || line.requirement_id != format!("additional:{}", index - 1)
+            {
+                return Err(BundleEvaluationError::Shape);
+            }
+            check_additional_allocation_policy(
+                primary.offering,
+                line.offering,
+                displayed_duration,
+            )?;
+        }
+        resolved.push(resolve_bundle_line(
+            line,
+            request,
+            displayed_duration,
+            context.snapshot,
+            context.policy_revision,
+            context.now,
+            context.exclude_reservation,
+            context.confirming_hold,
+        )?);
+    }
+
+    allocate_resolved_bundle(
+        context,
+        &primary.offering.id,
+        request.start,
+        displayed_duration,
+        resolved,
+    )
+}
+
+/// Resolve and atomically allocate the physical requirements for a displayed
+/// exact-time interval.
+///
+/// The caller must separately enforce caller eligibility, policy revision,
+/// duplicate protection, and booking horizon. This evaluator is shared by
+/// availability preview and window resource reservation, where those
+/// request-specific facts either do not exist or are checked by the owning
+/// workflow.
+pub fn evaluate_exact_time_physical_bundle(
+    context: &ExactTimeBundleContext<'_>,
+    start: DateTime<Utc>,
+    displayed_duration: u32,
+) -> Result<BundleAdmission, BundleEvaluationError> {
+    let Some(primary) = context.lines.first() else {
+        return Err(BundleEvaluationError::Shape);
+    };
+    let mut resolved = Vec::with_capacity(context.lines.len());
+    for (index, line) in context.lines.iter().enumerate() {
+        if index > 0 {
+            check_additional_allocation_policy(
+                primary.offering,
+                line.offering,
+                displayed_duration,
+            )?;
+        }
+        resolved.push(resolve_physical_bundle_line(
+            line,
+            start,
+            displayed_duration,
+            context.confirming_hold,
+        )?);
+    }
+    allocate_resolved_bundle(
+        context,
+        &primary.offering.id,
+        start,
+        displayed_duration,
+        resolved,
+    )
+}
+
+fn allocate_resolved_bundle(
+    context: &ExactTimeBundleContext<'_>,
+    primary_offering: &str,
+    start: DateTime<Utc>,
+    displayed_duration: u32,
+    resolved: Vec<ResolvedBundleLine>,
+) -> Result<BundleAdmission, BundleEvaluationError> {
+    let standing_allocations = context
+        .snapshot
+        .consuming(context.now)
+        .map(|claim| StandingAllocation {
+            reservation_id: claim.id.clone(),
+            resource_id: claim.supply_id.clone(),
+            interval: AllocationInterval {
+                start: claim.start,
+                end: claim.end,
+            },
+            units: claim.units,
+        })
+        .collect();
+    let allocation = allocate_bundle(&AllocationContext {
+        requirements: resolved
+            .iter()
+            .map(|line| line.requirement.clone())
+            .collect(),
+        standing_allocations,
+        exclude_reservation: context.exclude_reservation.map(str::to_owned),
+        limits: context.limits,
+    })?;
+    let mut allocations: Vec<_> = allocation
+        .into_iter()
+        .map(|allocated: AllocatedResource| {
+            let line = resolved
+                .iter()
+                .find(|line| line.requirement_id == allocated.requirement_id)
+                .expect("the allocator returns only input requirement identifiers");
+            BundleAllocation {
+                requirement_id: allocated.requirement_id,
+                offering: line.offering.clone(),
+                resource: allocated.resource_id,
+                units: allocated.units,
+                occupied_start: line.interval.start,
+                occupied_end: line.interval.end,
+            }
+        })
+        .collect();
+    allocations.sort_by_key(|allocation| {
+        if allocation.requirement_id == "primary" {
+            0
+        } else {
+            allocation
+                .requirement_id
+                .strip_prefix("additional:")
+                .and_then(|index| index.parse::<usize>().ok())
+                .unwrap_or(usize::MAX - 1)
+                .saturating_add(1)
+        }
+    });
+    Ok(BundleAdmission {
+        offering: primary_offering.to_owned(),
+        start,
+        end: start
+            .checked_add_signed(Duration::minutes(i64::from(displayed_duration)))
+            .ok_or(AdmissionRefusal::HorizonOutside {
+                kind: HorizonKind::TooFar,
+            })?,
+        allocations,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn resolve_bundle_line(
+    line: &ExactTimeBundleLineContext<'_>,
+    request: &AdmissionRequest,
+    displayed_duration: u32,
+    snapshot: &LedgerSnapshot,
+    policy_revision: u64,
+    now: DateTime<Utc>,
+    exclude: Option<&str>,
+    confirming_hold: bool,
+) -> Result<ResolvedBundleLine, AdmissionRefusal> {
+    if request.policy_revision != policy_revision {
+        return Err(AdmissionRefusal::PolicyChanged);
+    }
+    if !confirming_hold {
+        check_horizon(
+            request.start,
+            now,
+            line.exact.lead_time_minutes,
+            line.exact.horizon_days,
+        )?;
+    }
+    match request.party {
+        Some(party)
+            if party.is_coherent()
+                && party.recipients <= line.exact.maximum_recipients
+                && (!line.exact.party_counts.is_required() || party.recipients > 0) => {}
+        None if !line.exact.party_counts.is_required() => {}
+        _ => return Err(AdmissionRefusal::PartyCapacityInadequate),
+    }
+    check_capabilities(line.offering, request)?;
+    check_prerequisites(line.offering, request)?;
+    check_duplicate(line.offering, request, snapshot, exclude, now)?;
+    resolve_physical_bundle_line(line, request.start, displayed_duration, confirming_hold)
+}
+
+fn resolve_physical_bundle_line(
+    line: &ExactTimeBundleLineContext<'_>,
+    start: DateTime<Utc>,
+    displayed_duration: u32,
+    confirming_hold: bool,
+) -> Result<ResolvedBundleLine, AdmissionRefusal> {
+    if line
+        .exact
+        .selected_duration_minutes(Some(displayed_duration))
+        .is_none()
+    {
+        return Err(AdmissionRefusal::DurationOutOfPolicy);
+    }
+    if line.resource.is_some() && !line.stored_resource && !line.exact.allow_resource_selection {
+        return Err(AdmissionRefusal::ResourceSelectionNotAllowed);
+    }
+    let end = start
+        .checked_add_signed(Duration::minutes(i64::from(displayed_duration)))
+        .ok_or(AdmissionRefusal::HorizonOutside {
+            kind: HorizonKind::TooFar,
+        })?;
+    let occupied_start = start
+        .checked_sub_signed(Duration::minutes(i64::from(
+            line.exact.buffer_before_minutes,
+        )))
+        .ok_or(AdmissionRefusal::HorizonOutside {
+            kind: HorizonKind::TooSoon,
+        })?;
+    let occupied_end = end
+        .checked_add_signed(Duration::minutes(i64::from(
+            line.exact.buffer_after_minutes,
+        )))
+        .ok_or(AdmissionRefusal::HorizonOutside {
+            kind: HorizonKind::TooFar,
+        })?;
+    let (coverage_start, coverage_end) = match line.exact.opening_coverage {
+        OpeningCoverage::ServiceInterval => (start, end),
+        OpeningCoverage::OccupiedInterval => (occupied_start, occupied_end),
+    };
+    let Some(covering) = line
+        .open
+        .iter()
+        .find(|interval| interval.start <= coverage_start && coverage_end <= interval.end)
+    else {
+        return Err(
+            if line
+                .closures
+                .iter()
+                .any(|closure| closure.start < coverage_end && coverage_start < closure.end)
+            {
+                AdmissionRefusal::LocationClosed
+            } else {
+                AdmissionRefusal::ScheduleUnpublished
+            },
+        );
+    };
+    // Like the horizon, the start grid judges new requests only: a held
+    // start was on the grid its admission saw, and confirming the hold
+    // transfers that reservation. Opening coverage above still binds it.
+    let offset = start.signed_duration_since(covering.start);
+    let grid_seconds = i64::from(line.exact.start_increment_minutes) * 60;
+    if !confirming_hold
+        && (offset < Duration::zero()
+            || grid_seconds == 0
+            || offset.subsec_nanos() != 0
+            || offset.num_seconds() % grid_seconds != 0)
+    {
+        return Err(AdmissionRefusal::ScheduleUnpublished);
+    }
+
+    let candidate_members: Vec<&PoolMember> = if let Some(selected) = line.resource {
+        vec![line
+            .members
+            .iter()
+            .find(|member| member.resource_id == selected)
+            .ok_or(AdmissionRefusal::ResourceNotInPool)?]
+    } else {
+        line.members.iter().collect()
+    };
+    let capable: Vec<&PoolMember> = candidate_members
+        .into_iter()
+        .filter(|member| member.serves(&line.offering.requires_capabilities))
+        .collect();
+    if capable.is_empty() {
+        return Err(AdmissionRefusal::CapabilityUnmatched);
+    }
+    let available: Vec<&PoolMember> = capable
+        .into_iter()
+        .filter(|member| {
+            member.capacity_units > 0 && member.available_during(occupied_start, occupied_end)
+        })
+        .collect();
+    if available.is_empty() {
+        return Err(AdmissionRefusal::ResourceUnavailable);
+    }
+    let interval = AllocationInterval {
+        start: occupied_start,
+        end: occupied_end,
+    };
+    Ok(ResolvedBundleLine {
+        requirement_id: line.requirement_id.clone(),
+        offering: line.offering.id.clone(),
+        interval: interval.clone(),
+        requirement: AllocationRequirement {
+            id: line.requirement_id.clone(),
+            interval,
+            units: line.units,
+            candidates: available
+                .into_iter()
+                .map(|member| AllocationCandidate {
+                    resource_id: member.resource_id.clone(),
+                    capacity_units: member.capacity_units,
+                })
+                .collect(),
+        },
+    })
+}
+
 /// Evaluate one arrival-window admission request.
 ///
 /// The window's units policy converts the party to recipient units; the
@@ -326,6 +772,9 @@ pub fn evaluate_window_admission(
     request: &AdmissionRequest,
     exclude: Option<&str>,
 ) -> Result<Admission, AdmissionRefusal> {
+    if request.resource_units != 1 || !request.additional_allocations.is_empty() {
+        return Err(AdmissionRefusal::AtomicBundleRequired);
+    }
     let WindowContext {
         offering,
         window,
@@ -341,6 +790,12 @@ pub fn evaluate_window_admission(
 
     if request.policy_revision != *policy_revision {
         return Err(AdmissionRefusal::PolicyChanged);
+    }
+    if request.duration_minutes.is_some() {
+        return Err(AdmissionRefusal::DurationOutOfPolicy);
+    }
+    if request.resource.is_some() {
+        return Err(AdmissionRefusal::ResourceSelectionNotAllowed);
     }
     if request.window_revision != Some(window.revision) {
         return Err(AdmissionRefusal::RevisionMismatch {
@@ -365,12 +820,15 @@ pub fn evaluate_window_admission(
         });
     }
 
-    if request.party.recipients == 0 {
+    let Some(party) = request.party else {
+        return Err(AdmissionRefusal::PartyCapacityInadequate);
+    };
+    if !party.is_coherent() || party.recipients == 0 {
         return Err(AdmissionRefusal::PartyCapacityInadequate);
     }
     let required = window
         .units_policy
-        .evaluate(request.party.recipients)
+        .evaluate(party.recipients)
         .map_err(|error| match error {
             UnitsEvaluationError::RefusedAboveHighestBand | UnitsEvaluationError::Overflow => {
                 AdmissionRefusal::PartyCapacityInadequate
@@ -519,12 +977,12 @@ fn check_duplicate(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::PartyCounts;
     use crate::policy::{
-        ArrivalOffering, Channel, ExactTimeOffering, OfferingPolicy, PublishedWindow,
-        SchedulingMode, WindowSubquota,
+        ArrivalOffering, Channel, DurationSelectionPolicy, ExactTimeOffering, OfferingPolicy,
+        OpeningCoverage, PublishedWindow, SchedulingMode, WindowSubquota,
     };
     use crate::units::{BandedInput, RequiredUnitsPolicy};
+    use crate::{PartyCounts, PartyCountsRequirement};
     use chrono::TimeZone as _;
     use registry_platform_calendar::{
         expand_weekly_openings, CalendarException, CalendarExceptionKind, HolidaySetRevision,
@@ -546,11 +1004,15 @@ mod tests {
                     resource_id: "station-1".to_owned(),
                     capabilities: vec![],
                     available: true,
+                    capacity_units: 1,
+                    availability: None,
                 },
                 PoolMember {
                     resource_id: "station-2".to_owned(),
                     capabilities: vec![],
                     available: true,
+                    capacity_units: 1,
+                    availability: None,
                 },
             ]
         })
@@ -575,6 +1037,10 @@ mod tests {
             },
             ExactTimeOffering {
                 duration_minutes: 30,
+                duration_selection: None,
+                opening_coverage: OpeningCoverage::ServiceInterval,
+                allow_resource_selection: false,
+                party_counts: PartyCountsRequirement::Required,
                 buffer_before_minutes: 5,
                 buffer_after_minutes: 5,
                 lead_time_minutes: 60,
@@ -584,6 +1050,99 @@ mod tests {
                 maximum_recipients: 1,
             },
         )
+    }
+
+    #[test]
+    fn dated_resource_supply_controls_the_whole_occupied_interval() {
+        let at = |hour, minute| utc(10, hour, minute);
+        let scheduled: PoolMember = serde_json::from_value(serde_json::json!({
+            "resourceId": "station-1", "capabilities": [], "available": true,
+            "availability": {
+                "openings": [
+                    {"start": "2026-10-10T01:30:00Z", "end": "2026-10-10T03:00:00Z"},
+                    {"start": "2026-10-10T03:00:00Z", "end": "2026-10-10T04:30:00Z"}
+                ],
+                "closures": [{"start": "2026-10-10T09:50:00+07:00", "end": "2026-10-10T10:20:00+07:00"}]
+            }
+        })).expect("a resource may carry dated supply facts");
+        let mut available_members = members().to_vec();
+        available_members[0] = scheduled;
+        let (offering, mut exact) = exact_offering();
+        exact.allow_resource_selection = true;
+        let open = [CalendarInterval {
+            start: at(2, 0),
+            end: at(4, 0),
+        }];
+        let snapshot = LedgerSnapshot::default();
+        let context = ExactTimeContext {
+            offering: &offering,
+            exact: &exact,
+            members: &available_members,
+            open: &open,
+            closures: &[],
+            snapshot: &snapshot,
+            policy_revision: 1,
+            now: at(0, 0),
+        };
+        let blocked = exact_request(at(2, 30));
+        let allocation = evaluate_exact_time_admission(&context, &blocked, None).unwrap();
+        assert_eq!(allocation.resource.as_deref(), Some("station-2"));
+        let named = AdmissionRequest {
+            resource: Some("station-1".to_owned()),
+            ..blocked
+        };
+        assert_eq!(
+            evaluate_exact_time_admission(&context, &named, None).unwrap_err(),
+            AdmissionRefusal::ResourceUnavailable
+        );
+        for start in [at(2, 0), at(3, 30)] {
+            let request = AdmissionRequest {
+                start,
+                ..named.clone()
+            };
+            assert_eq!(
+                evaluate_exact_time_admission(&context, &request, None)
+                    .unwrap()
+                    .resource
+                    .as_deref(),
+                Some("station-1")
+            );
+        }
+        // Cleanup touches the closure even though the displayed service does
+        // not. Dated supply always constrains effective occupancy.
+        let mut buffered = exact.clone();
+        buffered.buffer_after_minutes = 25;
+        let context = ExactTimeContext {
+            exact: &buffered,
+            ..context
+        };
+        let request = AdmissionRequest {
+            start: at(2, 0),
+            ..named
+        };
+        assert_eq!(
+            evaluate_exact_time_admission(&context, &request, None).unwrap_err(),
+            AdmissionRefusal::ResourceUnavailable
+        );
+    }
+
+    #[test]
+    fn exact_time_refuses_zero_physical_capacity_even_when_the_member_is_available() {
+        let (offering, exact) = exact_offering();
+        let zero_capacity = [PoolMember {
+            resource_id: "station-1".to_owned(),
+            capabilities: Vec::new(),
+            available: true,
+            capacity_units: 0,
+            availability: None,
+        }];
+        let snapshot = LedgerSnapshot::default();
+        let context = exact_context(&offering, &exact, &zero_capacity, &snapshot, utc(5, 0, 0));
+
+        assert_eq!(
+            evaluate_exact_time_admission(&context, &exact_request(utc(5, 3, 0)), None),
+            Err(AdmissionRefusal::ResourceUnavailable)
+        );
     }
 
     /// The shared published openings, computed once and borrowed for the
@@ -627,10 +1186,15 @@ mod tests {
         AdmissionRequest {
             offering: "registry-update-30".to_owned(),
             start,
-            party: PartyCounts {
+            duration_minutes: None,
+            resource: None,
+            resource_units: 1,
+            additional_allocations: Vec::new(),
+            party: Some(PartyCounts {
                 recipients: 1,
                 attendees: 1,
-            },
+            }),
+            manager: None,
             channel: None,
             duplicate_key: Some("subject:one".to_owned()),
             policy_revision: 1,
@@ -638,6 +1202,333 @@ mod tests {
             capabilities: Vec::new(),
             prerequisites: Vec::new(),
             external_references: Vec::new(),
+            party_references: Vec::new(),
+        }
+    }
+
+    fn bundle_limits() -> AllocationLimits {
+        AllocationLimits {
+            maximum_requirements: 16,
+            maximum_units_per_requirement: 10_000,
+            maximum_candidate_resources: 256,
+            maximum_standing_allocations: 256,
+        }
+    }
+
+    #[test]
+    fn a_bundle_uses_each_lines_occupied_interval_and_half_open_boundaries() {
+        let (mut room, mut room_exact) = exact_offering();
+        room.id = "room".to_owned();
+        room.duplicate_active_key = None;
+        room_exact.duration_minutes = 120;
+        room_exact.party_counts = PartyCountsRequirement::Optional;
+        room_exact.buffer_before_minutes = 15;
+        room_exact.buffer_after_minutes = 15;
+        room_exact.allow_resource_selection = true;
+        room_exact.pool = "rooms".to_owned();
+        room.exact_time = Some(room_exact.clone());
+
+        let mut projector = room.clone();
+        projector.id = "projector".to_owned();
+        let mut projector_exact = room_exact.clone();
+        projector_exact.buffer_before_minutes = 0;
+        projector_exact.buffer_after_minutes = 0;
+        projector_exact.pool = "projectors".to_owned();
+        projector.exact_time = Some(projector_exact.clone());
+        let room_members = [PoolMember {
+            resource_id: "room-a".to_owned(),
+            capabilities: Vec::new(),
+            available: true,
+            capacity_units: 1,
+            availability: None,
+        }];
+        let projector_members = [PoolMember {
+            resource_id: "projector-a".to_owned(),
+            capabilities: Vec::new(),
+            available: true,
+            capacity_units: 1,
+            availability: None,
+        }];
+        let open = [CalendarInterval {
+            start: utc(5, 2, 0),
+            end: utc(5, 6, 0),
+        }];
+        let request = AdmissionRequest {
+            offering: "room".to_owned(),
+            start: utc(5, 3, 0),
+            duration_minutes: Some(120),
+            resource: Some("room-a".to_owned()),
+            resource_units: 1,
+            additional_allocations: vec![crate::AdditionalAllocationRequest {
+                offering: "projector".to_owned(),
+                resource: Some("projector-a".to_owned()),
+                units: 1,
+            }],
+            party: None,
+            manager: None,
+            channel: None,
+            duplicate_key: None,
+            policy_revision: 1,
+            window_revision: None,
+            capabilities: Vec::new(),
+            prerequisites: Vec::new(),
+            external_references: Vec::new(),
+            party_references: Vec::new(),
+        };
+        let lines = [
+            ExactTimeBundleLineContext {
+                requirement_id: "primary".to_owned(),
+                offering: &room,
+                exact: &room_exact,
+                members: &room_members,
+                open: &open,
+                closures: &[],
+                resource: Some("room-a"),
+                stored_resource: false,
+                units: 1,
+            },
+            ExactTimeBundleLineContext {
+                requirement_id: "additional:0".to_owned(),
+                offering: &projector,
+                exact: &projector_exact,
+                members: &projector_members,
+                open: &open,
+                closures: &[],
+                resource: Some("projector-a"),
+                stored_resource: false,
+                units: 1,
+            },
+        ];
+        let snapshot = LedgerSnapshot {
+            claims: vec![
+                booking_claim(
+                    "projector-before",
+                    "projector-a",
+                    utc(5, 2, 0),
+                    utc(5, 3, 0),
+                ),
+                booking_claim("room-overlap", "room-a", utc(5, 2, 30), utc(5, 3, 0)),
+            ],
+        };
+        let context = ExactTimeBundleContext {
+            lines: &lines,
+            snapshot: &snapshot,
+            policy_revision: 1,
+            now: utc(5, 0, 0),
+            exclude_reservation: None,
+            confirming_hold: false,
+            limits: bundle_limits(),
+        };
+        assert_eq!(
+            evaluate_exact_time_bundle(&context, &request),
+            Err(BundleEvaluationError::Allocation(
+                AllocationError::CapacityExhausted {
+                    requirement_id: "primary".to_owned()
+                }
+            ))
+        );
+
+        let snapshot = LedgerSnapshot {
+            claims: snapshot.claims[..1].to_vec(),
+        };
+        let context = ExactTimeBundleContext {
+            lines: &lines,
+            snapshot: &snapshot,
+            policy_revision: 1,
+            now: utc(5, 0, 0),
+            exclude_reservation: None,
+            confirming_hold: false,
+            limits: bundle_limits(),
+        };
+        let admitted = evaluate_exact_time_bundle(&context, &request).unwrap();
+        assert_eq!(admitted.allocations[0].occupied_start, utc(5, 2, 45));
+        assert_eq!(admitted.allocations[0].occupied_end, utc(5, 5, 15));
+        assert_eq!(admitted.allocations[1].occupied_start, utc(5, 3, 0));
+        assert_eq!(admitted.allocations[1].occupied_end, utc(5, 5, 0));
+    }
+
+    /// A held start was on the grid its admission saw. Confirming the hold
+    /// transfers that reservation, so a later opening that moves the grid
+    /// does not revoke it; opening coverage still binds the confirmation.
+    #[test]
+    fn hold_confirmation_skips_the_start_grid_but_keeps_opening_coverage() {
+        let (offering, exact) = exact_offering();
+        // The opening starts at 02:15, so its 30-minute grid serves 02:45 and
+        // 03:15 but not 03:00.
+        let open = [CalendarInterval {
+            start: utc(5, 2, 15),
+            end: utc(5, 5, 30),
+        }];
+        let lines = [ExactTimeBundleLineContext {
+            requirement_id: "primary".to_owned(),
+            offering: &offering,
+            exact: &exact,
+            members: members(),
+            open: &open,
+            closures: &[],
+            resource: None,
+            stored_resource: false,
+            units: 1,
+        }];
+        let snapshot = LedgerSnapshot::default();
+        let admitting = ExactTimeBundleContext {
+            lines: &lines,
+            snapshot: &snapshot,
+            policy_revision: 1,
+            now: utc(5, 0, 0),
+            exclude_reservation: None,
+            confirming_hold: false,
+            limits: bundle_limits(),
+        };
+        let held = exact_request(utc(5, 3, 0));
+        assert_eq!(
+            evaluate_exact_time_bundle(&admitting, &held),
+            Err(BundleEvaluationError::Admission(
+                AdmissionRefusal::ScheduleUnpublished
+            )),
+            "a new request off the grid is refused"
+        );
+
+        let confirming = ExactTimeBundleContext {
+            confirming_hold: true,
+            ..admitting
+        };
+        let admitted = evaluate_exact_time_bundle(&confirming, &held)
+            .expect("a confirmation does not re-run the start grid");
+        assert_eq!(admitted.start, utc(5, 3, 0));
+        // 05:15 ends its service at 05:45, after the opening closes.
+        assert_eq!(
+            evaluate_exact_time_bundle(&confirming, &exact_request(utc(5, 5, 15))),
+            Err(BundleEvaluationError::Admission(
+                AdmissionRefusal::ScheduleUnpublished
+            )),
+            "a confirmation still needs the opening to cover its service"
+        );
+    }
+
+    #[test]
+    fn physical_bundle_evaluation_does_not_invent_caller_eligibility() {
+        let (mut offering, mut exact) = exact_offering();
+        offering.requires_capabilities = vec!["interpreter".to_owned()];
+        offering.prerequisites = vec!["proof".to_owned()];
+        exact.party_counts = PartyCountsRequirement::Required;
+        let capable = [PoolMember {
+            resource_id: "station-1".to_owned(),
+            capabilities: vec!["interpreter".to_owned()],
+            available: true,
+            capacity_units: 1,
+            availability: None,
+        }];
+        let lines = [ExactTimeBundleLineContext {
+            requirement_id: "primary".to_owned(),
+            offering: &offering,
+            exact: &exact,
+            members: &capable,
+            open: open_intervals(),
+            closures: &[],
+            resource: None,
+            stored_resource: false,
+            units: 1,
+        }];
+        let snapshot = LedgerSnapshot::default();
+        let context = ExactTimeBundleContext {
+            lines: &lines,
+            snapshot: &snapshot,
+            policy_revision: 1,
+            now: utc(5, 0, 0),
+            exclude_reservation: None,
+            confirming_hold: false,
+            limits: bundle_limits(),
+        };
+
+        let admitted = evaluate_exact_time_physical_bundle(&context, utc(5, 3, 0), 30)
+            .expect("physical planning must not require a party, prerequisite, or duplicate key");
+        assert_eq!(admitted.allocations.len(), 1);
+        assert_eq!(admitted.allocations[0].resource, "station-1");
+
+        let request = AdmissionRequest {
+            capabilities: vec!["interpreter".to_owned()],
+            prerequisites: vec!["proof".to_owned()],
+            duplicate_key: None,
+            ..exact_request(utc(5, 3, 0))
+        };
+        assert_eq!(
+            evaluate_exact_time_bundle(&context, &request),
+            Err(BundleEvaluationError::Admission(
+                AdmissionRefusal::DuplicateKeyRequired
+            )),
+            "actual booking evaluation keeps the caller admission checks"
+        );
+    }
+
+    #[test]
+    fn the_legacy_evaluators_refuse_bundle_fields_instead_of_ignoring_them() {
+        let (offering, exact) = exact_offering();
+        let snapshot = LedgerSnapshot::default();
+        let context = exact_context(&offering, &exact, members(), &snapshot, utc(5, 0, 0));
+        let request = AdmissionRequest {
+            resource_units: 2,
+            ..exact_request(utc(5, 3, 0))
+        };
+        assert_eq!(
+            evaluate_exact_time_admission(&context, &request, None),
+            Err(AdmissionRefusal::AtomicBundleRequired)
+        );
+    }
+
+    #[test]
+    fn exact_time_omits_people_only_when_policy_explicitly_allows_it() {
+        let (offering, mut exact) = exact_offering();
+        let snapshot = LedgerSnapshot::default();
+        let request = AdmissionRequest {
+            party: None,
+            ..exact_request(utc(5, 3, 0))
+        };
+        let required = exact_context(&offering, &exact, members(), &snapshot, utc(5, 0, 0));
+        assert_eq!(
+            evaluate_exact_time_admission(&required, &request, None),
+            Err(AdmissionRefusal::PartyCapacityInadequate)
+        );
+
+        exact.party_counts = PartyCountsRequirement::Optional;
+        let optional = exact_context(&offering, &exact, members(), &snapshot, utc(5, 0, 0));
+        let admitted = evaluate_exact_time_admission(&optional, &request, None)
+            .expect("an explicitly party-optional resource reservation admits");
+        assert_eq!(admitted.units, 1);
+    }
+
+    #[test]
+    fn exact_time_refuses_incoherent_people_even_when_counts_are_optional() {
+        let (offering, mut exact) = exact_offering();
+        exact.party_counts = PartyCountsRequirement::Optional;
+        let snapshot = LedgerSnapshot::default();
+        let context = exact_context(&offering, &exact, members(), &snapshot, utc(5, 0, 0));
+        for party in [
+            PartyCounts {
+                recipients: 2,
+                attendees: 1,
+            },
+            PartyCounts {
+                recipients: 0,
+                attendees: 0,
+            },
+        ] {
+            let request = AdmissionRequest {
+                party: Some(party),
+                ..exact_request(utc(5, 3, 0))
+            };
+            assert_eq!(
+                evaluate_exact_time_admission(&context, &request, None),
+                Err(AdmissionRefusal::PartyCapacityInadequate)
+            );
+        }
+    }
+
+    fn selectable_duration() -> DurationSelectionPolicy {
+        DurationSelectionPolicy {
+            minimum_minutes: 15,
+            maximum_minutes: 60,
+            increment_minutes: 15,
         }
     }
 
@@ -754,6 +1645,239 @@ mod tests {
         // At 03:00, with the increment grid observed, both stations are free.
         let result = evaluate_exact_time_admission(&context, &exact_request(utc(5, 3, 0)), None);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn omitted_interval_and_resource_preserve_fixed_duration_fungible_selection() {
+        let (offering, exact) = exact_offering();
+        let snapshot = LedgerSnapshot::default();
+        let now = utc(4, 4, 0);
+        let context = exact_context(&offering, &exact, members(), &snapshot, now);
+
+        let admission =
+            evaluate_exact_time_admission(&context, &exact_request(utc(5, 2, 30)), None)
+                .expect("legacy request admits");
+        assert_eq!(admission.end, utc(5, 3, 0));
+        assert_eq!(admission.resource.as_deref(), Some("station-1"));
+    }
+
+    #[test]
+    fn requested_interval_must_be_on_the_authored_duration_lattice() {
+        let (offering, mut exact) = exact_offering();
+        exact.duration_selection = Some(selectable_duration());
+        let snapshot = LedgerSnapshot::default();
+        let now = utc(4, 4, 0);
+        let context = exact_context(&offering, &exact, members(), &snapshot, now);
+
+        for duration_minutes in [14, 16, 61] {
+            let request = AdmissionRequest {
+                duration_minutes: Some(duration_minutes),
+                ..exact_request(utc(5, 2, 30))
+            };
+            assert_eq!(
+                evaluate_exact_time_admission(&context, &request, None).err(),
+                Some(AdmissionRefusal::DurationOutOfPolicy),
+                "duration {duration_minutes} must be refused"
+            );
+        }
+
+        let request = AdmissionRequest {
+            duration_minutes: Some(45),
+            ..exact_request(utc(5, 2, 30))
+        };
+        let admission = evaluate_exact_time_admission(&context, &request, None)
+            .expect("an allowed duration admits");
+        assert_eq!(admission.end, utc(5, 3, 15));
+    }
+
+    #[test]
+    fn exact_resource_selection_never_falls_back_to_another_member() {
+        let (offering, mut exact) = exact_offering();
+        exact.allow_resource_selection = true;
+        let members = vec![
+            PoolMember {
+                resource_id: "station-1".to_owned(),
+                capabilities: Vec::new(),
+                available: true,
+                capacity_units: 1,
+                availability: None,
+            },
+            PoolMember {
+                resource_id: "station-2".to_owned(),
+                capabilities: Vec::new(),
+                available: false,
+                capacity_units: 1,
+                availability: None,
+            },
+        ];
+        let snapshot = LedgerSnapshot::default();
+        let now = utc(4, 4, 0);
+        let context = exact_context(&offering, &exact, &members, &snapshot, now);
+
+        let unavailable = AdmissionRequest {
+            resource: Some("station-2".to_owned()),
+            ..exact_request(utc(5, 2, 30))
+        };
+        assert_eq!(
+            evaluate_exact_time_admission(&context, &unavailable, None).err(),
+            Some(AdmissionRefusal::ResourceUnavailable)
+        );
+
+        let outside_pool = AdmissionRequest {
+            resource: Some("station-3".to_owned()),
+            ..exact_request(utc(5, 2, 30))
+        };
+        assert_eq!(
+            evaluate_exact_time_admission(&context, &outside_pool, None).err(),
+            Some(AdmissionRefusal::ResourceNotInPool)
+        );
+    }
+
+    #[test]
+    fn selected_member_must_carry_the_offerings_capabilities() {
+        let (mut offering, mut exact) = exact_offering();
+        exact.allow_resource_selection = true;
+        offering.requires_capabilities = vec!["notary".to_owned()];
+        let members = vec![
+            PoolMember {
+                resource_id: "station-1".to_owned(),
+                capabilities: Vec::new(),
+                available: true,
+                capacity_units: 1,
+                availability: None,
+            },
+            PoolMember {
+                resource_id: "station-2".to_owned(),
+                capabilities: vec!["notary".to_owned()],
+                available: true,
+                capacity_units: 1,
+                availability: None,
+            },
+        ];
+        let snapshot = LedgerSnapshot::default();
+        let context = exact_context(&offering, &exact, &members, &snapshot, utc(4, 4, 0));
+        let request = AdmissionRequest {
+            capabilities: vec!["notary".to_owned()],
+            resource: Some("station-1".to_owned()),
+            ..exact_request(utc(5, 2, 30))
+        };
+
+        assert_eq!(
+            evaluate_exact_time_admission(&context, &request, None).err(),
+            Some(AdmissionRefusal::CapabilityUnmatched)
+        );
+    }
+
+    #[test]
+    fn selected_member_buffer_conflict_refuses_instead_of_falling_back() {
+        let (offering, mut exact) = exact_offering();
+        exact.allow_resource_selection = true;
+        let snapshot = LedgerSnapshot {
+            claims: vec![booking_claim(
+                "claim-1",
+                "station-2",
+                utc(5, 1, 55),
+                utc(5, 2, 35),
+            )],
+        };
+        let context = exact_context(&offering, &exact, members(), &snapshot, utc(4, 4, 0));
+        let request = AdmissionRequest {
+            resource: Some("station-2".to_owned()),
+            ..exact_request(utc(5, 2, 30))
+        };
+
+        assert_eq!(
+            evaluate_exact_time_admission(&context, &request, None).err(),
+            Some(AdmissionRefusal::CapacityExhausted)
+        );
+    }
+
+    #[test]
+    fn named_resource_is_refused_unless_the_offering_opts_in() {
+        let (offering, exact) = exact_offering();
+        let snapshot = LedgerSnapshot::default();
+        let context = exact_context(&offering, &exact, members(), &snapshot, utc(4, 4, 0));
+        let request = AdmissionRequest {
+            resource: Some("station-1".to_owned()),
+            ..exact_request(utc(5, 2, 30))
+        };
+
+        assert_eq!(
+            evaluate_exact_time_admission(&context, &request, None).err(),
+            Some(AdmissionRefusal::ResourceSelectionNotAllowed)
+        );
+    }
+
+    #[test]
+    fn service_interval_coverage_preserves_buffered_boundary_slots() {
+        let (offering, exact) = exact_offering();
+        let snapshot = LedgerSnapshot::default();
+        let now = utc(4, 4, 0);
+        let opening = [CalendarInterval {
+            start: utc(5, 2, 0),
+            end: utc(5, 3, 0),
+        }];
+        let closures = [
+            CalendarInterval {
+                start: utc(5, 1, 55),
+                end: utc(5, 2, 0),
+            },
+            CalendarInterval {
+                start: utc(5, 3, 0),
+                end: utc(5, 3, 5),
+            },
+        ];
+        let context = ExactTimeContext {
+            open: &opening,
+            closures: &closures,
+            ..exact_context(&offering, &exact, members(), &snapshot, now)
+        };
+        let first = evaluate_exact_time_admission(&context, &exact_request(utc(5, 2, 0)), None)
+            .expect("the first displayed slot admits");
+        assert_eq!(first.occupied_start, utc(5, 1, 55));
+        let last = evaluate_exact_time_admission(&context, &exact_request(utc(5, 2, 30)), None)
+            .expect("the last displayed slot admits");
+        assert_eq!(last.occupied_end, utc(5, 3, 5));
+    }
+
+    #[test]
+    fn occupied_interval_coverage_rejects_buffers_outside_openings_or_in_closures() {
+        let (offering, mut exact) = exact_offering();
+        exact.opening_coverage = OpeningCoverage::OccupiedInterval;
+        let snapshot = LedgerSnapshot::default();
+        let now = utc(4, 4, 0);
+        let opening = [CalendarInterval {
+            start: utc(5, 2, 0),
+            end: utc(5, 3, 0),
+        }];
+        let context = ExactTimeContext {
+            open: &opening,
+            ..exact_context(&offering, &exact, members(), &snapshot, now)
+        };
+        assert_eq!(
+            evaluate_exact_time_admission(&context, &exact_request(utc(5, 2, 0)), None).err(),
+            Some(AdmissionRefusal::ScheduleUnpublished),
+            "the setup buffer starts before the opening"
+        );
+
+        let closure = [CalendarInterval {
+            start: utc(5, 3, 0),
+            end: utc(5, 3, 5),
+        }];
+        let opening = [CalendarInterval {
+            start: utc(5, 2, 0),
+            end: utc(5, 3, 0),
+        }];
+        let context = ExactTimeContext {
+            open: &opening,
+            closures: &closure,
+            ..exact_context(&offering, &exact, members(), &snapshot, now)
+        };
+        assert_eq!(
+            evaluate_exact_time_admission(&context, &exact_request(utc(5, 2, 30)), None).err(),
+            Some(AdmissionRefusal::LocationClosed),
+            "the cleanup buffer overlaps the closure"
+        );
     }
 
     /// AT-06, duplicate half: the same subject with an active booking is
@@ -1081,10 +2205,10 @@ mod tests {
 
         // A party larger than the offering can ever serve.
         let party = AdmissionRequest {
-            party: PartyCounts {
+            party: Some(PartyCounts {
                 recipients: 2,
                 attendees: 2,
-            },
+            }),
             ..exact_request(utc(5, 2, 30))
         };
         assert_eq!(
@@ -1104,6 +2228,8 @@ mod tests {
             resource_id: "station-1".to_owned(),
             capabilities: vec!["notary".to_owned()],
             available: true,
+            capacity_units: 1,
+            availability: None,
         }];
         let wanting_context =
             exact_context(&wanting, &exact_wanting, &capable_members, &snapshot, now);
@@ -1124,6 +2250,8 @@ mod tests {
             resource_id: "station-1".to_owned(),
             capabilities: vec!["interpreter".to_owned()],
             available: true,
+            capacity_units: 1,
+            availability: None,
         }];
         let available_context = exact_context(&wanting, &exact_wanting, &available, &snapshot, now);
         assert_eq!(
@@ -1139,6 +2267,8 @@ mod tests {
             resource_id: "station-1".to_owned(),
             capabilities: vec!["interpreter".to_owned()],
             available: false,
+            capacity_units: 1,
+            availability: None,
         }];
         let unavailable_context =
             exact_context(&wanting, &exact_wanting, &unavailable, &snapshot, now);
@@ -1208,6 +2338,7 @@ mod tests {
             }],
             leftover: None,
             staffing: None,
+            resources: Vec::new(),
             because: "The Saturday morning household block.".to_owned(),
         }
     }
@@ -1222,7 +2353,7 @@ mod tests {
             because: "Households arrive in a served morning block.".to_owned(),
             exact_time: None,
             arrival: Some(ArrivalOffering {
-                window: "household-morning-window".to_owned(),
+                window: Some("household-morning-window".to_owned()),
                 lead_time_minutes: 1,
                 horizon_days: 60,
             }),
@@ -1247,10 +2378,15 @@ mod tests {
         AdmissionRequest {
             offering: "household-morning".to_owned(),
             start: utc(10, 8, 0),
-            party: PartyCounts {
+            duration_minutes: None,
+            resource: None,
+            resource_units: 1,
+            additional_allocations: Vec::new(),
+            party: Some(PartyCounts {
                 recipients,
                 attendees,
-            },
+            }),
+            manager: None,
             channel: Some("public".to_owned()),
             duplicate_key: None,
             policy_revision: 1,
@@ -1258,6 +2394,7 @@ mod tests {
             capabilities: Vec::new(),
             prerequisites: Vec::new(),
             external_references: Vec::new(),
+            party_references: Vec::new(),
         }
     }
 
@@ -1664,6 +2801,11 @@ mod tests {
         exact.horizon_days = 3650;
         exact.start_increment_minutes = 30;
         exact.duration_minutes = 30;
+        exact.duration_selection = Some(DurationSelectionPolicy {
+            minimum_minutes: 30,
+            maximum_minutes: 60,
+            increment_minutes: 30,
+        });
         let snapshot = LedgerSnapshot::default();
         let now = Utc.with_ymd_and_hms(2026, 11, 1, 4, 0, 0).unwrap();
         let context = ExactTimeContext {
@@ -1677,16 +2819,17 @@ mod tests {
             now,
         };
         // Both 01:30 instants are on the grid and inside the real interval:
-        // the first (EDT) ends 06:00Z, the second (EST) ends 07:00Z.
-        let first = evaluate_exact_time_admission(
-            &context,
-            &exact_request(Utc.with_ymd_and_hms(2026, 11, 1, 5, 30, 0).unwrap()),
-            None,
-        )
-        .expect("the first 01:30 admits");
+        // the first (EDT) takes a selected 60 minutes and ends at the second
+        // 01:30 instant, while the second (EST) uses the 30-minute default.
+        let first_request = AdmissionRequest {
+            duration_minutes: Some(60),
+            ..exact_request(Utc.with_ymd_and_hms(2026, 11, 1, 5, 30, 0).unwrap())
+        };
+        let first = evaluate_exact_time_admission(&context, &first_request, None)
+            .expect("the first 01:30 admits");
         assert_eq!(
             first.end,
-            Utc.with_ymd_and_hms(2026, 11, 1, 6, 0, 0).unwrap()
+            Utc.with_ymd_and_hms(2026, 11, 1, 6, 30, 0).unwrap()
         );
         let second = evaluate_exact_time_admission(
             &context,

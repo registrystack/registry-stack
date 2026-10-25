@@ -20,6 +20,7 @@ use chrono::{DateTime, SecondsFormat, TimeDelta, Timelike, Utc};
 use jsonwebtoken::{Algorithm, EncodingKey, Header};
 use registry_platform_audit::{AuditHashSecret, AuditKeyHasher};
 use registry_platform_config::{SecretProvider, SecretReference, SecretResolver};
+use registry_platform_crypto::delivery_signature::{sign_v1, SignatureFields};
 use registry_platform_hooks::delivery::DeliveryOutcome;
 use registry_platform_hooks::{EnvelopeLimits, HookEnvelope, HookHandlerSource};
 use registry_platform_oidc::{
@@ -35,14 +36,19 @@ use registry_scheduling::config::{
 use registry_scheduling::config::{ReminderDestinationConfig, UrlHookDestinationConfig};
 use registry_scheduling::hooks::{ActivatedHooks, HookRuntimeIdentity};
 use registry_scheduling::http::{router, HttpState};
+use registry_scheduling::operational::{
+    OperationalProjectionConfig, OperationalProjectionField, OperationalReadPermissionConfig,
+    OperationalReadProfileConfig, OperationalResourceScope,
+};
 use registry_scheduling::runtime::{
     claim_due_intent_for_test, dispatch_due_intents, finish_intent_for_test, reminder_transport,
     send_claimed_intent_for_test, IntentLeaseForTest, ReminderTransport,
 };
 use registry_scheduling::service::SchedulingService;
+use registry_scheduling::source_busy::{BusyImpactProjection, BusyImportProfileConfig};
 use registry_scheduling::store::{
-    activation_layout, attempt_key_reference, ActivationRequest, ActivePackage, CommitError,
-    CommitOutcome, Commitment, PostgresStore, RoleMode, StoreError, SupplyContext,
+    activation_layout, attempt_key_reference, ActivationRequest, ActivePackage, BundleSupplyLine,
+    CommitError, CommitOutcome, CommitSupply, Commitment, PostgresStore, RoleMode, StoreError,
 };
 use registry_scheduling_core::{
     location_closure_intervals, location_open_intervals, AdmissionRefusal, AdmissionRequest,
@@ -58,6 +64,29 @@ use tower::ServiceExt;
 use uuid::Uuid;
 use wiremock::matchers::{body_string_contains, header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
+
+#[path = "postgres_commitments/atomic_allocations.rs"]
+mod atomic_allocations;
+#[path = "postgres_commitments/attendance.rs"]
+mod attendance;
+#[path = "postgres_commitments/booking_party.rs"]
+mod booking_party;
+#[path = "postgres_commitments/multi_window.rs"]
+mod multi_window;
+#[path = "postgres_commitments/operational_reads.rs"]
+mod operational_reads;
+#[path = "postgres_commitments/reservation_review.rs"]
+mod reservation_review;
+#[path = "postgres_commitments/resource_availability.rs"]
+mod resource_availability;
+#[path = "postgres_commitments/review_regressions.rs"]
+mod review_regressions;
+#[path = "postgres_commitments/selected_lifecycle.rs"]
+mod selected_lifecycle;
+#[path = "postgres_commitments/service_admission_regressions.rs"]
+mod service_admission_regressions;
+#[path = "postgres_commitments/source_busy.rs"]
+mod source_busy;
 
 const ISSUER: &str = "https://task-token.test";
 
@@ -83,7 +112,7 @@ const OVERLAPPING_OFFERING: &str = "registry-update-60";
 
 fn observer_policy() -> String {
     format!(
-        "{POLICY}hooks:\n  - id: confirmed-observer\n    phase: after\n    trigger: appointment.confirmed\n    projection: [appointmentId, offering, start, end, revision, policyRevision, state]\n    handler: {{type: url, destinationId: appointment-events}}\n  - id: rescheduled-observer\n    phase: after\n    trigger: appointment.rescheduled\n    projection: [appointmentId, offering, start, end, revision, policyRevision, state]\n    handler: {{type: url, destinationId: appointment-events}}\n  - id: cancelled-observer\n    phase: after\n    trigger: appointment.cancelled\n    projection: [appointmentId, revision, state]\n    handler: {{type: url, destinationId: appointment-events}}\n"
+        "{POLICY}hooks:\n  - id: confirmed-observer\n    phase: after\n    trigger: appointment.confirmed\n    projection: [appointmentId, offering, start, end, revision, policyRevision, state]\n    handler: {{type: url, destinationId: appointment-events}}\n  - id: rescheduled-observer\n    phase: after\n    trigger: appointment.rescheduled\n    projection: [appointmentId, offering, start, end, revision, policyRevision, state]\n    handler: {{type: url, destinationId: appointment-events}}\n  - id: cancelled-observer\n    phase: after\n    trigger: appointment.cancelled\n    projection: [appointmentId, revision, state]\n    handler: {{type: url, destinationId: appointment-events}}\n  - id: attendance-observer\n    phase: after\n    trigger: appointment.attendance-observed\n    projection: [appointmentId, appointmentRevision, attendanceRevision, attendanceState, observedAt, recordedAt, policyRevision]\n    handler: {{type: url, destinationId: appointment-events}}\n"
     )
 }
 
@@ -260,6 +289,20 @@ impl Fixture {
     }
 }
 
+async fn begin_current_test_writer(client: &tokio_postgres::Client) {
+    client
+        .batch_execute("BEGIN; SET LOCAL registry_scheduling.allocation_writer = 'v2'")
+        .await
+        .expect("begin a current atomic-allocation test writer");
+}
+
+async fn commit_current_test_writer(client: &tokio_postgres::Client) {
+    client
+        .batch_execute("COMMIT")
+        .await
+        .expect("commit the current test writer");
+}
+
 /// A fresh deployment in its own schema: migrated, adopted, seeded, published
 /// with every pool the policy names, and serving through the same router the
 /// runtime serves.
@@ -318,7 +361,7 @@ async fn fixture_publishing_with_hook_and_status(
     // resolves into it: table creation follows search_path, and the scoped
     // URL every store connection carries points at this schema, so it must
     // exist before the migrations run.
-    let (admin, connection) = tokio_postgres::connect(&base, tokio_postgres::NoTls)
+    let (mut admin, connection) = tokio_postgres::connect(&base, tokio_postgres::NoTls)
         .await
         .expect("connect the scheduling test database");
     tokio::spawn(async move { connection.await.expect("the scheduling admin connection") });
@@ -360,20 +403,30 @@ async fn fixture_publishing_with_hook_and_status(
     // against (the path operator tooling owns), and the store adopts the
     // deployment identity, the same claim `schedulingctl apply` makes on a
     // fresh database.
+    let seed = admin
+        .transaction()
+        .await
+        .expect("the facts seed transaction");
+    seed.batch_execute("SET LOCAL registry_scheduling.allocation_writer = 'v2'")
+        .await
+        .expect("the atomic allocation writer marker");
     for statement in [
         "INSERT INTO scheduling_locations(location_id, timezone) VALUES('north-counter','UTC')",
         "INSERT INTO scheduling_pools(pool_id) VALUES('north-counter')",
         "INSERT INTO scheduling_pools(pool_id) VALUES('two-counter')",
+        "INSERT INTO scheduling_pools(pool_id) VALUES('chairs')",
         "INSERT INTO scheduling_pool_members(resource_id, pool_id, available) \
          VALUES('station-1','north-counter',true)",
         "INSERT INTO scheduling_pool_members(resource_id, pool_id, available) \
          VALUES('station-2','two-counter',true)",
+        "INSERT INTO scheduling_pool_members(resource_id, pool_id, available, capacity_units) \
+         VALUES('chair-stock','chairs',true,30)",
     ] {
-        admin
-            .batch_execute(statement)
+        seed.batch_execute(statement)
             .await
             .expect("seed the scheduling facts");
     }
+    seed.commit().await.expect("commit the scheduling facts");
     store
         .adopt(SCHEDULING_ID)
         .await
@@ -437,7 +490,6 @@ async fn fixture_publishing_with_hook_and_status(
     let http = router(HttpState {
         service,
         authenticator: Arc::new(authenticator()),
-        store: store.clone(),
     });
     Fixture {
         http,
@@ -547,6 +599,38 @@ async fn fixture_with_task_status(status: Arc<TaskGrantStatusRegistry>) -> Fixtu
 }
 
 fn authenticator() -> SchedulingAuthenticator {
+    authenticator_with_busy_profiles(BTreeMap::new())
+}
+
+fn authenticator_with_busy_profiles(
+    busy_import_profiles: BTreeMap<String, BusyImportProfileConfig>,
+) -> SchedulingAuthenticator {
+    let operational_profile = |scope: &str, attendance: bool| OperationalReadProfileConfig {
+        scope: scope.to_owned(),
+        maximum_past_days: 30,
+        maximum_future_days: 90,
+        maximum_span_days: 62,
+        permissions: vec![OperationalReadPermissionConfig {
+            service: "registry-update".to_owned(),
+            location: "north-counter".to_owned(),
+            resources: OperationalResourceScope::Exact {
+                ids: vec!["station-1".to_owned(), "station-2".to_owned()],
+            },
+        }],
+        projection: OperationalProjectionConfig {
+            fields: vec![
+                OperationalProjectionField::OccupiedInterval,
+                OperationalProjectionField::Resource,
+                OperationalProjectionField::Units,
+                OperationalProjectionField::PartyCounts,
+                OperationalProjectionField::Allocations,
+            ]
+            .into_iter()
+            .chain(attendance.then_some(OperationalProjectionField::Attendance))
+            .collect(),
+            external_reference_products: vec!["registry-casework".to_owned()],
+        },
+    };
     let oidc = OidcConfig {
         provider: OidcIssuerConfig {
             issuer: registry_platform_yaml::Url::new(ISSUER).expect("valid issuer URL"),
@@ -561,6 +645,17 @@ fn authenticator() -> SchedulingAuthenticator {
         scope_claim: "registry_scopes".to_owned(),
         reads_scope: "scheduling-read".to_owned(),
         explain_scope: "scheduling-explain".to_owned(),
+        appointment_read_profiles: BTreeMap::from([
+            (
+                "desk".to_owned(),
+                operational_profile("scheduling-appointments-desk", false),
+            ),
+            (
+                "supervisor".to_owned(),
+                operational_profile("scheduling-appointments-supervisor", true),
+            ),
+        ]),
+        busy_import_profiles,
     };
     let verifier = TokenVerifierConfig::access_token_profile(
         ISSUER,
@@ -621,6 +716,34 @@ fn exact_supply_parts(
     let closures = location_closure_intervals(facts, &offering.location, &timezone)
         .expect("resolve the closures");
     (members, open, closures)
+}
+
+/// The one primary line an exact-time commitment places, as the service
+/// resolves it: a direct create names no resource, and a confirmation names
+/// the member its hold already occupies, read back from the ledger.
+fn primary_line<'p>(
+    offering: &'p OfferingPolicy,
+    (members, open, closures): &'p (
+        Vec<PoolMember>,
+        Vec<registry_platform_calendar::CalendarInterval>,
+        Vec<registry_platform_calendar::CalendarInterval>,
+    ),
+    resource: Option<&'p str>,
+) -> BundleSupplyLine<'p> {
+    BundleSupplyLine {
+        requirement_id: "primary".to_owned(),
+        offering,
+        exact: offering
+            .exact_time
+            .as_ref()
+            .expect("the test offering is exact-time"),
+        members,
+        open,
+        closures,
+        resource,
+        stored_resource: resource.is_some(),
+        units: 1,
+    }
 }
 
 /// The instant every fixture pins the deployment's clock at: tomorrow at
@@ -692,6 +815,15 @@ fn reader_token() -> String {
         "sub": "principal-read",
         "azp": CLIENT,
         "registry_scopes": "scheduling-read",
+        "registry_actor_kind": "service",
+    }))
+}
+
+fn operational_token(subject: &str, scopes: &str) -> String {
+    token(json!({
+        "sub": subject,
+        "azp": CLIENT,
+        "registry_scopes": scopes,
         "registry_actor_kind": "service",
     }))
 }
@@ -846,6 +978,183 @@ fn admission(fx: &Fixture, offering: &str, slot: DateTime<Utc>) -> Value {
     })
 }
 
+async fn selectable_interval_fixture() -> Fixture {
+    let policy = POLICY.replacen(
+        "durationMinutes: 30\n      bufferBeforeMinutes: 0\n      bufferAfterMinutes: 0",
+        "durationMinutes: 30\n      durationSelection: {minimumMinutes: 30, maximumMinutes: 120, incrementMinutes: 30}\n      allowResourceSelection: true\n      openingCoverage: occupied-interval\n      bufferBeforeMinutes: 15\n      bufferAfterMinutes: 15",
+        1,
+    );
+    let fx = fixture_publishing(
+        &policy,
+        &["north-counter".to_owned(), "two-counter".to_owned()],
+    )
+    .await;
+    begin_current_test_writer(&fx.admin).await;
+    fx.admin
+        .execute(
+            "INSERT INTO scheduling_pool_members(resource_id, pool_id, available) \
+             VALUES('station-3','north-counter',true)",
+            &[],
+        )
+        .await
+        .expect("a second independently reservable member");
+    commit_current_test_writer(&fx.admin).await;
+    fx
+}
+
+#[tokio::test]
+async fn selected_availability_binds_duration_resource_and_cursor() {
+    let fx = selectable_interval_fixture().await;
+    let (status, catalogue) = fx.get("/v1/offerings", &fx.reader).await;
+    assert_eq!(status, StatusCode::OK, "{catalogue}");
+    let offering = catalogue["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|offering| offering["id"] == OFFERING)
+        .unwrap();
+    assert_eq!(offering["durationSelection"]["maximumMinutes"], 120);
+    assert_eq!(offering["allowResourceSelection"], true);
+    assert_eq!(offering["pool"], "north-counter");
+    assert_eq!(offering["openingCoverage"], "occupied-interval");
+    let fixed = catalogue["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|offering| offering["id"] == SECOND_OFFERING)
+        .unwrap();
+    assert!(
+        fixed.get("pool").is_none(),
+        "a non-selectable offering does not expose its internal pool"
+    );
+    let uri = format!(
+        "{}&durationMinutes=90&resource=station-3&limit=2",
+        availability_uri(OFFERING, 300, 700)
+    );
+    let (status, first) = fx.get(&uri, &fx.reader).await;
+    assert_eq!(status, StatusCode::OK, "{first}");
+    let items = first["items"].as_array().expect("availability items");
+    assert_eq!(items.len(), 2);
+    for entry in items {
+        assert_eq!(
+            moment(entry, "end") - moment(entry, "start"),
+            TimeDelta::minutes(90)
+        );
+        assert_eq!(entry["free"], 1, "only the selected member is counted");
+    }
+    let cursor = first["nextCursor"].as_str().expect("a continuation");
+    let (status, second) = fx.get(&format!("{uri}&cursor={cursor}"), &fx.reader).await;
+    assert_eq!(status, StatusCode::OK, "{second}");
+    assert!(moment(&second["items"][0], "start") > moment(&items[1], "start"));
+    for altered in [
+        uri.replace("durationMinutes=90", "durationMinutes=60"),
+        uri.replace("station-3", "station-1"),
+    ] {
+        let (status, _) = fx
+            .get(&format!("{altered}&cursor={cursor}"), &fx.reader)
+            .await;
+        assert_eq!(
+            status,
+            StatusCode::BAD_REQUEST,
+            "selection changes cannot reuse a cursor"
+        );
+    }
+    let (status, invalid) = fx
+        .get(
+            &format!(
+                "{}&durationMinutes=45",
+                availability_uri(OFFERING, 300, 700)
+            ),
+            &fx.reader,
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{invalid}");
+    let (status, strict) = fx
+        .get(
+            &format!(
+                "{}&durationMinutes=30&resource=station-3",
+                availability_uri(OFFERING, 750, 810)
+            ),
+            &fx.reader,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{strict}");
+    assert_eq!(
+        strict["items"].as_array().unwrap().len(),
+        1,
+        "cleanup must fit the strict opening"
+    );
+}
+
+#[tokio::test]
+async fn named_interval_commitments_are_atomic_and_replay_the_exact_choices() {
+    let fx = selectable_interval_fixture().await;
+    let start = first_slot(&fx, OFFERING, 300, 700).await;
+    let mut request = admission(&fx, OFFERING, start);
+    request["durationMinutes"] = json!(90);
+    request["resource"] = json!("station-3");
+    let body = json!({"admission": request});
+    let (first, second) = tokio::join!(
+        fx.post(
+            "/v1/appointments",
+            &fx.agent,
+            "selected-first",
+            body.clone()
+        ),
+        fx.post(
+            "/v1/appointments",
+            &fx.agent,
+            "selected-second",
+            body.clone()
+        ),
+    );
+    let (success, success_key, refused) = if first.0 == StatusCode::CREATED {
+        (first, "selected-first", second)
+    } else {
+        (second, "selected-second", first)
+    };
+    assert_eq!(success.0, StatusCode::CREATED, "{:?}", success.1);
+    assert_eq!(refused.0, StatusCode::CONFLICT, "{:?}", refused.1);
+    assert_eq!(refused.1["code"], "capacity.exhausted");
+    assert_eq!(success.1["resource"], "station-3");
+    assert_eq!(
+        moment(&success.1, "end") - moment(&success.1, "start"),
+        TimeDelta::minutes(90)
+    );
+    let replay = fx
+        .post("/v1/appointments", &fx.agent, success_key, body.clone())
+        .await;
+    assert_eq!(replay, success, "same command retains its original outcome");
+    let mut changed = body.clone();
+    changed["admission"]["durationMinutes"] = json!(60);
+    let (status, refusal) = fx
+        .post("/v1/appointments", &fx.agent, success_key, changed)
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{refusal}");
+    assert_eq!(refusal["code"], "idempotency.key-reused");
+    let (status, explanation) = fx.get(
+        &format!("/v1/availability/explain?offering={OFFERING}&start={}&durationMinutes=90&resource=station-3", stamp(start)),
+        &fx.agent,
+    ).await;
+    assert_eq!(status, StatusCode::OK, "{explanation}");
+    assert_eq!(
+        explanation["publicCode"], "capacity.exhausted",
+        "explain must evaluate the chosen member"
+    );
+    let mut independent = body;
+    independent["admission"]["resource"] = json!("station-1");
+    let (status, other) = fx
+        .post(
+            "/v1/appointments",
+            &fx.agent,
+            "selected-independent",
+            independent,
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{other}");
+    assert_eq!(other["resource"], "station-1");
+}
+
 fn stamp(moment: DateTime<Utc>) -> String {
     moment.to_rfc3339_opts(SecondsFormat::Secs, true)
 }
@@ -854,6 +1163,33 @@ fn moment(value: &Value, field: &str) -> DateTime<Utc> {
     DateTime::parse_from_rfc3339(value[field].as_str().expect("an RFC 3339 field"))
         .expect("a parseable RFC 3339 field")
         .with_timezone(&Utc)
+}
+
+/// Every history event one claim recorded, in revision order, as its kind
+/// and its detail document.
+async fn history_details(fx: &Fixture, claim_id: &str) -> Vec<(String, Value)> {
+    fx.admin
+        .query(
+            "SELECT kind, detail FROM scheduling_history WHERE claim_id=$1 ORDER BY revision",
+            &[&Uuid::parse_str(claim_id).expect("a claim id")],
+        )
+        .await
+        .expect("read the claim history")
+        .iter()
+        .map(|row| (row.get::<_, String>(0), row.get::<_, Value>(1)))
+        .collect()
+}
+
+/// The field names of one history detail document, in sorted order.
+fn detail_keys(detail: &Value) -> Vec<&str> {
+    let mut keys = detail
+        .as_object()
+        .expect("a history detail object")
+        .keys()
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    keys.sort_unstable();
+    keys
 }
 
 fn availability_uri(offering: &str, from_minutes: i64, to_minutes: i64) -> String {
@@ -1377,7 +1713,6 @@ async fn rotating_the_audit_key_keeps_existing_claims_with_their_owner() {
             .with_hooks(fx.hooks.clone()),
         ),
         authenticator: Arc::new(authenticator()),
-        store: fx.store.clone(),
     });
     let through_rotated = |method: &str, uri: String, token: &str, key: Option<&str>, body| {
         send(
@@ -2456,6 +2791,7 @@ async fn an_elapsed_booking_no_longer_holds_the_partys_duplicate_key() {
 
     // What the passage of time does to that booking, with no sweeper and no
     // transition the party could have reached.
+    begin_current_test_writer(&fx.admin).await;
     fx.admin
         .execute(
             "UPDATE scheduling_claims SET \
@@ -2468,6 +2804,18 @@ async fn an_elapsed_booking_no_longer_holds_the_partys_duplicate_key() {
         )
         .await
         .expect("the standing booking elapses");
+    fx.admin
+        .execute(
+            "UPDATE scheduling_claim_allocations AS a SET \
+             occupied_start = $2::timestamptz - interval '2 hours', \
+             occupied_end = $2::timestamptz - interval '1 hour' \
+             FROM scheduling_claims AS c \
+             WHERE a.claim_id = c.claim_id AND c.duplicate_key = $1",
+            &[&"subject:elapsed", &pinned_now()],
+        )
+        .await
+        .expect("every physical allocation of the standing booking elapses");
+    commit_current_test_writer(&fx.admin).await;
 
     let (status, appointment) = fx
         .post(
@@ -2585,7 +2933,6 @@ async fn a_duplicate_active_key_survives_an_opening_shift_on_the_same_pool() {
     fx.http = router(HttpState {
         service,
         authenticator: Arc::new(authenticator()),
-        store: fx.store.clone(),
     });
     fx.revision = u64::try_from(revision).expect("a bounded policy revision");
 
@@ -3299,13 +3646,32 @@ async fn a_delayed_confirmation_cannot_transfer_rebooked_capacity_after_expiry()
     let expires_at = moment(&hold, "expiresAt");
     let confirmation_started_at = expires_at - TimeDelta::seconds(1);
     let after_expiry = expires_at + TimeDelta::seconds(1);
-    let hold_actor = fx
+    let held = fx
         .store
         .claim(hold_id)
         .await
         .expect("read the held claim")
-        .expect("the hold stands")
-        .actor;
+        .expect("the hold stands");
+    let hold_actor = held.actor.clone();
+    // The confirmation request the service rebuilds from the hold's own
+    // allocation: its interval, and the member it already occupies.
+    let mut confirmation: AdmissionRequest =
+        serde_json::from_value(admission(&fx, OFFERING, slot)).expect("the admission request");
+    confirmation.duration_minutes = Some(
+        u32::try_from(
+            held.displayed_end
+                .signed_duration_since(held.displayed_start)
+                .num_minutes(),
+        )
+        .expect("a bounded hold interval"),
+    );
+    confirmation.resource = Some(
+        held.allocations
+            .first()
+            .expect("an exact-time hold carries its allocation")
+            .resource
+            .clone(),
+    );
 
     // Capture the confirmation's request clock and resolved supply while the
     // hold is live, then stop it before the capacity transaction opens. This
@@ -3321,16 +3687,12 @@ async fn a_delayed_confirmation_cannot_transfer_rebooked_capacity_after_expiry()
             .facts()
             .await
             .expect("resolve supply before the stall");
-        let (members, open, closures) = exact_supply_parts(&policy, &facts, offering);
-        let supply = SupplyContext::ExactTime {
-            exact: offering
-                .exact_time
-                .as_ref()
-                .expect("the exact-time offering"),
-            members: &members,
-            open: &open,
-            closures: &closures,
-        };
+        let parts = exact_supply_parts(&policy, &facts, offering);
+        let lines = [primary_line(
+            offering,
+            &parts,
+            confirmation.resource.as_deref(),
+        )];
         let commitment = Commitment {
             now: confirmation_started_at,
             policy_revision: i64::try_from(delayed_revision).expect("a bounded revision"),
@@ -3338,6 +3700,7 @@ async fn a_delayed_confirmation_cannot_transfer_rebooked_capacity_after_expiry()
             actor: &hold_actor,
             actor_issuer: ISSUER,
             actor_subject: "principal-agent",
+            source_manager: None,
             idempotency_key: "expiry-race-confirm",
             request_hash: "sha256:expiry-race-confirm",
             attempt_expires_at: confirmation_started_at + TimeDelta::days(7),
@@ -3349,7 +3712,12 @@ async fn a_delayed_confirmation_cannot_transfer_rebooked_capacity_after_expiry()
             .expect("the test is waiting for the captured confirmation");
         resume_rx.await.expect("resume the delayed confirmation");
         delayed_store
-            .confirm_hold(hold_id, offering, &supply, commitment)
+            .confirm_hold(
+                hold_id,
+                &CommitSupply::Bundle(&lines),
+                Some(&confirmation),
+                commitment,
+            )
             .await
     });
     started_rx
@@ -3361,23 +3729,14 @@ async fn a_delayed_confirmation_cannot_transfer_rebooked_capacity_after_expiry()
     let policy = read_policy(POLICY).expect("the scheduling test policy");
     let offering = policy.offering(OFFERING).expect("the test offering");
     let (facts, facts_revision) = fx.store.facts().await.expect("resolve current supply");
-    let (members, open, closures) = exact_supply_parts(&policy, &facts, offering);
-    let supply = SupplyContext::ExactTime {
-        exact: offering
-            .exact_time
-            .as_ref()
-            .expect("the exact-time offering"),
-        members: &members,
-        open: &open,
-        closures: &closures,
-    };
+    let parts = exact_supply_parts(&policy, &facts, offering);
+    let lines = [primary_line(offering, &parts, None)];
     let request: AdmissionRequest =
         serde_json::from_value(admission(&fx, OFFERING, slot)).expect("the admission request");
     let competing = fx
         .store
         .create_appointment(
-            offering,
-            &supply,
+            &CommitSupply::Bundle(&lines),
             &request,
             Commitment {
                 now: after_expiry,
@@ -3386,6 +3745,7 @@ async fn a_delayed_confirmation_cannot_transfer_rebooked_capacity_after_expiry()
                 actor: "competing-actor",
                 actor_issuer: ISSUER,
                 actor_subject: "competing-principal",
+                source_manager: None,
                 idempotency_key: "expiry-race-booking",
                 request_hash: "sha256:expiry-race-booking",
                 attempt_expires_at: after_expiry + TimeDelta::days(7),
@@ -3433,6 +3793,159 @@ async fn a_delayed_confirmation_cannot_transfer_rebooked_capacity_after_expiry()
         counts.get::<_, String>(1),
         "active",
         "the refused confirmation rolls back without consuming the hold row"
+    );
+}
+
+/// Plant a hold the ledger carries without allocation rows on the exact-time
+/// test offering, owned by the agent caller: the shape a window hold leaves
+/// when it ended before its offering was republished as exact time.
+async fn unallocated_hold(fx: &Fixture, state: &str, expires_at: DateTime<Utc>) -> Uuid {
+    let hold_id = Uuid::new_v4();
+    let start = pinned_now() + TimeDelta::hours(2);
+    let end = start + TimeDelta::minutes(30);
+    let policy_revision = i64::try_from(fx.revision).expect("a bounded revision");
+    begin_current_test_writer(&fx.admin).await;
+    fx.admin
+        .execute(
+            "INSERT INTO scheduling_claims(claim_id, kind, state, offering, \
+             operational_service, operational_location, operational_mode, supply_id, \
+             displayed_start, displayed_end, occupied_start, occupied_end, units, \
+             hold_expires_at, revision, policy_revision, actor, owner_issuer, owner_subject) \
+             VALUES($1,'hold',$2,$3,'registry-update','north-counter','arrival-window', \
+             'retired-window',$4,$5,$4,$5,1,$6,1,$7,'actor-pseudonym',$8,'principal-agent')",
+            &[
+                &hold_id,
+                &state,
+                &OFFERING,
+                &start,
+                &end,
+                &expires_at,
+                &policy_revision,
+                &ISSUER,
+            ],
+        )
+        .await
+        .expect("plant the unallocated hold");
+    commit_current_test_writer(&fx.admin).await;
+    hold_id
+}
+
+/// A hold without allocation rows on an exact-time offering has nothing to
+/// place. Its confirmation answers the stored attempt or the refusal the
+/// hold's state earns, and a live one is an inconsistent ledger that writes
+/// nothing, whether the service or the store meets it.
+#[tokio::test]
+async fn an_unallocated_exact_time_hold_answers_only_a_replay_or_a_refusal() {
+    let fx = fixture().await;
+    let later = pinned_now() + TimeDelta::minutes(5);
+    let earlier = pinned_now() - TimeDelta::minutes(5);
+
+    let released = unallocated_hold(&fx, "released", later).await;
+    let (status, problem) = fx
+        .post(
+            "/v1/appointments",
+            &fx.agent,
+            "unallocated-released",
+            json!({"hold": released, "admission": null}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{problem}");
+    assert_eq!(problem["code"], "hold.released");
+
+    // An expired hold is refused as expired, and that refusal's receipt
+    // answers a retry of the key even after the hold's state moves on.
+    let expired = unallocated_hold(&fx, "active", earlier).await;
+    let confirm = json!({"hold": expired, "admission": null});
+    let (status, problem) = fx
+        .post(
+            "/v1/appointments",
+            &fx.agent,
+            "unallocated-expired",
+            confirm.clone(),
+        )
+        .await;
+    assert_eq!(status, StatusCode::GONE, "{problem}");
+    assert_eq!(problem["code"], "hold.expired");
+    begin_current_test_writer(&fx.admin).await;
+    fx.admin
+        .execute(
+            "UPDATE scheduling_claims SET state='released' WHERE claim_id=$1",
+            &[&expired],
+        )
+        .await
+        .expect("close the expired hold");
+    commit_current_test_writer(&fx.admin).await;
+    let (status, problem) = fx
+        .post(
+            "/v1/appointments",
+            &fx.agent,
+            "unallocated-expired",
+            confirm,
+        )
+        .await;
+    assert_eq!(
+        status,
+        StatusCode::GONE,
+        "the stored refusal answers the retry: {problem}"
+    );
+    assert_eq!(problem["code"], "hold.expired");
+
+    // A live hold without its rows never reaches a capacity transaction, and
+    // the store refuses one it is handed directly without writing.
+    let live = unallocated_hold(&fx, "active", later).await;
+    let (status, problem) = fx
+        .post(
+            "/v1/appointments",
+            &fx.agent,
+            "unallocated-live",
+            json!({"hold": live, "admission": null}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{problem}");
+    let (_, facts_revision) = fx.store.facts().await.expect("the records revision");
+    let direct = fx
+        .store
+        .confirm_unallocated_hold(
+            live,
+            Commitment {
+                now: pinned_now(),
+                policy_revision: i64::try_from(fx.revision).expect("a bounded revision"),
+                facts_revision,
+                actor: "actor-pseudonym",
+                actor_issuer: ISSUER,
+                actor_subject: "principal-agent",
+                source_manager: None,
+                idempotency_key: "unallocated-live-direct",
+                request_hash: "sha256:unallocated-live-direct",
+                attempt_expires_at: pinned_now() + TimeDelta::days(7),
+                grant_exp_unix: None,
+                hooks: None,
+            },
+        )
+        .await;
+    assert!(
+        matches!(direct, Err(CommitError::Store(StoreError::Corrupt))),
+        "a live unallocated hold is an inconsistent ledger: {direct:?}"
+    );
+    let ledger = fx
+        .admin
+        .query_one(
+            "SELECT \
+                 (SELECT count(*) FROM scheduling_claims WHERE kind='booking'), \
+                 (SELECT state FROM scheduling_claims WHERE claim_id=$1)",
+            &[&live],
+        )
+        .await
+        .expect("read the claim ledger");
+    assert_eq!(
+        ledger.get::<_, i64>(0),
+        0,
+        "no confirmation wrote a booking"
+    );
+    assert_eq!(
+        ledger.get::<_, String>(1),
+        "active",
+        "the live hold is left for release or expiry"
     );
 }
 
@@ -4416,7 +4929,9 @@ fn transport_to(destination: &MockServer) -> Arc<ReminderTransport> {
         reminder_transport(
             &ReminderDestinationConfig {
                 url: format!("{}/events", destination.uri()),
+                purpose_urls: Default::default(),
                 bearer_token_ref: None,
+                hmac_sha256_key_ref: None,
             },
             &secrets,
         )
@@ -4431,6 +4946,8 @@ fn records_without(retired: &[&str]) -> SchedulingFacts {
         resource_id: resource_id.to_owned(),
         capabilities: Vec::new(),
         available: true,
+        capacity_units: 1,
+        availability: None,
     };
     SchedulingFacts {
         locations: vec![LocationRecord {
@@ -4463,7 +4980,7 @@ fn records_without(retired: &[&str]) -> SchedulingFacts {
 }
 
 #[tokio::test]
-async fn a_records_swap_refuses_to_strand_a_resource_an_active_claim_occupies() {
+async fn a_records_swap_preserves_an_active_allocation_when_physical_inventory_is_lost() {
     let fx = fixture().await;
     let slot = first_slot(&fx, OFFERING, 90, 200).await;
     let (status, _) = fx
@@ -4476,41 +4993,43 @@ async fn a_records_swap_refuses_to_strand_a_resource_an_active_claim_occupies() 
         .await;
     assert_eq!(status, StatusCode::CREATED, "the direct create commits");
 
-    let refusal = fx
-        .store
+    fx.store
         .replace_facts(SCHEDULING_ID, &records_without(&["station-1"]))
         .await
-        .expect_err("a swap that strands a live booking is refused");
-    assert!(
-        refusal.to_string().contains("station-1"),
-        "{refusal} does not name the occupied resource"
-    );
-
-    // The refusal rolled the whole swap back, so the records stand as they
-    // were and the booking still occupies its slot.
+        .expect("physical inventory loss remains representable");
     let (standing, _) = fx.store.facts().await.expect("the records survive");
     assert_eq!(
         standing
             .pool("north-counter")
             .map(|pool| pool.members.len()),
-        Some(1),
-        "the occupied member is still a member"
+        Some(0),
+        "the lost member is absent from current facts"
     );
+    let retained: i64 = fx
+        .admin
+        .query_one(
+            "SELECT count(*) FROM scheduling_claim_allocations \
+         WHERE resource_id='station-1'",
+            &[],
+        )
+        .await
+        .expect("read the retained allocation")
+        .get(0);
+    assert_eq!(retained, 1, "physical loss does not erase commitment truth");
     assert!(
         !slot_offered(&fx, OFFERING, 90, 200, slot).await,
-        "the booking still consumes its slot"
+        "lost stock cannot accept a new allocation"
     );
 
-    // Retiring an idle station is exactly what the command is for.
+    // Reintroducing the same resource identity restores physical stock, but
+    // the retained allocation still consumes it over its occupied interval.
     fx.store
-        .replace_facts(SCHEDULING_ID, &records_without(&["station-2"]))
+        .replace_facts(SCHEDULING_ID, &records_without(&[]))
         .await
-        .expect("retiring an unoccupied resource commits");
-    let (standing, _) = fx.store.facts().await.expect("the records are readable");
-    assert_eq!(
-        standing.pool("two-counter").map(|pool| pool.members.len()),
-        Some(0),
-        "the idle member is gone"
+        .expect("reintroducing physical stock commits");
+    assert!(
+        !slot_offered(&fx, OFFERING, 90, 200, slot).await,
+        "the reintroduced resource remains occupied by the retained allocation"
     );
 }
 
@@ -5550,16 +6069,29 @@ const DUPLICATE_KEY_CEILING_BYTES: usize = 256;
 /// Write one claim carrying `duplicate_key` straight into the ledger, so the
 /// column's own bound is what decides, not a caller-facing check above it.
 async fn claim_keyed(fx: &Fixture, duplicate_key: &str) -> Result<u64, tokio_postgres::Error> {
-    fx.admin
+    begin_current_test_writer(&fx.admin).await;
+    let result = fx
+        .admin
         .execute(
-            "INSERT INTO scheduling_claims(claim_id, kind, state, offering, supply_id, \
+            "INSERT INTO scheduling_claims(claim_id, kind, state, offering, \
+             operational_service, operational_location, operational_mode, supply_id, \
              displayed_start, displayed_end, occupied_start, occupied_end, units, \
              duplicate_key, revision, policy_revision, actor) \
-             VALUES($1,'booking','active','registry-update-30','station-1', \
+             VALUES($1,'booking','active','registry-update-30', \
+             'registry-update','north-counter','exact-time','station-1', \
              $3, $3, $3, $3, 1, $2, 1, 1, 'actor-pseudonym')",
             &[&Uuid::new_v4(), &duplicate_key, &pinned_now()],
         )
-        .await
+        .await;
+    if result.is_ok() {
+        commit_current_test_writer(&fx.admin).await;
+    } else {
+        fx.admin
+            .batch_execute("ROLLBACK")
+            .await
+            .expect("roll back the refused claim");
+    }
+    result
 }
 
 #[tokio::test]
@@ -5572,6 +6104,81 @@ async fn the_claim_ledger_bounds_a_caller_chosen_duplicate_key() {
     assert!(
         refused.is_err(),
         "the ledger stores a duplicate key of any length the body ceiling allows"
+    );
+}
+
+/// Write one booking claim and one allocation of it straight into the ledger,
+/// each carrying the given operational mode, so the scope checks are what
+/// decide. The rows never stay: the transaction always rolls back.
+async fn scoped_rows(
+    fx: &Fixture,
+    claim_mode: Option<&str>,
+    allocation_mode: Option<&str>,
+) -> Result<(), tokio_postgres::Error> {
+    let claim_id = Uuid::new_v4();
+    let start = pinned_now();
+    let end = start + TimeDelta::minutes(30);
+    begin_current_test_writer(&fx.admin).await;
+    let mut result = fx
+        .admin
+        .execute(
+            "INSERT INTO scheduling_claims(claim_id, kind, state, offering, \
+             operational_service, operational_location, operational_mode, supply_id, \
+             displayed_start, displayed_end, occupied_start, occupied_end, units, \
+             revision, policy_revision, actor) \
+             VALUES($1,'booking','active','registry-update-30', \
+             'registry-update','north-counter',$2,'station-1', \
+             $3, $4, $3, $4, 1, 1, 1, 'actor-pseudonym')",
+            &[&claim_id, &claim_mode, &start, &end],
+        )
+        .await
+        .map(drop);
+    if result.is_ok() {
+        result = fx
+            .admin
+            .execute(
+                "INSERT INTO scheduling_claim_allocations( \
+                 claim_id, requirement_kind, requirement_index, part_index, offering, \
+                 operational_service, operational_location, operational_mode, anchor_id, \
+                 resource_id, occupied_start, occupied_end, units) \
+                 VALUES($1,'primary',0,0,'registry-update-30', \
+                 'registry-update','north-counter',$2,'station-1', \
+                 'station-1', $3, $4, 1)",
+                &[&claim_id, &allocation_mode, &start, &end],
+            )
+            .await
+            .map(drop);
+    }
+    fx.admin
+        .batch_execute("ROLLBACK")
+        .await
+        .expect("roll back the probe rows");
+    result
+}
+
+#[tokio::test]
+async fn the_ledger_refuses_a_claim_or_an_allocation_without_an_operational_mode() {
+    let fx = fixture().await;
+    scoped_rows(&fx, Some("exact-time"), Some("exact-time"))
+        .await
+        .expect("a labeled claim and allocation are stored");
+
+    let refused = scoped_rows(&fx, None, Some("exact-time"))
+        .await
+        .expect_err("a claim without an operational mode is refused");
+    assert_eq!(
+        refused.as_db_error().and_then(|error| error.constraint()),
+        Some("scheduling_claims_operational_scope_check"),
+        "{refused}"
+    );
+
+    let refused = scoped_rows(&fx, Some("exact-time"), None)
+        .await
+        .expect_err("an allocation without an operational mode is refused");
+    assert_eq!(
+        refused.as_db_error().and_then(|error| error.constraint()),
+        Some("scheduling_claim_allocations_scope_check"),
+        "{refused}"
     );
 }
 
@@ -6153,8 +6760,8 @@ async fn intent_state(fx: &Fixture, claim_id: &str) -> (String, i32, bool) {
 }
 
 /// A dispatch pass sends every due intent to the configured destination and
-/// reads each answer back the way the classes say: a taken event is delivered
-/// and never sent twice, a destination that could not answer proves nothing
+/// reads each answer back the way the classes say: a recorded successful
+/// delivery is not retried, a destination that could not answer proves nothing
 /// and waits out a back-off, and an outright refusal is held for an operator
 /// rather than retried against a destination that has already said no.
 ///
@@ -6254,6 +6861,198 @@ async fn a_dispatch_pass_delivers_retries_and_holds_by_what_the_destination_answ
             .len(),
         3,
         "nothing a pass concluded is sent to the destination again"
+    );
+}
+
+#[tokio::test]
+async fn a_signed_reminder_uses_the_shared_event_delivery_contract() {
+    const SIGNING_KEY: &str = "reminder-delivery-signing-key-0123456789abcdef";
+
+    let destination = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/events"))
+        .respond_with(ResponseTemplate::new(202))
+        .mount(&destination)
+        .await;
+    let fx = fixture().await;
+    let (appointment, _) = booked(&fx, 90, 200, "dispatch-signed").await;
+    let secret_name =
+        format!("SCHEDULING_REMINDER_{}", Uuid::new_v4().simple()).to_ascii_uppercase();
+    let bearer_name =
+        format!("SCHEDULING_REMINDER_BEARER_{}", Uuid::new_v4().simple()).to_ascii_uppercase();
+    std::env::set_var(&secret_name, SIGNING_KEY);
+    std::env::set_var(&bearer_name, "synthetic-reminder-token");
+    let secrets = SecretResolver::new([SecretProvider::Environment], "/private/tmp")
+        .expect("the scheduling reminder secret resolver");
+    let destination_config: ReminderDestinationConfig = serde_json::from_value(json!({
+        "url": format!("{}/events", destination.uri()),
+        "hmacSha256KeyRef": format!("secret:env/{secret_name}"),
+        "bearerTokenRef": format!("secret:env/{bearer_name}")
+    }))
+    .expect("the signed reminder destination configuration");
+    let transport = reminder_transport(&destination_config, &secrets)
+        .expect("the signed destination compiles into a frozen transport");
+
+    bring_intents_due(&fx, pinned_now()).await;
+    dispatch_due_intents(&fx.store, SCHEDULING_ID, Some(Arc::new(transport)))
+        .await
+        .expect("the signed dispatch pass runs");
+
+    let requests = destination
+        .received_requests()
+        .await
+        .expect("the signed reminder request");
+    let request = requests
+        .iter()
+        .find(|request| String::from_utf8_lossy(&request.body).contains(appointment.as_str()))
+        .expect("the appointment's signed reminder");
+    let event: Value = serde_json::from_slice(&request.body).expect("the canonical reminder event");
+    let header = |name: &str| {
+        request
+            .headers
+            .get(name)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_else(|| panic!("missing valid {name} header"))
+    };
+    assert_eq!(header("ce-specversion"), "1.0");
+    assert_eq!(header("ce-id"), event["id"]);
+    assert_eq!(header("ce-source"), event["source"]);
+    assert_eq!(header("ce-type"), event["type"]);
+    assert_eq!(header("ce-time"), event["time"]);
+    assert_eq!(header("ce-dataschema"), event["dataschema"]);
+    assert_eq!(header("x-registry-event-generation"), "1");
+    assert_eq!(header("x-registry-delivery-attempt"), "1");
+    assert!(!header("x-registry-delivery-time").is_empty());
+    assert!(header("idempotency-key").starts_with("sha256:"));
+    assert_eq!(header("authorization"), "Bearer synthetic-reminder-token");
+    let fields = |request_target| SignatureFields {
+        id: header("ce-id"),
+        source: header("ce-source"),
+        event_type: header("ce-type"),
+        time: header("ce-time"),
+        data_schema: header("ce-dataschema"),
+        generation: header("x-registry-event-generation"),
+        attempt: header("x-registry-delivery-attempt"),
+        delivery_time: header("x-registry-delivery-time"),
+        method: "POST",
+        request_target,
+        content_type: "application/json",
+        idempotency_key: header("idempotency-key"),
+        body: &request.body,
+    };
+    let expected =
+        sign_v1(SIGNING_KEY.as_bytes(), fields("/events")).expect("the shared signature");
+    assert_eq!(header("x-registry-signature"), expected);
+    assert_ne!(
+        sign_v1(SIGNING_KEY.as_bytes(), fields("/other")).expect("the target-bound signature"),
+        expected,
+        "the exact request target is covered"
+    );
+}
+
+/// A receiver can accept an event before the dispatcher loses the database
+/// acknowledgement. Recovery retries the same event after the lease expires,
+/// so the receiver can deduplicate it by the stable envelope identifier.
+#[tokio::test]
+async fn an_unrecorded_delivery_is_retried_with_the_same_event() {
+    let destination = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/events"))
+        .respond_with(ResponseTemplate::new(202))
+        .mount(&destination)
+        .await;
+    let fx = fixture().await;
+    let (appointment, _) = booked(&fx, 90, 200, "dispatch-unrecorded").await;
+    let outbox_id = intent_of(&fx, &appointment, "confirmation").await;
+    make_intent_due(&fx, outbox_id).await;
+    let transport = transport_to(&destination);
+
+    fx.admin
+        .batch_execute(
+            "CREATE FUNCTION refuse_delivery_acknowledgement() RETURNS trigger
+             LANGUAGE plpgsql AS $fixture$
+             BEGIN
+               IF NEW.state = 'delivered' THEN
+                 RAISE EXCEPTION 'fixture delivery acknowledgement unavailable';
+               END IF;
+               RETURN NEW;
+             END;
+             $fixture$;
+             CREATE TRIGGER refuse_delivery_acknowledgement
+               BEFORE UPDATE OF state ON scheduling_outbox
+               FOR EACH ROW EXECUTE FUNCTION refuse_delivery_acknowledgement();",
+        )
+        .await
+        .expect("interrupt the delivery outcome write");
+    dispatch_due_intents(&fx.store, SCHEDULING_ID, Some(Arc::clone(&transport)))
+        .await
+        .expect_err("the accepted delivery cannot be recorded");
+    let received = destination.received_requests().await.expect("the requests");
+    assert_eq!(
+        received.len(),
+        1,
+        "the receiver accepted the first delivery"
+    );
+    let first: Value = serde_json::from_slice(&received[0].body).expect("the event");
+    assert_eq!(first["data"]["appointmentId"], appointment);
+    assert_eq!(
+        outbox_row(&fx, outbox_id).await,
+        ("leased".to_owned(), 1, None, None),
+        "the unrecorded outcome leaves the intent leased"
+    );
+
+    fx.admin
+        .batch_execute(
+            "DROP TRIGGER refuse_delivery_acknowledgement ON scheduling_outbox;
+             DROP FUNCTION refuse_delivery_acknowledgement();",
+        )
+        .await
+        .expect("restore the delivery outcome write");
+    dispatch_due_intents(&fx.store, SCHEDULING_ID, Some(Arc::clone(&transport)))
+        .await
+        .expect("a pass inside the lease leaves the intent alone");
+    assert_eq!(
+        destination
+            .received_requests()
+            .await
+            .expect("the requests")
+            .len(),
+        1,
+        "recovery waits for the outstanding lease"
+    );
+    lapse_intent_lease(&fx, outbox_id).await;
+    dispatch_due_intents(&fx.store, SCHEDULING_ID, Some(Arc::clone(&transport)))
+        .await
+        .expect("recover the uncertain attempt after its lease");
+    assert_eq!(
+        outbox_row(&fx, outbox_id).await,
+        (
+            "pending".to_owned(),
+            1,
+            Some("delivery_failed".to_owned()),
+            Some(30_000)
+        ),
+        "recovery applies the frozen retry schedule"
+    );
+    make_intent_due(&fx, outbox_id).await;
+    dispatch_due_intents(&fx.store, SCHEDULING_ID, Some(transport))
+        .await
+        .expect("retry the unrecorded delivery after its back-off");
+
+    let received = destination.received_requests().await.expect("the requests");
+    assert_eq!(
+        received.len(),
+        2,
+        "the receiver sees the accepted event again"
+    );
+    assert_eq!(
+        received[0].body, received[1].body,
+        "retries preserve the canonical event"
+    );
+    assert_eq!(
+        outbox_row(&fx, outbox_id).await,
+        ("delivered".to_owned(), 2, None, None),
+        "the retry records delivery as the second attempt"
     );
 }
 
@@ -6387,6 +7186,7 @@ fn records_with_window(start: DateTime<Utc>) -> SchedulingFacts {
         }],
         leftover: None,
         staffing: None,
+        resources: Vec::new(),
         because: "test".to_owned(),
     });
     facts
@@ -6534,7 +7334,7 @@ fn window_on_north_counter() -> SchedulingPolicy {
         .iter_mut()
         .find_map(|offering| offering.arrival.as_mut())
         .expect("the arrival offering")
-        .window = "north-counter".to_owned();
+        .window = Some("north-counter".to_owned());
     policy
 }
 
@@ -6570,6 +7370,7 @@ async fn a_supply_identifier_may_not_anchor_both_a_pool_and_a_window() {
     // because both writes now refuse to produce one, and the publication
     // that would claim it as a pool is refused rather than skipping the
     // anchor and stranding the offering that needs it.
+    begin_current_test_writer(&fx.admin).await;
     fx.admin
         .execute(
             "INSERT INTO scheduling_supply(supply_id, kind) VALUES('south-counter','window')",
@@ -6577,6 +7378,7 @@ async fn a_supply_identifier_may_not_anchor_both_a_pool_and_a_window() {
         )
         .await
         .expect("plant a window anchor the policy will collide with");
+    commit_current_test_writer(&fx.admin).await;
     let deployed = fx
         .store
         .scheduling_meta()
@@ -6652,6 +7454,8 @@ async fn policy_publication_refuses_an_exact_time_offering_on_a_deployed_windows
             resource_id: "station-3".to_owned(),
             capabilities: Vec::new(),
             available: true,
+            capacity_units: 1,
+            availability: None,
         }],
     });
     staffed.windows[0].staffing = Some(WindowStaffing {
@@ -6787,6 +7591,7 @@ async fn changed_window_records_must_advance_the_revision_even_after_removal() {
 /// a hand-edited table, can leave behind.
 async fn plant_window(fx: &Fixture, window: &PublishedWindow) {
     let record = serde_json::to_value(window).expect("a serializable window record");
+    begin_current_test_writer(&fx.admin).await;
     fx.admin
         .execute(
             "INSERT INTO scheduling_windows(window_id, window_record) VALUES($1,$2) \
@@ -6803,6 +7608,7 @@ async fn plant_window(fx: &Fixture, window: &PublishedWindow) {
         )
         .await
         .expect("plant the window's supply anchor");
+    commit_current_test_writer(&fx.admin).await;
 }
 
 /// The per-admission check is defense in depth, not the only defense: both
@@ -6967,7 +7773,6 @@ async fn republished(fx: &Fixture, policy: SchedulingPolicy, pool_ids: &[String]
     router(HttpState {
         service,
         authenticator: Arc::new(authenticator()),
-        store: fx.store.clone(),
     })
 }
 
@@ -7137,6 +7942,152 @@ async fn a_retry_replays_its_receipt_after_its_offering_changes_service() {
     );
     assert_eq!(replayed["state"], "cancelled");
     assert_eq!(replayed["appointmentId"], appointment_id);
+}
+
+/// Every row the commitment ledger holds, table by table, in one reading, so
+/// a request can be shown to have left all of them exactly as it found them.
+async fn ledger_contents(fx: &Fixture) -> Vec<(&'static str, Value)> {
+    let mut contents = Vec::new();
+    for table in [
+        "scheduling_claims",
+        "scheduling_claim_allocations",
+        "scheduling_history",
+        "scheduling_outbox",
+        "scheduling_attempts",
+    ] {
+        let rows: Value = fx
+            .admin
+            .query_one(
+                &format!(
+                    "SELECT coalesce(jsonb_agg(to_jsonb(t) ORDER BY to_jsonb(t)::text), \
+                     '[]'::jsonb) FROM {table} t"
+                ),
+                &[],
+            )
+            .await
+            .unwrap_or_else(|_| panic!("read {table}"))
+            .get(0);
+        contents.push((table, rows));
+    }
+    contents
+}
+
+/// A third change a closed claim outlives: once the booking a window hold
+/// confirmed into is cancelled and the window leaves the records, nothing on
+/// the arrival offering is live, and publication may serve the same
+/// identifier as exact time. The consumed window hold carries no allocation
+/// rows, so the exact-time confirmation path meets it unallocated. The retry
+/// of the original confirmation must replay the receipt it stored, not read
+/// the hold as an inconsistent ledger and not place it again.
+#[tokio::test]
+async fn a_confirmation_replays_its_receipt_after_its_window_offering_turns_exact_time() {
+    let day = (pinned_now() + TimeDelta::days(2)).date_naive();
+    let start = DateTime::<Utc>::from_naive_utc_and_offset(
+        day.and_hms_opt(9, 0, 0).expect("a morning instant"),
+        Utc,
+    );
+    let fx = fixture_with_window(start).await;
+    let (status, hold) = fx
+        .post(
+            "/v1/holds",
+            &fx.agent,
+            "turned-offering-hold",
+            arrival(&fx, start, None)["admission"].clone(),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{hold}");
+    let hold_id = hold["holdId"].as_str().expect("a hold id").to_owned();
+
+    let confirmation = json!({"hold": hold_id, "admission": null});
+    let (status, confirmed) = fx
+        .post(
+            "/v1/appointments",
+            &fx.agent,
+            "turned-offering-confirm",
+            confirmation.clone(),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{confirmed}");
+    let appointment_id = confirmed["appointmentId"]
+        .as_str()
+        .expect("an appointment id")
+        .to_owned();
+    let revision = confirmed["revision"].as_u64().expect("a revision");
+    let hold_allocations: i64 = fx
+        .admin
+        .query_one(
+            "SELECT count(*) FROM scheduling_claim_allocations WHERE claim_id=$1",
+            &[&Uuid::parse_str(&hold_id).expect("a hold UUID")],
+        )
+        .await
+        .expect("count the hold's allocation rows")
+        .get(0);
+    assert_eq!(
+        hold_allocations, 0,
+        "a window hold carries no allocation rows"
+    );
+
+    let (status, cancelled) = fx
+        .post(
+            &format!("/v1/appointments/{appointment_id}/cancel"),
+            &fx.agent,
+            "turned-offering-cancel",
+            json!({"observedRevision": revision, "reason": null}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{cancelled}");
+    assert_eq!(cancelled["state"], "cancelled");
+
+    fx.store
+        .replace_facts(SCHEDULING_ID, &records_without(&[]))
+        .await
+        .expect("the idle window leaves the records");
+    let window_policy = policy_with_window();
+    let exact_policy = window_policy
+        .replace("    mode: arrival-window\n", "    mode: exact-time\n")
+        .replace(
+            &format!(
+                "    arrival:\n      window: {WINDOW_ID}\n      leadTimeMinutes: 1\n      \
+                 horizonDays: 60\n"
+            ),
+            "    exactTime:\n      durationMinutes: 30\n      bufferBeforeMinutes: 0\n      \
+             bufferAfterMinutes: 0\n      leadTimeMinutes: 60\n      horizonDays: 60\n      \
+             pool: north-counter\n      startIncrementMinutes: 30\n      maximumRecipients: 1\n",
+        );
+    assert!(
+        !exact_policy.contains("arrival-window") && !exact_policy.contains(WINDOW_ID),
+        "the arrival offering is served as exact time"
+    );
+    let mut replacement = read_policy(&exact_policy).expect("the offering as exact time");
+    replacement.project.version = "2".to_owned();
+    let turned = republished(
+        &fx,
+        replacement,
+        &["north-counter".to_owned(), "two-counter".to_owned()],
+    )
+    .await;
+
+    let before = ledger_contents(&fx).await;
+    let (status, replayed) = send(
+        turned,
+        "POST".to_owned(),
+        "/v1/appointments".to_owned(),
+        fx.agent.clone(),
+        Some("turned-offering-confirm".to_owned()),
+        Some(confirmation),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "the confirmation replays its receipt: {replayed}"
+    );
+    assert_eq!(replayed, confirmed, "the replay answers the stored receipt");
+    assert_eq!(
+        ledger_contents(&fx).await,
+        before,
+        "the replay writes nothing"
+    );
 }
 
 #[tokio::test]
@@ -8237,32 +9188,7 @@ async fn a_records_swap_refuses_a_commitment_resolving_the_old_facts() {
     // The slot resolves while the station still stands: the swap retires it.
     let slot = first_slot(&fx, OFFERING, 90, 200).await;
     let (facts, resolved_under) = fx.store.facts().await.expect("resolve the standing facts");
-    let exceptions: Vec<_> = facts
-        .exceptions
-        .iter()
-        .filter(|exception| exception.location == offering.location)
-        .map(|exception| exception.borrowed())
-        .collect();
-    let timezone = facts
-        .location(&offering.location)
-        .expect("the seeded location")
-        .timezone
-        .clone();
-    let members: Vec<PoolMember> = facts
-        .pool(
-            &offering
-                .exact_time
-                .as_ref()
-                .expect("an exact-time offering")
-                .pool,
-        )
-        .expect("the seeded pool")
-        .members
-        .clone();
-    let open = location_open_intervals(&policy, &offering.location, &timezone, &exceptions)
-        .expect("resolve the openings");
-    let closures = location_closure_intervals(&facts, &offering.location, &timezone)
-        .expect("resolve the closures");
+    let parts = exact_supply_parts(&policy, &facts, offering);
     // The operator retires the station this offering books; nothing occupies
     // it, so the swap commits.
     let swapped = records_without(&["station-1"]);
@@ -8270,22 +9196,19 @@ async fn a_records_swap_refuses_a_commitment_resolving_the_old_facts() {
         .replace_facts(SCHEDULING_ID, &swapped)
         .await
         .expect("the records swap commits");
-    let supply = SupplyContext::ExactTime {
-        exact: offering
-            .exact_time
-            .as_ref()
-            .expect("an exact-time offering"),
-        members: &members,
-        open: &open,
-        closures: &closures,
-    };
+    let lines = [primary_line(offering, &parts, None)];
     let request = AdmissionRequest {
         offering: OFFERING.to_owned(),
         start: slot,
-        party: PartyCounts {
+        duration_minutes: None,
+        resource: None,
+        resource_units: 1,
+        additional_allocations: Vec::new(),
+        party: Some(PartyCounts {
             recipients: 1,
             attendees: 1,
-        },
+        }),
+        manager: None,
         channel: None,
         duplicate_key: None,
         policy_revision: fx.revision,
@@ -8293,6 +9216,7 @@ async fn a_records_swap_refuses_a_commitment_resolving_the_old_facts() {
         capabilities: Vec::new(),
         prerequisites: Vec::new(),
         external_references: Vec::new(),
+        party_references: Vec::new(),
     };
     let commitment = Commitment {
         now: pinned_now(),
@@ -8301,6 +9225,7 @@ async fn a_records_swap_refuses_a_commitment_resolving_the_old_facts() {
         actor: "actor-pseudonym",
         actor_issuer: ISSUER,
         actor_subject: "principal-agent",
+        source_manager: None,
         idempotency_key: "stale-facts",
         request_hash: "sha256:stale-facts",
         attempt_expires_at: pinned_now() + TimeDelta::days(7),
@@ -8309,7 +9234,7 @@ async fn a_records_swap_refuses_a_commitment_resolving_the_old_facts() {
     };
     let outcome = fx
         .store
-        .create_appointment(offering, &supply, &request, commitment)
+        .create_appointment(&CommitSupply::Bundle(&lines), &request, commitment)
         .await;
     assert!(
         matches!(outcome, Err(CommitError::FactsStale)),
@@ -9073,6 +9998,123 @@ async fn refuses_a_pre_1_0_ledger_at_migrate_and_readiness(version: i64) {
     ));
 }
 
+#[tokio::test]
+async fn the_atomic_allocation_fence_denies_old_writers_and_the_marker_is_transaction_local() {
+    let mut fx = fixture().await;
+    let denied = fx
+        .admin
+        .execute(
+            "UPDATE scheduling_pool_members SET available=available WHERE resource_id='station-1'",
+            &[],
+        )
+        .await
+        .expect_err("a writer without the v2 marker is denied");
+    assert_eq!(
+        denied.code(),
+        Some(&tokio_postgres::error::SqlState::OBJECT_NOT_IN_PREREQUISITE_STATE)
+    );
+
+    let transaction = fx.admin.transaction().await.expect("begin a marked writer");
+    transaction
+        .batch_execute("SET LOCAL registry_scheduling.allocation_writer = 'v2'")
+        .await
+        .expect("set the transaction-local marker");
+    transaction
+        .execute(
+            "UPDATE scheduling_pool_members SET available=available WHERE resource_id='station-1'",
+            &[],
+        )
+        .await
+        .expect("the current writer is accepted");
+    transaction
+        .rollback()
+        .await
+        .expect("roll back the marked writer");
+
+    let denied = fx
+        .admin
+        .execute(
+            "UPDATE scheduling_pool_members SET available=available WHERE resource_id='station-1'",
+            &[],
+        )
+        .await
+        .expect_err("the marker does not leak after rollback");
+    assert_eq!(
+        denied.code(),
+        Some(&tokio_postgres::error::SqlState::OBJECT_NOT_IN_PREREQUISITE_STATE)
+    );
+}
+
+#[tokio::test]
+async fn activation_trust_rejects_a_same_named_but_altered_allocation_fence() {
+    let fx = fixture().await;
+    fx.admin
+        .batch_execute(
+            "CREATE OR REPLACE FUNCTION scheduling_require_allocation_writer_v2() \
+             RETURNS trigger LANGUAGE plpgsql AS $body$ BEGIN RETURN NEW; END $body$",
+        )
+        .await
+        .expect("alter the fence inside this isolated schema");
+
+    let weakness = fx
+        .store
+        .split_weakness()
+        .await
+        .expect("inspect the altered fence")
+        .expect("the altered fence is a split-role weakness");
+    assert!(
+        weakness
+            .to_string()
+            .contains("differs from the exact migration-owned"),
+        "{weakness}"
+    );
+}
+
+#[tokio::test]
+async fn the_baseline_migration_ddl_rolls_back_as_one_transaction() {
+    let base = std::env::var("SCHEDULING_TEST_DATABASE_URL")
+        .expect("SCHEDULING_TEST_DATABASE_URL names a disposable PostgreSQL test server");
+    let schema = format!("scheduling_{}", Uuid::new_v4().simple());
+    let (mut admin, connection) = tokio_postgres::connect(&base, tokio_postgres::NoTls)
+        .await
+        .expect("connect the scheduling test database");
+    tokio::spawn(async move { connection.await.expect("the scheduling admin connection") });
+    admin
+        .batch_execute(&format!(
+            "CREATE SCHEMA {schema}; SET search_path TO {schema}"
+        ))
+        .await
+        .expect("create the isolated rollback schema");
+
+    let transaction = admin.transaction().await.expect("begin migration 200");
+    transaction
+        .batch_execute(include_str!("../migrations/0200_scheduling.sql"))
+        .await
+        .expect("migration 200 applies inside its transaction");
+    transaction
+        .rollback()
+        .await
+        .expect("roll back migration 200");
+
+    let absent: bool = admin
+        .query_one(
+            "SELECT to_regclass(format('%I.scheduling_meta', current_schema())) IS NULL \
+             AND to_regclass(format('%I.scheduling_claim_allocations', current_schema())) IS NULL \
+             AND NOT EXISTS (SELECT 1 FROM pg_proc AS p \
+                 JOIN pg_namespace AS n ON n.oid=p.pronamespace \
+                 WHERE n.nspname=current_schema() \
+                   AND p.proname='scheduling_require_allocation_writer_v2')",
+            &[],
+        )
+        .await
+        .expect("inspect the rolled-back schema")
+        .get(0);
+    assert!(
+        absent,
+        "migration 200 leaves no partial schema after rollback"
+    );
+}
+
 /// The single `response` entry that answers the commitment's `request`
 /// entry among `appended`, after checking the pair shares one correlation
 /// and records a commitment nothing decided.
@@ -9366,6 +10408,9 @@ async fn a_records_swap_under_a_commitment_pairs_its_request_entry() {
         .transaction()
         .await
         .expect("the stand-in records swap opens");
+    swap.batch_execute("SET LOCAL registry_scheduling.allocation_writer = 'v2'")
+        .await
+        .expect("mark the stand-in records writer");
     swap.execute(
         "UPDATE scheduling_meta SET facts_revision = facts_revision + 1 WHERE singleton",
         &[],
@@ -9923,6 +10968,7 @@ async fn a_cleared_claim_owner_cannot_read_list_or_observe_a_retained_receipt() 
     assert_eq!(status, StatusCode::OK);
     // Model the raw owner being cleared while the independent receipt window
     // still permits observation. Neither the receipt nor its digest is authority.
+    begin_current_test_writer(&fx.admin).await;
     fx.admin
         .execute(
             "UPDATE scheduling_claims SET displayed_end=$1 WHERE claim_id=$2",
@@ -9930,6 +10976,7 @@ async fn a_cleared_claim_owner_cannot_read_list_or_observe_a_retained_receipt() 
         )
         .await
         .unwrap();
+    commit_current_test_writer(&fx.admin).await;
     assert_eq!(
         fx.store
             .erase_expired_claim_owners(pinned_now(), 7)
@@ -9989,6 +11036,7 @@ async fn an_erased_hold_owner_cannot_replay_a_retained_release_receipt() {
     let route = format!("/v1/holds/{id}");
     assert_eq!(fx.delete(&route, &fx.agent).await.0, StatusCode::NO_CONTENT);
     assert_eq!(fx.delete(&route, &fx.agent).await.0, StatusCode::NO_CONTENT);
+    begin_current_test_writer(&fx.admin).await;
     fx.admin
         .execute(
             "UPDATE scheduling_claims SET closed_at=$1 WHERE claim_id=$2",
@@ -9996,6 +11044,7 @@ async fn an_erased_hold_owner_cannot_replay_a_retained_release_receipt() {
         )
         .await
         .unwrap();
+    commit_current_test_writer(&fx.admin).await;
     assert_eq!(
         fx.store
             .erase_expired_claim_owners(pinned_now(), 7)
@@ -10103,10 +11152,12 @@ async fn claim_owner_retention_clears_only_elapsed_claims_and_preserves_the_ledg
             .await;
         assert_eq!(status, StatusCode::CREATED, "{original}");
         let id = Uuid::parse_str(original["appointmentId"].as_str().unwrap()).unwrap();
+        begin_current_test_writer(&fx.admin).await;
         fx.admin.execute(
             "UPDATE scheduling_claims SET kind=$1, state=$2, displayed_start=$3, displayed_end=$4, hold_expires_at=$5, closed_at=$6 WHERE claim_id=$7",
             &[&kind, &state, &(end-TimeDelta::minutes(30)), &end, &expiry, &closed, &id],
         ).await.unwrap();
+        commit_current_test_writer(&fx.admin).await;
         let rows_before = committed_row_counts(&fx).await;
         let history_before = fx
             .admin
@@ -10150,7 +11201,12 @@ async fn claim_owner_retention_clears_only_elapsed_claims_and_preserves_the_ledg
                 )
             );
             assert_eq!(row.get::<_, DateTime<Utc>>(3), now);
+            begin_current_test_writer(&fx.admin).await;
             assert!(fx.admin.execute("UPDATE scheduling_claims SET owner_issuer=$1, owner_subject=$2 WHERE claim_id=$3", &[&ISSUER, &"principal-agent", &id]).await.is_err(), "a tombstone cannot retain raw ownership");
+            fx.admin
+                .batch_execute("ROLLBACK")
+                .await
+                .expect("roll back the refused tombstone rewrite");
             assert!(!fx
                 .store
                 .claim(id)
@@ -10238,6 +11294,10 @@ async fn a_mutation_waiting_on_owner_erasure_rechecks_ownership_before_writing()
         );
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
+    eraser
+        .batch_execute("SET LOCAL registry_scheduling.allocation_writer = 'v2'")
+        .await
+        .unwrap();
     eraser.execute("UPDATE scheduling_claims SET owner_issuer=NULL, owner_subject=NULL, owner_reference='sha256:' || repeat('a',64), owner_erased_at=$1 WHERE claim_id=$2", &[&pinned_now(), &claim_id]).await.unwrap();
     eraser.commit().await.unwrap();
     let (status, problem) = mutation.await.unwrap();
@@ -10264,6 +11324,7 @@ async fn erased_hold_owners_do_not_hide_the_callers_remaining_hold_ceiling() {
         assert_eq!(status, StatusCode::CREATED, "{hold}");
         holds.push(Uuid::parse_str(hold["holdId"].as_str().unwrap()).unwrap());
     }
+    begin_current_test_writer(&fx.admin).await;
     fx.admin
         .execute(
             "UPDATE scheduling_claims SET hold_expires_at=$1 WHERE claim_id=$2",
@@ -10271,6 +11332,7 @@ async fn erased_hold_owners_do_not_hide_the_callers_remaining_hold_ceiling() {
         )
         .await
         .unwrap();
+    commit_current_test_writer(&fx.admin).await;
     assert_eq!(
         fx.store
             .erase_expired_claim_owners(pinned_now(), 7)

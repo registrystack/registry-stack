@@ -1,0 +1,237 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/coordinator/project/project.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/coordinator/project/v1alpha1
+kind: CoordinatorProject
+project: {id: reservation-review-request-only, version: '1'}
+types:
+  workflow-input:
+    type: object
+    additionalProperties: false
+    required: [reservationId, sourceVersion, sourceDigest, agreementCompleteAt, agreementCallbackId, agreementOutcome, grant]
+    properties:
+      reservationId: {type: string, format: uuid}
+      sourceVersion: {type: string, minLength: 1, maxLength: 64}
+      sourceDigest: {type: string, pattern: '^sha256:[0-9a-f]{64}$'}
+      agreementCompleteAt: {type: string, format: date-time}
+      agreementCallbackId: {type: string, minLength: 1, maxLength: 120}
+      agreementOutcome: {type: string, enum: [completed, failed]}
+      grant:
+        type: object
+        additionalProperties: false
+        required: [id, expiresAt]
+        properties:
+          id: {type: string, format: uuid}
+          expiresAt: {type: integer, minimum: 1}
+contracts:
+  reservations: {type: breg, source: generated/reservations.contract.json}
+functions:
+  review-request:
+    runtime: rhai
+    source: functions.rhai
+    entrypoint: review_request
+    inputs: {input: {typeRef: workflow-input}, reservation: {operationOutput: source-read}}
+    output: {operationInput: review-submit}
+  source-decision-request:
+    runtime: rhai
+    source: functions.rhai
+    entrypoint: source_decision_request
+    inputs:
+      input: {typeRef: workflow-input}
+      result: {completionOutput: {operation: review-submit, name: result}}
+    output: {operationInput: source-review-approved}
+  source-rejection-request:
+    runtime: rhai
+    source: functions.rhai
+    entrypoint: source_decision_request
+    inputs:
+      input: {typeRef: workflow-input}
+      result: {completionOutput: {operation: review-submit, name: result}}
+    output: {operationInput: source-review-rejected}
+  agreement-completed-request:
+    runtime: rhai
+    source: functions.rhai
+    entrypoint: agreement_request
+    inputs: {input: {typeRef: workflow-input}}
+    output: {operationInput: source-agreement-completed}
+  agreement-failed-request:
+    runtime: rhai
+    source: functions.rhai
+    entrypoint: agreement_request
+    inputs: {input: {typeRef: workflow-input}}
+    output: {operationInput: source-agreement-failed}
+  withdrawal-request:
+    runtime: rhai
+    source: functions.rhai
+    entrypoint: withdrawal_request
+    inputs: {input: {typeRef: workflow-input}}
+    output: {operationInput: source-withdraw}
+  booking-request:
+    runtime: rhai
+    source: functions.rhai
+    entrypoint: booking_request
+    inputs:
+      input: {typeRef: workflow-input}
+      reservation: {operationOutput: source-read-after-agreement}
+      metadata: {operationOutput: scheduling-read}
+    output: {operationInput: scheduling-book}
+  record-confirmation-request:
+    runtime: rhai
+    source: functions.rhai
+    entrypoint: record_confirmation_request
+    inputs: {input: {typeRef: workflow-input}, appointment: {operationOutput: scheduling-book}}
+    output: {operationInput: source-record-confirmed}
+  notice-request:
+    runtime: rhai
+    source: functions.rhai
+    entrypoint: notice_request
+    inputs:
+      input: {typeRef: workflow-input}
+      reservation: {operationOutput: source-read-after-agreement}
+      appointment: {operationOutput: scheduling-book}
+    output: {operationInput: notices-submit}
+operations:
+  source-read: {uses: breg.read-record/v1, connection: reservations}
+  source-read-after-agreement: {uses: breg.read-record/v1, connection: reservations}
+  source-review-approved:
+    uses: breg.invoke-action/v1
+    connection: reservations
+    action: {contract: reservations, id: record-review-approved}
+  source-review-rejected:
+    uses: breg.invoke-action/v1
+    connection: reservations
+    action: {contract: reservations, id: record-review-rejected}
+  source-agreement-completed:
+    uses: breg.invoke-action/v1
+    connection: reservations
+    action: {contract: reservations, id: record-agreement-completed}
+  source-agreement-failed:
+    uses: breg.invoke-action/v1
+    connection: reservations
+    action: {contract: reservations, id: record-agreement-failed}
+  source-record-confirmed:
+    uses: breg.invoke-action/v1
+    connection: reservations
+    action: {contract: reservations, id: record-direct-confirmed}
+  source-withdraw:
+    uses: breg.invoke-action/v1
+    connection: reservations
+    action: {contract: reservations, id: withdraw-reservation-request}
+  review-submit: {uses: casework.submit-review-request/v1, connection: review}
+  review-cancel: {uses: casework.cancel-review-request/v1, connection: review}
+  scheduling-read: {uses: scheduling.read-service/v1, connection: catalogue}
+  scheduling-book: {uses: scheduling.create-appointment/v1, connection: bookings}
+  notices-submit: {uses: messaging.submit-message/v1, connection: notices}
+workflow:
+  input: {typeRef: workflow-input}
+  deadlineSeconds: 604800
+  start: read-source
+  steps:
+    read-source:
+      type: call
+      operation: source-read
+      input: {type: fields, fields: {collection: {type: literal, value: reservation-requests}, recordId: {type: input, path: /reservationId}}}
+      next: submit-review
+    submit-review:
+      type: call
+      operation: review-submit
+      input: {type: function, function: review-request, inputs: {input: {type: input}, reservation: {type: step, step: read-source}}}
+      next: await-review
+    await-review:
+      type: wait-for
+      timeoutSeconds: 259200
+      next: decide-review
+      onTimeout: cancel-review-timeout
+      onCancel: cancel-review-operator
+      completion: {step: submit-review, name: result}
+    decide-review:
+      type: choose
+      choose: {type: step, step: await-review, path: /status}
+      cases: {approved: record-approved, rejected: record-rejected, changes-requested: record-rejected, answered: record-rejected, cancelled: record-rejected, superseded: record-rejected}
+    record-rejected:
+      type: call
+      operation: source-review-rejected
+      input: {type: function, function: source-rejection-request, inputs: {input: {type: input}, result: {type: step, step: await-review}}}
+      next: rejected
+    record-approved:
+      type: call
+      operation: source-review-approved
+      input: {type: function, function: source-decision-request, inputs: {input: {type: input}, result: {type: step, step: await-review}}}
+      next: await-agreement-fixture
+    await-agreement-fixture:
+      type: wait-until
+      waitUntil: {type: input, path: /agreementCompleteAt}
+      next: decide-agreement
+    decide-agreement:
+      type: choose
+      choose: {type: input, path: /agreementOutcome}
+      cases: {completed: record-agreement-completed, failed: record-agreement-failed}
+    record-agreement-failed:
+      type: call
+      operation: source-agreement-failed
+      input: {type: function, function: agreement-failed-request, inputs: {input: {type: input}}}
+      next: agreement-failed
+    record-agreement-completed:
+      type: call
+      operation: source-agreement-completed
+      input: {type: function, function: agreement-completed-request, inputs: {input: {type: input}}}
+      next: read-after-agreement
+    read-after-agreement:
+      type: call
+      operation: source-read-after-agreement
+      input: {type: fields, fields: {collection: {type: literal, value: reservation-requests}, recordId: {type: input, path: /reservationId}}}
+      next: metadata
+    metadata:
+      type: call
+      operation: scheduling-read
+      input: {type: fields, fields: {}}
+      next: book
+    book:
+      type: call
+      operation: scheduling-book
+      input: {type: function, function: booking-request, inputs: {input: {type: input}, reservation: {type: step, step: read-after-agreement}, metadata: {type: step, step: metadata}}}
+      next: record-confirmed
+    record-confirmed:
+      type: call
+      operation: source-record-confirmed
+      input: {type: function, function: record-confirmation-request, inputs: {input: {type: input}, appointment: {type: step, step: book}}}
+      next: notify
+    notify:
+      type: call
+      operation: notices-submit
+      input: {type: function, function: notice-request, inputs: {input: {type: input}, reservation: {type: step, step: read-after-agreement}, appointment: {type: step, step: book}}}
+      next: confirmed
+    cancel-review-timeout:
+      type: call
+      operation: review-cancel
+      input: {type: fields, fields: {request: {type: step, step: submit-review}, reason: {type: literal, value: Review deadline elapsed.}}}
+      next: record-withdrawal-after-timeout
+    cancel-review-operator:
+      type: call
+      operation: review-cancel
+      input: {type: fields, fields: {request: {type: step, step: submit-review}, reason: {type: literal, value: Workflow cancelled.}}}
+      next: record-withdrawal-after-cancel
+    record-withdrawal-after-timeout:
+      type: call
+      operation: source-withdraw
+      input: {type: function, function: withdrawal-request, inputs: {input: {type: input}}}
+      next: review-withdrawn
+    record-withdrawal-after-cancel:
+      type: call
+      operation: source-withdraw
+      input: {type: function, function: withdrawal-request, inputs: {input: {type: input}}}
+      next: review-withdrawn
+    confirmed:
+      type: finish
+      outcome: reservation-confirmed
+      output: {type: fields, fields: {appointmentId: {type: step, step: book, path: /appointmentId}, messageId: {type: step, step: notify, path: /id}}}
+    rejected: {type: finish, outcome: review-rejected}
+    agreement-failed: {type: finish, outcome: agreement-failed}
+    review-withdrawn: {type: finish, outcome: review-withdrawn}
+  outcomes:
+    reservation-confirmed:
+      type: object
+      additionalProperties: false
+      required: [appointmentId, messageId]
+      properties: {appointmentId: {type: string}, messageId: {type: string, format: uuid}}
+    review-rejected: {type: 'null'}
+    agreement-failed: {type: 'null'}
+    review-withdrawn: {type: 'null'}

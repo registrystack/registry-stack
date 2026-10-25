@@ -6,6 +6,8 @@ pub mod failed_fixture;
 pub mod messaging;
 #[cfg(feature = "postgres-test")]
 pub mod postgres_tool;
+#[cfg(feature = "postgres-test")]
+pub mod scheduling;
 
 use std::{collections::BTreeMap, path::Path};
 

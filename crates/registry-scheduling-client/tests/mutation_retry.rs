@@ -160,10 +160,16 @@ fn admission() -> AdmissionRequest {
     AdmissionRequest {
         offering: "registry-update-30".to_owned(),
         start: Utc.with_ymd_and_hms(2026, 10, 5, 2, 0, 0).unwrap(),
-        party: PartyCounts {
+        duration_minutes: Some(1_500),
+        resource: Some("station-2".to_owned()),
+        resource_units: 1,
+        additional_allocations: Vec::new(),
+        party: Some(PartyCounts {
             recipients: 1,
             attendees: 2,
-        },
+        }),
+        manager: None,
+        party_references: Vec::new(),
         channel: Some("public".to_owned()),
         duplicate_key: Some("subject:one".to_owned()),
         policy_revision: 4,
@@ -210,6 +216,10 @@ async fn a_timed_out_hold_is_resent_identically_under_the_same_key() {
     let observations = script.observations();
     assert_eq!(observations.len(), 2);
     assert_identical_resends(&observations, "hold-7");
+    let sent: AdmissionRequest =
+        serde_json::from_slice(&observations[0].body).expect("the admission request body");
+    assert_eq!(sent.duration_minutes, Some(1_500));
+    assert_eq!(sent.resource.as_deref(), Some("station-2"));
     server.abort();
 }
 

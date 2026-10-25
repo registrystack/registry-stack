@@ -15,6 +15,11 @@
   restricted to the caller.
 - Preserve bounded authentication-refusal warnings after a poisoned timestamp
   lock, while retaining their rate limit.
+- Name one `ALTER .. OWNER TO <migration>` statement for each registry object
+  a split-role runtime role owns when apply refuses that ownership, in place
+  of `REASSIGN OWNED BY`, which also moved what the runtime role owns outside
+  the registry schemas. Run them as a database administrator, then
+  `bregctl apply --package DIR` to reissue the runtime grants.
 - Serialize import-run admission so one authority has at most one open or
   blocked run. Successor plan and apply refuse legacy duplicates under a live
   current authority before maintenance while the existing runtime remains
@@ -242,6 +247,18 @@
   does not admit (`apply.database.catalog-refused`). Successor activations
   are not rehearsed this way.
 
+- Add `POST /v1/proposals/{proposal_id}/task-grant-context`, a field-limited
+  Proposal context read for a service profile that holds a
+  `get-task-grant-context` grant and a nonempty `readableContextFields` subset
+  of the Action's review-context fields. It binds the expected Action, frozen
+  subject identity, context contract, accepted review policy, Casework request
+  and task correlation, and requested fields, returns only the requested
+  fields under current Record, row-boundary, membership, and consent rules, and
+  conceals any mismatch before values are resolved. The grant is refused at
+  compile time for a non-service profile or an Action without review context.
+  Each read checks the current, non-withdrawn acceptance and the frozen digest
+  and fingerprint, and a refusal is audited. The Coordinator reservation-review
+  example reads task context through it.
 - A manual Proposal Apply that hits a unique constraint rolls back its Record
   effects and durably blocks that application. It returns the same value-free
   `409 mutation.conflict`, disables Apply, and leaves Rebase available to correct

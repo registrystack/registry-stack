@@ -13,22 +13,28 @@ use registry_platform_httputil::{
 };
 use registry_scheduling_core::{
     type_uri, valid_identifier, valid_reference, AdmissionRequest, AppointmentDocument,
-    AppointmentHistoryEntryDocument, AvailabilityEntry, CancelAppointmentRequest,
+    AppointmentHistoryEntryDocument, AvailabilityEntry, AvailabilityPreviewDocument,
+    AvailabilityPreviewRequest, AvailabilitySelection, CancelAppointmentRequest,
     CreateAppointmentRequest, ExplainDocument, ExternalReference, HoldDocument, LocationDocument,
-    OfferingDocument, PageDocument, ProblemCode, RescheduleAppointmentRequest, ResourceDocument,
-    SchedulingServiceDocument, ServiceDocument, APPOINTMENTS_PATH, APPOINTMENT_RECEIPT_PATH,
-    AVAILABILITY_EXPLAIN_PATH, AVAILABILITY_PATH, CURSOR_QUERY_PARAMETER, HOLDS_PATH,
-    IDEMPOTENCY_KEY_HEADER, LIMIT_QUERY_PARAMETER, LOCATIONS_PATH, MAXIMUM_IDEMPOTENCY_KEY_BYTES,
-    OFFERINGS_PATH, RESOURCES_PATH, SCHEDULING_PATH, SERVICES_PATH,
+    OfferingDocument, OperationalAppointmentDocument, OperationalAppointmentQuery,
+    OperationalTimeBasis, PageDocument, ProblemCode, RescheduleAppointmentRequest,
+    ResourceDocument, SchedulingServiceDocument, ServiceDocument, APPOINTMENTS_PATH,
+    APPOINTMENT_RECEIPT_PATH, AVAILABILITY_EXPLAIN_PATH, AVAILABILITY_PATH,
+    AVAILABILITY_PREVIEW_PATH, CURSOR_QUERY_PARAMETER, HOLDS_PATH, IDEMPOTENCY_KEY_HEADER,
+    LIMIT_QUERY_PARAMETER, LOCATIONS_PATH, MAXIMUM_BOOKING_DURATION_MINUTES,
+    MAXIMUM_IDEMPOTENCY_KEY_BYTES, OFFERINGS_PATH, OPERATIONAL_APPOINTMENTS_PATH, RESOURCES_PATH,
+    SCHEDULING_PATH, SERVICES_PATH,
 };
 use reqwest::header::{HeaderName, HeaderValue, ACCEPT, AUTHORIZATION, CONTENT_TYPE};
-use reqwest::{RequestBuilder, Response, StatusCode, Url};
+use reqwest::{Method, RequestBuilder, Response, StatusCode, Url};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 
 use crate::{
-    SchedulingAuth, SchedulingClientConfig, SchedulingClientError, SchedulingComplete,
-    SchedulingProtocolFailure,
+    AttendanceDocument, BusyApplyOutcome, BusyReconciliationPreview, BusyReconciliationRequest,
+    RecordAttendanceRequest, SchedulingAuth, SchedulingClientConfig, SchedulingClientError,
+    SchedulingComplete, SchedulingProtocolFailure, BUSY_SOURCE_APPLY_PATH,
+    BUSY_SOURCE_PREVIEW_PATH,
 };
 
 const JSON_MEDIA_TYPE: &str = "application/json";
@@ -39,9 +45,16 @@ const MAXIMUM_IDENTIFIER_BYTES: usize = 128;
 const OFFERING_QUERY_PARAMETER: &str = "offering";
 const START_QUERY_PARAMETER: &str = "start";
 const END_QUERY_PARAMETER: &str = "end";
+const DURATION_MINUTES_QUERY_PARAMETER: &str = "durationMinutes";
+const RESOURCE_QUERY_PARAMETER: &str = "resource";
 const EXTERNAL_REFERENCE_PRODUCT_QUERY_PARAMETER: &str = "externalReferenceProduct";
 const EXTERNAL_REFERENCE_RECORD_TYPE_QUERY_PARAMETER: &str = "externalReferenceRecordType";
 const EXTERNAL_REFERENCE_IDENTIFIER_QUERY_PARAMETER: &str = "externalReferenceIdentifier";
+const SERVICE_QUERY_PARAMETER: &str = "service";
+const LOCATION_QUERY_PARAMETER: &str = "location";
+const TIME_BASIS_QUERY_PARAMETER: &str = "timeBasis";
+const STATE_QUERY_PARAMETER: &str = "state";
+const PROFILE_QUERY_PARAMETER: &str = "profile";
 
 pub struct SchedulingClient {
     http: reqwest::Client,
@@ -119,7 +132,34 @@ impl SchedulingClient {
         cursor: Option<&str>,
         limit: Option<u32>,
     ) -> Result<SchedulingComplete<PageDocument<AvailabilityEntry>>, SchedulingClientError> {
+        self.availability_with_selection(
+            auth,
+            offering,
+            start,
+            end,
+            cursor,
+            limit,
+            &AvailabilitySelection::default(),
+        )
+        .await
+    }
+
+    /// Bounded availability under caller-selected exact-time choices. A
+    /// supplied duration or resource is a hard request constraint; omission
+    /// preserves the offering's default duration and fungible allocation.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn availability_with_selection(
+        &self,
+        auth: SchedulingAuth<'_>,
+        offering: &str,
+        start: Option<DateTime<Utc>>,
+        end: Option<DateTime<Utc>>,
+        cursor: Option<&str>,
+        limit: Option<u32>,
+        selection: &AvailabilitySelection,
+    ) -> Result<SchedulingComplete<PageDocument<AvailabilityEntry>>, SchedulingClientError> {
         validate_availability(offering, start, end, cursor, limit)?;
+        validate_availability_selection(selection)?;
         let mut query: Vec<(&str, String)> = Vec::new();
         query.push((OFFERING_QUERY_PARAMETER, offering.to_owned()));
         if let Some(start) = start {
@@ -127,6 +167,15 @@ impl SchedulingClient {
         }
         if let Some(end) = end {
             query.push((END_QUERY_PARAMETER, rfc3339(end)));
+        }
+        if let Some(duration_minutes) = selection.duration_minutes {
+            query.push((
+                DURATION_MINUTES_QUERY_PARAMETER,
+                duration_minutes.to_string(),
+            ));
+        }
+        if let Some(resource) = selection.resource.as_deref() {
+            query.push((RESOURCE_QUERY_PARAMETER, resource.to_owned()));
         }
         if let Some(cursor) = cursor {
             query.push((CURSOR_QUERY_PARAMETER, cursor.to_owned()));
@@ -150,11 +199,34 @@ impl SchedulingClient {
         offering: &str,
         start: DateTime<Utc>,
     ) -> Result<SchedulingComplete<ExplainDocument>, SchedulingClientError> {
+        self.explain_with_selection(auth, offering, start, &AvailabilitySelection::default())
+            .await
+    }
+
+    /// Explain a refusal under the same hard exact-time choices used for an
+    /// availability read.
+    pub async fn explain_with_selection(
+        &self,
+        auth: SchedulingAuth<'_>,
+        offering: &str,
+        start: DateTime<Utc>,
+        selection: &AvailabilitySelection,
+    ) -> Result<SchedulingComplete<ExplainDocument>, SchedulingClientError> {
         validate_offering(offering)?;
-        let query = [
+        validate_availability_selection(selection)?;
+        let mut query = vec![
             (OFFERING_QUERY_PARAMETER, offering.to_owned()),
             (START_QUERY_PARAMETER, rfc3339(start)),
         ];
+        if let Some(duration_minutes) = selection.duration_minutes {
+            query.push((
+                DURATION_MINUTES_QUERY_PARAMETER,
+                duration_minutes.to_string(),
+            ));
+        }
+        if let Some(resource) = selection.resource.as_deref() {
+            query.push((RESOURCE_QUERY_PARAMETER, resource.to_owned()));
+        }
         let request = self.authorized(
             self.http
                 .get(self.url_from_constant(AVAILABILITY_EXPLAIN_PATH)?)
@@ -162,6 +234,76 @@ impl SchedulingClient {
             &auth,
         );
         self.send_json(request, StatusCode::OK).await
+    }
+
+    /// Read physical capacity for the complete requested bundle. A positive
+    /// answer grants no admission authority and reserves no resource.
+    pub async fn preview_availability(
+        &self,
+        auth: SchedulingAuth<'_>,
+        request: &AvailabilityPreviewRequest,
+    ) -> Result<SchedulingComplete<AvailabilityPreviewDocument>, SchedulingClientError> {
+        // Rust callers can construct public structs without deserializing them.
+        // Apply the owning wire bounds before starting any HTTP exchange.
+        let body = serde_json::to_value(request).map_err(|_| {
+            SchedulingClientError::invalid_request("the capacity preview request is invalid")
+        })?;
+        let checked: AvailabilityPreviewRequest = serde_json::from_value(body).map_err(|_| {
+            SchedulingClientError::invalid_request("the capacity preview request is invalid")
+        })?;
+        let request = self.authorized(
+            self.http
+                .post(self.url_from_constant(AVAILABILITY_PREVIEW_PATH)?)
+                .json(&checked),
+            &auth,
+        );
+        self.send_json(request, StatusCode::OK).await
+    }
+
+    /// Preview one source-owned snapshot under the explicitly selected profile.
+    pub async fn preview_source_busy(
+        &self,
+        auth: SchedulingAuth<'_>,
+        profile: &str,
+        snapshot: &BusyReconciliationRequest,
+    ) -> Result<SchedulingComplete<BusyReconciliationPreview>, SchedulingClientError> {
+        let request =
+            self.source_busy_request(auth, profile, snapshot, BUSY_SOURCE_PREVIEW_PATH)?;
+        self.send_json(request, StatusCode::OK).await
+    }
+
+    /// Apply one bounded snapshot with compare-and-set revision semantics.
+    /// No automatic retry is made. Recover uncertainty using the exact same
+    /// body and expected revision; a stale different request proves no absence.
+    pub async fn apply_source_busy(
+        &self,
+        auth: SchedulingAuth<'_>,
+        profile: &str,
+        snapshot: &BusyReconciliationRequest,
+    ) -> Result<SchedulingComplete<BusyApplyOutcome>, SchedulingClientError> {
+        let request = self.source_busy_request(auth, profile, snapshot, BUSY_SOURCE_APPLY_PATH)?;
+        self.send_json(request, StatusCode::OK).await
+    }
+
+    fn source_busy_request(
+        &self,
+        auth: SchedulingAuth<'_>,
+        profile: &str,
+        snapshot: &BusyReconciliationRequest,
+        path: &str,
+    ) -> Result<RequestBuilder, SchedulingClientError> {
+        if !valid_identifier(profile) || snapshot.validate_wire().is_err() {
+            return Err(SchedulingClientError::invalid_request(
+                "the source busy request is invalid",
+            ));
+        }
+        Ok(self.authorized(
+            self.http
+                .post(self.url_from_constant(path)?)
+                .query(&[(PROFILE_QUERY_PARAMETER, profile)])
+                .json(snapshot),
+            &auth,
+        ))
     }
 
     /// Reserve an admission instead of committing it. The request body is
@@ -287,6 +429,79 @@ impl SchedulingClient {
         self.send_json(request, StatusCode::OK).await
     }
 
+    pub async fn list_operational_appointments(
+        &self,
+        auth: SchedulingAuth<'_>,
+        selection: &OperationalAppointmentQuery,
+    ) -> Result<
+        SchedulingComplete<PageDocument<OperationalAppointmentDocument>>,
+        SchedulingClientError,
+    > {
+        validate_operational_selection(selection)?;
+        let mut query = vec![
+            (SERVICE_QUERY_PARAMETER, selection.service.clone()),
+            (LOCATION_QUERY_PARAMETER, selection.location.clone()),
+            (START_QUERY_PARAMETER, rfc3339(selection.start)),
+            (END_QUERY_PARAMETER, rfc3339(selection.end)),
+            (
+                TIME_BASIS_QUERY_PARAMETER,
+                match selection.time_basis {
+                    OperationalTimeBasis::Displayed => "displayed",
+                    OperationalTimeBasis::Occupied => "occupied",
+                }
+                .to_owned(),
+            ),
+        ];
+        if let Some(offering) = selection.offering.as_deref() {
+            query.push((OFFERING_QUERY_PARAMETER, offering.to_owned()));
+        }
+        if let Some(state) = selection.state {
+            query.push((
+                STATE_QUERY_PARAMETER,
+                match state {
+                    registry_scheduling_core::AppointmentStateDocument::Confirmed => "confirmed",
+                    registry_scheduling_core::AppointmentStateDocument::Cancelled => "cancelled",
+                }
+                .to_owned(),
+            ));
+        }
+        if let Some(resource) = selection.resource.as_deref() {
+            query.push((RESOURCE_QUERY_PARAMETER, resource.to_owned()));
+        }
+        if let Some(reference) = selection.external_reference.as_ref() {
+            query.extend([
+                (
+                    EXTERNAL_REFERENCE_PRODUCT_QUERY_PARAMETER,
+                    reference.product.clone(),
+                ),
+                (
+                    EXTERNAL_REFERENCE_RECORD_TYPE_QUERY_PARAMETER,
+                    reference.record_type.clone(),
+                ),
+                (
+                    EXTERNAL_REFERENCE_IDENTIFIER_QUERY_PARAMETER,
+                    reference.identifier.clone(),
+                ),
+            ]);
+        }
+        if let Some(profile) = selection.profile.as_deref() {
+            query.push((PROFILE_QUERY_PARAMETER, profile.to_owned()));
+        }
+        if let Some(cursor) = selection.cursor.as_deref() {
+            query.push((CURSOR_QUERY_PARAMETER, cursor.to_owned()));
+        }
+        if let Some(limit) = selection.limit {
+            query.push((LIMIT_QUERY_PARAMETER, limit.to_string()));
+        }
+        let request = self.authorized(
+            self.http
+                .get(self.url_from_constant(OPERATIONAL_APPOINTMENTS_PATH)?)
+                .query(&query),
+            &auth,
+        );
+        self.send_json(request, StatusCode::OK).await
+    }
+
     pub async fn reschedule_appointment(
         &self,
         auth: SchedulingAuth<'_>,
@@ -316,6 +531,26 @@ impl SchedulingClient {
         self.post_json(
             &auth,
             &format!("{APPOINTMENTS_PATH}/{appointment_id}/cancel"),
+            idempotency_key,
+            request,
+            StatusCode::OK,
+        )
+        .await
+    }
+
+    /// Record or correct attendance for the exact appointment revision observed.
+    pub async fn record_attendance(
+        &self,
+        auth: SchedulingAuth<'_>,
+        appointment_id: &str,
+        idempotency_key: &str,
+        request: &RecordAttendanceRequest,
+    ) -> Result<SchedulingComplete<AttendanceDocument>, SchedulingClientError> {
+        validate_identifier(appointment_id, "the appointment identifier is invalid")?;
+        self.mutation_json(
+            Method::PUT,
+            &auth,
+            &format!("{APPOINTMENTS_PATH}/{appointment_id}/attendance"),
             idempotency_key,
             request,
             StatusCode::OK,
@@ -383,10 +618,32 @@ impl SchedulingClient {
         body: &B,
         expected_status: StatusCode,
     ) -> Result<SchedulingComplete<T>, SchedulingClientError> {
+        self.mutation_json(
+            Method::POST,
+            auth,
+            path,
+            idempotency_key,
+            body,
+            expected_status,
+        )
+        .await
+    }
+
+    async fn mutation_json<T: DeserializeOwned, B: Serialize + ?Sized>(
+        &self,
+        method: Method,
+        auth: &SchedulingAuth<'_>,
+        path: &str,
+        idempotency_key: &str,
+        body: &B,
+        expected_status: StatusCode,
+    ) -> Result<SchedulingComplete<T>, SchedulingClientError> {
         validate_idempotency_key(idempotency_key)?;
         let request = self
             .authorized(
-                self.http.post(self.url_from_constant(path)?).json(body),
+                self.http
+                    .request(method, self.url_from_constant(path)?)
+                    .json(body),
                 auth,
             )
             .header(
@@ -539,7 +796,7 @@ impl SchedulingClient {
             Err(error) => {
                 return SchedulingClientError::Transport {
                     kind: read_failure_kind(&error),
-                }
+                };
             }
         };
         let document = match ProblemDocument::parse_exact(&body, MAXIMUM_PROBLEM_BYTES as usize) {
@@ -715,6 +972,29 @@ fn validate_availability(
     validate_limit(limit)
 }
 
+fn validate_availability_selection(
+    selection: &AvailabilitySelection,
+) -> Result<(), SchedulingClientError> {
+    if selection
+        .duration_minutes
+        .is_some_and(|duration| !(1..=MAXIMUM_BOOKING_DURATION_MINUTES).contains(&duration))
+    {
+        return Err(SchedulingClientError::invalid_request(
+            "the requested duration is outside the accepted range",
+        ));
+    }
+    if selection
+        .resource
+        .as_deref()
+        .is_some_and(|resource| !valid_identifier(resource))
+    {
+        return Err(SchedulingClientError::invalid_request(
+            "the resource selector is invalid",
+        ));
+    }
+    Ok(())
+}
+
 fn validate_limit(limit: Option<u32>) -> Result<(), SchedulingClientError> {
     if limit == Some(0) {
         return Err(SchedulingClientError::invalid_request(
@@ -734,6 +1014,46 @@ fn validate_external_reference(reference: &ExternalReference) -> Result<(), Sche
     Err(SchedulingClientError::invalid_request(
         "the external reference is invalid",
     ))
+}
+
+fn validate_operational_selection(
+    selection: &OperationalAppointmentQuery,
+) -> Result<(), SchedulingClientError> {
+    for identifier in [
+        Some(selection.service.as_str()),
+        Some(selection.location.as_str()),
+        selection.offering.as_deref(),
+        selection.resource.as_deref(),
+        selection.profile.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if !valid_identifier(identifier) {
+            return Err(SchedulingClientError::invalid_request(
+                "an operational selector is invalid",
+            ));
+        }
+    }
+    if selection.end <= selection.start {
+        return Err(SchedulingClientError::invalid_request(
+            "the operational interval is invalid",
+        ));
+    }
+    if let Some(reference) = selection.external_reference.as_ref() {
+        validate_external_reference(reference)?;
+    }
+    validate_cursor(selection.cursor.as_deref())?;
+    if selection.limit == Some(0)
+        || selection
+            .limit
+            .is_some_and(|limit| limit > u32::MAX as usize)
+    {
+        return Err(SchedulingClientError::invalid_request(
+            "the page size is outside the accepted range",
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(test)]

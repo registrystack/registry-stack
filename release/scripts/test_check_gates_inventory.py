@@ -1799,7 +1799,7 @@ class GateInventoryTest(unittest.TestCase):
     def test_missing_breg_tutorial_gates_are_reported(self) -> None:
         for snippet, replacement, gate in (
             (
-                "node docs/site/scripts/run-tutorial.mjs --gate breg\n",
+                'node docs/site/scripts/run-tutorial.mjs --gate breg --shard "$BREG_TUTORIAL_SHARD"\n',
                 "true # Base Registry Engine tutorial replay disabled",
                 "Base Registry Engine tutorial replay",
             ),

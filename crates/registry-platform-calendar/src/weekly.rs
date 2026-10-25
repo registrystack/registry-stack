@@ -7,7 +7,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use chrono::{DateTime, Datelike, Days, NaiveDate, Utc, Weekday};
 use chrono_tz::Tz;
 
-use crate::{day_interval, parse_date, parse_hh_mm, CalendarEvaluationError, HolidaySetRevision};
+use crate::{
+    day_interval, parse_date, parse_hh_mm, parse_interval_end, CalendarEvaluationError,
+    HolidaySetRevision,
+};
 
 /// Ten years is also the maximum authored opening-pattern span.
 pub const MAXIMUM_PATTERN_SPAN_DAYS: u32 = 3_650;
@@ -21,8 +24,8 @@ pub struct WeeklyOpeningPattern<'a> {
     pub weekdays: &'a [Weekday],
     /// Strict local wall time in `HH:MM` form.
     pub start_time: &'a str,
-    /// Strict local wall time in `HH:MM` form, after `start_time` on the same
-    /// local date. Patterns do not cross midnight.
+    /// Local wall time after `start_time`, or `24:00` for the following
+    /// midnight. Adjacent patterns can cover an overnight interval.
     pub end_time: &'a str,
     /// Strict ISO calendar date in `YYYY-MM-DD` form, inclusive.
     pub effective_from: &'a str,
@@ -39,8 +42,8 @@ pub struct CalendarException<'a> {
     pub date: &'a str,
     /// Strict local wall time in `HH:MM` form.
     pub start_time: &'a str,
-    /// Strict local wall time in `HH:MM` form, after `start_time` on the same
-    /// local date.
+    /// Local wall time after `start_time`, or `24:00` for the following
+    /// midnight, including an entire closed local day.
     pub end_time: &'a str,
     /// The closure an exceptional reopening reopens. Required when `kind` is
     /// [`CalendarExceptionKind::Opening`], absent otherwise.
@@ -99,8 +102,8 @@ pub fn expand_weekly_openings(
     let start_time =
         parse_hh_mm(pattern.start_time).ok_or(CalendarEvaluationError::InvalidPatternTimes)?;
     let end_time =
-        parse_hh_mm(pattern.end_time).ok_or(CalendarEvaluationError::InvalidPatternTimes)?;
-    if start_time >= end_time {
+        parse_interval_end(pattern.end_time).ok_or(CalendarEvaluationError::InvalidPatternTimes)?;
+    if !end_time.follows(start_time) {
         return Err(CalendarEvaluationError::InvalidPatternTimes);
     }
     let effective_from = parse_date(pattern.effective_from)
@@ -240,9 +243,9 @@ fn parse_exception_times(
     })?;
     let start =
         parse_hh_mm(exception.start_time).ok_or(CalendarEvaluationError::InvalidExceptionTimes)?;
-    let end =
-        parse_hh_mm(exception.end_time).ok_or(CalendarEvaluationError::InvalidExceptionTimes)?;
-    if start >= end {
+    let end = parse_interval_end(exception.end_time)
+        .ok_or(CalendarEvaluationError::InvalidExceptionTimes)?;
+    if !end.follows(start) {
         return Err(CalendarEvaluationError::InvalidExceptionTimes);
     }
     day_interval(date, start, end, timezone)
@@ -358,6 +361,37 @@ mod tests {
         Weekday::Sat,
         Weekday::Sun,
     ];
+
+    #[test]
+    fn full_day_patterns_and_closures_reach_midnight_without_a_gap() {
+        let full_days = pattern_with(
+            ALL_WEEKDAYS,
+            "America/New_York",
+            "2026-03-07",
+            "2026-03-08",
+            "00:00",
+            "24:00",
+        );
+        let intervals = expand_weekly_openings(&full_days, &[], &holidays(&[])).unwrap();
+        assert_eq!(intervals.len(), 1);
+        assert_eq!((intervals[0].end - intervals[0].start).num_hours(), 47);
+        let closure = CalendarException {
+            id: "closed-day",
+            kind: CalendarExceptionKind::Closure,
+            date: "2026-03-08",
+            start_time: "00:00",
+            end_time: "24:00",
+            reopens: None,
+            authority: None,
+        };
+        let closed = expand_weekly_openings(&full_days, &[closure], &holidays(&[])).unwrap();
+        assert_eq!(closed.len(), 1);
+        assert_eq!((closed[0].end - closed[0].start).num_hours(), 24);
+        assert_eq!(
+            closed,
+            expand_weekly_openings(&full_days, &[], &holidays(&["2026-03-08"])).unwrap()
+        );
+    }
 
     fn instant(value: &str) -> DateTime<Utc> {
         DateTime::parse_from_rfc3339(value)
