@@ -310,12 +310,15 @@ degrades one member instead of failing the whole view.
 
 The reader refuses with a closed set of error codes, none of which carries a
 record value: `not-an-occurrence` (the record type declares no occurrence),
-`unsupported-version` (a descriptor version other than the integer `1`),
-`malformed-descriptor`, `wrong-record-evidence` (evidence or a creation
-revision that belongs to another record, or a malformed identifier, revision or
-proposal application time), `revision-mismatch`, `incompatible-metadata` (a
-record member that contradicts its declared type) and `invalid-input` (the
-language-binding arguments are not exact JSON or do not match the contract).
+`unsupported-version` (a descriptor version that is a non-negative integer other
+than `1`, including `0`), `malformed-descriptor` (a malformed descriptor,
+including a `descriptorVersion` that is not a non-negative integer, such as a
+string, a fraction or a negative number), `wrong-record-evidence` (evidence or
+a creation revision that belongs to another record, or a malformed identifier,
+revision or proposal application time), `revision-mismatch`,
+`incompatible-metadata` (a record member that contradicts its declared type) and
+`invalid-input` (the language-binding arguments are not exact JSON or do not
+match the contract).
 
 ## Changing a descriptor while work is in flight
 

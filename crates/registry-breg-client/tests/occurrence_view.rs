@@ -746,6 +746,29 @@ fn an_unknown_role_kind_makes_only_that_role_unsupported() {
 }
 
 #[test]
+fn an_unknown_role_kind_keeps_its_namespace_on_the_descriptor_round_trip() {
+    let mut descriptor = transfer_descriptor();
+    descriptor["sources"][0]["kind"] = json!("delegated");
+    let view = expect_view(&arguments(
+        "ownership-transfer",
+        descriptor.clone(),
+        transfer_record(),
+    ));
+    assert_eq!(
+        view["sources"][0],
+        json!({"role": "deed", "label": "Deed",
+            "value": {"status": "unsupported", "detail": "role kind delegated"}}),
+        "the view of an unknown kind carries no kind and no namespace"
+    );
+    let parsed = BRegOccurrenceDescriptor::from_value(&descriptor).expect("descriptor parses");
+    assert_eq!(
+        parsed.to_value(),
+        descriptor,
+        "the namespace of an unknown kind survives the round trip"
+    );
+}
+
+#[test]
 fn an_open_interval_end_that_is_not_mapped_is_unavailable() {
     let mut descriptor = suspension_descriptor();
     descriptor["effective"]
@@ -1003,7 +1026,20 @@ fn descriptor_version_other_than_one_is_unsupported() {
 }
 
 #[test]
-fn a_descriptor_version_that_is_not_a_positive_integer_is_malformed() {
+fn a_descriptor_version_of_zero_is_unsupported_not_malformed() {
+    let mut descriptor = transfer_descriptor();
+    descriptor["descriptorVersion"] = json!(0);
+    let error = BRegOccurrenceDescriptor::from_value(&descriptor)
+        .expect_err("version 0 is not a version this client reads");
+    assert!(matches!(
+        error,
+        BRegOccurrenceError::UnsupportedVersion { found: 0 }
+    ));
+    assert_eq!(error.code(), "unsupported-version");
+}
+
+#[test]
+fn a_descriptor_version_that_is_not_a_non_negative_integer_is_malformed() {
     for version in [json!("1"), json!(1.0), json!(-1), json!(null), json!(true)] {
         let mut descriptor = transfer_descriptor();
         descriptor["descriptorVersion"] = version.clone();

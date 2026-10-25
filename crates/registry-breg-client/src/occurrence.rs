@@ -97,10 +97,11 @@ enum RoleKind {
     External {
         namespace: String,
     },
-    /// A role kind this client does not know, retained for the descriptor
-    /// round trip.
+    /// A role kind this client does not know, retained with its `namespace`
+    /// (when the descriptor carries one) for the descriptor round trip.
     Unsupported {
         kind: String,
+        namespace: Option<String>,
     },
 }
 
@@ -236,6 +237,9 @@ fn parse_roles(value: &Value, path: &str) -> Result<Vec<RoleDescriptor>, BRegOcc
                     },
                     other => RoleKind::Unsupported {
                         kind: other.to_owned(),
+                        namespace: optional(object, "namespace")
+                            .map(|value| text(value, &child("namespace")))
+                            .transpose()?,
                     },
                 };
             Ok(RoleDescriptor {
@@ -456,8 +460,11 @@ fn roles_value(roles: &[RoleDescriptor]) -> Value {
                         member.insert("kind".into(), Value::from("external"));
                         member.insert("namespace".into(), Value::from(namespace.clone()));
                     }
-                    RoleKind::Unsupported { kind } => {
+                    RoleKind::Unsupported { kind, namespace } => {
                         member.insert("kind".into(), Value::from(kind.clone()));
+                        if let Some(namespace) = namespace {
+                            member.insert("namespace".into(), Value::from(namespace.clone()));
+                        }
                     }
                 }
                 member.insert("field".into(), field_value(&role.field));
@@ -870,7 +877,7 @@ fn role_members(
                     member.insert("kind".into(), Value::from("external"));
                     member.insert("namespace".into(), Value::from(namespace.clone()));
                 }
-                RoleKind::Unsupported { kind } => {
+                RoleKind::Unsupported { kind, .. } => {
                     member.insert("value".into(), unsupported(&format!("role kind {kind}")));
                     return Ok(Value::Object(member));
                 }
