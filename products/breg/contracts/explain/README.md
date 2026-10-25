@@ -49,7 +49,11 @@ Model `v1alpha7` adds `recordTypes[].occurrence`, `recordTypes[].grouping` and
 domain occurrence; otherwise it is the resolved descriptor (`descriptorVersion`
 `"1"`) naming the stored fields that say what a row is about, when it happened,
 when it takes effect, what it was recorded from and what it corrects. Undeclared
-optional members are explicit `null`; `recordedTime` is always
+`summary`, `occurredAt`, `effective`, `correction` and `sourceEventId` are
+explicit `null`, as are an interval's open `end` and a `sourceEventId`'s unset
+`namespace`, `namespaceField` and `constraint`. A role's `label`, a native
+role's `namespace` and a field's `target` (present only for a reference) are
+omitted, never `null`. `recordedTime` is always
 `{"source": "creation-revision"}` because recorded time is read from record
 history and is never authored. `grouping` is `null` unless the Record type or
 Action authors `display.purpose` or `display.group`; it is presentation only and

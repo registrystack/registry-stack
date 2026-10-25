@@ -206,10 +206,11 @@ queries. Authors may use all of them on the same fields; none reads the others.
 `bregctl explain model` reports the declared descriptor in
 `recordTypes[].occurrence` (`null` when undeclared) and the display grouping in
 `recordTypes[].grouping` and `actions[].grouping`. The explanation keeps
-explicit nulls for undeclared members. These members arrive with model
-explanation `v1alpha7`. The version string is part of the document file name
-and envelope, so a reader that accepts only an earlier version refuses the
-document; there is no partial view. See
+explicit nulls for undeclared members, and shows the `sourceEventId`
+`constraint` that runtime metadata does not serve. These members arrive with
+model explanation `v1alpha7`. The version string is part of the document file
+name and envelope, so a reader that accepts only an earlier version refuses
+the document; there is no partial view. See
 [the explanation contract](contracts/explain/README.md).
 
 ## Runtime metadata
