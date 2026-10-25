@@ -283,7 +283,10 @@ bregctl explain access facility
 
 ```text test-excerpt
     profile facility-reader
+      actor kind              not declared
+      requester clients       any
       principal claim         registry_principal
+      task grant              none
       operations              ["get","list"]
       required scopes (all)   ["registry:facility:read"]
       allowed purposes (any)  ["facility-administration"]
