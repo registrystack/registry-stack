@@ -8,6 +8,41 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use registry_platform_config::{FileSecretProviderConfig, SecretProvidersConfig, SecretReference};
 
 #[test]
+fn local_service_preserves_warning_level_and_captures_both_streams() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = fs::canonicalize(temporary.path()).unwrap();
+    fs::create_dir(root.join("logs")).unwrap();
+    let mut child = service(
+        Path::new("/bin/sh"),
+        &[
+            "-c",
+            "printf 'level=%s\\n' \"$BREG_LOG\"; printf 'runtime-warning-canary\\n' >&2",
+        ],
+        &root.join("runtime.yaml"),
+        &root,
+        "breg",
+    )
+    .unwrap();
+    assert!(child.wait().unwrap().success());
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let contents = fs::read_dir(root.join("logs"))
+            .unwrap()
+            .map(|entry| fs::read_to_string(entry.unwrap().path()).unwrap())
+            .collect::<String>();
+        if contents.contains("runtime-warning-canary") && contents.contains("level=") {
+            assert!(contents.contains("level=warn"), "{contents}");
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "local service output was not captured"
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[test]
 fn rehearsal_token_provider_omits_empty_scopes_and_preserves_explicit_scopes() {
     let endpoint = url::Url::parse("https://issuer.example.test/oauth2/token").unwrap();
     let key = registry_platform_crypto::generate_private_jwk(

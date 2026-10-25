@@ -10,6 +10,32 @@ use crate::contract::{parse_project_json, Operation};
 use crate::model::{CompiledRegistry, HttpMethod};
 
 #[test]
+fn unconditioned_action_schema_accepts_only_empty_optional_preconditions() {
+    let registry = compiled_asset_result_action_registry();
+    let action = registry
+        .actions()
+        .actions
+        .iter()
+        .find(|action| action.id == "register-asset")
+        .unwrap();
+    assert!(crate::plan::condition_inputs(action).is_empty());
+    let schema = inline_validator(&super::openapi_action_input_schema(action));
+    assert_valid(&schema, &json!({"input":{"assetCode":"ASSET-1"}}));
+    assert_valid(
+        &schema,
+        &json!({"input":{"assetCode":"ASSET-1"},"preconditions":{}}),
+    );
+    assert_invalid(
+        &schema,
+        &json!({"input":{"assetCode":"ASSET-1"},"preconditions":{"assetCode":{"ifMatch":"\"opaque\""}}}),
+    );
+    assert_invalid(
+        &schema,
+        &json!({"input":{"assetCode":"ASSET-1"},"preconditions":null}),
+    );
+}
+
+#[test]
 fn prospective_row_boundary_refusal_is_documented_only_where_it_can_apply() {
     for operation in [Operation::Create, Operation::Batch] {
         assert!(super::problem_responses(operation, true).contains_key("412"));

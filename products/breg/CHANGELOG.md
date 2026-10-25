@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- Support up to 4,096 migration statements consistently in packages and the
+  PostgreSQL activation ledger. Production checks warn when a full initial
+  schema exceeds that bound; successor packages check their actual migration
+  plan, including reviewed steps and assertions. Permit manifests up to 8 MiB
+  within the existing per-file and total package bounds, and reject oversized
+  manifests before publishing them.
+- Preserve the safe package refusal cause and failing stage in schema-test
+  diagnostics, including fingerprint-only measurements, and retain runtime
+  warnings in native development-session logs.
+- Document array-valued target claims with an executable two-reference
+  example. Align immediate Action schemas with the runtime's acceptance of an
+  empty optional `preconditions` object, and explain which inputs require
+  concurrency conditions.
 - Name one `ALTER .. OWNER TO <migration>` statement for each registry object
   a split-role runtime role owns when apply refuses that ownership, in place
   of `REASSIGN OWNED BY`, which also moved what the runtime role owns outside

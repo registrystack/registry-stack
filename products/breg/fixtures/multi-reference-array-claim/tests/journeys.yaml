@@ -1,0 +1,80 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/breg/journeys/journeys.v1.schema.json
+apiVersion: id.registrystack.org/formats/breg/journeys/v1
+kind: BRegJourneys
+journeys:
+  - id: every-reference-needs-authority
+    steps:
+      - id: create-north-authority
+        recordType: public-authority
+        accessProfile: reference-loader
+        claims:
+          principal: synthetic-reference-loader
+          scopes: [registry:authority:load]
+          purpose: permit-administration
+        request:
+          type: create
+          data: {code: AUTH-NORTH, jurisdiction: north-district}
+        expect: {outcome: success, status: 201}
+        capture: north-authority
+      - id: create-south-authority
+        recordType: public-authority
+        accessProfile: reference-loader
+        claims:
+          principal: synthetic-reference-loader
+          scopes: [registry:authority:load]
+          purpose: permit-administration
+        request:
+          type: create
+          data: {code: AUTH-SOUTH, jurisdiction: south-district}
+        expect: {outcome: success, status: 201}
+        capture: south-authority
+      - id: register-transfer-with-both-authorities-allowed
+        action: register-authority-transfer
+        accessProfile: transfer-clerk
+        claims:
+          principal: synthetic-transfer-clerk
+          scopes: [registry:permit:transfer]
+          purpose: permit-administration
+          directClaims:
+            allowed_jurisdictions: [north-district, south-district]
+        request:
+          type: invoke
+          idempotencyKey: both-authorities-allowed
+          input:
+            sourceAuthorityId: {recordCapture: north-authority}
+            destinationAuthorityId: {recordCapture: south-authority}
+            transferReference: TRANSFER-001
+        expect: {outcome: success, status: 200}
+        captureResults: {transfer: permitted-transfer}
+      - id: refuse-one-reference-outside-claim
+        action: register-authority-transfer
+        accessProfile: transfer-clerk
+        claims:
+          principal: synthetic-transfer-clerk
+          scopes: [registry:permit:transfer]
+          purpose: permit-administration
+          directClaims:
+            allowed_jurisdictions: [north-district]
+        request:
+          type: invoke
+          idempotencyKey: one-authority-outside-claim
+          input:
+            sourceAuthorityId: {recordCapture: north-authority}
+            destinationAuthorityId: {recordCapture: south-authority}
+            transferReference: TRANSFER-002
+        expect: {outcome: refusal, status: 412, problemCode: precondition.failed}
+      - id: refuse-missing-array-claim
+        action: register-authority-transfer
+        accessProfile: transfer-clerk
+        claims:
+          principal: synthetic-transfer-clerk
+          scopes: [registry:permit:transfer]
+          purpose: permit-administration
+        request:
+          type: invoke
+          idempotencyKey: missing-array-claim
+          input:
+            sourceAuthorityId: {recordCapture: north-authority}
+            destinationAuthorityId: {recordCapture: south-authority}
+            transferReference: TRANSFER-003
+        expect: {outcome: refusal, status: 404, problemCode: resource.not_found}

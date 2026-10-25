@@ -506,10 +506,22 @@ exact content digest; changed content needs a new submission and fresh review.
 
 An Action with `execution.mode: immediate` runs one atomic plan at `POST /v1/actions/{action}` with
 `Idempotency-Key`. Input names are exact `apiName` values, validated against the compiler-emitted
-JSON Schema in the Action descriptor. When the descriptor advertises target conditions, read them
-first at `POST /v1/actions/{action}/target-conditions`. Invoke requires Action authority over every
-target. Effects, revisions, audit, receipt, and outbox commit together or not at all; resend the
-original request with its original key when the outcome is uncertain. See
+JSON Schema in the Action descriptor. Invoke requires Action authority over every existing
+reference target, including each of several inputs that reference the same Record type. The
+descriptor's `requiredConditionKeys` separately lists the input API names that require concurrency
+conditions: existing write targets and inputs governed by an `unchanged` revision guard.
+
+When `requiredConditionKeys` is nonempty, `conditionRoute` and `routes.targetConditions` advertise
+`POST /v1/actions/{action}/target-conditions`. Send an `input` object containing exactly those
+condition inputs. The response's `preconditions` object carries one opaque `ifMatch` value for
+each key; send that object unchanged with Invoke. A target-condition request or Invoke
+`preconditions` member for any other input is refused.
+When `requiredConditionKeys` is empty, the descriptor advertises no target-conditions route and
+the Invoke schema and runtime allow `preconditions` to be omitted or supplied as an empty object.
+Prefer to omit the member for such an Action.
+
+Effects, revisions, audit, receipt, and outbox commit together or not at all; resend the original
+request with its original key when the outcome is uncertain. See
 [Actions and Proposals](../../configure/breg-actions/) for the model.
 
 An immediate Action with a reference input advertises one `routes.availability` endpoint at
@@ -530,7 +542,11 @@ constraints may still refuse. Invoke checks authority, concurrency, and every gu
 transaction.
 
 {/* Evidence: crates/registry-breg/src/api/actions.rs; crates/registry-breg/src/immediate_actions.rs; crates/registry-breg/src/mutation.rs;
+    crates/registry-breg/src/plan.rs, condition_inputs();
+    crates/registry-breg/src/artifacts.rs, public_action_metadata_entry(), openapi_action_input_schema(),
+    openapi_action_condition_request_schema(), and openapi_action_condition_response_schema();
     crates/registry-breg/tests/postgres_mutation.rs; crates/registry-breg/tests/postgres_immediate_action_requirements.rs;
+    crates/registry-breg/tests/postgres_multi_reference_action_authority.rs;
     products/breg/immediate-actions.md;
     crates/registry-breg-client/src/metadata.rs; crates/registry-breg-client/src/actions.rs. */}
 

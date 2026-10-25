@@ -1145,3 +1145,112 @@ fn reviewed_successor_installs_added_proposal_operation_policies() {
         .collect::<BTreeSet<_>>();
     assert_eq!(actual, expected);
 }
+
+#[test]
+fn package_migration_plan_accepts_the_statement_bound_and_refuses_one_more() {
+    let compiled = compile(&source());
+    let mut plan = initial_migration_plan(&compiled);
+    let statement = plan
+        .statements
+        .first()
+        .expect("the fixture compiles at least one DDL statement")
+        .clone();
+    plan.statements = vec![statement.clone(); MAX_MIGRATION_STATEMENTS];
+    validate_migration_plan_bounds(&plan, 0).expect("the exact package statement bound validates");
+
+    plan.statements.push(statement);
+    assert_eq!(
+        validate_migration_plan_bounds(&plan, 0),
+        Err(PackageError::Bounds)
+    );
+
+    plan.statements.truncate(1_025);
+    validate_migration_plan_bounds(&plan, MAX_MIGRATION_STATEMENTS - 1_025)
+        .expect("compiler and reviewed statements may fill the aggregate bound exactly");
+    assert_eq!(
+        validate_migration_plan_bounds(&plan, MAX_MIGRATION_STATEMENTS - 1_024),
+        Err(PackageError::Bounds)
+    );
+}
+
+fn package_capacity_request(source_revision: &str) -> PackageBuildRequest {
+    let mut value = source();
+    value["package"] = json!({"sourceRevision": source_revision});
+    value["manifestProjection"] = json!({
+        "accessProfile": "operator",
+        "classificationCeiling": "internal",
+        "catalog": {
+            "baseUrl": "https://action-package.example.test",
+            "title": "Action Package",
+            "publisher": {"id": "action-authority", "name": "Action Authority"}
+        },
+        "publicService": {"id": "action-service", "title": "Action Service"},
+        "datasets": [{
+            "id": "test-dataset", "title": "Test Dataset",
+            "owner": "Action Authority", "status": "active"
+        }],
+        "dataServices": [{
+            "id": "action-api", "title": "Action API",
+            "endpointUrl": "https://action-package.example.test",
+            "servesDatasets": ["test-dataset"]
+        }],
+        "distributions": []
+    });
+    value["accessProfiles"][0]["permissions"]["records"] = json!([{
+        "recordType": "item", "operations": ["get", "list"],
+        "readableFields": ["label"], "rowBoundaries": "unrestricted"
+    }]);
+    PackageBuildRequest {
+        from_package_digest: None,
+        compiler_source_revision: source_revision.to_owned(),
+        schema_fingerprint:
+            "sha256:0000000000000000000000000000000000000000000000000000000000000000".to_owned(),
+        project: PackageSourceFile {
+            path: "source/registry.json".to_owned(),
+            bytes: serde_json::to_vec(&value).expect("package fixture serializes"),
+        },
+        modules: Vec::new(),
+        fixture_journeys: PackageSourceFile {
+            path: FIXTURE_JOURNEYS_PATH.to_owned(),
+            bytes: b"capacity guard fixture".to_vec(),
+        },
+        migration_plan: PackageMigrationPlanInput::InitialCompiledDdl,
+    }
+}
+
+#[test]
+fn oversized_canonical_manifest_is_refused_before_a_package_can_be_left_behind() {
+    let mut prepared =
+        prepare_package(package_capacity_request("capacity-source")).expect("fixture prepares");
+    let oversized_revision = "x".repeat(MAX_MANIFEST_BYTES as usize);
+    prepared.manifest.compiler.source_revision = oversized_revision;
+    assert_eq!(
+        finish_prepared_package(
+            prepared.manifest.clone(),
+            prepared.registry.clone(),
+            prepared.files.clone(),
+        )
+        .err(),
+        Some(PackageError::Bounds),
+        "the preparation finalizer refuses a manifest the loader cannot read"
+    );
+
+    assert_eq!(prepared.package_digest(), Err(PackageError::Bounds));
+
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("clock follows epoch")
+        .as_nanos();
+    let destination = std::env::temp_dir().join(format!(
+        "breg-manifest-capacity-{}-{nanos}",
+        std::process::id()
+    ));
+    assert_eq!(
+        prepared.publish_to_directory(&destination).err(),
+        Some(PackageError::Bounds)
+    );
+    assert!(
+        !destination.exists(),
+        "refused publication does not create a package directory"
+    );
+}

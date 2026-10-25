@@ -746,7 +746,7 @@ pub(crate) fn openapi_action_input_schema(action: &CompiledAction) -> Value {
         input_schema["required"] = json!([]);
     }
     let mut properties = Map::from_iter([("input".to_owned(), input_schema)]);
-    if !condition_inputs.is_empty() {
+    if !action.execution.is_proposal() {
         properties.insert(
             "preconditions".to_owned(),
             action_preconditions_schema(condition_inputs.iter().copied()),

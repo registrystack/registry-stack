@@ -6235,6 +6235,9 @@ fn schema_test_runtime_setup_failure(
 
 fn test_lifecycle_failure(error: TestLifecycleError) -> FailureReport {
     let error = match error {
+        TestLifecycleError::Candidate { stage, error } => {
+            return candidate_package_failure("test", stage, error);
+        }
         TestLifecycleError::RuntimeSetup(error) => return schema_test_runtime_setup_failure(error),
         TestLifecycleError::FieldPatternSyntax {
             entity_id,
@@ -6344,13 +6347,7 @@ fn test_lifecycle_failure(error: TestLifecycleError) -> FailureReport {
         ),
         TestLifecycleError::JourneyStep { .. } => unreachable!("handled before match"),
         TestLifecycleError::Rehearsal(_) => unreachable!("handled before match"),
-        TestLifecycleError::Candidate => (
-            "test.candidate.refused",
-            "candidate",
-            "the schema-test package candidate was refused",
-            DiagnosticArtifact::SchemaTestCandidate,
-            SuggestedAction::CorrectSchemaTestCandidate,
-        ),
+        TestLifecycleError::Candidate { .. } => unreachable!("handled before match"),
         TestLifecycleError::ReviewFingerprint { .. } => unreachable!("handled before match"),
         TestLifecycleError::FieldPatternSyntax { .. } => unreachable!("handled before match"),
         TestLifecycleError::Database => (
@@ -7109,11 +7106,24 @@ fn candidate_package_error(command: &'static str, error: PackageError) -> Failur
     if command == "package" {
         return package_lifecycle_failure(PackageLifecycleError::Package(error));
     }
+    candidate_package_failure(command, "prepare", error)
+}
+
+fn candidate_package_failure(
+    command: &'static str,
+    stage: &'static str,
+    error: PackageError,
+) -> FailureReport {
+    // PackageError's Display and Debug contain only bounded package identities
+    // and value-free failure classes, never source values, SQL, or credentials.
+    let message = format!(
+        "the schema-test package candidate was refused during {stage}: {error:?} ({error})"
+    );
     candidate_failure(
         command,
         "test.candidate.refused",
         "candidate",
-        "the schema-test package candidate was refused",
+        &message,
         DiagnosticArtifact::SchemaTestCandidate,
         match error {
             PackageError::UnsafePath => SuggestedAction::VerifyPackagePath,
@@ -17339,6 +17349,27 @@ fn native_pattern_schema_test_diagnostic_identifies_only_the_authored_field() {
     );
     assert!(!diagnostic.message.contains("registry_data"));
     assert!(diagnostic.message.contains("PostgreSQL ARE syntax"));
+}
+
+#[cfg(test)]
+#[test]
+fn candidate_package_refusal_keeps_the_safe_cause_in_the_existing_diagnostic() {
+    for error in [
+        PackageError::Bounds,
+        PackageError::Derivation,
+        PackageError::Binding,
+    ] {
+        let cause = format!("{error:?}");
+        let description = error.to_string();
+        let report = candidate_package_error("test", error);
+        let diagnostic = &report.diagnostics[0];
+        assert_eq!(diagnostic.code, "test.candidate.refused");
+        assert!(diagnostic.message.contains("prepare"));
+        assert!(diagnostic.message.contains(&cause));
+        assert!(diagnostic.message.contains(&description));
+        let serialized = serde_json::to_value(&report).unwrap();
+        assert_eq!(serialized["diagnostics"][0]["message"], diagnostic.message);
+    }
 }
 
 #[cfg(test)]

@@ -5,10 +5,10 @@ use tokio_postgres::GenericClient;
 use uuid::Uuid;
 
 use super::{PostgresKernelError, Result, RuntimeRevoke, SqlIdentifier};
+use crate::package::MAX_MIGRATION_STATEMENTS;
 
-const MAX_MIGRATION_STATEMENTS: usize = 1024;
 const MAX_MIGRATION_ARTIFACTS: usize = 1024;
-const MAX_MIGRATION_STEPS: usize = 1024;
+const MAX_MIGRATION_STEPS: usize = MAX_MIGRATION_STATEMENTS;
 const MAX_LEDGER_TEXT_BYTES: usize = 512;
 
 /// What one activation changes in the managed catalog.
@@ -300,9 +300,8 @@ pub(crate) async fn install_migration_ledger(
     migration: &impl GenericClient,
     runtime_role: &SqlIdentifier,
 ) -> Result<()> {
-    migration
-        .batch_execute(
-            "CREATE TABLE IF NOT EXISTS registry_internal.registry_migrations (
+    let ledger_ddl =
+        "CREATE TABLE IF NOT EXISTS registry_internal.registry_migrations (
                  activation_id uuid PRIMARY KEY,
                  apply_order bigint NOT NULL
                      CONSTRAINT registry_migrations_apply_order_unique UNIQUE
@@ -323,19 +322,7 @@ pub(crate) async fn install_migration_ledger(
                  migration_kind text NOT NULL
                      CONSTRAINT registry_migrations_migration_kind_closed
                      CHECK (migration_kind IN ('compiled-additive', 'metadata-only', 'reviewed')),
-                 statement_checksums text[] NOT NULL
-                     CONSTRAINT registry_migrations_checksums_nonempty
-                     CHECK (
-                         COALESCE(array_ndims(statement_checksums), 1) = 1
-                         AND cardinality(statement_checksums) BETWEEN 0 AND 1024
-                         AND array_position(statement_checksums, '') IS NULL
-                         AND (
-                             (migration_kind = 'metadata-only' AND cardinality(statement_checksums) = 0)
-                             OR (migration_kind = 'reviewed' AND cardinality(statement_checksums) = 0)
-                             OR (migration_kind IN ('compiled-additive', 'reviewed')
-                                 AND cardinality(statement_checksums) BETWEEN 1 AND 1024)
-                         )
-                     ),
+                 statement_checksums text[] NOT NULL,
                  artifact_paths text[] NOT NULL,
                  artifact_checksums text[] NOT NULL,
                  preconditions_complete boolean NOT NULL DEFAULT false,
@@ -417,9 +404,9 @@ pub(crate) async fn install_migration_ledger(
                  )
              );
              REVOKE ALL ON TABLE registry_internal.registry_migrations FROM PUBLIC;
-             REVOKE ALL ON TABLE registry_internal.registry_migration_steps FROM PUBLIC;",
-        )
-        .await?;
+             REVOKE ALL ON TABLE registry_internal.registry_migration_steps FROM PUBLIC;";
+    migration.batch_execute(ledger_ddl).await?;
+    ensure_migration_statement_capacity(migration).await?;
     let revoke = RuntimeRevoke::detect(migration, runtime_role).await?;
     migration
         .batch_execute(&format!(
@@ -427,6 +414,50 @@ pub(crate) async fn install_migration_ledger(
              {}",
             revoke.revoke_all_on("TABLE registry_internal.registry_migrations"),
             revoke.revoke_all_on("TABLE registry_internal.registry_migration_steps"),
+        ))
+        .await?;
+    Ok(())
+}
+
+/// Widens the legacy ledger statement bound inside the caller's
+/// migration-authorized transaction. The versioned constraint makes repeated
+/// startup, rehearsal, and successor retries no-ops after the first upgrade.
+pub(crate) async fn ensure_migration_statement_capacity(
+    migration: &impl GenericClient,
+) -> Result<()> {
+    migration
+        .batch_execute(&format!(
+            "DO $migration_statement_capacity$
+             BEGIN
+                 IF EXISTS (
+                     SELECT 1 FROM pg_catalog.pg_constraint
+                     WHERE conrelid = 'registry_internal.registry_migrations'::regclass
+                       AND conname = 'registry_migrations_checksums_nonempty'
+                 ) THEN
+                     ALTER TABLE registry_internal.registry_migrations
+                         DROP CONSTRAINT registry_migrations_checksums_nonempty;
+                 END IF;
+                 IF NOT EXISTS (
+                     SELECT 1 FROM pg_catalog.pg_constraint
+                     WHERE conrelid = 'registry_internal.registry_migrations'::regclass
+                       AND conname = 'registry_migrations_statement_checksums_bounded_v2'
+                 ) THEN
+                     ALTER TABLE registry_internal.registry_migrations
+                         ADD CONSTRAINT registry_migrations_statement_checksums_bounded_v2
+                         CHECK (
+                             COALESCE(array_ndims(statement_checksums), 1) = 1
+                             AND cardinality(statement_checksums) BETWEEN 0 AND {MAX_MIGRATION_STATEMENTS}
+                             AND array_position(statement_checksums, '') IS NULL
+                             AND (
+                                 (migration_kind = 'metadata-only' AND cardinality(statement_checksums) = 0)
+                                 OR (migration_kind = 'reviewed' AND cardinality(statement_checksums) = 0)
+                                 OR (migration_kind IN ('compiled-additive', 'reviewed')
+                                     AND cardinality(statement_checksums) BETWEEN 1 AND {MAX_MIGRATION_STATEMENTS})
+                             )
+                         );
+                 END IF;
+             END
+             $migration_statement_capacity$;"
         ))
         .await?;
     Ok(())
@@ -994,6 +1025,26 @@ mod tests {
         malformed.statement_checksums = vec!["sha256:not-a-digest".to_owned()];
         assert!(matches!(
             malformed.validate(),
+            Err(PostgresKernelError::Configuration(_))
+        ));
+    }
+
+    #[test]
+    fn migration_ledger_accepts_the_supported_statement_bound_and_refuses_one_more() {
+        assert_eq!(MAX_MIGRATION_STATEMENTS, 4_096);
+        let mut entry = entry(MigrationKind::CompiledAdditive);
+        entry.statement_checksums = (0..MAX_MIGRATION_STATEMENTS)
+            .map(|ordinal| statement_checksum(&format!("SELECT {ordinal}")))
+            .collect();
+        entry
+            .validate()
+            .expect("the exact supported statement count validates");
+
+        entry
+            .statement_checksums
+            .push(statement_checksum("SELECT 4096"));
+        assert!(matches!(
+            entry.validate(),
             Err(PostgresKernelError::Configuration(_))
         ));
     }

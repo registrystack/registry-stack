@@ -104,11 +104,25 @@ response discloses and `writableFields` what a create or patch may set; `filtera
 not its `apiName`. A write never reveals a field the profile cannot read.
 
 A [row boundary](../../reference/glossary/#row-boundary) compares a Record field with a token claim.
-`equals` compares with one claim value; `in` with a list claim. Every boundary on a permission must
-hold. Reads leave other rows out, and writes check both the stored row and the row as it would be
-after the change. A permission that creates must keep its boundary field writable, otherwise
-every create is refused, and `bregctl check` says so. A patch under an `in` boundary can move a row
-between the caller's allowed values, which `bregctl check` points out. Write
+`equals` compares with one scalar claim value. `in` requires a claim whose value is a JSON array;
+in `dev-clients.yaml`, write the array as a YAML sequence:
+
+```yaml title="dev-clients.yaml"
+claims:
+  registry_principal: synthetic-transfer-clerk
+  registry_purpose: permit-administration
+  allowed_jurisdictions: [north-district, south-district]
+```
+
+A missing `in` claim or a scalar in its place fails closed. When journeys need another claim
+variant for a refusal, bind that client to the exact step with
+[`testBindings`](../../reference/breg-configuration/#development-clients).
+
+Every boundary on a permission must hold. Reads leave other rows out, and writes check both the
+stored row and the row as it would be after the change. A permission that creates must keep its
+boundary field writable, otherwise every create is refused, and `bregctl check` says so. A patch
+under an `in` boundary can move a row between the caller's allowed values, which `bregctl check`
+points out. Write
 `rowBoundaries: unrestricted` only for deliberately registry-wide authority.
 
 An agent is held to a narrower rule. A token from an agent, or one acting for another principal,
@@ -118,7 +132,9 @@ through [Actions and Proposals](../breg-actions/) instead.
 {/* Evidence: crates/registry-breg/src/access.rs, breg.access.profile-row-boundary-not-writable and
     breg.access.profile-writable-row-boundary; crates/registry-breg/src/api/mod.rs, authorize_direct_route();
     crates/registry-breg/src/compiler.rs, breg.access-profile.standing-agent-direct-mutation-forbidden and
-    breg.access-profile.task-grant-direct-mutation-forbidden. */}
+    breg.access-profile.task-grant-direct-mutation-forbidden;
+    products/breg/fixtures/multi-reference-array-claim/dev-clients.yaml;
+    crates/registry-breg/tests/postgres_multi_reference_action_authority.rs. */}
 
 ## Disclose related Records
 

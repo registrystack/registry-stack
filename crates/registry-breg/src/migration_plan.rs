@@ -946,6 +946,17 @@ impl ValidatedReviewedMigrationPlan {
     pub fn migrations(&self) -> &[ValidatedReviewedMigration] {
         &self.migrations
     }
+
+    pub(crate) fn statement_count(&self) -> usize {
+        self.migrations
+            .iter()
+            .map(|migration| {
+                migration.steps.len()
+                    + migration.pre_assertions.len()
+                    + migration.post_assertions.len()
+            })
+            .sum()
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -995,6 +1006,7 @@ pub(crate) struct ReviewedPlanBindings<'a> {
 pub(crate) struct PreparedReviewedMigrationPlan {
     pub descriptor_paths: Vec<String>,
     pub files: BTreeMap<String, Vec<u8>>,
+    pub statement_count: usize,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1073,6 +1085,7 @@ pub(crate) fn prepare_reviewed_migration_plan(
     Ok(PreparedReviewedMigrationPlan {
         descriptor_paths,
         files,
+        statement_count: validated.statement_count(),
     })
 }
 

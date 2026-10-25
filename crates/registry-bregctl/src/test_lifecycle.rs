@@ -12,6 +12,7 @@ use registry_breg::fixtures::{
     SchemaTestCredentialBindings, SchemaTestRuntimeSetupError,
 };
 use registry_breg::literal_text::{LiteralText, WRITE_THE_VALUE_OR_A_SECRET_REFERENCE};
+use registry_breg::package::PackageError;
 use registry_breg::postgres::{
     BaselineFingerprintDrift, MigrationRehearsalError, SuccessorMigrationRehearsal,
 };
@@ -87,7 +88,10 @@ pub(crate) struct OutputTarget {
 pub(crate) enum TestLifecycleError {
     RuntimeConfigPath,
     RuntimeConfig(RuntimeConfigError),
-    Candidate,
+    Candidate {
+        stage: &'static str,
+        error: PackageError,
+    },
     ReviewFingerprint {
         declared: String,
         measured: String,
@@ -227,7 +231,10 @@ pub(crate) fn run(
     request
         .candidate
         .prevalidate()
-        .map_err(|_| TestLifecycleError::Candidate)?;
+        .map_err(|error| TestLifecycleError::Candidate {
+            stage: "prevalidate",
+            error,
+        })?;
     let suite = match validate_fixture_journeys(
         request.candidate.fixture_journeys(),
         request.candidate.registry(),
@@ -268,7 +275,10 @@ pub(crate) fn run(
     let prepared = request
         .candidate
         .prepare(schema_fingerprint.clone())
-        .map_err(|_| TestLifecycleError::Candidate)?;
+        .map_err(|error| TestLifecycleError::Candidate {
+            stage: "prepare",
+            error,
+        })?;
     let mut baseline_fingerprint_drift = None;
     if let Some(baseline) = &rehearsal_baseline {
         baseline_fingerprint_drift = runtime
@@ -319,7 +329,10 @@ pub(crate) fn measure(
     let config = load_test_runtime_config(runtime_config)?;
     candidate
         .prevalidate()
-        .map_err(|_| TestLifecycleError::Candidate)?;
+        .map_err(|error| TestLifecycleError::Candidate {
+            stage: "measure.prevalidate",
+            error,
+        })?;
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -331,7 +344,10 @@ pub(crate) fn measure(
     })?;
     let prepared = candidate
         .prepare(schema_fingerprint.clone())
-        .map_err(|_| TestLifecycleError::Candidate)?;
+        .map_err(|error| TestLifecycleError::Candidate {
+            stage: "measure.prepare",
+            error,
+        })?;
     Ok(SchemaMeasurement {
         registry_revision: prepared.registry().revision().to_owned(),
         schema_fingerprint,
@@ -743,6 +759,96 @@ mod tests {
     use std::path::PathBuf;
 
     static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn candidate_prevalidation_keeps_its_cause_in_test_and_measure_reports() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = fs::canonicalize(temporary.path()).unwrap();
+        fs::create_dir(root.join("package")).unwrap();
+        fs::create_dir(root.join("secrets")).unwrap();
+        let runtime = root.join("runtime.yaml");
+        let runtime_source =
+            include_str!("../../../products/breg/examples/minimal/runtime.example.yaml")
+                .replace(
+                    "/var/lib/breg/package",
+                    root.join("package").to_str().unwrap(),
+                )
+                .replace(
+                    "/var/lib/breg/secrets",
+                    root.join("secrets").to_str().unwrap(),
+                )
+                .replace(
+                    "/var/log/breg/audit.jsonl",
+                    root.join("audit.jsonl").to_str().unwrap(),
+                );
+        fs::write(&runtime, runtime_source).unwrap();
+        let source = include_bytes!("../../../products/breg/examples/minimal/registry.yaml");
+        let project = registry_breg::contract::parse_project_yaml(source).unwrap();
+        let compiled = registry_breg::compiler::compile_project(
+            &project,
+            &[],
+            registry_breg::compiler::CompileProfile::Production,
+        )
+        .unwrap();
+        let candidate = CapturedPackageCandidate {
+            compiled,
+            compiler_source_revision: "candidate-regression".to_owned(),
+            from_package_digest: None,
+            project: registry_breg::package::PackageSourceFile {
+                path: "../source-path-canary".to_owned(),
+                bytes: source.to_vec(),
+            },
+            project_assets: Vec::new(),
+            modules: Vec::new(),
+            fixture_journeys: registry_breg::package::PackageSourceFile {
+                path: registry_breg::package::FIXTURE_JOURNEYS_PATH.to_owned(),
+                bytes: include_bytes!(
+                    "../../../products/breg/examples/minimal/tests/journeys.yaml"
+                )
+                .to_vec(),
+            },
+            migration_plan: registry_breg::package::PackageMigrationPlanInput::InitialCompiledDdl,
+            prevalidation_schema_fingerprint: None,
+            rehearsal_baseline: None,
+        };
+        assert_eq!(
+            candidate.prevalidate().unwrap_err(),
+            registry_breg::package::PackageError::UnsafePath
+        );
+        let output_path = root.join("receipt.json");
+        let output = preflight_output(&output_path).unwrap();
+        let errors = [
+            (
+                "prevalidate",
+                run(TestLifecycleRequest {
+                    candidate: candidate.clone(),
+                    runtime_config: &runtime,
+                    credentials: &root.join("credentials-canary.yaml"),
+                    output,
+                })
+                .unwrap_err(),
+            ),
+            (
+                "measure.prevalidate",
+                measure(candidate, &runtime).unwrap_err(),
+            ),
+        ];
+        for (stage, error) in errors {
+            let report = crate::test_lifecycle_failure(error);
+            assert_eq!(report.diagnostics[0].code, "test.candidate.refused");
+            assert!(report.diagnostics[0].message.contains(stage));
+            assert!(report.diagnostics[0].message.contains("UnsafePath"));
+            assert!(report.diagnostics[0]
+                .message
+                .contains("the package path is unsafe"));
+            let json = serde_json::to_string(&report).unwrap();
+            assert!(json.contains(stage));
+            assert!(json.contains("UnsafePath"));
+            assert!(!json.contains("source-path-canary"));
+            assert!(!json.contains("credentials-canary"));
+        }
+        assert!(!output_path.exists());
+    }
 
     const CREDENTIALS_EXAMPLE: &str = include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
