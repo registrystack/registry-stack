@@ -331,7 +331,7 @@ fn expected_transfer() -> Value {
     })
 }
 
-// ---- G3 projections and the generated fixtures ----
+// ---- Projections and the generated fixtures ----
 
 fn fixture_directory() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/occurrence-view")
@@ -520,7 +520,7 @@ fn the_view_schema_refuses_shapes_the_projection_never_emits() {
     }
 }
 
-// ---- A06: dates stay dates, unknowns stay unknown (deterministic, clock-free) ----
+// ---- Dates stay dates, unknowns stay unknown (deterministic, clock-free) ----
 
 #[test]
 fn dates_stay_dates_and_unknowns_stay_unknown() {
@@ -1071,7 +1071,10 @@ fn malformed_nested_members_name_their_path() {
                 field_ref("applicant-system", "applicantSystem", "string", None);
         }),
         ("occurredAt.type", |d| {
-            d["occurredAt"].as_object_mut().expect("time").remove("type");
+            d["occurredAt"]
+                .as_object_mut()
+                .expect("time")
+                .remove("type");
         }),
         ("effective.type", |d| {
             let time = d["effective"].as_object_mut().expect("time");
