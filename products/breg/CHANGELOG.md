@@ -19,6 +19,19 @@
   example. Align immediate Action schemas with the runtime's acceptance of an
   empty optional `preconditions` object, and explain which inputs require
   concurrency conditions.
+- Revalidate a submitted Proposal's retained task authority on every new
+  application attempt, including automatic application and separately authorized
+  manual Apply. Preserve completed receipt recovery and owner cancellation.
+- Before a successor package activates, require a usable cancellation path for
+  pending Proposals: one profile must provide Cancel with Get or List.
+- Human-readable access explanations include actor, client and task gates,
+  Action and Proposal targets, inputs, attachments, ownership and row reach.
+  Omitted ownership and writable-input defaults are explicit.
+- Keep related-record disclosure warnings separate from Action target warnings,
+  and report unrestricted Proposal targets even when Proposal ownership is
+  restricted to the caller.
+- Preserve bounded authentication-refusal warnings after a poisoned timestamp
+  lock, while retaining their rate limit.
 - Name one `ALTER .. OWNER TO <migration>` statement for each registry object
   a split-role runtime role owns when apply refuses that ownership, in place
   of `REASSIGN OWNED BY`, which also moved what the runtime role owns outside

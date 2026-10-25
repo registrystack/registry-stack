@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Upgrade the P-256 dependency stack to use `crypto-bigint` 0.7.6, addressing
+  RUSTSEC-2026-0387. Key generation retains operating-system randomness and
+  existing SEC1 and JWK formats; signing algorithms and providers are unchanged.
+
 - `registry-platform-activation` advises an exact, quoted `ALTER ... OWNER TO`
   statement for each product schema object a runtime role owns or inherits
   ownership of, in place of `REASSIGN OWNED BY`, which also moves the role's

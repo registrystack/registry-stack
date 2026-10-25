@@ -63,7 +63,7 @@ traceability:
   - {id: BREG-SEC-59, state: enforced, negativeId: BREG-NEG-59, negativeTest: {path: crates/registry-breg-client/tests/http_boundary.rs, name: caller_scoped_tokens_are_isolated_across_concurrent_requests}}
   - {id: BREG-SEC-60, state: enforced, negativeId: BREG-NEG-60, negativeTest: {path: crates/registry-breg/tests/postgres_proposal.rs, name: prepared_lifecycle_recovery_uses_current_authority_and_the_original_exact_condition}}
   - {id: BREG-SEC-63, state: enforced, negativeId: BREG-NEG-63, negativeTest: {path: crates/registry-breg/src/mutation/proposal.rs, name: proposal_actor_is_keyed_database_and_issuer_scoped_but_stable_across_activation}}
-  - {id: BREG-SEC-64, state: enforced, negativeId: BREG-NEG-64, negativeTest: {path: crates/registry-breg/tests/postgres_proposal_security.rs, name: signed_proposal_start_and_lifecycle_receipts_reject_sibling_grants}}
+  - {id: BREG-SEC-64, state: enforced, negativeId: BREG-NEG-64, negativeTest: {path: crates/registry-breg/tests/postgres_proposal_task_authority.rs, name: automatic_apply_requires_active_retained_task_authority}}
   - {id: BREG-SEC-65, state: enforced, negativeId: BREG-NEG-65, negativeTest: {path: crates/registry-breg/tests/postgres_action_evidence.rs, name: commit_evidence_is_guard_only_and_replay_never_reacquires}}
   - {id: BREG-SEC-66, state: enforced, negativeId: BREG-NEG-66, negativeTest: {path: crates/registry-breg/tests/postgres_hook_changes.rs, name: real_postgres_a_retained_local_delivery_survives_restart_verification}}
   - {id: BREG-SEC-67, state: enforced, negativeId: BREG-NEG-67, negativeTest: {path: crates/registry-breg/tests/support/hook_activation.rs, name: classified_proposal_completion_preserves_registry_and_lease_fences}}
@@ -200,3 +200,4 @@ traceability:
   # Request parsing audit proof: crates/registry-breg/tests/postgres_proposal_security.rs::task_grant_context_malformed_requests_are_audited_and_fail_closed
   - {"id": "BREG-SEC-192", "state": "enforced", "negativeId": "BREG-NEG-192", "negativeTest": {"path": "crates/registry-breg/tests/postgres_proposal_security.rs", "name": "review_status_service_reads_only_its_exact_frozen_review_binding"}}
   - {"id": "BREG-SEC-193", "state": "enforced", "negativeId": "BREG-NEG-193", "negativeTest": {"path": "crates/registry-breg-client/src/proposal.rs", "name": "task_context_refuses_invalid_or_cross_source_authority_before_credentials"}}
+  - {"id": "BREG-SEC-194", "state": "enforced", "negativeId": "BREG-NEG-194", "negativeTest": {"path": "crates/registry-breg/tests/postgres_proposal_recovery_permissions.rs", "name": "refused_split_recovery_successor_preserves_activation_and_pending_work"}}

@@ -8,6 +8,48 @@ security-invariant matrix in `contracts/security-invariant-matrix.yaml` is the
 row-per-invariant baseline; this file is the narrative behind the decisions
 and the residuals the matrix rows do not state.
 
+## Proposal task authority, recovery and access explanations
+
+A new Proposal application requires both current executor authority and the
+original task authority retained for its exact submission, when one exists.
+Apply preflight establishes current disclosure and the frozen submission before
+loading that binding. The service observes current status outside the mutation
+transaction, before acquiring Review or commit Evidence. The mutation then
+reloads and compares the exact binding and checks its local deadline before
+effects and at the final commit fence. Every new application attempt obtains
+its own status observation. A separately authorized human executor and the
+restricted built-in system executor keep their existing independent ceilings.
+
+An exact completed receipt returns under current disclosure without another
+retained-task status request. Cancellation and a Review rejection do not need
+the old submitter's grant to remain active. Status refusal is a failed
+precondition; an unavailable dependency is unavailable and remains eligible for
+the existing bounded worker retry. A source can revoke after the remote status
+observation and before local commit: BReg and the source share no distributed
+transaction. Local expiry and submission-binding checks remain enforced.
+
+Successor activation keeps pending Proposals inspectable and requires one
+Proposal grant that can both obtain a condition, through Get or List, and
+Cancel. An inspection grant still has to exist. The condition remains bound to
+the selected profile, principal, purpose and target bounds. The activation
+guard checks compiled permission shape; it does not prove that an operator has
+provisioned a real identity satisfying the profile's claims and row bounds.
+
+Human access explanations render the compiled actor, client, task, target,
+input, attachment and ownership gates, the system application ceiling and row
+reach. Caller ownership restricts Proposal documents, not the target Records.
+Read paths retain their related-disclosure finding without being classified as
+Action targets. These are review aids; runtime admission remains authoritative.
+Authentication refusal warnings recover a poisoned timestamp while retaining
+their existing rate limit; warning-state recovery supplies no caller authority.
+
+The PostgreSQL `postgres_proposal_task_authority` and
+`postgres_proposal_recovery_permissions` suites exercise the real public
+lifecycle and worker boundaries, including successful receipt and cancellation
+paths and refused activation preserving pending work. The CLI explanation and
+consent-access tests cover human-readable authority and the distinct warning
+surfaces. The authentication unit test pins warning recovery and rate limiting.
+
 ## Generated business identifiers
 
 The public code is an immutable stored field, while the record UUID remains
