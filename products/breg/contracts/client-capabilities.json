@@ -508,9 +508,9 @@
     },
     {
       "id": "occurrence-view",
-      "rust": ["occurrence_view", "occurrence_creation_revision"],
-      "node": ["occurrenceCreationRevision"],
-      "python": ["occurrence_creation_revision"]
+      "rust": ["occurrence_view", "occurrence", "occurrence_creation_revision"],
+      "node": ["occurrenceView", "occurrenceDescriptor", "occurrenceCreationRevision"],
+      "python": ["occurrence_view", "occurrence_descriptor", "occurrence_creation_revision"]
     }
   ]
 }
