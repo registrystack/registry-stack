@@ -67,6 +67,19 @@ or unify distinct authority contracts. Shared HTTP/token primitives live in
   permissions in a binding. Validate a mutation before token acquisition or
   I/O; never generate its idempotency key, and resend it only through the
   bounded same-key retry. Record ETags and lifecycle-action ETags are distinct.
+- The BReg occurrence view (`id.registrystack.org/formats/breg/occurrence-view/v1alpha1`)
+  is a pure, read-only projection of one record revision, built from the
+  caller-filtered occurrence descriptor in Registry Metadata, the record, and
+  evidence the caller supplies. It reads no clock and performs no exchange.
+  Recorded time comes only from the creation revision of that record, which
+  `occurrence_creation_revision` reads as exactly revision 1 and reports as
+  absent only for a 403 or 404 answer. Evidence that does not match the
+  record's exact type, identifier, and revision is listed as ignored, never
+  merged. Instants are emitted with an uppercase `T` and `Z` and the authored
+  offset; dates stay dates. The Rust projection is the single implementation:
+  the Node and Python exports (`occurrenceView`, `occurrence_view`, and the
+  metadata `occurrenceDescriptor` or `occurrence_descriptor` accessor) pass
+  JSON through it unchanged and add no semantics.
 - Messaging submissions take a caller-chosen idempotency key; a binding never
   generates one. Only the Rust client's bounded same-key retry resends a
   submission, and a cancellation is never resent. Message, template,
