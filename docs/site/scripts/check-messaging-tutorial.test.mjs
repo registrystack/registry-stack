@@ -116,17 +116,31 @@ test('the Author page replays in the tutorial project, after the tutorial', asyn
   assert.match(branch, /SPEC_READER=first-messaging/u);
 });
 
-// The source build reaches the network and a Rust toolchain, and the gate
-// replaces it with the binary under test, so it is the only surface the
-// journey leaves alone.
-test('the gate names the sh fences it did not execute', async () => {
+// The local first run is fully executable with the supplied source binaries.
+// Hosted operation remains outside this gate, and every omitted fence is
+// named so that the report does not overstate its coverage.
+test('the gate executes the local journey and names the hosted fences it omits', async () => {
   const { code, output } = await runGate();
   assert.equal(code, 0, output);
-  const unexecuted = (reportBlocks(output).get('tutorials/first-messaging') ?? [])
+  const firstRunUnexecuted = (reportBlocks(output).get('tutorials/first-messaging') ?? [])
     .map((line) => line.match(/not executed: fence \d+ under "([^"]+)"/u)?.[1])
     .filter(Boolean);
-  assert.ok(unexecuted.length > 0, output);
-  assert.deepEqual([...new Set(unexecuted)], ['Get messagingctl'], output);
+  assert.deepEqual(firstRunUnexecuted, [], output);
+
+  const hostedUnexecuted = (reportBlocks(output).get('operate/messaging') ?? [])
+    .map((line) => line.match(/not executed: fence \d+ under "([^"]+)"/u)?.[1])
+    .filter(Boolean);
+  assert.deepEqual(
+    [...new Set(hostedUnexecuted)],
+    [
+      'Install the binaries',
+      'Check the runtime file',
+      'Record and serve the package',
+      'Operate messages',
+      'Erase expired data on demand',
+    ],
+    output,
+  );
 });
 
 // The session is what every later step talks to, and the page ends by
@@ -139,9 +153,9 @@ test('the registered journey starts the session and stops it last', async () => 
   assert.equal(steps.at(-1), 'stop-session');
 });
 
-test('the registered journey sends both messages the page teaches', async () => {
+test('the registered journey opens the second terminal and sends both messages the page teaches', async () => {
   const steps = await specSteps();
-  for (const step of ['run:Get a token', 'run:Send an SMS', 'run:Send an email']) {
+  for (const step of ['run:Open a second terminal', 'run:Send an SMS', 'run:Send an email']) {
     assert.ok(steps.includes(step), `${step} must stay in the journey`);
   }
 });
@@ -151,7 +165,6 @@ test('the registered journey sends both messages the page teaches', async () => 
 test('the journey retains the outcomes the page teaches', async () => {
   const branch = await messagingSpec();
   for (const expected of [
-    'HTTP 202',
     '"status": "delivered"',
     '"status": "submitted"',
     'Subject: Votre rendez-vous du 01/10/2026',
@@ -169,30 +182,51 @@ async function runPrepareToolset(env = {}) {
   const source = await readFile(gate, 'utf8');
   const root = await mkdtemp(join(tmpdir(), 'messaging-toolset-test-'));
   const supplied = join(root, 'supplied-messagingctl');
+  const runtime = join(root, 'supplied-messaging');
+  const rstack = join(root, 'supplied-rstack');
   const shimDir = join(root, 'bin');
   await writeFile(supplied, '#!/usr/bin/env bash\nprintf "ran %s\\n" "$*"\n', { mode: 0o755 });
+  await writeFile(runtime, '#!/usr/bin/env bash\nprintf "runtime %s\\n" "$*"\n', { mode: 0o755 });
+  await writeFile(
+    rstack,
+    '#!/usr/bin/env bash\nset -euo pipefail\ninstall_root="$2"\nshift 4\n[[ "$1" == messaging ]]\nshift\nexec "$install_root/current/components/messaging/messagingctl/messagingctl" "$@"\n',
+    { mode: 0o755 },
+  );
   const harness = join(root, 'toolset.sh');
   await writeFile(
     harness,
     [
       '#!/usr/bin/env bash',
       'set -euo pipefail',
+      `REPO_ROOT='${resolve(scriptDir, '../../..')}'`,
+      `SITE_ROOT='${resolve(scriptDir, '..')}'`,
+      `WORK_ROOT='${join(root, 'work')}'`,
       `SHIM_DIR='${shimDir}'`,
       await liftFunction(source, 'prepare_toolset'),
       'prepare_toolset',
       `"${shimDir}/messagingctl" check`,
+      `"${shimDir}/rstack" messaging check`,
       '',
     ].join('\n'),
   );
   try {
-    const result = await runShell(`bash ${harness}`, { MESSAGINGCTL_BIN: supplied, ...env });
+    const result = await runShell(`bash ${harness}`, {
+      MESSAGINGCTL_BIN: supplied,
+      MESSAGING_BIN: runtime,
+      RSTACK_BIN: rstack,
+      ...env,
+    });
     const shim = join(shimDir, 'messagingctl');
     const stat = existsSync(shim) ? await lstat(shim) : null;
+    const managedLauncher = join(root, 'work/managed-rstack/current/rstack');
+    const managedEntrypoint = join(root, 'work/managed-rstack/current/components/messaging/messagingctl/messagingctl');
     return {
       ...result,
       supplied,
       symlink: stat?.isSymbolicLink() ? await readlink(shim) : null,
       wrapper: stat?.isFile() ? await readFile(shim, 'utf8') : null,
+      managedLauncher: existsSync(managedLauncher) ? await readFile(managedLauncher, 'utf8') : null,
+      managedEntrypoint: existsSync(managedEntrypoint) ? await readFile(managedEntrypoint, 'utf8') : null,
     };
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -205,21 +239,24 @@ test('the toolset serves the supplied binary under its own name', async () => {
   });
   assert.equal(code, 0, output);
   assert.equal(symlink, supplied);
-  assert.match(output, /ran check/u);
+  assert.equal(output.match(/ran check/gu)?.length, 2, output);
 });
 
 // macOS strips DYLD_* variables when it runs a protected executable, so a
 // value inherited by the journey shell would not reach the binary. The shim
 // carries it instead.
-test('the toolset carries a runtime library directory into the shim', async () => {
-  const { code, output, supplied, wrapper } = await runPrepareToolset({
+test('the toolset carries a runtime library directory into every managed wrapper', async () => {
+  const { code, output, supplied, wrapper, managedLauncher, managedEntrypoint } = await runPrepareToolset({
     REGISTRY_CARGO_RUNTIME_LIBRARY_PATH: '/opt/fips/artifacts',
   });
   assert.equal(code, 0, output);
   assert.ok(wrapper, 'the shim must be a wrapper script');
-  assert.match(wrapper, /DYLD_FALLBACK_LIBRARY_PATH=\/opt\/fips\/artifacts/u);
+  for (const managed of [wrapper, managedLauncher, managedEntrypoint]) {
+    assert.match(managed, /DYLD_FALLBACK_LIBRARY_PATH=/u);
+    assert.ok(managed.includes('/opt/fips/artifacts'), managed);
+  }
   assert.ok(wrapper.includes(`exec ${supplied} "$@"`), wrapper);
-  assert.match(output, /ran check/u);
+  assert.equal(output.match(/ran check/gu)?.length, 2, output);
 });
 
 test('the toolset refuses a relative binary path', async () => {
@@ -382,20 +419,20 @@ const STAND_IN_PAGE = [
   '## Create a package',
   '',
   '```sh',
-  'messagingctl init tutorial-work/notices',
-  `mkdir -p tutorial-work && printf 'kind: starter\\nid: one\\n' >tutorial-work/starter.yaml`,
+  'rstack messaging init tutorial-work/notices',
+  `mkdir -p tutorial-work/notices && printf 'kind: starter\\nid: one\\n' >tutorial-work/starter.yaml`,
   '```',
   '',
   '## Start the session',
   '',
   '```sh',
-  'messagingctl dev tutorial-work/notices',
+  'rstack messaging dev tutorial-work/notices',
   '```',
   '',
-  '## Get a token',
+  '## Open a second terminal',
   '',
   '```sh',
-  'messagingctl dev token case-system tutorial-work/notices',
+  'cd tutorial-work/notices',
   '```',
   '',
   '## Send an SMS',
@@ -487,13 +524,27 @@ async function replayStandIn(options = {}) {
     }
     await writeFile(join(root, 'docs/tutorials/first-messaging.mdx'), STAND_IN_PAGE);
     await writeFile(join(root, 'docs/configure/messaging.mdx'), standInAuthorPage(options.author));
+    await writeFile(
+      join(root, 'docs/configure/api-connections.mdx'),
+      '---\ntitle: stub\n---\n\n```sh\nmessagingctl connection list\n```\n',
+    );
     await writeFile(join(root, 'docs/operate/messaging.mdx'), STAND_IN_DEPLOY_PAGE);
     const bin = join(root, 'messagingctl');
+    const runtime = join(root, 'messaging');
+    const rstack = join(root, 'rstack');
     await writeFile(bin, standInMessagingctl(options), { mode: 0o755 });
+    await writeFile(runtime, '#!/usr/bin/env bash\nprintf "messaging runtime\\n"\n', { mode: 0o755 });
+    await writeFile(
+      rstack,
+      '#!/usr/bin/env bash\nset -euo pipefail\ninstall_root="$2"\nshift 4\n[[ "$1" == messaging ]]\nshift\nexec "$install_root/current/components/messaging/messagingctl/messagingctl" "$@"\n',
+      { mode: 0o755 },
+    );
     return await runGate(
       {
         MESSAGING_TUTORIAL_DOCS_ROOT: join(root, 'docs'),
         MESSAGINGCTL_BIN: bin,
+        MESSAGING_BIN: runtime,
+        RSTACK_BIN: rstack,
         MESSAGING_TUTORIAL_READY_SECONDS: '20',
         REGISTRY_CARGO_RUNTIME_LIBRARY_PATH: '',
       },
@@ -509,7 +560,6 @@ test('the replay leaves the session running, then stops it with SIGINT', async (
   assert.equal(code, 0, output);
   assert.match(output, /fence \d+ \(session, left running\)/u);
   assert.match(output, /^ready$/mu);
-  assert.match(output, /messagingctl dev token case-system tutorial-work\/notices/u);
   assert.match(output, /stop the session \(Ctrl-C\)/u);
   assert.match(output, /containers are removed/u);
   assert.match(output, /Registry Messaging tutorial gate: PASS/u);
@@ -581,7 +631,11 @@ async function docsFixtureRoot(edit = (page) => page) {
   for (const section of sections) {
     await mkdir(join(root, section), { recursive: true });
   }
-  for (const slug of extractBashArray(source, 'MESSAGING_TUTORIALS')) {
+  const fixturePages = [
+    ...extractBashArray(source, 'MESSAGING_TUTORIALS'),
+    ...extractBashArray(source, 'EXCLUDED_MESSAGING_TUTORIALS'),
+  ];
+  for (const slug of fixturePages) {
     const page = await readFile(resolve(docsRoot, `${slug}.mdx`), 'utf8');
     await writeFile(join(root, `${slug}.mdx`), slug === 'tutorials/first-messaging' ? edit(page) : page);
   }
@@ -683,7 +737,7 @@ test('a renamed heading fails the gate by name', async () => {
 // refuses the shape rather than guessing.
 test('a session heading holding a second fence fails the gate', async () => {
   const root = await docsFixtureRoot((page) =>
-    page.replace('\n## Get a token\n', '\n```sh\ndocker ps\n```\n\n## Get a token\n'),
+    page.replace('\n## Open a second terminal\n', '\n```sh\ndocker ps\n```\n\n## Open a second terminal\n'),
   );
   try {
     const { code, output } = await runGate({ MESSAGING_TUTORIAL_DOCS_ROOT: root });
@@ -697,8 +751,8 @@ test('a session heading holding a second fence fails the gate', async () => {
 test('a session fence holding a second command line fails the gate', async () => {
   const root = await docsFixtureRoot((page) =>
     page.replace(
-      '```sh\nmessagingctl dev tutorial-work/notices\n```',
-      '```sh\nmessagingctl dev tutorial-work/notices\nmessagingctl dev token case-system tutorial-work/notices\n```',
+      '```sh\nrstack messaging dev tutorial-work/notices\n```',
+      '```sh\nrstack messaging dev tutorial-work/notices\nrstack messaging api /health --client case-system\n```',
     ),
   );
   try {

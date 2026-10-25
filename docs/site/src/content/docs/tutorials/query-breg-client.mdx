@@ -38,7 +38,7 @@ In the project directory, request a token for the `editor` test caller and put i
 registry's address, where your programs will read them:
 
 ```sh test-cwd="tutorial-work/project"
-bregctl dev token editor
+rstack breg dev token editor
 export REGISTRY_URL=http://127.0.0.1:8090
 export REGISTRY_TOKEN="$(sed 's/^Authorization: Bearer //' .breg/dev/secrets/editor.header)"
 ```
@@ -47,7 +47,7 @@ export REGISTRY_TOKEN="$(sed 's/^Authorization: Bearer //' .breg/dev/secrets/edi
 bregctl dev token succeeded.
 ```
 
-Use the address `bregctl dev start` reported if it differs. The token lasts five minutes: when a
+Use the address `rstack breg dev start` reported if it differs. The token lasts five minutes: when a
 program fails with status 401, run these three commands again in the project directory.
 
 ## Install the client
@@ -58,7 +58,7 @@ Make a directory beside the project for your programs and install the client the
 ```sh
 mkdir ../contacts-app
 cd ../contacts-app
-version="$(breg --version | awk '{print $2}')"
+version="$(rstack breg --version | awk '{print $2}')"
 ```
 
 For Python, in a virtual environment:

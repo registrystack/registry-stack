@@ -1,0 +1,201 @@
+{
+  "$defs": {
+    "ConnectionCheckStatus": {
+      "enum": [
+        "complete",
+        "domain-refusal",
+        "operational-failure"
+      ],
+      "type": "string"
+    },
+    "Diagnostic": {
+      "additionalProperties": false,
+      "description": "One problem, in the shape every checking command reports (CFG-DIAG-1).\n\nA diagnostic names keys, the path, accepted values, bounds, and the\nexpected envelope. It never repeats a scalar value read from a file or the\nenvironment (CFG-SEC-3).",
+      "properties": {
+        "artifact": {
+          "description": "The document's `kind`, or the expected kind when the document's own is\nabsent or wrong and the reader expected exactly one.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "code": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "path": {
+          "description": "RFC 6901 JSON pointer into the document as written; `\"\"` is the root.",
+          "type": "string"
+        },
+        "related": {
+          "items": {
+            "$ref": "#/$defs/Related"
+          },
+          "type": "array"
+        },
+        "severity": {
+          "$ref": "#/$defs/Severity"
+        },
+        "source": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Source"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "suggestedAction": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "severity",
+        "code",
+        "path",
+        "message",
+        "suggestedAction"
+      ],
+      "type": "object"
+    },
+    "Related": {
+      "additionalProperties": false,
+      "description": "A second place that explains a diagnostic, such as the first occurrence\nof a duplicate. Human output prints it as a `note:` line.",
+      "properties": {
+        "column": {
+          "format": "uint",
+          "maximum": 18446744073709551615,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "file": {
+          "type": "string"
+        },
+        "line": {
+          "format": "uint",
+          "maximum": 18446744073709551615,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "message": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "file",
+        "path",
+        "message"
+      ],
+      "type": "object"
+    },
+    "Severity": {
+      "description": "Whether a diagnostic refuses the input.",
+      "enum": [
+        "error",
+        "warning"
+      ],
+      "type": "string"
+    },
+    "Source": {
+      "additionalProperties": false,
+      "description": "Where a diagnostic points. `file` is the path exactly as the caller gave\nit; `line` and `column` are 1-based and absent when the problem concerns\nthe file as a whole.",
+      "properties": {
+        "column": {
+          "format": "uint",
+          "maximum": 18446744073709551615,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "file": {
+          "type": "string"
+        },
+        "line": {
+          "format": "uint",
+          "maximum": 18446744073709551615,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "file"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "https://id.registrystack.org/schemas/platform/cli-connection-check-report/cli-connection-check-report.v1alpha1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Machine-readable result of `connection check` for every product adapter.",
+  "properties": {
+    "apiVersion": {
+      "const": "id.registrystack.org/formats/platform/cli-connection-check-report/v1alpha1"
+    },
+    "command": {
+      "const": "connection check"
+    },
+    "diagnostics": {
+      "items": {
+        "$ref": "#/$defs/Diagnostic"
+      },
+      "type": "array"
+    },
+    "errors": {
+      "format": "uint",
+      "maximum": 18446744073709551615,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "filesChecked": {
+      "format": "uint",
+      "maximum": 18446744073709551615,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "kind": {
+      "const": "PlatformCliConnectionCheckReport"
+    },
+    "ok": {
+      "type": "boolean"
+    },
+    "status": {
+      "$ref": "#/$defs/ConnectionCheckStatus"
+    },
+    "warnings": {
+      "format": "uint",
+      "maximum": 18446744073709551615,
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "ok",
+    "command",
+    "status",
+    "apiVersion",
+    "kind",
+    "filesChecked",
+    "errors",
+    "warnings",
+    "diagnostics"
+  ],
+  "title": "Registry Stack CLI connection check report",
+  "type": "object"
+}

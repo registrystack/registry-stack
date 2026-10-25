@@ -122,6 +122,7 @@ SCHEMAS = {
     ),
     "platform": (
         ("products/platform/schemas/task-connection.schema.json", "task-connection.yaml"),
+        ("crates/registry-cli-api/schema/connections.schema.json", "connections.yaml"),
     ),
     "evidence": (
         (

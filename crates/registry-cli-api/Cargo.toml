@@ -1,0 +1,40 @@
+[package]
+name = "registry-cli-api"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Shared raw HTTP and saved-connection tooling for Registry Stack product CLIs."
+repository.workspace = true
+publish = false
+
+[features]
+default = []
+schema = [
+    "dep:schemars",
+    "registry-platform-config/schema",
+]
+
+[dependencies]
+clap.workspace = true
+fs2.workspace = true
+http.workspace = true
+registry-platform-config.workspace = true
+registry-platform-crypto.workspace = true
+registry-platform-httputil.workspace = true
+registry-platform-yaml.workspace = true
+reqwest.workspace = true
+schemars = { workspace = true, optional = true }
+serde.workspace = true
+serde_json.workspace = true
+serde_norway.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+url.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

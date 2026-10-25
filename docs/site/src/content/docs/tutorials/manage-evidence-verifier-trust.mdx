@@ -27,7 +27,7 @@ Obtain each public JWK from the provider through your onboarding channel, not fr
 endpoint alone, then assemble the set your client will trust:
 
 ```sh
-evidencectl jwks \
+rstack evidence jwks \
   --output trusted-jwks.next.json \
   provider-current.public.jwk.json \
   provider-next.public.jwk.json
@@ -45,12 +45,12 @@ set stays available for rollback.
 
 ## Pin the set in the client profile
 
-Pass the set to `evidencectl client profile create` with `--pinned-jwks`, a path relative to the
+Pass the set to `rstack evidence client profile create` with `--pinned-jwks`, a path relative to the
 profile file. The other values are the ones your deployment's operator gave you; the private key is
 the one your client registered with the issuer:
 
 ```sh
-evidencectl client profile create \
+rstack evidence client profile create \
   --base-url https://evidence.example.com \
   --client-id age-check-app \
   --private-key-file app-key/client-assertion-p384-private-jwk \
@@ -62,7 +62,7 @@ evidencectl client profile create \
 Created client profile
 ```
 
-`evidencectl keygen client-assertion --output-dir app-key` writes a key of that name (ES384, its
+`rstack evidence keygen client-assertion --output-dir app-key` writes a key of that name (ES384, its
 default); register its public half with your issuer. Without `--pinned-jwks` the profile fetches the
 service's key set itself, over HTTPS discovery or, with `--local-loopback-discovery`, over
 loopback. A profile carries no revoked-key list in any trust mode, so with a profile you revoke a

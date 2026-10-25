@@ -161,6 +161,35 @@ fn dev_token_requests_each_clients_registered_resource_or_the_default() {
     assert_eq!(requests[1]["scope"], "registry:generic:operate");
 }
 
+#[test]
+fn local_api_accepts_only_clients_admitted_to_this_breg_resource() {
+    let (_temporary, state, mut clients, _files) = fixture();
+    assert_eq!(
+        local_breg_client(&state, &clients, "operator")
+            .expect("the admitted default-resource client is accepted")
+            .id,
+        "operator"
+    );
+
+    clients
+        .issuer
+        .client_resources
+        .insert("operator".into(), "urn:example:other-resource".into());
+    let error = local_breg_client(&state, &clients, "operator").unwrap_err();
+    assert!(error.to_string().contains("external resource"), "{error:#}");
+
+    clients.issuer.client_resources.remove("operator");
+    let operator = clients
+        .clients
+        .iter_mut()
+        .find(|client| client.id == "operator")
+        .unwrap();
+    operator.access_profiles.clear();
+    operator.allow_breg_access = false;
+    let error = local_breg_client(&state, &clients, "operator").unwrap_err();
+    assert!(error.to_string().contains("not admitted"), "{error:#}");
+}
+
 /// A session whose `source` client is registered for `resource` and whose
 /// `operator` client is not, with its issuer placed on a local listener.
 fn external_resource_session(resource: &str) -> (tempfile::TempDir, State, TcpListener) {

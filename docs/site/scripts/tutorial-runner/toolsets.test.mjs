@@ -8,6 +8,7 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
+import { prepareManagedRstack } from '../managed-rstack.mjs';
 import { TOOLSETS, cargoBuild, clientEnvironment, npmEnvironment, serveBinaries, serveNpmPackages, workspaceReleaseTag, coordinatorTutorialEnvironment } from './toolsets.mjs';
 
 const execFileAsync = promisify(execFile);
@@ -18,11 +19,11 @@ const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..'
 // matches a command a fence runs and not a path or file that shares its name.
 const CASES = {
   breg: {
-    runs: ['bregctl init .', 'bregctl dev start .', 'breg --version', 'version=$(bregctl --version)', 'bregctl dev stop .; echo done'],
+    runs: ['bregctl init .', 'bregctl dev start .', 'breg --version', 'rstack breg api /v1/records', 'version=$(bregctl --version)', 'bregctl dev stop .; echo done'],
     names: ['cd tutorial-work/breg', 'cat .breg/dev/state.json', 'ls ./breg', 'cat breg.yaml', 'cd breg-demo', 'ls breg/'],
   },
   casework: {
-    runs: ['caseworkctl dev start .', 'casework --version', 'caseworkctl check . | tail -1'],
+    runs: ['caseworkctl dev start .', 'casework --version', 'rstack casework api /v1/review-tasks', 'caseworkctl check . | tail -1'],
     names: ['cd tutorial-work/casework', 'cat .casework/dev/state.json', 'cat casework.yaml', 'ls casework/'],
   },
   coordinator: {
@@ -35,11 +36,11 @@ const CASES = {
     names: ['cd products/coordinator', 'cat coordinator.yaml', 'ls reviewed-notice-input/'],
   },
   evidence: {
-    runs: ['evidencectl init .', 'evidence --version', 'evidence-oid4vci --help', 'products/evidence/scripts/check-contracts.sh'],
+    runs: ['evidencectl init .', 'evidence --version', 'evidence-oid4vci --help', 'rstack evidence api /v1/evidence', 'products/evidence/scripts/check-contracts.sh'],
     names: ['cd ~/work/evidence', 'ls .evidence/clients', 'cat evidence.yaml', 'ls evidence/', "curl --get --data-urlencode 'serviceKind=evidence' $url"],
   },
   discovery: {
-    runs: ['discoveryctl check --project discovery-project --allow-loopback', 'discovery --runtime runtime.yaml', 'discoveryctl build --project . && echo ok'],
+    runs: ['discoveryctl check --project discovery-project --allow-loopback', 'discovery --runtime runtime.yaml', 'discoveryctl build --project . && echo ok', 'rstack discovery api /v1/evidence-providers'],
     names: ['cp -R products/discovery/tutorial/project discovery-project', 'rm -rf discovery-project', 'cat discovery.yaml', 'ls discovery/'],
   },
   scheduling: {
@@ -47,6 +48,94 @@ const CASES = {
     names: ['cat ./scheduling/scheduling.yaml', 'cd tutorial-work/scheduling', 'ls scheduling/fixtures', 'cat scheduling.yaml'],
   },
 };
+
+async function fakeManagedBinaries(root) {
+  const calls = join(root, 'calls');
+  const rstack = join(root, 'rstack-source');
+  const bregctl = join(root, 'bregctl-source');
+  const breg = join(root, 'breg-source');
+  await writeFile(
+    rstack,
+    [
+      '#!/usr/bin/env bash',
+      'set -euo pipefail',
+      '[[ "$1" == --install-root ]]',
+      'install_root="$2"',
+      '[[ "$3" == --bin-dir ]]',
+      'shift 4',
+      '[[ "$1" == breg ]]',
+      'shift',
+      'exec "$install_root/current/components/breg/bregctl/bregctl" "$@"',
+      '',
+    ].join('\n'),
+    { mode: 0o755 },
+  );
+  await writeFile(bregctl, `#!/usr/bin/env bash\nprintf 'bregctl:%s:%s\\n' "\${BREG_BIN-unset}" "$*" >>'${calls}'\n`, { mode: 0o755 });
+  await writeFile(breg, '#!/usr/bin/env bash\nprintf "breg:%s\\n" "$*"\n', { mode: 0o755 });
+  return { calls, rstack, bregctl, breg };
+}
+
+test('a source toolset serves rstack through an integrity-recorded selected generation', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'toolset-managed-rstack-'));
+  const source = await fakeManagedBinaries(root);
+  const workRoot = join(root, 'work');
+  const binDir = join(workRoot, 'bin');
+  await mkdir(binDir, { recursive: true });
+  const prepared = await prepareManagedRstack({
+    repoRoot: REPO_ROOT,
+    workRoot,
+    binDir,
+    rstackBin: source.rstack,
+    components: {
+      breg: { entrypoint: 'bregctl', binaries: { breg: source.breg, bregctl: source.bregctl } },
+    },
+  });
+
+  const run = spawnSync(join(binDir, 'rstack'), ['breg', 'api', '/v1/records'], {
+    encoding: 'utf8',
+    env: { ...process.env, BREG_BIN: '/outside/the/selected/generation' },
+  });
+  assert.equal(run.status, 0, run.stderr);
+  assert.equal(readFileSync(source.calls, 'utf8'), 'bregctl:unset:api /v1/records\n');
+  assert.equal(realpathSync(join(prepared.installRoot, 'current')), realpathSync(prepared.generationDir));
+  const ownership = JSON.parse(readFileSync(join(prepared.generationDir, '.rstack-ownership.json'), 'utf8'));
+  assert.equal(ownership.schema_version, 'registry-stack.generation-ownership.v1');
+  assert.ok(ownership.files['components/breg/bregctl/bregctl']);
+  assert.ok(ownership.directories.includes('components/breg/bregctl'));
+});
+
+test('supplied Cargo binaries retain their explicit FIPS runtime directory in every wrapper', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'toolset-supplied-fips-'));
+  const source = await fakeManagedBinaries(root);
+  const workRoot = join(root, 'work');
+  const binDir = join(workRoot, 'bin');
+  const libraryDir = join(root, 'fips artifacts');
+  await mkdir(libraryDir, { recursive: true });
+  const supplied = {
+    BREG_BIN: source.breg,
+    BREGCTL_BIN: source.bregctl,
+    RSTACK_BIN: source.rstack,
+    REGISTRY_CARGO_RUNTIME_LIBRARY_PATH: libraryDir,
+  };
+  const previous = Object.fromEntries(Object.keys(supplied).map((name) => [name, process.env[name]]));
+  Object.assign(process.env, supplied);
+  try {
+    await TOOLSETS.breg.prepare({ repoRoot: REPO_ROOT, workRoot, binDir });
+  } finally {
+    for (const [name, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  }
+
+  for (const path of [
+    join(binDir, 'bregctl'),
+    join(workRoot, 'managed-rstack/current/rstack'),
+    join(workRoot, 'managed-rstack/current/components/breg/bregctl/bregctl'),
+  ]) {
+    assert.match(readFileSync(path, 'utf8'), new RegExp(libraryDir.replaceAll(' ', '\\s')));
+  }
+});
 
 test('the scheduling toolset has no local development session to stop', async () => {
   const readerDir = await mkdtemp(join(tmpdir(), 'toolset-scheduling-'));

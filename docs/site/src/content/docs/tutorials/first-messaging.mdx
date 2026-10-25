@@ -1,6 +1,6 @@
 ---
 title: Send your first message
-description: Run the Registry Messaging starter locally with messagingctl dev, send one SMS through the mock provider until it is delivered, and send one email you can read in Mailpit.
+description: Run the Registry Messaging starter locally, send one SMS through the mock provider until it is delivered, and send one email you can read in Mailpit.
 status: draft
 owner: registry-docs
 source_repos:
@@ -20,43 +20,40 @@ starter package's caller, and read back what each provider reported.
 
 <QuickstartMeta
   outcome="One SMS reported delivered by the mock provider and one email received by Mailpit, both sent through a local Messaging runtime."
-  time="About 20 minutes, plus the build and the image download"
+  time="About 20 minutes, plus the image download"
   level="Local evaluation only"
-  prerequisites={['Linux amd64 or arm64, or macOS on Apple Silicon', 'A Registry Stack checkout and a Rust toolchain', 'Running Docker', 'curl 7.76 or later', 'jq', 'Free loopback ports 8107 and 9107']}
+  prerequisites={['Linux amd64 or arm64, or macOS on Apple Silicon', 'Running Docker', 'curl 7.76 or later', 'jq', 'Free loopback ports 8107 and 9107', 'The tools required by the release verification procedure']}
 />
 
 {/* Evidence: crates/registry-messagingctl/src/lib.rs, Command;
     crates/registry-messagingctl/src/dev/mod.rs, StartArgs and TokenArgs;
     products/messaging/README.md, Running locally. */}
 
-## Get messagingctl
+## Install Registry Stack
 
-Build `messagingctl` from the root of a Registry Stack checkout and put it on your `PATH`. On
-Linux:
+Download one exact `rstack-vX.Y.Z-install.sh` and the verification material from the same Registry
+Stack release. Follow the
+[release verification procedure](https://github.com/registrystack/registry-stack/blob/main/release/VERIFY.md)
+before running the installer. From the verified release directory, install the `messaging`
+component:
 
-```sh
-cargo build --release --locked -p registry-messagingctl
-export PATH="$PWD/target/release:$PATH"
+```sh test-skip="uses a downloaded, independently verified release installer"
+tag="vX.Y.Z"
+bash "rstack-${tag}-install.sh" messaging
+rstack messaging --version
 ```
 
-On macOS, build with the repository's helper, which finds the FIPS crypto library the binary loads:
+The managed installation exposes `rstack` on your `PATH`. The `messaging` component supplies the
+Registry Messaging runtime and its command-line tools from the same release.
 
-```sh
-. scripts/cargo-runtime-library-path.sh
-registry_cargo_build "$PWD" --release --locked -p registry-messagingctl
-export PATH="$PWD/target/release:$PATH"
-```
-
-Then change to an empty directory in the same terminal and run every later command from there.
-
-{/* Evidence: scripts/cargo-runtime-library-path.sh, registry_cargo_build;
-    release/scripts/release_candidate.py, which publishes Messaging for linux-amd64 only. */}
+{/* Evidence: crates/registry-rstack/README.md, installation and command migration;
+    crates/registry-rstack/install.sh; release/VERIFY.md, download and checksum authentication. */}
 
 ## Create a package
 
 ```sh
 mkdir -p tutorial-work
-messagingctl init tutorial-work/notices
+rstack messaging init tutorial-work/notices
 ```
 
 ```text
@@ -83,7 +80,7 @@ Keep that directory out of version control, and send only to example addresses a
 :::
 
 ```sh
-messagingctl dev tutorial-work/notices
+rstack messaging dev tutorial-work/notices
 ```
 
 ```text
@@ -100,61 +97,57 @@ next: messagingctl dev token CLIENT, then send with curl -H @HEADER_FILE; Ctrl-C
 Leave it running. The session runs PostgreSQL and Mailpit in containers, a mock SMS gateway, and
 the Messaging runtime on port 8107. Your Mailpit and gateway ports differ.
 
-Open a second terminal, put `messagingctl` on its `PATH` again, and change to the same directory.
-Every later command runs there.
+## Open a second terminal
+
+Open a second terminal and change into the project. Every later command runs there:
+
+```sh
+cd tutorial-work/notices
+```
 
 {/* Evidence: crates/registry-messagingctl/src/dev/mod.rs, StartArgs and DevArgs;
     crates/registry-messagingctl/src/lib.rs, render_dev. */}
 
-## Get a token
-
-Sign a bearer token for `case-system`:
-
-```sh
-messagingctl dev token case-system tutorial-work/notices
-api=http://127.0.0.1:8107
-header=tutorial-work/notices/.messaging/dev/tokens/case-system.header
-```
-
-```text
-header file: <directory>/tutorial-work/notices/.messaging/dev/tokens/case-system.header
-valid for 3600 seconds; send with curl -H @<directory>/tutorial-work/notices/.messaging/dev/tokens/case-system.header
-```
-
-{/* Evidence: crates/registry-messagingctl/src/dev/mod.rs, token;
-    crates/registry-messagingctl/src/dev/config.rs, header_file. */}
-
 ## Send an SMS
 
 Submit the reminder to an example number. The idempotency key is yours to choose: the same body
-sent again under it returns the same message instead of sending a second one.
+sent again under it returns the same message instead of sending a second one. `--input` selects
+`POST`, and the API command gets a fresh token for the local `case-system` client without writing
+a header file:
+
+{/* Evidence: crates/registry-messagingctl/src/dev/mod.rs, api_connection;
+    crates/registry-cli-api/src/api.rs, run_api, request_method. */}
 
 ```sh
-curl --silent --show-error \
-  --header @"$header" \
-  --header 'Idempotency-Key: tutorial-sms-1' \
-  --header 'Content-Type: application/json' \
-  --data '{"senderProfile":"reminders-sms","to":{"phone":"+15555550100"},"template":{"id":"appointment-reminder-sms","version":"1"},"locale":"en","data":{"name":"Ada","day":"2026-10-01","office":"North"}}' \
-  --output tutorial-work/sms.json --write-out 'HTTP %{http_code}\n' \
-  "$api/v1/messages"
+cat > sms-request.json <<'JSON'
+{
+  "senderProfile": "reminders-sms",
+  "to": {"phone": "+15555550100"},
+  "template": {"id": "appointment-reminder-sms", "version": "1"},
+  "locale": "en",
+  "data": {"name": "Ada", "day": "2026-10-01", "office": "North"}
+}
+JSON
+rstack messaging api /v1/messages \
+  --client case-system \
+  --idempotency-key tutorial-sms-1 \
+  --input sms-request.json \
+  --output sms.json
 ```
 
-```text
-HTTP 202
-```
-
-`202` means Messaging accepted and queued the message. The mock gateway takes it, then posts a
-signed delivery report back. Read the message until the report has arrived, for up to ten seconds:
+Messaging accepts and queues the message. The mock gateway takes it, then posts a signed delivery
+report back. Read the message until the report has arrived, for up to ten seconds:
 
 ```sh
-sms_id="$(jq -r .id tutorial-work/sms.json)"
+sms_id="$(jq -r .id sms.json)"
 for _ in 1 2 3 4 5 6 7 8 9 10; do
-  curl --silent --show-error --header @"$header" "$api/v1/messages/$sms_id" \
-    --output tutorial-work/sms-status.json
-  if [ "$(jq -r .report tutorial-work/sms-status.json)" = "delivered" ]; then break; fi
+  rstack messaging api "/v1/messages/$sms_id" \
+    --client case-system \
+    --output sms-status.json
+  if [ "$(jq -r .report sms-status.json)" = "delivered" ]; then break; fi
   sleep 1
 done
-jq '{status, dispatch, report, to}' tutorial-work/sms-status.json
+jq '{status, dispatch, report, to}' sms-status.json
 ```
 
 ```json
@@ -179,24 +172,33 @@ provider said afterwards: delivered. `status` combines the two. The answer never
 ## Send an email
 
 Send the same reminder as an email, in French, with a correlation identifier your own system would
-use to find it again:
+use to find it again. Then wait for the email provider to accept it:
 
 ```sh
-curl --silent --show-error \
-  --header @"$header" \
-  --header 'Idempotency-Key: tutorial-email-1' \
-  --header 'Content-Type: application/json' \
-  --data '{"senderProfile":"transactional","to":{"email":"ada@example.org"},"template":{"id":"appointment-reminder","version":"1"},"locale":"fr","data":{"name":"Ada","day":"2026-10-01","office":"North"},"correlationId":"case-42"}' \
-  --output tutorial-work/email.json --write-out 'HTTP %{http_code}\n' \
-  "$api/v1/messages"
-email_id="$(jq -r .id tutorial-work/email.json)"
+cat > email-request.json <<'JSON'
+{
+  "senderProfile": "transactional",
+  "to": {"email": "ada@example.org"},
+  "template": {"id": "appointment-reminder", "version": "1"},
+  "locale": "fr",
+  "data": {"name": "Ada", "day": "2026-10-01", "office": "North"},
+  "correlationId": "case-42"
+}
+JSON
+rstack messaging api /v1/messages \
+  --client case-system \
+  --idempotency-key tutorial-email-1 \
+  --input email-request.json \
+  --output email.json
+email_id="$(jq -r .id email.json)"
 for _ in 1 2 3 4 5 6 7 8 9 10; do
-  curl --silent --show-error --header @"$header" "$api/v1/messages/$email_id" \
-    --output tutorial-work/email-status.json
-  if [ "$(jq -r .dispatch tutorial-work/email-status.json)" = "submitted" ]; then break; fi
+  rstack messaging api "/v1/messages/$email_id" \
+    --client case-system \
+    --output email-status.json
+  if [ "$(jq -r .dispatch email-status.json)" = "submitted" ]; then break; fi
   sleep 1
 done
-jq '{status, dispatch, report, correlationId}' tutorial-work/email-status.json
+jq '{status, dispatch, report, correlationId}' email-status.json
 ```
 
 ```json
@@ -214,7 +216,7 @@ report back, so Messaging cannot say more.
 Read what Mailpit received. The session file records Mailpit's address:
 
 ```sh
-mailpit="$(jq -r .detail.mailpit tutorial-work/notices/.messaging/dev/session.json)"
+mailpit="$(jq -r .detail.mailpit .messaging/dev/session.json)"
 curl --silent --show-error "$mailpit/api/v1/messages" |
   jq -r '.messages[0] | "To: \(.To[0].Address)\nSubject: \(.Subject)\n\(.Snippet)"'
 ```
@@ -242,7 +244,7 @@ session directory: <directory>/tutorial-work/notices/.messaging/dev
 ```
 
 The database and the mailbox are gone. The session directory keeps the log and the audit journal
-until the next `messagingctl dev` replaces it.
+until the next `rstack messaging dev` replaces it.
 
 {/* Evidence: crates/registry-messagingctl/src/lib.rs, render_dev;
     crates/registry-messagingctl/src/dev/mod.rs, clear_previous. */}

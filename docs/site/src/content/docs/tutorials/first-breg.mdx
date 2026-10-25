@@ -25,25 +25,32 @@ the registry, check it, start it, add the contact, and read it back.
   outcome="A running local registry holding one test contact that only the callers allowed to read it can see."
   time="About 15 minutes, plus image downloads"
   level="Local evaluation only"
-  prerequisites={['Running Docker', 'curl', 'A shell and an editor']}
+  prerequisites={['Running Docker', 'A shell and an editor', 'The tools required by the release verification procedure']}
 />
 
-## Install breg and bregctl
+## Install Registry Stack
 
-`breg` is the registry server and `bregctl` the command-line tool you drive it with. The
-installer checks the release checksums and puts both in `~/.local/bin`; keep that directory on
-your `PATH`.
+Download one exact `rstack-vX.Y.Z-install.sh` and the verification material from the same Registry
+Stack release. Follow the
+[release verification procedure](https://github.com/registrystack/registry-stack/blob/main/release/VERIFY.md)
+before running the installer. From the verified release directory, install the `breg` component:
 
-```sh test-skip="downloads a release; the gate uses binaries built from this checkout"
-curl -fsSL https://github.com/registrystack/registry-stack/releases/latest/download/breg-install.sh | bash
-bregctl --version
+```sh test-skip="uses a downloaded, independently verified release installer"
+tag="vX.Y.Z"
+bash "rstack-${tag}-install.sh" breg
+rstack breg --version
 ```
+
+The managed installation exposes `rstack` on your `PATH`. The `breg` component supplies the
+Base Registry Engine runtime and its command-line tools from the same release.
+
+{/* Evidence: crates/registry-rstack/README.md; crates/registry-rstack/install.sh; release/VERIFY.md. */}
 
 ## Create a project
 
 ```sh
 mkdir -p tutorial-work
-bregctl init tutorial-work/project
+rstack breg init tutorial-work/project
 cd tutorial-work/project
 ```
 
@@ -70,7 +77,7 @@ remaining commands from this directory.
 ## Check the project
 
 ```sh
-bregctl check .
+rstack breg check .
 ```
 
 ```text test-expect
@@ -123,7 +130,7 @@ claim `zone-b`.
 ## Start the registry
 
 ```sh
-bregctl dev start
+rstack breg dev start
 ```
 
 ```text test-expect
@@ -146,7 +153,7 @@ bregctl dev succeeded.
     assertion key file  <project-dir>/.breg/dev/credentials/foreign-editor/assertion-key.jwk
 ```
 
-`bregctl` started PostgreSQL and a local token issuer in Docker, ran the project's tests, and
+`rstack breg` started PostgreSQL and a local token issuer in Docker, ran the project's tests, and
 started the registry at `breg url`. The first start downloads the images and takes longer. The
 files under `.breg/dev/` are private keys for the two test callers; keep them out of version
 control.
@@ -158,7 +165,7 @@ place of `http://127.0.0.1:8090` below.
 ## Add a test contact
 
 ```sh
-bregctl examples run contact
+rstack breg examples run contact
 ```
 
 ```text test-excerpt
@@ -174,24 +181,11 @@ step.
 
 ## Read the contact as two callers
 
-Get a token for each test caller. Each is valid for five minutes; run the command again when it
-expires.
+List the contacts as `editor`. The command finds the running project, gets a fresh short-lived
+token for that registered local client, and sends the request:
 
 ```sh
-bregctl dev token editor
-bregctl dev token foreign-editor
-```
-
-```text test-expect
-bregctl dev token succeeded.
-bregctl dev token succeeded.
-```
-
-Each token is saved, ready to send, as an HTTP header in `.breg/dev/secrets/`. List the contacts
-as `editor`:
-
-```sh
-curl -s -H @.breg/dev/secrets/editor.header http://127.0.0.1:8090/v1/records/contacts
+rstack breg api /v1/records/contacts --client editor
 ```
 
 ```json test-expect
@@ -222,7 +216,7 @@ The Record carries a stable identifier and a revision number beside the fields. 
 contacts as `foreign-editor`, whose token says `zone-b`:
 
 ```sh
-curl -s -H @.breg/dev/secrets/foreign-editor.header http://127.0.0.1:8090/v1/records/contacts
+rstack breg api /v1/records/contacts --client foreign-editor
 ```
 
 ```json test-expect
@@ -244,12 +238,13 @@ The registry applied the access profile: the contact exists, and `foreign-editor
 {/* Evidence: crates/registry-bregctl/src/starters.rs; products/breg/examples/minimal/registry.yaml;
     products/breg/examples/minimal/dev-clients.yaml;
     products/breg/examples/minimal/examples/scenarios.json;
-    crates/registry-bregctl/src/dev/examples.rs; crates/registry-bregctl/src/dev/mod.rs. */}
+    crates/registry-bregctl/src/dev/examples.rs; crates/registry-bregctl/src/dev/mod.rs;
+    crates/registry-cli-api/src/api.rs; crates/registry-cli-api/src/project.rs. */}
 
 ## Leave the registry running
 
 The next tutorial continues with this registry and its contact, so leave it running. When you
-are finished with it, run `bregctl dev stop --remove` in this directory to stop it and delete its
+are finished with it, run `rstack breg dev stop --remove` in this directory to stop it and delete its
 data.
 
 ## Next

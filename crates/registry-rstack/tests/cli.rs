@@ -124,6 +124,23 @@ fn action_help_accepts_json_after_the_product_without_an_installation() {
 }
 
 #[test]
+fn offline_evidence_runtime_help_does_not_advertise_wrapper_format() {
+    let output = run(&["evidence", "runtime", "--help", "--format", "json"]);
+    assert!(output.status.success(), "{output:?}");
+    assert!(output.stderr.is_empty(), "{output:?}");
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["command"]["invocation"], "rstack evidence runtime");
+    assert!(
+        report["command"]["options"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|option| option["display"] != "--format <FORMAT>"),
+        "{report}"
+    );
+}
+
+#[test]
 fn evidence_junit_help_remains_offline_for_supported_commands() {
     for arguments in [
         &["--format", "junit", "evidence", "test", "--help"][..],

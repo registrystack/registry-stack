@@ -38,7 +38,7 @@ Registry Evidence reads the project only as it starts. In `first-evidence-assert
 stop it while you change the project; the source keeps running:
 
 ```sh test-cwd="first-evidence-assertion/adult-status"
-evidencectl dev stop .
+rstack evidence dev stop .
 ```
 
 ```text test-expect
@@ -75,7 +75,7 @@ on that profile, `tutorial-client` and `example-caller` alike, may now ask for t
 representation. Check the project:
 
 ```sh
-evidencectl check . --target local-target.yaml
+rstack evidence check . --target local-target.yaml
 ```
 
 ```text test-excerpt
@@ -90,7 +90,7 @@ evidencectl check . --target local-target.yaml
 Start Registry Evidence again with the same ports, so it loads the changed definition and grant:
 
 ```sh
-evidencectl dev start . \
+rstack evidence dev start . \
   --target local-target.yaml \
   --evidence-port 18080 \
   --issuer-port 8082
@@ -106,28 +106,23 @@ Name the representation with `--response-format`, send the SD-JWT VC media type,
 response:
 
 ```sh
-evidencectl request prepare adult-status \
+rstack evidence request prepare adult-status \
   --client tutorial-client \
   --purpose age-check \
   --subject subject:record-id=adult \
   --response-format sd-jwt-vc \
   --name adult-status-vc
-curl --silent --show-error --fail-with-body \
-  --config .evidence/requests/adult-status-vc/authorization.curl \
-  --request POST \
-  --url http://127.0.0.1:18080/v1/evidence \
-  --header 'Content-Type: application/json' \
-  --header 'Accept: application/dc+sd-jwt' \
-  --data-binary @.evidence/requests/adult-status-vc/request.json \
-  --output adult-status.sd-jwt-vc \
-  --write-out 'HTTP %{http_code}\n'
-evidencectl verify adult-status.sd-jwt-vc \
+rstack evidence api /v1/evidence \
+  --client tutorial-client \
+  --input .evidence/requests/adult-status-vc/request.json \
+  --accept application/dc+sd-jwt \
+  --output adult-status.sd-jwt-vc
+rstack evidence verify adult-status.sd-jwt-vc \
   --context .evidence/requests/adult-status-vc/verification.json \
   --output adult-status-vc.verified.json
 ```
 
 ```text test-excerpt
-HTTP 200
 VERIFIED
 ```
 
@@ -172,7 +167,7 @@ PY
 Verification refuses the copy:
 
 ```sh test-exit="1"
-evidencectl verify adult-status-tampered.sd-jwt-vc \
+rstack evidence verify adult-status-tampered.sd-jwt-vc \
   --context .evidence/requests/adult-status-vc/verification.json \
   --output adult-status-tampered.verified.json
 ```
@@ -186,12 +181,12 @@ evidencectl: Evidence response verification failed
 ## Stop and read the audit
 
 Registry Evidence wrote an audit event before it read the source and another before the response
-left. `evidencectl audit show` reads them only from a stopped session, so stop it and show the last
+left. `rstack evidence audit show` reads them only from a stopped session, so stop it and show the last
 operation, your SD-JWT VC request:
 
 ```sh
-evidencectl dev stop .
-evidencectl audit show --last-operation
+rstack evidence dev stop .
+rstack evidence audit show --last-operation
 ```
 
 ```text test-excerpt
@@ -206,7 +201,7 @@ output was released. The value is not shown.
 project, its keys, and its clients stay:
 
 ```sh
-evidencectl dev clean .
+rstack evidence dev clean .
 ```
 
 ```text test-expect

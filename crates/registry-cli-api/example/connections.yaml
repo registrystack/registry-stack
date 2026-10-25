@@ -1,0 +1,26 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/platform/cli-connections/cli-connections.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/platform/cli-connections/v1alpha1
+kind: PlatformCliConnections
+connections:
+  - product: breg
+    name: production
+    baseUrl: https://registry.example.org/api
+    trustedRootCertificatesFile: /etc/ssl/registry-stack/institution-ca.pem
+    secretProviders:
+      file:
+        root: /run/secrets/registry-stack-cli/production
+    auth:
+      type: bearer
+      tokenRef: secret:file/access-token
+  - product: evidence
+    name: production
+    baseUrl: https://evidence.example.org
+    secretProviders:
+      environment: {}
+    auth:
+      type: bearer
+      tokenRef: secret:env/EVIDENCE_ACCESS_TOKEN
+selections:
+  - product: breg
+    project: /srv/registry-projects/businesses
+    connection: production

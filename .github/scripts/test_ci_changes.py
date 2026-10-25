@@ -3182,6 +3182,22 @@ on:
                 selected = {row["name"] for row in outputs["rust_matrix"]["include"]}
                 self.assertIn("developer-tools", selected)
 
+    def test_shared_api_changes_select_every_consuming_command_tree(self) -> None:
+        outputs = classify(self.workspace, ("crates/registry-cli-api/src/api.rs",))
+        for package in (
+            "registry-cli-api",
+            "registry-bregctl",
+            "registry-evidencectl",
+            "registry-caseworkctl",
+            "registry-messagingctl",
+            "registry-schedulingctl",
+            "registry-discoveryctl",
+            "registry-coordinator",
+            "registry-cli-docs",
+        ):
+            with self.subTest(package=package):
+                self.assertIn(package, outputs["rust_packages"])
+
     def test_files_the_docs_suite_holds_pages_against_run_docs(self) -> None:
         """The docs script tests read these files beside the pages they check."""
         for path in (

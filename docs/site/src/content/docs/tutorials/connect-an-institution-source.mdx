@@ -21,16 +21,16 @@ import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 If you integrate an institution's existing HTTP API with Registry Evidence, you connect one of its
 operations here and return a verified answer from it. You start a new project, so you are no
 longer in the standalone project from your first assertion; if that one is still
-running, run `evidencectl dev stop .` in its directory first, because both use the same ports.
+running, run `rstack evidence dev stop .` in its directory first, because both use the same ports.
 
 <QuickstartMeta
   outcome="A verified coverage-status assertion from a FHIR API."
   time="About 20 minutes"
   level="Local development with a synthetic public server"
   prerequisites={[
-    'evidence and evidencectl on PATH',
+    'The Evidence component installed for rstack',
     'Running Docker',
-    'Python 3, curl, tar, and jq',
+    'Python 3, tar, and jq',
     'Internet access',
   ]}
 />
@@ -65,8 +65,8 @@ cd connect-an-institution-api/fhir-record-evidence
 Check it and run its fixtures, which need no network:
 
 ```sh
-evidencectl check . --target local-target.yaml
-evidencectl test . --target local-target.yaml --deny-warnings
+rstack evidence check . --target local-target.yaml
+rstack evidence test . --target local-target.yaml --deny-warnings
 ```
 
 ```text test-expect
@@ -90,7 +90,7 @@ disposable, owner-only keys under `.generated/secrets`; keep that directory out 
 two fields the answer needs (`--list-pointers` instead lists every field it returns):
 
 ```sh
-evidencectl source suggest --openapi source.openapi.yaml \
+rstack evidence source suggest --openapi source.openapi.yaml \
   --operation 'GET /Coverage/{coverage_id}' --source-id coverage-record \
   --select /status --select /beneficiary/reference
 ```
@@ -144,9 +144,9 @@ connections:
 ```
 
 The local adapter needs none. For your API, set `type: bearer` with a `tokenRef` to the secret,
-as your first assertion's target does. For your own description, `evidencectl init <dir> --openapi
-<doc> --profile local` writes a project and `evidencectl source suggest <dir>` writes the draft
-into it.
+as your first assertion's target does. For your own description,
+`rstack evidence init <dir> --openapi <doc> --profile local` writes a project and
+`rstack evidence source suggest <dir>` writes the draft into it.
 
 {/* Evidence: crates/registry-evidencectl/src/suggest/emit.rs, intentionally absent;
     crates/registry-evidence/src/config.rs, AcquisitionPosture; products/evidence/OPERATOR-CONTRACT.md, record-transformed;
@@ -183,7 +183,7 @@ Organization selector file: ready
 Register the client you will request as:
 
 ```sh
-evidencectl access client add fhir-client --access-profile fhir-service --generate-local-key
+rstack evidence access client add fhir-client --access-profile fhir-service --generate-local-key
 ```
 
 ```text test-expect
@@ -193,7 +193,7 @@ Added client fhir-client with access profile fhir-service.
 Start the gateway and its local token issuer; they run until you stop them:
 
 ```sh
-evidencectl dev start . --target local-target.yaml --evidence-port 18080 --issuer-port 8082
+rstack evidence dev start . --target local-target.yaml --evidence-port 18080 --issuer-port 8082
 ```
 
 ```text test-excerpt
@@ -204,7 +204,7 @@ Issuer ready at http://127.0.0.1:8082
 Prepare the request from the subject file:
 
 ```sh
-evidencectl request prepare fhir-coverage-status \
+rstack evidence request prepare fhir-coverage-status \
   --client fhir-client \
   --purpose coverage-record-verification \
   --subjects-file ../fhir-coverage-subjects.json \
@@ -220,15 +220,12 @@ Prepared authorization: .evidence/requests/fhir-coverage/authorization.curl
 Send it and verify the signed response offline:
 
 ```sh
-curl --silent --show-error --fail-with-body \
-  --config .evidence/requests/fhir-coverage/authorization.curl \
-  --request POST \
-  --url http://127.0.0.1:18080/v1/evidence \
-  --header 'Content-Type: application/json' \
-  --header 'Accept: application/jose+json' \
-  --data-binary @.evidence/requests/fhir-coverage/request.json \
+rstack evidence api /v1/evidence \
+  --client fhir-client \
+  --input .evidence/requests/fhir-coverage/request.json \
+  --accept application/jose+json \
   --output fhir-coverage.jws.json
-evidencectl verify fhir-coverage.jws.json \
+rstack evidence verify fhir-coverage.jws.json \
   --context .evidence/requests/fhir-coverage/verification.json \
   --output fhir-coverage.verified.json
 ```
@@ -260,8 +257,8 @@ active, and none of the coverage record.
 The audit view reads only a stopped session, so stop the gateway first:
 
 ```sh
-evidencectl dev stop .
-evidencectl audit show --last-operation
+rstack evidence dev stop .
+rstack evidence audit show --last-operation
 ```
 
 ```text test-excerpt
@@ -273,7 +270,7 @@ Cleaning removes the stopped session's directory, `.evidence/dev`, and the audit
 the audit first. The project, its registered client, and the prepared request stay:
 
 ```sh
-evidencectl dev clean .
+rstack evidence dev clean .
 ```
 
 ```text test-expect

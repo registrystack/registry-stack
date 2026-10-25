@@ -486,6 +486,66 @@ fn fresh_token(project_path: &Path, client: &str) -> Result<Value> {
     Ok(json!({"ok":true,"command":"dev token","headerFile":output}))
 }
 
+pub(crate) fn api_connection(
+    project_path: &Path,
+    client: &str,
+) -> std::result::Result<registry_cli_api::LocalConnection, String> {
+    local_api_connection(project_path, client).map_err(|error| error.to_string())
+}
+
+fn local_api_connection(
+    project_path: &Path,
+    client: &str,
+) -> Result<registry_cli_api::LocalConnection> {
+    if !config::identifier(client) {
+        bail!("a registered bounded local client ID is required");
+    }
+    let project = project(project_path)?;
+    private::check(&project.join(".casework"), true)?;
+    let root = project.join(".casework/dev");
+    let state = read_state(&root)?;
+    if !matches!(state.status, Status::Ready)
+        || !control(&root, "status").is_ok_and(|status| status == "ready")
+    {
+        bail!("the local development session must be ready before calling the API");
+    }
+    let profile = api_client_profile(&state, client)?.map(str::to_owned);
+    let token = acquire_token(&state, client, &AtomicBool::new(false))?;
+    api_connection_with_credentials(state.casework_origin(), token, profile.as_deref())
+        .map_err(|error| anyhow::anyhow!(error.to_string()))
+}
+
+fn api_connection_with_credentials(
+    base_url: String,
+    token: Zeroizing<String>,
+    profile: Option<&str>,
+) -> std::result::Result<registry_cli_api::LocalConnection, registry_cli_api::ApiError> {
+    let mut connection = registry_cli_api::LocalConnection::bearer(base_url, token)?;
+    if let Some(profile) = profile {
+        connection = connection
+            .with_header("Registry-Casework-Profile", profile)
+            .and_then(|connection| connection.with_header("Registry-Review-Profile", profile))?;
+    }
+    Ok(connection)
+}
+
+fn api_client_profile<'a>(state: &'a State, client: &str) -> Result<Option<&'a str>> {
+    let registered = state
+        .clients
+        .iter()
+        .find(|registered| registered.id == client)
+        .with_context(|| {
+            format!(
+                "{client} is not a local Casework client; integration clients may be bound to another service and cannot call the local Casework API"
+            )
+        })?;
+    let (resource, _) = token_parameters(state, client)?;
+    if resource != state.audience() {
+        bail!("the local Casework client resource differs from the running Casework audience");
+    }
+    Ok(Some(registered.profile.as_str()))
+}
+
 /// One header per line, so `curl --header @file` sends the bearer credential
 /// and, for a client bound to an access profile, that profile for each protocol.
 /// Each route selects its own header and independently checks the actor's role.
@@ -3879,11 +3939,19 @@ fn issue_tokens(
 }
 
 fn token(state: &State, id: &str, terminate: &AtomicBool) -> Result<()> {
-    use registry_platform_httputil::{PrivateKeyJwt, PrivateKeyJwtConfig, TokenProvider};
-    ensure_active(terminate)?;
-    let root = state.root();
-    let clients = config::retained(&private::read(&root.join("clients.json"), MAX_BYTES)?)?;
-    let (resource, scopes) = clients
+    let token = acquire_token(state, id, terminate)?;
+    private::replace(
+        &state.root().join("secrets").join(format!("{id}-token")),
+        token.as_bytes(),
+    )
+}
+
+fn token_parameters(state: &State, id: &str) -> Result<(String, Vec<String>)> {
+    let clients = config::retained(&private::read(
+        &state.root().join("clients.json"),
+        MAX_BYTES,
+    )?)?;
+    clients
         .clients
         .iter()
         .find(|client| client.id == id)
@@ -3894,7 +3962,14 @@ fn token(state: &State, id: &str, terminate: &AtomicBool) -> Result<()> {
                 .as_ref()
                 .and_then(|value| value.token_parameters(state, id))
         })
-        .context("the local client is not registered")?;
+        .context("the local client is not registered")
+}
+
+fn acquire_token(state: &State, id: &str, terminate: &AtomicBool) -> Result<Zeroizing<String>> {
+    use registry_platform_httputil::{PrivateKeyJwt, PrivateKeyJwtConfig, TokenProvider};
+    ensure_active(terminate)?;
+    let root = state.root();
+    let (resource, scopes) = token_parameters(state, id)?;
     let bytes = private::read(
         &root.join("credentials").join(id).join("assertion-key.jwk"),
         4096,
@@ -3920,10 +3995,7 @@ fn token(state: &State, id: &str, terminate: &AtomicBool) -> Result<()> {
         .to_str()?
         .strip_prefix("Bearer ")
         .context("the issued credential is not bearer")?;
-    private::replace(
-        &root.join("secrets").join(format!("{id}-token")),
-        token.as_bytes(),
-    )
+    Ok(Zeroizing::new(token.to_owned()))
 }
 
 fn http_cancellable(

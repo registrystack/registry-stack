@@ -32,9 +32,9 @@ test('the shipped optional PublicSchema selection tracks the embedded revision',
 test('the Evidence composition tutorial uses the explicit authored source registry', () => {
   const page = readRepo('docs/site/src/content/docs/tutorials/evidence-from-breg.mdx');
   assert.match(page, /cp -R teaching-inputs\/registry \.\/registry/);
-  assert.match(page, /bregctl check \.\/registry/);
-  assert.match(page, /bregctl generate evidence-source \.\/registry/);
-  assert.doesNotMatch(page, /bregctl init[^\n]*--model|save this selection as `organization-selection.yaml`/);
+  assert.match(page, /rstack breg check \.\/registry/);
+  assert.match(page, /rstack breg generate evidence-source \.\/registry/);
+  assert.doesNotMatch(page, /(?:bregctl|rstack breg) init[^\n]*--model|save this selection as `organization-selection.yaml`/);
 });
 
 // Hand-written current pages; generated trees and dated records are not restated versions.

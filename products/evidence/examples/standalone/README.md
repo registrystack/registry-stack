@@ -12,7 +12,9 @@ output allowlist. Private source facts stay inside Evidence.
 | `professional-licence-status` | `licence-check` | `active`, `suspended`, or `expired` |
 | `legal-parent-relationship` | `relationship-check` | Boolean for the child and candidate-parent roles |
 
-Use matching versions of `evidence` and `evidencectl`, Python 3, curl, and Docker.
+Use an active `rstack` installation that includes the Evidence component. Use
+`evidence` and `evidencectl` native tools that match that installation, plus
+Python 3 and Docker.
 Start from a writable copy outside the repository. Keep the example's generated
 credentials and responses private. The commands below run in that copy.
 The tracked `access/clients/example-caller.yaml` demonstrates the public client
@@ -46,11 +48,11 @@ port when needed.
 EVIDENCE_PORT=${EVIDENCE_PORT:-8080}
 evidencectl dev start . --target local-target.yaml --evidence-port "$EVIDENCE_PORT" --issuer-port 8082
 evidencectl request prepare adult-status --client demo --purpose age-check --subject subject:record-id=adult --name adult
-curl --silent --show-error --fail-with-body \
-  --config .evidence/requests/adult/authorization.curl \
-  --header 'Content-Type: application/json' \
-  --data-binary @.evidence/requests/adult/request.json \
-  "http://127.0.0.1:$EVIDENCE_PORT/v1/evidence" > .evidence/requests/adult/response.json
+rstack evidence api /v1/evidence \
+  --client demo \
+  --input .evidence/requests/adult/request.json \
+  --accept application/jose+json \
+  --output .evidence/requests/adult/response.json
 evidencectl verify .evidence/requests/adult/response.json \
   --context .evidence/requests/adult/verification.json \
   --output .evidence/requests/adult/verified.json

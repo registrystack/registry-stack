@@ -888,6 +888,7 @@ export default defineConfig({
           items: [
             { label: 'Overview', slug: 'operate/advanced' },
             { label: 'Operator handoff', slug: 'operate' },
+            { label: 'Call an API with rstack', slug: 'configure/api-connections' },
             { label: 'Rotate credentials and trust', slug: 'operate/advanced/rotate-credentials-and-trust' },
             { label: 'Connect an OIDC issuer', slug: 'operate/advanced/connect-an-oidc-issuer' },
             { label: 'Inspect and diagnose', slug: 'operate/advanced/inspect-and-diagnose' },

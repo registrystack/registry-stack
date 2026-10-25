@@ -17,7 +17,9 @@ receives the call, which decides it under its own authorization.
   adopter tooling, a supporting service, or a language binding. Never write
   to another product's database. Tests compose with another product the same
   way, through its built executable and public HTTP contract, never through a
-  runtime dev-dependency.
+  runtime dev-dependency. Its combined CLI may use `registry-cli-api` for
+  product-neutral HTTP and connection handling; that helper carries no
+  product runtime or authority.
 - The Coordinator inherits no authorization. A caller allowed to start a run
   is not thereby allowed the effects its workflow requests: every product decides
   each call it receives under its own policy, and a wait never renews an

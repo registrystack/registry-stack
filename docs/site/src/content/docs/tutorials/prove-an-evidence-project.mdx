@@ -87,7 +87,7 @@ function, outputs, and [grant ceiling](../../reference/glossary/#grant-ceiling).
 Run all four fixtures, and treat a warning as a failure, the way a build should:
 
 ```sh
-evidencectl test . --target local-target.yaml --deny-warnings
+rstack evidence test . --target local-target.yaml --deny-warnings
 ```
 
 ```text test-expect
@@ -121,7 +121,7 @@ one JSON document.
 When a case fails, the trace shows where. Ask for the trace of the midnight case:
 
 ```sh
-evidencectl test . --target local-target.yaml \
+rstack evidence test . --target local-target.yaml \
   --fixture fixtures/adult-status.yaml \
   --case boundary-at-bangkok-midnight \
   --explain --deny-warnings

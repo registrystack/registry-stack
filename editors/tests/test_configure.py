@@ -378,7 +378,7 @@ class ConfigureTests(unittest.TestCase):
             (ROOT / "products/manifest/schemas/profile.schema.json").read_bytes(),
         )
 
-    def test_platform_maps_its_task_connection_file(self):
+    def test_platform_maps_task_and_cli_connection_files(self):
         project = self.project(
             "platform", "task-connection.yaml", "products/platform/examples/task-connection.yaml"
         )
@@ -387,7 +387,10 @@ class ConfigureTests(unittest.TestCase):
         managed = project / ".registry-stack-editor/schemas"
         self.assertEqual(
             schemas,
-            {(managed / "task-connection.schema.json").as_uri(): [str(project / "task-connection.yaml")]},
+            {
+                (managed / "task-connection.schema.json").as_uri(): [str(project / "task-connection.yaml")],
+                (managed / "connections.schema.json").as_uri(): [str(project / "connections.yaml")],
+            },
         )
         self.assertEqual(
             (managed / "task-connection.schema.json").read_bytes(),

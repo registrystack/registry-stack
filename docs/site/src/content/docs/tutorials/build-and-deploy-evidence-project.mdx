@@ -27,7 +27,7 @@ dependencies before it opens a listener.
   outcome="An activated Registry Evidence candidate with a recorded package digest and passing dependency preflight."
   time="About 30 minutes"
   level="Operator handoff with synthetic data and a local signer"
-  prerequisites={['The proved adult-status project', 'evidence and evidencectl from one release', 'Free loopback port 18090']}
+  prerequisites={['The proved adult-status project', 'The Evidence component installed for rstack', 'Free loopback port 18090']}
 />
 
 ## Before you begin
@@ -47,7 +47,7 @@ If you stopped the development session, start it again from the project director
 issuer answers on `8082`:
 
 ```sh test-skip="the session from Your first assertion is still running"
-evidencectl dev start . \
+rstack evidence dev start . \
   --target local-target.yaml \
   --evidence-port 18080 \
   --issuer-port 8082
@@ -62,7 +62,7 @@ settings:
 
 ```sh test-cwd="first-evidence-assertion/adult-status"
 cd ..
-evidencectl target new ./deploy-target --settings adult-status/local-target.yaml
+rstack evidence target new ./deploy-target --settings adult-status/local-target.yaml
 ```
 
 ```text test-expect
@@ -84,7 +84,7 @@ Give the deployment its own signing key:
 
 ```sh
 umask 077
-evidencectl keygen signing --output-dir deploy-target/secrets \
+rstack evidence keygen signing --output-dir deploy-target/secrets \
   --public-output deploy-target/public-keys/signing.jwk.json
 ```
 
@@ -140,7 +140,7 @@ The bind must be a loopback or private address unless `listener.networkExposure`
 `container-private`. Read back what the target selects, offline:
 
 ```sh
-evidencectl target explain deploy-target/target.yaml adult-status
+rstack evidence target explain deploy-target/target.yaml adult-status
 ```
 
 ```text test-expect
@@ -159,7 +159,7 @@ Access profiles: 1
 Ask whether the target is fit for production:
 
 ```sh test-exit="1"
-evidencectl check adult-status --target deploy-target/target.yaml --production
+rstack evidence check adult-status --target deploy-target/target.yaml --production
 ```
 
 ```text test-expect
@@ -171,7 +171,7 @@ A local key file cannot meet a production `assuranceProfile`, so this target dec
 stays a rehearsal. Package it into a new directory outside the project:
 
 ```sh
-evidencectl package adult-status --target deploy-target/target.yaml --output candidate
+rstack evidence package adult-status --target deploy-target/target.yaml --output candidate
 ```
 
 ```text test-expect
@@ -223,8 +223,8 @@ Only the candidate travels to the target host, here this same directory. Provisi
 source accepts only the one it was started with, so copy that one:
 
 ```sh
-evidencectl keygen secret --output deploy-target/secrets/audit-hmac-key
-evidencectl keygen secret --output deploy-target/secrets/subject-binding-hmac-key
+rstack evidence keygen secret --output deploy-target/secrets/audit-hmac-key
+rstack evidence keygen secret --output deploy-target/secrets/subject-binding-hmac-key
 cp adult-status/.generated/secrets/synthetic-source-token deploy-target/secrets/
 cp -R candidate/bundle deploy-target/package
 ```
@@ -237,7 +237,7 @@ wrote deploy-target/secrets/subject-binding-hmac-key
 Activate the authority against the installed package:
 
 ```sh
-evidence authority activate --runtime-config candidate/runtime.yaml \
+rstack evidence runtime authority activate --runtime-config candidate/runtime.yaml \
   --document candidate/compiled-authority.yaml
 ```
 
@@ -249,7 +249,7 @@ Activation records the authority snapshot for the next start; a running process 
 until restart. Check the installed package, which reads no secret and contacts no network service:
 
 ```sh
-evidence check --runtime-config candidate/runtime.yaml
+rstack evidence runtime check --runtime-config candidate/runtime.yaml
 ```
 
 ```text test-expect
@@ -262,7 +262,7 @@ resolves every secret, proves the signer, opens the audit log, and fetches the t
 keys, as startup does. Name the runtime file by absolute path:
 
 ```sh
-evidencectl doctor --runtime-config "$PWD/candidate/runtime.yaml"
+rstack evidence doctor --runtime-config "$PWD/candidate/runtime.yaml"
 ```
 
 ```text test-excerpt
@@ -283,26 +283,71 @@ Start the service in a terminal of its own; it logs `evidence service listening`
 package digest:
 
 ```sh test-skip="runs in the foreground until stopped"
-evidence serve --runtime-config "$PWD/candidate/runtime.yaml"
+rstack evidence runtime serve --runtime-config "$PWD/candidate/runtime.yaml"
 ```
 
-Route traffic through your TLS front only after `GET http://127.0.0.1:18090/ready` succeeds. To
-send one synthetic request, keep the access token in an owner-only curl configuration, never on a
-command line:
+Route traffic through your TLS front only after the readiness request succeeds:
+
+```sh test-skip="needs the running service"
+rstack evidence api /ready --url http://127.0.0.1:18090
+```
+
+Create `deployment-check-client.json` by following
+[Create the client profile](../request-evidence-from-an-application/#create-the-client-profile).
+Use this deployment's reviewed endpoint and trust pins, plus the client registration, assertion
+audience, resource, and scopes issued for that endpoint. A loopback-only smoke may use
+`--local-loopback-discovery`; a deployed call uses its HTTPS origin and reviewed pinned trust after
+the deployment signer has been provisioned. Do not carry the development session's identity or
+discovery settings into this profile.
+
+Prepare a new synthetic request from that profile. This discovers the deployment's published
+contract and retains the pinned verification context before any response exists:
+
+```sh test-skip="needs the running service and token issuer"
+rstack evidence request prepare \
+  --profile deployment-check-client.json \
+  --requirement urn:example:requirement:adult-status:v1 \
+  --subject record-id=adult \
+  --name deployment-check
+```
+
+This creates owner-only `.evidence/requests/deployment-check/request.json`,
+`.evidence/requests/deployment-check/verification.json`, and
+`.evidence/requests/deployment-check/curl.config`. The curl config is a raw-HTTP handoff and is not
+input to `rstack evidence api`. Create an owner-only destination for a fresh, short-lived access
+token for the same registered client, resource, and scopes:
+
+```sh test-skip="the operator supplies the credential path"
+umask 077
+install -m 600 /dev/null "<owner-only-token-file>"
+```
+
+Have your secret-management path write the token into that file. Replace
+`https://<evidence-host>` with the same endpoint the profile names, then send the emitted request
+and verify the response against the emitted retained context:
 
 ```sh test-skip="needs the running service and an access token"
-umask 077
-install -m 600 /dev/null "<owner-only-curl-config>"
+rstack evidence api /v1/evidence \
+  --url 'https://<evidence-host>' \
+  --token-file "<owner-only-token-file>" \
+  --input .evidence/requests/deployment-check/request.json \
+  --accept application/jose+json \
+  --output .evidence/requests/deployment-check/response.jws.json
+rstack evidence verify .evidence/requests/deployment-check/response.jws.json \
+  --context .evidence/requests/deployment-check/verification.json \
+  --output .evidence/requests/deployment-check/verified.json
 ```
 
-Put `header = "Authorization: Bearer <access-token>"` in it through your secret-management path,
-then send the request with `curl --config "<owner-only-curl-config>"` and delete the file. In
-production only, where the deployment ships `audit.path` to an append-only audit store, confirm
-that the request's `access-attempt` and `disclosure-release` entries, which share one
-`correlation`, reached that store.
+The verification command must print `VERIFIED` before you inspect the assertion. Remove the token
+file through the same secret-management path after the check. In production only, where the
+deployment ships `audit.path` to an append-only audit store, confirm that the request's
+`access-attempt` and `disclosure-release` entries, which share one `correlation`, reached that
+store.
 
 {/* Evidence: crates/registry-evidence/src/server.rs, READY_ROUTE;
-    crates/registry-evidence/src/audit.rs, correlation; products/evidence/OPERATOR-CONTRACT.md. */}
+    crates/registry-evidence/src/audit.rs, correlation;
+    crates/registry-cli-api/src/api.rs, ApiArgs, resolve_connection, execute;
+    products/evidence/OPERATOR-CONTRACT.md. */}
 
 ## Next
 

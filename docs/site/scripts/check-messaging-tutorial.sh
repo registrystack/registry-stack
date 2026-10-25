@@ -83,8 +83,10 @@
 # journey is worth walking again.
 #
 # Configuration:
-#   MESSAGINGCTL_BIN                           run this exact binary instead
-#                                              of building from source
+#   RSTACK_BIN, MESSAGINGCTL_BIN, MESSAGING_BIN
+#                                              run these exact binaries instead
+#                                              of building from source; set all
+#                                              three or none
 #   MESSAGING_TUTORIAL_CARGO_PROFILE           ci (default) or release
 #   MESSAGING_TUTORIAL_READY_SECONDS           how long a session may take to
 #                                              report ready (default 600, which
@@ -132,8 +134,9 @@ MESSAGING_TUTORIALS=(
 # Every other page that runs Registry Messaging commands, and the reason it is
 # not replayed here. check_tutorial_coverage below fails by name on a page in
 # neither list, so a new Messaging tutorial cannot ship unreplayed and
-# unexplained. No page needs an entry today.
+# unexplained.
 EXCLUDED_MESSAGING_TUTORIALS=(
+	configure/api-connections # requires an operator-provisioned remote connection
 )
 
 in_list() {
@@ -215,24 +218,21 @@ load_spec() {
 
 	case "$1" in
 	tutorials/first-messaging)
-		# The page opens with a source build that puts messagingctl on PATH,
-		# which this gate replaces with the binary under test. The session
+		# The page opens with a release installation, which this source gate
+		# replaces with a managed generation around the binaries under test. The session
 		# runs in a first terminal until Ctrl-C; everything after it runs in
 		# a second terminal, which is this journey's own shell.
 		SPEC_STEPS=(
 			"run:Create a package"
 			"session:Start the session"
-			"run:Get a token"
+			"run:Open a second terminal"
 			"run:Send an SMS"
 			"run:Send an email"
 			"stop-session"
 		)
-		# The submissions use curl --write-out and no --fail-with-body, and
-		# the status polls give up quietly after ten one-second tries, so the
-		# fences exit zero even if Messaging refuses the send or the report
-		# never arrives.
+		# The status polls give up quietly after ten one-second tries, so the
+		# transcript holds the provider outcomes the page promises.
 		SPEC_ASSERTS=(
-			"HTTP 202"
 			'"status": "delivered"'
 			'"status": "submitted"'
 			"Subject: Votre rendez-vous du 01/10/2026"
@@ -374,7 +374,15 @@ resolve_profile_dir() {
 }
 
 prepare_toolset() {
-	if [[ -z "${MESSAGINGCTL_BIN:-}" ]]; then
+	local supplied=0
+	[[ -n "${RSTACK_BIN:-}" ]] && supplied=$((supplied + 1))
+	[[ -n "${MESSAGINGCTL_BIN:-}" ]] && supplied=$((supplied + 1))
+	[[ -n "${MESSAGING_BIN:-}" ]] && supplied=$((supplied + 1))
+	if ((supplied > 0 && supplied < 3)); then
+		printf 'set RSTACK_BIN, MESSAGINGCTL_BIN, and MESSAGING_BIN, or none of them to build from source\n' >&2
+		exit 1
+	fi
+	if ((supplied == 0)); then
 		local profile_dir
 		profile_dir="$(resolve_profile_dir)"
 		# On macOS the FIPS crypto library is a dynamic library a directly
@@ -384,21 +392,27 @@ prepare_toolset() {
 		. "$REPO_ROOT/scripts/cargo-runtime-library-path.sh"
 		CARGO_TARGET_DIR="$TARGET_DIR" \
 			registry_cargo_build "$REPO_ROOT" --manifest-path "$REPO_ROOT/Cargo.toml" \
-			--locked --profile "$BUILD_PROFILE" -p registry-messagingctl --bins
+			--locked --profile "$BUILD_PROFILE" -p registry-messagingctl \
+			-p registry-messaging -p registry-rstack --bins
 		MESSAGINGCTL_BIN="$TARGET_DIR/$profile_dir/messagingctl"
+		MESSAGING_BIN="$TARGET_DIR/$profile_dir/messaging"
+		RSTACK_BIN="$TARGET_DIR/$profile_dir/rstack"
 	fi
 	# Absoluteness first: the reader journey runs from its own directory and
 	# reaches the binary through the shim, so a relative path resolves
 	# against the wrong directory and would otherwise surface much later,
 	# mid-journey, as "command not found".
-	if [[ "$MESSAGINGCTL_BIN" != /* ]]; then
-		printf 'toolset binary path must be absolute: %s\n' "$MESSAGINGCTL_BIN" >&2
-		exit 1
-	fi
-	if [[ ! -x "$MESSAGINGCTL_BIN" ]]; then
-		printf 'toolset binary not executable: %s\n' "$MESSAGINGCTL_BIN" >&2
-		exit 1
-	fi
+	local binary
+	for binary in "$RSTACK_BIN" "$MESSAGINGCTL_BIN" "$MESSAGING_BIN"; do
+		if [[ "$binary" != /* ]]; then
+			printf 'toolset binary path must be absolute: %s\n' "$binary" >&2
+			exit 1
+		fi
+		if [[ ! -x "$binary" ]]; then
+			printf 'toolset binary not executable: %s\n' "$binary" >&2
+			exit 1
+		fi
+	done
 
 	# The tutorial calls the binary by name, so serve it from a shim
 	# directory. Where the build recorded a runtime library directory, the
@@ -409,10 +423,28 @@ prepare_toolset() {
 	if [[ -n "${REGISTRY_CARGO_RUNTIME_LIBRARY_PATH:-}" ]]; then
 		printf '#!/bin/sh\nDYLD_FALLBACK_LIBRARY_PATH=%q\nexport DYLD_FALLBACK_LIBRARY_PATH\nexec %q "$@"\n' \
 			"$REGISTRY_CARGO_RUNTIME_LIBRARY_PATH" "$MESSAGINGCTL_BIN" >"$SHIM_DIR/messagingctl"
+		printf '#!/bin/sh\nDYLD_FALLBACK_LIBRARY_PATH=%q\nexport DYLD_FALLBACK_LIBRARY_PATH\nexec %q "$@"\n' \
+			"$REGISTRY_CARGO_RUNTIME_LIBRARY_PATH" "$MESSAGING_BIN" >"$SHIM_DIR/messaging"
 		chmod 755 "$SHIM_DIR/messagingctl"
+		chmod 755 "$SHIM_DIR/messaging"
 	else
 		ln -s "$MESSAGINGCTL_BIN" "$SHIM_DIR/messagingctl"
+		ln -s "$MESSAGING_BIN" "$SHIM_DIR/messaging"
 	fi
+	local managed_args=(
+		"$SITE_ROOT/scripts/managed-rstack.mjs"
+		--repo-root "$REPO_ROOT"
+		--work-root "$WORK_ROOT"
+		--bin-dir "$SHIM_DIR"
+		--rstack-bin "$RSTACK_BIN"
+		--component messaging=messagingctl
+		--binary "messagingctl=$MESSAGINGCTL_BIN"
+		--binary "messaging=$MESSAGING_BIN"
+	)
+	if [[ -n "${REGISTRY_CARGO_RUNTIME_LIBRARY_PATH:-}" ]]; then
+		managed_args+=(--library-dir "$REGISTRY_CARGO_RUNTIME_LIBRARY_PATH")
+	fi
+	node "${managed_args[@]}"
 }
 
 # ---------------------------------------------------------------------------
@@ -504,29 +536,32 @@ emit_session_step() {
 	local number
 	number="$(resolve_session_fence "$slug" "$address" "$fence_dir")" || exit $?
 	printf '\nprintf "==> %s fence %s (session, left running)\\n"\n' "$slug" "$number"
+	local session_command
+	IFS= read -r session_command <"$fence_dir/fence-$number.sh"
 	# The redirection is emitted literally; the journey shell expands it.
 	# shellcheck disable=SC2016
-	printf '%s >"$MESSAGING_TUTORIAL_SESSION_LOG" 2>&1 &\n' "$(cat "$fence_dir/fence-$number.sh")"
-	cat <<'EOF'
-session_pid=$!
-printf '%s\n' "$session_pid" >"$MESSAGING_TUTORIAL_SESSION_PID_FILE"
-session_deadline=$((SECONDS + MESSAGING_TUTORIAL_READY_SECONDS))
-until grep -q '^ready$' "$MESSAGING_TUTORIAL_SESSION_LOG"; do
-	if ! kill -0 "$session_pid" 2>/dev/null; then
-		cat "$MESSAGING_TUTORIAL_SESSION_LOG"
-		printf 'the session stopped before it reported ready\n' >&2
-		exit 1
-	fi
-	if ((SECONDS >= session_deadline)); then
-		cat "$MESSAGING_TUTORIAL_SESSION_LOG"
-		printf 'the session did not report ready in %s seconds\n' "$MESSAGING_TUTORIAL_READY_SECONDS" >&2
-		exit 1
-	fi
-	sleep 1
-done
-cat "$MESSAGING_TUTORIAL_SESSION_LOG"
-session_reported="$(wc -l <"$MESSAGING_TUTORIAL_SESSION_LOG")"
-EOF
+	printf '%s >"$MESSAGING_TUTORIAL_SESSION_LOG" 2>&1 &\n' "$session_command"
+	# These variables and substitutions belong to the generated journey shell.
+	# shellcheck disable=SC2016
+	printf '%s\n' \
+		'session_pid=$!' \
+		'printf '\''%s\n'\'' "$session_pid" >"$MESSAGING_TUTORIAL_SESSION_PID_FILE"' \
+		'session_deadline=$((SECONDS + MESSAGING_TUTORIAL_READY_SECONDS))' \
+		'until grep -q '\''^ready$'\'' "$MESSAGING_TUTORIAL_SESSION_LOG"; do' \
+		'if ! kill -0 "$session_pid" 2>/dev/null; then' \
+		'cat "$MESSAGING_TUTORIAL_SESSION_LOG"' \
+		'printf '\''the session stopped before it reported ready\n'\'' >&2' \
+		'exit 1' \
+		'fi' \
+		'if ((SECONDS >= session_deadline)); then' \
+		'cat "$MESSAGING_TUTORIAL_SESSION_LOG"' \
+		'printf '\''the session did not report ready in %s seconds\n'\'' "$MESSAGING_TUTORIAL_READY_SECONDS" >&2' \
+		'exit 1' \
+		'fi' \
+		'sleep 1' \
+		'done' \
+		'cat "$MESSAGING_TUTORIAL_SESSION_LOG"' \
+		'session_reported="$(wc -l <"$MESSAGING_TUTORIAL_SESSION_LOG")"'
 }
 
 # Emit the stop-session step: the Ctrl-C the page tells a reader to press, then
@@ -534,11 +569,12 @@ EOF
 emit_stop_session_step() {
 	local slug="$1"
 	printf '\nprintf "==> %s stop the session (Ctrl-C)\\n"\n' "$slug"
-	cat <<'EOF'
-kill -INT "$session_pid"
-wait "$session_pid"
-tail -n "+$((session_reported + 1))" "$MESSAGING_TUTORIAL_SESSION_LOG"
-EOF
+	# These variables and substitutions belong to the generated journey shell.
+	# shellcheck disable=SC2016
+	printf '%s\n' \
+		'kill -INT "$session_pid"' \
+		'wait "$session_pid"' \
+		'tail -n "+$((session_reported + 1))" "$MESSAGING_TUTORIAL_SESSION_LOG"'
 }
 
 emit_journey() {
