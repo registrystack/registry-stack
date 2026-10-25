@@ -1,0 +1,104 @@
+{
+  "contract": "id.registrystack.org/formats/breg/occurrence-view/v1alpha1",
+  "correction": {
+    "status": "unavailable"
+  },
+  "descriptorVersion": "1",
+  "effective": {
+    "at": {
+      "status": "available",
+      "type": "instant",
+      "value": "2026-10-20T00:00:00+02:00"
+    },
+    "kind": "point"
+  },
+  "ignoredEvidence": [],
+  "label": "Ownership transferred",
+  "occurredAt": {
+    "end": {
+      "status": "declaredUnknown"
+    },
+    "kind": "interval",
+    "meaning": "within",
+    "start": {
+      "status": "available",
+      "type": "date",
+      "value": "2026-09-01"
+    }
+  },
+  "provenance": [],
+  "recordedAt": {
+    "status": "unavailable"
+  },
+  "recordedAtSource": "creation-revision",
+  "registryRevision": "sha256:00000000000000000000000000000000000000000000000000000000000000aa",
+  "source": {
+    "recordId": "8b3e0000-0000-4000-8000-000000000020",
+    "recordType": "ownership-transfer",
+    "revision": "1"
+  },
+  "sourceEventId": {
+    "duplicates": "reject",
+    "namespace": {
+      "status": "available",
+      "type": "text",
+      "value": "urn:example:synthetic:deeds"
+    },
+    "value": {
+      "status": "available",
+      "type": "text",
+      "value": "DEED-0007"
+    }
+  },
+  "sources": [
+    {
+      "kind": "external",
+      "label": "Deed",
+      "namespace": "urn:example:synthetic:deeds",
+      "role": "deed",
+      "value": {
+        "status": "available",
+        "type": "text",
+        "value": "DEED-0007"
+      }
+    }
+  ],
+  "subjects": [
+    {
+      "kind": "native",
+      "label": "Asset",
+      "role": "asset",
+      "value": {
+        "status": "available",
+        "target": "asset",
+        "type": "reference",
+        "value": "8b3e0000-0000-4000-8000-000000000b01"
+      }
+    },
+    {
+      "kind": "native",
+      "label": "Previous ownership",
+      "role": "previous-ownership",
+      "value": {
+        "status": "available",
+        "target": "ownership-record",
+        "type": "reference",
+        "value": "8b3e0000-0000-4000-8000-000000000b11"
+      }
+    },
+    {
+      "kind": "native",
+      "label": "New ownership",
+      "role": "new-ownership",
+      "value": {
+        "status": "available",
+        "target": "ownership-record",
+        "type": "reference",
+        "value": "8b3e0000-0000-4000-8000-000000000b12"
+      }
+    }
+  ],
+  "summary": {
+    "status": "unavailable"
+  }
+}

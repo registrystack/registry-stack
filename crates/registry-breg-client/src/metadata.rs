@@ -13,6 +13,8 @@ use serde_json::{Map, Number, Value};
 use time::{Date, Month};
 use uuid::Uuid;
 
+use crate::{BRegOccurrenceDescriptor, BRegOccurrenceError};
+
 /// Maximum accepted size of one Base Registry Engine runtime metadata document.
 pub const MAX_BREG_METADATA_BYTES: usize = 8 * 1024 * 1024;
 /// Maximum nesting depth accepted anywhere in runtime metadata, including
@@ -771,6 +773,8 @@ struct BRegMetadataEntity {
     operations: Vec<(BRegOperationKind, String)>,
     readable_fields: Vec<String>,
     mutation_policy: Option<Value>,
+    /// The caller-filtered occurrence descriptor, retained as received.
+    occurrence: Option<Value>,
 }
 
 /// One typed input advertised by a caller-visible immediate action.
@@ -1230,6 +1234,22 @@ impl BRegMetadata {
     #[must_use]
     pub fn registry_revision(&self) -> &str {
         &self.revision
+    }
+
+    /// The occurrence descriptor this caller sees for one record type. A
+    /// record type that is absent from the caller-filtered metadata or does
+    /// not declare an occurrence is `NotAnOccurrence`.
+    pub fn occurrence(
+        &self,
+        record_type_identifier: &str,
+    ) -> Result<BRegOccurrenceDescriptor, BRegOccurrenceError> {
+        let descriptor = self
+            .entities
+            .iter()
+            .find(|entity| entity.id == record_type_identifier)
+            .and_then(|entity| entity.occurrence.as_ref())
+            .ok_or(BRegOccurrenceError::NotAnOccurrence)?;
+        BRegOccurrenceDescriptor::from_value(descriptor)
     }
 
     #[must_use]
@@ -2717,6 +2737,7 @@ fn parse_entity(value: Value) -> Result<BRegMetadataEntity, BRegMetadataError> {
     if let Some(value) = &mutation_policy {
         validate_mutation_policy(value)?;
     }
+    let occurrence = entity.remove("occurrence").filter(|value| !value.is_null());
     finish(entity)?;
     Ok(BRegMetadataEntity {
         id,
@@ -2726,6 +2747,7 @@ fn parse_entity(value: Value) -> Result<BRegMetadataEntity, BRegMetadataError> {
         operations,
         readable_fields,
         mutation_policy,
+        occurrence,
     })
 }
 
