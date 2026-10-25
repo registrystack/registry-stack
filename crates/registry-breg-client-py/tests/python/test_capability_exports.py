@@ -8,11 +8,15 @@ from bootstrap import ensure_built
 
 ensure_built()
 
-from registry_breg_client import BaseRegistryClient  # noqa: E402
+import registry_breg_client  # noqa: E402
+from registry_breg_client import BaseRegistryClient, BRegMetadata  # noqa: E402
 
 
 class CapabilityExportTests(unittest.TestCase):
     def test_inventoried_client_methods_are_runtime_exports(self) -> None:
+        # An entry point is a client method, a metadata method, or a
+        # package-level function.
+        owners = (BaseRegistryClient, BRegMetadata, registry_breg_client)
         root = Path(__file__).resolve().parents[4]
         inventory = json.loads(
             (root / "products/breg/contracts/client-capabilities.json").read_text()
@@ -22,7 +26,7 @@ class CapabilityExportTests(unittest.TestCase):
                 method
                 for capability in inventory["capabilities"]
                 for method in capability["python"]
-                if not hasattr(BaseRegistryClient, method)
+                if not any(hasattr(owner, method) for owner in owners)
             }
         )
         self.assertEqual(missing, [])
