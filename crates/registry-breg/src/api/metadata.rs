@@ -575,9 +575,292 @@ fn humanize(id: &str) -> String {
     }
 }
 
+/// The caller-filtered occurrence descriptor of a record type. Every field named here
+/// is already in the caller's `readableFields` and every target is already one of the
+/// caller's visible record types. Members the caller cannot fully see are absent, so an
+/// undeclared member and a withheld member look the same.
+pub(super) fn occurrence_metadata(
+    occurrence: &crate::model::CompiledOccurrence,
+    readable: &BTreeSet<String>,
+    visible_types: &BTreeSet<String>,
+) -> Value {
+    let field = |field: &crate::model::CompiledOccurrenceField| {
+        let mut value = json!({
+            "id": field.id,
+            "apiName": field.api_name,
+            "type": field.value_type.name(),
+        });
+        if let Some(target) = field
+            .target
+            .as_ref()
+            .filter(|target| visible_types.contains(*target))
+        {
+            value["target"] = json!(target);
+        }
+        value
+    };
+    let roles = |roles: &[crate::model::CompiledOccurrenceRole]| {
+        roles
+            .iter()
+            .filter(|role| readable.contains(&role.field.id))
+            .map(|role| {
+                let mut value = json!({
+                    "role": role.role,
+                    "kind": role.kind,
+                    "field": field(&role.field),
+                });
+                if let Some(label) = &role.label {
+                    value["label"] = json!(label);
+                }
+                if let Some(namespace) = &role.namespace {
+                    value["namespace"] = json!(namespace);
+                }
+                value
+            })
+            .collect::<Vec<_>>()
+    };
+    let time = |time: &crate::model::CompiledOccurrenceTime| match time {
+        crate::model::CompiledOccurrenceTime::Point { at } => readable
+            .contains(&at.id)
+            .then(|| json!({"kind": "point", "at": field(at)})),
+        crate::model::CompiledOccurrenceTime::Interval {
+            meaning,
+            start,
+            end,
+        } => {
+            let bounds_readable = readable.contains(&start.id)
+                && end.as_ref().is_none_or(|end| readable.contains(&end.id));
+            bounds_readable.then(|| {
+                let mut value =
+                    json!({"kind": "interval", "meaning": meaning, "start": field(start)});
+                if let Some(end) = end {
+                    value["end"] = field(end);
+                }
+                value
+            })
+        }
+    };
+
+    let mut value = json!({
+        "descriptorVersion": occurrence.descriptor_version,
+        "label": occurrence.label,
+        "subjects": roles(&occurrence.subjects),
+        "sources": roles(&occurrence.sources),
+        "recordedTime": {"source": occurrence.recorded_time.source},
+    });
+    if let Some(summary) = occurrence
+        .summary
+        .as_ref()
+        .filter(|summary| readable.contains(&summary.id))
+    {
+        value["summary"] = field(summary);
+    }
+    if let Some(occurred_at) = occurrence.occurred_at.as_ref().and_then(time) {
+        value["occurredAt"] = occurred_at;
+    }
+    if let Some(effective) = occurrence.effective.as_ref().and_then(time) {
+        value["effective"] = effective;
+    }
+    if let Some(correction) = occurrence
+        .correction
+        .as_ref()
+        .filter(|correction| readable.contains(&correction.field.id))
+    {
+        value["correction"] =
+            json!({"relation": correction.relation, "field": field(&correction.field)});
+    }
+    if let Some(source_event_id) = occurrence
+        .source_event_id
+        .as_ref()
+        .filter(|source_event_id| {
+            readable.contains(&source_event_id.field.id)
+                && source_event_id
+                    .namespace_field
+                    .as_ref()
+                    .is_none_or(|namespace| readable.contains(&namespace.id))
+        })
+    {
+        let mut id = json!({
+            "field": field(&source_event_id.field),
+            "duplicates": source_event_id.duplicates,
+        });
+        if let Some(namespace) = &source_event_id.namespace {
+            id["namespace"] = json!(namespace);
+        }
+        if let Some(namespace_field) = &source_event_id.namespace_field {
+            id["namespaceField"] = field(namespace_field);
+        }
+        value["sourceEventId"] = id;
+    }
+    value
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn shapes_occurrence(record_type: &str) -> crate::model::CompiledOccurrence {
+        let project = crate::contract::parse_project_yaml(include_bytes!(
+            "../../tests/fixtures/occurrence/shapes.yaml"
+        ))
+        .expect("the occurrence shapes fixture parses");
+        let registry = crate::compiler::compile_project(
+            &project,
+            &[],
+            crate::compiler::CompileProfile::Authoring,
+        )
+        .expect("the occurrence shapes fixture compiles");
+        registry
+            .entities()
+            .get(record_type)
+            .and_then(|entity| entity.occurrence.clone())
+            .expect("the record type declares an occurrence")
+    }
+
+    fn set(ids: &[&str]) -> BTreeSet<String> {
+        ids.iter().map(|id| (*id).to_owned()).collect()
+    }
+
+    const REGISTRATION_FIELDS: &[&str] = &[
+        "entry",
+        "summary",
+        "occurred-on",
+        "effective-at",
+        "source-reference",
+        "corrects",
+    ];
+
+    #[test]
+    fn occurrence_metadata_with_every_field_readable_keeps_each_declared_member() {
+        let occurrence = shapes_occurrence("entry-registration");
+        let value = occurrence_metadata(
+            &occurrence,
+            &set(REGISTRATION_FIELDS),
+            &set(&["entry", "entry-registration"]),
+        );
+        assert_eq!(
+            value,
+            json!({
+                "descriptorVersion": "1",
+                "label": "Entry registered",
+                "subjects": [{"role": "entry", "label": "Entry", "kind": "native",
+                    "field": {"id": "entry", "apiName": "entry", "type": "reference", "target": "entry"}}],
+                "summary": {"id": "summary", "apiName": "summary", "type": "text"},
+                "occurredAt": {"kind": "point",
+                    "at": {"id": "occurred-on", "apiName": "occurredOn", "type": "date"}},
+                "effective": {"kind": "point",
+                    "at": {"id": "effective-at", "apiName": "effectiveAt", "type": "timestamp"}},
+                "sources": [{"role": "source", "label": "Source", "kind": "external",
+                    "namespace": "urn:example:synthetic:sources",
+                    "field": {"id": "source-reference", "apiName": "sourceReference", "type": "string"}}],
+                "correction": {"relation": "corrects",
+                    "field": {"id": "corrects", "apiName": "corrects", "type": "reference",
+                        "target": "entry-registration"}},
+                "sourceEventId": {
+                    "field": {"id": "source-reference", "apiName": "sourceReference", "type": "string"},
+                    "namespace": "urn:example:synthetic:sources",
+                    "duplicates": "reject"},
+                "recordedTime": {"source": "creation-revision"}
+            })
+        );
+    }
+
+    #[test]
+    fn occurrence_metadata_omits_every_member_whose_fields_are_unreadable() {
+        let occurrence = shapes_occurrence("entry-registration");
+        let value = occurrence_metadata(&occurrence, &set(&[]), &set(&["entry-registration"]));
+        assert_eq!(
+            value,
+            json!({
+                "descriptorVersion": "1",
+                "label": "Entry registered",
+                "subjects": [],
+                "sources": [],
+                "recordedTime": {"source": "creation-revision"}
+            }),
+            "withheld members are absent, never null"
+        );
+        for member in [
+            "summary",
+            "occurredAt",
+            "effective",
+            "correction",
+            "sourceEventId",
+        ] {
+            assert!(value.get(member).is_none(), "{member} is withheld");
+        }
+    }
+
+    #[test]
+    fn occurrence_metadata_drops_targets_that_are_not_visible_record_types() {
+        let occurrence = shapes_occurrence("entry-registration");
+        let value = occurrence_metadata(
+            &occurrence,
+            &set(REGISTRATION_FIELDS),
+            &set(&["entry-registration"]),
+        );
+        let subject = &value["subjects"][0]["field"];
+        assert_eq!(subject["id"], "entry");
+        assert!(
+            subject.get("target").is_none(),
+            "a hidden target is dropped"
+        );
+        assert_eq!(
+            value["correction"]["field"]["target"], "entry-registration",
+            "a visible target is kept"
+        );
+        let hidden = occurrence_metadata(&occurrence, &set(REGISTRATION_FIELDS), &set(&[]));
+        assert!(hidden["correction"]["field"].get("target").is_none());
+    }
+
+    #[test]
+    fn occurrence_metadata_needs_every_bound_of_an_interval() {
+        let occurrence = shapes_occurrence("grant-pause-decision");
+        let readable = |ids: &[&str]| {
+            occurrence_metadata(
+                &occurrence,
+                &set(ids),
+                &set(&["grant", "grant-pause-decision"]),
+            )
+        };
+        let both = readable(&["effective-from", "effective-until"]);
+        assert_eq!(both["effective"]["kind"], "interval");
+        assert_eq!(both["effective"]["start"]["id"], "effective-from");
+        assert_eq!(both["effective"]["end"]["id"], "effective-until");
+        assert!(readable(&["effective-from"]).get("effective").is_none());
+        assert!(readable(&["effective-until"]).get("effective").is_none());
+    }
+
+    #[test]
+    fn occurrence_metadata_withholds_a_source_event_id_without_its_namespace_field() {
+        let mut occurrence = shapes_occurrence("entry-registration");
+        let field = occurrence.source_event_id.as_ref().unwrap().field.clone();
+        let namespace_field = crate::model::CompiledOccurrenceField {
+            id: "namespace".to_owned(),
+            api_name: "namespace".to_owned(),
+            value_type: crate::model::OccurrenceValueType::String,
+            target: None,
+        };
+        let source_event_id = occurrence.source_event_id.as_mut().unwrap();
+        source_event_id.namespace = None;
+        source_event_id.namespace_field = Some(namespace_field);
+        let without = occurrence_metadata(
+            &occurrence,
+            &set(&[field.id.as_str()]),
+            &set(&["entry-registration"]),
+        );
+        assert!(without.get("sourceEventId").is_none());
+        let with = occurrence_metadata(
+            &occurrence,
+            &set(&[field.id.as_str(), "namespace"]),
+            &set(&["entry-registration"]),
+        );
+        assert_eq!(
+            with["sourceEventId"]["namespaceField"],
+            json!({"id": "namespace", "apiName": "namespace", "type": "string"})
+        );
+        assert!(with["sourceEventId"].get("namespace").is_none());
+    }
 
     #[test]
     fn record_operations_do_not_require_retired_lifecycle_capabilities() {
