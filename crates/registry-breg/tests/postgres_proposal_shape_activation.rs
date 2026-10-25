@@ -208,6 +208,7 @@ enum Change {
     Required,
     PolicyOnly,
     DisplayOnly,
+    OccurrenceOnly,
 }
 
 async fn shape_journey(change: Change) {
@@ -225,7 +226,16 @@ async fn shape_journey(change: Change) {
         json!([{"id":"local-review","protocol":"id.registrystack.org/protocols/review/v1"}]);
     let policy =
         json!({"id":"name-correction","version":"1","digest":format!("sha256:{}", "b".repeat(64))});
-    let review_source = if matches!(&change, Change::DisplayOnly) {
+    if matches!(&change, Change::OccurrenceOnly) {
+        // The fields an occurrence descriptor maps exist before the descriptor
+        // is declared, so the successor differs only by the descriptor.
+        let fields = source["recordTypes"][0]["fields"].as_array_mut().unwrap();
+        fields.push(json!({"id":"parent","type":"reference","target":"target","required":false,"classification":"internal"}));
+        fields.push(
+            json!({"id":"noted-on","type":"date","required":false,"classification":"internal"}),
+        );
+    }
+    let review_source = if matches!(&change, Change::DisplayOnly | Change::OccurrenceOnly) {
         "shared.facility.registry:v1"
     } else {
         "proposal-test"
@@ -301,7 +311,7 @@ async fn shape_journey(change: Change) {
         "only the first request is approved"
     );
     assert_eq!(counts.get::<_, i64>(2), 0, "neither request applied");
-    if !matches!(change, Change::DisplayOnly) {
+    if !matches!(change, Change::DisplayOnly | Change::OccurrenceOnly) {
         source["actions"][0]["execution"]["proposal"]["review"]["policy"]["digest"] =
             json!(format!("sha256:{}", "c".repeat(64)));
     }
@@ -322,8 +332,22 @@ async fn shape_journey(change: Change) {
         Change::DisplayOnly => {
             source["actions"][0]["display"] = json!({"label":"A display-only update"})
         }
+        Change::OccurrenceOnly => {
+            source["recordTypes"][0]["occurrence"] = json!({
+                "label":"Target noted",
+                "subjects":[{"role":"parent","field":"parent","label":"Parent","target":"target"}],
+                "occurredAt":{"at":"noted-on"}
+            });
+            source["recordTypes"][0]["display"] = json!({"purpose":"domain","group":"Directory"});
+        }
     }
     let candidate = shape_package::candidate(&fixture, &source).await;
+    if matches!(change, Change::OccurrenceOnly) {
+        assert!(fixture.registry.entities()["target"].occurrence.is_none());
+        assert!(candidate.registry().entities()["target"]
+            .occurrence
+            .is_some());
+    }
     let inventory = registry_breg::proposal_retention::prepare_proposal_activation_compatibility(
         &fixture.pool,
         &fixture.identity,
@@ -395,7 +419,10 @@ async fn shape_journey(change: Change) {
         .await
         .unwrap();
     let get = metadata.value.select_proposal_get("clerk").unwrap();
-    let shape_changed = !matches!(change, Change::PolicyOnly | Change::DisplayOnly);
+    let shape_changed = !matches!(
+        change,
+        Change::PolicyOnly | Change::DisplayOnly | Change::OccurrenceOnly
+    );
     for original in [&approved, &reviewing] {
         let request = current
             .client
@@ -473,6 +500,72 @@ async fn shape_journey(change: Change) {
             assert_eq!(row.get::<_, i64>(3), 0, "old approval cannot follow Rebase");
         }
     }
+    if matches!(change, Change::OccurrenceOnly) {
+        // The submission frozen before the descriptor existed applies after
+        // it, with the effects it froze and without a second review.
+        let request = current
+            .client
+            .get_proposal(&get, approved.id())
+            .await
+            .unwrap()
+            .value;
+        let apply = current
+            .client
+            .prepare_proposal(
+                &request,
+                "apply",
+                json!({
+                    "submissionVersion": request.submission_version(),
+                    "effectDigest": request.effect_digest().unwrap(),
+                    "reason": "descriptor-only activation"
+                }),
+                &key("apply-after-descriptor"),
+            )
+            .unwrap();
+        let applied = current.client.execute_proposal(&apply).await.unwrap().value;
+        assert_eq!(
+            applied.state(),
+            registry_breg_client::BRegProposalState::Applied
+        );
+        assert_eq!(applied.effect_digest(), approved.effect_digest());
+        let after = fixture.database.admin.query_one("SELECT (SELECT count(*) FROM registry_internal.registry_proposal_review_submissions), (SELECT count(*) FROM registry_internal.registry_proposal_review_results), (SELECT count(*) FROM registry_internal.registry_proposal_applications)", &[]).await.unwrap();
+        assert_eq!(
+            after.get::<_, i64>(0),
+            2,
+            "descriptor-only activation queued no new review submission"
+        );
+        assert_eq!(
+            after.get::<_, i64>(1),
+            1,
+            "descriptor-only activation produced no new review result"
+        );
+        assert_eq!(
+            after.get::<_, i64>(2),
+            1,
+            "exactly the approved request applied"
+        );
+        let entity = &fixture.registry.entities()["target"];
+        let mut names: Vec<String> = fixture
+            .database
+            .admin
+            .query(
+                &format!(
+                    "SELECT \"{}\" FROM registry_data.\"{}\"",
+                    entity.fields["name"].physical_name, entity.physical_table
+                ),
+                &[],
+            )
+            .await
+            .unwrap()
+            .iter()
+            .map(|row| row.get::<_, String>(0))
+            .collect();
+        names.sort();
+        assert_eq!(names, ["After approved", "Before"]);
+        drop(current);
+        fixture.finish().await;
+        return;
+    }
     let applications: i64 = fixture
         .database
         .admin
@@ -529,6 +622,10 @@ async fn required_field_and_policy_change_require_fresh_review() {
 #[tokio::test]
 async fn policy_only_change_retains_review_compatibility() {
     shape_journey(Change::PolicyOnly).await;
+}
+#[tokio::test]
+async fn occurrence_descriptor_change_does_not_block_waiting_requests() {
+    shape_journey(Change::OccurrenceOnly).await;
 }
 #[tokio::test]
 async fn unrelated_display_change_does_not_block_waiting_requests() {

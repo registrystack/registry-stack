@@ -43,9 +43,12 @@ struct Fixture {
 
 impl Fixture {
     async fn start(pool_size: usize) -> Self {
+        Self::start_with(pool_size, compiled_registry()).await
+    }
+
+    async fn start_with(pool_size: usize, registry: registry_breg::CompiledRegistry) -> Self {
         let database = TestDatabase::create(pool_size).await;
         let (migration, migration_task) = database.connect_migration().await;
-        let registry = compiled_registry();
         install_compiled_schema(&migration, &registry, &database.runtime_role)
             .await
             .expect("migration installs active-reference constraints");
@@ -513,6 +516,359 @@ async fn active_references_refuse_tombstones_and_preserve_retained_links() {
     assert_eq!(durable_state(&fixture).await, before_batch);
 
     fixture.database.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn occurrence_references_restrict_tombstone_and_mutable_source_control() {
+    let fixture = Fixture::start_with(10, occurrence_registry()).await;
+    let subject_create = plan(&fixture, "records.subject.create");
+    let subject_tombstone = plan(&fixture, "records.subject.tombstone");
+    let decision_create = plan(&fixture, "records.decision.create");
+    let journal_create = plan(&fixture, "records.journal.create");
+    let journal_tombstone = plan(&fixture, "records.journal.tombstone");
+    assert!(
+        MutationPlan::from_compiled(&fixture.registry, "records.decision.tombstone").is_err(),
+        "a create-only occurrence record has no tombstone operation"
+    );
+    assert!(
+        MutationPlan::from_compiled(&fixture.registry, "records.decision.patch").is_err(),
+        "a create-only occurrence record has no patch operation"
+    );
+    let subject_claims = claims(&fixture.registry, "subject", "subject-operator", "zone-a");
+    let recorder_claims = claims(&fixture.registry, "decision", "recorder", "zone-a");
+    let journal_claims = claims(&fixture.registry, "journal", "recorder", "zone-a");
+    let mut client = fixture.pool.get_for_test().await.expect("client");
+    let subject_fields: BTreeSet<String> = ["jurisdiction", "name"]
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+    let decision_fields: BTreeSet<String> = ["jurisdiction", "subject", "corrects", "occurred-on"]
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+    let journal_fields: BTreeSet<String> = ["jurisdiction", "subject", "noted-on"]
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+    let make_subject = |name: &str| {
+        Map::from_iter([
+            (
+                "jurisdiction".to_owned(),
+                Value::String("zone-a".to_owned()),
+            ),
+            ("name".to_owned(), Value::String(name.to_owned())),
+        ])
+    };
+    let make_decision = |subject: &str, corrects: Option<&str>| {
+        let mut data = Map::from_iter([
+            (
+                "jurisdiction".to_owned(),
+                Value::String("zone-a".to_owned()),
+            ),
+            ("subject".to_owned(), Value::String(subject.to_owned())),
+            (
+                "occurredOn".to_owned(),
+                Value::String("2026-10-20".to_owned()),
+            ),
+        ]);
+        if let Some(id) = corrects {
+            data.insert("corrects".to_owned(), Value::String(id.to_owned()));
+        }
+        data
+    };
+    let make_journal = |subject: &str| {
+        Map::from_iter([
+            (
+                "jurisdiction".to_owned(),
+                Value::String("zone-a".to_owned()),
+            ),
+            ("subject".to_owned(), Value::String(subject.to_owned())),
+            ("notedOn".to_owned(), Value::String("2026-10-21".to_owned())),
+        ])
+    };
+
+    let subject = fixture
+        .mutations
+        .execute(
+            &mut client,
+            create_request(
+                &subject_create,
+                "subject-1",
+                &subject_claims,
+                make_subject("subject one"),
+                subject_fields.clone(),
+            ),
+        )
+        .await
+        .expect("subject create commits");
+    let subject_id = response_id(&subject);
+    let subject_etag = response_etag(&subject);
+
+    // A correction is a second occurrence that names the first; the first
+    // keeps its single revision and its content.
+    let original = fixture
+        .mutations
+        .execute(
+            &mut client,
+            create_request(
+                &decision_create,
+                "decision-1",
+                &recorder_claims,
+                make_decision(&subject_id, None),
+                decision_fields.clone(),
+            ),
+        )
+        .await
+        .expect("occurrence create commits");
+    let original_id = response_id(&original);
+    let correction = fixture
+        .mutations
+        .execute(
+            &mut client,
+            create_request(
+                &decision_create,
+                "decision-2",
+                &recorder_claims,
+                make_decision(&subject_id, Some(&original_id)),
+                decision_fields.clone(),
+            ),
+        )
+        .await
+        .expect("correction create commits");
+    assert_ne!(response_id(&correction), original_id);
+    assert_eq!(
+        response_json(&correction)["data"]["domainData"]["corrects"],
+        original_id
+    );
+    assert_record(&fixture, "decision", &original_id, "active", 1).await;
+
+    // A correction of a record that does not exist is refused whole.
+    let rows_before = decision_rows(&fixture).await;
+    let missing = Uuid::new_v4().to_string();
+    let refused = fixture
+        .mutations
+        .execute(
+            &mut client,
+            create_request(
+                &decision_create,
+                "decision-missing",
+                &recorder_claims,
+                make_decision(&subject_id, Some(&missing)),
+                decision_fields.clone(),
+            ),
+        )
+        .await
+        .expect_err("a correction names an existing occurrence");
+    assert!(
+        !format!("{refused:?} {refused}").contains(&missing),
+        "the refusal carries no submitted identifier"
+    );
+    assert_eq!(decision_rows(&fixture).await, rows_before);
+
+    // Occurrence references restrict tombstoning the subject. The occurrence
+    // is create-only, so the restriction cannot be released.
+    let refused = tombstone(
+        &fixture.mutations,
+        &mut client,
+        &subject_tombstone,
+        &subject_claims,
+        "subject-1-refused",
+        &subject_id,
+        &subject_etag,
+        &["jurisdiction", "name"],
+    )
+    .await
+    .expect_err("an occurrence that references the subject prevents its tombstone");
+    assert_value_free_conflict(refused, &fixture.registry, &[&subject_id, &original_id]);
+    assert_record(&fixture, "subject", &subject_id, "active", 1).await;
+
+    // A mutable record that maps an occurrence restricts the same way, and
+    // tombstoning it releases the restriction while its link stays stored.
+    let held = fixture
+        .mutations
+        .execute(
+            &mut client,
+            create_request(
+                &subject_create,
+                "subject-2",
+                &subject_claims,
+                make_subject("subject two"),
+                subject_fields.clone(),
+            ),
+        )
+        .await
+        .expect("second subject create commits");
+    let held_id = response_id(&held);
+    let held_etag = response_etag(&held);
+    let journal = fixture
+        .mutations
+        .execute(
+            &mut client,
+            create_request(
+                &journal_create,
+                "journal-1",
+                &journal_claims,
+                make_journal(&held_id),
+                journal_fields,
+            ),
+        )
+        .await
+        .expect("mutable occurrence source create commits");
+    let journal_id = response_id(&journal);
+    let journal_etag = response_etag(&journal);
+    let refused = tombstone(
+        &fixture.mutations,
+        &mut client,
+        &subject_tombstone,
+        &subject_claims,
+        "subject-2-refused",
+        &held_id,
+        &held_etag,
+        &["jurisdiction", "name"],
+    )
+    .await
+    .expect_err("an active mutable source prevents the subject tombstone");
+    assert_value_free_conflict(refused, &fixture.registry, &[&held_id, &journal_id]);
+    tombstone(
+        &fixture.mutations,
+        &mut client,
+        &journal_tombstone,
+        &journal_claims,
+        "journal-1-tombstone",
+        &journal_id,
+        &journal_etag,
+        &["jurisdiction", "subject", "noted-on"],
+    )
+    .await
+    .expect("tombstoning the mutable source releases its restriction");
+    tombstone(
+        &fixture.mutations,
+        &mut client,
+        &subject_tombstone,
+        &subject_claims,
+        "subject-2-tombstone",
+        &held_id,
+        &held_etag,
+        &["jurisdiction", "name"],
+    )
+    .await
+    .expect("the formerly referenced subject can now be tombstoned");
+    let journal_entity = &fixture.registry.entities()["journal"];
+    let retained: Uuid = fixture
+        .database
+        .admin
+        .query_one(
+            &format!(
+                "SELECT {} FROM registry_data.{} WHERE record_id = $1",
+                q(&journal_entity.fields["subject"].physical_name),
+                q(&journal_entity.physical_table)
+            ),
+            &[&Uuid::parse_str(&journal_id).expect("journal id is a UUID")],
+        )
+        .await
+        .expect("administrator reads the retained reference")
+        .get(0);
+    assert_eq!(retained.to_string(), held_id);
+    assert!(
+        fixture
+            .database
+            .admin
+            .execute(
+                &format!(
+                    "DELETE FROM registry_data.{} WHERE record_id = $1",
+                    q(&fixture.registry.entities()["subject"].physical_table)
+                ),
+                &[&Uuid::parse_str(&held_id).expect("subject id is a UUID")],
+            )
+            .await
+            .is_err(),
+        "the raw FK preserves the tombstoned source's retained UUID"
+    );
+    fixture.database.cleanup().await;
+}
+
+async fn decision_rows(fixture: &Fixture) -> i64 {
+    fixture
+        .database
+        .admin
+        .query_one(
+            &format!(
+                "SELECT count(*) FROM registry_data.{}",
+                q(&fixture.registry.entities()["decision"].physical_table)
+            ),
+            &[],
+        )
+        .await
+        .expect("administrator counts occurrence rows")
+        .get(0)
+}
+
+fn occurrence_registry() -> registry_breg::CompiledRegistry {
+    let project = parse_project_json(
+        br#"{
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"reference-integrity-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "datasets":[{"id":"records"}],
+          "recordTypes":[{
+            "id":"subject","primaryDataset":"records","route":"subjects","mutationMode":"mutable","tombstone":true,"classification":"internal",
+            "fields":[
+              {"id":"jurisdiction","type":"string","maximumLength":32,"required":true,"classification":"internal"},
+              {"id":"name","type":"string","maximumLength":64,"required":true,"classification":"internal"}
+            ]
+          },{
+            "id":"decision","primaryDataset":"records","route":"decisions","mutationMode":"create-only","classification":"internal",
+            "fields":[
+              {"id":"jurisdiction","type":"string","maximumLength":32,"required":true,"classification":"internal"},
+              {"id":"subject","type":"reference","target":"subject","onDelete":"restrict","required":true,"classification":"internal"},
+              {"id":"corrects","type":"reference","target":"decision","onDelete":"restrict","classification":"internal"},
+              {"id":"occurred-on","type":"date","required":true,"classification":"internal"}
+            ],
+            "occurrence":{
+              "label":"Decision made",
+              "subjects":[{"role":"subject","field":"subject","label":"Subject","target":"subject"}],
+              "occurredAt":{"at":"occurred-on"},
+              "correction":{"field":"corrects","relation":"corrects"}
+            }
+          },{
+            "id":"journal","primaryDataset":"records","route":"journals","mutationMode":"mutable","tombstone":true,"classification":"internal",
+            "fields":[
+              {"id":"jurisdiction","type":"string","maximumLength":32,"required":true,"classification":"internal"},
+              {"id":"subject","type":"reference","target":"subject","onDelete":"restrict","required":true,"classification":"internal"},
+              {"id":"noted-on","type":"date","required":true,"classification":"internal"}
+            ],
+            "occurrence":{
+              "label":"Note made",
+              "subjects":[{"role":"subject","field":"subject","label":"Subject","target":"subject"}],
+              "occurredAt":{"at":"noted-on"}
+            }
+          }],
+          "accessProfiles":[{
+            "id":"subject-operator","default":true,"principalClaim":"principal","requiredScopes":"unrestricted","requiredPurposes":["operations"],
+            "permissions":{"records":[{
+              "recordType":"subject","operations":["create","get","patch","tombstone"],
+              "readableFields":["jurisdiction","name"],"writableFields":["jurisdiction","name"],
+              "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
+            }]}
+          },{
+            "id":"recorder","principalClaim":"principal","requiredScopes":"unrestricted","requiredPurposes":["operations"],
+            "permissions":{"records":[{
+              "recordType":"decision","operations":["create","get"],
+              "readableFields":["jurisdiction","subject","corrects","occurred-on"],
+              "writableFields":["jurisdiction","subject","corrects","occurred-on"],
+              "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
+            },{
+              "recordType":"journal","operations":["create","get","patch","tombstone"],
+              "readableFields":["jurisdiction","subject","noted-on"],
+              "writableFields":["jurisdiction","subject","noted-on"],
+              "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
+            }]}
+          }]
+        }"#,
+    )
+    .expect("occurrence reference fixture parses");
+    compile_project(&project, &[], CompileProfile::Authoring)
+        .expect("occurrence reference fixture compiles")
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
