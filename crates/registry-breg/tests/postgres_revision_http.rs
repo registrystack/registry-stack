@@ -408,6 +408,132 @@ async fn real_postgres_revision_http_lists_internal_migration_revisions() {
     database.cleanup().await;
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn occurrence_history_is_caller_bounded() {
+    let database = TestDatabase::create(4).await;
+    let (migration, migration_task) = database.connect_migration().await;
+    let registry = Arc::new(occurrence_registry());
+    install_compiled_schema(&migration, &registry, &database.runtime_role)
+        .await
+        .expect("migration installs the complete compiled PostgreSQL schema");
+    let catalog = ExpectedManagedCatalog::compiled(&registry);
+    let identity = initialize_registry_state_for_catalog_test(
+        &migration,
+        &database.runtime_role,
+        &catalog,
+        RegistryStateTestIdentity {
+            package_id: PACKAGE_ID,
+            database_id: DATABASE_ID,
+            label: PACKAGE_REVISION,
+        },
+    )
+    .await
+    .expect("migration initializes durable Registry identity");
+    retain_history_descriptor(&migration, &registry).await;
+    let holder = "00000000-0000-4000-8000-0000000000a1";
+    for (record_id, jurisdiction) in [(RECORD_ID, "zone-a"), (HIDDEN_RECORD_ID, "zone-b")] {
+        insert_revision(
+            &migration,
+            record_id,
+            1,
+            None,
+            "active",
+            "create",
+            json!({
+                "jurisdiction": jurisdiction,
+                "label": "occurrence",
+                "holder": holder,
+                "occurred-on": "2026-10-20",
+                "secret": SECRET_CANARY,
+            }),
+        )
+        .await;
+    }
+    migration_task.abort();
+
+    let pool = database
+        .runtime_config
+        .build_pool()
+        .expect("bounded runtime pool builds");
+    let lock_key = RegistryLockKey::derive(PACKAGE_ID).expect("lock identity is bounded");
+    let audit = database.audit(
+        AuditProfile::production_from_secret_bytes(vec![0x5d; 32].into())
+            .expect("test owns a strongly keyed audit profile"),
+    );
+    let app = revision_router(pool, Arc::clone(&registry), identity, lock_key, audit, None);
+
+    // The creation revision is the occurrence evidence, bounded to the fields
+    // the profile may read.
+    let list = send(
+        &app,
+        &format!("/v1/records/widgets/{RECORD_ID}/revisions"),
+        Some(history_claims("case-review", ["zone-a"])),
+    )
+    .await;
+    assert_eq!(list.status(), StatusCode::OK);
+    let list_bytes = body_bytes(list).await;
+    let list = json_from_bytes(&list_bytes);
+    let items = list["items"].as_array().expect("list returns items");
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["revisionIdentifier"], "1");
+    assert_eq!(items[0]["mutationKind"], "create");
+    assert_eq!(items[0]["operationIdentifier"], "records.widget.create");
+    assert_eq!(
+        items[0]["domainData"],
+        json!({"holder": holder, "label": "occurrence", "occurredOn": "2026-10-20"})
+    );
+    assert!(
+        !String::from_utf8(list_bytes)
+            .expect("response is UTF-8")
+            .contains(SECRET_CANARY),
+        "a field outside the profile never reaches the revision list"
+    );
+
+    // A profile without revision access gets no history, whatever the descriptor.
+    let unavailable = send(
+        &app,
+        &format!("/v1/records/widgets/{RECORD_ID}/revisions?accessProfile=reader"),
+        Some(history_claims("case-review", ["zone-a"])),
+    )
+    .await;
+    let unavailable_status = unavailable.status();
+    let unavailable_bytes = body_bytes(unavailable).await;
+    assert_eq!(
+        unavailable_status,
+        StatusCode::NOT_FOUND,
+        "history without revision access is unavailable"
+    );
+    assert!(!String::from_utf8(unavailable_bytes)
+        .expect("response is UTF-8")
+        .contains(SECRET_CANARY));
+
+    // A record outside the caller's row authority is concealed exactly like
+    // an absent record.
+    let concealed = send(
+        &app,
+        &format!("/v1/records/widgets/{HIDDEN_RECORD_ID}/revisions"),
+        Some(history_claims("case-review", ["zone-a"])),
+    )
+    .await;
+    let absent = send(
+        &app,
+        "/v1/records/widgets/00000000-0000-4000-8000-0000000000ff/revisions",
+        Some(history_claims("case-review", ["zone-a"])),
+    )
+    .await;
+    assert_eq!(concealed.status(), absent.status());
+    let concealed_bytes = body_bytes(concealed).await;
+    let absent_bytes = body_bytes(absent).await;
+    assert!(!String::from_utf8(concealed_bytes.clone())
+        .expect("response is UTF-8")
+        .contains(SECRET_CANARY));
+    assert_eq!(
+        json_from_bytes(&concealed_bytes)["code"],
+        json_from_bytes(&absent_bytes)["code"]
+    );
+    database.cleanup().await;
+}
+
 #[allow(clippy::too_many_arguments)]
 fn revision_router(
     pool: registry_breg::postgres::RuntimePool,
@@ -879,4 +1005,58 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
     .expect("revision HTTP fixture parses");
     compile_project(&project, &[], CompileProfile::Authoring)
         .expect("revision HTTP fixture compiles")
+}
+
+fn occurrence_registry() -> registry_breg::CompiledRegistry {
+    let project = parse_project_json(
+        br#"{"datasets":[{"id": "test-dataset"}],
+          "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+          "kind":"BRegProject",
+          "project":{"id":"revision-http-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "recordTypes":[{
+            "id":"holder","primaryDataset":"test-dataset","route":"holders","mutationMode":"mutable",
+            "classification":"restricted",
+            "fields":[
+              {"id":"name","type":"string","required":true,"maximumLength":32,"classification":"internal"}
+            ]
+          },{
+            "id":"widget","primaryDataset":"test-dataset","route":"widgets","mutationMode":"mutable","tombstone":true,
+            "classification":"restricted",
+            "fields":[
+              {"id":"jurisdiction","type":"string","required":true,"maximumLength":32,"classification":"internal"},
+              {"id":"label","type":"string","required":true,"maximumLength":100,"classification":"internal"},
+              {"id":"holder","type":"reference","target":"holder","required":true,"classification":"internal"},
+              {"id":"occurred-on","type":"date","required":true,"classification":"internal"},
+              {"id":"secret","type":"string","required":true,"maximumLength":100,"classification":"restricted"}
+            ],
+            "occurrence":{
+              "label":"Occurrence",
+              "subjects":[{"role":"holder","field":"holder","label":"Holder","target":"holder"}],
+              "occurredAt":{"at":"occurred-on"}
+            }
+          }],
+          "accessProfiles":[{
+            "id":"operator","default":true,"principalClaim":"registry_principal",
+            "requiredScopes":["history.read"],"requiredPurposes":["case-review"],
+            "permissions":{"records":[{
+              "recordType":"widget",
+              "operations":["get","revisions"],"revisionAccess":true,
+              "readableFields":["label","holder","occurred-on"],
+              "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdictions","operator":"in"}]
+            }]}
+          },{
+            "id":"reader","principalClaim":"registry_principal",
+            "requiredScopes":["history.read"],"requiredPurposes":["case-review"],
+            "permissions":{"records":[{
+              "recordType":"widget",
+              "operations":["get"],
+              "readableFields":["label","holder","occurred-on"],
+              "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdictions","operator":"in"}]
+            }]}
+          }]
+        }"#,
+    )
+    .expect("occurrence history fixture parses");
+    compile_project(&project, &[], CompileProfile::Authoring)
+        .expect("occurrence history fixture compiles")
 }
