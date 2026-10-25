@@ -21,9 +21,9 @@ use registry_breg::api::VerifiedRequestClaims;
 use registry_breg::compiler::{compile_project, CompileProfile};
 use registry_breg::contract::parse_project_yaml;
 use registry_breg_client::{
-    occurrence_view, BRegCreateRequest, BRegDirectWrite, BRegIdempotencyKey, BRegMetadata,
-    BRegOccurrenceDescriptor, BRegOccurrenceError, BRegOccurrenceEvidence, BRegRecordFormat,
-    BRegRecordOptions, BaseRegistryClient,
+    occurrence_view, BRegActionInvocationRequest, BRegCreateRequest, BRegDirectWrite,
+    BRegIdempotencyKey, BRegMetadata, BRegOccurrenceDescriptor, BRegOccurrenceError,
+    BRegOccurrenceEvidence, BRegRecordFormat, BRegRecordOptions, BaseRegistryClient,
 };
 use serde_json::{json, Value};
 
@@ -73,14 +73,10 @@ const PERMITTED: &[(&str, &[&str])] = &[
     ),
 ];
 
-/// The shared shapes fixture with record permissions in place of its Action
-/// permissions, so the reader can create and read every record type.
-fn registry() -> registry_breg::CompiledRegistry {
-    let record_types = SHAPES
-        .split("\nactions:\n")
-        .next()
-        .expect("shapes fixture declares record types before its actions");
-    let permissions: String = PERMITTED
+/// The reader's record permissions: it can create, read and list the
+/// revisions of every record type.
+fn record_permissions() -> String {
+    PERMITTED
         .iter()
         .map(|(record_type, fields)| {
             let fields = fields.join(", ");
@@ -90,14 +86,42 @@ fn registry() -> registry_breg::CompiledRegistry {
                  rowBoundaries: unrestricted}}\n"
             )
         })
-        .collect();
+        .collect()
+}
+
+fn compile_reader(declarations: &str, other_permissions: &str) -> registry_breg::CompiledRegistry {
     let project = format!(
-        "{record_types}\naccessProfiles:\n  - id: reader\n    default: true\n    \
+        "{declarations}\naccessProfiles:\n  - id: reader\n    default: true\n    \
          principalClaim: registry_principal\n    requiredScopes: unrestricted\n    \
-         permissions:\n      records:\n{permissions}"
+         permissions:\n{other_permissions}      records:\n{}",
+        record_permissions()
     );
     let project = parse_project_yaml(project.as_bytes()).expect("reader registry parses");
     compile_project(&project, &[], CompileProfile::Authoring).expect("reader registry compiles")
+}
+
+/// The shared shapes fixture with record permissions in place of its Action
+/// permissions, so the reader can create and read every record type.
+fn registry() -> registry_breg::CompiledRegistry {
+    let record_types = SHAPES
+        .split("\nactions:\n")
+        .next()
+        .expect("shapes fixture declares record types before its actions");
+    compile_reader(record_types, "")
+}
+
+/// The shared shapes fixture with its Actions, and a reader that may also use
+/// them. Every Action needs an explicit permission to compile, so the reader
+/// takes the fixture's own Action and Proposal permissions.
+fn registry_with_actions() -> registry_breg::CompiledRegistry {
+    let (declarations, profile) = SHAPES
+        .split_once("\naccessProfiles:\n")
+        .expect("shapes fixture declares Actions before its profiles");
+    let permissions = profile
+        .split_once("    permissions:\n")
+        .expect("shapes fixture profile declares permissions")
+        .1;
+    compile_reader(declarations, permissions)
 }
 
 fn claims() -> VerifiedRequestClaims {
@@ -447,5 +471,110 @@ async fn one_reader_projects_three_schemas() {
     .expect("the view projects without creation evidence");
     let view = serde_json::to_value(view).expect("view serializes");
     assert_eq!(view["recordedAt"], json!({"status": "unavailable"}));
+    fixture.finish().await;
+}
+
+/// A record written by an immediate Action is read by the same client
+/// reader as a directly created one: its creation revision is revision 1, and
+/// the Action receipt that produced it is provenance of the projected view.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_action_created_record_has_a_readable_creation_revision() {
+    let fixture = client_http::ClientFixture::start(registry_with_actions(), claims()).await;
+    let client = &fixture.http.client;
+    let contract = client
+        .registry_contract(Some("reader"))
+        .await
+        .expect("metadata is served and parses")
+        .value;
+    let mut journey = Journey {
+        client,
+        contract: &contract,
+        sequence: 0,
+    };
+    let grant = journey
+        .create("grant", json!({"grantNumber": "G-1", "status": "active"}))
+        .await;
+
+    let binding = contract
+        .select_action("record-grant-pause", "reader")
+        .expect("the profile may invoke the Action");
+    let inputs = json!({
+        "grantId": grant,
+        "decidedOn": "2020-03-01",
+        "effectiveFrom": "2020-04-01",
+    });
+    let invocation = BRegActionInvocationRequest::new(
+        &binding,
+        inputs.as_object().expect("inputs are an object").clone(),
+        None,
+    )
+    .expect("invocation is bounded");
+    let key = BRegIdempotencyKey::parse("reader-action-1").expect("idempotency key");
+    let receipt = client
+        .invoke_action(&binding, &invocation, &key)
+        .await
+        .expect("the Action records the decision")
+        .value;
+    let decision = receipt
+        .results()
+        .get("decision")
+        .expect("the receipt names the decision result")
+        .record_identifier()
+        .to_string();
+
+    let creation = client
+        .occurrence_creation_revision("grant-pause-decisions", &decision, None)
+        .await
+        .expect("creation revision read")
+        .expect("the profile may read the creation revision of an Action-created record");
+    assert_eq!(creation.record_identifier(), decision);
+    assert!(
+        !creation.created_at().starts_with("2020"),
+        "the recording instant is the system clock, not the decision date: {}",
+        creation.created_at()
+    );
+
+    let descriptor = contract
+        .occurrence("grant-pause-decision")
+        .expect("served descriptor");
+    let record = client
+        .get_record(
+            "grant-pause-decisions",
+            &decision,
+            &BRegRecordOptions::default(),
+        )
+        .await
+        .expect("record read")
+        .value
+        .data;
+    let view = occurrence_view(
+        contract.registry_revision(),
+        "grant-pause-decision",
+        &descriptor,
+        &record,
+        &BRegOccurrenceEvidence {
+            creation_revision: Some(&creation),
+            action_receipts: &[(&receipt, "decision")],
+            ..Default::default()
+        },
+    )
+    .expect("the view projects");
+    let view = serde_json::to_value(view).expect("view serializes");
+
+    assert_eq!(view["source"]["recordId"], json!(decision));
+    assert_eq!(view["source"]["revision"], json!("1"));
+    assert_eq!(view["recordedAt"]["status"], json!("available"));
+    assert_eq!(view["recordedAt"]["type"], json!("instant"));
+    assert_eq!(view["recordedAtSource"], json!("creation-revision"));
+    assert_eq!(
+        view["provenance"],
+        json!([{
+            "kind": "action-receipt",
+            "action": "record-grant-pause",
+            "applicationId": receipt.application_identifier().to_string(),
+            "effect": "decision",
+        }])
+    );
+    assert_eq!(view["ignoredEvidence"], json!([]));
     fixture.finish().await;
 }
