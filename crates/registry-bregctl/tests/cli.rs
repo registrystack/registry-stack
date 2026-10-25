@@ -105,6 +105,78 @@ fn duplicate_profile_display_warns_once_and_deny_warnings_refuses_it() {
     ]);
     assert_eq!(denied.status.code(), Some(1));
     assert_eq!(json_stdout(&denied)["diagnostics"], report["diagnostics"]);
+
+    fs::write(
+        project.path().join("check-acceptances.yaml"),
+        r#"apiVersion: id.registrystack.org/formats/platform/check-acceptances/v1alpha1
+kind: PlatformCheckAcceptances
+acceptances:
+  - code: breg.access-profile.duplicate-label
+    scope:
+      file: registry.yaml
+      path: /accessProfiles/@id=directory-observer/display/label
+    reason: These profiles intentionally share a label in this reviewed project.
+"#,
+    )
+    .unwrap();
+    let accepted = bregctl(&[
+        "--format",
+        "json",
+        "check",
+        path(project.path()),
+        "--deny-warnings",
+    ]);
+    assert!(accepted.status.success(), "{accepted:?}");
+    let accepted_report = json_stdout(&accepted);
+    assert_eq!(accepted_report["diagnostics"].as_array().unwrap().len(), 1);
+    let accepted_warning = &accepted_report["diagnostics"][0];
+    assert_eq!(accepted_warning["severity"], "warning");
+    assert_eq!(
+        accepted_warning["scope"],
+        json!({
+            "file": "registry.yaml",
+            "path": "/accessProfiles/@id=directory-observer/display/label"
+        })
+    );
+    assert_eq!(
+        accepted_warning["acceptedReason"],
+        "These profiles intentionally share a label in this reviewed project."
+    );
+    assert_eq!(accepted_warning["rank"], "hygiene");
+
+    let explained = bregctl(&[
+        "--format",
+        "json",
+        "explain",
+        "access",
+        path(project.path()),
+    ]);
+    assert!(explained.status.success(), "{explained:?}");
+    let explained_report = json_stdout(&explained);
+    let explained_warning = explained_report["findings"]
+        .as_array()
+        .and_then(|findings| {
+            findings
+                .iter()
+                .find(|finding| finding["code"] == "breg.access-profile.duplicate-label")
+        })
+        .unwrap_or_else(|| panic!("accepted warning remains visible: {explained_report}"));
+    assert_eq!(
+        explained_warning["acceptedReason"],
+        "These profiles intentionally share a label in this reviewed project."
+    );
+    assert_eq!(
+        explained_warning["scope"],
+        json!({
+            "file": "registry.yaml",
+            "path": "/accessProfiles/@id=directory-observer/display/label"
+        })
+    );
+
+    let accepted_human = bregctl(&["check", path(project.path()), "--deny-warnings"]);
+    assert!(accepted_human.status.success(), "{accepted_human:?}");
+    assert!(String::from_utf8_lossy(&accepted_human.stdout)
+        .ends_with("0 errors, 0 warnings, 1 accepted warning in 2 files\n"));
 }
 
 #[test]
@@ -2159,7 +2231,7 @@ fn facility_starter_checks_clean_with_warnings_denied() {
     ]);
     assert!(initialized.status.success(), "{initialized:?}");
 
-    let registry = registry_platform_yaml::Reader::new("registry.yaml")
+    let mut registry = registry_platform_yaml::Reader::new("registry.yaml")
         .scan(&fs::read(destination.join("registry.yaml")).unwrap())
         .unwrap()
         .unwrap()
@@ -2199,6 +2271,75 @@ fn facility_starter_checks_clean_with_warnings_denied() {
         .as_array()
         .unwrap()
         .is_empty());
+
+    let registrar = registry["accessProfiles"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|profile| profile["id"] == "facility-registrar")
+        .unwrap();
+    let facility_target = registrar["permissions"]["actions"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|permission| permission["action"] == "register-facility")
+        .unwrap()["targets"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|target| target["recordType"] == "facility")
+        .unwrap();
+    facility_target["rowBoundaries"] = json!("unrestricted");
+    fs::write(
+        destination.join("registry.yaml"),
+        serde_norway::to_string(&registry).unwrap(),
+    )
+    .unwrap();
+
+    let refused = bregctl(&[
+        "--format",
+        "json",
+        "check",
+        path(&destination),
+        "--deny-warnings",
+    ]);
+    assert_eq!(refused.status.code(), Some(1), "{refused:?}");
+    let refused_report = json_stdout(&refused);
+    let findings = refused_report["diagnostics"].as_array().unwrap();
+    assert_eq!(findings.len(), 1, "{refused_report}");
+    let warning = &findings[0];
+    assert_eq!(warning["code"], "breg.access.target-unrestricted-rows");
+    assert_eq!(warning["severity"], "warning");
+    assert_eq!(warning["rank"], "widens-access");
+
+    fs::write(
+        destination.join("check-acceptances.yaml"),
+        serde_json::to_vec_pretty(&json!({
+            "apiVersion": registry_platform_yaml::CHECK_ACCEPTANCES_API_VERSION,
+            "kind": registry_platform_yaml::CHECK_ACCEPTANCES_KIND,
+            "acceptances": [{
+                "code": warning["code"],
+                "scope": warning["scope"],
+                "reason": "The facility registrar intentionally has registry-wide create authority."
+            }]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let accepted = bregctl(&[
+        "--format",
+        "json",
+        "check",
+        path(&destination),
+        "--deny-warnings",
+    ]);
+    assert!(accepted.status.success(), "{accepted:?}");
+    let accepted_report = json_stdout(&accepted);
+    assert_eq!(accepted_report["diagnostics"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        accepted_report["diagnostics"][0]["acceptedReason"],
+        "The facility registrar intentionally has registry-wide create authority."
+    );
 }
 
 #[test]
@@ -3320,6 +3461,73 @@ fn check_says_so_when_an_expression_stops_it() {
 
         assert_eq!(check(true).status.code(), Some(1), "{pointer}");
     }
+}
+
+#[test]
+fn project_acceptance_applies_after_the_runtime_warning_is_collected() {
+    let scratch = TestProject::asset_fixture();
+    let project = scratch.path().join("runtime-warning-project");
+    let initialized = bregctl(&["init", path(&project)]);
+    assert!(initialized.status.success(), "{initialized:?}");
+    let runtime = project.join("runtime.example.yaml");
+    let source = fs::read_to_string(&runtime).unwrap();
+    let edited = source.replacen(
+        "allowedAlgorithm: EdDSA",
+        "allowedAlgorithm: ${BREG_CHECK_TEST_ALGORITHM}",
+        1,
+    );
+    assert_ne!(edited, source);
+    fs::write(&runtime, edited).unwrap();
+
+    let arguments = [
+        "--format",
+        "json",
+        "check",
+        path(&project),
+        "--runtime-config",
+        path(&runtime),
+    ];
+    let warned = bregctl(&arguments);
+    assert!(warned.status.success(), "{warned:?}");
+    let report = json_stdout(&warned);
+    let warning = report["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|diagnostic| diagnostic["code"] == "platform.runtime-config.check-incomplete")
+        .unwrap_or_else(|| panic!("the runtime warning is reported: {report}"));
+    assert_eq!(
+        warning["scope"],
+        json!({
+            "file": "runtime.example.yaml",
+            "path": "/authentication/oidc/allowedAlgorithm"
+        })
+    );
+
+    fs::write(
+        project.join("check-acceptances.yaml"),
+        serde_json::to_vec_pretty(&json!({
+            "apiVersion": registry_platform_yaml::CHECK_ACCEPTANCES_API_VERSION,
+            "kind": registry_platform_yaml::CHECK_ACCEPTANCES_KIND,
+            "acceptances": [{
+                "code": warning["code"],
+                "scope": warning["scope"],
+                "reason": "This deployment supplies the reviewed algorithm through its environment."
+            }]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let mut strict_arguments = arguments.to_vec();
+    strict_arguments.push("--deny-warnings");
+    let accepted = bregctl(&strict_arguments);
+    assert!(accepted.status.success(), "{accepted:?}");
+    let report = json_stdout(&accepted);
+    assert_eq!(report["diagnostics"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        report["diagnostics"][0]["acceptedReason"],
+        "This deployment supplies the reviewed algorithm through its environment."
+    );
 }
 
 /// One numbered step, read back out of the rendering: the ordinal line and the

@@ -515,12 +515,20 @@
       "description": "Registry Manifest metadata manifest and profile descriptor JSON Schema."
     },
     {
-      "glob": "products/platform/schemas/*.schema.json",
+      "glob": "products/platform/schemas/task-connection.schema.json",
       "sourcePath": "crates/registry-thunderid-tooling/src/schema.rs",
       "owner": "platform",
       "status": "active",
       "compatibilityLine": "v1alpha1",
       "description": "Registry Stack task connection JSON Schema."
+    },
+    {
+      "glob": "products/platform/schemas/check-acceptances.schema.json",
+      "sourcePath": "crates/registry-platform-yaml/src/check_acceptances.rs",
+      "owner": "platform",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "description": "Registry Stack project check acceptances JSON Schema."
     },
     {
       "glob": "products/evidence/generated/oid4vci-runtime/*.schema.json",

@@ -396,6 +396,7 @@ fn check(
         );
         report.extend(findings);
         exit_code = exit_code.max(project_exit);
+        registry_platform_config::apply_check_acceptances(path, &mut report);
     }
     if report.has_errors() || (deny_warnings && report.warning_count() > 0) {
         return Err(CoordinatorError::from_report(report).with_exit(exit_code));

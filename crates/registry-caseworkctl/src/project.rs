@@ -300,6 +300,53 @@ pub(crate) fn load_and_check_policy(project: &Path) -> Result<CaseworkProject> {
     Ok(CaseworkProject::load(project.join("casework.yaml"))?)
 }
 pub(super) fn check(project: &Path, production: bool, deny_warnings: bool) -> Result<Value> {
+    check_impl(project, production, deny_warnings)
+}
+
+pub(super) fn check_with_acceptances(
+    project: &Path,
+    production: bool,
+    deny_warnings: bool,
+) -> Result<Value> {
+    finish_check_with_acceptances(project, deny_warnings, check(project, production, false))
+}
+
+fn finish_check_with_acceptances(
+    project: &Path,
+    deny_warnings: bool,
+    checked: Result<Value>,
+) -> Result<Value> {
+    let (mut report, mut checked) = match checked {
+        Ok(checked) => {
+            let mut report = Report::new(serde_json::from_value(checked["diagnostics"].clone())?);
+            if let Some(files) = checked["filesChecked"]
+                .as_u64()
+                .and_then(|files| usize::try_from(files).ok())
+            {
+                report.set_files_checked(files);
+            }
+            (report, Some(checked))
+        }
+        Err(error) => match crate::configuration_report(&error) {
+            Some(report) => (report.clone(), None),
+            None => return Err(error),
+        },
+    };
+    registry_platform_config::apply_check_acceptances(project, &mut report);
+    if report.has_errors() || (deny_warnings && report.warning_count() > 0) {
+        return Err(report.into());
+    }
+    let mut checked = checked
+        .take()
+        .expect("an error-free project has a check report");
+    checked["diagnostics"] = report.to_json_value();
+    if let Some(files) = report.files_checked() {
+        checked["filesChecked"] = json!(files);
+    }
+    Ok(checked)
+}
+
+fn check_impl(project: &Path, production: bool, deny_warnings: bool) -> Result<Value> {
     let decoded = read_project(project)?;
     let policy = decoded.value;
     let mut diagnostics = decoded.document.warnings();
@@ -942,17 +989,42 @@ pub(super) fn check_runtime_config(
     project: &Path,
     path: &Path,
     environment: bool,
+    deny_warnings: bool,
     checked: Result<Value>,
 ) -> Result<Value> {
     let policy = load_and_check_policy(project).ok();
     let absolute = std::path::absolute(path)?;
-    let report = registry_casework::check_runtime(&absolute, policy.as_ref(), environment);
-    let report = Report::new(report.diagnostics);
-    if report.has_errors() {
-        return Err(report.into());
+    let runtime = registry_casework::check_runtime(&absolute, policy.as_ref(), environment);
+    let runtime = Report::new(runtime.diagnostics);
+    let (mut combined, mut checked) = match checked {
+        Ok(checked) => {
+            let mut report = Report::new(serde_json::from_value(checked["diagnostics"].clone())?);
+            if let Some(files) = checked["filesChecked"]
+                .as_u64()
+                .and_then(|files| usize::try_from(files).ok())
+            {
+                report.set_files_checked(files);
+            }
+            (report, Some(checked))
+        }
+        Err(error) => match crate::configuration_report(&error) {
+            Some(report) => (report.clone(), None),
+            None => return Err(error),
+        },
+    };
+    combined.extend(runtime);
+    registry_platform_config::apply_check_acceptances(project, &mut combined);
+    if combined.has_errors() || (deny_warnings && combined.warning_count() > 0) {
+        return Err(combined.into());
     }
-    let mut checked = checked?;
+    let mut checked = checked
+        .take()
+        .expect("an error-free project has a check report");
     checked["runtimeConfig"] = json!(path);
+    checked["diagnostics"] = combined.to_json_value();
+    if let Some(files) = combined.files_checked() {
+        checked["filesChecked"] = json!(files);
+    }
     Ok(checked)
 }
 pub(super) fn doctor(path: &Path) -> Result<Value> {
@@ -1008,7 +1080,8 @@ mod display_integrity_tests {
         );
         fs::write(&path, authored).unwrap();
 
-        let report = check(&project, false, false).expect("warnings do not normally refuse check");
+        let report = check_with_acceptances(&project, false, false)
+            .expect("warnings do not normally refuse check");
         let warning = report["diagnostics"]
             .as_array()
             .unwrap()
@@ -1019,14 +1092,75 @@ mod display_integrity_tests {
             warning["path"],
             "/reviewPolicies/decision/outcomes/rejected/label"
         );
+        let files_without_acceptances = report["filesChecked"].as_u64().unwrap();
 
-        let error = check(&project, false, true).expect_err("--deny-warnings refuses the warning");
+        let error = check_with_acceptances(&project, false, true)
+            .expect_err("--deny-warnings refuses the warning");
         let report = crate::configuration_report(&error).expect("a structured warning report");
         assert_eq!(report.error_count(), 0);
         assert_eq!(report.warning_count(), 1);
         assert_eq!(
             report.diagnostics()[0].code,
             "casework.review-policy.duplicate-outcome-label"
+        );
+
+        let scope = warning["scope"]
+            .as_object()
+            .expect("a stable warning scope");
+        fs::write(
+            project.join("check-acceptances.yaml"),
+            format!(
+                "apiVersion: id.registrystack.org/formats/platform/check-acceptances/v1alpha1\nkind: PlatformCheckAcceptances\nacceptances:\n  - code: casework.review-policy.duplicate-outcome-label\n    scope:\n      file: {}\n      path: {}\n    reason: The two outcomes are deliberately phrased alike for this pilot.\n",
+                scope["file"].as_str().unwrap(),
+                scope["path"].as_str().unwrap(),
+            ),
+        )
+        .unwrap();
+        let accepted = check_with_acceptances(&project, false, true)
+            .expect("an accepted warning does not make --deny-warnings fail");
+        assert_eq!(
+            accepted["filesChecked"],
+            files_without_acceptances + 1,
+            "the present acceptance file is counted once"
+        );
+        let warning = accepted["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["code"] == "casework.review-policy.duplicate-outcome-label")
+            .unwrap();
+        assert_eq!(
+            warning["acceptedReason"],
+            "The two outcomes are deliberately phrased alike for this pilot."
+        );
+        let mut human = Vec::new();
+        crate::render_human(&accepted, &mut human).unwrap();
+        assert!(
+            String::from_utf8(human)
+                .unwrap()
+                .contains(&format!("in {} files", files_without_acceptances + 1)),
+            "the human summary uses the JSON filesChecked count"
+        );
+
+        let mut diagnostics =
+            serde_json::from_value::<Vec<Diagnostic>>(accepted["diagnostics"].clone()).unwrap();
+        diagnostics[0].accepted_reason = None;
+        let mut refused = Report::new(diagnostics);
+        refused.push(Diagnostic::error(
+            "casework.project.invalid",
+            "/project",
+            "the project has an unrelated error",
+            "Correct the project.",
+        ));
+        let error = finish_check_with_acceptances(&project, true, Err(refused.into()))
+            .expect_err("the unrelated error still refuses the check");
+        let report = crate::configuration_report(&error).unwrap();
+        assert_eq!(report.error_count(), 1);
+        assert_eq!(report.warning_count(), 0);
+        assert_eq!(report.accepted_warning_count(), 1);
+        assert_eq!(
+            report.diagnostics()[0].accepted_reason.as_deref(),
+            Some("The two outcomes are deliberately phrased alike for this pilot.")
         );
     }
 

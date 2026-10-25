@@ -30,3 +30,7 @@ url.workspace = true
 jsonschema.workspace = true
 regex.workspace = true
 schemars.workspace = true
+
+[[example]]
+name = "check-acceptances-schema"
+required-features = ["schema"]

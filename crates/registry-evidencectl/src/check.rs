@@ -39,7 +39,22 @@ pub(crate) fn check(
             .into());
         }
     }
-    let mut checked = crate::normalized::inspect(project, target, "check")?;
+    let mut checked = match crate::normalized::inspect(project, target, "check") {
+        Ok(checked) => checked,
+        Err(error) => {
+            let Some(report) = error.downcast_ref::<Report>() else {
+                return Err(error);
+            };
+            let mut report = report.clone();
+            registry_platform_config::apply_check_acceptances(project, &mut report);
+            return Err(report.into());
+        }
+    };
+    registry_platform_config::apply_check_acceptances(project, &mut checked.diagnostics);
+    checked.report["diagnostics"] = checked.diagnostics.to_json_value();
+    if checked.diagnostics.has_errors() {
+        return Err(checked.diagnostics.into());
+    }
     if let Some(path) = target {
         let bytes = crate::authored::read_authored_file(path, "EvidenceTarget")?;
         let target_model =
@@ -266,6 +281,69 @@ mod tests {
             report.diagnostics()[0].source.as_ref().unwrap().file,
             project_file.to_string_lossy()
         );
+
+        fs::write(
+            temporary.path().join("check-acceptances.yaml"),
+            r#"apiVersion: id.registrystack.org/formats/platform/check-acceptances/v1alpha1
+kind: PlatformCheckAcceptances
+acceptances:
+  - code: evidence.project.duplicate-source-label
+    scope:
+      file: evidence.yaml
+      path: /sources/person-record/label
+    reason: These source labels are intentionally aligned for this reviewed project.
+"#,
+        )
+        .unwrap();
+        let accepted = check(temporary.path(), None, false, true)
+            .expect("an accepted warning does not fail --deny-warnings");
+        assert_eq!(accepted.diagnostics.error_count(), 0);
+        assert_eq!(accepted.diagnostics.warning_count(), 0);
+        assert_eq!(accepted.diagnostics.accepted_warning_count(), 1);
+        assert_eq!(accepted.diagnostics.diagnostics().len(), 1);
+        let warning = &accepted.diagnostics.diagnostics()[0];
+        assert_eq!(warning.severity, registry_platform_yaml::Severity::Warning);
+        assert_eq!(
+            warning.scope.as_ref(),
+            Some(&registry_platform_yaml::CheckScope {
+                file: "evidence.yaml".to_owned(),
+                path: "/sources/person-record/label".to_owned(),
+            })
+        );
+        assert_eq!(
+            warning.accepted_reason.as_deref(),
+            Some("These source labels are intentionally aligned for this reviewed project.")
+        );
+        assert_eq!(
+            accepted.report["diagnostics"][0]["acceptedReason"],
+            "These source labels are intentionally aligned for this reviewed project."
+        );
+    }
+
+    #[test]
+    fn malformed_check_acceptances_refuse_the_evidence_project() {
+        let temporary = tempfile::tempdir().unwrap();
+        let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../products/evidence/examples/standalone");
+        copy_tree(&source, temporary.path());
+        fs::write(
+            temporary.path().join("check-acceptances.yaml"),
+            "apiVersion: id.registrystack.org/formats/platform/check-acceptances/v1alpha1\nkind: PlatformCheckAcceptances\nacceptances: invalid\n",
+        )
+        .unwrap();
+
+        let error = check(temporary.path(), None, false, false)
+            .expect_err("a malformed acceptance file refuses the project");
+        let report = error
+            .downcast_ref::<Report>()
+            .expect("malformed acceptances produce a structured diagnostic report");
+        assert!(report.has_errors());
+        assert!(report.diagnostics().iter().any(|diagnostic| {
+            diagnostic
+                .source
+                .as_ref()
+                .is_some_and(|source| source.file.ends_with("check-acceptances.yaml"))
+        }));
     }
     #[test]
     fn check_preserves_duplicate_display_warning_when_function_compilation_fails() {
@@ -324,6 +402,37 @@ mod tests {
         assert_eq!(warning_source.file, project_file.to_string_lossy());
         assert!(warning_source.line.is_some());
         assert!(warning_source.column.is_some());
+
+        fs::write(
+            temporary.path().join("check-acceptances.yaml"),
+            r#"apiVersion: id.registrystack.org/formats/platform/check-acceptances/v1alpha1
+kind: PlatformCheckAcceptances
+acceptances:
+  - code: evidence.project.duplicate-source-label
+    scope:
+      file: evidence.yaml
+      path: /sources/person-record/label
+    reason: These source labels are intentionally aligned for this reviewed project.
+"#,
+        )
+        .unwrap();
+        let error = check(temporary.path(), None, false, true)
+            .expect_err("the Function error still refuses a project with an accepted warning");
+        let report = error
+            .downcast_ref::<Report>()
+            .expect("the mixed refusal remains a structured report");
+        assert_eq!(report.error_count(), 1);
+        assert_eq!(report.warning_count(), 0);
+        assert_eq!(report.accepted_warning_count(), 1);
+        let warning = report
+            .diagnostics()
+            .iter()
+            .find(|diagnostic| diagnostic.code == "evidence.project.duplicate-source-label")
+            .expect("the accepted warning remains beside the error");
+        assert_eq!(
+            warning.accepted_reason.as_deref(),
+            Some("These source labels are intentionally aligned for this reviewed project.")
+        );
     }
     #[test]
     fn check_caps_project_warnings_with_a_function_compilation_error() {

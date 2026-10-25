@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- `caseworkctl check` reads an optional project `check-acceptances.yaml`, keeps
+  exactly matched warnings visible with their reasons, and excludes only those
+  accepted warnings from `--deny-warnings`.
 - Split-mode refusals for a runtime role that owns Casework objects name an
   exact `ALTER ... OWNER TO` statement for each Casework schema object, run as
   a database administrator, then `caseworkctl apply`, in place of

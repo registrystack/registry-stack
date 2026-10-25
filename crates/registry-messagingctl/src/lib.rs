@@ -999,9 +999,12 @@ fn check(args: &CheckArgs) -> Outcome {
     let Some(path) = &args.runtime_config else {
         return match given {
             Some((root, Ok(loaded))) => {
-                let warnings = loaded.warnings();
-                if args.deny_warnings && warnings.warning_count() > 0 {
-                    return Outcome::diagnosed(DOMAIN_REFUSAL_EXIT, warnings);
+                let mut warnings = loaded.warnings().clone();
+                if args.project.is_some() {
+                    registry_platform_config::apply_check_acceptances(root, &mut warnings);
+                }
+                if warnings.has_errors() || (args.deny_warnings && warnings.warning_count() > 0) {
+                    return Outcome::diagnosed(DOMAIN_REFUSAL_EXIT, &warnings);
                 }
                 match package_report(&loaded) {
                     Ok(mut report) => {
@@ -1013,7 +1016,18 @@ fn check(args: &CheckArgs) -> Outcome {
                     Err(refused) => refused,
                 }
             }
-            Some((root, Err(error))) => package_refusal(root, &error),
+            Some((root, Err(error))) => {
+                let mut report = package_load_report(root, &error);
+                if args.project.is_some() {
+                    registry_platform_config::apply_check_acceptances(root, &mut report);
+                }
+                let exit = if error.is_read_failure() {
+                    OPERATIONAL_FAILURE_EXIT
+                } else {
+                    DOMAIN_REFUSAL_EXIT
+                };
+                Outcome::diagnosed(exit, &report)
+            }
             None => Outcome::refused(
                 USAGE_EXIT,
                 "usage.invalid",
@@ -1045,7 +1059,10 @@ fn check(args: &CheckArgs) -> Outcome {
         (None, None) => CheckedAgainst::NamedPackage,
     };
     let runtime = check_runtime_file(&absolute, against, args.environment);
-    let report = runtime_report(path, &absolute, &runtime);
+    let mut report = runtime_report(path, &absolute, &runtime);
+    if let Some(root) = &args.project {
+        registry_platform_config::apply_check_acceptances(root, &mut report);
+    }
     let denied = report.has_errors() || (args.deny_warnings && report.warning_count() > 0);
     if let Some(mut refused) = refused.take() {
         let exit = if runtime.unavailable {

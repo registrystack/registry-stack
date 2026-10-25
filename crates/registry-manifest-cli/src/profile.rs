@@ -660,6 +660,7 @@ fn manifest_codelists(manifest: &MetadataManifest) -> BTreeMap<&str, BTreeSet<&s
 /// Warn about every YAML file under `root` that is neither a descriptor nor
 /// a listed fixture. Linked directories are not followed.
 fn unlisted_files(findings: &mut Findings, root: &Path, known: &BTreeSet<PathBuf>) {
+    let check_acceptances = normalized(&root.join(registry_platform_yaml::CHECK_ACCEPTANCES_FILE));
     let mut pending = vec![root.to_path_buf()];
     while let Some(directory) = pending.pop() {
         let Ok(entries) = fs::read_dir(&directory) else {
@@ -689,7 +690,7 @@ fn unlisted_files(findings: &mut Findings, root: &Path, known: &BTreeSet<PathBuf
             let listed = path
                 .ancestors()
                 .any(|listed| known.contains(&normalized(listed)));
-            if yaml && !listed {
+            if yaml && !listed && normalized(&path) != check_acceptances {
                 findings.push(about(
                     Severity::Warning,
                     "manifest.profile.unlisted-file",

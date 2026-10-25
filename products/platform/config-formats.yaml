@@ -63,6 +63,43 @@ sharedSchemas:
 
 formats:
 
+  - id: platform/check-acceptances
+    product: platform
+    title: Project check acceptances
+    files: [check-acceptances.yaml]
+    syntax: yaml
+    audience: authored
+    stability: unpromised
+    current:
+      apiVersion: id.registrystack.org/formats/platform/check-acceptances/v1alpha1
+      kind: PlatformCheckAcceptances
+      checkedBy:
+        file: crates/registry-platform-yaml/src/check_acceptances.rs
+        symbol: CHECK_ACCEPTANCES_API_VERSION
+    target:
+      apiVersion: id.registrystack.org/formats/platform/check-acceptances/v1alpha1
+      kind: PlatformCheckAcceptances
+    schema:
+      path: products/platform/schemas/check-acceptances.schema.json
+      id: https://id.registrystack.org/schemas/platform/check-acceptances/check-acceptances.v1alpha1.schema.json
+      origin: generated
+      generator: cargo run -p registry-platform-yaml --features schema --example check-acceptances-schema -- --output products/platform/schemas
+      driftCheck: crates/registry-platform-yaml/tests/check_acceptances.rs
+    reader:
+      crate: registry-platform-yaml
+      file: crates/registry-platform-yaml/src/check_acceptances.rs
+      function: read_check_acceptances
+      type: CheckAcceptances
+    check: bregctl check --file {file}
+    example: products/platform/examples/check-acceptances.yaml
+    conformance:
+      requiredText: /acceptances/0/reason
+      optionalText: none
+      integer: none
+      boolean: none
+    securityMembers: []
+    restrictingMembers: []
+
   # breg
   - id: breg/project
     product: breg

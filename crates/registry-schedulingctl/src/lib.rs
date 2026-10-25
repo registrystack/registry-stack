@@ -368,7 +368,11 @@ fn run(cli: Cli) -> Result<Value> {
         Command::Serve(_) => unreachable!("serve replaces the ctl process before report dispatch"),
         Command::Init(args) => project::init(&args.project, &args.template),
         Command::Check(args) => {
-            let checked = project::check(&args.project, args.deny_warnings);
+            let checked = if args.runtime_config.is_some() {
+                project::check(&args.project, false)
+            } else {
+                project::check_with_acceptances(&args.project, args.deny_warnings)
+            };
             match &args.runtime_config {
                 Some(runtime_config) => project::check_runtime_config(
                     &args.project,

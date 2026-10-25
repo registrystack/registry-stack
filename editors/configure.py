@@ -37,6 +37,7 @@ PRODUCTS = (*PRODUCT_FILES, "evidence-oid4vci")
 # language server; every other pattern is YAML.
 SCHEMAS = {
     "breg": (
+        ("products/platform/schemas/check-acceptances.schema.json", "check-acceptances.yaml"),
         ("products/breg/generated/authoring/registry-project.schema.json", "registry.yaml"),
         ("products/breg/generated/authoring/registry-module.schema.json", "modules/**/module.yaml"),
         ("products/breg/generated/runtime/runtime.schema.json", "runtime.yaml"),
@@ -60,6 +61,7 @@ SCHEMAS = {
     "breg-mcp": (("products/breg/generated/mcp-runtime/mcp-runtime.schema.json", "runtime.yaml"),),
     "breg-review": (("products/breg/generated/review-runtime/review-runtime.schema.json", "runtime.yaml"),),
     "coordinator": (
+        ("products/platform/schemas/check-acceptances.schema.json", "check-acceptances.yaml"),
         ("products/coordinator/generated/project/project.schema.json", "workflow.yaml"),
         ("products/coordinator/generated/runtime/runtime.schema.json", "runtime.yaml"),
         ("products/coordinator/generated/runtime/runtime.schema.json", "runtime.example.yaml"),
@@ -67,6 +69,7 @@ SCHEMAS = {
         ("products/coordinator/generated/scenarios/scenarios.schema.json", "scenarios.yaml"),
     ),
     "casework": (
+        ("products/platform/schemas/check-acceptances.schema.json", "check-acceptances.yaml"),
         ("products/casework/generated/project/project.schema.json", "casework.yaml"),
         ("products/casework/generated/runtime/runtime.schema.json", "runtime.yaml"),
         ("products/casework/generated/runtime/runtime.schema.json", "runtime.example.yaml"),
@@ -83,6 +86,7 @@ SCHEMAS = {
         ("products/casework/generated/dev-clients/dev-clients.schema.json", "dev-clients.yaml"),
     ),
     "scheduling": (
+        ("products/platform/schemas/check-acceptances.schema.json", "check-acceptances.yaml"),
         ("products/scheduling/generated/project/project.schema.json", "scheduling.yaml"),
         ("products/scheduling/generated/runtime/runtime.schema.json", "runtime.yaml"),
         ("products/scheduling/generated/runtime/runtime.schema.json", "runtime.example.yaml"),
@@ -91,6 +95,7 @@ SCHEMAS = {
         ("products/scheduling/generated/fixture/fixture.schema.json", "fixtures/*.yml"),
     ),
     "messaging": (
+        ("products/platform/schemas/check-acceptances.schema.json", "check-acceptances.yaml"),
         ("products/messaging/generated/authoring/project.schema.json", "messaging.yaml"),
         ("products/messaging/generated/authoring/template.schema.json", "templates/*/*/template.yaml"),
         ("products/messaging/generated/authoring/provider.schema.json", "providers/*/provider.yaml"),
@@ -98,6 +103,7 @@ SCHEMAS = {
         ("products/messaging/generated/runtime/runtime.schema.json", "runtime.example.yaml"),
     ),
     "documents": (
+        ("products/platform/schemas/check-acceptances.schema.json", "check-acceptances.yaml"),
         ("products/documents/generated/project/project.schema.json", "documents.yaml"),
         ("products/documents/generated/runtime/runtime.schema.json", "runtime.yaml"),
         ("products/documents/generated/runtime/runtime.schema.json", "runtime.example.yaml"),
@@ -106,24 +112,29 @@ SCHEMAS = {
         ("products/evidence/generated/oid4vci-runtime/oid4vci-runtime.schema.json", "{document}"),
     ),
     "discovery": (
+        ("products/platform/schemas/check-acceptances.schema.json", "check-acceptances.yaml"),
         ("products/discovery/schemas/origins.schema.json", "origins.yaml"),
         ("products/discovery/schemas/runtime.schema.json", "runtime.yaml"),
         ("products/discovery/schemas/evidence-mapping.schema.json", "mappings/*.yaml"),
         ("products/discovery/schemas/evidence-mapping.schema.json", "mappings/*.yml"),
     ),
     "render": (
+        ("products/platform/schemas/check-acceptances.schema.json", "check-acceptances.yaml"),
         ("products/render/schemas/bundle.schema.json", "manifest.yaml"),
         ("products/render/schemas/labels.schema.json", "labels/*.yaml"),
         ("products/render/schemas/runtime.schema.json", "runtime.yaml"),
     ),
     "manifest": (
+        ("products/platform/schemas/check-acceptances.schema.json", "check-acceptances.yaml"),
         ("products/manifest/schemas/metadata.schema.json", "{document}"),
         ("products/manifest/schemas/profile.schema.json", "**/profile.yaml"),
     ),
     "platform": (
+        ("products/platform/schemas/check-acceptances.schema.json", "check-acceptances.yaml"),
         ("products/platform/schemas/task-connection.schema.json", "task-connection.yaml"),
     ),
     "evidence": (
+        ("products/platform/schemas/check-acceptances.schema.json", "check-acceptances.yaml"),
         (
             "crates/registry-evidencectl/schemas/authoring/project.schema.json",
             "evidence.yaml",

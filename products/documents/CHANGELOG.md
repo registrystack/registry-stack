@@ -11,3 +11,7 @@ metadata and status only: it cannot grant, read the bytes, or list the grants
 (`GET /v1/documents/{documentId}/grants` is the custodian's alone and answers
 the reserving system `profile.not-authorized`), so the issuer never learns
 whom the citizen shared with.
+
+`documentsctl check --project` reads an optional `check-acceptances.yaml`,
+keeps exactly matched warnings visible with their reasons, and excludes only
+those accepted warnings from `--deny-warnings`.

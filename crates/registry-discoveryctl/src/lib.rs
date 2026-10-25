@@ -269,6 +269,10 @@ fn check(
     }
     let mut report = Report::new(diagnostics);
     report.set_files_checked(files);
+    if let Some(root) = &request.project {
+        registry_platform_config::apply_check_acceptances(root, &mut report);
+        files = report.files_checked().unwrap_or(files);
+    }
     let exit = if unavailable {
         report::OPERATIONAL_FAILURE_EXIT
     } else if report.has_errors() || (request.deny_warnings && report.warning_count() > 0) {
@@ -592,6 +596,102 @@ mod tests {
         assert_eq!(unknown["source"]["line"], 3);
         assert_eq!(unknown["source"]["column"], 1);
         assert!(unknown["suggestedAction"].is_string());
+    }
+
+    #[test]
+    fn project_check_acceptance_keeps_the_warning_and_allows_the_warning_gate() {
+        let root = fixture_copy(|root| {
+            fs::write(root.join("notes.yaml"), "title: Project notes\n").unwrap();
+        });
+        let args = [
+            "check",
+            "--project",
+            root.path().to_str().unwrap(),
+            "--format",
+            "json",
+            "--deny-warnings",
+        ];
+        let (exit, stdout, _) = run_cli(&args);
+        assert_eq!(exit, ExitCode::from(1));
+        let before = json(&stdout);
+        let files_before_acceptance = before["filesChecked"].as_u64().unwrap();
+        let warning = &before["diagnostics"][0];
+        let acceptance = serde_json::json!({
+            "apiVersion": registry_platform_yaml::CHECK_ACCEPTANCES_API_VERSION,
+            "kind": registry_platform_yaml::CHECK_ACCEPTANCES_KIND,
+            "acceptances": [{"code":warning["code"], "scope":warning["scope"], "reason":"Project notes are intentionally kept beside the origins."}]
+        });
+        fs::write(
+            root.path().join("check-acceptances.yaml"),
+            serde_json::to_vec(&acceptance).unwrap(),
+        )
+        .unwrap();
+        let (exit, stdout, stderr) = run_cli(&args);
+        assert_eq!(exit, ExitCode::SUCCESS, "{stdout}{stderr}");
+        let after = json(&stdout);
+        assert_eq!(
+            after["filesChecked"],
+            serde_json::json!(files_before_acceptance + 1)
+        );
+        assert_eq!(after["warnings"], 0);
+        assert_eq!(after["diagnostics"].as_array().unwrap().len(), 1);
+        assert_eq!(after["diagnostics"][0]["severity"], "warning");
+        assert_eq!(
+            after["diagnostics"][0]["acceptedReason"],
+            "Project notes are intentionally kept beside the origins."
+        );
+    }
+
+    #[test]
+    fn project_acceptance_is_retained_when_an_explicit_runtime_refuses() {
+        let root = fixture_copy(|root| {
+            fs::write(root.join("notes.yaml"), "title: Project notes\n").unwrap();
+        });
+        let deployment = root.path().join("deployment");
+        fs::create_dir(&deployment).unwrap();
+        let runtime = deployment.join("runtime.yaml");
+        let source = fs::read_to_string(Path::new(FIXTURE).join("runtime.yaml")).unwrap();
+        let source = format!("{source}unknownMember: true\n");
+        fs::write(&runtime, source).unwrap();
+        fs::write(
+            root.path().join("check-acceptances.yaml"),
+            serde_json::to_vec(&serde_json::json!({
+                "apiVersion": registry_platform_yaml::CHECK_ACCEPTANCES_API_VERSION,
+                "kind": registry_platform_yaml::CHECK_ACCEPTANCES_KIND,
+                "acceptances": [{
+                    "code": "discovery.project.unread-file",
+                    "scope": {"file": "notes.yaml", "path": ""},
+                    "reason": "Project notes are intentionally kept beside the origins."
+                }]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let (exit, stdout, stderr) = run_cli(&[
+            "check",
+            "--project",
+            root.path().to_str().unwrap(),
+            "--runtime-config",
+            runtime.to_str().unwrap(),
+            "--format",
+            "json",
+            "--deny-warnings",
+        ]);
+        assert_eq!(exit, ExitCode::from(1), "{stdout}{stderr}");
+        let report = json(&stdout);
+        assert_eq!(report["errors"], 1);
+        assert_eq!(report["warnings"], 0);
+        assert_eq!(report["diagnostics"].as_array().unwrap().len(), 2);
+        let accepted = report["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|diagnostic| diagnostic["code"] == "discovery.project.unread-file")
+            .expect("the accepted project warning remains beside the runtime error");
+        assert_eq!(
+            accepted["acceptedReason"],
+            "Project notes are intentionally kept beside the origins."
+        );
     }
 
     #[test]

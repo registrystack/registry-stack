@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- `evidencectl check` reads an optional `check-acceptances.yaml`. An exact,
+  reasoned acceptance keeps its advisory warning visible while allowing
+  `--deny-warnings` to pass; errors remain refusals.
 - BREAKING: the OID4VCI wallet delivery runtime requires an `audit` block. It
   records each offer's creating client and subject as keyed pseudonyms, and
   each wallet delivery outcome, in a durable journal. To upgrade, store a

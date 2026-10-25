@@ -4598,7 +4598,7 @@
       },
       "artifact": {
         "path": "products/casework/contracts/cli/report.schema.json",
-        "sha256": "d01b81b1c12f785be1f4d9ed7089cfd625722c1ce4cd80ba1ed1d393331aac02",
+        "sha256": "158d1cb317dcc9bbee833684aefff09f215c066ee2f03d61f980088f5c52fc10",
         "mediaType": "application/schema+json"
       }
     },
@@ -5229,6 +5229,24 @@
       "artifact": {
         "path": "products/messaging/generated/authoring/template.schema.json",
         "sha256": "5d99a71fc7fb00d3d4f6f4ffc4f6399570e60497e53a080cd571fc0ef3bd0d42",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/schemas/platform/check-acceptances/check-acceptances.v1alpha1.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "platform",
+      "title": "CheckAcceptances",
+      "description": "Registry Stack project check acceptances JSON Schema.",
+      "source": {
+        "path": "crates/registry-platform-yaml/src/check_acceptances.rs",
+        "sha256": "9f01dd394d730e590710e430baf1928ee3e02bb52c1d3ab53b41e447ac692fd2"
+      },
+      "artifact": {
+        "path": "products/platform/schemas/check-acceptances.schema.json",
+        "sha256": "3fa0953ce1c3effc0a35c61e5c93d484d5b948e5f64478999c6ea671e588b3d1",
         "mediaType": "application/schema+json"
       }
     },

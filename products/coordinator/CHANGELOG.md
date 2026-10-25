@@ -4,6 +4,9 @@
 
 First release of Registry Coordinator.
 
+- `coordinatorctl check --project` reads an optional
+  `check-acceptances.yaml`, keeps exactly matched warnings visible with their
+  reasons, and excludes only those accepted warnings from `--deny-warnings`.
 - Coordinator executes finite, acyclic Workflows across durable waits, outages, and restarts.
   Projects separate generated contracts, reusable types, named pure Functions, local exact
   Operation aliases, and one Workflow graph. Functions take one typed object of named inputs.

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- `schedulingctl check` reads an optional project `check-acceptances.yaml`,
+  keeps exactly matched warnings visible with their reasons, and excludes only
+  those accepted warnings from `--deny-warnings`.
 - Split-mode refusals for a runtime role that owns Scheduling objects name an
   exact `ALTER ... OWNER TO` statement for each Scheduling schema object, then
   `schedulingctl apply`, in place of `REASSIGN OWNED BY`, which also moves the

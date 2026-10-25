@@ -147,6 +147,37 @@ fn every_registered_tool_example_checks_without_a_diagnostic() {
 }
 
 #[test]
+fn check_acceptance_reason_refuses_an_authored_expression() {
+    let scratch = scratch();
+    let file = scratch
+        .path()
+        .canonicalize()
+        .unwrap()
+        .join("check-acceptances.yaml");
+    fs::write(
+        &file,
+        r#"apiVersion: id.registrystack.org/formats/platform/check-acceptances/v1alpha1
+kind: PlatformCheckAcceptances
+acceptances:
+  - code: breg.access.target-unrestricted-rows
+    scope: {file: registry.yaml, path: /accessProfiles/@id=reader}
+    reason: ${CHECK_ACCEPTANCE_REASON_CANARY}
+"#,
+    )
+    .unwrap();
+
+    let output = check_file(&file, &["--format", "json"]);
+    assert_eq!(output.status.code(), Some(1));
+    let report = json_report(&output);
+    assert_eq!(
+        report["diagnostics"][0]["code"],
+        "config.substitution-not-allowed"
+    );
+    assert_eq!(report["diagnostics"][0]["path"], "/acceptances/0/reason");
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("CHECK_ACCEPTANCE_REASON_CANARY"));
+}
+
+#[test]
 fn model_selection_effective_ids_refuse_separator_collisions_at_authored_sources() {
     let scratch = scratch();
     for (name, record_types, primary, related) in [

@@ -314,6 +314,45 @@ pub(super) fn check(project: &Path, deny_warnings: bool) -> Result<Value> {
     }))
 }
 
+pub(super) fn check_with_acceptances(project: &Path, deny_warnings: bool) -> Result<Value> {
+    finish_check_with_acceptances(project, deny_warnings, check(project, false))
+}
+
+fn finish_check_with_acceptances(
+    project: &Path,
+    deny_warnings: bool,
+    checked: Result<Value>,
+) -> Result<Value> {
+    let (mut report, mut checked) = match checked {
+        Ok(checked) => {
+            let mut report = Report::new(serde_json::from_value(checked["diagnostics"].clone())?);
+            if let Some(files) = checked["filesChecked"]
+                .as_u64()
+                .and_then(|files| usize::try_from(files).ok())
+            {
+                report.set_files_checked(files);
+            }
+            (report, Some(checked))
+        }
+        Err(error) => match crate::configuration_report(&error) {
+            Some(report) => (report.clone(), None),
+            None => return Err(error),
+        },
+    };
+    registry_platform_config::apply_check_acceptances(project, &mut report);
+    if refuses(&report, deny_warnings) {
+        return Err(report.into());
+    }
+    let mut checked = checked
+        .take()
+        .expect("an error-free project has a check report");
+    checked["diagnostics"] = report.to_json_value();
+    if let Some(files) = report.files_checked() {
+        checked["filesChecked"] = json!(files);
+    }
+    Ok(checked)
+}
+
 pub(super) fn test(project: &Path) -> Result<Value> {
     let checked = checked_project(project, true, false)?;
     if checked.fixtures.is_empty() {
@@ -652,28 +691,9 @@ pub(super) fn check_runtime_config(
         }
         diagnostic
     };
-    let mut report = Report::new(runtime.diagnostics.into_iter().map(named).collect());
-    report.set_files_checked(1);
-    if !refuses(&report, deny_warnings) {
-        let mut checked = checked?;
-        checked["runtimeConfig"] = json!(given);
-        if let (Some(diagnostics), Value::Array(warnings)) = (
-            checked["diagnostics"].as_array_mut(),
-            report.to_json_value(),
-        ) {
-            // The project check reads its own runtime example, which may be
-            // the file given: a finding it already holds is not repeated.
-            let reported = diagnostics.clone();
-            diagnostics.extend(warnings.into_iter().filter(|w| !reported.contains(w)));
-        }
-        if let Some(files) = checked["filesChecked"].as_u64() {
-            checked["filesChecked"] = json!(files + 1);
-        }
-        return Ok(checked);
-    }
-    let refused = match checked {
-        // The project passed: its warnings and the files it read stay in
-        // the refusal beside the runtime file's diagnostics.
+    let mut runtime_report = Report::new(runtime.diagnostics.into_iter().map(named).collect());
+    runtime_report.set_files_checked(1);
+    let (mut combined, mut checked) = match checked {
         Ok(checked) => {
             let mut project = Report::new(
                 serde_json::from_value(checked["diagnostics"].clone())
@@ -685,8 +705,7 @@ pub(super) fn check_runtime_config(
             {
                 project.set_files_checked(files);
             }
-            project.extend(unreported(report, project.diagnostics()));
-            project
+            (project, Some(checked))
         }
         Err(error) => match crate::configuration_report(&error) {
             Some(project) => {
@@ -694,17 +713,30 @@ pub(super) fn check_runtime_config(
                 if project.files_checked().is_none() {
                     project.set_files_checked(1);
                 }
-                project.extend(unreported(report, project.diagnostics()));
-                project
+                (project, None)
             }
             None => return Err(error),
         },
     };
-    Err(RuntimeConfigRefusal {
-        report: refused,
-        unavailable: runtime.unavailable,
+    let reported = combined.diagnostics().to_vec();
+    combined.extend(unreported(runtime_report, &reported));
+    registry_platform_config::apply_check_acceptances(project, &mut combined);
+    if refuses(&combined, deny_warnings) {
+        return Err(RuntimeConfigRefusal {
+            report: combined,
+            unavailable: runtime.unavailable,
+        }
+        .into());
     }
-    .into())
+    let mut checked = checked
+        .take()
+        .expect("an error-free project has a check report");
+    checked["runtimeConfig"] = json!(given);
+    checked["diagnostics"] = combined.to_json_value();
+    if let Some(files) = combined.files_checked() {
+        checked["filesChecked"] = json!(files);
+    }
+    Ok(checked)
 }
 
 /// `report` without the diagnostics the project check already reported, so a
@@ -1146,7 +1178,8 @@ mod tests {
             "  - id: registry-update\n    label: Registry record update\n",
             "  - id: registry-update\n    label: Registry record update\n  - id: registry-copy\n    label: registry record update\n",
         );
-        let report = check(&project, false).expect("warnings do not normally refuse check");
+        let report =
+            check_with_acceptances(&project, false).expect("warnings do not normally refuse check");
         let warning = report["diagnostics"]
             .as_array()
             .unwrap()
@@ -1154,14 +1187,68 @@ mod tests {
             .find(|item| item["code"] == "scheduling.project.duplicate-service-label")
             .unwrap_or_else(|| panic!("the product check reports the duplicate label: {report}"));
         assert_eq!(warning["path"], "/services/1/label");
+        let files_without_acceptances = report["filesChecked"].as_u64().unwrap();
 
-        let error = check(&project, true).expect_err("--deny-warnings refuses the warning");
+        let error = check_with_acceptances(&project, true)
+            .expect_err("--deny-warnings refuses the warning");
         let report = crate::configuration_report(&error).expect("a structured warning report");
         assert_eq!(report.error_count(), 0);
         assert_eq!(report.warning_count(), 1);
         assert_eq!(
             report.diagnostics()[0].code,
             "scheduling.project.duplicate-service-label"
+        );
+
+        let scope = warning["scope"]
+            .as_object()
+            .expect("a stable warning scope");
+        fs::write(
+            project.join("check-acceptances.yaml"),
+            format!(
+                "apiVersion: id.registrystack.org/formats/platform/check-acceptances/v1alpha1\nkind: PlatformCheckAcceptances\nacceptances:\n  - code: scheduling.project.duplicate-service-label\n    scope:\n      file: {}\n      path: {}\n    reason: These two pilot services intentionally use the same public label.\n",
+                scope["file"].as_str().unwrap(),
+                scope["path"].as_str().unwrap(),
+            ),
+        )
+        .unwrap();
+        let accepted = check_with_acceptances(&project, true)
+            .expect("an accepted warning does not make --deny-warnings fail");
+        assert_eq!(
+            accepted["filesChecked"],
+            files_without_acceptances + 1,
+            "the present acceptance file is counted once"
+        );
+        let warning = accepted["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["code"] == "scheduling.project.duplicate-service-label")
+            .unwrap();
+        assert_eq!(
+            warning["acceptedReason"],
+            "These two pilot services intentionally use the same public label."
+        );
+
+        edit(
+            &project,
+            SCHEDULING_RECORDS_FILE,
+            "kind: SchedulingRecords\n",
+            "kind: SchedulingRecords\nstray: true\n",
+        );
+        let error = check_with_acceptances(&project, true)
+            .expect_err("an unrelated records error still refuses the project");
+        let report = crate::configuration_report(&error).unwrap();
+        assert_eq!(report.error_count(), 1);
+        assert_eq!(report.warning_count(), 0);
+        assert_eq!(report.accepted_warning_count(), 1);
+        let accepted = report
+            .diagnostics()
+            .iter()
+            .find(|diagnostic| diagnostic.code == "scheduling.project.duplicate-service-label")
+            .unwrap();
+        assert_eq!(
+            accepted.accepted_reason.as_deref(),
+            Some("These two pilot services intentionally use the same public label.")
         );
     }
 

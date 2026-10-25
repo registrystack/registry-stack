@@ -798,7 +798,10 @@ fn check_root_files(root: &Path, environment: bool, findings: &mut Findings) {
             return;
         };
         let path = entry.path();
-        if is_yaml(&path) && path.file_name() != Some(ORIGINS_FILE.as_ref()) {
+        if is_yaml(&path)
+            && path.file_name() != Some(ORIGINS_FILE.as_ref())
+            && path.file_name() != Some(registry_platform_yaml::CHECK_ACCEPTANCES_FILE.as_ref())
+        {
             paths.push(path);
         }
     }

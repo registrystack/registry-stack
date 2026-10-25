@@ -283,6 +283,20 @@ def capitalize(text: str) -> str:
     return text[:1].upper() + text[1:]
 
 
+def reads_through_platform_yaml(reader_crate: str, text: str) -> bool:
+    """Whether reader source visibly uses the shared YAML reader boundary."""
+
+    code = conformance.code_only(text)
+    return (
+        "registry_platform_yaml" in code
+        or "RuntimeConfigLoader" in code
+        or (
+            reader_crate == "registry-platform-yaml"
+            and re.search(r"\bReader\s*::\s*new\s*\(", code) is not None
+        )
+    )
+
+
 def def_context(name: str) -> str:
     """Name a definition as a member would be named, for parent context."""
 
@@ -1668,7 +1682,7 @@ class Lint:
         reader = entry["reader"]
         if isinstance(reader, dict) and entry["syntax"] in ("yaml", "json") and self.applies(entry, "CFG-YAML-1"):
             text = self.rust_text(str(reader["file"])) or ""
-            if "registry_platform_yaml" not in text and "RuntimeConfigLoader" not in text:
+            if not reads_through_platform_yaml(str(reader["crate"]), text):
                 self.find("CFG-YAML-1", fid, str(reader["file"]), f"{reader['function']}()",
                           "the reader does not read through registry-platform-yaml",
                           "Read through registry-platform-yaml")

@@ -720,6 +720,16 @@ each entry with `file`, `line`, `column`, `path`, and `message`. The type
 lives in `registry-platform-yaml` and the ctl report envelope (`ok`,
 `command`, `status`, ..., `diagnostics`) carries it unchanged.
 
+For a project warning, optional `scope` contains a project-relative `file`
+and the resource `path` used for exact acceptance matching. List positions
+use an existing unique `id`, `action`, or `recordType` where available,
+written as `@id=value`, `@action=value`, or `@recordType=value`; other
+positions stay numeric. The diagnostic's original `path` and source position
+are unchanged. An accepted warning also carries `acceptedReason`, the
+project's deliberately authored explanation. These fields identify and
+explain the project decision; diagnostic messages and refusal remedies still
+follow the value-free rule in CFG-SEC-3.
+
 **CFG-DIAG-2 (MUST). Human output puts the position first:**
 
 ```text
@@ -744,7 +754,9 @@ key, and type problems. A code is never reused for a different condition.
 **CFG-DIAG-4 (MUST). Exit codes:** 0 when no error was reported (warnings
 allowed), 1 when the input was refused, 2 for a usage error, 3 when something
 the command depends on was unavailable. Every checking command takes
-`--deny-warnings`, which makes a reported warning exit 1.
+`--deny-warnings`, which makes an unaccepted warning exit 1. An accepted
+warning retains `severity: warning` and its `acceptedReason`, and does not
+contribute to the active warning count. Errors always refuse the input.
 
 **CFG-DIAG-5 (MUST). A check reports every problem it can find in one run.**
 Structural problems are those the reader finds before decoding: every `yaml.`
@@ -778,6 +790,18 @@ variant, or invalid value holds a `#` with no space before it, YAML reads the
 `#` and what follows as part of the value, and the fix adds: "A `#` starts a
 comment only after a space: put a space before the `#` that starts the
 comment." The sentence names no part of the value (CFG-SEC-3).
+
+**CFG-DIAG-7 (MUST). Project warning acceptances use one shared file.**
+`check-acceptances.yaml` is optional and uses the `PlatformCheckAcceptances`
+format. Each entry has `code`, `scope` (`file` and `path`), and a nonblank
+`reason`. Matching is exact; no wildcard, fingerprint, expiry, or inferred
+approval is involved. Only warning diagnostics can be accepted. The decision
+remains until an author edits or removes it, and unused entries are harmless.
+Malformed or unreadable acceptance files refuse the project check. The file
+is a regular file in the project, not a symbolic link. A check retains accepted
+warnings in JSON and groups them with their reasons in human output, including
+when another diagnostic refuses the project. The shared parser and matcher
+tests, consuming check tests, and generated schema enforce this rule.
 
 ## 11. Schemas, editors, and the registry
 

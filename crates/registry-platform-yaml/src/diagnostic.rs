@@ -6,6 +6,8 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
+use crate::CheckScope;
+
 /// Whether a diagnostic refuses the input.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -55,9 +57,10 @@ pub struct Related {
 
 /// One problem, in the shape every checking command reports (CFG-DIAG-1).
 ///
-/// A diagnostic names keys, the path, accepted values, bounds, and the
-/// expected envelope. It never repeats a scalar value read from a file or the
-/// environment (CFG-SEC-3).
+/// Messages name keys, paths, accepted values, bounds, and the expected
+/// envelope without repeating rejected scalar values (CFG-SEC-3). Warning
+/// acceptance metadata separately identifies the resource and carries the
+/// project's deliberately authored reason.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
@@ -76,6 +79,12 @@ pub struct Diagnostic {
     pub source: Option<Source>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub related: Vec<Related>,
+    /// Project-relative identity copied into a check acceptance.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<CheckScope>,
+    /// The project's reason for accepting this advisory warning.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accepted_reason: Option<String>,
 }
 
 impl Diagnostic {
@@ -95,6 +104,8 @@ impl Diagnostic {
             suggested_action: suggested_action.into(),
             source: None,
             related: Vec::new(),
+            scope: None,
+            accepted_reason: None,
         }
     }
 
@@ -144,6 +155,11 @@ impl Diagnostic {
             }
             out.push(' ');
             out.push_str(&clean(&related.message));
+            out.push('\n');
+        }
+        if let Some(reason) = &self.accepted_reason {
+            out.push_str("  accepted: ");
+            out.push_str(&clean(reason));
             out.push('\n');
         }
         out
@@ -208,6 +224,10 @@ impl Report {
         &self.diagnostics
     }
 
+    pub fn diagnostics_mut(&mut self) -> &mut [Diagnostic] {
+        &mut self.diagnostics
+    }
+
     pub fn into_diagnostics(self) -> Vec<Diagnostic> {
         self.diagnostics
     }
@@ -225,7 +245,21 @@ impl Report {
     }
 
     pub fn warning_count(&self) -> usize {
-        self.count(Severity::Warning)
+        self.diagnostics
+            .iter()
+            .filter(|diagnostic| {
+                diagnostic.severity == Severity::Warning && diagnostic.accepted_reason.is_none()
+            })
+            .count()
+    }
+
+    pub fn accepted_warning_count(&self) -> usize {
+        self.diagnostics
+            .iter()
+            .filter(|diagnostic| {
+                diagnostic.severity == Severity::Warning && diagnostic.accepted_reason.is_some()
+            })
+            .count()
     }
 
     fn count(&self, severity: Severity) -> usize {
@@ -266,8 +300,18 @@ impl Report {
     /// any related notes, and a closing summary line.
     pub fn render_human(&self) -> String {
         let mut out = String::new();
-        for diagnostic in &self.diagnostics {
+        for diagnostic in self.diagnostics.iter().filter(|diagnostic| {
+            diagnostic.severity != Severity::Warning || diagnostic.accepted_reason.is_none()
+        }) {
             out.push_str(&diagnostic.render_human());
+        }
+        if self.accepted_warning_count() > 0 {
+            out.push_str("Accepted warnings:\n");
+            for diagnostic in self.diagnostics.iter().filter(|diagnostic| {
+                diagnostic.severity == Severity::Warning && diagnostic.accepted_reason.is_some()
+            }) {
+                out.push_str(&diagnostic.render_human());
+            }
         }
         out.push_str(&self.summary());
         out.push('\n');
@@ -295,6 +339,14 @@ impl Report {
             warnings,
             plural(warnings, "warning", "warnings")
         );
+        let accepted = self.accepted_warning_count();
+        if accepted > 0 {
+            summary.push_str(&format!(
+                ", {} accepted {}",
+                accepted,
+                plural(accepted, "warning", "warnings")
+            ));
+        }
         if files > 0 {
             summary.push_str(&format!(" in {} {}", files, plural(files, "file", "files")));
         }

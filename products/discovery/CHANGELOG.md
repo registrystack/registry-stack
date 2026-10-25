@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- `discoveryctl check --project` reads an optional `check-acceptances.yaml`.
+  An exact, reasoned acceptance keeps its warning visible while allowing
+  `--deny-warnings` to pass; errors remain refusals.
+
 ## 0.43.0 - 2026-10-21
 
 - BREAKING: the current provider-publication parser rejects prohibited display

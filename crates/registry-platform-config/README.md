@@ -131,6 +131,17 @@ accepted reference through the explicitly enabled environment or file provider.
   through `url_hook_destinations`. `registry-platform-hooks` activates the
   block under a fixed outbound policy: https, or http on a loopback host.
 
+## Project check acceptances
+
+Adopter tooling calls `apply_check_acceptances(project_root, &mut report)`
+once after collecting project diagnostics. It adds portable scopes and reads
+the optional `check-acceptances.yaml` under the shared authored-file policy.
+The file must be a readable regular file; a missing file means no acceptances.
+Each entry accepts one exact warning code and scope, with a required reason.
+Invalid files add errors to the report. Errors remain blocking; accepted
+warnings retain their severity and explanation in the report and do not
+contribute to `--deny-warnings`. There is no expiry or automatic reapproval.
+
 ## Package
 
 `package` is the one package format every runtime serves from

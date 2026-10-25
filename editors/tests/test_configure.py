@@ -91,7 +91,7 @@ class ConfigureTests(unittest.TestCase):
         settings = json.loads(settings_path.read_text())
         self.assertEqual(settings["editor.tabSize"], 4)
         schemas = settings["yaml.schemas"]
-        self.assertEqual(len(schemas), 7)
+        self.assertEqual(len(schemas), 8)
         dev_clients_schema = (project / ".registry-stack-editor/schemas/dev-clients.v1alpha1.schema.json").as_uri()
         self.assertEqual(schemas[dev_clients_schema], [str(project / "dev-clients.yaml")])
         project_schema = (project / ".registry-stack-editor/schemas/registry-project.schema.json").as_uri()
@@ -169,6 +169,27 @@ class ConfigureTests(unittest.TestCase):
                 with self.subTest(product=product, source=source):
                     self.assertTrue((ROOT / source).is_file(), source)
 
+    def test_every_project_checker_maps_shared_check_acceptances(self):
+        shared = (
+            "products/platform/schemas/check-acceptances.schema.json",
+            "check-acceptances.yaml",
+        )
+        for product in (
+            "breg",
+            "evidence",
+            "casework",
+            "scheduling",
+            "messaging",
+            "coordinator",
+            "documents",
+            "discovery",
+            "manifest",
+            "render",
+            "platform",
+        ):
+            with self.subTest(product=product):
+                self.assertIn(shared, configure.SCHEMAS[product])
+
     def test_casework_maps_only_current_authored_files(self):
         project = self.project(
             "casework",
@@ -181,6 +202,9 @@ class ConfigureTests(unittest.TestCase):
         self.assertEqual(
             schemas,
             {
+                (managed / "check-acceptances.schema.json").as_uri(): [
+                    str(project / "check-acceptances.yaml")
+                ],
                 (managed / "project.schema.json").as_uri(): [str(project / "casework.yaml")],
                 (managed / "runtime.schema.json").as_uri(): [
                     str(project / "runtime.yaml"),
@@ -275,6 +299,9 @@ class ConfigureTests(unittest.TestCase):
         self.assertEqual(
             schemas,
             {
+                (managed / "check-acceptances.schema.json").as_uri(): [
+                    str(project / "check-acceptances.yaml")
+                ],
                 (managed / "project.schema.json").as_uri(): [str(project / "messaging.yaml")],
                 (managed / "template.schema.json").as_uri(): [
                     str(project / "templates/*/*/template.yaml")
@@ -331,7 +358,7 @@ class ConfigureTests(unittest.TestCase):
         configure.configure("casework", casework, self.workspace, None)
         configure.configure("breg", breg, self.workspace, None)
         settings = json.loads(settings_path.read_text())
-        self.assertEqual(len(settings["yaml.schemas"]), 13)
+        self.assertEqual(len(settings["yaml.schemas"]), 15)
         breg_dev_clients = (breg / ".registry-stack-editor/schemas/dev-clients.v1alpha1.schema.json").as_uri()
         self.assertEqual(settings["yaml.schemas"][breg_dev_clients], [str(breg / "dev-clients.yaml")])
         self.assertEqual(settings["yaml.schemas"][unrelated_uri], [str(self.workspace / "unrelated/registry.yaml")])
@@ -347,6 +374,9 @@ class ConfigureTests(unittest.TestCase):
         self.assertEqual(
             schemas,
             {
+                (managed / "check-acceptances.schema.json").as_uri(): [
+                    str(bundle / "check-acceptances.yaml")
+                ],
                 (managed / "bundle.schema.json").as_uri(): [str(bundle / "manifest.yaml")],
                 (managed / "labels.schema.json").as_uri(): [str(bundle / "labels/*.yaml")],
                 (managed / "runtime.schema.json").as_uri(): [str(bundle / "runtime.yaml")],
@@ -369,6 +399,9 @@ class ConfigureTests(unittest.TestCase):
         self.assertEqual(
             schemas,
             {
+                (managed / "check-acceptances.schema.json").as_uri(): [
+                    str(project / "check-acceptances.yaml")
+                ],
                 (managed / "metadata.schema.json").as_uri(): [str(project / "catalog.metadata.yaml")],
                 (managed / "profile.schema.json").as_uri(): [str(project / "**/profile.yaml")],
             },
@@ -387,7 +420,14 @@ class ConfigureTests(unittest.TestCase):
         managed = project / ".registry-stack-editor/schemas"
         self.assertEqual(
             schemas,
-            {(managed / "task-connection.schema.json").as_uri(): [str(project / "task-connection.yaml")]},
+            {
+                (managed / "check-acceptances.schema.json").as_uri(): [
+                    str(project / "check-acceptances.yaml")
+                ],
+                (managed / "task-connection.schema.json").as_uri(): [
+                    str(project / "task-connection.yaml")
+                ],
+            },
         )
         self.assertEqual(
             (managed / "task-connection.schema.json").read_bytes(),
@@ -497,6 +537,9 @@ class ConfigureTests(unittest.TestCase):
         self.assertEqual(
             yaml_schemas,
             {
+                (schemas / "check-acceptances.schema.json").as_uri(): [
+                    str(evidence / "check-acceptances.yaml")
+                ],
                 (schemas / "project.schema.json").as_uri(): [str(evidence / "evidence.yaml")],
                 (schemas / "target.schema.json").as_uri(): [
                     str(evidence / "*-target.yaml"), str(evidence / "target.yaml"),
