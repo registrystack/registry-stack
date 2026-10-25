@@ -293,6 +293,13 @@
       "description": "Base Registry Engine tool-file JSON Schemas at version v1alpha1."
     },
     {
+      "glob": "products/breg/contracts/occurrence-view/OccurrenceView.schema.json",
+      "owner": "breg",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "description": "Base Registry Engine occurrence view JSON Schema, written by hand and held to the BReg client's projection output by its contract test."
+    },
+    {
       "glob": "products/breg/contracts/explain/AccessExplanation.schema.json",
       "owner": "breg",
       "status": "active",

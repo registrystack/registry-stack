@@ -1,0 +1,514 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://id.registrystack.org/schemas/breg/occurrence-view/occurrence-view.v1alpha1.schema.json",
+  "title": "OccurrenceView",
+  "description": "Wire shape of the occurrence view that the BReg client projects from one record revision, its occurrence descriptor and optional evidence. Written by hand and held to the client's output by its contract test. The view is inert data: a status word (available, declaredUnknown, unavailable, unsupported) says what the client could state, never a guess.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "contract": {
+      "const": "id.registrystack.org/formats/breg/occurrence-view/v1alpha1"
+    },
+    "descriptorVersion": {
+      "const": "1"
+    },
+    "registryRevision": {
+      "type": "string"
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "recordType": {
+          "type": "string"
+        },
+        "recordId": {
+          "type": "string"
+        },
+        "revision": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "recordType",
+        "recordId",
+        "revision"
+      ]
+    },
+    "label": {
+      "type": "string"
+    },
+    "subjects": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Role"
+      }
+    },
+    "summary": {
+      "$ref": "#/$defs/Value"
+    },
+    "occurredAt": {
+      "$ref": "#/$defs/Time"
+    },
+    "effective": {
+      "$ref": "#/$defs/Time"
+    },
+    "recordedAt": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/Unavailable"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "status": {
+              "const": "available"
+            },
+            "type": {
+              "const": "instant"
+            },
+            "value": {
+              "$ref": "#/$defs/Instant"
+            }
+          },
+          "required": [
+            "status",
+            "type",
+            "value"
+          ]
+        }
+      ]
+    },
+    "recordedAtSource": {
+      "const": "creation-revision"
+    },
+    "sources": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Role"
+      }
+    },
+    "correction": {
+      "$ref": "#/$defs/Correction"
+    },
+    "sourceEventId": {
+      "$ref": "#/$defs/SourceEventId"
+    },
+    "provenance": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Provenance"
+      }
+    },
+    "ignoredEvidence": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/IgnoredEvidence"
+      }
+    }
+  },
+  "required": [
+    "contract",
+    "descriptorVersion",
+    "registryRevision",
+    "source",
+    "label",
+    "subjects",
+    "summary",
+    "occurredAt",
+    "effective",
+    "recordedAt",
+    "recordedAtSource",
+    "sources",
+    "correction",
+    "sourceEventId",
+    "provenance",
+    "ignoredEvidence"
+  ],
+  "$defs": {
+    "Instant": {
+      "type": "string",
+      "description": "An RFC 3339 instant with an uppercase T separator and Z zone letter. A numeric offset is kept as authored.",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T"
+    },
+    "Unavailable": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "const": "unavailable"
+        }
+      },
+      "required": [
+        "status"
+      ]
+    },
+    "DeclaredUnknown": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "const": "declaredUnknown"
+        }
+      },
+      "required": [
+        "status"
+      ]
+    },
+    "Unsupported": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "const": "unsupported"
+        },
+        "detail": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "status",
+        "detail"
+      ]
+    },
+    "AvailableScalar": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "const": "available"
+        },
+        "type": {
+          "enum": [
+            "date",
+            "instant",
+            "text",
+            "uuid"
+          ]
+        },
+        "value": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "status",
+        "type",
+        "value"
+      ]
+    },
+    "AvailableReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "const": "available"
+        },
+        "type": {
+          "const": "reference"
+        },
+        "value": {
+          "type": "string"
+        },
+        "target": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "status",
+        "type",
+        "value"
+      ]
+    },
+    "Value": {
+      "description": "One record member as the registry stated it. unavailable: the record has no such key. declaredUnknown: the record holds an explicit null. unsupported: the client does not know the declared type, kind or relation and says so instead of guessing.",
+      "oneOf": [
+        {
+          "$ref": "#/$defs/AvailableScalar"
+        },
+        {
+          "$ref": "#/$defs/AvailableReference"
+        },
+        {
+          "$ref": "#/$defs/DeclaredUnknown"
+        },
+        {
+          "$ref": "#/$defs/Unavailable"
+        },
+        {
+          "$ref": "#/$defs/Unsupported"
+        }
+      ]
+    },
+    "Role": {
+      "description": "A subject or source. kind and namespace are absent when the client does not know the role kind; value is then unsupported.",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "role": {
+              "type": "string"
+            },
+            "label": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "native"
+            },
+            "value": {
+              "$ref": "#/$defs/Value"
+            }
+          },
+          "required": [
+            "role",
+            "kind",
+            "value"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "role": {
+              "type": "string"
+            },
+            "label": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "external"
+            },
+            "namespace": {
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/$defs/Value"
+            }
+          },
+          "required": [
+            "role",
+            "kind",
+            "namespace",
+            "value"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "role": {
+              "type": "string"
+            },
+            "label": {
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/$defs/Unsupported"
+            }
+          },
+          "required": [
+            "role",
+            "value"
+          ]
+        }
+      ]
+    },
+    "Time": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/Unavailable"
+        },
+        {
+          "$ref": "#/$defs/Unsupported"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "point"
+            },
+            "at": {
+              "$ref": "#/$defs/Value"
+            }
+          },
+          "required": [
+            "kind",
+            "at"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "interval"
+            },
+            "meaning": {
+              "enum": [
+                "span",
+                "within"
+              ]
+            },
+            "start": {
+              "$ref": "#/$defs/Value"
+            },
+            "end": {
+              "$ref": "#/$defs/Value"
+            }
+          },
+          "required": [
+            "kind",
+            "meaning",
+            "start",
+            "end"
+          ]
+        }
+      ]
+    },
+    "Correction": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/Unavailable"
+        },
+        {
+          "$ref": "#/$defs/Unsupported"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "relation": {
+              "enum": [
+                "corrects",
+                "supersedes"
+              ]
+            },
+            "reference": {
+              "$ref": "#/$defs/Value"
+            }
+          },
+          "required": [
+            "relation",
+            "reference"
+          ]
+        }
+      ]
+    },
+    "SourceEventId": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/Unavailable"
+        },
+        {
+          "$ref": "#/$defs/Unsupported"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "namespace": {
+              "$ref": "#/$defs/Value"
+            },
+            "value": {
+              "$ref": "#/$defs/Value"
+            },
+            "duplicates": {
+              "enum": [
+                "reject",
+                "allow"
+              ]
+            }
+          },
+          "required": [
+            "namespace",
+            "value",
+            "duplicates"
+          ]
+        }
+      ]
+    },
+    "Provenance": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "action-receipt"
+            },
+            "action": {
+              "type": "string"
+            },
+            "applicationId": {
+              "type": "string"
+            },
+            "effect": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "action",
+            "applicationId",
+            "effect"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "proposal-application"
+            },
+            "applicationId": {
+              "type": "string"
+            },
+            "submissionVersion": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "appliedAt": {
+              "$ref": "#/$defs/Instant"
+            },
+            "appliedBy": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "applicationId",
+            "submissionVersion"
+          ]
+        }
+      ]
+    },
+    "IgnoredEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "enum": [
+            "action-receipt",
+            "proposal-application"
+          ]
+        },
+        "applicationId": {
+          "type": "string"
+        },
+        "reason": {
+          "enum": [
+            "revision-mismatch",
+            "no-matching-result"
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "applicationId",
+        "reason"
+      ]
+    }
+  }
+}

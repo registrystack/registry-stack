@@ -15,6 +15,7 @@ use axum::extract::State;
 use axum::http::{HeaderName, HeaderValue, Request, Response, StatusCode};
 use axum::routing::any;
 use axum::Router;
+use jsonschema::{Draft, JSONSchema};
 use registry_breg_client::{
     occurrence_view, occurrence_view_from_json, BRegActionInvocationRequest, BRegCreationRevision,
     BRegIdempotencyKey, BRegMetadata, BRegOccurrenceDescriptor, BRegOccurrenceError,
@@ -396,6 +397,126 @@ fn generated_fixtures_equal_the_projection_output() {
             );
             assert_eq!(read_fixture(&format!("{name}.json")), view, "{name} view");
         }
+    }
+}
+
+// ---- The published view schema ----
+
+fn view_schema() -> JSONSchema {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../products/breg/contracts/occurrence-view/OccurrenceView.schema.json");
+    let bytes =
+        std::fs::read(&path).unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+    let schema: Value = serde_json::from_slice(&bytes)
+        .unwrap_or_else(|error| panic!("parse {}: {error}", path.display()));
+    assert_eq!(
+        schema["properties"]["contract"]["const"],
+        json!(OCCURRENCE_VIEW_CONTRACT),
+        "the schema pins the contract identifier the client emits"
+    );
+    JSONSchema::options()
+        .with_draft(Draft::Draft202012)
+        .compile(&schema)
+        .unwrap_or_else(|error| panic!("the view schema compiles: {error}"))
+}
+
+fn assert_valid(schema: &JSONSchema, label: &str, view: &Value) {
+    if let Err(errors) = schema.validate(view) {
+        let report: Vec<String> = errors
+            .map(|error| format!("{}: {error}", error.instance_path))
+            .collect();
+        panic!("{label} violates the view schema:\n{}", report.join("\n"));
+    }
+}
+
+#[test]
+fn the_committed_fixtures_validate_against_the_view_schema() {
+    let schema = view_schema();
+    for name in [
+        "incorporation",
+        "suspension-decision",
+        "suspension-correction",
+        "ownership-transfer",
+    ] {
+        assert_valid(&schema, name, &read_fixture(&format!("{name}.json")));
+    }
+}
+
+#[test]
+fn every_status_and_degraded_member_validates_against_the_view_schema() {
+    let schema = view_schema();
+
+    let mut descriptor = incorporation_descriptor();
+    descriptor["effective"] = json!({"kind": "recurrence", "rule": "weekly"});
+    descriptor["correction"]["relation"] = json!("supersedes");
+    descriptor["sourceEventId"]["duplicates"] = json!("merge");
+    descriptor["subjects"][0]["kind"] = json!("delegated");
+    descriptor["occurredAt"] = json!({"kind": "interval", "meaning": "around",
+        "start": field_ref("occurred-on", "occurredOn", "date", None)});
+    let mut arguments = arguments("incorporation", descriptor, incorporation_record());
+    arguments["descriptor"]["summary"]["type"] = json!("duration");
+    arguments["record"]["domainData"]["summary"] = json!("P1D");
+    arguments.insert("creationRevision".into(), creation_revision_json());
+    arguments.insert(
+        "actionReceipts".into(),
+        json!([{"effect": "record-incorporation", "receipt": incorporation_receipt()},
+            {"effect": "absent-effect", "receipt": incorporation_receipt()}]),
+    );
+    arguments.insert(
+        "proposalApplications".into(),
+        json!([{"applicationId": "b2000000-0000-4000-8000-000000000002", "submissionVersion": 3,
+            "effectDigest": "sha256:00000000000000000000000000000000000000000000000000000000000000bb",
+            "appliedBy": "reviewer-ref-1", "appliedAt": "2026-10-26T09:00:00Z",
+            "resultLinks": [{"recordType": "incorporation", "recordId": INCORPORATION_ID, "revision": 2}]}]),
+    );
+    let view = expect_view(&arguments);
+    assert_eq!(view["subjects"][0]["value"]["status"], json!("unsupported"));
+    assert_eq!(view["summary"]["status"], json!("unsupported"));
+    assert_valid(&schema, "degraded view", &view);
+
+    let mut bare = transfer_arguments();
+    bare.insert(
+        "proposalApplications".into(),
+        json!([{"applicationId": "b2000000-0000-4000-8000-000000000002", "submissionVersion": 3,
+            "effectDigest": "sha256:00000000000000000000000000000000000000000000000000000000000000bb",
+            "appliedBy": "reviewer-ref-1", "appliedAt": "2026-10-26T09:00:00Z",
+            "resultLinks": [{"recordType": "ownership-transfer", "recordId": TRANSFER_ID, "revision": 1}]}]),
+    );
+    let view = expect_view(&bare);
+    assert_eq!(view["provenance"][0]["kind"], json!("proposal-application"));
+    assert_valid(&schema, "proposal provenance view", &view);
+}
+
+#[test]
+fn the_view_schema_refuses_shapes_the_projection_never_emits() {
+    let schema = view_schema();
+    let valid = read_fixture("incorporation.json");
+    let mutations: [(&str, DescriptorMutation); 7] = [
+        ("an unknown member", |view| view["extra"] = json!(true)),
+        ("a wrong contract", |view| view["contract"] = json!("other")),
+        ("a missing recordedAtSource", |view| {
+            view.as_object_mut()
+                .expect("view")
+                .remove("recordedAtSource");
+        }),
+        ("an unknown status word", |view| {
+            view["summary"] = json!({"status": "redacted"});
+        }),
+        ("an available value without a value", |view| {
+            view["summary"] = json!({"status": "available", "type": "text"});
+        }),
+        ("an unsupported value without a detail", |view| {
+            view["summary"] = json!({"status": "unsupported"});
+        }),
+        ("an unknown ignored-evidence reason", |view| {
+            view["ignoredEvidence"] = json!([{"kind": "action-receipt",
+                "applicationId": APPLICATION_ID, "reason": "stale"}]);
+        }),
+    ];
+    for (label, mutate) in mutations {
+        let mut view = valid.clone();
+        mutate(&mut view);
+        assert!(!schema.is_valid(&view), "the schema accepted {label}");
     }
 }
 

@@ -73,14 +73,17 @@ or unify distinct authority contracts. Shared HTTP/token primitives live in
   evidence the caller supplies. It reads no clock and performs no exchange.
   Recorded time comes only from the creation revision of that record, which
   `occurrence_creation_revision` reads as exactly revision 1 and reports as
-  absent only for a 403 or 404 answer. Evidence that does not match the
+  absent only for a 403 or 404 answer, which means the caller cannot see that
+  revision; every other status is returned as an error. Evidence that does not match the
   record's exact type, identifier, and revision is listed as ignored, never
   merged. Instants are emitted with an uppercase `T` and `Z` and the offset the
   registry served (it serves stored timestamps in UTC with `+00:00`); dates stay
   dates. The Rust projection is the single implementation:
   the Node and Python exports (`occurrenceView`, `occurrence_view`, and the
   metadata `occurrenceDescriptor` or `occurrence_descriptor` accessor) pass
-  JSON through it unchanged and add no semantics.
+  JSON through it unchanged and add no semantics. The view shape, its status
+  words and its error codes are documented in `products/breg/occurrences.md`
+  and published as `products/breg/contracts/occurrence-view/OccurrenceView.schema.json`.
 - Messaging submissions take a caller-chosen idempotency key; a binding never
   generates one. Only the Rust client's bounded same-key retry resends a
   submission, and a cancellation is never resent. Message, template,
