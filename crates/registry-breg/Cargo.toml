@@ -371,6 +371,11 @@ path = "tests/postgres_immediate_action_requirements.rs"
 required-features = ["postgres-test"]
 
 [[test]]
+name = "postgres_multi_reference_action_authority"
+path = "tests/postgres_multi_reference_action_authority.rs"
+required-features = ["postgres-test", "tooling"]
+
+[[test]]
 name = "postgres_action_handlers"
 path = "tests/postgres_action_handlers.rs"
 required-features = ["postgres-test", "tooling"]

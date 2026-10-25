@@ -85,6 +85,7 @@ postgres_targets=(
   postgres_mutation
   postgres_reference_integrity
   postgres_immediate_action_requirements
+  postgres_multi_reference_action_authority
   postgres_immediate_action_generated_identifiers
   postgres_consent_access
   postgres_membership_access

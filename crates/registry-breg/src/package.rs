@@ -69,13 +69,15 @@ pub const MAX_RHAI_PLANNER_SOURCE_BYTES: u64 = crate::plan::MAX_PLAN_SOURCE_BYTE
 pub const MAX_RHAI_PLANNER_PATH_BYTES: usize = 256;
 
 const MANIFEST_PATH: &str = "package.json";
-const MAX_MANIFEST_BYTES: u64 = 4 * 1024 * 1024;
+const MAX_MANIFEST_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_FILE_BYTES: u64 = MAX_PACKAGE_SOURCE_FILE_BYTES;
 pub const MAX_PACKAGE_BYTES: u64 = 64 * 1024 * 1024;
 pub const MAX_PACKAGE_FILES: usize = 1_024;
+/// Maximum number of statements represented by one bounded package migration
+/// and its durable PostgreSQL activation-ledger identity.
+pub const MAX_MIGRATION_STATEMENTS: usize = 4_096;
 const MAX_PATH_BYTES: usize = 512;
 const MAX_PATH_COMPONENTS: usize = 16;
-const MAX_MIGRATION_STATEMENTS: usize = 1_024;
 const MAX_MIGRATION_BASELINE_BYTES: usize = 4 * 1024 * 1024;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -839,15 +841,23 @@ impl PreparedPackage {
         }
     }
 
+    fn manifest_bytes(&self) -> Result<Vec<u8>> {
+        let bytes = canonicalize_json(
+            &serde_json::to_value(self.envelope()).map_err(|_| PackageError::CanonicalJson)?,
+        )
+        .map_err(|_| PackageError::CanonicalJson)?;
+        if bytes.len() as u64 > MAX_MANIFEST_BYTES {
+            return Err(PackageError::Bounds);
+        }
+        Ok(bytes)
+    }
+
     /// The package identity this candidate has once published without a
     /// `REVISION` file: the digest of the sum file over its files and
     /// manifest. Nothing is written.
     pub fn package_digest(&self) -> Result<String> {
         let mut files = self.files.clone();
-        let manifest_bytes = canonicalize_json(
-            &serde_json::to_value(self.envelope()).map_err(|_| PackageError::CanonicalJson)?,
-        )
-        .map_err(|_| PackageError::CanonicalJson)?;
+        let manifest_bytes = self.manifest_bytes()?;
         files.insert(MANIFEST_PATH.to_owned(), manifest_bytes);
         plan_package(
             Path::new("."),
@@ -874,6 +884,7 @@ impl PreparedPackage {
         destination: &Path,
         revision: Option<&str>,
     ) -> Result<SharedVerifiedPackage> {
+        let manifest_bytes = self.manifest_bytes()?;
         reject_symlink_components(destination)?;
         if destination.exists() {
             return Err(PackageError::Closure);
@@ -895,10 +906,6 @@ impl PreparedPackage {
                 }
                 write_new_file(&full, bytes)?;
             }
-            let manifest_bytes = canonicalize_json(
-                &serde_json::to_value(self.envelope()).map_err(|_| PackageError::CanonicalJson)?,
-            )
-            .map_err(|_| PackageError::CanonicalJson)?;
             write_new_file(&destination.join(MANIFEST_PATH), &manifest_bytes)?;
             let package = write_sum_file(
                 destination,
@@ -3245,11 +3252,21 @@ pub fn prepare_package_with_project_assets(
     };
     validate_migration_plan(&manifest, &compiled)?;
     validate_source_inventory(&manifest)?;
-    Ok(PreparedPackage {
+    finish_prepared_package(manifest, compiled, files)
+}
+
+fn finish_prepared_package(
+    manifest: PackageManifest,
+    registry: CompiledRegistry,
+    files: BTreeMap<String, Vec<u8>>,
+) -> Result<PreparedPackage> {
+    let prepared = PreparedPackage {
         manifest,
-        registry: compiled,
+        registry,
         files,
-    })
+    };
+    prepared.manifest_bytes()?;
+    Ok(prepared)
 }
 
 #[cfg(feature = "tooling")]
@@ -3284,17 +3301,17 @@ fn reviewed_successor_inputs(
     let PreparedReviewedMigrationPlan {
         descriptor_paths,
         files,
+        statement_count,
     } = reviewed;
-    Ok((
-        reviewed_successor_migration_plan(
-            baseline,
-            compiled,
-            &change_set,
-            descriptor_paths,
-            prior_schema_fingerprint,
-        )?,
-        files,
-    ))
+    let plan = reviewed_successor_migration_plan(
+        baseline,
+        compiled,
+        &change_set,
+        descriptor_paths,
+        prior_schema_fingerprint,
+    )?;
+    validate_migration_plan_bounds(&plan, statement_count)?;
+    Ok((plan, files))
 }
 
 fn package_compiler_assets(
@@ -4672,6 +4689,9 @@ fn rederive(
     }
     validate_migration_plan(manifest, &compiled)?;
     let reviewed_migration_plan = rederive_reviewed_migration_plan(manifest, loaded, &compiled)?;
+    if let Some(reviewed) = &reviewed_migration_plan {
+        validate_migration_plan_bounds(&manifest.migration_plan, reviewed.statement_count())?;
+    }
     Ok((compiled, reviewed_migration_plan))
 }
 
@@ -4964,15 +4984,7 @@ fn validate_captured_bindings(
 }
 
 fn validate_migration_plan(manifest: &PackageManifest, compiled: &CompiledRegistry) -> Result<()> {
-    if manifest.migration_plan.statements.len() > MAX_MIGRATION_STATEMENTS {
-        return Err(PackageError::Bounds);
-    }
-    if manifest.migration_plan.changes.len() > MAX_MIGRATION_STATEMENTS {
-        return Err(PackageError::Bounds);
-    }
-    if manifest.migration_plan.reviewed_descriptors.len() > MAX_MIGRATION_STATEMENTS {
-        return Err(PackageError::Bounds);
-    }
+    validate_migration_plan_bounds(&manifest.migration_plan, 0)?;
     let mut prior_descriptor = None;
     for descriptor in &manifest.migration_plan.reviewed_descriptors {
         validate_relative(descriptor)?;
@@ -4987,6 +4999,30 @@ fn validate_migration_plan(manifest: &PackageManifest, compiled: &CompiledRegist
     let expected = expected_migration_plan(manifest, compiled)?;
     if manifest.migration_plan != expected {
         return Err(PackageError::MigrationPlan);
+    }
+    Ok(())
+}
+
+fn validate_migration_plan_bounds(
+    plan: &MigrationPlan,
+    reviewed_statement_count: usize,
+) -> Result<()> {
+    if plan.statements.len() > MAX_MIGRATION_STATEMENTS {
+        return Err(PackageError::Bounds);
+    }
+    if plan.changes.len() > MAX_MIGRATION_STATEMENTS {
+        return Err(PackageError::Bounds);
+    }
+    if plan.reviewed_descriptors.len() > MAX_MIGRATION_STATEMENTS {
+        return Err(PackageError::Bounds);
+    }
+    if plan
+        .statements
+        .len()
+        .checked_add(reviewed_statement_count)
+        .is_none_or(|count| count > MAX_MIGRATION_STATEMENTS)
+    {
+        return Err(PackageError::Bounds);
     }
     Ok(())
 }

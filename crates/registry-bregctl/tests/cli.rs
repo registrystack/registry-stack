@@ -46,6 +46,9 @@ mod module_consent_tests;
 #[path = "cli/file_check.rs"]
 mod file_check_tests;
 
+#[path = "cli/migration_capacity.rs"]
+mod migration_capacity_tests;
+
 #[test]
 fn duplicate_profile_display_warns_once_and_deny_warnings_refuses_it() {
     let mut source = registry_platform_yaml::Reader::new("registry.yaml")

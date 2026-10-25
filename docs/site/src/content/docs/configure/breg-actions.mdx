@@ -75,8 +75,18 @@ for a Proposal:
 Other Proposal operations, such as `submit`, `cancel`, or `apply`, are granted separately under
 `permissions.proposals`, so whoever drafts a change need not apply it.
 
+The Action grant also declares `targets`. Every input that references an existing Record needs
+current target authority, including a reference used only as a link in a newly created Record.
+When two inputs reference the same Record type, BReg checks the target row boundaries against each
+referenced Record independently. An `in` boundary therefore succeeds only when the array claim
+covers both Records; authority over one does not authorize the other.
+Run the [two-reference example](https://github.com/registrystack/registry-stack/tree/main/products/breg/fixtures/multi-reference-array-claim)
+to exercise the permitted and refused cases with local clients.
+
 {/* evidence: crates/registry-breg/src/contract.rs (ActionSource);
-    crates/registry-breg/src/immediate_actions.rs; products/breg/examples/facility/registry.yaml. */}
+    crates/registry-breg/src/immediate_actions.rs; products/breg/examples/facility/registry.yaml;
+    products/breg/fixtures/multi-reference-array-claim/registry.yaml;
+    crates/registry-breg/tests/postgres_multi_reference_action_authority.rs. */}
 
 ## Immediate Actions return an ActionReceipt
 
@@ -84,6 +94,15 @@ Other Proposal operations, such as `submit`, `cancel`, or `apply`, are granted s
 writes every effect, and commits the new revisions, the receipt, the audit entry, and any outbox
 events together, or none of them. The answer is an
 [ActionReceipt](../../reference/glossary/#action-receipt) naming each changed Record and its new revision.
+
+Before invocation, use the caller-filtered Action descriptor to identify concurrency conditions.
+`requiredConditionKeys` contains the API names of existing write targets and inputs with an
+`unchanged` revision guard. When that list is nonempty, `routes.targetConditions` advertises the
+endpoint that reads their current condition tokens. Send its returned `preconditions` unchanged
+with the invocation. A reference used only as a link still needs target authority, but it is not a
+condition input. When `requiredConditionKeys` is empty, omit `preconditions`.
+The [immediate Action API contract](../../reference/breg-api/#immediate-actions) gives the request
+rules.
 
 A Record type can require a Proposal for an operation:
 
@@ -96,7 +115,8 @@ With this on `facility`, neither a direct patch nor an immediate Action may patc
 a Proposal can. `register-facility` still creates facilities at once.
 
 {/* evidence: crates/registry-breg/src/mutation/action.rs (apply_action_effect_group);
-    crates/registry-breg/src/immediate_actions.rs. */}
+    crates/registry-breg/src/immediate_actions.rs; crates/registry-breg/src/plan.rs,
+    condition_inputs(); crates/registry-breg/src/artifacts.rs, public_action_metadata_entry(). */}
 
 ## Proposals
 

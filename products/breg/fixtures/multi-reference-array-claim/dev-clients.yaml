@@ -1,0 +1,34 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/breg/dev-clients/dev-clients.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/breg/dev-clients/v1alpha1
+kind: BRegDevClients
+clients:
+  - id: reference-loader
+    accessProfiles: [reference-loader]
+    scopes: [registry:authority:load]
+    claims:
+      registry_principal: synthetic-reference-loader
+      registry_purpose: permit-administration
+  - id: transfer-clerk
+    accessProfiles: [transfer-clerk]
+    scopes: [registry:permit:transfer]
+    claims:
+      registry_principal: synthetic-transfer-clerk
+      registry_purpose: permit-administration
+      allowed_jurisdictions: [north-district, south-district]
+  - id: north-only-transfer-clerk
+    accessProfiles: [transfer-clerk]
+    scopes: [registry:permit:transfer]
+    claims:
+      registry_principal: synthetic-transfer-clerk
+      registry_purpose: permit-administration
+      allowed_jurisdictions: [north-district]
+    testBindings:
+      - {journeyId: every-reference-needs-authority, stepId: refuse-one-reference-outside-claim}
+  - id: transfer-clerk-without-claim
+    accessProfiles: [transfer-clerk]
+    scopes: [registry:permit:transfer]
+    claims:
+      registry_principal: synthetic-transfer-clerk
+      registry_purpose: permit-administration
+    testBindings:
+      - {journeyId: every-reference-needs-authority, stepId: refuse-missing-array-claim}

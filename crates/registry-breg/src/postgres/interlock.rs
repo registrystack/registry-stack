@@ -30,7 +30,7 @@ use crate::migration_plan::{
 };
 use crate::model::{CompiledBlindIndex, CompiledEntity, CompiledField, CompiledRegistry};
 use crate::mutation::install_mutation_schema;
-use crate::package::CompiledRegistryMigrationBaseline;
+use crate::package::{CompiledRegistryMigrationBaseline, MAX_MIGRATION_STATEMENTS};
 
 use super::{
     catalog::{
@@ -40,11 +40,11 @@ use super::{
     },
     config::ConnectionTls,
     migration_ledger::{
-        in_flight_activation, migration_phase_state, record_applied, record_chunk_progress,
-        record_failed, record_postconditions_complete, record_preconditions_complete,
-        record_reverted, record_started, record_step_complete, statement_checksum, step_progress,
-        verify_resumable, ActivationPlanKind, MigrationLedgerEntry, MigrationLedgerStep,
-        MigrationLedgerStepKind,
+        ensure_migration_statement_capacity, in_flight_activation, migration_phase_state,
+        record_applied, record_chunk_progress, record_failed, record_postconditions_complete,
+        record_preconditions_complete, record_reverted, record_started, record_step_complete,
+        statement_checksum, step_progress, verify_resumable, ActivationPlanKind,
+        MigrationLedgerEntry, MigrationLedgerStep, MigrationLedgerStepKind,
     },
     schema::{
         execute_compiled_ddl_statement, is_spatial_candidate_view_drop_sql,
@@ -55,9 +55,8 @@ use super::{
     ExpectedRegistryIdentity, PostgresKernelError, Result, SqlIdentifier,
 };
 
-// These defense-in-depth bounds match the verified package manifest envelope:
-// at most 1,024 migration statements inside at most 4 MiB of manifest bytes.
-const MAX_VERIFIED_DDL_STATEMENTS: usize = 1024;
+// These defense-in-depth bounds match the verified package manifest envelope.
+const MAX_VERIFIED_DDL_STATEMENTS: usize = MAX_MIGRATION_STATEMENTS;
 const MAX_VERIFIED_DDL_STATEMENT_BYTES: usize = 4 * 1024 * 1024;
 const MAX_VERIFIED_DDL_STATEMENT_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 /// Final field-encryption verification must inspect every affected row without
@@ -2606,6 +2605,7 @@ async fn begin_successor_in(
         .is_some();
     if fresh {
         verify_import_run_admission_state(transaction, current.activation_uuid()?).await?;
+        ensure_migration_statement_capacity(transaction).await?;
     }
     let changed = transaction
         .execute(

@@ -11,6 +11,9 @@ mod fingerprint_tests;
 #[path = "postgres_package/pre_1_0_schema.rs"]
 mod pre_1_0_schema_tests;
 
+#[path = "postgres_package/migration_capacity.rs"]
+mod migration_capacity_tests;
+
 #[cfg(feature = "tooling")]
 #[path = "postgres_package/policy_upgrade.rs"]
 mod policy_upgrade_tests;

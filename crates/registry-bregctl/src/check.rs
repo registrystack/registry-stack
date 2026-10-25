@@ -58,6 +58,7 @@ const ADD_READABLE_OR_REMOVE_PROCESSING: &str =
 const REVIEW_RELATED_DISCLOSURE: &str = "Remove fields that these readers should not see from this read path's readableFields, or remove the read path; use a direct permission on the related record type when its own row boundaries should apply.";
 const FIND_PROJECT: &str = "Point bregctl check at a readable project directory that holds registry.yaml, or create one with bregctl init.";
 const REBUILD_PACKAGE: &str = "Rebuild the package with bregctl package PROJECT --test-receipt RECEIPT --output BUILD; a package is checked as the build wrote it, unmodified.";
+const REDUCE_MIGRATION_STATEMENTS: &str = "For an initial activation, reduce the generated schema or policy inventory below the supported package migration bound, for example by consolidating equivalent access profiles. A baseline-derived successor is checked against its actual migration when the package is prepared.";
 
 /// What `bregctl check` was asked to check.
 pub(super) struct Request<'a> {
@@ -769,6 +770,14 @@ fn compile_project_with_documents(
     }
     match compile_captured_registry(&source, profile) {
         Ok(compiled) => {
+            if profile == ProfileArg::Production {
+                if let Some(diagnostic) =
+                    migration_statement_capacity_diagnostic(compiled.ddl().statements.len())
+                {
+                    let severity = severity_of(diagnostic.severity);
+                    diagnostics.push(place(project, &documents, diagnostic, severity));
+                }
+            }
             for finding in compiled
                 .findings()
                 .iter()
@@ -802,6 +811,23 @@ fn compile_project_with_documents(
             None
         }
     }
+}
+
+fn migration_statement_capacity_diagnostic(
+    statement_count: usize,
+) -> Option<registry_breg::Diagnostic> {
+    (statement_count > registry_breg::package::MAX_MIGRATION_STATEMENTS).then(|| {
+        registry_breg::Diagnostic {
+            severity: DiagnosticSeverity::Finding,
+            code: "breg.package.migration-statement-capacity".to_owned(),
+            path: "project".to_owned(),
+            message: format!(
+                "The full compiled schema would require {statement_count} statements for an initial activation; a package migration supports at most {}. Baseline-derived successors are checked against their actual migration when the package is prepared.",
+                registry_breg::package::MAX_MIGRATION_STATEMENTS
+            ),
+            related: Vec::new(),
+        }
+    })
 }
 
 /// Compile the same authoring source as `check`, retaining its positioned
@@ -1601,6 +1627,7 @@ fn without_values(path: &str) -> String {
 fn action_for(code: &str, severity: Severity) -> &'static str {
     match code {
         "breg.field.pattern-unverified-offline" => RUN_SCHEMA_TEST,
+        "breg.package.migration-statement-capacity" => REDUCE_MIGRATION_STATEMENTS,
         "breg.module.lock-digest-missing"
         | "breg.module.lock-digest-required"
         | "breg.module.lock-digest-mismatch"
@@ -1801,6 +1828,24 @@ mod tests {
             let action = action_for(code, Severity::Error);
             assert!(action.contains(setting), "{code}: {action}");
         }
+    }
+
+    #[test]
+    fn production_capacity_diagnostic_names_actual_and_supported_statement_counts() {
+        assert!(migration_statement_capacity_diagnostic(
+            registry_breg::package::MAX_MIGRATION_STATEMENTS
+        )
+        .is_none());
+
+        let actual = registry_breg::package::MAX_MIGRATION_STATEMENTS + 1;
+        let diagnostic = migration_statement_capacity_diagnostic(actual)
+            .expect("one statement beyond the supported initial bound is reported");
+        assert_eq!(diagnostic.code, "breg.package.migration-statement-capacity");
+        assert_eq!(diagnostic.severity, DiagnosticSeverity::Finding);
+        assert!(diagnostic.message.contains(&actual.to_string()));
+        assert!(diagnostic
+            .message
+            .contains(&registry_breg::package::MAX_MIGRATION_STATEMENTS.to_string()));
     }
 
     #[test]

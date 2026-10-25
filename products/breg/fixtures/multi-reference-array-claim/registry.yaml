@@ -1,0 +1,103 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/breg/project/project.v1alpha1.schema.json
+apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project:
+  id: permit-authority-transfer
+  version: 0.1.0
+  defaultLanguage: en
+  canonicalBaseIri: https://permit-authority-transfer.example.gov
+package:
+  sourceRevision: permit-authority-transfer-0.1.0
+manifestProjection:
+  accessProfile: reference-loader
+  classificationCeiling: internal
+  catalog:
+    baseUrl: https://permit-authority-transfer.example.gov
+    title: Permit authority transfer catalog
+    publisher:
+      id: permit-registry-authority
+      name: Permit Registry Authority
+  publicService:
+    id: permit-authority-transfer-service
+    title: Permit authority transfer service
+  datasets:
+    - id: permits
+      title: Permit authority transfers
+      owner: Permit Registry Authority
+      status: under-development
+  dataServices:
+    - id: permit-authority-transfer-api
+      title: Permit authority transfer API
+      endpointUrl: https://permit-authority-transfer.example.gov
+      servesDatasets: [permits]
+  distributions: []
+datasets:
+  - id: permits
+recordTypes:
+  - id: public-authority
+    primaryDataset: permits
+    route: public-authorities
+    mutationMode: mutable
+    fields:
+      - {id: code, type: string, required: true, minimumLength: 1, maximumLength: 64, classification: internal}
+      - {id: jurisdiction, type: string, required: true, minimumLength: 1, maximumLength: 64, classification: internal}
+    constraints:
+      - {id: authority-code-unique, type: unique, fields: [code]}
+  - id: permit-transfer
+    primaryDataset: permits
+    route: permit-transfers
+    mutationMode: create-only
+    fields:
+      - {id: source-authority, apiName: sourceAuthorityId, type: reference, target: public-authority, required: true, classification: internal}
+      - {id: destination-authority, apiName: destinationAuthorityId, type: reference, target: public-authority, required: true, classification: internal}
+      - {id: transfer-reference, apiName: transferReference, type: string, required: true, minimumLength: 1, maximumLength: 64, classification: internal}
+    constraints:
+      - {id: transfer-reference-unique, type: unique, fields: [transfer-reference]}
+actions:
+  - id: register-authority-transfer
+    execution: {mode: immediate}
+    inputs:
+      - {id: source-authority, apiName: sourceAuthorityId, type: reference, target: public-authority, required: true, classification: internal}
+      - {id: destination-authority, apiName: destinationAuthorityId, type: reference, target: public-authority, required: true, classification: internal}
+      - {id: transfer-reference, apiName: transferReference, type: string, required: true, minimumLength: 1, maximumLength: 64, classification: internal}
+    plan:
+      type: fixed
+      effects:
+        - id: transfer
+          target: {recordType: permit-transfer}
+          operation: create
+          set:
+            source-authority: {fromInput: source-authority}
+            destination-authority: {fromInput: destination-authority}
+            transfer-reference: {fromInput: transfer-reference}
+accessProfiles:
+  - id: reference-loader
+    default: true
+    principalClaim: registry_principal
+    requiredScopes: [registry:authority:load]
+    requiredPurposes: [permit-administration]
+    permissions:
+      records:
+        - recordType: public-authority
+          operations: [create, get, list]
+          readableFields: [code, jurisdiction]
+          writableFields: [code, jurisdiction]
+          rowBoundaries: unrestricted
+        - recordType: permit-transfer
+          operations: [get, list]
+          readableFields: [source-authority, destination-authority, transfer-reference]
+          rowBoundaries: unrestricted
+  - id: transfer-clerk
+    principalClaim: registry_principal
+    requiredScopes: [registry:permit:transfer]
+    requiredPurposes: [permit-administration]
+    permissions:
+      actions:
+        - action: register-authority-transfer
+          operations: [invoke]
+          targets:
+            - recordType: public-authority
+              rowBoundaries:
+                - {field: jurisdiction, claim: allowed_jurisdictions, operator: in}
+            - {recordType: permit-transfer, rowBoundaries: unrestricted}
+          results: [transfer]
