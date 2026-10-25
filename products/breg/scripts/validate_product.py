@@ -117,6 +117,7 @@ POSTGRES_TEST_COMMANDS = (
     "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_immediate_action_examples",
     "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_immediate_action_activation",
     "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_occurrence_examples",
+    "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_occurrence_reader",
     "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_webhook_outbox",
     "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_webhook_delivery",
     "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_hook_changes",
