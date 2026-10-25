@@ -123,6 +123,7 @@ pub mod migration_reconcile;
 pub mod model;
 #[cfg(feature = "runtime")]
 pub mod mutation;
+pub(crate) mod occurrence;
 #[cfg(feature = "runtime")]
 pub mod outbox;
 #[cfg(feature = "runtime")]
