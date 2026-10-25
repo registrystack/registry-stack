@@ -760,6 +760,48 @@ impl BaseRegistryClient {
         })
     }
 
+    /// Read the creation revision (revision 1) of one record, the only source
+    /// of an occurrence's recorded time.
+    ///
+    /// Performs exactly one exchange. Returns `None` when the caller cannot
+    /// read that revision (a 403 or 404 problem answer); the absence is never
+    /// replaced by another timestamp. Every other failure is returned, and a
+    /// revision 1 document that is not the record's creation is a body failure.
+    pub async fn occurrence_creation_revision(
+        &self,
+        entity_route: &str,
+        record_identifier: &str,
+        access_profile: Option<&str>,
+    ) -> Result<Option<BRegCreationRevision>, BaseRegistryClientError> {
+        let mut options = BRegRecordOptions::default();
+        if let Some(access_profile) = access_profile {
+            options = options
+                .access_profile(access_profile)
+                .map_err(|error| BaseRegistryClientError::invalid_request(error.reason()))?;
+        }
+        let document = match self
+            .get_record_revision(entity_route, record_identifier, 1, &options)
+            .await
+        {
+            Ok(document) => document,
+            Err(
+                BaseRegistryClientError::Problem {
+                    status: 403 | 404, ..
+                }
+                | BaseRegistryClientError::UnrecognizedProblem {
+                    status: 403 | 404, ..
+                },
+            ) => return Ok(None),
+            Err(error) => return Err(error),
+        };
+        let trace_id = document.metadata.trace_id().clone();
+        let value = decode_exact_json(document.value.as_bytes())
+            .map_err(|_| body_failure(200, trace_id.clone()))?;
+        BRegCreationRevision::from_document(record_identifier, &value)
+            .map(Some)
+            .map_err(|_| body_failure(200, trace_id))
+    }
+
     /// Execute one metadata-bound direct Create.
     ///
     /// A Create whose outcome is unknown is resent identically under the same

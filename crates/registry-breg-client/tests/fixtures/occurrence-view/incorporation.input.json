@@ -1,0 +1,115 @@
+{
+  "actionReceipts": [
+    {
+      "effect": "record-incorporation",
+      "receipt": {
+        "action": "incorporate-company",
+        "applicationId": "a1000000-0000-4000-8000-000000000001",
+        "results": {
+          "record-incorporation": {
+            "recordId": "6f1e0c62-0000-4000-8000-000000000001",
+            "recordType": "incorporation",
+            "revision": 1
+          },
+          "update-company": {
+            "recordId": "6f1e0c62-0000-4000-8000-00000000c001",
+            "recordType": "company",
+            "revision": 2
+          }
+        }
+      }
+    }
+  ],
+  "creationRevision": {
+    "createdAt": "2026-10-26T08:15:30.123456Z",
+    "recordId": "6f1e0c62-0000-4000-8000-000000000001",
+    "revision": "1"
+  },
+  "descriptor": {
+    "correction": {
+      "field": {
+        "apiName": "corrects",
+        "id": "corrects",
+        "target": "incorporation",
+        "type": "reference"
+      },
+      "relation": "corrects"
+    },
+    "descriptorVersion": "1",
+    "effective": {
+      "at": {
+        "apiName": "effectiveAt",
+        "id": "effective-at",
+        "type": "timestamp"
+      },
+      "kind": "point"
+    },
+    "label": "Incorporation",
+    "occurredAt": {
+      "at": {
+        "apiName": "occurredOn",
+        "id": "occurred-on",
+        "type": "date"
+      },
+      "kind": "point"
+    },
+    "recordedTime": {
+      "source": "creation-revision"
+    },
+    "sourceEventId": {
+      "constraint": "one-per-application",
+      "duplicates": "reject",
+      "field": {
+        "apiName": "applicationReference",
+        "id": "application-reference",
+        "type": "string"
+      },
+      "namespace": "urn:example:synthetic:applications"
+    },
+    "sources": [
+      {
+        "field": {
+          "apiName": "applicationReference",
+          "id": "application-reference",
+          "type": "string"
+        },
+        "kind": "external",
+        "label": "Application",
+        "namespace": "urn:example:synthetic:applications",
+        "role": "application"
+      }
+    ],
+    "subjects": [
+      {
+        "field": {
+          "apiName": "company",
+          "id": "company",
+          "target": "company",
+          "type": "reference"
+        },
+        "kind": "native",
+        "label": "Company",
+        "role": "company"
+      }
+    ],
+    "summary": {
+      "apiName": "summary",
+      "id": "summary",
+      "type": "text"
+    }
+  },
+  "record": {
+    "domainData": {
+      "applicationReference": "APP-2026-0042",
+      "company": "6f1e0c62-0000-4000-8000-00000000c001",
+      "corrects": null,
+      "effectiveAt": "2026-11-02T09:00:00Z",
+      "occurredOn": null,
+      "summary": "Synthetic incorporation of a test company."
+    },
+    "recordIdentifier": "6f1e0c62-0000-4000-8000-000000000001",
+    "revisionIdentifier": "1"
+  },
+  "recordType": "incorporation",
+  "registryRevision": "sha256:00000000000000000000000000000000000000000000000000000000000000aa"
+}

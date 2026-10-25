@@ -1,0 +1,104 @@
+{
+  "descriptor": {
+    "descriptorVersion": "1",
+    "effective": {
+      "at": {
+        "apiName": "effectiveAt",
+        "id": "effective-at",
+        "type": "timestamp"
+      },
+      "kind": "point"
+    },
+    "label": "Ownership transferred",
+    "occurredAt": {
+      "end": {
+        "apiName": "agreedBefore",
+        "id": "agreed-before",
+        "type": "date"
+      },
+      "kind": "interval",
+      "meaning": "within",
+      "start": {
+        "apiName": "agreedNotBefore",
+        "id": "agreed-not-before",
+        "type": "date"
+      }
+    },
+    "recordedTime": {
+      "source": "creation-revision"
+    },
+    "sourceEventId": {
+      "constraint": "one-per-deed",
+      "duplicates": "reject",
+      "field": {
+        "apiName": "deedReference",
+        "id": "deed-reference",
+        "type": "string"
+      },
+      "namespace": "urn:example:synthetic:deeds"
+    },
+    "sources": [
+      {
+        "field": {
+          "apiName": "deedReference",
+          "id": "deed-reference",
+          "type": "string"
+        },
+        "kind": "external",
+        "label": "Deed",
+        "namespace": "urn:example:synthetic:deeds",
+        "role": "deed"
+      }
+    ],
+    "subjects": [
+      {
+        "field": {
+          "apiName": "asset",
+          "id": "asset",
+          "target": "asset",
+          "type": "reference"
+        },
+        "kind": "native",
+        "label": "Asset",
+        "role": "asset"
+      },
+      {
+        "field": {
+          "apiName": "previousOwnership",
+          "id": "previous-ownership",
+          "target": "ownership-record",
+          "type": "reference"
+        },
+        "kind": "native",
+        "label": "Previous ownership",
+        "role": "previous-ownership"
+      },
+      {
+        "field": {
+          "apiName": "newOwnership",
+          "id": "new-ownership",
+          "target": "ownership-record",
+          "type": "reference"
+        },
+        "kind": "native",
+        "label": "New ownership",
+        "role": "new-ownership"
+      }
+    ]
+  },
+  "record": {
+    "domainData": {
+      "agreedBefore": null,
+      "agreedNotBefore": "2026-09-01",
+      "asset": "8b3e0000-0000-4000-8000-000000000b01",
+      "deedReference": "DEED-0007",
+      "effectiveAt": "2026-10-20T00:00:00+02:00",
+      "newOwnership": "8b3e0000-0000-4000-8000-000000000b12",
+      "previousOwnership": "8b3e0000-0000-4000-8000-000000000b11"
+    },
+    "recordIdentifier": "8b3e0000-0000-4000-8000-000000000020",
+    "revisionIdentifier": "1"
+  },
+  "recordType": "ownership-transfer",
+  "registryRevision": "sha256:00000000000000000000000000000000000000000000000000000000000000aa"
+}

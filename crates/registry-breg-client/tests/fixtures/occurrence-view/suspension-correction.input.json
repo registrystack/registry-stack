@@ -1,0 +1,67 @@
+{
+  "descriptor": {
+    "correction": {
+      "field": {
+        "apiName": "corrects",
+        "id": "corrects",
+        "target": "suspension-decision",
+        "type": "reference"
+      },
+      "relation": "corrects"
+    },
+    "descriptorVersion": "1",
+    "effective": {
+      "end": {
+        "apiName": "effectiveUntil",
+        "id": "effective-until",
+        "type": "date"
+      },
+      "kind": "interval",
+      "meaning": "span",
+      "start": {
+        "apiName": "effectiveFrom",
+        "id": "effective-from",
+        "type": "date"
+      }
+    },
+    "label": "Suspension decided",
+    "occurredAt": {
+      "at": {
+        "apiName": "decidedOn",
+        "id": "decided-on",
+        "type": "date"
+      },
+      "kind": "point"
+    },
+    "recordedTime": {
+      "source": "creation-revision"
+    },
+    "sources": [],
+    "subjects": [
+      {
+        "field": {
+          "apiName": "permit",
+          "id": "permit",
+          "target": "permit",
+          "type": "reference"
+        },
+        "kind": "native",
+        "label": "Permit",
+        "role": "permit"
+      }
+    ]
+  },
+  "record": {
+    "domainData": {
+      "corrects": "7a2d0000-0000-4000-8000-000000000010",
+      "decidedOn": "2026-10-27",
+      "effectiveFrom": "2026-12-15",
+      "effectiveUntil": "2027-01-15",
+      "permit": "7a2d0000-0000-4000-8000-000000000a01"
+    },
+    "recordIdentifier": "7a2d0000-0000-4000-8000-000000000011",
+    "revisionIdentifier": "1"
+  },
+  "recordType": "suspension-decision",
+  "registryRevision": "sha256:00000000000000000000000000000000000000000000000000000000000000aa"
+}
