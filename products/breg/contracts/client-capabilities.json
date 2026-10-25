@@ -505,6 +505,12 @@
       "rust": ["read_proposal_review_context_batch", "read_proposal_review_context", "read_proposal_review_status", "read_proposal_review_by_id", "download_proposal_review_document"],
       "node": ["readProposalReviewContextBatch", "readProposalReviewContext", "readProposalReviewStatus", "readProposalReviewById", "downloadProposalReviewDocument"],
       "python": ["read_proposal_review_context_batch", "read_proposal_review_context", "read_proposal_review_status", "read_proposal_review_by_id", "download_proposal_review_document"]
+    },
+    {
+      "id": "occurrence-view",
+      "rust": ["occurrence_view", "occurrence_creation_revision"],
+      "node": ["occurrenceCreationRevision"],
+      "python": ["occurrence_creation_revision"]
     }
   ]
 }

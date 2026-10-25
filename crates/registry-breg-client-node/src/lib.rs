@@ -8,8 +8,8 @@ use std::{collections::BTreeMap, sync::Arc, time::Duration};
 use napi::{bindgen_prelude::Buffer, Error as NapiError, Result};
 use napi_derive::napi;
 use registry_breg_client::{
-    verify_hook_delivery as verify_core_hook_delivery, BRegActionAvailabilityRequest,
-    BRegActionBinding, BRegActionInvocationRequest,
+    occurrence_view_from_json, verify_hook_delivery as verify_core_hook_delivery,
+    BRegActionAvailabilityRequest, BRegActionBinding, BRegActionInvocationRequest,
     BRegActionTargetConditions as CoreActionTargetConditions, BRegActionTargetConditionsRequest,
     BRegAsOfContinuation, BRegAsOfContinuationProjection, BRegAsOfListRequest, BRegBatchBinding,
     BRegBatchBuilder, BRegBatchRequest, BRegBoundingBox, BRegChangeContext, BRegComplete,
@@ -20,8 +20,8 @@ use registry_breg_client::{
     BRegHookVerificationError, BRegIngestionChunk as CoreIngestionChunk, BRegIngestionError,
     BRegIngestionPrefixDigest as CoreIngestionPrefixDigest, BRegIngestionRunListQuery,
     BRegIngestionRunRequest, BRegListRequest, BRegLookupRequest, BRegMetadata as CoreMetadata,
-    BRegMetadataSelectionError, BRegMetadataSelectionErrorKind, BRegPage, BRegPatchBinding,
-    BRegPatchRequest, BRegPreparedAction as CorePreparedAction,
+    BRegMetadataSelectionError, BRegMetadataSelectionErrorKind, BRegOccurrenceError, BRegPage,
+    BRegPatchBinding, BRegPatchRequest, BRegPreparedAction as CorePreparedAction,
     BRegPreparedCreate as CorePreparedCreate, BRegProblemCode, BRegProtocolFailure,
     BRegRawDocument, BRegRecordFormat, BRegRecordOptions, BRegRelationshipContinuation,
     BRegRelationshipContinuationProjection, BRegRelationshipListRequest, BRegReleaseSelection,
@@ -108,6 +108,24 @@ pub fn verify_hook_delivery(input: HookDeliveryInput) -> Result<VerifiedHookDeli
         idempotency_key: verified.idempotency_key,
         body: verified.body.into(),
     })
+}
+
+/// Project one record revision into the occurrence view. The input is the
+/// JSON arguments document of the Rust projection; the result is the view
+/// document as JSON text.
+#[napi]
+pub fn occurrence_view(arguments_json: String) -> Result<String> {
+    let view = occurrence_view_from_json(arguments_json.as_bytes()).map_err(occurrence_error)?;
+    serde_json::to_string(&view)
+        .map_err(|_| binding_error("protocol", "occurrence view is not representable"))
+}
+
+fn occurrence_error(error: BRegOccurrenceError) -> NapiError {
+    mapped_error(json!({
+        "kind": "occurrence",
+        "code": error.code(),
+        "message": error.to_string(),
+    }))
 }
 
 fn hook_verification_error(error: BRegHookVerificationError) -> NapiError {
@@ -2387,6 +2405,17 @@ pub struct Metadata {
 
 #[napi]
 impl Metadata {
+    /// The occurrence descriptor declared for one record type, as JSON text.
+    #[napi]
+    pub fn occurrence_descriptor(&self, record_type: String) -> Result<String> {
+        let descriptor = self
+            .inner
+            .occurrence(&record_type)
+            .map_err(occurrence_error)?;
+        serde_json::to_string(&descriptor.to_value())
+            .map_err(|_| binding_error("protocol", "occurrence descriptor is not representable"))
+    }
+
     /// Read-only capability inventory for each exact Action/profile pair.
     #[napi(getter)]
     pub fn proposal_actions(&self) -> Value {
@@ -2893,6 +2922,31 @@ impl BaseRegistryClient {
             .await
             .map(raw_value)
             .map_err(client_error)
+    }
+
+    /// Read the first revision of one record as the compact creation-revision
+    /// JSON, or null when the caller may not read it.
+    #[napi]
+    pub async fn occurrence_creation_revision(
+        &self,
+        entity_route: String,
+        record_identifier: String,
+        access_profile: Option<String>,
+    ) -> Result<Option<String>> {
+        self.inner
+            .occurrence_creation_revision(
+                &entity_route,
+                &record_identifier,
+                access_profile.as_deref(),
+            )
+            .await
+            .map_err(client_error)?
+            .map(|revision| {
+                serde_json::to_string(&revision).map_err(|_| {
+                    binding_error("protocol", "creation revision is not representable")
+                })
+            })
+            .transpose()
     }
 
     #[napi]

@@ -818,4 +818,5 @@ module.exports.TombstoneBinding = nativeBinding.TombstoneBinding
 module.exports.PrivateKeyJwt = nativeBinding.PrivateKeyJwt
 module.exports.PrivateKeyJwtBinding = nativeBinding.PrivateKeyJwtBinding
 module.exports.encodeIngestionChunk = nativeBinding.encodeIngestionChunk
+module.exports.occurrenceView = nativeBinding.occurrenceView
 module.exports.verifyHookDelivery = nativeBinding.verifyHookDelivery

@@ -20,6 +20,11 @@ export declare class BaseRegistryClient {
   recordRevisions(entityRoute: string, recordIdentifier: string, accessProfile?: string | undefined | null): Promise<RawOutcome>
   /** Retrieve one exact retained revision as validated inert record JSON. */
   getRecordRevision(entityRoute: string, recordIdentifier: string, revision: number, options?: any | undefined | null): Promise<RawOutcome>
+  /**
+   * Read the first revision of one record as the compact creation-revision
+   * JSON, or null when the caller may not read it.
+   */
+  occurrenceCreationRevision(entityRoute: string, recordIdentifier: string, accessProfile?: string | undefined | null): Promise<string | null>
   getRecord(entityRoute: string, recordIdentifier: string, options?: any | undefined | null): Promise<CompleteOutcome>
   listRecords(entityRoute: string, options?: any | undefined | null): Promise<PageOutcome>
   continueList(value: any): Promise<PageOutcome>
@@ -207,6 +212,8 @@ export declare class BRegIngestionPrefixDigest {
 export type IngestionPrefixDigest = BRegIngestionPrefixDigest
 
 export declare class BRegMetadata {
+  /** The occurrence descriptor declared for one record type, as JSON text. */
+  occurrenceDescriptor(recordType: string): string
   /** Read-only capability inventory for each exact Action/profile pair. */
   get proposalActions(): any
   /** Caller-filtered inert descriptors. Selectors below remain the only authority constructors. */
@@ -348,6 +355,13 @@ export interface JsonOutcome {
   snapshot?: string
   validAt?: string
 }
+
+/**
+ * Project one record revision into the occurrence view. The input is the
+ * JSON arguments document of the Rust projection; the result is the view
+ * document as JSON text.
+ */
+export declare function occurrenceView(argumentsJson: string): string
 
 export interface PageOutcome {
   kind: string
