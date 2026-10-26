@@ -2,21 +2,21 @@
 
 ## Unreleased
 
-- Add an optional `occurrence` descriptor to record types: subjects, occurrence
+- Add an optional `eventRecord` descriptor to record types: subjects, occurred
   and effective time (point, span or unknown-precision `within`), sources,
   correction links and source event identity over stored fields. It adds no
   storage, route or grant and is excluded from definition revisions and
-  Proposal fingerprints. See `products/breg/occurrences.md`.
+  Proposal fingerprints. See `products/breg/event-records.md`.
 - Add optional `display.purpose` (`domain`, `processing`, `technical`, and
   `synthetic-seed` for Actions) and `display.group` to record types and
   Actions. Presentation only.
 - BREAKING: `bregctl explain model` emits `v1alpha7`, which adds
-  `recordTypes[].occurrence`, `recordTypes[].grouping` and `actions[].grouping`.
+  `recordTypes[].eventRecord`, `recordTypes[].grouping` and `actions[].grouping`.
   Readers that accept only an earlier version refuse the document.
-- Add a caller-filtered `occurrence` member to record types in `/v1/registry`
+- Add a caller-filtered `eventRecord` member to record types in `/v1/registry`
   metadata. Members the profile cannot read are omitted; `metadataVersion`
   stays `"2"`.
-- Add an occurrence view to the Rust, Node and Python BReg clients, projecting
+- Add an event record view to the Rust, Node and Python BReg clients, projecting
   a record, its caller-filtered descriptor and its creation revision into one
   generic document.
 - Support up to 4,096 migration statements consistently in packages and the

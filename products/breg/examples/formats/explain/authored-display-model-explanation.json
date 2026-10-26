@@ -542,6 +542,7 @@
       "display": {
         "label": "Directory entry"
       },
+      "eventRecord": null,
       "fields": [
         {
           "apiName": "code",
@@ -622,7 +623,6 @@
       "moduleOrigins": {},
       "mutationMode": "create-only",
       "mutationPolicy": {},
-      "occurrence": null,
       "primaryDataset": "directory",
       "readPaths": {},
       "relationships": {},

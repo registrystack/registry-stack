@@ -1411,19 +1411,19 @@ pub struct EntitySource {
     /// `requireConsent` permissions check before returning a subject's row.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub consent_record: Option<ConsentRecordSource>,
-    /// Declares this record type's rows as domain occurrences: which fields
+    /// Declares this record type's rows as event records: which fields
     /// say what the row is about, when it happened, when it takes effect, what
     /// it was recorded from and what it corrects. It adds no storage, endpoint
     /// or authority.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub occurrence: Option<OccurrenceSource>,
+    pub event_record: Option<EventRecordSource>,
 }
 
-/// The record-level mapping of stored fields onto occurrence roles.
+/// The record-level mapping of stored fields onto event record roles.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct OccurrenceSource {
+pub struct EventRecordSource {
     #[serde(
         default,
         deserialize_with = "registry_platform_yaml::optional_display_text",
@@ -1434,24 +1434,24 @@ pub struct OccurrenceSource {
         schemars(with = "Option<registry_platform_yaml::DisplayText>")
     )]
     pub label: Option<String>,
-    /// What the occurrence is about. At least one, at most 16. The serde
+    /// What the event record is about. At least one, at most 16. The serde
     /// default only lets compilation report the stable emptiness diagnostic.
     #[serde(default)]
     #[cfg_attr(feature = "schema", schemars(!default))]
-    pub subjects: Vec<OccurrenceRoleSource>,
+    pub subjects: Vec<EventRecordRoleSource>,
     /// A `string` or `text` field holding a human summary.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub summary: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub occurred_at: Option<OccurrenceTimeSource>,
+    pub occurred_at: Option<EventRecordTimeSource>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effective: Option<EffectiveTimeSource>,
-    /// What the occurrence was recorded from. Recording a reference is not
+    /// What the event record was recorded from. Recording a reference is not
     /// verifying it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub sources: Vec<OccurrenceRoleSource>,
+    pub sources: Vec<EventRecordRoleSource>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub correction: Option<OccurrenceCorrectionSource>,
+    pub correction: Option<EventRecordCorrectionSource>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_event_id: Option<SourceEventIdSource>,
 }
@@ -1460,7 +1460,7 @@ pub struct OccurrenceSource {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct OccurrenceRoleSource {
+pub struct EventRecordRoleSource {
     pub role: String,
     pub field: String,
     #[serde(
@@ -1494,7 +1494,7 @@ pub struct ExternalReferenceSource {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct OccurrenceTimeSource {
+pub struct EventRecordTimeSource {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub at: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1518,38 +1518,38 @@ pub struct EffectiveTimeSource {
     pub end: Option<String>,
 }
 
-/// What an occurrence interval says about the occurrence.
+/// What an event record's interval says about the event.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum IntervalMeaning {
-    /// The occurrence lasted from start to end.
+    /// The event lasted from start to end.
     Span,
-    /// One occurrence happened at an unknown instant between start and end.
+    /// The event happened at an unknown instant between start and end.
     Within,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct OccurrenceCorrectionSource {
-    /// A reference to a record type that also declares an occurrence.
+pub struct EventRecordCorrectionSource {
+    /// A reference to a record type that also declares an event record.
     pub field: String,
     pub relation: CorrectionRelation,
 }
 
-/// How a later occurrence relates to the one it names.
+/// How a later event record relates to the one it names.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum CorrectionRelation {
-    /// Amends an error in the named occurrence.
+    /// Amends an error in the named event record.
     Corrects,
-    /// Replaces the named occurrence as the current interpretation.
+    /// Replaces the named event record as the current interpretation.
     Supersedes,
 }
 
-/// The identifier an occurrence carries from the system it was recorded from.
+/// The identifier an event record carries from the system it was recorded from.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -1576,11 +1576,11 @@ pub enum DuplicatePolicy {
     Allow,
 }
 
-/// Maximum subjects or sources one occurrence declares.
-pub const MAX_OCCURRENCE_ROLES: usize = 16;
+/// Maximum subjects or sources one event record declares.
+pub const MAX_EVENT_RECORD_ROLES: usize = 16;
 
-/// Maximum UTF-8 bytes in an occurrence namespace.
-pub const MAX_OCCURRENCE_NAMESPACE_BYTES: usize = 512;
+/// Maximum UTF-8 bytes in an event record namespace.
+pub const MAX_EVENT_RECORD_NAMESPACE_BYTES: usize = 512;
 
 /// Maximum retained subject-facing access-log window.
 pub const MAX_ACCESS_LOG_RETENTION_DAYS: u16 = 3_650;

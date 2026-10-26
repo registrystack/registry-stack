@@ -6,10 +6,10 @@ const path = require('node:path');
 const { test } = require('node:test');
 const pkg = process.env.BREG_CLIENT_PACKAGE
   ? require(process.env.BREG_CLIENT_PACKAGE).breg : require('..');
-const { BaseRegistryClient, occurrenceView } = pkg;
+const { BaseRegistryClient, eventRecordView } = pkg;
 
 const fixtures = path.join(
-  __dirname, '..', '..', 'registry-breg-client', 'tests', 'fixtures', 'occurrence-view',
+  __dirname, '..', '..', 'registry-breg-client', 'tests', 'fixtures', 'event-record-view',
 );
 const read = (name) => fs.readFileSync(path.join(fixtures, name), 'utf8');
 
@@ -19,31 +19,31 @@ const recordId = '6f1e0c62-0000-4000-8000-000000000001';
 const hiddenId = '6f1e0c62-0000-4000-8000-000000000404';
 const link = '<https://id.registrystack.org/profiles/registry-record/v1>; rel="profile", </v1/schemas/incorporation>; rel="describedby"';
 
-test('occurrenceView projects every generated fixture to its recorded view', () => {
+test('eventRecordView projects every generated fixture to its recorded view', () => {
   for (const name of [
     'incorporation', 'suspension-decision', 'suspension-correction', 'ownership-transfer',
   ]) {
-    const view = occurrenceView(read(`${name}.input.json`));
+    const view = eventRecordView(read(`${name}.input.json`));
     assert.equal(typeof view, 'string');
     assert.deepEqual(JSON.parse(view), JSON.parse(read(`${name}.json`)), name);
   }
 });
 
-test('occurrenceView raises a described occurrence failure', () => {
+test('eventRecordView raises a described event record failure', () => {
   const input = JSON.parse(read('incorporation.input.json'));
   input.descriptor.descriptorVersion = 2;
-  assert.throws(() => occurrenceView(JSON.stringify(input)), (error) => {
-    assert.equal(error.kind, 'occurrence');
+  assert.throws(() => eventRecordView(JSON.stringify(input)), (error) => {
+    assert.equal(error.kind, 'event-record');
     assert.equal(error.code, 'unsupported-version');
     assert.equal(error.outcomeUnknown, false);
     return true;
   });
-  assert.throws(() => occurrenceView('{"unknown":true}'), (error) => {
-    assert.equal(error.kind, 'occurrence');
+  assert.throws(() => eventRecordView('{"unknown":true}'), (error) => {
+    assert.equal(error.kind, 'event-record');
     assert.equal(error.code, 'invalid-input');
     return true;
   });
-  assert.throws(() => occurrenceView({}), (error) => error.kind === 'invalid-request');
+  assert.throws(() => eventRecordView({}), (error) => error.kind === 'invalid-request');
 });
 
 test('the metadata accessor and the creation-revision read follow the declared contract', async () => {
@@ -54,7 +54,7 @@ test('the metadata accessor and the creation-revision read follow the declared c
       {
         id: 'incorporation', datasetIdentifier: 'register', route: 'incorporations',
         operations: [], readableFields: [], schema: '/v1/schemas/incorporation',
-        occurrence: input.descriptor,
+        eventRecord: input.descriptor,
       },
       {
         id: 'note', datasetIdentifier: 'register', route: 'notes', operations: [],
@@ -105,32 +105,32 @@ test('the metadata accessor and the creation-revision read follow the declared c
   try {
     const client = new BaseRegistryClient({ baseUrl: `http://127.0.0.1:${server.address().port}` });
     const contract = await client.registryContract();
-    const descriptor = JSON.parse(contract.occurrenceDescriptor('incorporation'));
+    const descriptor = JSON.parse(contract.eventRecordDescriptor('incorporation'));
     assert.equal(descriptor.descriptorVersion, 1);
     assert.equal(descriptor.label, 'Incorporation');
     for (const absent of ['note', 'unknown-type']) {
-      assert.throws(() => contract.occurrenceDescriptor(absent), (error) => {
-        assert.equal(error.kind, 'occurrence');
-        assert.equal(error.code, 'not-an-occurrence');
+      assert.throws(() => contract.eventRecordDescriptor(absent), (error) => {
+        assert.equal(error.kind, 'event-record');
+        assert.equal(error.code, 'not-an-event-record');
         return true;
       });
     }
 
-    const text = await client.occurrenceCreationRevision('incorporations', recordId);
+    const text = await client.eventRecordCreationRevision('incorporations', recordId);
     assert.deepEqual(JSON.parse(text), {
       recordType: 'incorporation', recordId, revision: '1',
       createdAt: '2026-10-26T08:15:30.123456Z',
     });
     assert.ok(requests.some((url) => url.includes(`/incorporations/${recordId}/revisions/1`)));
-    assert.equal(await client.occurrenceCreationRevision('incorporations', hiddenId), null);
+    assert.equal(await client.eventRecordCreationRevision('incorporations', hiddenId), null);
     input.creationRevision = JSON.parse(text);
     assert.deepEqual(
-      JSON.parse(occurrenceView(JSON.stringify(input))).recordedAt,
+      JSON.parse(eventRecordView(JSON.stringify(input))).recordedAt,
       { status: 'available', type: 'instant', value: '2026-10-26T08:15:30.123456Z' },
     );
     input.creationRevision.recordType = 'ownership-transfer';
-    assert.throws(() => occurrenceView(JSON.stringify(input)), (error) => {
-      assert.equal(error.kind, 'occurrence');
+    assert.throws(() => eventRecordView(JSON.stringify(input)), (error) => {
+      assert.equal(error.kind, 'event-record');
       assert.equal(error.code, 'wrong-record-evidence');
       assert.doesNotMatch(error.message, /ownership-transfer/);
       return true;

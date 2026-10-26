@@ -33,7 +33,7 @@ export declare class BaseRegistryClient {
    * `{recordType, recordId, revision, createdAt}` JSON, or null when the
    * caller may not read it.
    */
-  occurrenceCreationRevision(entityRoute: string, recordIdentifier: string, accessProfile?: string | undefined | null): Promise<string | null>
+  eventRecordCreationRevision(entityRoute: string, recordIdentifier: string, accessProfile?: string | undefined | null): Promise<string | null>
   getRecord(entityRoute: string, recordIdentifier: string, options?: any | undefined | null): Promise<CompleteOutcome>
   listRecords(entityRoute: string, options?: any | undefined | null): Promise<PageOutcome>
   continueList(value: any): Promise<PageOutcome>
@@ -221,8 +221,8 @@ export declare class BRegIngestionPrefixDigest {
 export type IngestionPrefixDigest = BRegIngestionPrefixDigest
 
 export declare class BRegMetadata {
-  /** The occurrence descriptor declared for one record type, as JSON text. */
-  occurrenceDescriptor(recordType: string): string
+  /** The event record descriptor declared for one record type, as JSON text. */
+  eventRecordDescriptor(recordType: string): string
   /** Read-only capability inventory for each exact Action/profile pair. */
   get proposalActions(): any
   /** Caller-filtered inert descriptors. Selectors below remain the only authority constructors. */
@@ -344,6 +344,13 @@ export interface CompleteOutcome {
  */
 export declare function encodeIngestionChunk(chunkIndex: number, items: any, prefixDigest: string): BRegIngestionChunk
 
+/**
+ * Project one record revision into the event record view. The input is the
+ * JSON arguments document of the Rust projection; the result is the view
+ * document as JSON text.
+ */
+export declare function eventRecordView(argumentsJson: string): string
+
 /** Exact BReg hook request supplied by a receiver. */
 export interface HookDeliveryInput {
   method: string
@@ -364,13 +371,6 @@ export interface JsonOutcome {
   snapshot?: string
   validAt?: string
 }
-
-/**
- * Project one record revision into the occurrence view. The input is the
- * JSON arguments document of the Rust projection; the result is the view
- * document as JSON text.
- */
-export declare function occurrenceView(argumentsJson: string): string
 
 export interface PageOutcome {
   kind: string

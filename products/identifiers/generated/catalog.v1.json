@@ -4162,7 +4162,7 @@
       "description": "Base Registry Engine portable Action contract export schema, reproduced from the canonical compiled project.",
       "source": {
         "path": "crates/registry-breg/src/artifacts.rs",
-        "sha256": "b36ee937859293bac226dd16d53c869f5ac21a1249aa2dd0855b99bc0cfd333d"
+        "sha256": "560911be004e83d591163ea1c4a25f577546decd01b3f3d49fbbe92354c380b3"
       },
       "artifact": {
         "path": "products/breg/generated/facility/generated/action-contracts.schema.json",
@@ -4221,6 +4221,24 @@
       "artifact": {
         "path": "products/breg/generated/tools/dev-clients.v1alpha1.schema.json",
         "sha256": "5020d8c8d12191760b03bfd268a0f11a8a88b7bc06982063573b7e48c9950fae",
+        "mediaType": "application/schema+json"
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/schemas/breg/event-record-view/event-record-view.v1alpha1.schema.json",
+      "kind": "schema",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "breg",
+      "title": "EventRecordView",
+      "description": "Base Registry Engine event record view JSON Schema, written by hand and held to the BReg client's projection output by its contract test.",
+      "source": {
+        "path": "products/breg/contracts/event-record-view/EventRecordView.schema.json",
+        "sha256": "52b076a8325b63e0bcaffb71d348e0239cea4d48be094100a018ef8a819fdab5"
+      },
+      "artifact": {
+        "path": "products/breg/contracts/event-record-view/EventRecordView.schema.json",
+        "sha256": "52b076a8325b63e0bcaffb71d348e0239cea4d48be094100a018ef8a819fdab5",
         "mediaType": "application/schema+json"
       }
     },
@@ -4342,11 +4360,11 @@
       "description": "Base Registry Engine bregctl explain output JSON Schemas, written by hand and held to bregctl's output by its contract test.",
       "source": {
         "path": "products/breg/contracts/explain/ModelExplanation.schema.json",
-        "sha256": "75c265aa4e2511bd999753fa71f4690292f80ad5383b2b818655a23716220f4e"
+        "sha256": "c5c5461590e22ba0896a312e9235ad707c066b803c14759f34d402c186823797"
       },
       "artifact": {
         "path": "products/breg/contracts/explain/ModelExplanation.schema.json",
-        "sha256": "75c265aa4e2511bd999753fa71f4690292f80ad5383b2b818655a23716220f4e",
+        "sha256": "c5c5461590e22ba0896a312e9235ad707c066b803c14759f34d402c186823797",
         "mediaType": "application/schema+json"
       }
     },
@@ -4382,25 +4400,7 @@
       },
       "artifact": {
         "path": "products/breg/generated/authoring/registry-module.schema.json",
-        "sha256": "752911e19644db0a136884241b8ea150a227e28e625cbbed7d56aa8463a597a5",
-        "mediaType": "application/schema+json"
-      }
-    },
-    {
-      "uri": "https://id.registrystack.org/schemas/breg/occurrence-view/occurrence-view.v1alpha1.schema.json",
-      "kind": "schema",
-      "status": "active",
-      "compatibilityLine": "v1alpha1",
-      "owner": "breg",
-      "title": "OccurrenceView",
-      "description": "Base Registry Engine occurrence view JSON Schema, written by hand and held to the BReg client's projection output by its contract test.",
-      "source": {
-        "path": "products/breg/contracts/occurrence-view/OccurrenceView.schema.json",
-        "sha256": "1f1d102ba8558ff08e32700ac28a8eba87682b65a12d00d546d96731bbc6f00a"
-      },
-      "artifact": {
-        "path": "products/breg/contracts/occurrence-view/OccurrenceView.schema.json",
-        "sha256": "1f1d102ba8558ff08e32700ac28a8eba87682b65a12d00d546d96731bbc6f00a",
+        "sha256": "8460b2cf91e0582b64b1cb774f42a78b97d4954d2b786c252b0180b38878bfe5",
         "mediaType": "application/schema+json"
       }
     },
@@ -4418,7 +4418,7 @@
       },
       "artifact": {
         "path": "products/breg/generated/authoring/registry-project.schema.json",
-        "sha256": "12cfc6b3b9d7af6c8be2e4ca493bd8ef3547a83bea8ade08dabb8991aa97b10e",
+        "sha256": "fe7ef8632c7fb587baacf9b4bf1ea11e4553d544fa40a27da1c3dd58584934fc",
         "mediaType": "application/schema+json"
       }
     },

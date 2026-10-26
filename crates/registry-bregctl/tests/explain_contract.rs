@@ -441,30 +441,30 @@ fn model_field_types_describe_unprojected_text_without_a_query_join() {
 }
 
 #[test]
-fn model_explanation_carries_occurrence_descriptor_and_display_grouping() {
+fn model_explanation_carries_event_record_descriptor_and_display_grouping() {
     let project = tempfile::tempdir().unwrap();
     std::fs::copy(
-        repo_root().join("crates/registry-breg/tests/fixtures/occurrence/shapes.yaml"),
+        repo_root().join("crates/registry-breg/tests/fixtures/event-record/shapes.yaml"),
         project.path().join("registry.yaml"),
     )
     .unwrap();
     let model = explain("model", project.path());
-    assert_matches_contract("occurrence shapes", "ModelExplanation", &model);
+    assert_matches_contract("event record shapes", "ModelExplanation", &model);
 
     let records = model["recordTypes"].as_array().unwrap();
     let record = |id: &str| records.iter().find(|record| record["id"] == id).unwrap();
     let registration = record("entry-registration");
-    assert_eq!(registration["occurrence"]["descriptorVersion"], 1);
-    assert_eq!(registration["occurrence"]["label"], "Entry registered");
+    assert_eq!(registration["eventRecord"]["descriptorVersion"], 1);
+    assert_eq!(registration["eventRecord"]["label"], "Entry registered");
     assert_eq!(
-        registration["occurrence"]["subjects"][0]["field"]["target"],
+        registration["eventRecord"]["subjects"][0]["field"]["target"],
         "entry"
     );
     assert_eq!(
         registration["grouping"],
         json!({"group": "Register", "purpose": "domain"})
     );
-    assert_eq!(record("entry")["occurrence"], Value::Null);
+    assert_eq!(record("entry")["eventRecord"], Value::Null);
     assert_eq!(record("review-note")["grouping"]["purpose"], "processing");
     let seed = model["actions"]
         .as_array()
@@ -477,7 +477,7 @@ fn model_explanation_carries_occurrence_descriptor_and_display_grouping() {
         json!({"group": "Demonstration data", "purpose": "synthetic-seed"})
     );
 
-    // The actions explanation carries neither grouping nor occurrence descriptors.
+    // The actions explanation carries neither grouping nor event record descriptors.
     let actions = explain("actions", project.path());
     assert!(actions["actions"]
         .as_array()
@@ -488,7 +488,7 @@ fn model_explanation_carries_occurrence_descriptor_and_display_grouping() {
         .as_array()
         .unwrap()
         .iter()
-        .all(|record| record.get("grouping").is_none() && record.get("occurrence").is_none()));
+        .all(|record| record.get("grouping").is_none() && record.get("eventRecord").is_none()));
 
     let schema = load_schema("ModelExplanation");
     let index = records
@@ -500,19 +500,19 @@ fn model_explanation_carries_occurrence_descriptor_and_display_grouping() {
     missing["recordTypes"][index]
         .as_object_mut()
         .unwrap()
-        .remove("occurrence");
-    invalid.push(("occurrence is required on a record type", missing));
+        .remove("eventRecord");
+    invalid.push(("eventRecord is required on a record type", missing));
     let mut extra_member = model.clone();
-    extra_member["recordTypes"][index]["occurrence"]["recordedAt"] = json!("now");
+    extra_member["recordTypes"][index]["eventRecord"]["recordedAt"] = json!("now");
     invalid.push(("an unknown descriptor member", extra_member));
     let mut bad_purpose = model.clone();
     bad_purpose["recordTypes"][index]["grouping"]["purpose"] = json!("archival");
     invalid.push(("an unknown display purpose", bad_purpose));
     let mut bad_time = model.clone();
-    bad_time["recordTypes"][index]["occurrence"]["recordedTime"]["source"] = json!("wall-clock");
+    bad_time["recordTypes"][index]["eventRecord"]["recordedTime"]["source"] = json!("wall-clock");
     invalid.push(("an unknown recorded-time source", bad_time));
     let mut bad_meaning = model.clone();
-    bad_meaning["recordTypes"][index]["occurrence"]["occurredAt"] = json!({
+    bad_meaning["recordTypes"][index]["eventRecord"]["occurredAt"] = json!({
         "type": "interval", "meaning": "around",
         "start": {"id": "a", "apiName": "a", "type": "date"},
         "end": {"id": "b", "apiName": "b", "type": "date"}

@@ -62,13 +62,13 @@ path = "tests/postgres_immediate_action_examples.rs"
 required-features = ["postgres-test", "tooling"]
 
 [[test]]
-name = "postgres_occurrence_reader"
-path = "tests/postgres_occurrence_reader.rs"
+name = "postgres_event_record_reader"
+path = "tests/postgres_event_record_reader.rs"
 required-features = ["postgres-test", "runtime", "tooling"]
 
 [[test]]
-name = "postgres_occurrence_examples"
-path = "tests/postgres_occurrence_examples.rs"
+name = "postgres_event_record_examples"
+path = "tests/postgres_event_record_examples.rs"
 required-features = ["postgres-test", "runtime", "tooling"]
 
 [[test]]

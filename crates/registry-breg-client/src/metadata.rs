@@ -13,7 +13,7 @@ use serde_json::{Map, Number, Value};
 use time::{Date, Month};
 use uuid::Uuid;
 
-use crate::{BRegOccurrenceDescriptor, BRegOccurrenceError};
+use crate::{BRegEventRecordDescriptor, BRegEventRecordError};
 
 /// Maximum accepted size of one Base Registry Engine runtime metadata document.
 pub const MAX_BREG_METADATA_BYTES: usize = 8 * 1024 * 1024;
@@ -773,8 +773,8 @@ struct BRegMetadataEntity {
     operations: Vec<(BRegOperationKind, String)>,
     readable_fields: Vec<String>,
     mutation_policy: Option<Value>,
-    /// The caller-filtered occurrence descriptor, retained as received.
-    occurrence: Option<Value>,
+    /// The caller-filtered event record descriptor, retained as received.
+    event_record: Option<Value>,
 }
 
 /// One typed input advertised by a caller-visible immediate action.
@@ -1236,20 +1236,20 @@ impl BRegMetadata {
         &self.revision
     }
 
-    /// The occurrence descriptor this caller sees for one record type. A
+    /// The event record descriptor this caller sees for one record type. A
     /// record type that is absent from the caller-filtered metadata or does
-    /// not declare an occurrence is `NotAnOccurrence`.
-    pub fn occurrence(
+    /// not declare an event record is `NotAnEventRecord`.
+    pub fn event_record(
         &self,
         record_type_identifier: &str,
-    ) -> Result<BRegOccurrenceDescriptor, BRegOccurrenceError> {
+    ) -> Result<BRegEventRecordDescriptor, BRegEventRecordError> {
         let descriptor = self
             .entities
             .iter()
             .find(|entity| entity.id == record_type_identifier)
-            .and_then(|entity| entity.occurrence.as_ref())
-            .ok_or(BRegOccurrenceError::NotAnOccurrence)?;
-        BRegOccurrenceDescriptor::from_value(descriptor)
+            .and_then(|entity| entity.event_record.as_ref())
+            .ok_or(BRegEventRecordError::NotAnEventRecord)?;
+        BRegEventRecordDescriptor::from_value(descriptor)
     }
 
     #[must_use]
@@ -2737,7 +2737,9 @@ fn parse_entity(value: Value) -> Result<BRegMetadataEntity, BRegMetadataError> {
     if let Some(value) = &mutation_policy {
         validate_mutation_policy(value)?;
     }
-    let occurrence = entity.remove("occurrence").filter(|value| !value.is_null());
+    let event_record = entity
+        .remove("eventRecord")
+        .filter(|value| !value.is_null());
     finish(entity)?;
     Ok(BRegMetadataEntity {
         id,
@@ -2747,7 +2749,7 @@ fn parse_entity(value: Value) -> Result<BRegMetadataEntity, BRegMetadataError> {
         operations,
         readable_fields,
         mutation_policy,
-        occurrence,
+        event_record,
     })
 }
 

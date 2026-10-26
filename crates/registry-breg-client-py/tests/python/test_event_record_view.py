@@ -1,4 +1,4 @@
-"""Occurrence projection through the native Python boundary."""
+"""Event record projection through the native Python boundary."""
 
 import json
 import threading
@@ -13,12 +13,12 @@ ensure_built()
 from registry_breg_client import (  # noqa: E402
     BaseRegistryClient,
     BaseRegistryClientError,
-    occurrence_view,
+    event_record_view,
 )
 
 FIXTURES = (
     Path(__file__).resolve().parents[3]
-    / "registry-breg-client/tests/fixtures/occurrence-view"
+    / "registry-breg-client/tests/fixtures/event-record-view"
 )
 REVISION = "sha256:" + "a" * 64
 TRACEPARENT = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
@@ -35,7 +35,7 @@ def fixture(name: str) -> dict:
     return json.loads((FIXTURES / name).read_text())
 
 
-class OccurrenceViewTests(unittest.TestCase):
+class EventRecordViewTests(unittest.TestCase):
     def test_every_generated_fixture_projects_to_its_recorded_view(self) -> None:
         for name in (
             "incorporation",
@@ -45,23 +45,23 @@ class OccurrenceViewTests(unittest.TestCase):
         ):
             with self.subTest(name):
                 self.assertEqual(
-                    occurrence_view(fixture(f"{name}.input.json")),
+                    event_record_view(fixture(f"{name}.input.json")),
                     fixture(f"{name}.json"),
                 )
 
-    def test_refusals_are_described_occurrence_failures(self) -> None:
+    def test_refusals_are_described_event_record_failures(self) -> None:
         arguments = fixture("incorporation.input.json")
         arguments["descriptor"]["descriptorVersion"] = 2
         with self.assertRaises(BaseRegistryClientError) as caught:
-            occurrence_view(arguments)
-        self.assertEqual(caught.exception.kind, "occurrence")
+            event_record_view(arguments)
+        self.assertEqual(caught.exception.kind, "event-record")
         self.assertEqual(caught.exception.code, "unsupported-version")
         self.assertFalse(caught.exception.outcome_unknown)
         with self.assertRaises(BaseRegistryClientError) as caught:
-            occurrence_view({"unknown": True})
+            event_record_view({"unknown": True})
         self.assertEqual(caught.exception.code, "invalid-input")
         with self.assertRaises(BaseRegistryClientError) as caught:
-            occurrence_view(object())
+            event_record_view(object())
         self.assertEqual(caught.exception.kind, "invalid-request")
 
     def test_metadata_accessor_and_creation_revision_read(self) -> None:
@@ -73,7 +73,7 @@ class OccurrenceViewTests(unittest.TestCase):
                 {
                     "id": "incorporation", "datasetIdentifier": "register",
                     "route": "incorporations", "operations": [], "readableFields": [],
-                    "schema": "/v1/schemas/incorporation", "occurrence": descriptor,
+                    "schema": "/v1/schemas/incorporation", "eventRecord": descriptor,
                 },
                 {
                     "id": "note", "datasetIdentifier": "register", "route": "notes",
@@ -136,15 +136,15 @@ class OccurrenceViewTests(unittest.TestCase):
             client = BaseRegistryClient(f"http://127.0.0.1:{server.server_port}")
             contract = client.registry_contract()
             self.assertEqual(
-                contract.occurrence_descriptor("incorporation")["label"], "Incorporation"
+                contract.event_record_descriptor("incorporation")["label"], "Incorporation"
             )
             for absent in ("note", "unknown-type"):
                 with self.assertRaises(BaseRegistryClientError) as caught:
-                    contract.occurrence_descriptor(absent)
-                self.assertEqual(caught.exception.kind, "occurrence")
-                self.assertEqual(caught.exception.code, "not-an-occurrence")
+                    contract.event_record_descriptor(absent)
+                self.assertEqual(caught.exception.kind, "event-record")
+                self.assertEqual(caught.exception.code, "not-an-event-record")
 
-            revision = client.occurrence_creation_revision("incorporations", RECORD_ID)
+            revision = client.event_record_creation_revision("incorporations", RECORD_ID)
             self.assertEqual(
                 revision,
                 {
@@ -155,18 +155,18 @@ class OccurrenceViewTests(unittest.TestCase):
                 },
             )
             self.assertIsNone(
-                client.occurrence_creation_revision("incorporations", HIDDEN_ID)
+                client.event_record_creation_revision("incorporations", HIDDEN_ID)
             )
             arguments = fixture("incorporation.input.json")
             arguments["creationRevision"] = revision
             self.assertEqual(
-                occurrence_view(arguments)["recordedAt"],
+                event_record_view(arguments)["recordedAt"],
                 {"status": "available", "type": "instant", "value": CREATED_AT},
             )
             arguments["creationRevision"]["recordType"] = "ownership-transfer"
             with self.assertRaises(BaseRegistryClientError) as caught:
-                occurrence_view(arguments)
-            self.assertEqual(caught.exception.kind, "occurrence")
+                event_record_view(arguments)
+            self.assertEqual(caught.exception.kind, "event-record")
             self.assertEqual(caught.exception.code, "wrong-record-evidence")
             self.assertNotIn("ownership-transfer", str(caught.exception))
         finally:

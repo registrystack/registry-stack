@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! Occurrence projection: descriptor parsing, the pure view, creation-revision
+//! Event record projection: descriptor parsing, the pure view, creation-revision
 //! evidence and the explicit read helper. The projection cases are
 //! deterministic and clock-free: every timestamp is supplied as input.
 
@@ -17,11 +17,11 @@ use axum::routing::any;
 use axum::Router;
 use jsonschema::{Draft, JSONSchema};
 use registry_breg_client::{
-    occurrence_view, occurrence_view_from_json, BRegActionInvocationRequest, BRegCreationRevision,
-    BRegIdempotencyKey, BRegMetadata, BRegOccurrenceDescriptor, BRegOccurrenceError,
-    BRegOccurrenceEvidence, BRegProposalApplication, BaseRegistryClient, BaseRegistryClientConfig,
-    BaseRegistryClientError, RegistryRecord, OCCURRENCE_DESCRIPTOR_VERSION,
-    OCCURRENCE_VIEW_CONTRACT,
+    event_record_view, event_record_view_from_json, BRegActionInvocationRequest,
+    BRegCreationRevision, BRegEventRecordDescriptor, BRegEventRecordError, BRegEventRecordEvidence,
+    BRegIdempotencyKey, BRegMetadata, BRegProposalApplication, BaseRegistryClient,
+    BaseRegistryClientConfig, BaseRegistryClientError, RegistryRecord,
+    EVENT_RECORD_DESCRIPTOR_VERSION, EVENT_RECORD_VIEW_CONTRACT,
 };
 use registry_platform_httputil::client::{BearerToken, TokenError, TokenProvider};
 use serde_json::{json, Map, Value};
@@ -173,9 +173,9 @@ fn arguments(record_type: &str, descriptor: Value, record: Value) -> Map<String,
     map
 }
 
-fn project(arguments: &Map<String, Value>) -> Result<Value, BRegOccurrenceError> {
+fn project(arguments: &Map<String, Value>) -> Result<Value, BRegEventRecordError> {
     let bytes = serde_json::to_vec(arguments).expect("arguments serialize");
-    occurrence_view_from_json(&bytes).map(|view| serde_json::to_value(view).expect("view"))
+    event_record_view_from_json(&bytes).map(|view| serde_json::to_value(view).expect("view"))
 }
 
 fn expect_view(arguments: &Map<String, Value>) -> Value {
@@ -238,7 +238,7 @@ fn transfer_arguments() -> Map<String, Value> {
 
 fn expected_incorporation() -> Value {
     json!({
-        "contract": "id.registrystack.org/formats/breg/occurrence-view/v1alpha1",
+        "contract": "id.registrystack.org/formats/breg/event-record-view/v1alpha1",
         "descriptorVersion": 1,
         "registryRevision": REGISTRY_REVISION,
         "source": {"recordType": "incorporation", "recordId": INCORPORATION_ID, "revision": "1"},
@@ -266,7 +266,7 @@ fn expected_incorporation() -> Value {
 
 fn expected_decision() -> Value {
     json!({
-        "contract": "id.registrystack.org/formats/breg/occurrence-view/v1alpha1",
+        "contract": "id.registrystack.org/formats/breg/event-record-view/v1alpha1",
         "descriptorVersion": 1,
         "registryRevision": REGISTRY_REVISION,
         "source": {"recordType": "suspension-decision", "recordId": DECISION_ID, "revision": "1"},
@@ -300,7 +300,7 @@ fn expected_correction() -> Value {
 
 fn expected_transfer() -> Value {
     json!({
-        "contract": "id.registrystack.org/formats/breg/occurrence-view/v1alpha1",
+        "contract": "id.registrystack.org/formats/breg/event-record-view/v1alpha1",
         "descriptorVersion": 1,
         "registryRevision": REGISTRY_REVISION,
         "source": {"recordType": "ownership-transfer", "recordId": TRANSFER_ID, "revision": "1"},
@@ -335,7 +335,7 @@ fn expected_transfer() -> Value {
 // ---- Projections and the generated fixtures ----
 
 fn fixture_directory() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/occurrence-view")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/event-record-view")
 }
 
 fn read_fixture(name: &str) -> Value {
@@ -354,7 +354,7 @@ fn write_fixture(name: &str, value: &Value) {
 }
 
 #[test]
-fn incorporation_with_unknown_occurrence_date_and_receipt_provenance() {
+fn incorporation_with_unknown_event_record_date_and_receipt_provenance() {
     assert_eq!(
         expect_view(&incorporation_arguments()),
         expected_incorporation()
@@ -373,7 +373,7 @@ fn ownership_transfer_keeps_three_subjects_and_a_within_window_as_bounds() {
 }
 
 /// The checked-in fixtures are producer output. Regenerate them with
-/// `OCCURRENCE_VIEW_REGENERATE=1`; otherwise the files must equal what the
+/// `EVENT_RECORD_VIEW_REGENERATE=1`; otherwise the files must equal what the
 /// projection produces now, and the inputs must equal the ones the cases use.
 #[test]
 fn generated_fixtures_equal_the_projection_output() {
@@ -383,7 +383,7 @@ fn generated_fixtures_equal_the_projection_output() {
         ("suspension-correction", correction_arguments()),
         ("ownership-transfer", transfer_arguments()),
     ];
-    let regenerate = std::env::var_os("OCCURRENCE_VIEW_REGENERATE").is_some();
+    let regenerate = std::env::var_os("EVENT_RECORD_VIEW_REGENERATE").is_some();
     for (name, input) in cases {
         let view = expect_view(&input);
         let input = Value::Object(input);
@@ -405,14 +405,14 @@ fn generated_fixtures_equal_the_projection_output() {
 
 fn view_schema() -> JSONSchema {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../products/breg/contracts/occurrence-view/OccurrenceView.schema.json");
+        .join("../../products/breg/contracts/event-record-view/EventRecordView.schema.json");
     let bytes =
         std::fs::read(&path).unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
     let schema: Value = serde_json::from_slice(&bytes)
         .unwrap_or_else(|error| panic!("parse {}: {error}", path.display()));
     assert_eq!(
         schema["properties"]["contract"]["const"],
-        json!(OCCURRENCE_VIEW_CONTRACT),
+        json!(EVENT_RECORD_VIEW_CONTRACT),
         "the schema pins the contract identifier the client emits"
     );
     JSONSchema::options()
@@ -527,7 +527,7 @@ fn the_view_schema_refuses_shapes_the_projection_never_emits() {
 fn dates_stay_dates_and_unknowns_stay_unknown() {
     let view = expect_view(&incorporation_arguments());
     // The creation time is a transaction timestamp; the effective instant and
-    // the occurrence date are separate facts and never take its value.
+    // the date of the event are separate facts and never take its value.
     assert_eq!(view["recordedAt"]["value"], json!(CREATED_AT));
     assert_ne!(
         view["effective"]["at"]["value"],
@@ -628,7 +628,7 @@ fn values_that_contradict_the_declared_type_are_incompatible_metadata() {
         let arguments = with_domain_data(incorporation_arguments(), name, Some(value.clone()));
         let error = project(&arguments).expect_err(&format!("{name}={value} is refused"));
         assert!(
-            matches!(error, BRegOccurrenceError::IncompatibleMetadata { .. }),
+            matches!(error, BRegEventRecordError::IncompatibleMetadata { .. }),
             "{name}={value}: {error}"
         );
         assert_eq!(error.code(), "incompatible-metadata");
@@ -649,7 +649,7 @@ fn a_numeric_date_is_incompatible_metadata_on_the_transfer_window() {
     );
     assert!(matches!(
         project(&arguments),
-        Err(BRegOccurrenceError::IncompatibleMetadata { .. })
+        Err(BRegEventRecordError::IncompatibleMetadata { .. })
     ));
 }
 
@@ -719,7 +719,7 @@ fn a_supersedes_correction_is_projected_like_a_corrects_correction() {
         view["correction"],
         json!({"relation": "supersedes", "reference": reference(DECISION_ID, "suspension-decision")})
     );
-    let parsed = BRegOccurrenceDescriptor::from_value(&descriptor).expect("descriptor parses");
+    let parsed = BRegEventRecordDescriptor::from_value(&descriptor).expect("descriptor parses");
     assert_eq!(parsed.to_value(), descriptor);
 }
 
@@ -742,7 +742,7 @@ fn an_unknown_role_kind_makes_only_that_role_unsupported() {
     assert_eq!(subjects[0]["kind"], json!("native"));
     assert_eq!(subjects[2]["value"]["status"], json!("available"));
     assert_eq!(view["sources"][0]["value"]["value"], json!("DEED-0007"));
-    let parsed = BRegOccurrenceDescriptor::from_value(&descriptor).expect("descriptor parses");
+    let parsed = BRegEventRecordDescriptor::from_value(&descriptor).expect("descriptor parses");
     assert_eq!(parsed.to_value(), descriptor);
 }
 
@@ -761,7 +761,7 @@ fn an_unknown_role_kind_keeps_its_namespace_on_the_descriptor_round_trip() {
             "value": {"status": "unsupported", "detail": "role kind delegated"}}),
         "the view of an unknown kind carries no kind and no namespace"
     );
-    let parsed = BRegOccurrenceDescriptor::from_value(&descriptor).expect("descriptor parses");
+    let parsed = BRegEventRecordDescriptor::from_value(&descriptor).expect("descriptor parses");
     assert_eq!(
         parsed.to_value(),
         descriptor,
@@ -818,7 +818,7 @@ fn recorded_time_comes_only_from_the_creation_revision_of_this_record() {
     let error = project(&arguments).expect_err("another record's creation revision is refused");
     assert!(matches!(
         error,
-        BRegOccurrenceError::WrongRecordEvidence { .. }
+        BRegEventRecordError::WrongRecordEvidence { .. }
     ));
     assert_eq!(error.code(), "wrong-record-evidence");
 
@@ -830,14 +830,14 @@ fn recorded_time_comes_only_from_the_creation_revision_of_this_record() {
     );
     assert!(matches!(
         project(&transfer),
-        Err(BRegOccurrenceError::WrongRecordEvidence { .. })
+        Err(BRegEventRecordError::WrongRecordEvidence { .. })
     ));
 }
 
 #[test]
 fn a_creation_revision_for_another_record_type_with_the_same_id_is_refused() {
     let descriptor =
-        BRegOccurrenceDescriptor::from_value(&incorporation_descriptor()).expect("descriptor");
+        BRegEventRecordDescriptor::from_value(&incorporation_descriptor()).expect("descriptor");
     let mut other_type_revision =
         creation_revision_envelope(INCORPORATION_ID, "1", Value::Null, "create");
     other_type_revision["meta"]["entityTypeIdentifier"] = json!("ownership-transfer");
@@ -845,12 +845,12 @@ fn a_creation_revision_for_another_record_type_with_the_same_id_is_refused() {
     let creation = BRegCreationRevision::from_document(INCORPORATION_ID, &other_type_revision)
         .expect("revision 1 for the other record type");
 
-    let error = occurrence_view(
+    let error = event_record_view(
         REGISTRY_REVISION,
         "incorporation",
         &descriptor,
         &registry_record(&incorporation_record()),
-        &BRegOccurrenceEvidence {
+        &BRegEventRecordEvidence {
             creation_revision: Some(&creation),
             ..Default::default()
         },
@@ -859,7 +859,7 @@ fn a_creation_revision_for_another_record_type_with_the_same_id_is_refused() {
 
     assert!(matches!(
         &error,
-        BRegOccurrenceError::WrongRecordEvidence { .. }
+        BRegEventRecordError::WrongRecordEvidence { .. }
     ));
     assert!(!error.to_string().contains("ownership-transfer"));
 }
@@ -873,7 +873,7 @@ fn compact_creation_evidence_for_another_record_type_with_the_same_id_is_refused
     let error = project(&arguments).expect_err("another record type is refused");
     assert!(matches!(
         &error,
-        BRegOccurrenceError::WrongRecordEvidence { .. }
+        BRegEventRecordError::WrongRecordEvidence { .. }
     ));
     assert!(!error.to_string().contains("ownership-transfer"));
 }
@@ -889,7 +889,7 @@ fn a_creation_revision_that_is_not_revision_one_is_refused() {
     let error = project(&arguments).expect_err("only revision 1 states the recorded time");
     assert!(matches!(
         error,
-        BRegOccurrenceError::RevisionMismatch { ref expected, ref found }
+        BRegEventRecordError::RevisionMismatch { ref expected, ref found }
             if expected == "1" && found == "2"
     ));
     assert_eq!(error.code(), "revision-mismatch");
@@ -1012,7 +1012,7 @@ fn an_applied_at_instant_is_emitted_like_every_other_instant() {
     arguments["proposalApplications"][0]["appliedAt"] = json!("yesterday");
     assert!(matches!(
         project(&arguments),
-        Err(BRegOccurrenceError::WrongRecordEvidence { .. })
+        Err(BRegEventRecordError::WrongRecordEvidence { .. })
     ));
 }
 
@@ -1068,21 +1068,21 @@ fn descriptor_version_other_than_one_is_unsupported() {
     .expect_err("version 2 is refused");
     assert!(matches!(
         error,
-        BRegOccurrenceError::UnsupportedVersion { found: 2 }
+        BRegEventRecordError::UnsupportedVersion { found: 2 }
     ));
     assert_eq!(error.code(), "unsupported-version");
-    assert_eq!(OCCURRENCE_DESCRIPTOR_VERSION, 1);
+    assert_eq!(EVENT_RECORD_DESCRIPTOR_VERSION, 1);
 }
 
 #[test]
 fn a_descriptor_version_of_zero_is_unsupported_not_malformed() {
     let mut descriptor = transfer_descriptor();
     descriptor["descriptorVersion"] = json!(0);
-    let error = BRegOccurrenceDescriptor::from_value(&descriptor)
+    let error = BRegEventRecordDescriptor::from_value(&descriptor)
         .expect_err("version 0 is not a version this client reads");
     assert!(matches!(
         error,
-        BRegOccurrenceError::UnsupportedVersion { found: 0 }
+        BRegEventRecordError::UnsupportedVersion { found: 0 }
     ));
     assert_eq!(error.code(), "unsupported-version");
 }
@@ -1092,10 +1092,10 @@ fn a_descriptor_version_that_is_not_a_non_negative_integer_is_malformed() {
     for version in [json!("1"), json!(1.0), json!(-1), json!(null), json!(true)] {
         let mut descriptor = transfer_descriptor();
         descriptor["descriptorVersion"] = version.clone();
-        let error = BRegOccurrenceDescriptor::from_value(&descriptor)
+        let error = BRegEventRecordDescriptor::from_value(&descriptor)
             .expect_err(&format!("{version} is not a descriptor version"));
         assert!(
-            matches!(error, BRegOccurrenceError::MalformedDescriptor { ref path } if path == "descriptorVersion"),
+            matches!(error, BRegEventRecordError::MalformedDescriptor { ref path } if path == "descriptorVersion"),
             "{version}: {error}"
         );
     }
@@ -1115,10 +1115,10 @@ fn a_descriptor_missing_a_required_member_is_malformed() {
             .as_object_mut()
             .expect("descriptor")
             .remove(member);
-        let error = BRegOccurrenceDescriptor::from_value(&descriptor)
+        let error = BRegEventRecordDescriptor::from_value(&descriptor)
             .expect_err(&format!("missing {member}"));
         assert!(
-            matches!(error, BRegOccurrenceError::MalformedDescriptor { path: ref found } if found == path),
+            matches!(error, BRegEventRecordError::MalformedDescriptor { path: ref found } if found == path),
             "{member}: {error}"
         );
         assert_eq!(error.code(), "malformed-descriptor");
@@ -1173,16 +1173,16 @@ fn malformed_nested_members_name_their_path() {
     for (path, mutate) in cases {
         let mut descriptor = incorporation_descriptor();
         mutate(&mut descriptor);
-        let error = BRegOccurrenceDescriptor::from_value(&descriptor)
+        let error = BRegEventRecordDescriptor::from_value(&descriptor)
             .expect_err(&format!("{path} is malformed"));
         assert!(
-            matches!(error, BRegOccurrenceError::MalformedDescriptor { path: ref found } if found == path),
+            matches!(error, BRegEventRecordError::MalformedDescriptor { path: ref found } if found == path),
             "{path}: {error}"
         );
     }
     assert!(matches!(
-        BRegOccurrenceDescriptor::from_value(&json!([])),
-        Err(BRegOccurrenceError::MalformedDescriptor { .. })
+        BRegEventRecordDescriptor::from_value(&json!([])),
+        Err(BRegEventRecordError::MalformedDescriptor { .. })
     ));
 }
 
@@ -1208,13 +1208,13 @@ fn descriptors_round_trip_through_their_canonical_form() {
         suspension_descriptor(),
         transfer_descriptor(),
     ] {
-        let parsed = BRegOccurrenceDescriptor::from_value(&descriptor).expect("parses");
+        let parsed = BRegEventRecordDescriptor::from_value(&descriptor).expect("parses");
         assert_eq!(
             parsed.to_value(),
             descriptor,
             "canonical form omits what is absent"
         );
-        let reparsed = BRegOccurrenceDescriptor::from_value(&parsed.to_value()).expect("reparses");
+        let reparsed = BRegEventRecordDescriptor::from_value(&parsed.to_value()).expect("reparses");
         assert_eq!(parsed, reparsed);
     }
 }
@@ -1238,9 +1238,9 @@ fn argument_documents_are_strict() {
         },
         br#"{"recordType":"a","recordType":"b"}"#.to_vec(),
     ] {
-        let error = occurrence_view_from_json(&invalid).expect_err("invalid input is refused");
+        let error = event_record_view_from_json(&invalid).expect_err("invalid input is refused");
         assert!(
-            matches!(error, BRegOccurrenceError::InvalidInput { .. }),
+            matches!(error, BRegEventRecordError::InvalidInput { .. }),
             "{error}"
         );
         assert_eq!(error.code(), "invalid-input");
@@ -1273,7 +1273,7 @@ fn invalid_input_errors_carry_no_supplied_value() {
     ] {
         let error = project(&arguments).expect_err("invalid input is refused");
         assert!(
-            matches!(error, BRegOccurrenceError::InvalidInput { .. }),
+            matches!(error, BRegEventRecordError::InvalidInput { .. }),
             "{error}"
         );
         let message = error.to_string();
@@ -1313,7 +1313,7 @@ fn creation_revision_errors_carry_no_supplied_value() {
     );
     for error in errors {
         assert!(
-            matches!(error, BRegOccurrenceError::WrongRecordEvidence { .. }),
+            matches!(error, BRegEventRecordError::WrongRecordEvidence { .. }),
             "{error}"
         );
         let message = error.to_string();
@@ -1328,41 +1328,44 @@ fn a_record_id_that_is_not_a_uuid_is_wrong_record_evidence() {
     arguments["record"]["recordIdentifier"] = json!("not-a-uuid");
     assert!(matches!(
         project(&arguments),
-        Err(BRegOccurrenceError::WrongRecordEvidence { .. })
+        Err(BRegEventRecordError::WrongRecordEvidence { .. })
     ));
 }
 
 #[test]
 fn error_codes_and_display_are_stable() {
     let cases = [
-        (BRegOccurrenceError::NotAnOccurrence, "not-an-occurrence"),
         (
-            BRegOccurrenceError::UnsupportedVersion { found: 9 },
+            BRegEventRecordError::NotAnEventRecord,
+            "not-an-event-record",
+        ),
+        (
+            BRegEventRecordError::UnsupportedVersion { found: 9 },
             "unsupported-version",
         ),
         (
-            BRegOccurrenceError::MalformedDescriptor {
+            BRegEventRecordError::MalformedDescriptor {
                 path: "label".into(),
             },
             "malformed-descriptor",
         ),
         (
-            BRegOccurrenceError::WrongRecordEvidence { reason: "x".into() },
+            BRegEventRecordError::WrongRecordEvidence { reason: "x".into() },
             "wrong-record-evidence",
         ),
         (
-            BRegOccurrenceError::RevisionMismatch {
+            BRegEventRecordError::RevisionMismatch {
                 expected: "1".into(),
                 found: "2".into(),
             },
             "revision-mismatch",
         ),
         (
-            BRegOccurrenceError::IncompatibleMetadata { reason: "x".into() },
+            BRegEventRecordError::IncompatibleMetadata { reason: "x".into() },
             "incompatible-metadata",
         ),
         (
-            BRegOccurrenceError::InvalidInput { reason: "x".into() },
+            BRegEventRecordError::InvalidInput { reason: "x".into() },
             "invalid-input",
         ),
     ];
@@ -1396,18 +1399,18 @@ fn registry_record(value: &Value) -> RegistryRecord {
 #[test]
 fn the_typed_view_equals_the_json_view_for_the_same_evidence() {
     let descriptor =
-        BRegOccurrenceDescriptor::from_value(&incorporation_descriptor()).expect("descriptor");
+        BRegEventRecordDescriptor::from_value(&incorporation_descriptor()).expect("descriptor");
     let creation = BRegCreationRevision::from_document(
         INCORPORATION_ID,
         &creation_revision_envelope(INCORPORATION_ID, "1", Value::Null, "create"),
     )
     .expect("creation revision");
-    let view = occurrence_view(
+    let view = event_record_view(
         REGISTRY_REVISION,
         "incorporation",
         &descriptor,
         &registry_record(&incorporation_record()),
-        &BRegOccurrenceEvidence {
+        &BRegEventRecordEvidence {
             creation_revision: Some(&creation),
             ..Default::default()
         },
@@ -1421,7 +1424,7 @@ fn the_typed_view_equals_the_json_view_for_the_same_evidence() {
 #[test]
 fn typed_proposal_applications_are_projected_like_their_json_form() {
     let descriptor =
-        BRegOccurrenceDescriptor::from_value(&transfer_descriptor()).expect("descriptor");
+        BRegEventRecordDescriptor::from_value(&transfer_descriptor()).expect("descriptor");
     let application: BRegProposalApplication = serde_json::from_value(json!({
         "applicationId": "b2000000-0000-4000-8000-000000000002", "submissionVersion": 3,
         "effectDigest": "sha256:00000000000000000000000000000000000000000000000000000000000000bb",
@@ -1430,12 +1433,12 @@ fn typed_proposal_applications_are_projected_like_their_json_form() {
     }))
     .expect("application");
     let applications = [&application];
-    let view = occurrence_view(
+    let view = event_record_view(
         REGISTRY_REVISION,
         "ownership-transfer",
         &descriptor,
         &registry_record(&transfer_record()),
-        &BRegOccurrenceEvidence {
+        &BRegEventRecordEvidence {
             proposal_applications: &applications,
             ..Default::default()
         },
@@ -1495,7 +1498,7 @@ fn from_document_accepts_only_the_creating_revision_of_the_record() {
     );
     assert!(matches!(
         wrong_record,
-        Err(BRegOccurrenceError::WrongRecordEvidence { .. })
+        Err(BRegEventRecordError::WrongRecordEvidence { .. })
     ));
     for (document, label) in [
         (
@@ -1515,7 +1518,7 @@ fn from_document_accepts_only_the_creating_revision_of_the_record() {
         assert!(
             matches!(
                 BRegCreationRevision::from_document(INCORPORATION_ID, &document),
-                Err(BRegOccurrenceError::WrongRecordEvidence { .. })
+                Err(BRegEventRecordError::WrongRecordEvidence { .. })
             ),
             "{label}"
         );
@@ -1526,14 +1529,14 @@ fn from_document_accepts_only_the_creating_revision_of_the_record() {
     );
     assert!(matches!(
         later,
-        Err(BRegOccurrenceError::RevisionMismatch { ref expected, ref found })
+        Err(BRegEventRecordError::RevisionMismatch { ref expected, ref found })
             if expected == "1" && found == "2"
     ));
     let mut bad_time = creation_revision_envelope(INCORPORATION_ID, "1", Value::Null, "create");
     bad_time["data"]["createdAt"] = json!("yesterday");
     assert!(matches!(
         BRegCreationRevision::from_document(INCORPORATION_ID, &bad_time),
-        Err(BRegOccurrenceError::WrongRecordEvidence { .. })
+        Err(BRegEventRecordError::WrongRecordEvidence { .. })
     ));
 }
 
@@ -1546,13 +1549,13 @@ fn metadata_with(entities: Value) -> BRegMetadata {
         .expect("metadata parses")
 }
 
-fn entity(id: &str, route: &str, occurrence: Option<Value>) -> Value {
+fn entity(id: &str, route: &str, event_record: Option<Value>) -> Value {
     let mut value = json!({
         "id": id, "datasetIdentifier": "register", "route": route, "operations": [],
         "readableFields": [], "schema": format!("/v1/schemas/{id}")
     });
-    if let Some(occurrence) = occurrence {
-        value["occurrence"] = occurrence;
+    if let Some(event_record) = event_record {
+        value["eventRecord"] = event_record;
     }
     value
 }
@@ -1576,35 +1579,35 @@ fn metadata_exposes_the_descriptor_lazily_and_tolerates_a_bad_one() {
                 descriptor
             })
         ),
-        entity("scalar", "scalars", Some(json!("occurrence")))
+        entity("scalar", "scalars", Some(json!("eventRecord")))
     ]));
     let descriptor = metadata
-        .occurrence("incorporation")
-        .expect("declared occurrence");
+        .event_record("incorporation")
+        .expect("declared event record");
     assert_eq!(descriptor.to_value(), incorporation_descriptor());
     assert_eq!(
         descriptor,
-        BRegOccurrenceDescriptor::from_value(&incorporation_descriptor()).expect("parses")
+        BRegEventRecordDescriptor::from_value(&incorporation_descriptor()).expect("parses")
     );
     assert!(matches!(
-        metadata.occurrence("review-note"),
-        Err(BRegOccurrenceError::NotAnOccurrence)
+        metadata.event_record("review-note"),
+        Err(BRegEventRecordError::NotAnEventRecord)
     ));
     assert!(matches!(
-        metadata.occurrence("not-visible"),
-        Err(BRegOccurrenceError::NotAnOccurrence)
+        metadata.event_record("not-visible"),
+        Err(BRegEventRecordError::NotAnEventRecord)
     ));
     assert!(matches!(
-        metadata.occurrence("broken"),
-        Err(BRegOccurrenceError::MalformedDescriptor { .. })
+        metadata.event_record("broken"),
+        Err(BRegEventRecordError::MalformedDescriptor { .. })
     ));
     assert!(matches!(
-        metadata.occurrence("future"),
-        Err(BRegOccurrenceError::UnsupportedVersion { .. })
+        metadata.event_record("future"),
+        Err(BRegEventRecordError::UnsupportedVersion { .. })
     ));
     assert!(matches!(
-        metadata.occurrence("scalar"),
-        Err(BRegOccurrenceError::MalformedDescriptor { ref path }) if path == "occurrence"
+        metadata.event_record("scalar"),
+        Err(BRegEventRecordError::MalformedDescriptor { ref path }) if path == "eventRecord"
     ));
 }
 
@@ -1702,7 +1705,7 @@ struct CountingToken(AtomicUsize);
 impl TokenProvider for CountingToken {
     async fn bearer_token(&self) -> Result<BearerToken, TokenError> {
         self.0.fetch_add(1, Ordering::SeqCst);
-        BearerToken::new("occurrence-test-token")
+        BearerToken::new("event-record-test-token")
     }
 }
 
@@ -1762,7 +1765,7 @@ async fn the_creation_revision_helper_reads_exactly_revision_one() {
     .await;
     let creation = fixture
         .client
-        .occurrence_creation_revision("incorporations", INCORPORATION_ID, Some("history-reader"))
+        .event_record_creation_revision("incorporations", INCORPORATION_ID, Some("history-reader"))
         .await
         .expect("read succeeds")
         .expect("a creation revision");
@@ -1800,7 +1803,7 @@ async fn a_concealed_or_absent_history_is_none_and_never_a_substitute_time() {
         let fixture = test_client(vec![MockResponse::problem(status, body)]).await;
         let result = fixture
             .client
-            .occurrence_creation_revision("incorporations", INCORPORATION_ID, None)
+            .event_record_creation_revision("incorporations", INCORPORATION_ID, None)
             .await
             .expect("concealment is not an error");
         assert!(result.is_none(), "{status}");
@@ -1823,7 +1826,7 @@ async fn other_failures_and_invalid_documents_stay_visible() {
     .await;
     assert!(fixture
         .client
-        .occurrence_creation_revision("incorporations", INCORPORATION_ID, None)
+        .event_record_creation_revision("incorporations", INCORPORATION_ID, None)
         .await
         .is_err());
 
@@ -1840,7 +1843,7 @@ async fn other_failures_and_invalid_documents_stay_visible() {
     .await;
     assert!(fixture
         .client
-        .occurrence_creation_revision("incorporations", INCORPORATION_ID, None)
+        .event_record_creation_revision("incorporations", INCORPORATION_ID, None)
         .await
         .is_err());
 
@@ -1853,7 +1856,7 @@ async fn other_failures_and_invalid_documents_stay_visible() {
         let fixture = test_client(vec![revision_response(document)]).await;
         let error = fixture
             .client
-            .occurrence_creation_revision("incorporations", INCORPORATION_ID, None)
+            .event_record_creation_revision("incorporations", INCORPORATION_ID, None)
             .await
             .expect_err("a non-create revision 1 is refused");
         assert!(
@@ -1869,7 +1872,7 @@ async fn other_failures_and_invalid_documents_stay_visible() {
     ] {
         assert!(fixture
             .client
-            .occurrence_creation_revision(route, id, None)
+            .event_record_creation_revision(route, id, None)
             .await
             .is_err());
     }
@@ -1945,16 +1948,16 @@ async fn a_typed_action_receipt_projects_like_its_json_form() {
         .value;
 
     let descriptor =
-        BRegOccurrenceDescriptor::from_value(&incorporation_descriptor()).expect("descriptor");
+        BRegEventRecordDescriptor::from_value(&incorporation_descriptor()).expect("descriptor");
     let creation: BRegCreationRevision =
         serde_json::from_value(creation_revision_json()).expect("creation revision");
     let receipts = [(&receipt, "record-incorporation")];
-    let view = occurrence_view(
+    let view = event_record_view(
         REGISTRY_REVISION,
         "incorporation",
         &descriptor,
         &registry_record(&incorporation_record()),
-        &BRegOccurrenceEvidence {
+        &BRegEventRecordEvidence {
             creation_revision: Some(&creation),
             action_receipts: &receipts,
             proposal_applications: &[],
@@ -1967,12 +1970,12 @@ async fn a_typed_action_receipt_projects_like_its_json_form() {
     );
 
     let mismatched = [(&receipt, "update-company")];
-    let view = occurrence_view(
+    let view = event_record_view(
         REGISTRY_REVISION,
         "incorporation",
         &descriptor,
         &registry_record(&incorporation_record()),
-        &BRegOccurrenceEvidence {
+        &BRegEventRecordEvidence {
             action_receipts: &mismatched,
             ..Default::default()
         },
@@ -1985,7 +1988,7 @@ async fn a_typed_action_receipt_projects_like_its_json_form() {
         json!("no-matching-result")
     );
     assert_eq!(
-        OCCURRENCE_VIEW_CONTRACT,
+        EVENT_RECORD_VIEW_CONTRACT,
         expected_incorporation()["contract"]
             .as_str()
             .expect("contract")

@@ -66,6 +66,7 @@ pub mod derived_sql;
 pub mod diagnostics;
 #[cfg(feature = "runtime")]
 pub mod event_destination;
+pub(crate) mod event_record;
 pub mod evidence_source;
 #[cfg(feature = "tooling")]
 pub mod example_references;
@@ -123,7 +124,6 @@ pub mod migration_reconcile;
 pub mod model;
 #[cfg(feature = "runtime")]
 pub mod mutation;
-pub(crate) mod occurrence;
 #[cfg(feature = "runtime")]
 pub mod outbox;
 #[cfg(feature = "runtime")]

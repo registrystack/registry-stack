@@ -1,22 +1,23 @@
-# Domain occurrences
+# Event records
 
-A record type may declare that each of its records states one domain
-occurrence: something that happened to one or more subjects, when it happened,
-when it took effect, what it rests on, and whether it corrects an earlier
+An event record is data stored in the registry that states something
+happened. A hook event is something else: a notification the registry sends
+after a record changes, which `bregctl explain events` and
+[the event and webhook design](EVENTS-AND-WEBHOOKS.md) describe. An author
+models an event record as an ordinary record; the descriptor has no `event`
+member, and the two never read each other.
+
+A record type may declare that each of its records is an event record: it
+states something that happened to one or more subjects, when it happened, when
+it took effect, what it rests on, and whether it corrects an earlier
 statement. The declaration is a descriptor over fields the record type already
 stores. It adds no storage, no route, no grant and no behavior. It lets a
 compiler, an explanation, runtime metadata and a client read the same record
 shape in one generic way.
 
-A domain occurrence is not a technical event. `bregctl explain events` and
-[the event and webhook design](EVENTS-AND-WEBHOOKS.md) describe delivery
-notifications about changes; an occurrence is registry data an author models
-as a record. The descriptor has no `event` member and the two never read each
-other.
-
 ## Authoring
 
-`occurrence` is an optional member of a record type, next to `consentRecord`.
+`eventRecord` is an optional member of a record type, next to `consentRecord`.
 Every `field` value is the id of a stored field of the same record type (not a
 derived field and not an `apiName`).
 
@@ -33,7 +34,7 @@ recordTypes:
   - {id: corrects, type: reference, target: entry-registration, required: false}
   constraints:
   - {id: one-per-source, type: unique, fields: [source-reference]}
-  occurrence:
+  eventRecord:
     label: Entry registered
     subjects:
     - {role: entry, field: entry, label: Entry, target: entry}
@@ -53,13 +54,13 @@ recordTypes:
 
 | Member | Required | Meaning |
 |---|---|---|
-| `label` | no | Display text for the occurrence. Defaults to the record type display label, then its id. |
-| `subjects` | yes, 1 to 16 | What the occurrence is about. Each item maps a `role` to a field. |
+| `label` | no | Display text for the event record. Defaults to the record type display label, then its id. |
+| `subjects` | yes, 1 to 16 | What the event record is about. Each item maps a `role` to a field. |
 | `summary` | no | A `string` or `text` field holding a human description. The descriptor never generates prose. |
 | `occurredAt` | no | When it happened: a point or an interval. |
 | `effective` | no | When it took effect: a point or a span, kept separate from `occurredAt`. |
 | `sources` | no, 0 to 16 | References to what the statement rests on. Same item shape as subjects. |
-| `correction` | no | A reference to an earlier occurrence record this one corrects or supersedes. |
+| `correction` | no | A reference to an earlier event record this one corrects or supersedes. |
 | `sourceEventId` | no | An identifier assigned by the originating system, with its namespace and a duplicate policy. |
 
 Subjects and sources share one role namespace. A role starts with a lowercase
@@ -89,7 +90,7 @@ that the source exists or supports the statement.
 
 - `span`: it lasted from `start` to `end` (end exclusive, as in
   [history](HISTORY.md)). `end` is optional (still open).
-- `within`: one occurrence happened at an unknown point between `start` and
+- `within`: the event happened at an unknown point between `start` and
   `end`. `end` is required. This is the unknown-precision form, for example
   "agreed between two dates, exact day unknown".
 
@@ -108,7 +109,7 @@ Rules that follow from this:
   `domainData`.
 - Date fields stay dates. No midnight instant is ever derived from them.
 - The descriptor adds no ordering rule. To require `start` before `end`, or an
-  effect not before the occurrence, author a `compare` constraint. A null side
+  effect not before the event, author a `compare` constraint. A null side
   passes the constraint.
 - There is no `recordedAt` member (the parser refuses it with
   `config.unknown-key`). Recorded time is always the creation revision of the
@@ -117,7 +118,7 @@ Rules that follow from this:
 ### Corrections
 
 `correction.field` is a `reference` to a record type that declares an
-occurrence (the same record type is allowed). `relation` is:
+event record (the same record type is allowed). `relation` is:
 
 - `corrects`: the new record amends an error in the earlier statement.
 - `supersedes`: the new record replaces the earlier statement as the current
@@ -144,27 +145,27 @@ absolute URI of at most 512 bytes) or `namespaceField` (a `string` or
 
 ### Validation
 
-All diagnostics are errors. Paths use `recordTypes[id=<record>].occurrence`
+All diagnostics are errors. Paths use `recordTypes[id=<record>].eventRecord`
 as the base, and `[role=<role>]` for role items (the index form `[<n>]` when
 the role itself is invalid or duplicated).
 
 | Code | Trigger |
 |---|---|
-| `breg.occurrence.subjects-empty` | `subjects` is empty |
-| `breg.occurrence.roles-too-many` | more than 16 subjects or sources |
-| `breg.occurrence.role-invalid` | role is not a lowercase identifier |
-| `breg.occurrence.role-duplicate` | a role repeated across subjects and sources |
-| `breg.occurrence.field-unknown` | a mapped field is not a stored field of the record type |
-| `breg.occurrence.field-type` | field type outside the allowed set below |
-| `breg.occurrence.field-reused` | one field mapped by two of subjects, sources, correction and summary |
-| `breg.occurrence.reference-target` | `target` differs from the field's reference target |
-| `breg.occurrence.external-target` | `target` on an `external` item |
-| `breg.occurrence.external-namespace` | namespace is not an absolute URI of at most 512 bytes |
-| `breg.occurrence.time-shape` | point and interval members mixed, `end` without `start`, missing or misplaced `meaning`, `within` without `end` |
-| `breg.occurrence.interval-type-mismatch` | interval bounds of different types |
-| `breg.occurrence.correction-target` | the correction target declares no occurrence |
-| `breg.occurrence.source-event-namespace` | both or neither of `namespace` and `namespaceField` |
-| `breg.occurrence.source-event-constraint` | policy and constraint disagree, or the constraint is not a matching unique constraint |
+| `breg.event-record.subjects-empty` | `subjects` is empty |
+| `breg.event-record.roles-too-many` | more than 16 subjects or sources |
+| `breg.event-record.role-invalid` | role is not a lowercase identifier |
+| `breg.event-record.role-duplicate` | a role repeated across subjects and sources |
+| `breg.event-record.field-unknown` | a mapped field is not a stored field of the record type |
+| `breg.event-record.field-type` | field type outside the allowed set below |
+| `breg.event-record.field-reused` | one field mapped by two of subjects, sources, correction and summary |
+| `breg.event-record.reference-target` | `target` differs from the field's reference target |
+| `breg.event-record.external-target` | `target` on an `external` item |
+| `breg.event-record.external-namespace` | namespace is not an absolute URI of at most 512 bytes |
+| `breg.event-record.time-shape` | point and interval members mixed, `end` without `start`, missing or misplaced `meaning`, `within` without `end` |
+| `breg.event-record.interval-type-mismatch` | interval bounds of different types |
+| `breg.event-record.correction-target` | the correction target declares no event record |
+| `breg.event-record.source-event-namespace` | both or neither of `namespace` and `namespaceField` |
+| `breg.event-record.source-event-constraint` | policy and constraint disagree, or the constraint is not a matching unique constraint |
 | `breg.display-text.invalid` | unsafe characters in a label |
 | `config.unknown-key` | an unknown member, for example `recordedAt`, `event` or `meaning` under `effective` |
 | `config.unknown-variant` | an unknown `meaning`, `relation` or `duplicates` value |
@@ -208,7 +209,7 @@ queries. Authors may use all of them on the same fields; none reads the others.
 ## Explanation
 
 `bregctl explain model` reports the declared descriptor in
-`recordTypes[].occurrence` (`null` when undeclared) and the display grouping in
+`recordTypes[].eventRecord` (`null` when undeclared) and the display grouping in
 `recordTypes[].grouping` and `actions[].grouping`. The explanation keeps
 explicit nulls for undeclared members, and shows the `sourceEventId`
 `constraint` that runtime metadata does not serve. These members arrive with
@@ -219,11 +220,11 @@ the document; there is no partial view. See
 
 ## Runtime metadata
 
-`GET /v1/registry` carries the descriptor as an `occurrence` member of a record
+`GET /v1/registry` carries the descriptor as an `eventRecord` member of a record
 type, filtered for the caller and profile. `metadataVersion` stays `"2"`; the
 member is additive and ignorable.
 
-- No `occurrence` member when the record type declares none.
+- No `eventRecord` member when the record type declares none.
 - `descriptorVersion` (the integer `1`), `label` and `recordedTime` (`{source:
   creation-revision}`) are always present for a declaring, visible record type.
 - A subject or source item is omitted when its field is not readable by the
@@ -258,19 +259,19 @@ as RFC 3339 text ending in `Z`.
 Authored `timestamp` values are stored as instants and served in UTC with a
 `+00:00` offset: `2026-10-20T09:30:00+02:00` is read back as
 `2026-10-20T07:30:00+00:00`. The authored offset is not preserved by the
-registry. The client occurrence view passes the served text through (only
+registry. The client event record view passes the served text through (only
 letter case is normalized: uppercase `T` separator and `Z` zone letter) and
 never converts a value to another zone.
 
 ## Client view
 
 The Rust, Node and Python clients project a record plus its creation revision
-into an occurrence view for any declared record type through one reader. The
+into an event record view for any declared record type through one reader. The
 client guide, [CLIENTS.md](../../crates/CLIENTS.md), documents the clients.
 The view is inert data. Its format identifier is
-`id.registrystack.org/formats/breg/occurrence-view/v1alpha1`, and its JSON
+`id.registrystack.org/formats/breg/event-record-view/v1alpha1`, and its JSON
 Schema is
-[`OccurrenceView.schema.json`](contracts/occurrence-view/OccurrenceView.schema.json),
+[`EventRecordView.schema.json`](contracts/event-record-view/EventRecordView.schema.json),
 which the client tests hold to the projection output.
 
 The view carries these members:
@@ -311,7 +312,7 @@ policy the client does not know, so a descriptor that is newer than the client
 degrades one member instead of failing the whole view.
 
 The reader refuses with a closed set of error codes, none of which carries a
-record value: `not-an-occurrence` (the record type declares no occurrence),
+record value: `not-an-event-record` (the record type declares no event record),
 `unsupported-version` (a descriptor version that is a non-negative integer other
 than `1`, including `0`), `malformed-descriptor` (a malformed descriptor,
 including a `descriptorVersion` that is not a non-negative integer, such as a
@@ -335,14 +336,14 @@ match the contract).
 
 ## Retention and tombstones
 
-Occurrence links are ordinary `reference` fields and follow the existing
+Event record links are ordinary `reference` fields and follow the existing
 reference rules. Only `onDelete: restrict` is supported.
 
-- A create-only record cannot be tombstoned. An occurrence record is normally
+- A create-only record cannot be tombstoned. An event record is normally
   create-only, so it stays as evidence.
 - Tombstoning a record that an active record references is refused with a
-  value-free conflict. This applies to subjects of a create-only occurrence and
-  to a record an active mutable occurrence record points at.
+  value-free conflict. This applies to subjects of a create-only event record and
+  to a record an active mutable event record points at.
 - Tombstoning a mutable record that held a reference releases the restriction
   on its target. The retained link UUID stays in the revision history.
 - A reference to an unknown record UUID, such as an unknown `corrects` target, is refused at write time.
@@ -399,9 +400,9 @@ without a `purpose` as grouped with no badge, and shows an unrecognized future
 `purpose` as unsupported while keeping the item visible. Grouping never hides
 an item.
 
-## Actions that record occurrences
+## Actions that write event records
 
-Recording an occurrence is an ordinary create-only Action: one or more effects,
+Writing an event record is an ordinary create-only Action: one or more effects,
 an idempotency key, and commit guards. Observed behavior:
 
 - A failed guard returns `412 action.guard_failed`, with `guardReason` when the

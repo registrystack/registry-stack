@@ -98,7 +98,7 @@
           "derivedRelations",
           "moduleOrigins",
           "grouping",
-          "occurrence"
+          "eventRecord"
         ],
         "properties": {
           "id": {
@@ -117,13 +117,13 @@
               }
             ]
           },
-          "occurrence": {
+          "eventRecord": {
             "oneOf": [
               {
                 "type": "null"
               },
               {
-                "$ref": "#/$defs/Occurrence"
+                "$ref": "#/$defs/EventRecord"
               }
             ]
           },
@@ -651,7 +651,7 @@
         }
       }
     },
-    "OccurrenceField": {
+    "EventRecordField": {
       "description": "A stored field named by id and API name; `target` is present for a reference.",
       "type": "object",
       "additionalProperties": false,
@@ -683,7 +683,7 @@
         }
       }
     },
-    "OccurrenceRole": {
+    "EventRecordRole": {
       "description": "A subject or source role. A native role references a record of this registry; an external role is an opaque identifier in the named namespace and is never resolved.",
       "type": "object",
       "additionalProperties": false,
@@ -709,11 +709,11 @@
           "type": "string"
         },
         "field": {
-          "$ref": "#/$defs/OccurrenceField"
+          "$ref": "#/$defs/EventRecordField"
         }
       }
     },
-    "OccurrenceTime": {
+    "EventRecordTime": {
       "description": "A point, or an interval whose `end` is null when open.",
       "oneOf": [
         {
@@ -728,7 +728,7 @@
               "const": "point"
             },
             "at": {
-              "$ref": "#/$defs/OccurrenceField"
+              "$ref": "#/$defs/EventRecordField"
             }
           }
         },
@@ -752,7 +752,7 @@
               ]
             },
             "start": {
-              "$ref": "#/$defs/OccurrenceField"
+              "$ref": "#/$defs/EventRecordField"
             },
             "end": {
               "oneOf": [
@@ -760,7 +760,7 @@
                   "type": "null"
                 },
                 {
-                  "$ref": "#/$defs/OccurrenceField"
+                  "$ref": "#/$defs/EventRecordField"
                 }
               ]
             }
@@ -768,8 +768,8 @@
         }
       ]
     },
-    "Occurrence": {
-      "description": "A Record type's domain occurrence descriptor. It maps roles onto existing stored fields and adds no storage, endpoint or authority.",
+    "EventRecord": {
+      "description": "A Record type's event record descriptor. It maps roles onto existing stored fields and adds no storage, endpoint or authority.",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -797,7 +797,7 @@
           "minItems": 1,
           "maxItems": 16,
           "items": {
-            "$ref": "#/$defs/OccurrenceRole"
+            "$ref": "#/$defs/EventRecordRole"
           }
         },
         "summary": {
@@ -806,7 +806,7 @@
               "type": "null"
             },
             {
-              "$ref": "#/$defs/OccurrenceField"
+              "$ref": "#/$defs/EventRecordField"
             }
           ]
         },
@@ -816,7 +816,7 @@
               "type": "null"
             },
             {
-              "$ref": "#/$defs/OccurrenceTime"
+              "$ref": "#/$defs/EventRecordTime"
             }
           ]
         },
@@ -826,7 +826,7 @@
               "type": "null"
             },
             {
-              "$ref": "#/$defs/OccurrenceTime"
+              "$ref": "#/$defs/EventRecordTime"
             }
           ]
         },
@@ -834,7 +834,7 @@
           "type": "array",
           "maxItems": 16,
           "items": {
-            "$ref": "#/$defs/OccurrenceRole"
+            "$ref": "#/$defs/EventRecordRole"
           }
         },
         "correction": {
@@ -857,7 +857,7 @@
                   ]
                 },
                 "field": {
-                  "$ref": "#/$defs/OccurrenceField"
+                  "$ref": "#/$defs/EventRecordField"
                 }
               }
             }
@@ -880,7 +880,7 @@
               ],
               "properties": {
                 "field": {
-                  "$ref": "#/$defs/OccurrenceField"
+                  "$ref": "#/$defs/EventRecordField"
                 },
                 "namespace": {
                   "type": [
@@ -894,7 +894,7 @@
                       "type": "null"
                     },
                     {
-                      "$ref": "#/$defs/OccurrenceField"
+                      "$ref": "#/$defs/EventRecordField"
                     }
                   ]
                 },

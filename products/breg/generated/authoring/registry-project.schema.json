@@ -1563,16 +1563,16 @@
       ]
     },
     "CorrectionRelation": {
-      "description": "How a later occurrence relates to the one it names.",
+      "description": "How a later event record relates to the one it names.",
       "oneOf": [
         {
           "const": "corrects",
-          "description": "Amends an error in the named occurrence.",
+          "description": "Amends an error in the named event record.",
           "type": "string"
         },
         {
           "const": "supersedes",
-          "description": "Replaces the named occurrence as the current interpretation.",
+          "description": "Replaces the named event record as the current interpretation.",
           "type": "string"
         }
       ]
@@ -2328,6 +2328,10 @@
           "$ref": "#/$defs/ModelDisplaySource",
           "default": {}
         },
+        "eventRecord": {
+          "$ref": "#/$defs/EventRecordSource",
+          "description": "Declares this record type's rows as event records: which fields\nsay what the row is about, when it happened, when it takes effect, what\nit was recorded from and what it corrects. It adds no storage, endpoint\nor authority."
+        },
         "fields": {
           "default": [],
           "items": {
@@ -2360,10 +2364,6 @@
         },
         "mutationPolicy": {
           "$ref": "#/$defs/MutationPolicySource"
-        },
-        "occurrence": {
-          "$ref": "#/$defs/OccurrenceSource",
-          "description": "Declares this record type's rows as domain occurrences: which fields\nsay what the row is about, when it happened, when it takes effect, what\nit was recorded from and what it corrects. It adds no storage, endpoint\nor authority."
         },
         "primaryDataset": {
           "type": "string"
@@ -2460,6 +2460,113 @@
       "required": [
         "type"
       ],
+      "type": "object"
+    },
+    "EventRecordCorrectionSource": {
+      "additionalProperties": false,
+      "properties": {
+        "field": {
+          "description": "A reference to a record type that also declares an event record.",
+          "type": "string"
+        },
+        "relation": {
+          "$ref": "#/$defs/CorrectionRelation"
+        }
+      },
+      "required": [
+        "field",
+        "relation"
+      ],
+      "type": "object"
+    },
+    "EventRecordRoleSource": {
+      "additionalProperties": false,
+      "description": "One named role played by a stored field.",
+      "properties": {
+        "external": {
+          "$ref": "#/$defs/ExternalReferenceSource",
+          "description": "Marks the field as an opaque identifier owned by another system."
+        },
+        "field": {
+          "type": "string"
+        },
+        "label": {
+          "$ref": "#/$defs/DisplayText"
+        },
+        "role": {
+          "type": "string"
+        },
+        "target": {
+          "description": "Asserts the record type a native reference field points at.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "role",
+        "field"
+      ],
+      "type": "object"
+    },
+    "EventRecordSource": {
+      "additionalProperties": false,
+      "description": "The record-level mapping of stored fields onto event record roles.",
+      "properties": {
+        "correction": {
+          "$ref": "#/$defs/EventRecordCorrectionSource"
+        },
+        "effective": {
+          "$ref": "#/$defs/EffectiveTimeSource"
+        },
+        "label": {
+          "$ref": "#/$defs/DisplayText"
+        },
+        "occurredAt": {
+          "$ref": "#/$defs/EventRecordTimeSource"
+        },
+        "sourceEventId": {
+          "$ref": "#/$defs/SourceEventIdSource"
+        },
+        "sources": {
+          "description": "What the event record was recorded from. Recording a reference is not\nverifying it.",
+          "items": {
+            "$ref": "#/$defs/EventRecordRoleSource"
+          },
+          "type": "array"
+        },
+        "subjects": {
+          "description": "What the event record is about. At least one, at most 16. The serde\ndefault only lets compilation report the stable emptiness diagnostic.",
+          "items": {
+            "$ref": "#/$defs/EventRecordRoleSource"
+          },
+          "type": "array"
+        },
+        "summary": {
+          "description": "A `string` or `text` field holding a human summary.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "subjects"
+      ],
+      "type": "object"
+    },
+    "EventRecordTimeSource": {
+      "additionalProperties": false,
+      "description": "A point (`at`) or an interval (`start`, `end`, `meaning`). Flat optional\nmembers let the compiler address each shape error at its authored path.",
+      "properties": {
+        "at": {
+          "type": "string"
+        },
+        "end": {
+          "type": "string"
+        },
+        "meaning": {
+          "$ref": "#/$defs/IntervalMeaning"
+        },
+        "start": {
+          "type": "string"
+        }
+      },
       "type": "object"
     },
     "EventTrigger": {
@@ -3220,16 +3327,16 @@
       "type": "object"
     },
     "IntervalMeaning": {
-      "description": "What an occurrence interval says about the occurrence.",
+      "description": "What an event record's interval says about the event.",
       "oneOf": [
         {
           "const": "span",
-          "description": "The occurrence lasted from start to end.",
+          "description": "The event lasted from start to end.",
           "type": "string"
         },
         {
           "const": "within",
-          "description": "One occurrence happened at an unknown instant between start and end.",
+          "description": "The event happened at an unknown instant between start and end.",
           "type": "string"
         }
       ]
@@ -3851,113 +3958,6 @@
           "type": "string"
         }
       ]
-    },
-    "OccurrenceCorrectionSource": {
-      "additionalProperties": false,
-      "properties": {
-        "field": {
-          "description": "A reference to a record type that also declares an occurrence.",
-          "type": "string"
-        },
-        "relation": {
-          "$ref": "#/$defs/CorrectionRelation"
-        }
-      },
-      "required": [
-        "field",
-        "relation"
-      ],
-      "type": "object"
-    },
-    "OccurrenceRoleSource": {
-      "additionalProperties": false,
-      "description": "One named role played by a stored field.",
-      "properties": {
-        "external": {
-          "$ref": "#/$defs/ExternalReferenceSource",
-          "description": "Marks the field as an opaque identifier owned by another system."
-        },
-        "field": {
-          "type": "string"
-        },
-        "label": {
-          "$ref": "#/$defs/DisplayText"
-        },
-        "role": {
-          "type": "string"
-        },
-        "target": {
-          "description": "Asserts the record type a native reference field points at.",
-          "type": "string"
-        }
-      },
-      "required": [
-        "role",
-        "field"
-      ],
-      "type": "object"
-    },
-    "OccurrenceSource": {
-      "additionalProperties": false,
-      "description": "The record-level mapping of stored fields onto occurrence roles.",
-      "properties": {
-        "correction": {
-          "$ref": "#/$defs/OccurrenceCorrectionSource"
-        },
-        "effective": {
-          "$ref": "#/$defs/EffectiveTimeSource"
-        },
-        "label": {
-          "$ref": "#/$defs/DisplayText"
-        },
-        "occurredAt": {
-          "$ref": "#/$defs/OccurrenceTimeSource"
-        },
-        "sourceEventId": {
-          "$ref": "#/$defs/SourceEventIdSource"
-        },
-        "sources": {
-          "description": "What the occurrence was recorded from. Recording a reference is not\nverifying it.",
-          "items": {
-            "$ref": "#/$defs/OccurrenceRoleSource"
-          },
-          "type": "array"
-        },
-        "subjects": {
-          "description": "What the occurrence is about. At least one, at most 16. The serde\ndefault only lets compilation report the stable emptiness diagnostic.",
-          "items": {
-            "$ref": "#/$defs/OccurrenceRoleSource"
-          },
-          "type": "array"
-        },
-        "summary": {
-          "description": "A `string` or `text` field holding a human summary.",
-          "type": "string"
-        }
-      },
-      "required": [
-        "subjects"
-      ],
-      "type": "object"
-    },
-    "OccurrenceTimeSource": {
-      "additionalProperties": false,
-      "description": "A point (`at`) or an interval (`start`, `end`, `meaning`). Flat optional\nmembers let the compiler address each shape error at its authored path.",
-      "properties": {
-        "at": {
-          "type": "string"
-        },
-        "end": {
-          "type": "string"
-        },
-        "meaning": {
-          "$ref": "#/$defs/IntervalMeaning"
-        },
-        "start": {
-          "type": "string"
-        }
-      },
-      "type": "object"
     },
     "Operation": {
       "oneOf": [
@@ -4900,7 +4900,7 @@
     },
     "SourceEventIdSource": {
       "additionalProperties": false,
-      "description": "The identifier an occurrence carries from the system it was recorded from.",
+      "description": "The identifier an event record carries from the system it was recorded from.",
       "properties": {
         "constraint": {
           "description": "The authored unique constraint that enforces `duplicates: reject`.",

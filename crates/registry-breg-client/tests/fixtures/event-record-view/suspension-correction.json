@@ -1,21 +1,26 @@
 {
-  "contract": "id.registrystack.org/formats/breg/occurrence-view/v1alpha1",
+  "contract": "id.registrystack.org/formats/breg/event-record-view/v1alpha1",
   "correction": {
     "reference": {
-      "status": "declaredUnknown"
+      "status": "available",
+      "target": "suspension-decision",
+      "type": "reference",
+      "value": "7a2d0000-0000-4000-8000-000000000010"
     },
     "relation": "corrects"
   },
   "descriptorVersion": 1,
   "effective": {
     "end": {
-      "status": "declaredUnknown"
+      "status": "available",
+      "type": "date",
+      "value": "2027-01-15"
     },
     "meaning": "span",
     "start": {
       "status": "available",
       "type": "date",
-      "value": "2026-12-01"
+      "value": "2026-12-15"
     },
     "type": "interval"
   },
@@ -25,7 +30,7 @@
     "at": {
       "status": "available",
       "type": "date",
-      "value": "2026-10-26"
+      "value": "2026-10-27"
     },
     "type": "point"
   },
@@ -36,7 +41,7 @@
   "recordedAtSource": "creation-revision",
   "registryRevision": "sha256:00000000000000000000000000000000000000000000000000000000000000aa",
   "source": {
-    "recordId": "7a2d0000-0000-4000-8000-000000000010",
+    "recordId": "7a2d0000-0000-4000-8000-000000000011",
     "recordType": "suspension-decision",
     "revision": "1"
   },

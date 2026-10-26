@@ -820,7 +820,7 @@ mod tests {
             api_name: "Membership".to_owned(),
             display: Default::default(),
             grouping: None,
-            occurrence: None,
+            event_record: None,
             definition_revision:
                 "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
             relationships: Default::default(),

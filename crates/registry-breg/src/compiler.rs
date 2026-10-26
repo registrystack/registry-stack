@@ -325,7 +325,7 @@ pub fn compile_project_with_assets(
     crate::access::validate_access_requirements(&sources, &mut diagnostics);
     crate::membership::validate(&sources, &mut diagnostics);
     crate::consent::validate(project, &sources, &mut diagnostics);
-    crate::occurrence::validate(&sources, &mut diagnostics);
+    crate::event_record::validate(&sources, &mut diagnostics);
     findings.extend(crate::access::access_findings(&sources));
     findings.extend(crate::access::project_access_findings(project, &sources));
     findings.extend(crate::access::module_access_findings(
@@ -363,7 +363,7 @@ pub fn compile_project_with_assets(
     })?;
     crate::membership::compile(&mut entities);
     let recipients = crate::consent::compile(project, &sources, &mut entities);
-    crate::occurrence::compile(&sources, &mut entities);
+    crate::event_record::compile(&sources, &mut entities);
     let mut action_inventory = compile_immediate_actions(
         &action_sources,
         &entities,
@@ -7173,7 +7173,7 @@ fn compile_entities(
                     .unwrap_or_else(|| type_api_name(&source.id)),
                 display: source.display.display(),
                 grouping: source.display.grouping(),
-                occurrence: None,
+                event_record: None,
                 definition_revision: record_definition_revision(source, &constraints),
                 id: source.id.clone(),
                 source_module,

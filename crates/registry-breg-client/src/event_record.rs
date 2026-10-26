@@ -1,4 +1,4 @@
-//! Occurrence projection: a caller-filtered, read-only view of one record
+//! Event record projection: a caller-filtered, read-only view of one record
 //! revision that says what happened, to whom, when it took effect, when the
 //! registry recorded it, and which evidence points at it.
 //!
@@ -18,43 +18,43 @@ use uuid::Uuid;
 
 use crate::{decode_exact_json, BRegActionReceipt, BRegProposalApplication, RegistryRecord};
 
-/// Contract identifier carried by every occurrence view.
-pub const OCCURRENCE_VIEW_CONTRACT: &str =
-    "id.registrystack.org/formats/breg/occurrence-view/v1alpha1";
+/// Contract identifier carried by every event record view.
+pub const EVENT_RECORD_VIEW_CONTRACT: &str =
+    "id.registrystack.org/formats/breg/event-record-view/v1alpha1";
 
 /// The only runtime descriptor version this client projects.
-pub const OCCURRENCE_DESCRIPTOR_VERSION: u64 = 1;
+pub const EVENT_RECORD_DESCRIPTOR_VERSION: u64 = 1;
 
 const CREATION_REVISION: &str = "1";
 const CREATION_REVISION_SOURCE: &str = "creation-revision";
 
-/// Why an occurrence descriptor, evidence document, or view input was refused.
+/// Why an event record descriptor, evidence document, or view input was refused.
 /// No variant carries a record value.
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
 #[non_exhaustive]
-pub enum BRegOccurrenceError {
-    #[error("the record type does not declare an occurrence")]
-    NotAnOccurrence,
-    #[error("occurrence descriptor version {found} is not supported")]
+pub enum BRegEventRecordError {
+    #[error("the record type does not declare an event record")]
+    NotAnEventRecord,
+    #[error("event record descriptor version {found} is not supported")]
     UnsupportedVersion { found: u64 },
-    #[error("the occurrence descriptor is malformed at {path}")]
+    #[error("the event record descriptor is malformed at {path}")]
     MalformedDescriptor { path: String },
     #[error("the evidence does not describe this record: {reason}")]
     WrongRecordEvidence { reason: String },
     #[error("expected revision {expected} but found revision {found}")]
     RevisionMismatch { expected: String, found: String },
-    #[error("the record does not fit the occurrence descriptor: {reason}")]
+    #[error("the record does not fit the event record descriptor: {reason}")]
     IncompatibleMetadata { reason: String },
-    #[error("the occurrence view input is invalid: {reason}")]
+    #[error("the event record view input is invalid: {reason}")]
     InvalidInput { reason: String },
 }
 
-impl BRegOccurrenceError {
+impl BRegEventRecordError {
     /// A stable kebab-case code for the error class.
     #[must_use]
     pub const fn code(&self) -> &'static str {
         match self {
-            Self::NotAnOccurrence => "not-an-occurrence",
+            Self::NotAnEventRecord => "not-an-event-record",
             Self::UnsupportedVersion { .. } => "unsupported-version",
             Self::MalformedDescriptor { .. } => "malformed-descriptor",
             Self::WrongRecordEvidence { .. } => "wrong-record-evidence",
@@ -65,18 +65,18 @@ impl BRegOccurrenceError {
     }
 }
 
-fn malformed(path: impl Into<String>) -> BRegOccurrenceError {
-    BRegOccurrenceError::MalformedDescriptor { path: path.into() }
+fn malformed(path: impl Into<String>) -> BRegEventRecordError {
+    BRegEventRecordError::MalformedDescriptor { path: path.into() }
 }
 
-fn wrong_evidence(reason: impl Into<String>) -> BRegOccurrenceError {
-    BRegOccurrenceError::WrongRecordEvidence {
+fn wrong_evidence(reason: impl Into<String>) -> BRegEventRecordError {
+    BRegEventRecordError::WrongRecordEvidence {
         reason: reason.into(),
     }
 }
 
-fn invalid_input(reason: impl Into<String>) -> BRegOccurrenceError {
-    BRegOccurrenceError::InvalidInput {
+fn invalid_input(reason: impl Into<String>) -> BRegEventRecordError {
+    BRegEventRecordError::InvalidInput {
         reason: reason.into(),
     }
 }
@@ -158,10 +158,10 @@ struct SourceEventDescriptor {
     constraint: Option<String>,
 }
 
-/// The runtime occurrence descriptor of one record type, already filtered for
+/// The runtime event record descriptor of one record type, already filtered for
 /// the caller: undeclared and withheld optional members are absent.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct BRegOccurrenceDescriptor {
+pub struct BRegEventRecordDescriptor {
     label: String,
     subjects: Vec<RoleDescriptor>,
     summary: Option<FieldRef>,
@@ -176,7 +176,7 @@ fn required<'a>(
     object: &'a Map<String, Value>,
     key: &str,
     path: &str,
-) -> Result<&'a Value, BRegOccurrenceError> {
+) -> Result<&'a Value, BRegEventRecordError> {
     match object.get(key) {
         Some(value) if !value.is_null() => Ok(value),
         _ => Err(malformed(path)),
@@ -187,7 +187,7 @@ fn optional<'a>(object: &'a Map<String, Value>, key: &str) -> Option<&'a Value> 
     object.get(key).filter(|value| !value.is_null())
 }
 
-fn text(value: &Value, path: &str) -> Result<String, BRegOccurrenceError> {
+fn text(value: &Value, path: &str) -> Result<String, BRegEventRecordError> {
     value
         .as_str()
         .map(str::to_owned)
@@ -197,11 +197,11 @@ fn text(value: &Value, path: &str) -> Result<String, BRegOccurrenceError> {
 fn object_at<'a>(
     value: &'a Value,
     path: &str,
-) -> Result<&'a Map<String, Value>, BRegOccurrenceError> {
+) -> Result<&'a Map<String, Value>, BRegEventRecordError> {
     value.as_object().ok_or_else(|| malformed(path))
 }
 
-fn parse_field(value: &Value, path: &str) -> Result<FieldRef, BRegOccurrenceError> {
+fn parse_field(value: &Value, path: &str) -> Result<FieldRef, BRegEventRecordError> {
     let object = object_at(value, path)?;
     let child = |name: &str| format!("{path}.{name}");
     Ok(FieldRef {
@@ -217,7 +217,7 @@ fn parse_field(value: &Value, path: &str) -> Result<FieldRef, BRegOccurrenceErro
     })
 }
 
-fn parse_roles(value: &Value, path: &str) -> Result<Vec<RoleDescriptor>, BRegOccurrenceError> {
+fn parse_roles(value: &Value, path: &str) -> Result<Vec<RoleDescriptor>, BRegEventRecordError> {
     let items = value.as_array().ok_or_else(|| malformed(path))?;
     items
         .iter()
@@ -254,7 +254,7 @@ fn parse_roles(value: &Value, path: &str) -> Result<Vec<RoleDescriptor>, BRegOcc
         .collect()
 }
 
-fn parse_time(value: &Value, path: &str) -> Result<TimeDescriptor, BRegOccurrenceError> {
+fn parse_time(value: &Value, path: &str) -> Result<TimeDescriptor, BRegEventRecordError> {
     let object = object_at(value, path)?;
     let child = |name: &str| format!("{path}.{name}");
     let time_type = text(required(object, "type", &child("type"))?, &child("type"))?;
@@ -288,7 +288,7 @@ fn parse_time(value: &Value, path: &str) -> Result<TimeDescriptor, BRegOccurrenc
     }
 }
 
-fn parse_correction(value: &Value) -> Result<CorrectionDescriptor, BRegOccurrenceError> {
+fn parse_correction(value: &Value) -> Result<CorrectionDescriptor, BRegEventRecordError> {
     let object = object_at(value, "correction")?;
     Ok(CorrectionDescriptor {
         relation: text(
@@ -302,7 +302,7 @@ fn parse_correction(value: &Value) -> Result<CorrectionDescriptor, BRegOccurrenc
     })
 }
 
-fn parse_source_event(value: &Value) -> Result<SourceEventDescriptor, BRegOccurrenceError> {
+fn parse_source_event(value: &Value) -> Result<SourceEventDescriptor, BRegEventRecordError> {
     let object = object_at(value, "sourceEventId")?;
     let namespace = match (
         optional(object, "namespace"),
@@ -330,20 +330,20 @@ fn parse_source_event(value: &Value) -> Result<SourceEventDescriptor, BRegOccurr
     })
 }
 
-impl BRegOccurrenceDescriptor {
-    /// Parse the `occurrence` member of one caller-filtered record type.
+impl BRegEventRecordDescriptor {
+    /// Parse the `eventRecord` member of one caller-filtered record type.
     ///
     /// The version is checked first. Unknown members are ignored; a member
     /// whose declared kind this client does not know is kept and renders as
     /// `unsupported` in a view.
-    pub fn from_value(value: &Value) -> Result<Self, BRegOccurrenceError> {
-        let root = object_at(value, "occurrence")?;
+    pub fn from_value(value: &Value) -> Result<Self, BRegEventRecordError> {
+        let root = object_at(value, "eventRecord")?;
         let version = match root.get("descriptorVersion").map(Value::as_u64) {
             Some(Some(version)) => version,
             _ => return Err(malformed("descriptorVersion")),
         };
-        if version != OCCURRENCE_DESCRIPTOR_VERSION {
-            return Err(BRegOccurrenceError::UnsupportedVersion { found: version });
+        if version != EVENT_RECORD_DESCRIPTOR_VERSION {
+            return Err(BRegEventRecordError::UnsupportedVersion { found: version });
         }
         let label = text(required(root, "label", "label")?, "label")?;
         let subjects = parse_roles(required(root, "subjects", "subjects")?, "subjects")?;
@@ -383,7 +383,7 @@ impl BRegOccurrenceDescriptor {
         let mut root = Map::new();
         root.insert(
             "descriptorVersion".into(),
-            Value::from(OCCURRENCE_DESCRIPTOR_VERSION),
+            Value::from(EVENT_RECORD_DESCRIPTOR_VERSION),
         );
         root.insert("label".into(), Value::from(self.label.clone()));
         root.insert("subjects".into(), roles_value(&self.subjects));
@@ -520,7 +520,7 @@ pub struct BRegCreationRevision {
 impl BRegCreationRevision {
     /// Read a Registry Record revision envelope (`{"data": {...}, "meta": {...}}`)
     /// and keep only the creation evidence for `record_id`.
-    pub fn from_document(record_id: &str, document: &Value) -> Result<Self, BRegOccurrenceError> {
+    pub fn from_document(record_id: &str, document: &Value) -> Result<Self, BRegEventRecordError> {
         let record_type = document
             .get("meta")
             .and_then(Value::as_object)
@@ -557,7 +557,7 @@ impl BRegCreationRevision {
 
     /// Read the compact `{"recordType", "recordId", "revision", "createdAt"}`
     /// form that `Serialize` writes.
-    pub fn from_value(value: &Value) -> Result<Self, BRegOccurrenceError> {
+    pub fn from_value(value: &Value) -> Result<Self, BRegEventRecordError> {
         let object = value
             .as_object()
             .ok_or_else(|| wrong_evidence("the creation revision is not an object"))?;
@@ -589,7 +589,7 @@ impl BRegCreationRevision {
         record_type: &str,
         record_id: &str,
         created_at: &str,
-    ) -> Result<Self, BRegOccurrenceError> {
+    ) -> Result<Self, BRegEventRecordError> {
         if OffsetDateTime::parse(created_at, &Rfc3339).is_err() {
             return Err(wrong_evidence(
                 "the creation time is not an RFC 3339 timestamp",
@@ -621,7 +621,7 @@ impl BRegCreationRevision {
 
 /// Accept revision 1. Another revision number is a mismatch that names it; any
 /// other text is refused without echoing it, so errors stay value-free.
-fn require_creation_revision(revision: &str) -> Result<(), BRegOccurrenceError> {
+fn require_creation_revision(revision: &str) -> Result<(), BRegEventRecordError> {
     if revision == CREATION_REVISION {
         return Ok(());
     }
@@ -634,7 +634,7 @@ fn require_creation_revision(revision: &str) -> Result<(), BRegOccurrenceError> 
             "the revision identifier is not a revision number",
         ));
     }
-    Err(BRegOccurrenceError::RevisionMismatch {
+    Err(BRegEventRecordError::RevisionMismatch {
         expected: CREATION_REVISION.to_owned(),
         found: revision.to_owned(),
     })
@@ -665,7 +665,7 @@ impl<'de> Deserialize<'de> for BRegCreationRevision {
 /// does not match the exact record type, record identifier and revision is
 /// listed in the view as ignored and never contributes provenance.
 #[derive(Clone, Copy, Default)]
-pub struct BRegOccurrenceEvidence<'a> {
+pub struct BRegEventRecordEvidence<'a> {
     /// The creation revision of the projected record, when readable.
     pub creation_revision: Option<&'a BRegCreationRevision>,
     /// Action receipts, each paired with the identifier of the result effect
@@ -674,10 +674,10 @@ pub struct BRegOccurrenceEvidence<'a> {
     pub proposal_applications: &'a [&'a BRegProposalApplication],
 }
 
-impl std::fmt::Debug for BRegOccurrenceEvidence<'_> {
+impl std::fmt::Debug for BRegEventRecordEvidence<'_> {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
-            .debug_struct("BRegOccurrenceEvidence")
+            .debug_struct("BRegEventRecordEvidence")
             .field("creation_revision", &self.creation_revision)
             .field("action_receipts", &self.action_receipts.len())
             .field("proposal_applications", &self.proposal_applications.len())
@@ -685,14 +685,14 @@ impl std::fmt::Debug for BRegOccurrenceEvidence<'_> {
     }
 }
 
-/// The occurrence view of one record revision, as an inert JSON document.
+/// The event record view of one record revision, as an inert JSON document.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(transparent)]
-pub struct BRegOccurrenceView {
+pub struct BRegEventRecordView {
     document: Value,
 }
 
-impl BRegOccurrenceView {
+impl BRegEventRecordView {
     #[must_use]
     pub fn as_value(&self) -> &Value {
         &self.document
@@ -816,7 +816,7 @@ fn unsupported(detail: &str) -> Value {
 
 /// One record member rendered as a view value. A key that is absent from the
 /// record is `unavailable`; a null is `declaredUnknown`.
-fn value_member(field: &FieldRef, record: &RecordRef<'_>) -> Result<Value, BRegOccurrenceError> {
+fn value_member(field: &FieldRef, record: &RecordRef<'_>) -> Result<Value, BRegEventRecordError> {
     let Some(raw) = record.domain_data.get(&field.api_name) else {
         return Ok(status("unavailable"));
     };
@@ -834,7 +834,7 @@ fn value_member(field: &FieldRef, record: &RecordRef<'_>) -> Result<Value, BRegO
         other => return Ok(unsupported(&format!("value type {other}"))),
     };
     let value = raw.as_str().filter(|value| check(value)).ok_or_else(|| {
-        BRegOccurrenceError::IncompatibleMetadata {
+        BRegEventRecordError::IncompatibleMetadata {
             reason: format!(
                 "record member {} does not hold a {} value",
                 field.api_name, field.value_type
@@ -853,7 +853,7 @@ fn value_member(field: &FieldRef, record: &RecordRef<'_>) -> Result<Value, BRegO
 fn time_member(
     time: Option<&TimeDescriptor>,
     record: &RecordRef<'_>,
-) -> Result<Value, BRegOccurrenceError> {
+) -> Result<Value, BRegEventRecordError> {
     let Some(time) = time else {
         return Ok(status("unavailable"));
     };
@@ -894,7 +894,7 @@ fn time_member(
 fn role_members(
     roles: &[RoleDescriptor],
     record: &RecordRef<'_>,
-) -> Result<Vec<Value>, BRegOccurrenceError> {
+) -> Result<Vec<Value>, BRegEventRecordError> {
     roles
         .iter()
         .map(|role| {
@@ -925,7 +925,7 @@ fn role_members(
 fn correction_member(
     correction: Option<&CorrectionDescriptor>,
     record: &RecordRef<'_>,
-) -> Result<Value, BRegOccurrenceError> {
+) -> Result<Value, BRegEventRecordError> {
     let Some(correction) = correction else {
         return Ok(status("unavailable"));
     };
@@ -944,7 +944,7 @@ fn correction_member(
 fn source_event_member(
     event: Option<&SourceEventDescriptor>,
     record: &RecordRef<'_>,
-) -> Result<Value, BRegOccurrenceError> {
+) -> Result<Value, BRegEventRecordError> {
     let Some(event) = event else {
         return Ok(status("unavailable"));
     };
@@ -967,11 +967,11 @@ fn source_event_member(
 
 fn build_view(
     registry_revision: &str,
-    descriptor: &BRegOccurrenceDescriptor,
+    descriptor: &BRegEventRecordDescriptor,
     record: &RecordRef<'_>,
     creation_revision: Option<&BRegCreationRevision>,
     evidence: &[EvidenceRef<'_>],
-) -> Result<BRegOccurrenceView, BRegOccurrenceError> {
+) -> Result<BRegEventRecordView, BRegEventRecordError> {
     if !canonical_uuid(record.record_id) {
         return Err(wrong_evidence("the record identifier is not a UUID"));
     }
@@ -1069,7 +1069,7 @@ fn build_view(
                     }
                 };
                 // Evidence repeated by the caller adds no second entry; the
-                // first occurrence keeps its place.
+                // first one keeps its place.
                 if !provenance.contains(&item) {
                     provenance.push(item);
                 }
@@ -1094,8 +1094,8 @@ fn build_view(
         None => status("unavailable"),
     };
     let document = serde_json::json!({
-        "contract": OCCURRENCE_VIEW_CONTRACT,
-        "descriptorVersion": OCCURRENCE_DESCRIPTOR_VERSION,
+        "contract": EVENT_RECORD_VIEW_CONTRACT,
+        "descriptorVersion": EVENT_RECORD_DESCRIPTOR_VERSION,
         "registryRevision": registry_revision,
         "source": {
             "recordType": record.record_type,
@@ -1115,20 +1115,20 @@ fn build_view(
         "provenance": provenance,
         "ignoredEvidence": ignored,
     });
-    Ok(BRegOccurrenceView { document })
+    Ok(BRegEventRecordView { document })
 }
 
-/// Project one record revision into an occurrence view.
+/// Project one record revision into an event record view.
 ///
 /// Pure: no exchange and no clock. `registry_revision` is the revision of the
 /// metadata that supplied `descriptor`.
-pub fn occurrence_view(
+pub fn event_record_view(
     registry_revision: &str,
     record_type: &str,
-    descriptor: &BRegOccurrenceDescriptor,
+    descriptor: &BRegEventRecordDescriptor,
     record: &RegistryRecord,
-    evidence: &BRegOccurrenceEvidence<'_>,
-) -> Result<BRegOccurrenceView, BRegOccurrenceError> {
+    evidence: &BRegEventRecordEvidence<'_>,
+) -> Result<BRegEventRecordView, BRegEventRecordError> {
     let mut refs = Vec::new();
     for (receipt, effect) in evidence.action_receipts {
         refs.push(EvidenceRef::Receipt {
@@ -1230,7 +1230,9 @@ struct ResultDocument {
 /// Duplicate members, unknown members and malformed shapes are refused as
 /// `InvalidInput` with a fixed reason that never quotes the input; the
 /// descriptor and the evidence keep their own errors.
-pub fn occurrence_view_from_json(bytes: &[u8]) -> Result<BRegOccurrenceView, BRegOccurrenceError> {
+pub fn event_record_view_from_json(
+    bytes: &[u8],
+) -> Result<BRegEventRecordView, BRegEventRecordError> {
     let document =
         decode_exact_json(bytes).map_err(|_| invalid_input("the arguments are not exact JSON"))?;
     // The serde message is dropped: it quotes the offending value or member name.
@@ -1253,7 +1255,7 @@ pub fn occurrence_view_from_json(bytes: &[u8]) -> Result<BRegOccurrenceView, BRe
         .iter()
         .map(|(name, value)| (name.clone(), value.clone()))
         .collect();
-    let descriptor = BRegOccurrenceDescriptor::from_value(&arguments.descriptor)?;
+    let descriptor = BRegEventRecordDescriptor::from_value(&arguments.descriptor)?;
     let creation = arguments
         .creation_revision
         .as_ref()

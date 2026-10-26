@@ -8,20 +8,21 @@ use std::{collections::BTreeMap, sync::Arc, time::Duration};
 use napi::{bindgen_prelude::Buffer, Error as NapiError, Result};
 use napi_derive::napi;
 use registry_breg_client::{
-    occurrence_view_from_json, verify_hook_delivery as verify_core_hook_delivery,
+    event_record_view_from_json, verify_hook_delivery as verify_core_hook_delivery,
     BRegActionAvailabilityRequest, BRegActionBinding, BRegActionInvocationRequest,
     BRegActionTargetConditions as CoreActionTargetConditions, BRegActionTargetConditionsRequest,
     BRegAsOfContinuation, BRegAsOfContinuationProjection, BRegAsOfListRequest, BRegBatchBinding,
     BRegBatchBuilder, BRegBatchRequest, BRegBoundingBox, BRegChangeContext, BRegComplete,
     BRegContinuation, BRegContinuationProjection, BRegCreateBinding, BRegCreateRequest,
     BRegCurrentContinuation, BRegCurrentContinuationProjection, BRegCurrentListRequest,
-    BRegDirectWrite, BRegEtag, BRegGeoJsonContinuation, BRegGeoJsonContinuationProjection,
-    BRegGeoJsonListRequest, BRegGeoJsonOptions, BRegHookDelivery as CoreHookDelivery,
-    BRegHookVerificationError, BRegIngestionChunk as CoreIngestionChunk, BRegIngestionError,
+    BRegDirectWrite, BRegEtag, BRegEventRecordError, BRegGeoJsonContinuation,
+    BRegGeoJsonContinuationProjection, BRegGeoJsonListRequest, BRegGeoJsonOptions,
+    BRegHookDelivery as CoreHookDelivery, BRegHookVerificationError,
+    BRegIngestionChunk as CoreIngestionChunk, BRegIngestionError,
     BRegIngestionPrefixDigest as CoreIngestionPrefixDigest, BRegIngestionRunListQuery,
     BRegIngestionRunRequest, BRegListRequest, BRegLookupRequest, BRegMetadata as CoreMetadata,
-    BRegMetadataSelectionError, BRegMetadataSelectionErrorKind, BRegOccurrenceError, BRegPage,
-    BRegPatchBinding, BRegPatchRequest, BRegPreparedAction as CorePreparedAction,
+    BRegMetadataSelectionError, BRegMetadataSelectionErrorKind, BRegPage, BRegPatchBinding,
+    BRegPatchRequest, BRegPreparedAction as CorePreparedAction,
     BRegPreparedCreate as CorePreparedCreate, BRegProblemCode, BRegProtocolFailure,
     BRegRawDocument, BRegRecordFormat, BRegRecordOptions, BRegRelationshipContinuation,
     BRegRelationshipContinuationProjection, BRegRelationshipListRequest, BRegReleaseSelection,
@@ -110,19 +111,20 @@ pub fn verify_hook_delivery(input: HookDeliveryInput) -> Result<VerifiedHookDeli
     })
 }
 
-/// Project one record revision into the occurrence view. The input is the
+/// Project one record revision into the event record view. The input is the
 /// JSON arguments document of the Rust projection; the result is the view
 /// document as JSON text.
 #[napi]
-pub fn occurrence_view(arguments_json: String) -> Result<String> {
-    let view = occurrence_view_from_json(arguments_json.as_bytes()).map_err(occurrence_error)?;
+pub fn event_record_view(arguments_json: String) -> Result<String> {
+    let view =
+        event_record_view_from_json(arguments_json.as_bytes()).map_err(event_record_error)?;
     serde_json::to_string(&view)
-        .map_err(|_| binding_error("protocol", "occurrence view is not representable"))
+        .map_err(|_| binding_error("protocol", "event record view is not representable"))
 }
 
-fn occurrence_error(error: BRegOccurrenceError) -> NapiError {
+fn event_record_error(error: BRegEventRecordError) -> NapiError {
     mapped_error(json!({
-        "kind": "occurrence",
+        "kind": "event-record",
         "code": error.code(),
         "message": error.to_string(),
     }))
@@ -2405,15 +2407,15 @@ pub struct Metadata {
 
 #[napi]
 impl Metadata {
-    /// The occurrence descriptor declared for one record type, as JSON text.
+    /// The event record descriptor declared for one record type, as JSON text.
     #[napi]
-    pub fn occurrence_descriptor(&self, record_type: String) -> Result<String> {
+    pub fn event_record_descriptor(&self, record_type: String) -> Result<String> {
         let descriptor = self
             .inner
-            .occurrence(&record_type)
-            .map_err(occurrence_error)?;
+            .event_record(&record_type)
+            .map_err(event_record_error)?;
         serde_json::to_string(&descriptor.to_value())
-            .map_err(|_| binding_error("protocol", "occurrence descriptor is not representable"))
+            .map_err(|_| binding_error("protocol", "event record descriptor is not representable"))
     }
 
     /// Read-only capability inventory for each exact Action/profile pair.
@@ -2928,14 +2930,14 @@ impl BaseRegistryClient {
     /// `{recordType, recordId, revision, createdAt}` JSON, or null when the
     /// caller may not read it.
     #[napi]
-    pub async fn occurrence_creation_revision(
+    pub async fn event_record_creation_revision(
         &self,
         entity_route: String,
         record_identifier: String,
         access_profile: Option<String>,
     ) -> Result<Option<String>> {
         self.inner
-            .occurrence_creation_revision(
+            .event_record_creation_revision(
                 &entity_route,
                 &record_identifier,
                 access_profile.as_deref(),

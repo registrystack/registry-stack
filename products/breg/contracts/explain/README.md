@@ -44,9 +44,9 @@ Lifecycle `v1alpha8` adds `recoveryReasons` to every transition. `retry`
 recovers `dependency-outage` and `lease-expired`; other transitions currently
 report an empty list.
 
-Model `v1alpha7` adds `recordTypes[].occurrence`, `recordTypes[].grouping` and
-`actions[].grouping`. `occurrence` is `null` unless the Record type declares a
-domain occurrence; otherwise it is the resolved descriptor (`descriptorVersion`
+Model `v1alpha7` adds `recordTypes[].eventRecord`, `recordTypes[].grouping` and
+`actions[].grouping`. `eventRecord` is `null` unless the Record type declares
+an event record descriptor; otherwise it is the resolved descriptor (`descriptorVersion`
 `1`, an integer) naming the stored fields that say what a row is about, when it
 happened, when it takes effect, what it was recorded from and what it corrects.
 A declared `occurredAt` or `effective` names its shape in `type` (`point` or
@@ -60,7 +60,7 @@ omitted, never `null`. `recordedTime` is always
 history and is never authored. `grouping` is `null` unless the Record type or
 Action authors `display.purpose` or `display.group`; it is presentation only and
 never changes identity, access or execution. Consumers must not infer a purpose
-or an occurrence from names, routes, dates or references.
+or an event record from names, routes, dates or references.
 
 Model and Access `v1alpha6` add dataset and access-profile display inventories.
 Model also retains field display and module origins, and adds `authoring.documents`.

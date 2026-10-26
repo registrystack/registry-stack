@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! Domain occurrences written by immediate Actions against a real PostgreSQL
+//! Event records written by immediate Actions against a real PostgreSQL
 //! database: atomic success and refusal, replay, source event uniqueness,
 //! competing writers, decision and effective dates, and correction links.
 
@@ -10,8 +10,8 @@
 #[allow(dead_code)]
 mod postgres_harness;
 
-#[path = "support/occurrence_registry.rs"]
-mod occurrence_registry;
+#[path = "support/event_record_registry.rs"]
+mod event_record_registry;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -35,8 +35,8 @@ use serde_json::{json, Value};
 use tower::Service as _;
 use zeroize::Zeroizing;
 
-const INSTANCE_ID: &str = "occurrence-examples-instance";
-const DATABASE_ID: &str = "occurrence-examples-database";
+const INSTANCE_ID: &str = "event-record-examples-instance";
+const DATABASE_ID: &str = "event-record-examples-database";
 
 struct Fixture {
     database: TestDatabase,
@@ -53,18 +53,18 @@ impl Fixture {
     async fn start() -> Self {
         let database = TestDatabase::create(10).await;
         let (migration, migration_task) = database.connect_migration().await;
-        let registry = Arc::new(occurrence_registry::compiled());
+        let registry = Arc::new(event_record_registry::compiled());
         install_compiled_schema(&migration, &registry, &database.runtime_role)
             .await
-            .expect("migration installs the occurrence registry schema");
+            .expect("migration installs the event record registry schema");
         let identity = initialize_compiled_registry_state_for_test(
             &migration,
             &database.runtime_role,
             &registry,
             RegistryStateTestIdentity {
-                package_id: occurrence_registry::PACKAGE_ID,
+                package_id: event_record_registry::PACKAGE_ID,
                 database_id: DATABASE_ID,
-                label: "package-occurrence-1",
+                label: "package-event-record-1",
             },
         )
         .await
@@ -81,7 +81,7 @@ impl Fixture {
                 .expect("test owns a keyed audit profile"),
         );
         let lock_key =
-            RegistryLockKey::derive(occurrence_registry::PACKAGE_ID).expect("lock key derives");
+            RegistryLockKey::derive(event_record_registry::PACKAGE_ID).expect("lock key derives");
         let cursors = Arc::new(
             CursorCodec::new(Zeroizing::new(vec![0x63; 32]), Duration::from_secs(300))
                 .expect("test cursor key is valid"),
@@ -263,7 +263,7 @@ impl Fixture {
 
     async fn revisions(&self, route: &str, id: &str) -> Reply {
         self.get(&format!(
-            "/v1/records/{route}/{id}/revisions?accessProfile=occurrence-history"
+            "/v1/records/{route}/{id}/revisions?accessProfile=event-record-history"
         ))
         .await
     }
@@ -360,7 +360,7 @@ async fn atomic_success_and_refusal() {
     assert_eq!(refused.body["guardReason"], "grant-not-active");
     assert_eq!(fixture.row_count("grant-pause-decision").await, 1);
 
-    // A uniqueness refusal on the occurrence rolls back the sibling effects.
+    // A uniqueness refusal on the event record rolls back the sibling effects.
     let item = fixture
         .open("open-item", "open-item-1", json!({"itemNumber": "I-1"}))
         .await;
@@ -499,7 +499,7 @@ async fn replay_and_source_event_uniqueness() {
     );
     assert_eq!(fixture.row_count("custody-handover").await, 1);
 
-    // A new key does not make the same source event a second occurrence.
+    // A new key does not make the same source event a second event record.
     let duplicate = fixture
         .invoke_conditioned(
             "hand-over-custody",
@@ -512,7 +512,7 @@ async fn replay_and_source_event_uniqueness() {
     assert_eq!(duplicate.body["code"], "mutation.conflict");
     assert_eq!(fixture.row_count("custody-handover").await, 1);
 
-    // A different source event is a second occurrence.
+    // A different source event is a second event record.
     let second = fixture
         .invoke_conditioned(
             "hand-over-custody",
@@ -552,7 +552,7 @@ async fn competing_changes_single_winner() {
     );
     assert_eq!(fixture.row_count("grant-pause-decision").await, 1);
 
-    // Two writers racing the same source event leave one occurrence.
+    // Two writers racing the same source event leave one event record.
     let item = fixture
         .open("open-item", "open-item-1", json!({"itemNumber": "I-1"}))
         .await;

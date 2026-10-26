@@ -2121,6 +2121,7 @@
         "description": "A contact entry maintained through generated record routes.",
         "label": "Directory entry"
       },
+      "eventRecord": null,
       "fields": [
         {
           "apiName": "name",
@@ -2188,7 +2189,6 @@
       "moduleOrigins": {},
       "mutationMode": "mutable",
       "mutationPolicy": {},
-      "occurrence": null,
       "primaryDataset": "facility-registry",
       "readPaths": {},
       "relationships": {},
@@ -2223,6 +2223,7 @@
         "label": "Facility",
         "titleField": "name"
       },
+      "eventRecord": null,
       "fields": [
         {
           "apiName": "facilityCode",
@@ -2374,7 +2375,6 @@
       "mutationPolicy": {
         "patch": "proposal-required"
       },
-      "occurrence": null,
       "primaryDataset": "facility-registry",
       "readPaths": {
         "operators": {
@@ -2428,6 +2428,7 @@
         "description": "The operator assigned when a facility is registered.",
         "label": "Facility assignment"
       },
+      "eventRecord": null,
       "fields": [
         {
           "apiName": "facility",
@@ -2500,7 +2501,6 @@
       "moduleOrigins": {},
       "mutationMode": "create-only",
       "mutationPolicy": {},
-      "occurrence": null,
       "primaryDataset": "facility-registry",
       "readPaths": {},
       "relationships": {
@@ -2556,6 +2556,7 @@
         "label": "Operator",
         "titleField": "operator-code"
       },
+      "eventRecord": null,
       "fields": [
         {
           "apiName": "operatorCode",
@@ -2629,7 +2630,6 @@
       "moduleOrigins": {},
       "mutationMode": "mutable",
       "mutationPolicy": {},
-      "occurrence": null,
       "primaryDataset": "facility-registry",
       "readPaths": {},
       "relationships": {

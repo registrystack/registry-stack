@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Domain occurrence descriptors.
+//! Event record descriptors.
 //!
 //! A record type may declare which of its stored fields say what a row is
 //! about, when it happened, when it takes effect, what it was recorded from and
@@ -11,28 +11,30 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::contract::{
-    ConstraintSource, DuplicatePolicy, EffectiveTimeSource, EntitySource, FieldSource,
-    FieldTypeSource, IntervalMeaning, OccurrenceRoleSource, OccurrenceSource, OccurrenceTimeSource,
-    MAX_OCCURRENCE_NAMESPACE_BYTES, MAX_OCCURRENCE_ROLES,
+    ConstraintSource, DuplicatePolicy, EffectiveTimeSource, EntitySource, EventRecordRoleSource,
+    EventRecordSource, EventRecordTimeSource, FieldSource, FieldTypeSource, IntervalMeaning,
+    MAX_EVENT_RECORD_NAMESPACE_BYTES, MAX_EVENT_RECORD_ROLES,
 };
 use crate::diagnostics::Diagnostic;
 use crate::model::{
-    CompiledEntity, CompiledOccurrence, CompiledOccurrenceCorrection, CompiledOccurrenceField,
-    CompiledOccurrenceRole, CompiledOccurrenceTime, CompiledRecordedTime, CompiledSourceEventId,
-    OccurrenceRoleKind, OccurrenceValueType, RecordedTimeSource, OCCURRENCE_DESCRIPTOR_VERSION,
+    CompiledEntity, CompiledEventRecord, CompiledEventRecordCorrection, CompiledEventRecordField,
+    CompiledEventRecordRole, CompiledEventRecordTime, CompiledRecordedTime, CompiledSourceEventId,
+    EventRecordRoleKind, EventRecordValueType, RecordedTimeSource, EVENT_RECORD_DESCRIPTOR_VERSION,
 };
 
-const REFERENCE: &[OccurrenceValueType] = &[OccurrenceValueType::Reference];
-const OPAQUE_IDENTIFIER: &[OccurrenceValueType] =
-    &[OccurrenceValueType::String, OccurrenceValueType::Uuid];
-const SUMMARY: &[OccurrenceValueType] = &[OccurrenceValueType::String, OccurrenceValueType::Text];
-const MOMENT: &[OccurrenceValueType] = &[OccurrenceValueType::Date, OccurrenceValueType::Timestamp];
-const NAMESPACE: &[OccurrenceValueType] = &[
-    OccurrenceValueType::String,
-    OccurrenceValueType::VocabularyCode,
+const REFERENCE: &[EventRecordValueType] = &[EventRecordValueType::Reference];
+const OPAQUE_IDENTIFIER: &[EventRecordValueType] =
+    &[EventRecordValueType::String, EventRecordValueType::Uuid];
+const SUMMARY: &[EventRecordValueType] =
+    &[EventRecordValueType::String, EventRecordValueType::Text];
+const MOMENT: &[EventRecordValueType] =
+    &[EventRecordValueType::Date, EventRecordValueType::Timestamp];
+const NAMESPACE: &[EventRecordValueType] = &[
+    EventRecordValueType::String,
+    EventRecordValueType::VocabularyCode,
 ];
 
-fn expected_name(allowed: &[OccurrenceValueType]) -> &'static str {
+fn expected_name(allowed: &[EventRecordValueType]) -> &'static str {
     match allowed {
         REFERENCE => "reference",
         OPAQUE_IDENTIFIER => "string or uuid",
@@ -43,16 +45,16 @@ fn expected_name(allowed: &[OccurrenceValueType]) -> &'static str {
     }
 }
 
-/// The mapped value type of a stored field, when occurrences can map it.
-fn value_type(field: &FieldSource) -> Option<OccurrenceValueType> {
+/// The mapped value type of a stored field, when event records can map it.
+fn value_type(field: &FieldSource) -> Option<EventRecordValueType> {
     match &field.field_type {
-        FieldTypeSource::Reference { .. } => Some(OccurrenceValueType::Reference),
-        FieldTypeSource::String { .. } => Some(OccurrenceValueType::String),
-        FieldTypeSource::Text { .. } => Some(OccurrenceValueType::Text),
-        FieldTypeSource::Date => Some(OccurrenceValueType::Date),
-        FieldTypeSource::Timestamp => Some(OccurrenceValueType::Timestamp),
-        FieldTypeSource::Uuid => Some(OccurrenceValueType::Uuid),
-        FieldTypeSource::VocabularyCode { .. } => Some(OccurrenceValueType::VocabularyCode),
+        FieldTypeSource::Reference { .. } => Some(EventRecordValueType::Reference),
+        FieldTypeSource::String { .. } => Some(EventRecordValueType::String),
+        FieldTypeSource::Text { .. } => Some(EventRecordValueType::Text),
+        FieldTypeSource::Date => Some(EventRecordValueType::Date),
+        FieldTypeSource::Timestamp => Some(EventRecordValueType::Timestamp),
+        FieldTypeSource::Uuid => Some(EventRecordValueType::Uuid),
+        FieldTypeSource::VocabularyCode { .. } => Some(EventRecordValueType::VocabularyCode),
         FieldTypeSource::Boolean
         | FieldTypeSource::Int64
         | FieldTypeSource::Decimal { .. }
@@ -91,7 +93,7 @@ fn valid_role(value: &str) -> bool {
 }
 
 fn valid_namespace(value: &str) -> bool {
-    value.len() <= MAX_OCCURRENCE_NAMESPACE_BYTES && url::Url::parse(value).is_ok()
+    value.len() <= MAX_EVENT_RECORD_NAMESPACE_BYTES && url::Url::parse(value).is_ok()
 }
 
 struct Checker<'a> {
@@ -113,20 +115,20 @@ impl Checker<'_> {
     }
 
     /// Resolves a mapped field and checks its type; `member` is the path
-    /// relative to the occurrence, used in the type message.
+    /// relative to the event record, used in the type message.
     fn check_field(
         &mut self,
         field_id: &str,
         member: &str,
-        allowed: &[OccurrenceValueType],
-    ) -> Option<OccurrenceValueType> {
+        allowed: &[EventRecordValueType],
+    ) -> Option<EventRecordValueType> {
         let path = format!("{}.{member}", self.base);
         let Some(field) = self.field(field_id) else {
             self.error(
-                "breg.occurrence.field-unknown",
+                "breg.event-record.field-unknown",
                 path,
                 format!(
-                    "occurrence field \"{field_id}\" names no stored field of record type \"{}\"",
+                    "event record field \"{field_id}\" names no stored field of record type \"{}\"",
                     self.entity.id
                 ),
             );
@@ -138,7 +140,7 @@ impl Checker<'_> {
             Some(kind) if allowed.contains(&kind) => Some(kind),
             _ => {
                 self.error(
-                    "breg.occurrence.field-type",
+                    "breg.event-record.field-type",
                     path,
                     format!(
                         "{member} requires a {} field; field \"{field_id}\" is {actual}",
@@ -155,7 +157,7 @@ impl Checker<'_> {
         if let Some(earlier) = self.claimed.get(field_id) {
             let message = format!("field \"{field_id}\" is already mapped by {earlier}");
             self.error(
-                "breg.occurrence.field-reused",
+                "breg.event-record.field-reused",
                 format!("{}.{path_member}", self.base),
                 message,
             );
@@ -167,7 +169,7 @@ impl Checker<'_> {
     fn check_namespace(&mut self, namespace: &str, member: &str) {
         if !valid_namespace(namespace) {
             self.error(
-                "breg.occurrence.external-namespace",
+                "breg.event-record.external-namespace",
                 format!("{}.{member}", self.base),
                 "namespace must be an absolute URI of at most 512 bytes".to_owned(),
             );
@@ -177,19 +179,19 @@ impl Checker<'_> {
     fn check_roles(
         &mut self,
         list: &str,
-        roles: &[OccurrenceRoleSource],
+        roles: &[EventRecordRoleSource],
         seen: &mut BTreeSet<String>,
     ) {
-        if roles.len() > MAX_OCCURRENCE_ROLES {
+        if roles.len() > MAX_EVENT_RECORD_ROLES {
             let noun = if list == "subjects" {
                 "subjects"
             } else {
                 "sources"
             };
             self.error(
-                "breg.occurrence.roles-too-many",
+                "breg.event-record.roles-too-many",
                 format!("{}.{list}", self.base),
-                format!("an occurrence declares at most {MAX_OCCURRENCE_ROLES} {noun}"),
+                format!("an event record declares at most {MAX_EVENT_RECORD_ROLES} {noun}"),
             );
         }
         for (index, item) in roles.iter().enumerate() {
@@ -197,7 +199,7 @@ impl Checker<'_> {
             if !valid_role(&item.role) {
                 addressable = false;
                 self.error(
-                    "breg.occurrence.role-invalid",
+                    "breg.event-record.role-invalid",
                     format!("{}.{list}[{index}].role", self.base),
                     format!(
                         "role \"{}\" must start with a lowercase letter and contain only lowercase letters, digits, hyphens and underscores, at most 64 characters",
@@ -207,10 +209,10 @@ impl Checker<'_> {
             } else if !seen.insert(item.role.clone()) {
                 addressable = false;
                 self.error(
-                    "breg.occurrence.role-duplicate",
+                    "breg.event-record.role-duplicate",
                     format!("{}.{list}[{index}].role", self.base),
                     format!(
-                        "role \"{}\" is declared more than once in this occurrence",
+                        "role \"{}\" is declared more than once in this event record",
                         item.role
                     ),
                 );
@@ -224,7 +226,7 @@ impl Checker<'_> {
         }
     }
 
-    fn check_role(&mut self, item: &OccurrenceRoleSource, address: &str) {
+    fn check_role(&mut self, item: &EventRecordRoleSource, address: &str) {
         let allowed = if item.external.is_some() {
             OPAQUE_IDENTIFIER
         } else {
@@ -242,12 +244,12 @@ impl Checker<'_> {
             );
             if item.target.is_some() {
                 self.error(
-                    "breg.occurrence.external-target",
+                    "breg.event-record.external-target",
                     format!("{}.{address}.target", self.base),
                     "an external reference has no native target".to_owned(),
                 );
             }
-        } else if let (Some(target), Some(OccurrenceValueType::Reference)) =
+        } else if let (Some(target), Some(EventRecordValueType::Reference)) =
             (item.target.as_deref(), kind)
         {
             let actual = self
@@ -259,7 +261,7 @@ impl Checker<'_> {
                 .unwrap_or_default();
             if actual != target {
                 self.error(
-                    "breg.occurrence.reference-target",
+                    "breg.event-record.reference-target",
                     format!("{}.{address}.target", self.base),
                     format!(
                         "target \"{target}\" does not match reference target \"{actual}\" of field \"{}\"",
@@ -297,7 +299,7 @@ impl Checker<'_> {
         };
         if let Some(message) = shape {
             self.error(
-                "breg.occurrence.time-shape",
+                "breg.event-record.time-shape",
                 format!("{}.{member}", self.base),
                 message.to_owned(),
             );
@@ -312,7 +314,7 @@ impl Checker<'_> {
             if let (Some(start_type), Some(end_type)) = (start_type, end_type) {
                 if start_type != end_type {
                     self.error(
-                        "breg.occurrence.interval-type-mismatch",
+                        "breg.event-record.interval-type-mismatch",
                         format!("{}.{member}.end", self.base),
                         format!(
                             "interval bounds must share one type; start is {}, end is {}",
@@ -325,7 +327,7 @@ impl Checker<'_> {
         }
     }
 
-    fn check_occurred_at(&mut self, time: &OccurrenceTimeSource) {
+    fn check_occurred_at(&mut self, time: &EventRecordTimeSource) {
         self.check_time(
             "occurredAt",
             time.at.as_deref(),
@@ -366,13 +368,13 @@ impl Checker<'_> {
             let declares = self
                 .entities
                 .get(&target)
-                .is_some_and(|entity| entity.occurrence.is_some());
+                .is_some_and(|entity| entity.event_record.is_some());
             if self.entities.contains_key(&target) && !declares {
                 self.error(
-                    "breg.occurrence.correction-target",
+                    "breg.event-record.correction-target",
                     format!("{}.correction.field", self.base),
                     format!(
-                        "correction field \"{field_id}\" targets record type \"{target}\", which declares no occurrence"
+                        "correction field \"{field_id}\" targets record type \"{target}\", which declares no event record"
                     ),
                 );
             }
@@ -388,7 +390,7 @@ impl Checker<'_> {
                 self.check_field(field, "sourceEventId.namespaceField", NAMESPACE);
             }
             _ => self.error(
-                "breg.occurrence.source-event-namespace",
+                "breg.event-record.source-event-namespace",
                 format!("{}.{member}", self.base),
                 "declare exactly one of \"namespace\" or \"namespaceField\"".to_owned(),
             ),
@@ -396,12 +398,12 @@ impl Checker<'_> {
         let path = format!("{}.{member}.constraint", self.base);
         match (source.duplicates, source.constraint.as_deref()) {
             (DuplicatePolicy::Reject, None) => self.error(
-                "breg.occurrence.source-event-constraint",
+                "breg.event-record.source-event-constraint",
                 path,
                 "duplicates: reject requires \"constraint\"".to_owned(),
             ),
             (DuplicatePolicy::Allow, Some(_)) => self.error(
-                "breg.occurrence.source-event-constraint",
+                "breg.event-record.source-event-constraint",
                 path,
                 "\"constraint\" applies only to duplicates: reject".to_owned(),
             ),
@@ -430,7 +432,7 @@ impl Checker<'_> {
             });
         let Some((fields, when)) = unique else {
             self.error(
-                "breg.occurrence.source-event-constraint",
+                "breg.event-record.source-event-constraint",
                 path,
                 format!(
                     "constraint \"{id}\" is not a unique constraint of record type \"{}\"",
@@ -451,7 +453,7 @@ impl Checker<'_> {
                 .collect::<Vec<_>>()
                 .join(", ");
             self.error(
-                "breg.occurrence.source-event-constraint",
+                "breg.event-record.source-event-constraint",
                 path,
                 format!("constraint \"{id}\" must cover exactly {listed} without \"when\""),
             );
@@ -461,60 +463,60 @@ impl Checker<'_> {
 
 pub(crate) fn validate(entities: &BTreeMap<String, EntitySource>, errors: &mut Vec<Diagnostic>) {
     for entity in entities.values() {
-        if let Some(occurrence) = &entity.occurrence {
-            validate_entity(entity, occurrence, entities, errors);
+        if let Some(event_record) = &entity.event_record {
+            validate_entity(entity, event_record, entities, errors);
         }
     }
 }
 
 fn validate_entity(
     entity: &EntitySource,
-    occurrence: &OccurrenceSource,
+    event_record: &EventRecordSource,
     entities: &BTreeMap<String, EntitySource>,
     errors: &mut Vec<Diagnostic>,
 ) {
     let mut checker = Checker {
         entity,
         entities,
-        base: format!("recordTypes[id={}].occurrence", entity.id),
+        base: format!("recordTypes[id={}].eventRecord", entity.id),
         errors,
         claimed: BTreeMap::new(),
     };
-    if occurrence.subjects.is_empty() {
+    if event_record.subjects.is_empty() {
         checker.error(
-            "breg.occurrence.subjects-empty",
+            "breg.event-record.subjects-empty",
             format!("{}.subjects", checker.base),
-            "an occurrence declares at least one subject".to_owned(),
+            "an event record declares at least one subject".to_owned(),
         );
     }
     let mut seen = BTreeSet::new();
-    checker.check_roles("subjects", &occurrence.subjects, &mut seen);
-    checker.check_roles("sources", &occurrence.sources, &mut seen);
-    if let Some(correction) = &occurrence.correction {
+    checker.check_roles("subjects", &event_record.subjects, &mut seen);
+    checker.check_roles("sources", &event_record.sources, &mut seen);
+    if let Some(correction) = &event_record.correction {
         checker.check_correction(&correction.field);
     }
-    if let Some(summary) = &occurrence.summary {
+    if let Some(summary) = &event_record.summary {
         if checker.check_field(summary, "summary", SUMMARY).is_some() {
             checker.claim(summary, "summary", "summary");
         }
     }
-    if let Some(time) = &occurrence.occurred_at {
+    if let Some(time) = &event_record.occurred_at {
         checker.check_occurred_at(time);
     }
-    if let Some(time) = &occurrence.effective {
+    if let Some(time) = &event_record.effective {
         checker.check_effective(time);
     }
-    if let Some(source) = &occurrence.source_event_id {
+    if let Some(source) = &event_record.source_event_id {
         checker.check_source_event_id(source);
     }
     crate::compiler::validate_display_text_at(
-        occurrence.label.as_deref(),
+        event_record.label.as_deref(),
         &format!("{}.label", checker.base),
         checker.errors,
     );
     for (list, roles) in [
-        ("subjects", &occurrence.subjects),
-        ("sources", &occurrence.sources),
+        ("subjects", &event_record.subjects),
+        ("sources", &event_record.sources),
     ] {
         for (index, item) in roles.iter().enumerate() {
             let address = if valid_role(&item.role) {
@@ -531,25 +533,25 @@ fn validate_entity(
     }
 }
 
-fn compiled_field(entity: &CompiledEntity, id: &str) -> CompiledOccurrenceField {
+fn compiled_field(entity: &CompiledEntity, id: &str) -> CompiledEventRecordField {
     let stored = entity
         .stored_fields
         .iter()
         .find(|field| field.logical.id == id)
-        .expect("validated occurrence fields are stored fields");
+        .expect("validated event record fields are stored fields");
     let (value_type, target) = match &stored.logical.field_type {
         FieldTypeSource::Reference { target, .. } => {
-            (OccurrenceValueType::Reference, Some(target.clone()))
+            (EventRecordValueType::Reference, Some(target.clone()))
         }
-        FieldTypeSource::String { .. } => (OccurrenceValueType::String, None),
-        FieldTypeSource::Text { .. } => (OccurrenceValueType::Text, None),
-        FieldTypeSource::Date => (OccurrenceValueType::Date, None),
-        FieldTypeSource::Timestamp => (OccurrenceValueType::Timestamp, None),
-        FieldTypeSource::Uuid => (OccurrenceValueType::Uuid, None),
-        FieldTypeSource::VocabularyCode { .. } => (OccurrenceValueType::VocabularyCode, None),
-        _ => unreachable!("validated occurrence fields have a mappable type"),
+        FieldTypeSource::String { .. } => (EventRecordValueType::String, None),
+        FieldTypeSource::Text { .. } => (EventRecordValueType::Text, None),
+        FieldTypeSource::Date => (EventRecordValueType::Date, None),
+        FieldTypeSource::Timestamp => (EventRecordValueType::Timestamp, None),
+        FieldTypeSource::Uuid => (EventRecordValueType::Uuid, None),
+        FieldTypeSource::VocabularyCode { .. } => (EventRecordValueType::VocabularyCode, None),
+        _ => unreachable!("validated event record fields have a mappable type"),
     };
-    CompiledOccurrenceField {
+    CompiledEventRecordField {
         id: id.to_owned(),
         api_name: stored.logical.api_name.clone(),
         value_type,
@@ -559,17 +561,17 @@ fn compiled_field(entity: &CompiledEntity, id: &str) -> CompiledOccurrenceField 
 
 fn compiled_roles(
     entity: &CompiledEntity,
-    roles: &[OccurrenceRoleSource],
-) -> Vec<CompiledOccurrenceRole> {
+    roles: &[EventRecordRoleSource],
+) -> Vec<CompiledEventRecordRole> {
     roles
         .iter()
-        .map(|item| CompiledOccurrenceRole {
+        .map(|item| CompiledEventRecordRole {
             role: item.role.clone(),
             label: item.label.clone(),
             kind: if item.external.is_some() {
-                OccurrenceRoleKind::External
+                EventRecordRoleKind::External
             } else {
-                OccurrenceRoleKind::Native
+                EventRecordRoleKind::Native
             },
             namespace: item
                 .external
@@ -586,43 +588,43 @@ fn compiled_time(
     start: Option<&str>,
     end: Option<&str>,
     meaning: IntervalMeaning,
-) -> Option<CompiledOccurrenceTime> {
+) -> Option<CompiledEventRecordTime> {
     if let Some(at) = at {
-        return Some(CompiledOccurrenceTime::Point {
+        return Some(CompiledEventRecordTime::Point {
             at: compiled_field(entity, at),
         });
     }
-    start.map(|start| CompiledOccurrenceTime::Interval {
+    start.map(|start| CompiledEventRecordTime::Interval {
         meaning,
         start: compiled_field(entity, start),
         end: end.map(|end| compiled_field(entity, end)),
     })
 }
 
-/// Resolves every declared occurrence onto its compiled record type.
+/// Resolves every declared event record onto its compiled record type.
 pub(crate) fn compile(
     sources: &BTreeMap<String, EntitySource>,
     entities: &mut BTreeMap<String, CompiledEntity>,
 ) {
     for source in sources.values() {
-        let Some(occurrence) = &source.occurrence else {
+        let Some(event_record) = &source.event_record else {
             continue;
         };
         let entity = entities.get_mut(&source.id).expect("compiled entity");
-        let label = occurrence
+        let label = event_record
             .label
             .clone()
             .or_else(|| entity.display.label.clone())
             .unwrap_or_else(|| entity.id.clone());
-        let compiled = CompiledOccurrence {
-            descriptor_version: OCCURRENCE_DESCRIPTOR_VERSION,
+        let compiled = CompiledEventRecord {
+            descriptor_version: EVENT_RECORD_DESCRIPTOR_VERSION,
             label,
-            subjects: compiled_roles(entity, &occurrence.subjects),
-            summary: occurrence
+            subjects: compiled_roles(entity, &event_record.subjects),
+            summary: event_record
                 .summary
                 .as_deref()
                 .map(|id| compiled_field(entity, id)),
-            occurred_at: occurrence.occurred_at.as_ref().and_then(|time| {
+            occurred_at: event_record.occurred_at.as_ref().and_then(|time| {
                 compiled_time(
                     entity,
                     time.at.as_deref(),
@@ -631,7 +633,7 @@ pub(crate) fn compile(
                     time.meaning.unwrap_or(IntervalMeaning::Span),
                 )
             }),
-            effective: occurrence.effective.as_ref().and_then(|time| {
+            effective: event_record.effective.as_ref().and_then(|time| {
                 compiled_time(
                     entity,
                     time.at.as_deref(),
@@ -640,14 +642,14 @@ pub(crate) fn compile(
                     IntervalMeaning::Span,
                 )
             }),
-            sources: compiled_roles(entity, &occurrence.sources),
-            correction: occurrence.correction.as_ref().map(|correction| {
-                CompiledOccurrenceCorrection {
+            sources: compiled_roles(entity, &event_record.sources),
+            correction: event_record.correction.as_ref().map(|correction| {
+                CompiledEventRecordCorrection {
                     relation: correction.relation,
                     field: compiled_field(entity, &correction.field),
                 }
             }),
-            source_event_id: occurrence.source_event_id.as_ref().map(|event| {
+            source_event_id: event_record.source_event_id.as_ref().map(|event| {
                 CompiledSourceEventId {
                     field: compiled_field(entity, &event.field),
                     namespace: event.namespace.clone(),
@@ -663,6 +665,6 @@ pub(crate) fn compile(
                 source: RecordedTimeSource::CreationRevision,
             },
         };
-        entity.occurrence = Some(compiled);
+        entity.event_record = Some(compiled);
     }
 }

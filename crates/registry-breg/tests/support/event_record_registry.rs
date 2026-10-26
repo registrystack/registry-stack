@@ -1,20 +1,20 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! A neutral registry that declares domain occurrences and the immediate
-//! Actions that write them, shared by the PostgreSQL occurrence tests.
+//! A neutral registry that declares event records and the immediate
+//! Actions that write them, shared by the PostgreSQL event record tests.
 //!
 //! The record types are `grant` (a subject whose status an Action changes),
-//! `grant-pause-decision` (an occurrence with distinct decision and effective
+//! `grant-pause-decision` (an event record with distinct decision and effective
 //! dates and a correction link), `item` and `custody-record` (subjects), and
-//! `custody-handover` (an occurrence with several subjects and an authored
+//! `custody-handover` (an event record with several subjects and an authored
 //! unique source event).
 
-pub const PACKAGE_ID: &str = "occurrence-examples-registry";
+pub const PACKAGE_ID: &str = "event-record-examples-registry";
 
 pub const PROJECT: &str = r#"
 apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
 kind: BRegProject
-project: {id: occurrence-examples-registry, version: "1", defaultLanguage: en, canonicalBaseIri: https://occurrence-examples.example.test}
+project: {id: event-record-examples-registry, version: "1", defaultLanguage: en, canonicalBaseIri: https://event-record-examples.example.test}
 datasets: [{id: test-dataset}]
 vocabularies:
   - {id: grant-status, values: [active, paused]}
@@ -43,7 +43,7 @@ recordTypes:
       - {id: corrects, type: reference, target: grant-pause-decision, required: false, classification: restricted}
     constraints:
       - {id: effective-order, type: compare, left: effective-from, operator: less-than, right: effective-until}
-    occurrence:
+    eventRecord:
       label: Grant pause decided
       subjects:
         - {role: grant, field: grant, label: Grant, target: grant}
@@ -83,7 +83,7 @@ recordTypes:
       - {id: deed-reference, type: string, minimumLength: 1, maximumLength: 80, required: true, classification: restricted}
     constraints:
       - {id: one-per-deed, type: unique, fields: [deed-reference]}
-    occurrence:
+    eventRecord:
       label: Custody handed over
       subjects:
         - {role: item, field: item, label: Item, target: item}
@@ -264,7 +264,7 @@ accessProfiles:
           operations: [invoke]
           targets: [{recordType: item, rowBoundaries: unrestricted}, {recordType: custody-record, rowBoundaries: unrestricted}, {recordType: custody-handover, rowBoundaries: unrestricted}]
           results: [new-custody, release, handover]
-  - id: occurrence-history
+  - id: event-record-history
     principalClaim: registry_principal
     requiredScopes: unrestricted
     permissions:
@@ -275,11 +275,11 @@ accessProfiles:
 
 pub fn compiled() -> registry_breg::CompiledRegistry {
     let project = registry_breg::contract::parse_project_yaml(PROJECT.as_bytes())
-        .expect("occurrence examples project parses");
+        .expect("event record examples project parses");
     registry_breg::compiler::compile_project(
         &project,
         &[],
         registry_breg::compiler::CompileProfile::Authoring,
     )
-    .expect("occurrence examples project compiles")
+    .expect("event record examples project compiles")
 }

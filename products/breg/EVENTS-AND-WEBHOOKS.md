@@ -9,6 +9,10 @@ change, send a small authenticated event to a configured service. This should
 cover the common integration need without turning Base Registry Engine into a
 workflow engine or plugin host.
 
+A hook event is a notification sent after a change, not stored registry data;
+a record that states something happened is an event record, described in
+[event records](event-records.md).
+
 The mechanism is domain-neutral. A project may declare events for a business registration,
 an establishment, a facility inspection, a permit, an asset, or any other
 configured entity. Base Registry Engine has no built-in knowledge of those

@@ -714,9 +714,9 @@ fn omitted_project_display_and_review_authorities_keep_empty_artifact_shape() {
 }
 
 #[test]
-fn model_retains_occurrence_descriptor_and_display_grouping() {
+fn model_retains_event_record_descriptor_and_display_grouping() {
     let source = registry_platform_yaml::Reader::new("registry.yaml")
-        .scan(include_bytes!("fixtures/occurrence/shapes.yaml"))
+        .scan(include_bytes!("fixtures/event-record/shapes.yaml"))
         .unwrap()
         .unwrap()
         .to_json_value();
@@ -734,10 +734,10 @@ fn model_retains_occurrence_descriptor_and_display_grouping() {
     validates("model", with_modules);
 
     let registration = definition(&model["recordTypes"], "entry-registration");
-    assert_eq!(registration["occurrence"]["descriptorVersion"], 1);
-    assert_eq!(registration["occurrence"]["label"], "Entry registered");
+    assert_eq!(registration["eventRecord"]["descriptorVersion"], 1);
+    assert_eq!(registration["eventRecord"]["label"], "Entry registered");
     assert_eq!(
-        registration["occurrence"]["recordedTime"],
+        registration["eventRecord"]["recordedTime"],
         json!({"source": "creation-revision"})
     );
     assert_eq!(
@@ -747,7 +747,7 @@ fn model_retains_occurrence_descriptor_and_display_grouping() {
 
     let ordinary = definition(&model["recordTypes"], "entry");
     assert_eq!(
-        ordinary["occurrence"],
+        ordinary["eventRecord"],
         Value::Null,
         "an undeclared descriptor is an explicit null in the author view"
     );

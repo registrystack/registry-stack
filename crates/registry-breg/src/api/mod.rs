@@ -629,9 +629,9 @@ async fn registry_metadata(
                     display.as_object_mut().expect("display is an object").remove("titleField");
                 }
                 metadata["display"] = display;
-                if let Some(occurrence) = &record_type.occurrence {
-                    metadata["occurrence"] = metadata::occurrence_metadata(
-                        occurrence,
+                if let Some(event_record) = &record_type.event_record {
+                    metadata["eventRecord"] = metadata::event_record_metadata(
+                        event_record,
                         &entity.readable_fields,
                         &visible_types,
                     );
