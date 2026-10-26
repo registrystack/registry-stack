@@ -1275,9 +1275,19 @@ fn oversized_bodies_are_refused_after_auth_as_problems() {
     let text = String::from_utf8_lossy(&refused.body);
     assert!(text.contains("body-too-large"), "{text}");
     assert!(text.contains("Reduce the request body"), "{text}");
+    let mut problem: serde_json::Value = serde_json::from_slice(&refused.body).unwrap();
+    // Opaque correlation IDs may contain the same digits as a configured limit.
+    // Operator-only values must stay out of the diagnostic fields.
+    let trace = problem
+        .as_object_mut()
+        .unwrap()
+        .remove("traceId")
+        .expect("the problem carries a trace ID");
+    assert!(trace.as_str().is_some_and(|id| !id.is_empty()));
+    let diagnostic = problem.to_string();
     assert!(
-        !text.contains("1024"),
-        "configured values stay with the operator: {text}"
+        !diagnostic.contains("1024"),
+        "configured values stay with the operator: {diagnostic}"
     );
     // The refusal is audited like every other.
     drop(server);
