@@ -185,7 +185,10 @@ pub(crate) fn check_directory(
         let path = entry.path();
         let name = entry.file_name();
         // Runtime custody belongs to deployment commands, never author checking.
-        if name == ".coordinator" || name == "workflow.yaml" {
+        if name == ".coordinator"
+            || name == "workflow.yaml"
+            || name == registry_platform_yaml::CHECK_ACCEPTANCES_FILE
+        {
             continue;
         }
         let kind = match entry.file_type() {

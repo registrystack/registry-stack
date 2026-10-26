@@ -1505,6 +1505,22 @@ class CheckAndReaderTests(ConventionsTestCase):
         self.repo.write(CONFIG_RS, CONFIG_RS_TEXT.replace("registry_platform_yaml", "serde_yaml_ng"))
         self.assertFinding(self.repo.run(), "CFG-YAML-1", P, at(CONFIG_RS, "load()"))
 
+    def test_cfg_yaml_1_recognizes_reader_new_inside_platform_yaml_itself(self) -> None:
+        self.assertTrue(
+            lint.reads_through_platform_yaml(
+                "registry-platform-yaml",
+                "pub fn read(file: &str) { Reader::new(file).scan(b\"\"); }",
+            )
+        )
+
+    def test_cfg_yaml_1_does_not_treat_bare_reader_new_as_shared_in_another_crate(self) -> None:
+        self.assertFalse(
+            lint.reads_through_platform_yaml(
+                "registry-casework-core",
+                "pub fn read(file: &str) { Reader::new(file).scan(b\"\"); }",
+            )
+        )
+
 
 class SourceLintTests(ConventionsTestCase):
     def plant(self, text: str) -> None:

@@ -1068,9 +1068,12 @@ fn check(args: &CheckArgs) -> Outcome {
     let Some(path) = &args.runtime_config else {
         return match given {
             Some((root, Ok(loaded))) => {
-                let warnings = loaded.warnings();
-                if args.deny_warnings && warnings.warning_count() > 0 {
-                    return Outcome::diagnosed(DOMAIN_REFUSAL_EXIT, warnings);
+                let mut warnings = loaded.warnings().clone();
+                if args.project.is_some() {
+                    registry_platform_config::apply_check_acceptances(root, &mut warnings);
+                }
+                if warnings.has_errors() || (args.deny_warnings && warnings.warning_count() > 0) {
+                    return Outcome::diagnosed(DOMAIN_REFUSAL_EXIT, &warnings);
                 }
                 match package_report(&loaded) {
                     Ok(mut report) => {
@@ -1082,7 +1085,18 @@ fn check(args: &CheckArgs) -> Outcome {
                     Err(refused) => refused,
                 }
             }
-            Some((root, Err(error))) => package_refusal(root, &error),
+            Some((root, Err(error))) => {
+                let mut report = package_load_report(root, &error);
+                if args.project.is_some() {
+                    registry_platform_config::apply_check_acceptances(root, &mut report);
+                }
+                let exit = if error.is_read_failure() {
+                    OPERATIONAL_FAILURE_EXIT
+                } else {
+                    DOMAIN_REFUSAL_EXIT
+                };
+                Outcome::diagnosed(exit, &report)
+            }
             None => Outcome::refused(
                 USAGE_EXIT,
                 "usage.invalid",
@@ -1093,7 +1107,14 @@ fn check(args: &CheckArgs) -> Outcome {
     };
     let (given, mut refused) = match given {
         Some((root, Ok(loaded))) => (Some((root, loaded)), None),
-        Some((root, Err(error))) => (None, Some(package_refusal(root, &error))),
+        Some((root, Err(error))) => {
+            let exit = if error.is_read_failure() {
+                OPERATIONAL_FAILURE_EXIT
+            } else {
+                DOMAIN_REFUSAL_EXIT
+            };
+            (None, Some((exit, package_load_report(root, &error))))
+        }
         None => (None, None),
     };
     let absolute = match std::path::absolute(path) {
@@ -1114,27 +1135,23 @@ fn check(args: &CheckArgs) -> Outcome {
         (None, None) => CheckedAgainst::NamedPackage,
     };
     let runtime = check_runtime_file(&absolute, against, args.environment);
-    let report = runtime_report(path, &absolute, &runtime);
-    let denied = report.has_errors() || (args.deny_warnings && report.warning_count() > 0);
-    if let Some(mut refused) = refused.take() {
+    let mut report = runtime_report(path, &absolute, &runtime);
+    if let Some((refused_exit, mut combined)) = refused.take() {
+        combined.extend(report);
+        if let Some(root) = &args.project {
+            registry_platform_config::apply_check_acceptances(root, &mut combined);
+        }
         let exit = if runtime.unavailable {
             OPERATIONAL_FAILURE_EXIT
         } else {
-            refused.exit
+            refused_exit
         };
-        if let (Some(diagnostics), Value::Array(more)) = (
-            refused.report["diagnostics"].as_array_mut(),
-            Outcome::diagnosed(exit, &report).report["diagnostics"].take(),
-        ) {
-            diagnostics.extend(more);
-        }
-        let package_files = refused.report["filesChecked"].as_u64().unwrap_or(0);
-        refused.report["filesChecked"] =
-            json!(package_files + report.files_checked().map_or(0, |files| files as u64));
-        refused.exit = exit;
-        refused.view = View::Diagnostics;
-        return refused;
+        return Outcome::diagnosed(exit, &combined);
     }
+    if let Some(root) = &args.project {
+        registry_platform_config::apply_check_acceptances(root, &mut report);
+    }
+    let denied = report.has_errors() || (args.deny_warnings && report.warning_count() > 0);
     if denied {
         let exit = if runtime.unavailable {
             OPERATIONAL_FAILURE_EXIT

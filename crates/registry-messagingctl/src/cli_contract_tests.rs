@@ -67,7 +67,11 @@ fn assert_envelope(stdout: &[u8], report: &Value, exit: ExitCode) {
         let diagnostics = report["diagnostics"].as_array().expect("diagnostics");
         assert!(!diagnostics.is_empty(), "{text}");
         for diagnostic in diagnostics {
-            assert_eq!(diagnostic["severity"], "error", "{text}");
+            assert!(
+                diagnostic["severity"] == "error"
+                    || (report["command"] == "check" && diagnostic["severity"] == "warning"),
+                "{text}"
+            );
             // The empty pointer names the document's root (CFG-DIAG-1).
             assert!(diagnostic["path"].is_string(), "path: {text}");
             for member in ["code", "artifact", "message", "suggestedAction"] {
@@ -153,6 +157,151 @@ fn starter(root: &Path) -> (PathBuf, PathBuf) {
     )
     .unwrap();
     (project, data)
+}
+
+#[test]
+fn project_check_accepts_an_exact_warning_without_weakening_deny_warnings() {
+    let (_guard, root) = workspace();
+    let (project, _) = starter(&root);
+    let path = project.join("messaging.yaml");
+    std::fs::write(
+        &path,
+        std::fs::read_to_string(&path).unwrap().replacen(
+            "requiredScopes: [messaging:send]",
+            "requiredScopes: ['*']",
+            1,
+        ),
+    )
+    .unwrap();
+
+    let (exit, report) = invoke(arguments(&[
+        "check",
+        "--project",
+        project.to_str().unwrap(),
+    ]));
+    assert_eq!(exit, ExitCode::SUCCESS, "{report}");
+    let warning = report["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["code"] == "messaging.project.wildcard-spelled-item")
+        .expect("the project checker reports the explicit wildcard warning");
+    let files_without_acceptances = report["filesChecked"].as_u64().unwrap();
+    let scope = warning["scope"]
+        .as_object()
+        .expect("a stable warning scope");
+
+    let (exit, denied) = invoke(arguments(&[
+        "check",
+        "--project",
+        project.to_str().unwrap(),
+        "--deny-warnings",
+    ]));
+    assert_eq!(exit, ExitCode::from(DOMAIN_REFUSAL_EXIT), "{denied}");
+
+    std::fs::write(
+        project.join("check-acceptances.yaml"),
+        format!(
+            "apiVersion: id.registrystack.org/formats/platform/check-acceptances/v1alpha1\nkind: PlatformCheckAcceptances\nacceptances:\n  - code: messaging.project.wildcard-spelled-item\n    scope:\n      file: {}\n      path: {}\n    reason: This isolated pilot intentionally grants every messaging scope.\n",
+            scope["file"].as_str().unwrap(),
+            scope["path"].as_str().unwrap(),
+        ),
+    )
+    .unwrap();
+    let (exit, accepted) = invoke(arguments(&[
+        "check",
+        "--project",
+        project.to_str().unwrap(),
+        "--deny-warnings",
+    ]));
+    assert_eq!(exit, ExitCode::SUCCESS, "{accepted}");
+    assert_eq!(
+        accepted["filesChecked"],
+        files_without_acceptances + 1,
+        "the present acceptance file is counted once"
+    );
+    let warning = accepted["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["code"] == "messaging.project.wildcard-spelled-item")
+        .unwrap();
+    assert_eq!(
+        warning["acceptedReason"],
+        "This isolated pilot intentionally grants every messaging scope."
+    );
+}
+
+#[test]
+fn combined_project_and_runtime_refusal_keeps_an_accepted_project_warning() {
+    let (_guard, root) = workspace();
+    let (project, _) = starter(&root);
+    let path = project.join("messaging.yaml");
+    let source = std::fs::read_to_string(&path).unwrap().replacen(
+        "requiredScopes: [messaging:send]",
+        "requiredScopes: ['*']",
+        1,
+    );
+    std::fs::write(&path, &source).unwrap();
+
+    let (exit, report) = invoke(arguments(&[
+        "check",
+        "--project",
+        project.to_str().unwrap(),
+    ]));
+    assert_eq!(exit, ExitCode::SUCCESS, "{report}");
+    let warning = report["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["code"] == "messaging.project.wildcard-spelled-item")
+        .expect("the project checker reports the explicit wildcard warning");
+    let scope = warning["scope"]
+        .as_object()
+        .expect("a stable warning scope");
+    std::fs::write(
+        project.join("check-acceptances.yaml"),
+        format!(
+            "apiVersion: id.registrystack.org/formats/platform/check-acceptances/v1alpha1\nkind: PlatformCheckAcceptances\nacceptances:\n  - code: messaging.project.wildcard-spelled-item\n    scope:\n      file: {}\n      path: {}\n    reason: This isolated pilot intentionally grants every messaging scope.\n",
+            scope["file"].as_str().unwrap(),
+            scope["path"].as_str().unwrap(),
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        &path,
+        source.replacen("provider: mail-relay", "provider: unknown-provider", 1),
+    )
+    .unwrap();
+
+    let missing_runtime = root.join("missing-runtime.yaml");
+    let (exit, refused) = invoke(arguments(&[
+        "check",
+        "--project",
+        project.to_str().unwrap(),
+        "--runtime-config",
+        missing_runtime.to_str().unwrap(),
+        "--deny-warnings",
+    ]));
+    assert_eq!(exit, ExitCode::from(OPERATIONAL_FAILURE_EXIT), "{refused}");
+    assert!(
+        refused["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["severity"] == "error"),
+        "{refused}"
+    );
+    let warning = refused["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["code"] == "messaging.project.wildcard-spelled-item")
+        .expect("the project warning remains visible beside the errors");
+    assert_eq!(
+        warning["acceptedReason"],
+        "This isolated pilot intentionally grants every messaging scope."
+    );
 }
 
 /// The arguments of every database command, pointed at a runtime

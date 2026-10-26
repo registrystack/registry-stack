@@ -105,6 +105,7 @@
 //! `#[serde(tag = "...")]` or `#[serde(untagged)]`: they buffer the mapping
 //! without positions.
 
+mod check_acceptances;
 mod de;
 mod diagnostic;
 mod document;
@@ -118,6 +119,13 @@ mod structure;
 mod types;
 mod union;
 
+#[cfg(feature = "schema")]
+pub use check_acceptances::check_acceptances_schema;
+pub use check_acceptances::{
+    check_scope_path, read_check_acceptances, CheckAcceptance, CheckAcceptances, CheckScope,
+    CHECK_ACCEPTANCES_API_VERSION, CHECK_ACCEPTANCES_FILE, CHECK_ACCEPTANCES_FORMAT,
+    CHECK_ACCEPTANCES_KIND, CHECK_ACCEPTANCES_SCHEMA_ID,
+};
 pub use de::{Invalid, SHARED_BLOCK_PREFIX};
 pub use diagnostic::{Diagnostic, Related, Report, Severity, Source};
 pub use document::{

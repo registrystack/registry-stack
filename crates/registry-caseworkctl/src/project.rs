@@ -300,6 +300,53 @@ pub(crate) fn load_and_check_policy(project: &Path) -> Result<CaseworkProject> {
     Ok(CaseworkProject::load(project.join("casework.yaml"))?)
 }
 pub(super) fn check(project: &Path, production: bool, deny_warnings: bool) -> Result<Value> {
+    check_impl(project, production, deny_warnings)
+}
+
+pub(super) fn check_with_acceptances(
+    project: &Path,
+    production: bool,
+    deny_warnings: bool,
+) -> Result<Value> {
+    finish_check_with_acceptances(project, deny_warnings, check(project, production, false))
+}
+
+fn finish_check_with_acceptances(
+    project: &Path,
+    deny_warnings: bool,
+    checked: Result<Value>,
+) -> Result<Value> {
+    let (mut report, mut checked) = match checked {
+        Ok(checked) => {
+            let mut report = Report::new(serde_json::from_value(checked["diagnostics"].clone())?);
+            if let Some(files) = checked["filesChecked"]
+                .as_u64()
+                .and_then(|files| usize::try_from(files).ok())
+            {
+                report.set_files_checked(files);
+            }
+            (report, Some(checked))
+        }
+        Err(error) => match crate::configuration_report(&error) {
+            Some(report) => (report.clone(), None),
+            None => return Err(error),
+        },
+    };
+    registry_platform_config::apply_check_acceptances(project, &mut report);
+    if report.has_errors() || (deny_warnings && report.warning_count() > 0) {
+        return Err(report.into());
+    }
+    let mut checked = checked
+        .take()
+        .expect("an error-free project has a check report");
+    checked["diagnostics"] = report.to_json_value();
+    if let Some(files) = report.files_checked() {
+        checked["filesChecked"] = json!(files);
+    }
+    Ok(checked)
+}
+
+fn check_impl(project: &Path, production: bool, deny_warnings: bool) -> Result<Value> {
     let decoded = read_project(project)?;
     let policy = decoded.value;
     let mut diagnostics = decoded.document.warnings();
@@ -365,45 +412,80 @@ pub(super) fn check(project: &Path, production: bool, deny_warnings: bool) -> Re
     if diagnostics.has_errors() || (deny_warnings && diagnostics.warning_count() > 0) {
         return Err(diagnostics.into());
     }
-    let bindings = policy
-        .review_policies
-        .iter()
-        .map(|p| p.compile(&policy).map(|c| c.identity))
-        .collect::<std::result::Result<Vec<_>, _>>()?;
-    for provider in &policy.context_providers {
-        if let Some(description) = &provider.description {
-            files_checked.insert(description.clone());
-            let bytes = read_package_input(&project_input_path(project, description)?)?;
-            let export: registry_casework_breg::BregContextExport =
-                serde_json::from_value(registry_breg_client_value(&bytes)?)?;
-            export.check()?;
-            if export.source_namespace != provider.source_namespace {
-                bail!("provider export namespace differs from its compiled binding");
-            }
-            for review in &policy.review_policies {
-                if let ReviewContextPolicy::CurrentSource {
-                    provider: id,
-                    contract,
-                } = &review.context
-                {
-                    if id == &provider.id && contract != &export.contract {
-                        bail!("provider export context contract differs from the compiled policy");
+    let late_check = (|| -> Result<Vec<_>> {
+        let bindings = policy
+            .review_policies
+            .iter()
+            .map(|p| p.compile(&policy).map(|c| c.identity))
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        for provider in &policy.context_providers {
+            if let Some(description) = &provider.description {
+                files_checked.insert(description.clone());
+                let bytes = read_package_input(&project_input_path(project, description)?)?;
+                let export: registry_casework_breg::BregContextExport =
+                    serde_json::from_value(registry_breg_client_value(&bytes)?)?;
+                export.check()?;
+                if export.source_namespace != provider.source_namespace {
+                    bail!("provider export namespace differs from its compiled binding");
+                }
+                for review in &policy.review_policies {
+                    if let ReviewContextPolicy::CurrentSource {
+                        provider: id,
+                        contract,
+                    } = &review.context
+                    {
+                        if id == &provider.id && contract != &export.contract {
+                            bail!(
+                                "provider export context contract differs from the compiled policy"
+                            );
+                        }
                     }
                 }
             }
         }
-    }
-    if production {
-        for input in registry_casework::package_inputs(&policy, &policy_bytes)? {
-            read_package_input(&project_input_path(project, &input)?)?;
-            if input != registry_casework::POLICY_FILE {
-                files_checked.insert(input);
+        if production {
+            for input in registry_casework::package_inputs(&policy, &policy_bytes)? {
+                read_package_input(&project_input_path(project, &input)?)?;
+                if input != registry_casework::POLICY_FILE {
+                    files_checked.insert(input);
+                }
             }
         }
-    }
+        Ok(bindings)
+    })();
+    let bindings = match late_check {
+        Ok(bindings) => bindings,
+        Err(error) => return finish_late_check_error(diagnostics, files_checked.len() + 1, error),
+    };
     Ok(
         json!({"ok":true,"command":"check","status":"complete","project":project,"policyBindings":bindings,"filesChecked":files_checked.len()+1,"diagnostics":diagnostics.diagnostics(),"networkAccess":false,"databaseAccess":false}),
     )
+}
+
+/// Retain diagnostics already found by an offline check when a later authored
+/// input is refused. Operational failures keep their original error chain.
+fn finish_late_check_error(
+    mut diagnostics: Report,
+    files_checked: usize,
+    error: anyhow::Error,
+) -> Result<Value> {
+    let (exit, fallback) = crate::classify_failure(crate::CommandKind::Authoring, &error);
+    if exit != crate::DOMAIN_REFUSAL_EXIT {
+        return Err(error);
+    }
+    if let Some(refused) = crate::configuration_report(&error) {
+        for diagnostic in refused.diagnostics() {
+            if !diagnostics.diagnostics().contains(diagnostic) {
+                diagnostics.push(diagnostic.clone());
+            }
+        }
+    } else {
+        let diagnostic = serde_json::from_value(fallback)
+            .expect("the failure classifier returns one diagnostic");
+        diagnostics.push(diagnostic);
+    }
+    diagnostics.set_files_checked(files_checked);
+    Err(diagnostics.into())
 }
 
 /// Refuses a project that needs a review-context capability its source does
@@ -942,17 +1024,42 @@ pub(super) fn check_runtime_config(
     project: &Path,
     path: &Path,
     environment: bool,
+    deny_warnings: bool,
     checked: Result<Value>,
 ) -> Result<Value> {
     let policy = load_and_check_policy(project).ok();
     let absolute = std::path::absolute(path)?;
-    let report = registry_casework::check_runtime(&absolute, policy.as_ref(), environment);
-    let report = Report::new(report.diagnostics);
-    if report.has_errors() {
-        return Err(report.into());
+    let runtime = registry_casework::check_runtime(&absolute, policy.as_ref(), environment);
+    let runtime = Report::new(runtime.diagnostics);
+    let (mut combined, mut checked) = match checked {
+        Ok(checked) => {
+            let mut report = Report::new(serde_json::from_value(checked["diagnostics"].clone())?);
+            if let Some(files) = checked["filesChecked"]
+                .as_u64()
+                .and_then(|files| usize::try_from(files).ok())
+            {
+                report.set_files_checked(files);
+            }
+            (report, Some(checked))
+        }
+        Err(error) => match crate::configuration_report(&error) {
+            Some(report) => (report.clone(), None),
+            None => return Err(error),
+        },
+    };
+    combined.extend(runtime);
+    registry_platform_config::apply_check_acceptances(project, &mut combined);
+    if combined.has_errors() || (deny_warnings && combined.warning_count() > 0) {
+        return Err(combined.into());
     }
-    let mut checked = checked?;
+    let mut checked = checked
+        .take()
+        .expect("an error-free project has a check report");
     checked["runtimeConfig"] = json!(path);
+    checked["diagnostics"] = combined.to_json_value();
+    if let Some(files) = combined.files_checked() {
+        checked["filesChecked"] = json!(files);
+    }
     Ok(checked)
 }
 pub(super) fn doctor(path: &Path) -> Result<Value> {
@@ -1008,7 +1115,8 @@ mod display_integrity_tests {
         );
         fs::write(&path, authored).unwrap();
 
-        let report = check(&project, false, false).expect("warnings do not normally refuse check");
+        let report = check_with_acceptances(&project, false, false)
+            .expect("warnings do not normally refuse check");
         let warning = report["diagnostics"]
             .as_array()
             .unwrap()
@@ -1019,8 +1127,10 @@ mod display_integrity_tests {
             warning["path"],
             "/reviewPolicies/decision/outcomes/rejected/label"
         );
+        let files_without_acceptances = report["filesChecked"].as_u64().unwrap();
 
-        let error = check(&project, false, true).expect_err("--deny-warnings refuses the warning");
+        let error = check_with_acceptances(&project, false, true)
+            .expect_err("--deny-warnings refuses the warning");
         let report = crate::configuration_report(&error).expect("a structured warning report");
         assert_eq!(report.error_count(), 0);
         assert_eq!(report.warning_count(), 1);
@@ -1028,6 +1138,264 @@ mod display_integrity_tests {
             report.diagnostics()[0].code,
             "casework.review-policy.duplicate-outcome-label"
         );
+
+        let scope = warning["scope"]
+            .as_object()
+            .expect("a stable warning scope");
+        fs::write(
+            project.join("check-acceptances.yaml"),
+            format!(
+                "apiVersion: id.registrystack.org/formats/platform/check-acceptances/v1alpha1\nkind: PlatformCheckAcceptances\nacceptances:\n  - code: casework.review-policy.duplicate-outcome-label\n    scope:\n      file: {}\n      path: {}\n    reason: The two outcomes are deliberately phrased alike for this pilot.\n",
+                scope["file"].as_str().unwrap(),
+                scope["path"].as_str().unwrap(),
+            ),
+        )
+        .unwrap();
+        let accepted = check_with_acceptances(&project, false, true)
+            .expect("an accepted warning does not make --deny-warnings fail");
+        assert_eq!(
+            accepted["filesChecked"],
+            files_without_acceptances + 1,
+            "the present acceptance file is counted once"
+        );
+        let warning = accepted["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["code"] == "casework.review-policy.duplicate-outcome-label")
+            .unwrap();
+        assert_eq!(
+            warning["acceptedReason"],
+            "The two outcomes are deliberately phrased alike for this pilot."
+        );
+        let mut human = Vec::new();
+        crate::render_human(&accepted, &mut human).unwrap();
+        assert!(
+            String::from_utf8(human)
+                .unwrap()
+                .contains(&format!("in {} files", files_without_acceptances + 1)),
+            "the human summary uses the JSON filesChecked count"
+        );
+
+        let mut diagnostics =
+            serde_json::from_value::<Vec<Diagnostic>>(accepted["diagnostics"].clone()).unwrap();
+        diagnostics[0].accepted_reason = None;
+        let mut refused = Report::new(diagnostics);
+        refused.push(Diagnostic::error(
+            "casework.project.invalid",
+            "/project",
+            "the project has an unrelated error",
+            "Correct the project.",
+        ));
+        let error = finish_check_with_acceptances(&project, true, Err(refused.into()))
+            .expect_err("the unrelated error still refuses the check");
+        let report = crate::configuration_report(&error).unwrap();
+        assert_eq!(report.error_count(), 1);
+        assert_eq!(report.warning_count(), 0);
+        assert_eq!(report.accepted_warning_count(), 1);
+        assert_eq!(
+            report.diagnostics()[0].accepted_reason.as_deref(),
+            Some("The two outcomes are deliberately phrased alike for this pilot.")
+        );
+    }
+
+    #[test]
+    fn check_keeps_accepted_warnings_beside_unserved_capability_errors() {
+        let root = crate::canonical_tempdir();
+        let project = root.path().join("project");
+        init(&project, "canonical-review").unwrap();
+        let path = project.join("casework.yaml");
+        let authored = fs::read_to_string(&path)
+            .unwrap()
+            .replacen("label: Return for correction", "label: confirm", 1)
+            .replacen(
+                "capabilities: [human-display, service-status]",
+                "capabilities: [human-display, service-status, routing-context]",
+                1,
+            );
+        fs::write(&path, authored).unwrap();
+        fs::write(
+            project.join("check-acceptances.yaml"),
+            "apiVersion: id.registrystack.org/formats/platform/check-acceptances/v1alpha1\nkind: PlatformCheckAcceptances\nacceptances:\n  - code: casework.review-policy.duplicate-outcome-label\n    scope:\n      file: casework.yaml\n      path: /reviewPolicies/decision/outcomes/rejected/label\n    reason: The two outcomes are deliberately phrased alike for this pilot.\n",
+        )
+        .unwrap();
+
+        let error = check_with_acceptances(&project, false, true)
+            .expect_err("the unserved provider capability still refuses the check");
+        let report = crate::configuration_report(&error).expect("a structured check report");
+        assert_eq!(report.error_count(), 1);
+        assert_eq!(report.warning_count(), 0);
+        assert_eq!(report.accepted_warning_count(), 1);
+        let capability = report
+            .diagnostics()
+            .iter()
+            .find(|diagnostic| diagnostic.code == "casework.context-provider.unserved-capability")
+            .expect("the unserved capability remains an error");
+        assert_eq!(
+            capability.path,
+            "/contextProviders/facility-proposal-context/capabilities"
+        );
+        let warning = report
+            .diagnostics()
+            .iter()
+            .find(|diagnostic| diagnostic.code == "casework.review-policy.duplicate-outcome-label")
+            .expect("the accepted warning remains visible beside the error");
+        assert_eq!(
+            warning.accepted_reason.as_deref(),
+            Some("The two outcomes are deliberately phrased alike for this pilot.")
+        );
+    }
+
+    #[test]
+    fn check_keeps_accepted_warnings_beside_late_provider_refusals() {
+        for mismatch in ["namespace", "contract"] {
+            let root = crate::canonical_tempdir();
+            let project = root.path().join("project");
+            init(&project, "canonical-review").unwrap();
+            let path = project.join("casework.yaml");
+            let mut authored = fs::read_to_string(&path)
+                .unwrap()
+                .replacen("label: Return for correction", "label: confirm", 1)
+                .replacen(
+                    "deploymentRef: facility-registry",
+                    "deploymentRef: facility-registry\n    description: providers/facility-proposal-context.json",
+                    1,
+                );
+            authored = match mismatch {
+                "namespace" => authored
+                    .replacen(
+                        "sourceNamespace: facility-registry",
+                        "sourceNamespace: different-registry",
+                        1,
+                    )
+                    .replacen(
+                        "sourceNamespaces: [facility-registry]",
+                        "sourceNamespaces: [different-registry]",
+                        1,
+                    ),
+                "contract" => authored.replacen(
+                    "revision: sha256:d66f9fa80d136e3f8a9e8c30bf03e5922e7ecfe980854282413f6e4f07694b47",
+                    "revision: sha256:0000000000000000000000000000000000000000000000000000000000000000",
+                    1,
+                ),
+                _ => unreachable!(),
+            };
+            fs::write(&path, authored).unwrap();
+            fs::write(
+                project.join("check-acceptances.yaml"),
+                "apiVersion: id.registrystack.org/formats/platform/check-acceptances/v1alpha1\nkind: PlatformCheckAcceptances\nacceptances:\n  - code: casework.review-policy.duplicate-outcome-label\n    scope:\n      file: casework.yaml\n      path: /reviewPolicies/decision/outcomes/rejected/label\n    reason: The two outcomes are deliberately phrased alike for this pilot.\n",
+            )
+            .unwrap();
+            let schema_bytes =
+                fs::read_to_string(project.join("schemas/correct-address.schema.json")).unwrap();
+            let schema: Value = serde_json::from_str(&schema_bytes).unwrap();
+            let description = json!({
+                "apiVersion": registry_casework_breg::DESCRIPTION_API_VERSION,
+                "kind": registry_casework_breg::DESCRIPTION_KIND,
+                "sourceNamespace": "facility-registry",
+                "actionId": "correct-address",
+                "contextId": "facility-address-context",
+                "contract": {
+                    "id": schema["$id"],
+                    "revision": schema["x-registry-definition-revision"],
+                    "schemaDigest": registry_platform_config::sha256_uri(schema_bytes.as_bytes()),
+                },
+                "schema": schema,
+                "schemaBytes": schema_bytes,
+            });
+            fs::create_dir(project.join("providers")).unwrap();
+            fs::write(
+                project.join("providers/facility-proposal-context.json"),
+                serde_json::to_vec(&description).unwrap(),
+            )
+            .unwrap();
+
+            let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
+            let exit = crate::main_entry_from(
+                [
+                    "caseworkctl".into(),
+                    "--format=json".into(),
+                    "check".into(),
+                    project.into_os_string(),
+                    "--deny-warnings".into(),
+                ],
+                &mut stdout,
+                &mut stderr,
+            );
+            assert_eq!(
+                exit,
+                std::process::ExitCode::from(crate::DOMAIN_REFUSAL_EXIT),
+                "{mismatch}"
+            );
+            assert!(stderr.is_empty(), "{mismatch}");
+            let report: Value = serde_json::from_slice(&stdout).unwrap();
+            let diagnostics = report["diagnostics"].as_array().unwrap();
+            assert_eq!(diagnostics.len(), 2, "{mismatch}: {report}");
+            let refusal = diagnostics
+                .iter()
+                .find(|diagnostic| diagnostic["code"] == "caseworkctl.refused")
+                .unwrap_or_else(|| {
+                    panic!(
+                        "the late {mismatch} mismatch keeps its existing generic refusal: {report}"
+                    )
+                });
+            assert_eq!(refusal["path"], "runtime");
+            assert_eq!(refusal["message"], "The authored input was refused.");
+            assert_eq!(
+                refusal["suggestedAction"],
+                "Correct the named input or runtime dependency, then retry."
+            );
+            let warning = diagnostics
+                .iter()
+                .find(|diagnostic| {
+                    diagnostic["code"] == "casework.review-policy.duplicate-outcome-label"
+                })
+                .expect("the accepted warning remains visible beside the late refusal");
+            assert_eq!(
+                warning["acceptedReason"],
+                "The two outcomes are deliberately phrased alike for this pilot."
+            );
+            let rendered = String::from_utf8(stdout).unwrap();
+            assert!(!rendered.contains("facility-registry"));
+            assert!(!rendered.contains("different-registry"));
+        }
+    }
+
+    #[test]
+    fn late_check_errors_merge_typed_findings_and_preserve_operational_errors() {
+        let warning = Diagnostic::warning(
+            "casework.project.advisory",
+            "/project",
+            "Review this project setting.",
+            "Confirm the intended setting.",
+        );
+        let typed_error = Diagnostic::error(
+            "casework.project.invalid",
+            "/project",
+            "The project setting is invalid.",
+            "Correct the project setting.",
+        );
+        let retained = Report::new(vec![warning.clone()]);
+        let refused = Report::new(vec![warning, typed_error]);
+
+        let error = finish_late_check_error(retained, 4, refused.into())
+            .expect_err("a typed domain refusal still refuses the check");
+        let combined = crate::configuration_report(&error).expect("an aggregate report");
+        assert_eq!(combined.files_checked(), Some(4));
+        assert_eq!(combined.error_count(), 1);
+        assert_eq!(combined.warning_count(), 1);
+        assert_eq!(
+            combined.diagnostics().len(),
+            2,
+            "the warning is not duplicated"
+        );
+        assert_eq!(combined.diagnostics()[1].code, "casework.project.invalid");
+
+        let unavailable = std::io::Error::other("late input is unavailable");
+        let error = finish_late_check_error(Report::default(), 1, unavailable.into())
+            .expect_err("an I/O failure remains operational");
+        assert!(error.chain().any(|cause| cause.is::<std::io::Error>()));
+        assert!(crate::configuration_report(&error).is_none());
     }
 
     #[test]

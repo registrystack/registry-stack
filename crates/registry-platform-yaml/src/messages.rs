@@ -21,6 +21,8 @@ pub struct CodeInfo {
 /// reader's have two (`yaml.` for the YAML subset, `config.` for envelope,
 /// key, and type problems).
 pub const CODES: &[CodeInfo] = &[
+    CodeInfo { code: "config.check-acceptance-invalid", meaning: "an acceptance needs a valid check code, project-relative scope and nonblank reason" },
+    CodeInfo { code: "config.check-acceptance-duplicate", meaning: "the same check code and scope have more than one acceptance" },
     CodeInfo { code: "yaml.too-large", meaning: "the document is larger than 1 MiB" },
     CodeInfo { code: "yaml.not-utf8", meaning: "the document is not UTF-8" },
     CodeInfo { code: "yaml.syntax", meaning: "the YAML is not well formed and no narrower code applies" },
@@ -121,6 +123,8 @@ impl Problem {
     pub fn into_diagnostic(self, file: &str, artifact: Option<&str>) -> Diagnostic {
         Diagnostic {
             severity: self.severity,
+            scope: None,
+            accepted_reason: None,
             code: self.code,
             artifact: artifact.map(str::to_string),
             path: self.pointer,

@@ -9,6 +9,7 @@
 //! validates the rest of its configuration contract.
 
 pub mod blocks;
+mod check_acceptances;
 mod loader;
 mod offline;
 pub mod package;
@@ -35,6 +36,7 @@ pub use blocks::{
     MAX_OIDC_AUDIENCE_CHARACTERS, MIN_ATTEMPT_TIMEOUT_MILLISECONDS,
     MIN_HOOK_ATTEMPT_TIMEOUT_MILLISECONDS,
 };
+pub use check_acceptances::{apply_check_acceptances, read_project_check_acceptances};
 pub use loader::{
     contains_environment_expression, reject_environment_expressions_in_authored_yaml,
     AuthoredExpressions, LoadedRuntimeConfig, RemovedKey, RuntimeConfigError, RuntimeConfigLoader,

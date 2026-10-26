@@ -60,7 +60,15 @@ macro_rules! tooling_format {
     };
 }
 
-const FORMATS: [(FormatSpec<'static>, bool, Check); 8] = [
+const FORMATS: [(FormatSpec<'static>, bool, Check); 9] = [
+    (
+        registry_platform_yaml::CHECK_ACCEPTANCES_FORMAT,
+        false,
+        |file, bytes| {
+            let decoded = registry_platform_config::read_project_check_acceptances(file, bytes)?;
+            Ok(decoded.document.report_with(Vec::new()))
+        },
+    ),
     (
         registry_evidence_authoring::formats::ACCESS_CLIENT,
         false,
@@ -322,6 +330,22 @@ fn in_file(mut diagnostic: Diagnostic, label: &str) -> Diagnostic {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shared_check_acceptances_are_a_supported_tool_file() {
+        let temporary = tempfile::tempdir().unwrap();
+        let file = temporary.path().join("check-acceptances.yaml");
+        std::fs::write(
+            &file,
+            "apiVersion: id.registrystack.org/formats/platform/check-acceptances/v1alpha1\nkind: PlatformCheckAcceptances\nacceptances: []\n",
+        )
+        .unwrap();
+
+        let report = check(&file, &file.display().to_string())
+            .unwrap_or_else(|_| panic!("the shared acceptance format is a supported tool file"));
+        assert!(!report.has_errors());
+        assert!(report.diagnostics().is_empty());
+    }
 
     #[test]
     fn standalone_file_warnings_are_preserved_and_obey_the_requested_policy() {

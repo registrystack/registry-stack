@@ -36,6 +36,7 @@ pub(crate) struct Request<'a> {
 }
 
 /// Why a check produced no findings.
+#[derive(Debug)]
 pub(crate) enum Failure {
     /// The shared reader refused the document.
     Refused(Report),
@@ -86,7 +87,18 @@ type Check = fn(&Input<'_>) -> Result<Vec<Diagnostic>, Failure>;
 /// it is refused with, when the file is read as written (CFG-SEC-2); and its
 /// check. A file a command writes holds text it copied, which is never
 /// substituted, so it has no remedy.
-const CHECKS: [(FormatSpec<'static>, Option<&str>, Check); 15] = [
+const CHECKS: [(FormatSpec<'static>, Option<&str>, Check); 16] = [
+    (
+        registry_platform_yaml::CHECK_ACCEPTANCES_FORMAT,
+        Some(WRITE_THE_VALUE),
+        |input| {
+            registry_platform_config::read_project_check_acceptances(
+                &input.file.display().to_string(),
+                input.bytes,
+            )?;
+            Ok(Vec::new())
+        },
+    ),
     (fixtures::JOURNEYS_FORMAT, Some(WRITE_THE_VALUE), journeys),
     (
         fixtures::SCHEMA_TEST_RECEIPT_FORMAT,
@@ -516,6 +528,26 @@ fn nearest_written_pointer<'a>(document: &Document, pointer: &'a str) -> &'a str
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shared_check_acceptances_are_a_supported_tool_file() {
+        let temporary = tempfile::tempdir().unwrap();
+        let file = temporary
+            .path()
+            .canonicalize()
+            .unwrap()
+            .join("check-acceptances.yaml");
+        std::fs::write(
+            &file,
+            "apiVersion: id.registrystack.org/formats/platform/check-acceptances/v1alpha1\nkind: PlatformCheckAcceptances\nacceptances: []\n",
+        )
+        .unwrap();
+
+        let report = check(&file, &file.display().to_string(), &Against::Nothing)
+            .expect("the shared acceptance format is a supported tool file");
+        assert!(!report.has_errors());
+        assert!(report.diagnostics().is_empty());
+    }
 
     #[test]
     fn a_descriptor_location_is_the_last_five_path_components() {

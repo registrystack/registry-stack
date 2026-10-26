@@ -274,6 +274,11 @@ fn validate_command(matches: &ArgMatches) -> Result<u8, Failure> {
         }
         None => None,
     };
+    let project_root = Path::new(path)
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    registry_platform_config::apply_check_acceptances(project_root, &mut report);
     let exit = check_exit(&report, check.unavailable, options.deny_warnings);
     if options.json {
         let mut written = CtlReport::new("validate", exit, &report);
@@ -304,7 +309,8 @@ fn validate_command(matches: &ArgMatches) -> Result<u8, Failure> {
 fn validate_profiles_command(matches: &ArgMatches) -> Result<u8, Failure> {
     let options = CheckOptions::parse(matches, "profiles")?;
     let root = PathBuf::from(options.path);
-    let check = check_profiles(&root);
+    let mut check = check_profiles(&root);
+    registry_platform_config::apply_check_acceptances(&root, &mut check.report);
     let exit = check_exit(&check.report, check.unavailable, options.deny_warnings);
     if options.json {
         let mut written = CtlReport::new("validate-profiles", exit, &check.report);

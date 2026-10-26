@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- `messagingctl check --project` reads an optional `check-acceptances.yaml`,
+  keeps exactly matched warnings visible with their reasons, and excludes only
+  those accepted warnings from `--deny-warnings`.
 - A split-mode apply that refuses a runtime role owning Messaging objects
   lists an exact `ALTER ... OWNER TO` statement for each Messaging schema
   object in place of `REASSIGN OWNED BY`, which also moves the role's objects

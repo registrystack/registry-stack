@@ -1,0 +1,91 @@
+{
+  "$defs": {
+    "CheckAcceptance": {
+      "additionalProperties": false,
+      "description": "One warning accepted for one exact scope, with the project's explanation.",
+      "properties": {
+        "code": {
+          "pattern": "^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*)+$",
+          "type": "string"
+        },
+        "reason": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/DisplayText"
+            },
+            {
+              "pattern": "\\S",
+              "type": "string"
+            }
+          ]
+        },
+        "scope": {
+          "$ref": "#/$defs/CheckScope"
+        }
+      },
+      "required": [
+        "code",
+        "scope",
+        "reason"
+      ],
+      "type": "object"
+    },
+    "CheckScope": {
+      "additionalProperties": false,
+      "description": "A source file relative to the project and the resource path a check reports.",
+      "properties": {
+        "file": {
+          "minLength": 1,
+          "not": {
+            "pattern": "(^|/)\\.{1,2}(/|$)"
+          },
+          "pattern": "^[^/\\\\:\\x00-\\x1f\\x7f-\\x9f]+(/[^/\\\\:\\x00-\\x1f\\x7f-\\x9f]+)*$",
+          "type": "string"
+        },
+        "path": {
+          "pattern": "^(?:/(?:[^~\\x00-\\x1f\\x7f-\\x9f]|~[01])*)?$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "file",
+        "path"
+      ],
+      "type": "object"
+    },
+    "DisplayText": {
+      "description": "Human-readable display text. Bidirectional embedding, override, and isolate controls, byte-order marks, line and paragraph separators, and Unicode noncharacters are refused; multilingual joiners and direction marks remain valid.",
+      "not": {
+        "pattern": "[  ‪-‮⁦-⁩﻿﷐-﷯￾￿]|🿾|🿿|𯿾|𯿿|𿿾|𿿿|񏿾|񏿿|񟿾|񟿿|񯿾|񯿿|񿿾|񿿿|򏿾|򏿿|򟿾|򟿿|򯿾|򯿿|򿿾|򿿿|󏿾|󏿿|󟿾|󟿿|󯿾|󯿿|󿿾|󿿿|􏿾|􏿿"
+      },
+      "type": "string"
+    }
+  },
+  "$id": "https://id.registrystack.org/schemas/platform/check-acceptances/check-acceptances.v1alpha1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "The optional project file shared by Registry Stack checking commands.",
+  "properties": {
+    "acceptances": {
+      "items": {
+        "$ref": "#/$defs/CheckAcceptance"
+      },
+      "type": "array"
+    },
+    "apiVersion": {
+      "const": "id.registrystack.org/formats/platform/check-acceptances/v1alpha1",
+      "type": "string"
+    },
+    "kind": {
+      "const": "PlatformCheckAcceptances",
+      "type": "string"
+    }
+  },
+  "required": [
+    "apiVersion",
+    "kind",
+    "acceptances"
+  ],
+  "title": "CheckAcceptances",
+  "type": "object"
+}

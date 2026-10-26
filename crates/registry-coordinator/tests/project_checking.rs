@@ -109,6 +109,55 @@ fn project_check_reports_duplicate_display_text_and_deny_warnings_refuses_it() {
         denied["diagnostics"][0]["code"],
         "coordinator.project.duplicate-step-title"
     );
+
+    let scope = warning["scope"]
+        .as_object()
+        .expect("a stable warning scope");
+    fs::write(
+        root.join("check-acceptances.yaml"),
+        format!(
+            "apiVersion: id.registrystack.org/formats/platform/check-acceptances/v1alpha1\nkind: PlatformCheckAcceptances\nacceptances:\n  - code: coordinator.project.duplicate-step-title\n    scope:\n      file: {}\n      path: {}\n    reason: Operators distinguish these pilot steps by their surrounding stage.\n",
+            scope["file"].as_str().unwrap(),
+            scope["path"].as_str().unwrap(),
+        ),
+    )
+    .unwrap();
+    let (exit, accepted) = check(&root, &["--deny-warnings"]);
+    assert_eq!(exit, 0, "{accepted}");
+    let warning = accepted["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["code"] == "coordinator.project.duplicate-step-title")
+        .unwrap();
+    assert_eq!(
+        warning["acceptedReason"],
+        "Operators distinguish these pilot steps by their surrounding stage."
+    );
+}
+
+#[test]
+fn project_check_never_accepts_an_error() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path().canonicalize().unwrap();
+    project(&root);
+    let path = root.join("workflow.yaml");
+    fs::write(
+        &path,
+        format!(
+            "unknownMember: true\n{}",
+            fs::read_to_string(&path).unwrap()
+        ),
+    )
+    .unwrap();
+    fs::write(
+        root.join("check-acceptances.yaml"),
+        "apiVersion: id.registrystack.org/formats/platform/check-acceptances/v1alpha1\nkind: PlatformCheckAcceptances\nacceptances:\n  - code: config.unknown-key\n    scope:\n      file: workflow.yaml\n      path: /unknownMember\n    reason: Errors remain active even when an entry attempts to accept them.\n",
+    )
+    .unwrap();
+    let (exit, still_refused) = check(&root, &[]);
+    assert_eq!(exit, 1, "{still_refused}");
+    assert!(still_refused["diagnostics"][0]["acceptedReason"].is_null());
 }
 
 #[test]

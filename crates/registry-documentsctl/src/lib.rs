@@ -709,6 +709,9 @@ fn check(args: &CheckArgs) -> Outcome {
         combined.extend(runtime.report);
         report["runtimeConfig"] = json!(path);
     }
+    if let Some(root) = &args.project {
+        registry_platform_config::apply_check_acceptances(root, &mut combined);
+    }
     report["filesChecked"] = json!(combined.files_checked().unwrap_or(0));
     report["diagnostics"] = combined.to_json_value();
     let exit = check_exit(&combined, args.deny_warnings, unavailable);
@@ -1239,6 +1242,35 @@ mod tests {
         ]);
         assert_eq!(code, ExitCode::SUCCESS, "{report:#}");
         assert_eq!(report["diagnostics"], json!([]));
+    }
+
+    #[test]
+    fn malformed_project_acceptances_refuse_an_otherwise_clean_check() {
+        let directory = scratch();
+        let project = directory.path().join("project");
+        let project_text = project.to_str().unwrap();
+        assert_eq!(json_report(&["init", project_text]).0, ExitCode::SUCCESS);
+        std::fs::write(
+            project.join("check-acceptances.yaml"),
+            "apiVersion: wrong\nkind: PlatformCheckAcceptances\nacceptances: []\n",
+        )
+        .unwrap();
+
+        let (code, report) = json_report(&["check", "--project", project_text]);
+        assert_eq!(code, ExitCode::from(DOMAIN_REFUSAL_EXIT), "{report:#}");
+        assert_eq!(
+            report["filesChecked"], 2,
+            "documents.yaml and the malformed acceptance file are each counted once"
+        );
+        assert!(report["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| {
+                item["source"]["file"]
+                    .as_str()
+                    .is_some_and(|file| file.ends_with("check-acceptances.yaml"))
+            }));
     }
 
     #[test]

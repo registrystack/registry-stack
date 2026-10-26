@@ -146,6 +146,53 @@ fn validate_reports_duplicate_display_text_and_deny_warnings_refuses_it() {
 }
 
 #[test]
+fn project_check_acceptance_keeps_the_warning_and_allows_the_warning_gate() {
+    let root = temp_dir("check-acceptance");
+    let manifest = root.join("metadata.yaml");
+    write_minimal_manifest(&manifest, "authorities:\n  - id: registry-office\n    name: Registry Office\n  - id: registry-copy\n    name: registry office\n");
+    let check = || {
+        Command::new(bin())
+            .arg("validate")
+            .arg(&manifest)
+            .args(["--format", "json", "--deny-warnings"])
+            .output()
+            .unwrap()
+    };
+    let before = check();
+    assert_eq!(before.status.code(), Some(1));
+    let before: serde_json::Value = serde_json::from_slice(&before.stdout).unwrap();
+    let files_before_acceptance = before["filesChecked"].as_u64().unwrap();
+    let warning = &before["diagnostics"][0];
+    let acceptance = serde_json::json!({
+        "apiVersion": registry_platform_yaml::CHECK_ACCEPTANCES_API_VERSION,
+        "kind": registry_platform_yaml::CHECK_ACCEPTANCES_KIND,
+        "acceptances": [{"code":warning["code"], "scope":warning["scope"], "reason":"These two authorities intentionally use the same display name."}]
+    });
+    fs::write(
+        root.join("check-acceptances.yaml"),
+        serde_json::to_vec(&acceptance).unwrap(),
+    )
+    .unwrap();
+    let after = check();
+    assert!(
+        after.status.success(),
+        "{}",
+        String::from_utf8_lossy(&after.stdout)
+    );
+    let after: serde_json::Value = serde_json::from_slice(&after.stdout).unwrap();
+    assert_eq!(
+        after["filesChecked"],
+        serde_json::json!(files_before_acceptance + 1)
+    );
+    assert_eq!(after["warnings"], 0);
+    assert_eq!(after["diagnostics"][0]["severity"], "warning");
+    assert_eq!(
+        after["diagnostics"][0]["acceptedReason"],
+        "These two authorities intentionally use the same display name."
+    );
+}
+
+#[test]
 fn version_reports_the_shared_build_identity() {
     let output = Command::new(bin())
         .arg("--version")
@@ -2559,4 +2606,39 @@ fn validate_profiles_warns_on_an_unlisted_file_and_deny_warnings_refuses_it() {
     assert_eq!(report["ok"], false);
     assert_eq!(report["warnings"], 1);
     assert_eq!(report["profiles"], 1);
+    let files_before_acceptance = report["filesChecked"].as_u64().unwrap();
+
+    let warning = &report["diagnostics"][0];
+    let acceptance = serde_json::json!({
+        "apiVersion": registry_platform_yaml::CHECK_ACCEPTANCES_API_VERSION,
+        "kind": registry_platform_yaml::CHECK_ACCEPTANCES_KIND,
+        "acceptances": [{"code":warning["code"], "scope":warning["scope"], "reason":"This fixture is intentionally retained beside the reviewed profile."}]
+    });
+    fs::write(
+        root.join("check-acceptances.yaml"),
+        serde_json::to_vec(&acceptance).unwrap(),
+    )
+    .unwrap();
+    let accepted = Command::new(bin())
+        .args(["validate-profiles", "--deny-warnings", "--format", "json"])
+        .arg(&root)
+        .output()
+        .expect("run cli with a reasoned acceptance");
+    assert!(
+        accepted.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&accepted.stdout),
+        String::from_utf8_lossy(&accepted.stderr)
+    );
+    let report = json_report(&accepted);
+    assert_eq!(
+        report["filesChecked"],
+        serde_json::json!(files_before_acceptance + 1)
+    );
+    assert_eq!(report["warnings"], 0);
+    assert_eq!(report["diagnostics"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        report["diagnostics"][0]["acceptedReason"],
+        "This fixture is intentionally retained beside the reviewed profile."
+    );
 }

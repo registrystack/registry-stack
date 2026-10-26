@@ -101,6 +101,33 @@ fn every_registered_example_passes_in_json_output() {
 }
 
 #[test]
+fn check_acceptance_reason_refuses_an_authored_expression() {
+    let directory = tempfile::tempdir().expect("directory");
+    let file = directory.path().join("check-acceptances.yaml");
+    fs::write(
+        &file,
+        r#"apiVersion: id.registrystack.org/formats/platform/check-acceptances/v1alpha1
+kind: PlatformCheckAcceptances
+acceptances:
+  - code: evidence.project.duplicate-source-label
+    scope: {file: evidence.yaml, path: /sources/person-record/label}
+    reason: ${CHECK_ACCEPTANCE_REASON_CANARY}
+"#,
+    )
+    .unwrap();
+
+    let output = check_file(&file, &["--format", "json"]);
+    assert_eq!(output.status.code(), Some(1));
+    let report = json_report(&output);
+    assert_eq!(
+        report["diagnostics"][0]["code"],
+        "config.substitution-not-allowed"
+    );
+    assert_eq!(report["diagnostics"][0]["path"], "/acceptances/0/reason");
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("CHECK_ACCEPTANCE_REASON_CANARY"));
+}
+
+#[test]
 fn a_file_with_a_member_its_format_does_not_define_is_refused() {
     let directory = tempfile::tempdir().expect("directory");
     for (format, relative) in EXAMPLES {

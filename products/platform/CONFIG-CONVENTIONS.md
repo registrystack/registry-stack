@@ -720,6 +720,16 @@ each entry with `file`, `line`, `column`, `path`, and `message`. The type
 lives in `registry-platform-yaml` and the ctl report envelope (`ok`,
 `command`, `status`, ..., `diagnostics`) carries it unchanged.
 
+For a project warning, optional `scope` contains a project-relative `file`
+and the resource `path` used for exact acceptance matching. List positions
+use an existing unique `id`, `action`, or `recordType` where available,
+written as `@id=value`, `@action=value`, or `@recordType=value`; other
+positions stay numeric. The diagnostic's original `path` and source position
+are unchanged. An accepted warning also carries `acceptedReason`, the
+project's deliberately authored explanation. These fields identify and
+explain the project decision; diagnostic messages and refusal remedies still
+follow the value-free rule in CFG-SEC-3.
+
 **CFG-DIAG-2 (MUST). Human output puts the position first:**
 
 ```text
@@ -744,7 +754,9 @@ key, and type problems. A code is never reused for a different condition.
 **CFG-DIAG-4 (MUST). Exit codes:** 0 when no error was reported (warnings
 allowed), 1 when the input was refused, 2 for a usage error, 3 when something
 the command depends on was unavailable. Every checking command takes
-`--deny-warnings`, which makes a reported warning exit 1.
+`--deny-warnings`, which makes an unaccepted warning exit 1. An accepted
+warning retains `severity: warning` and its `acceptedReason`, and does not
+contribute to the active warning count. Errors always refuse the input.
 
 **CFG-DIAG-5 (MUST). A check reports every problem it can find in one run.**
 Structural problems are those the reader finds before decoding: every `yaml.`
@@ -778,6 +790,18 @@ variant, or invalid value holds a `#` with no space before it, YAML reads the
 `#` and what follows as part of the value, and the fix adds: "A `#` starts a
 comment only after a space: put a space before the `#` that starts the
 comment." The sentence names no part of the value (CFG-SEC-3).
+
+**CFG-DIAG-7 (MUST). Project warning acceptances use one shared file.**
+`check-acceptances.yaml` is optional and uses the `PlatformCheckAcceptances`
+format. Each entry has `code`, `scope` (`file` and `path`), and a nonblank
+`reason`. Matching is exact; no wildcard, fingerprint, expiry, or inferred
+approval is involved. Only warning diagnostics can be accepted. The decision
+remains until an author edits or removes it, and unused entries are harmless.
+Malformed or unreadable acceptance files refuse the project check. The file
+is a regular file in the project, not a symbolic link. A check retains accepted
+warnings in JSON and groups them with their reasons in human output, including
+when another diagnostic refuses the project. The shared parser and matcher
+tests, consuming check tests, and generated schema enforce this rule.
 
 ## 11. Schemas, editors, and the registry
 
@@ -983,6 +1007,7 @@ Each MUST rule appears once; SHOULD rules are in the last row.
 |---|---|
 | CFG-ENV-1, 4; CFG-YAML-2 to 8; CFG-VAL-1 to 3; CFG-EMPTY-1; CFG-SEC-2, 3; CFG-DIAG-1, 2, 5; CFG-CHANGE-2 | reader unit tests named with the rule ID; the conformance corpus; for CFG-ENV-1 also the convention lint (`const` envelope) |
 | CFG-VAL-11 | shared reader and comparison-helper unit tests; generated product schemas; product check tests for structured warnings and `--deny-warnings` |
+| CFG-DIAG-7 | shared acceptance parser, matcher, schema drift, and file-boundary tests; consuming product check tests for exact matching, refusal preservation, and `--deny-warnings` |
 | CFG-YAML-1 | `disallowed-methods` in every `clippy.toml` in the repository, with `check-yaml-reader-boundary.sh`; the conformance corpus |
 | CFG-ENV-2, 3, 6; CFG-NAME-1 to 5; CFG-ID-1, 6, 7; CFG-QTY-1 to 4; CFG-VAL-6, 7; CFG-EMPTY-2, 4; CFG-SEC-1; CFG-EMBED-2; CFG-SCHEMA-1, 3 to 6 | `check-config-conventions.py` over the registry and every schema, with the exceptions register as ratchet; for CFG-EMPTY-2 the lint checks the sentinel shape and review classifies each member as granting or restricting; for CFG-SEC-1 also the `SecretReference` parser tests; for CFG-ID-6 also the source lint (set types) and the corpus's duplicated set item; for CFG-QTY-4 also the corpus boundary sweep over the bounds each format's registered schema states |
 | CFG-SCHEMA-8; CFG-CHANGE-1 | source lint over the reader-type closure (`flatten`, `untagged`, `tag`, `alias`, set types); the corpus unknown-key sweep |
