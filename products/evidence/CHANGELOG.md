@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- A normalized target document accepts an optional
+  `signing.maximumAssertionValiditySeconds` (1 to 31,536,000, default 300) so a
+  definition with a longer `validitySeconds`, such as a seven-day holder-bound
+  credential, can be checked and built. Targets that omit it compile exactly as
+  before.
 - `evidencectl check` reads an optional `check-acceptances.yaml`. An exact,
   reasoned acceptance keeps its advisory warning visible while allowing
   `--deny-warnings` to pass; errors remain refusals.
