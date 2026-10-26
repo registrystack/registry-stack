@@ -1,15 +1,18 @@
 name: Rehearse RegistryStack Release
-run-name: Rehearse ${{ inputs.unit }} ${{ inputs.release_id }} v${{ inputs.version }} (${{ inputs.request_id }})
+run-name: >-
+  ${{ inputs.advisory_evidence &&
+      format('Collect advisory evidence v{0} ({1})', inputs.version, inputs.request_id) ||
+      format('Rehearse {0} {1} v{2} ({3})', inputs.unit, inputs.release_id, inputs.version, inputs.request_id) }}
 
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: Prepared canonical semantic version without the v prefix
+        description: Canonical semantic version without the v prefix
         required: true
         type: string
       unit:
-        description: Release unit to rehearse
+        description: Release unit to rehearse or collect evidence for
         required: true
         default: stack
         type: choice
@@ -17,8 +20,9 @@ on:
           - stack
           - discovery
       release_id:
-        description: Prepared release train identity
-        required: true
+        description: Prepared release train identity for an ordinary rehearsal; omit for advisory evidence
+        required: false
+        default: ""
         type: string
       request_id:
         description: Unique operator-generated identity used to correlate this rehearsal
@@ -41,29 +45,44 @@ jobs:
     permissions:
       contents: read
     steps:
-      - name: Require a branch rehearsal
+      - name: Validate rehearsal mode and branch
         env:
           REHEARSAL_ADVISORY_EVIDENCE: ${{ inputs.advisory_evidence }}
+          REHEARSAL_RELEASE_ID: ${{ inputs.release_id }}
           REHEARSAL_UNIT: ${{ inputs.unit }}
         shell: bash
         run: |
           set -euo pipefail
           if [[ "${GITHUB_REF}" != refs/heads/* ]]; then
-            echo "release rehearsal must run from a prepared branch" >&2
+            echo "release rehearsal and advisory evidence collection require a branch ref" >&2
             exit 1
           fi
           case "${REHEARSAL_UNIT}" in
             stack) ;;
-            discovery)
-              if [[ "${REHEARSAL_ADVISORY_EVIDENCE}" == true ]]; then
+            discovery) ;;
+            *) echo "unit must be stack or discovery" >&2; exit 2 ;;
+          esac
+          case "${REHEARSAL_ADVISORY_EVIDENCE}" in
+            true)
+              if [[ "${REHEARSAL_UNIT}" != stack ]]; then
                 echo "Discovery rehearsal does not collect the Stack advisory evidence set" >&2
                 exit 2
               fi
+              if [[ -n "${REHEARSAL_RELEASE_ID}" ]]; then
+                echo "advisory evidence collection does not accept release_id" >&2
+                exit 2
+              fi
               ;;
-            *) echo "unit must be stack or discovery" >&2; exit 2 ;;
+            false)
+              if [[ -z "${REHEARSAL_RELEASE_ID}" ]]; then
+                echo "ordinary release rehearsal requires release_id" >&2
+                exit 2
+              fi
+              ;;
+            *) echo "advisory_evidence must be a typed boolean" >&2; exit 2 ;;
           esac
 
-      - name: Checkout prepared branch
+      - name: Checkout dispatched branch
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 1
@@ -93,6 +112,7 @@ jobs:
 
   rehearse:
     name: Exercise future-tag release paths on Ubuntu
+    if: ${{ !inputs.advisory_evidence }}
     needs: validate
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -168,7 +188,7 @@ jobs:
       matrix:
         group: ${{ inputs.unit == 'discovery' && fromJSON('["discovery"]') || fromJSON('["core","breg","casework","scheduling","messaging"]') }}
     steps:
-      - name: Checkout exact prepared source
+      - name: Checkout exact dispatched source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
@@ -237,7 +257,7 @@ jobs:
       ORAS_VERSION: v1.3.2
       ORAS_LINUX_AMD64_SHA256: 9229ccc6d17bb282039ad4a69abb16dcb887a5bce567c075d731d9b3c7ad8eaf
     steps:
-      - name: Checkout exact prepared source
+      - name: Checkout exact dispatched source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
@@ -542,7 +562,7 @@ jobs:
 
   node-clients:
     name: Prove Linux Node clients for ${{ matrix.asset }}
-    if: ${{ inputs.unit == 'stack' }}
+    if: ${{ inputs.unit == 'stack' && !inputs.advisory_evidence }}
     needs: validate
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 40

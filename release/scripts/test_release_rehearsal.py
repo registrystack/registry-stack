@@ -27,7 +27,7 @@ class ReleaseRehearsalTest(unittest.TestCase):
         unit_input = triggers["workflow_dispatch"]["inputs"]["unit"]
         self.assertEqual(
             {
-                "description": "Release unit to rehearse",
+                "description": "Release unit to rehearse or collect evidence for",
                 "required": True,
                 "default": "stack",
                 "type": "choice",
@@ -96,7 +96,7 @@ class ReleaseRehearsalTest(unittest.TestCase):
         self.assertIn("unit_release_pipeline.py stage-payload", discovery_stage["run"])
         self.assertIn("--binaries dist/bin", discovery_stage["run"])
         self.assertEqual(
-            "${{ inputs.unit == 'stack' }}",
+            "${{ inputs.unit == 'stack' && !inputs.advisory_evidence }}",
             document["jobs"]["node-clients"]["if"],
         )
 
@@ -182,7 +182,7 @@ class ReleaseRehearsalTest(unittest.TestCase):
         self.assertNotIn("push:", trigger)
         self.assertNotIn("pull_request:", trigger)
         self.assertNotIn("schedule:", trigger)
-        self.assertIn("${{ inputs.request_id }}", document["run-name"])
+        self.assertIn("inputs.request_id", document["run-name"])
         self.assertIn("request_id:", trigger)
         self.assertIn("required: true", trigger)
         triggers = document.get("on", document.get(True))
@@ -196,6 +196,21 @@ class ReleaseRehearsalTest(unittest.TestCase):
             },
             advisory_input,
         )
+        release_id_input = triggers["workflow_dispatch"]["inputs"]["release_id"]
+        self.assertEqual(
+            {
+                "description": (
+                    "Prepared release train identity for an ordinary rehearsal; "
+                    "omit for advisory evidence"
+                ),
+                "required": False,
+                "default": "",
+                "type": "string",
+            },
+            release_id_input,
+        )
+        self.assertIn("Collect advisory evidence", document["run-name"])
+        self.assertIn("Rehearse", document["run-name"])
         self.assertEqual({"contents": "read"}, document["permissions"])
         self.assertEqual(
             [
@@ -211,7 +226,18 @@ class ReleaseRehearsalTest(unittest.TestCase):
         self.assertEqual("ubuntu-24.04", validate["runs-on"])
         self.assertLessEqual(validate["timeout-minutes"], 5)
         self.assertEqual({"contents": "read"}, validate["permissions"])
-        self.assertEqual("Require a branch rehearsal", validate["steps"][0]["name"])
+        mode = validate["steps"][0]
+        self.assertEqual("Validate rehearsal mode and branch", mode["name"])
+        self.assertEqual(
+            "${{ inputs.release_id }}", mode["env"]["REHEARSAL_RELEASE_ID"]
+        )
+        self.assertIn(
+            "ordinary release rehearsal requires release_id", mode["run"]
+        )
+        self.assertIn(
+            "advisory evidence collection does not accept release_id", mode["run"]
+        )
+        self.assertNotIn("${{ inputs.", mode["run"])
         onboarding = next(
             step
             for step in validate["steps"]
@@ -234,7 +260,7 @@ class ReleaseRehearsalTest(unittest.TestCase):
         self.assertIn("false) ;;", onboarding["run"])
         self.assertIn("advisory_evidence must be a typed boolean", onboarding["run"])
         self.assertNotIn("${{ inputs.", onboarding["run"])
-        self.assertEqual(text.count("Require a branch rehearsal"), 1)
+        self.assertEqual(text.count("Validate rehearsal mode and branch"), 1)
         for job_name in ("rehearse", "canonical-linux-binaries", "node-clients"):
             self.assertEqual("validate", document["jobs"][job_name]["needs"])
         self.assertEqual(
@@ -242,6 +268,7 @@ class ReleaseRehearsalTest(unittest.TestCase):
             document["jobs"]["canonical-linux"]["needs"],
         )
         job = document["jobs"]["rehearse"]
+        self.assertEqual("${{ !inputs.advisory_evidence }}", job["if"])
         self.assertEqual("ubuntu-24.04", job["runs-on"])
         self.assertLessEqual(job["timeout-minutes"], 15)
         self.assertFalse(any("upload-artifact@" in str(step) for step in job["steps"]))
@@ -252,8 +279,13 @@ class ReleaseRehearsalTest(unittest.TestCase):
             rehearsal["env"]["REHEARSAL_RELEASE_ID"],
         )
         self.assertNotIn("${{ inputs.", rehearsal["run"])
+        self.assertEqual(
+            "${{ inputs.unit == 'stack' && !inputs.advisory_evidence }}",
+            document["jobs"]["node-clients"]["if"],
+        )
 
         canonical = document["jobs"]["canonical-linux"]
+        self.assertNotIn("if", canonical)
         self.assertEqual("ubuntu-24.04", canonical["runs-on"])
         self.assertLessEqual(canonical["timeout-minutes"], 90)
         self.assertEqual(
@@ -323,6 +355,7 @@ class ReleaseRehearsalTest(unittest.TestCase):
         )
         self.assertNotIn("ghcr.io", canonical_without_mirror)
         binary_job = document["jobs"]["canonical-linux-binaries"]
+        self.assertNotIn("if", binary_job)
         self.assertFalse(binary_job["strategy"]["fail-fast"])
         self.assertIn(
             'fromJSON(\'["core","breg","casework","scheduling","messaging"]\')',
@@ -583,6 +616,37 @@ class ReleaseRehearsalTest(unittest.TestCase):
         ):
             self.assertNotIn(forbidden, str(clients))
 
+    def test_rehearsal_modes_require_exactly_one_identity_shape(self) -> None:
+        document = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+        step = document["jobs"]["validate"]["steps"][0]
+        common = {
+            **os.environ,
+            "GITHUB_REF": "refs/heads/review/advisory-evidence",
+            "REHEARSAL_UNIT": "stack",
+        }
+        cases = (
+            ("false", "beta-55", "stack", 0),
+            ("false", "", "stack", 2),
+            ("true", "", "stack", 0),
+            ("true", "beta-55", "stack", 2),
+            ("true", "", "discovery", 2),
+            ("invalid", "", "stack", 2),
+        )
+        for advisory, release_id, unit, expected in cases:
+            with self.subTest(advisory=advisory, release_id=release_id, unit=unit):
+                result = subprocess.run(
+                    ["bash", "-c", step["run"]],
+                    env={
+                        **common,
+                        "REHEARSAL_ADVISORY_EVIDENCE": advisory,
+                        "REHEARSAL_RELEASE_ID": release_id,
+                        "REHEARSAL_UNIT": unit,
+                    },
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertEqual(expected, result.returncode, result.stderr)
+
     def test_script_exercises_future_tag_source_archive_and_dev_base_in_order(
         self,
     ) -> None:
@@ -615,6 +679,9 @@ class ReleaseRehearsalTest(unittest.TestCase):
     def test_advisory_artifact_docs_renew_from_an_independent_revision(self) -> None:
         operations = (ROOT / "release/OPERATIONS.md").read_text(encoding="utf-8")
         blocks = operations.split("```")
+        dispatch = next(
+            block for block in blocks if "-f advisory_evidence=true" in block
+        )
         preparation = next(
             block for block in blocks if 'gh run download "${rehearsal_run}"' in block
         )
@@ -630,6 +697,11 @@ class ReleaseRehearsalTest(unittest.TestCase):
             '--source-revision "${source_revision}"',
             '--reviewed-at "${reviewed_at}"',
         )
+        self.assertIn('gh workflow run release-rehearsal.yml', dispatch)
+        self.assertIn('--ref "${evidence_branch}"', dispatch)
+        self.assertIn('-f version="${version}"', dispatch)
+        self.assertIn('-f request_id="${evidence_request_id}"', dispatch)
+        self.assertNotIn("release_id", dispatch)
         self.assertIn('gh run view "${rehearsal_run}"', preparation)
         self.assertIn("--json headSha", preparation)
         self.assertNotIn("collection.json", preparation)
