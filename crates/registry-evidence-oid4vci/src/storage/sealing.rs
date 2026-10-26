@@ -194,6 +194,12 @@ mod tests {
         PreparedRequest::new("exchange-1", "urn:example:kind", BODY, 4)
     }
 
+    #[test]
+    fn the_cipher_wipes_its_copy_of_the_sealing_key_when_it_drops() {
+        fn wiped_on_drop<T: zeroize::ZeroizeOnDrop>() {}
+        wiped_on_drop::<XChaCha20Poly1305>();
+    }
+
     fn binding<'a>(tag: &'a str, generation: &'a CatalogGeneration) -> Binding<'a> {
         Binding {
             purpose: Purpose::Offer,
