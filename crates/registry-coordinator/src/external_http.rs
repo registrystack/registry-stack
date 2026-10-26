@@ -330,28 +330,28 @@ impl ExternalHttpConnection {
             Err(_) => return uncertain("transport-uncertain"),
         };
         let status = response.status();
-        // A redirect is never followed. It may answer an accepted command.
-        if status.is_redirection() {
-            return uncertain("external-redirect");
-        }
-        // Only an explicit busy answer is retried; any other server failure
-        // may follow an effect, so the run holds for same-command recovery.
-        // A 503 may follow an effect too, so its retry keeps it unknown.
-        match status.as_u16() {
-            429 => {
+        match command_status(status) {
+            CommandStatus::Interpreted => {}
+            // A redirect is never followed. It may answer an accepted command.
+            CommandStatus::Redirect => return uncertain("external-redirect"),
+            // Only an explicit busy answer is retried; any other server failure
+            // may follow an effect, so the run holds for same-command recovery.
+            // A 503 may follow an effect too, so its retry keeps it unknown.
+            CommandStatus::RateLimited => {
                 return CallOutcome::Retryable {
                     code: "external-rate-limited".into(),
                     retry_after: command_retry_after(response.headers()),
                 }
             }
-            503 if !final_attempt => {
+            CommandStatus::Unavailable if !final_attempt => {
                 return CallOutcome::UncertainRetryable {
                     code: "external-unavailable".into(),
                     retry_after: command_retry_after(response.headers()),
                 }
             }
-            500..=599 => return uncertain("external-uncertain"),
-            _ => {}
+            CommandStatus::Unavailable | CommandStatus::ServerFailure => {
+                return uncertain("external-uncertain")
+            }
         }
         let bytes = match read_bounded(response, self.config.maximum_response_bytes.get()).await {
             Ok(bytes) => bytes,
@@ -466,6 +466,41 @@ impl ExternalHttpConnection {
         })
         .ok()?;
         self.response_schema.is_valid(&reply).then_some(reply)
+    }
+}
+
+/// What an `external.command/v1` attempt does with the provider's HTTP status
+/// before any body is read. Only [`CommandStatus::Interpreted`] reaches the
+/// operation's interpretation Function; scenario checks use the same
+/// classification, so a synthetic response reply cannot show the Function
+/// reading a status the worker never hands it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CommandStatus {
+    /// The bounded response goes to the interpretation Function.
+    Interpreted,
+    /// A redirect is never followed. It may answer an accepted command, so
+    /// the command is uncertain.
+    Redirect,
+    /// A 429 is trusted to mean the command was not processed, so it is
+    /// retried.
+    RateLimited,
+    /// A 503 may follow an effect. It is retried before the final attempt but
+    /// stays uncertain until a later attempt settles it.
+    Unavailable,
+    /// Any other server failure may follow an effect, so the command is
+    /// uncertain and the run holds for same-command recovery.
+    ServerFailure,
+}
+
+pub(crate) fn command_status(status: reqwest::StatusCode) -> CommandStatus {
+    if status.is_redirection() {
+        return CommandStatus::Redirect;
+    }
+    match status.as_u16() {
+        429 => CommandStatus::RateLimited,
+        503 => CommandStatus::Unavailable,
+        500..=599 => CommandStatus::ServerFailure,
+        _ => CommandStatus::Interpreted,
     }
 }
 

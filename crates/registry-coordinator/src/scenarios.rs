@@ -138,7 +138,9 @@ enum AuthoredReply {
     /// The provider answered an `external.command/v1` call with `value`. The
     /// operation's pinned interpretation Function turns it into an accepted
     /// result, a declared refusal or an uncertain outcome, as it would at run
-    /// time.
+    /// time. The status must be one the worker hands to that Function: a
+    /// redirect, a 429 or a 5xx never reaches it, so a scenario models those
+    /// with an `uncertain` or `retryable` reply.
     Response {
         /// The complete `{status, body}` response, which must satisfy the
         /// operation's declared response schema.
@@ -798,6 +800,14 @@ fn execute(definition: &Definition, scenario: &Scenario) -> Result<ScenarioRepor
                                 "Correct the synthetic response so it satisfies the operation's responseSchema.",
                             )
                         })?;
+                    if let Some((status, action)) = uninterpreted_status(response) {
+                        return Err(error(
+                            "scenario.reply",
+                            format!("/replies/{step}/{index}/value/status"),
+                            format!("the response reply to step {step} has status {status}, which {operation} never hands to its interpret Function"),
+                            action,
+                        ));
+                    }
                 }
                 _ => {}
             }
@@ -1814,6 +1824,41 @@ pub(crate) fn case_pointer(error: &CoordinatorError, index: usize) -> String {
         })
         .unwrap_or_default();
     format!("/cases/{index}{within}")
+}
+
+/// The status of a synthetic command response the worker would never hand to
+/// the interpretation Function, with the reply that models what the worker
+/// does instead. The worker reads the status before any body, so a scenario
+/// cannot show the Function reading a redirect, a 429 or a server failure.
+fn uninterpreted_status(response: &Value) -> Option<(String, &'static str)> {
+    use crate::external_http::{command_status, CommandStatus};
+    let Some(status) = response
+        .get("status")
+        .and_then(Value::as_u64)
+        .and_then(|status| u16::try_from(status).ok())
+        .and_then(|status| reqwest::StatusCode::from_u16(status).ok())
+    else {
+        return Some((
+            "outside 100 to 999".into(),
+            "Give the response an HTTP status from 100 to 999, as a provider answer carries.",
+        ));
+    };
+    let action = match command_status(status) {
+        CommandStatus::Interpreted => return None,
+        CommandStatus::Redirect => {
+            "Reply with type: uncertain and code: external-redirect; the worker never follows a redirect and holds the command as uncertain."
+        }
+        CommandStatus::RateLimited => {
+            "Reply with type: retryable and code: external-rate-limited; the worker retries a 429 as a command the provider did not process."
+        }
+        CommandStatus::Unavailable => {
+            "Reply with type: uncertain and code: external-unavailable; the worker retries a 503 under the same command and holds it as uncertain until a later answer settles it."
+        }
+        CommandStatus::ServerFailure => {
+            "Reply with type: uncertain and code: external-uncertain; the worker holds a server failure as uncertain for same-command recovery."
+        }
+    };
+    Some((status.as_u16().to_string(), action))
 }
 
 /// A value outside an operation contract. The message names where the value
