@@ -7,7 +7,9 @@
 //! deadline: past it, or on any failure, the connection is closed rather than
 //! returned to the pool, and PostgreSQL rolls the transaction back. The server
 //! also ends a session idle in transaction for longer than the deadline plus
-//! five seconds, so a process stalled in its signer cannot hold entries.
+//! five seconds, so a process stalled in its signer cannot hold entries. A
+//! lock wait inside the transaction gives up when the deadline passes, so a
+//! discarded session does not go on waiting while it holds its entries.
 //!
 //! Entries are written VALID. Just before the commit, under the subject's
 //! pseudonym lock, the batch takes the status it inherits from the latest
@@ -20,6 +22,7 @@ use chrono::{DateTime, Utc};
 use deadpool_postgres::Object;
 use rand_core::{OsRng, RngCore};
 use tokio::time::{timeout_at, Instant};
+use tokio_postgres::error::SqlState;
 
 use super::apply::{entry_status_column, status_column};
 use super::error::StatusError;
@@ -186,7 +189,13 @@ impl IssuanceTransaction<'_> {
         } else {
             timeout_at(
                 self.deadline,
-                allocate_rows(self.ledger, client, &self.idle_timeout, &rows),
+                allocate_rows(
+                    self.ledger,
+                    client,
+                    self.deadline,
+                    &self.idle_timeout,
+                    &rows,
+                ),
             )
             .await
             .unwrap_or(Err(StatusError::DeadlineExceeded))
@@ -238,7 +247,7 @@ impl IssuanceTransaction<'_> {
         } else {
             timeout_at(
                 self.deadline,
-                inherit_and_commit(self.ledger, client, inheritance),
+                inherit_and_commit(self.ledger, client, self.deadline, inheritance),
             )
             .await
             .unwrap_or(Err(StatusError::DeadlineExceeded))
@@ -353,20 +362,43 @@ struct Allocated {
     references: Vec<StatusReference>,
 }
 
+/// The `lock_timeout` setting that ends a lock wait when the deadline
+/// passes: the remaining time in milliseconds, at least one, since zero
+/// would disable it.
+fn remaining_lock_timeout(deadline: Instant) -> String {
+    deadline
+        .saturating_duration_since(Instant::now())
+        .as_millis()
+        .max(1)
+        .to_string()
+}
+
+/// A lock wait ended by the transaction's lock timeout is the deadline
+/// passing; any other failure is the database's.
+fn issuance_failure(error: &tokio_postgres::Error) -> StatusError {
+    if error.code() == Some(&SqlState::LOCK_NOT_AVAILABLE) {
+        StatusError::DeadlineExceeded
+    } else {
+        StatusError::database(error)
+    }
+}
+
 async fn allocate_rows(
     ledger: &StatusLedger,
     client: &Object,
+    deadline: Instant,
     idle_timeout: &str,
     rows: &AllocationRows,
 ) -> Result<Allocated, StatusError> {
     let count = rows.holder_digests.len();
     let (list_id, entry_count) = reserve(ledger, client, count).await?;
-    let failed = |error: tokio_postgres::Error| StatusError::database(&error);
+    let failed = |error: tokio_postgres::Error| issuance_failure(&error);
     client.batch_execute("BEGIN").await.map_err(failed)?;
     client
         .execute(
-            "SELECT set_config('idle_in_transaction_session_timeout', $1, true)",
-            &[&idle_timeout],
+            "SELECT set_config('idle_in_transaction_session_timeout', $1, true), \
+             set_config('lock_timeout', $2, true)",
+            &[&idle_timeout, &remaining_lock_timeout(deadline)],
         )
         .await
         .map_err(failed)?;
@@ -431,9 +463,17 @@ async fn allocate_rows(
 async fn inherit_and_commit(
     ledger: &StatusLedger,
     client: &Object,
+    deadline: Instant,
     inheritance: &Inheritance,
 ) -> Result<(), StatusError> {
-    let failed = |error: tokio_postgres::Error| StatusError::database(&error);
+    let failed = |error: tokio_postgres::Error| issuance_failure(&error);
+    client
+        .execute(
+            "SELECT set_config('lock_timeout', $1, true)",
+            &[&remaining_lock_timeout(deadline)],
+        )
+        .await
+        .map_err(failed)?;
     client
         .execute(
             SHARE_PSEUDONYMS,

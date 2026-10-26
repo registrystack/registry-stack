@@ -15,8 +15,9 @@ use registry_evidence::status::{
 };
 use serde_json::Value;
 use status_support::{
-    days, holder_digest_keys, http_read, inspector, ledger, ledger_with, now, pseudonym_keys, rows,
-    small_list_ledger, subject, thumbprint, TestLedger, PUBLIC_ORIGIN, REQUIREMENT_ID,
+    days, holder_digest_keys, http_read, inspector, ledger, ledger_with, now, pseudonym_keys,
+    pseudonym_lock_key, rows, small_list_ledger, subject, thumbprint, TestLedger,
+    PSEUDONYM_LOCK_CLASS, PUBLIC_ORIGIN, REQUIREMENT_ID,
 };
 
 const DEADLINE: Duration = Duration::from_secs(20);
@@ -294,6 +295,72 @@ async fn the_server_ends_a_session_idle_in_transaction_past_deadline_plus_five_s
 
     let error = transaction.commit().await.unwrap_err();
     assert!(error.is_dependency());
+    assert!(allocation_rows(&ledger).await.is_empty());
+}
+
+#[tokio::test]
+async fn a_lock_wait_past_the_deadline_ends_with_the_deadline() {
+    let application_name = format!("status-lock-{}", uuid::Uuid::new_v4().simple());
+    let ledger = ledger_with(
+        registry_evidence::status::ListPolicy::new(LONG_AGE).unwrap(),
+        pseudonym_keys(),
+        holder_digest_keys(),
+        Some(&application_name),
+    )
+    .await;
+    let person = subject("person-0006");
+    let key = pseudonym_lock_key(&pseudonym_keys(), &person);
+    // An observation being recorded for the subject holds its lock.
+    let mut holder = inspector().await;
+    let held = holder.transaction().await.unwrap();
+    held.execute(
+        "SELECT pg_advisory_xact_lock($1, $2)",
+        &[&PSEUDONYM_LOCK_CLASS, &key],
+    )
+    .await
+    .unwrap();
+
+    let issued_at = now();
+    let fields = AllocationFields {
+        requirement_id: REQUIREMENT_ID,
+        subject: &person,
+        issued_at,
+        not_after: issued_at + days(30),
+        source_read: http_read(issued_at),
+    };
+    let mut transaction = ledger
+        .ledger
+        .begin(&ledger.issuance, Duration::from_millis(500))
+        .await
+        .unwrap();
+    transaction
+        .allocate(&fields, CredentialMembers::Unbound { count: 1 })
+        .await
+        .unwrap();
+    let error = transaction.commit().await.unwrap_err();
+    assert!(matches!(error, StatusError::DeadlineExceeded), "{error:?}");
+
+    // The discarded session stops waiting at the deadline instead of holding
+    // its uncommitted entries until the lock is released.
+    let observer = inspector().await;
+    let mut waiting = -1;
+    for _ in 0..30 {
+        waiting = observer
+            .query_one(
+                "SELECT count(*) FROM pg_stat_activity \
+                 WHERE application_name = $1 AND wait_event_type = 'Lock'",
+                &[&application_name],
+            )
+            .await
+            .unwrap()
+            .get::<_, i64>(0);
+        if waiting == 0 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert_eq!(waiting, 0, "a discarded session still waits on the lock");
+    held.rollback().await.unwrap();
     assert!(allocation_rows(&ledger).await.is_empty());
 }
 
