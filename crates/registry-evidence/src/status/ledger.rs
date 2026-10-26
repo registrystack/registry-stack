@@ -414,19 +414,20 @@ impl Statements {
             ),
             latest_observed_revision: format!(
                 "SELECT max(source_revision) FROM {s}.observations \
-                 WHERE selector_pseudonym = ANY($1::bytea[])"
+                 WHERE requirement_id = $1 AND selector_pseudonym = ANY($2::bytea[])"
             ),
             latest_observation: format!(
                 "SELECT status, source_revision, captured_at, mapping_version \
-                 FROM {s}.observations WHERE selector_pseudonym = ANY($1::bytea[]) \
+                 FROM {s}.observations \
+                 WHERE requirement_id = $1 AND selector_pseudonym = ANY($2::bytea[]) \
                  ORDER BY source_revision DESC, captured_at DESC LIMIT 1"
             ),
             upsert_observation: format!(
                 "INSERT INTO {s}.observations \
-                 (selector_pseudonym, pseudonym_key_version, status, source_revision, \
-                  captured_at, mapping_version) \
-                 VALUES ($1, $2, $3, $4, $5, $6) \
-                 ON CONFLICT (selector_pseudonym) DO UPDATE \
+                 (requirement_id, selector_pseudonym, pseudonym_key_version, status, \
+                  source_revision, captured_at, mapping_version) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7) \
+                 ON CONFLICT (requirement_id, selector_pseudonym) DO UPDATE \
                  SET pseudonym_key_version = EXCLUDED.pseudonym_key_version, \
                      status = EXCLUDED.status, \
                      source_revision = EXCLUDED.source_revision, \

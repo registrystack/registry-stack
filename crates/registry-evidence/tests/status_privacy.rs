@@ -152,6 +152,7 @@ async fn no_canary_reaches_any_ledger_table() {
             .ledger
             .record_observation(
                 &ledger.reserved,
+                REQUIREMENT_ID,
                 subject,
                 &Observation {
                     status: EntryStatus::Suspended,
@@ -368,6 +369,7 @@ async fn no_error_or_key_type_formats_a_canary_or_key_bytes() {
     let error = unmigrated
         .record_observation(
             &ledger.reserved,
+            REQUIREMENT_ID,
             &canary_subject(SELECTOR_CANARY),
             &Observation {
                 status: EntryStatus::Invalid,
@@ -384,6 +386,7 @@ async fn no_error_or_key_type_formats_a_canary_or_key_bytes() {
         .ledger
         .record_observation(
             &ledger.reserved,
+            REQUIREMENT_ID,
             &canary_subject(SELECTOR_CANARY),
             &Observation {
                 status: EntryStatus::Invalid,

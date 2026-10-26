@@ -30,6 +30,8 @@ pub const DATABASE_URL_VARIABLE: &str = "EVIDENCE_STATUS_TEST_DATABASE_URL";
 pub const PUBLIC_ORIGIN: &str = "https://status.example.test";
 pub const SELECTOR_PROFILE_ID: &str = "person-reference";
 pub const REQUIREMENT_ID: &str = "practice-permit";
+/// A second status-required requirement keyed by the same selector profile.
+pub const OTHER_REQUIREMENT_ID: &str = "disability-benefit";
 pub const PSEUDONYM_KEY_BYTE: u8 = 0x51;
 pub const HOLDER_DIGEST_KEY_BYTE: u8 = 0x52;
 
@@ -194,9 +196,21 @@ pub async fn allocate_for(
     source_read: SourceRead,
     members: CredentialMembers<'_>,
 ) -> Vec<StatusReference> {
+    allocate_under(ledger, REQUIREMENT_ID, subject, source_read, members).await
+}
+
+/// Allocate and commit `members` of a `requirement_id` credential for
+/// `subject` with the given source read.
+pub async fn allocate_under(
+    ledger: &TestLedger,
+    requirement_id: &str,
+    subject: &StatusSubject,
+    source_read: SourceRead,
+    members: CredentialMembers<'_>,
+) -> Vec<StatusReference> {
     let issued_at = now();
     let fields = AllocationFields {
-        requirement_id: REQUIREMENT_ID,
+        requirement_id,
         subject,
         issued_at,
         not_after: issued_at + days(30),

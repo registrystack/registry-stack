@@ -16,8 +16,8 @@ use registry_evidence::status::{
 };
 use serde_json::Value;
 use status_support::{
-    allocate_for, extract_read, http_read, inspector, ledger, mapping_version, now, reason,
-    revision, rows, subject, text, TestLedger,
+    allocate_for, allocate_under, extract_read, http_read, inspector, ledger, mapping_version, now,
+    reason, revision, rows, subject, text, TestLedger, OTHER_REQUIREMENT_ID, REQUIREMENT_ID,
 };
 use uuid::Uuid;
 
@@ -433,6 +433,7 @@ async fn a_process_on_a_lower_mapping_version_applies_nothing() {
         .ledger
         .record_observation(
             &ledger.reserved,
+            REQUIREMENT_ID,
             &subject("person-6003"),
             &Observation {
                 status: EntryStatus::Suspended,
@@ -557,15 +558,29 @@ async fn observe(
     person: &str,
     observation: &Observation,
 ) -> ObservationOutcome {
+    observe_under(ledger, REQUIREMENT_ID, person, observation).await
+}
+
+async fn observe_under(
+    ledger: &TestLedger,
+    requirement_id: &str,
+    person: &str,
+    observation: &Observation,
+) -> ObservationOutcome {
     ledger
         .ledger
-        .record_observation(&ledger.reserved, &subject(person), observation)
+        .record_observation(
+            &ledger.reserved,
+            requirement_id,
+            &subject(person),
+            observation,
+        )
         .await
         .unwrap()
 }
 
 #[tokio::test]
-async fn the_observation_store_keeps_the_latest_revision_per_pseudonym() {
+async fn the_observation_store_keeps_the_latest_revision_per_requirement_and_pseudonym() {
     let ledger = ledger().await;
     register(&ledger, 1).await;
     let at = now();
@@ -626,10 +641,192 @@ async fn the_observation_store_keeps_the_latest_revision_per_pseudonym() {
         .iter()
         .find(|row| row["selector_pseudonym"] == format!("\\x{hex}"))
         .unwrap();
+    assert_eq!(row["requirement_id"], REQUIREMENT_ID);
     assert_eq!(row["status"], 0);
     assert_eq!(row["source_revision"], 4);
     assert_eq!(row["pseudonym_key_version"], 1);
     assert_eq!(row["mapping_version"], 1);
+}
+
+#[tokio::test]
+async fn an_observation_names_its_requirement() {
+    let ledger = ledger().await;
+    register(&ledger, 1).await;
+    for requirement_id in [String::new(), "r".repeat(257)] {
+        let error = ledger
+            .ledger
+            .record_observation(
+                &ledger.reserved,
+                &requirement_id,
+                &subject("person-7050"),
+                &observation(EntryStatus::Suspended, 1, now()),
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(error, StatusError::InvalidInput(_)), "{error:?}");
+    }
+    assert!(rows(&inspector().await, &ledger.schema, "observations")
+        .await
+        .is_empty());
+}
+
+#[tokio::test]
+async fn a_withdrawal_for_one_requirement_is_not_inherited_by_another() {
+    let ledger = ledger().await;
+    register(&ledger, 1).await;
+    let read_at = now() - TimeDelta::minutes(30);
+    // The subject's record for the other requirement is withdrawn after the
+    // source read.
+    assert_eq!(
+        observe_under(
+            &ledger,
+            OTHER_REQUIREMENT_ID,
+            "person-8200",
+            &observation(EntryStatus::Invalid, 2, read_at + TimeDelta::minutes(1)),
+        )
+        .await,
+        ObservationOutcome::Recorded
+    );
+
+    // A credential for a requirement whose record was never withdrawn
+    // starts VALID and takes no revision from the other record.
+    let unaffected = allocate_under(
+        &ledger,
+        REQUIREMENT_ID,
+        &subject("person-8200"),
+        http_read(read_at),
+        CredentialMembers::Unbound { count: 1 },
+    )
+    .await;
+    let row = allocation_row(&ledger, unaffected[0].entry()).await;
+    assert_eq!(row["status"], 0);
+    assert_eq!(row["last_applied_source_revision"], Value::Null);
+    assert_eq!(row["mapping_version"], Value::Null);
+
+    // A credential for the withdrawn record's requirement inherits it.
+    let withdrawn = allocate_under(
+        &ledger,
+        OTHER_REQUIREMENT_ID,
+        &subject("person-8200"),
+        http_read(read_at),
+        CredentialMembers::Unbound { count: 1 },
+    )
+    .await;
+    let row = allocation_row(&ledger, withdrawn[0].entry()).await;
+    assert_eq!(row["status"], 1);
+    assert_eq!(row["last_applied_source_revision"], 2);
+}
+
+#[tokio::test]
+async fn a_newer_revision_for_another_requirement_hides_no_withdrawal() {
+    let ledger = ledger().await;
+    register(&ledger, 1).await;
+    let read_at = now() - TimeDelta::minutes(30);
+    let captured = read_at + TimeDelta::minutes(1);
+    // Withdrawn, then the other record changes at a higher revision.
+    for (requirement_id, status, source_revision) in [
+        (REQUIREMENT_ID, EntryStatus::Invalid, 3),
+        (OTHER_REQUIREMENT_ID, EntryStatus::Valid, 7),
+    ] {
+        assert_eq!(
+            observe_under(
+                &ledger,
+                requirement_id,
+                "person-8300",
+                &observation(status, source_revision, captured),
+            )
+            .await,
+            ObservationOutcome::Recorded
+        );
+    }
+    // The other record first, then the withdrawal at a lower revision.
+    for (requirement_id, status, source_revision) in [
+        (OTHER_REQUIREMENT_ID, EntryStatus::Valid, 7),
+        (REQUIREMENT_ID, EntryStatus::Invalid, 3),
+    ] {
+        assert_eq!(
+            observe_under(
+                &ledger,
+                requirement_id,
+                "person-8301",
+                &observation(status, source_revision, captured),
+            )
+            .await,
+            ObservationOutcome::Recorded
+        );
+    }
+    assert_eq!(
+        rows(&inspector().await, &ledger.schema, "observations")
+            .await
+            .len(),
+        4
+    );
+
+    // A credential evaluated before the withdrawal inherits it either way.
+    for person in ["person-8300", "person-8301"] {
+        let references = allocate_under(
+            &ledger,
+            REQUIREMENT_ID,
+            &subject(person),
+            http_read(read_at),
+            CredentialMembers::Unbound { count: 1 },
+        )
+        .await;
+        let row = allocation_row(&ledger, references[0].entry()).await;
+        assert_eq!(row["status"], 1, "{person}");
+        assert_eq!(row["last_applied_source_revision"], 3, "{person}");
+    }
+}
+
+#[tokio::test]
+async fn a_revision_of_another_requirement_never_makes_an_input_stale() {
+    let ledger = ledger().await;
+    register(&ledger, 1).await;
+    let read_at = now() - TimeDelta::minutes(30);
+    observe_under(
+        &ledger,
+        OTHER_REQUIREMENT_ID,
+        "person-8400",
+        &observation(EntryStatus::Valid, 7, read_at + TimeDelta::minutes(1)),
+    )
+    .await;
+    let entry = allocate_under(
+        &ledger,
+        REQUIREMENT_ID,
+        &subject("person-8400"),
+        http_read(read_at),
+        CredentialMembers::Unbound { count: 1 },
+    )
+    .await[0]
+        .entry()
+        .clone();
+    assert_eq!(
+        allocation_row(&ledger, &entry).await["last_applied_source_revision"],
+        Value::Null
+    );
+
+    // Revisions of this requirement's record below the other record's apply.
+    let suspended = apply(
+        &ledger,
+        &request(&entry, EntryStatus::Suspended, hook(1, 4)),
+    )
+    .await
+    .unwrap();
+    assert!(
+        matches!(suspended, TransitionOutcome::Applied { .. }),
+        "{suspended:?}"
+    );
+    let invalidated = apply(
+        &ledger,
+        &request(&entry, EntryStatus::Invalid, reconciliation(1, Some(5))),
+    )
+    .await
+    .unwrap();
+    assert!(
+        matches!(invalidated, TransitionOutcome::Applied { .. }),
+        "{invalidated:?}"
+    );
+    assert_eq!(status_of(&ledger, &entry).await, EntryStatus::Invalid);
 }
 
 #[tokio::test]
