@@ -201,6 +201,16 @@ pub enum CallOutcome {
         /// long, up to the longest automatic retry delay.
         retry_after: Option<Duration>,
     },
+    /// The receiver answered busy after the request may have reached it, so
+    /// the effect is unknown. The same keyed command is sent again
+    /// automatically on the ordinary retry schedule, waiting at least
+    /// `retry_after` when present, and the step stays uncertain until a later
+    /// attempt settles it. Only an operation with same-command recovery may
+    /// return this; any other operation is held before its next send.
+    UncertainRetryable {
+        code: String,
+        retry_after: Option<Duration>,
+    },
     Refused {
         code: String,
     },

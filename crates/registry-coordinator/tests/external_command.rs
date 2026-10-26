@@ -85,6 +85,10 @@ fn describe(outcome: &CallOutcome) -> String {
             "retryable:{code}:{}",
             retry_after.map_or("-".into(), |wait| wait.as_secs().to_string())
         ),
+        CallOutcome::UncertainRetryable { code, retry_after } => format!(
+            "uncertain-retryable:{code}:{}",
+            retry_after.map_or("-".into(), |wait| wait.as_secs().to_string())
+        ),
         CallOutcome::Refused { code } => format!("refused:{code}"),
         CallOutcome::DeclaredRefusal(refusal) => format!("declared:{}", refusal.refusal_code()),
         CallOutcome::Uncertain { code } => format!("uncertain:{code}"),
@@ -404,18 +408,45 @@ async fn a_redirect_is_not_followed_and_the_credential_stays_at_the_origin() {
 async fn provider_statuses_are_classified_without_claiming_a_provider_failure() {
     let server = MockServer::start().await;
     let connection = connection(&config(&server.uri()));
+    const DATE: &str = "Wed, 21 Oct 2026 07:28:00 GMT";
     let cases = [
         (
             ResponseTemplate::new(429).insert_header("retry-after", "7"),
             "retryable:external-rate-limited:7",
         ),
+        // A 503 may follow an effect, so its automatic retry keeps the
+        // effect unknown until a later attempt settles it.
         (
             ResponseTemplate::new(503),
-            "retryable:external-unavailable:-",
+            "uncertain-retryable:external-unavailable:-",
         ),
         (
+            ResponseTemplate::new(503).insert_header("retry-after", "30"),
+            "uncertain-retryable:external-unavailable:30",
+        ),
+        // The status is the busy answer. A hint the command cannot use is
+        // ignored, and the retry follows the ordinary backoff instead.
+        (
             ResponseTemplate::new(429).insert_header("retry-after", "86401"),
-            "refused:external-unusable-retry-after",
+            "retryable:external-rate-limited:-",
+        ),
+        (
+            ResponseTemplate::new(429).insert_header("retry-after", DATE),
+            "retryable:external-rate-limited:-",
+        ),
+        (
+            ResponseTemplate::new(429)
+                .append_header("retry-after", "5")
+                .append_header("retry-after", "6"),
+            "retryable:external-rate-limited:-",
+        ),
+        (
+            ResponseTemplate::new(503).insert_header("retry-after", DATE),
+            "uncertain-retryable:external-unavailable:-",
+        ),
+        (
+            ResponseTemplate::new(503).insert_header("retry-after", "86401"),
+            "uncertain-retryable:external-unavailable:-",
         ),
         (ResponseTemplate::new(500), "uncertain:external-uncertain"),
         (ResponseTemplate::new(502), "uncertain:external-uncertain"),

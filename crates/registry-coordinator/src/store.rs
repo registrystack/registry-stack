@@ -2361,6 +2361,9 @@ impl DispatchStore for Store {
                 Disposition::Delivered if detail.outcome.is_some() => "finished",
                 Disposition::Delivered | Disposition::RetryPending => "running",
                 Disposition::Unknown => "attention",
+                // An attempt that may have reached its receiver leaves the
+                // effect unknown even when no retry follows it.
+                _ if detail.uncertain => "attention",
                 Disposition::Expired => "expired",
                 _ => "failed",
             }
