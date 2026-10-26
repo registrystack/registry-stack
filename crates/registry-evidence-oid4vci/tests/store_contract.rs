@@ -1394,6 +1394,43 @@ store:
         }
     }
 
+    /// A transaction code is tagged together with the offer it guards, so
+    /// two offers that carry the same code hold different tags, and a reader
+    /// of the table cannot tell which offers share a code.
+    #[tokio::test]
+    async fn one_transaction_code_tags_differently_on_every_offer() {
+        let (deployment, store) = Deployment::open(Kind::Postgres, bounds(), Keys::default()).await;
+        let schema = deployment.schema().to_owned();
+        let catalog = generation("catalog-1");
+        for code in ["first-offer", "second-offer"] {
+            store
+                .remember_offer(code, Some("4711"), &catalog, prepared(), NOW)
+                .await
+                .expect("the offer is remembered");
+        }
+        let tags: Vec<String> = admin()
+            .await
+            .query(
+                &format!("SELECT transaction_code_tag FROM {schema}.offers"),
+                &[],
+            )
+            .await
+            .expect("read the transaction code tags")
+            .iter()
+            .map(|row| row.get(0))
+            .collect();
+        assert_eq!(tags.len(), 2);
+        assert_ne!(tags[0], tags[1], "two offers share a transaction code tag");
+        for code in ["first-offer", "second-offer"] {
+            assert_prepared(
+                &store
+                    .redeem_offer(code, Some("4711"), &catalog, NOW)
+                    .await
+                    .expect("the right code still opens each offer"),
+            );
+        }
+    }
+
     #[tokio::test]
     async fn a_sealed_request_moved_to_another_row_is_refused() {
         let (deployment, store) = Deployment::open(Kind::Postgres, bounds(), Keys::default()).await;

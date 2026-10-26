@@ -51,7 +51,7 @@ use thiserror::Error;
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 use crate::config::StoreConfig;
-use crate::storage::{tag, CatalogGeneration, KeyRing, VersionedKey};
+use crate::storage::{tag, transaction_code_tag, CatalogGeneration, KeyRing, VersionedKey};
 
 /// Domain labels, so a value that is a valid key in one key-space cannot be
 /// replayed as a key in another.
@@ -322,7 +322,7 @@ impl OfferStore {
         let key = state.keys.current();
         let offer_tag = tag(key, OFFER_DOMAIN, code);
         let transaction_code_tag =
-            transaction_code.map(|value| tag(key, TRANSACTION_CODE_DOMAIN, value));
+            transaction_code.map(|value| transaction_code_tag(key, &offer_tag, value));
         state.offers.insert(
             offer_tag.to_string(),
             OfferEntry {
@@ -386,7 +386,8 @@ impl OfferStore {
             return Err(StoreError::Unknown);
         };
         // The transaction code was tagged under the key the offer was.
-        let presented_tag = transaction_code.map(|value| tag(key, TRANSACTION_CODE_DOMAIN, value));
+        let presented_tag =
+            transaction_code.map(|value| transaction_code_tag(key, &offer_tag, value));
 
         let Some(ledger) = state.ledgers.get(offer_tag.as_str()) else {
             return Err(StoreError::Unknown);

@@ -63,11 +63,9 @@ use tokio_postgres::IsolationLevel;
 use zeroize::Zeroizing;
 
 use super::sealing::{self, Binding, Purpose, SealError, Sealed};
-use super::{tag, CatalogGeneration, KeyRing, Store, VersionedKey};
+use super::{tag, transaction_code_tag, CatalogGeneration, KeyRing, Store, VersionedKey};
 use crate::config::StoreConfig;
-use crate::store::{
-    PreparedRequest, StoreError, ACCESS_TOKEN_DOMAIN, OFFER_DOMAIN, TRANSACTION_CODE_DOMAIN,
-};
+use crate::store::{PreparedRequest, StoreError, ACCESS_TOKEN_DOMAIN, OFFER_DOMAIN};
 
 /// The schema a deployment uses unless it names another.
 pub const DEFAULT_SCHEMA: &str = "evidence_oid4vci";
@@ -433,8 +431,10 @@ impl PostgresStore {
         else {
             return Err(StoreError::Unknown.into());
         };
-        // The transaction code was tagged under the key the offer was.
-        let presented = transaction_code.map(|value| tag(key, TRANSACTION_CODE_DOMAIN, value));
+        // The transaction code was tagged for this offer, under the key the
+        // offer was.
+        let presented =
+            transaction_code.map(|value| transaction_code_tag(key, &row.offer_tag, value));
         if !codes_match(
             offer.transaction_code_tag.as_deref(),
             presented.as_ref().map(|tag| tag.as_str()),
@@ -693,7 +693,7 @@ impl Store for PostgresStore {
         let key = self.tag_keys.current();
         let offer_tag = tag(key, OFFER_DOMAIN, code);
         let transaction_code_tag =
-            transaction_code.map(|value| tag(key, TRANSACTION_CODE_DOMAIN, value));
+            transaction_code.map(|value| transaction_code_tag(key, &offer_tag, value));
         let candidates = self.candidate_tags(OFFER_DOMAIN, code);
         let tags: Vec<&str> = candidates.iter().map(|(_, tag)| tag.as_str()).collect();
         let sealed = self.seal(
