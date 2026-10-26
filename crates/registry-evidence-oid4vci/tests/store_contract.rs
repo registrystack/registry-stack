@@ -1544,7 +1544,10 @@ store:
             deployment.reopen(Keys::default()),
             deployment.reopen(Keys::default()),
         );
-        assert_eq!(count(deployment.schema(), "schema_migrations").await, 1);
+        assert_eq!(
+            count(deployment.schema(), "oid4vci_schema_migrations").await,
+            1
+        );
     }
 
     /// Replicas installed together all find an empty database. Their first
@@ -1573,7 +1576,7 @@ store:
                 outcomes.iter().all(Result::is_ok),
                 "every first migration succeeds: {outcomes:?}"
             );
-            assert_eq!(count(&schema, "schema_migrations").await, 1);
+            assert_eq!(count(&schema, "oid4vci_schema_migrations").await, 1);
         }
     }
 
@@ -1588,7 +1591,7 @@ store:
         admin()
             .await
             .execute(
-                &format!("INSERT INTO {schema}.schema_migrations (version) VALUES (999)"),
+                &format!("INSERT INTO {schema}.oid4vci_schema_migrations (version) VALUES (999)"),
                 &[],
             )
             .await
@@ -1608,6 +1611,37 @@ store:
             "{rendered}"
         );
         assert!(!rendered.contains(&schema), "{rendered}");
+    }
+
+    /// A migration table of the store's name that another tool made, with
+    /// versions this build cannot read, is refused rather than read.
+    #[tokio::test]
+    async fn a_migration_table_this_store_did_not_make_is_refused() {
+        let schema = isolated_schema_name();
+        admin()
+            .await
+            .batch_execute(&format!(
+                "CREATE SCHEMA {schema}; \
+                 CREATE TABLE {schema}.oid4vci_schema_migrations (version varchar PRIMARY KEY); \
+                 INSERT INTO {schema}.oid4vci_schema_migrations VALUES ('20240101000000');"
+            ))
+            .await
+            .expect("leave another tool's migration table in the schema");
+
+        let (logs, _guard) = Logs::capture();
+        let refused = unmigrated(pool(), &schema, &bounds(), Keys::default(), REQUEST_TIMEOUT)
+            .migrate()
+            .await;
+        assert!(
+            matches!(refused, Err(PostgresSetupError::MigrationTable)),
+            "{refused:?}"
+        );
+        let rendered = logs.rendered();
+        assert!(
+            rendered.contains(r#"operation="read the applied migrations""#),
+            "{rendered}"
+        );
+        assert!(!rendered.contains("20240101000000"), "{rendered}");
     }
 
     async fn join<T: Send + 'static>(handles: Vec<tokio::task::JoinHandle<T>>) -> Vec<T> {
