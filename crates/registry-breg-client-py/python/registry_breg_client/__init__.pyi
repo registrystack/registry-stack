@@ -337,8 +337,8 @@ class BaseRegistryClient:
         *,
         access_profile: str | None = None,
     ) -> dict[str, str] | None:
-        """The first revision of a record as `recordId`, `revision` and `createdAt`,
-        or None when the caller may not read it (403 or 404)."""
+        """The first revision of a record as `recordType`, `recordId`, `revision`
+        and `createdAt`, or None when the caller may not read it (403 or 404)."""
         ...
     def statistics_live(
         self, dataset: str, *, from_period: str | None = None,

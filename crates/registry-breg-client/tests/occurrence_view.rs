@@ -150,7 +150,8 @@ fn transfer_record() -> Value {
 }
 
 fn creation_revision_json() -> Value {
-    json!({"recordId": INCORPORATION_ID, "revision": "1", "createdAt": CREATED_AT})
+    json!({"recordType": "incorporation", "recordId": INCORPORATION_ID,
+        "revision": "1", "createdAt": CREATED_AT})
 }
 
 fn incorporation_receipt() -> Value {
@@ -589,7 +590,7 @@ fn instants_are_emitted_with_uppercase_separator_and_zone_letters() {
     );
     arguments.insert(
         "creationRevision".into(),
-        json!({"recordId": INCORPORATION_ID, "revision": "1",
+        json!({"recordType": "incorporation", "recordId": INCORPORATION_ID, "revision": "1",
             "createdAt": "2026-10-26t08:15:30z"}),
     );
     let view = expect_view(&arguments);
@@ -811,7 +812,8 @@ fn recorded_time_comes_only_from_the_creation_revision_of_this_record() {
     let mut arguments = incorporation_arguments();
     arguments.insert(
         "creationRevision".into(),
-        json!({"recordId": OTHER_TRANSFER_ID, "revision": "1", "createdAt": CREATED_AT}),
+        json!({"recordType": "incorporation", "recordId": OTHER_TRANSFER_ID,
+            "revision": "1", "createdAt": CREATED_AT}),
     );
     let error = project(&arguments).expect_err("another record's creation revision is refused");
     assert!(matches!(
@@ -823,7 +825,8 @@ fn recorded_time_comes_only_from_the_creation_revision_of_this_record() {
     let mut transfer = transfer_arguments();
     transfer.insert(
         "creationRevision".into(),
-        json!({"recordId": OTHER_TRANSFER_ID, "revision": "1", "createdAt": CREATED_AT}),
+        json!({"recordType": "ownership-transfer", "recordId": OTHER_TRANSFER_ID,
+            "revision": "1", "createdAt": CREATED_AT}),
     );
     assert!(matches!(
         project(&transfer),
@@ -832,11 +835,56 @@ fn recorded_time_comes_only_from_the_creation_revision_of_this_record() {
 }
 
 #[test]
+fn a_creation_revision_for_another_record_type_with_the_same_id_is_refused() {
+    let descriptor =
+        BRegOccurrenceDescriptor::from_value(&incorporation_descriptor()).expect("descriptor");
+    let mut other_type_revision =
+        creation_revision_envelope(INCORPORATION_ID, "1", Value::Null, "create");
+    other_type_revision["meta"]["entityTypeIdentifier"] = json!("ownership-transfer");
+    other_type_revision["data"]["createdAt"] = json!("2026-10-25T07:00:00Z");
+    let creation = BRegCreationRevision::from_document(INCORPORATION_ID, &other_type_revision)
+        .expect("revision 1 for the other record type");
+
+    let error = occurrence_view(
+        REGISTRY_REVISION,
+        "incorporation",
+        &descriptor,
+        &registry_record(&incorporation_record()),
+        &BRegOccurrenceEvidence {
+            creation_revision: Some(&creation),
+            ..Default::default()
+        },
+    )
+    .expect_err("another record type's creation time must not be projected");
+
+    assert!(matches!(
+        &error,
+        BRegOccurrenceError::WrongRecordEvidence { .. }
+    ));
+    assert!(!error.to_string().contains("ownership-transfer"));
+}
+
+#[test]
+fn compact_creation_evidence_for_another_record_type_with_the_same_id_is_refused() {
+    let mut arguments = incorporation_arguments();
+    arguments["creationRevision"]["recordType"] = json!("ownership-transfer");
+    arguments["creationRevision"]["createdAt"] = json!("2026-10-25T07:00:00Z");
+
+    let error = project(&arguments).expect_err("another record type is refused");
+    assert!(matches!(
+        &error,
+        BRegOccurrenceError::WrongRecordEvidence { .. }
+    ));
+    assert!(!error.to_string().contains("ownership-transfer"));
+}
+
+#[test]
 fn a_creation_revision_that_is_not_revision_one_is_refused() {
     let mut arguments = incorporation_arguments();
     arguments.insert(
         "creationRevision".into(),
-        json!({"recordId": INCORPORATION_ID, "revision": "2", "createdAt": CREATED_AT}),
+        json!({"recordType": "incorporation", "recordId": INCORPORATION_ID,
+            "revision": "2", "createdAt": CREATED_AT}),
     );
     let error = project(&arguments).expect_err("only revision 1 states the recorded time");
     assert!(matches!(
@@ -852,7 +900,8 @@ fn a_creation_revision_with_an_invalid_timestamp_is_refused() {
     let mut arguments = incorporation_arguments();
     arguments.insert(
         "creationRevision".into(),
-        json!({"recordId": INCORPORATION_ID, "revision": "1", "createdAt": "2026-10-26"}),
+        json!({"recordType": "incorporation", "recordId": INCORPORATION_ID,
+            "revision": "1", "createdAt": "2026-10-26"}),
     );
     assert!(project(&arguments).is_err());
 }
@@ -1241,12 +1290,14 @@ fn creation_revision_errors_carry_no_supplied_value() {
     let mut wrong_revision = incorporation_arguments();
     wrong_revision.insert(
         "creationRevision".into(),
-        json!({"recordId": INCORPORATION_ID, "revision": secret, "createdAt": CREATED_AT}),
+        json!({"recordType": "incorporation", "recordId": INCORPORATION_ID,
+            "revision": secret, "createdAt": CREATED_AT}),
     );
     let mut unknown_member = incorporation_arguments();
     unknown_member.insert(
         "creationRevision".into(),
-        json!({"recordId": INCORPORATION_ID, "revision": "1", "createdAt": CREATED_AT,
+        json!({"recordType": "incorporation", "recordId": INCORPORATION_ID,
+            "revision": "1", "createdAt": CREATED_AT,
             secret: true}),
     );
     let mut errors = Vec::new();
@@ -1431,6 +1482,8 @@ fn from_document_accepts_only_the_creating_revision_of_the_record() {
         &creation_revision_envelope(INCORPORATION_ID, "1", Value::Null, "create"),
     )
     .expect("revision 1 create");
+    assert_eq!(creation.record_type_identifier(), "incorporation");
+    assert_eq!(creation.record_identifier(), INCORPORATION_ID);
     assert_eq!(
         serde_json::to_value(&creation).expect("serializes"),
         creation_revision_json()
@@ -1453,7 +1506,10 @@ fn from_document_accepts_only_the_creating_revision_of_the_record() {
             creation_revision_envelope(INCORPORATION_ID, "1", Value::Null, "update"),
             "mutation kind",
         ),
-        (json!({"meta": {}}), "missing data"),
+        (
+            json!({"meta": {"entityTypeIdentifier": "incorporation"}}),
+            "missing data",
+        ),
         (json!([]), "not an object"),
     ] {
         assert!(

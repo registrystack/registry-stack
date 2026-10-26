@@ -2924,8 +2924,9 @@ impl BaseRegistryClient {
             .map_err(client_error)
     }
 
-    /// Read the first revision of one record as the compact creation-revision
-    /// JSON, or null when the caller may not read it.
+    /// Read the first revision of one record as the compact
+    /// `{recordType, recordId, revision, createdAt}` JSON, or null when the
+    /// caller may not read it.
     #[napi]
     pub async fn occurrence_creation_revision(
         &self,

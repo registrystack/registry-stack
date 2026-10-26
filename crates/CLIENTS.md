@@ -74,9 +74,12 @@ or unify distinct authority contracts. Shared HTTP/token primitives live in
   Recorded time comes only from the creation revision of that record, which
   `occurrence_creation_revision` reads as exactly revision 1 and reports as
   absent only for a 403 or 404 answer, which means the caller cannot see that
-  revision; every other status is returned as an error. Evidence that does not match the
-  record's exact type, identifier, and revision is listed as ignored, never
-  merged. Instants are emitted with an uppercase `T` and `Z` and the offset the
+  revision; every other status is returned as an error. Its compact
+  `{recordType, recordId, revision, createdAt}` form retains the response's
+  record type so a same-UUID revision of another type cannot supply recorded
+  time. Evidence that does not match the record's exact type, identifier, and
+  revision is listed as ignored, never merged. Instants are emitted with an
+  uppercase `T` and `Z` and the offset the
   registry served (it serves stored timestamps in UTC with `+00:00`); dates stay
   dates. The Rust projection is the single implementation:
   the Node and Python exports (`occurrenceView`, `occurrence_view`, and the

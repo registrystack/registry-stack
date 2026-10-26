@@ -147,7 +147,12 @@ class OccurrenceViewTests(unittest.TestCase):
             revision = client.occurrence_creation_revision("incorporations", RECORD_ID)
             self.assertEqual(
                 revision,
-                {"recordId": RECORD_ID, "revision": "1", "createdAt": CREATED_AT},
+                {
+                    "recordType": "incorporation",
+                    "recordId": RECORD_ID,
+                    "revision": "1",
+                    "createdAt": CREATED_AT,
+                },
             )
             self.assertIsNone(
                 client.occurrence_creation_revision("incorporations", HIDDEN_ID)
@@ -158,6 +163,12 @@ class OccurrenceViewTests(unittest.TestCase):
                 occurrence_view(arguments)["recordedAt"],
                 {"status": "available", "type": "instant", "value": CREATED_AT},
             )
+            arguments["creationRevision"]["recordType"] = "ownership-transfer"
+            with self.assertRaises(BaseRegistryClientError) as caught:
+                occurrence_view(arguments)
+            self.assertEqual(caught.exception.kind, "occurrence")
+            self.assertEqual(caught.exception.code, "wrong-record-evidence")
+            self.assertNotIn("ownership-transfer", str(caught.exception))
         finally:
             server.shutdown()
             thread.join()

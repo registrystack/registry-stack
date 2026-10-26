@@ -767,6 +767,8 @@ impl BaseRegistryClient {
     /// read that revision (a 403 or 404 problem answer); the absence is never
     /// replaced by another timestamp. Every other failure is returned, and a
     /// revision 1 document that is not the record's creation is a body failure.
+    /// The retained evidence binds the response's record type, record identifier,
+    /// revision and creation time.
     pub async fn occurrence_creation_revision(
         &self,
         entity_route: &str,

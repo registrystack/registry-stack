@@ -118,7 +118,8 @@ test('the metadata accessor and the creation-revision read follow the declared c
 
     const text = await client.occurrenceCreationRevision('incorporations', recordId);
     assert.deepEqual(JSON.parse(text), {
-      recordId, revision: '1', createdAt: '2026-10-26T08:15:30.123456Z',
+      recordType: 'incorporation', recordId, revision: '1',
+      createdAt: '2026-10-26T08:15:30.123456Z',
     });
     assert.ok(requests.some((url) => url.includes(`/incorporations/${recordId}/revisions/1`)));
     assert.equal(await client.occurrenceCreationRevision('incorporations', hiddenId), null);
@@ -127,6 +128,13 @@ test('the metadata accessor and the creation-revision read follow the declared c
       JSON.parse(occurrenceView(JSON.stringify(input))).recordedAt,
       { status: 'available', type: 'instant', value: '2026-10-26T08:15:30.123456Z' },
     );
+    input.creationRevision.recordType = 'ownership-transfer';
+    assert.throws(() => occurrenceView(JSON.stringify(input)), (error) => {
+      assert.equal(error.kind, 'occurrence');
+      assert.equal(error.code, 'wrong-record-evidence');
+      assert.doesNotMatch(error.message, /ownership-transfer/);
+      return true;
+    });
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }

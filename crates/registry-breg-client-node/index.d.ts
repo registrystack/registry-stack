@@ -29,8 +29,9 @@ export declare class BaseRegistryClient {
   /** Retrieve one exact retained revision as validated inert record JSON. */
   getRecordRevision(entityRoute: string, recordIdentifier: string, revision: number, options?: any | undefined | null): Promise<RawOutcome>
   /**
-   * Read the first revision of one record as the compact creation-revision
-   * JSON, or null when the caller may not read it.
+   * Read the first revision of one record as the compact
+   * `{recordType, recordId, revision, createdAt}` JSON, or null when the
+   * caller may not read it.
    */
   occurrenceCreationRevision(entityRoute: string, recordIdentifier: string, accessProfile?: string | undefined | null): Promise<string | null>
   getRecord(entityRoute: string, recordIdentifier: string, options?: any | undefined | null): Promise<CompleteOutcome>
