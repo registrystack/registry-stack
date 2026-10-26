@@ -15,9 +15,11 @@ use chrono::{DateTime, TimeDelta, Utc};
 use deadpool_postgres::{Manager, ManagerConfig, Pool, RecyclingMethod, Runtime};
 use registry_evidence::config::SelectorProfile;
 use registry_evidence::status::{
-    HolderDigestKeyRing, HolderKeyThumbprint, IssuancePool, KeyRing, KeyVersion, LedgerConfig,
-    ListPolicy, PseudonymKeyRing, ReservedPool, SchemaName, SourceRead, StatusKey, StatusLedger,
-    StatusSubject, DEFAULT_CLOCK_SKEW, DEFAULT_ISSUANCE_POOL_SIZE, DEFAULT_RESERVED_POOL_SIZE,
+    AllocationFields, CredentialMembers, HolderDigestKeyRing, HolderKeyThumbprint, IssuancePool,
+    KeyRing, KeyVersion, LedgerConfig, ListPolicy, MappingVersion, ProvenanceText,
+    PseudonymKeyRing, ReasonCategory, ReservedPool, SchemaName, SourceRead, SourceRevision,
+    StatusKey, StatusLedger, StatusReference, StatusSubject, DEFAULT_CLOCK_SKEW,
+    DEFAULT_ISSUANCE_POOL_SIZE, DEFAULT_RESERVED_POOL_SIZE,
 };
 use serde_json::{json, Map, Value};
 use tokio_postgres::NoTls;
@@ -162,6 +164,57 @@ pub fn http_read(at: DateTime<Utc>) -> SourceRead {
     SourceRead::Http { request_time: at }
 }
 
+pub fn extract_read(published_at: DateTime<Utc>, evaluation_instant: DateTime<Utc>) -> SourceRead {
+    SourceRead::Extract {
+        published_at,
+        evaluation_instant,
+    }
+}
+
+pub fn mapping_version(version: u32) -> MappingVersion {
+    MappingVersion::new(version).expect("mapping version is valid")
+}
+
+pub fn revision(revision: i64) -> SourceRevision {
+    SourceRevision::new(revision).expect("revision is valid")
+}
+
+pub fn text(value: &str) -> ProvenanceText {
+    ProvenanceText::new(value).expect("provenance text is valid")
+}
+
+pub fn reason(value: &str) -> ReasonCategory {
+    ReasonCategory::new(value).expect("reason category is valid")
+}
+
+/// Allocate and commit `members` for `subject` with the given source read.
+pub async fn allocate_for(
+    ledger: &TestLedger,
+    subject: &StatusSubject,
+    source_read: SourceRead,
+    members: CredentialMembers<'_>,
+) -> Vec<StatusReference> {
+    let issued_at = now();
+    let fields = AllocationFields {
+        requirement_id: REQUIREMENT_ID,
+        subject,
+        issued_at,
+        not_after: issued_at + days(30),
+        source_read,
+    };
+    let mut transaction = ledger
+        .ledger
+        .begin(&ledger.issuance, Duration::from_secs(20))
+        .await
+        .expect("issuance transaction begins");
+    let references = transaction
+        .allocate(&fields, members)
+        .await
+        .expect("entries allocate");
+    transaction.commit().await.expect("allocation commits");
+    references
+}
+
 pub fn now() -> DateTime<Utc> {
     Utc::now()
 }
@@ -198,8 +251,15 @@ pub async fn rows(client: &tokio_postgres::Client, schema: &str, table: &str) ->
         .collect()
 }
 
-/// Every table in `schema` with every row rendered as text.
-pub async fn dump_schema(client: &tokio_postgres::Client, schema: &str) -> Vec<(String, String)> {
+/// One row of a schema dump: its table, its JSON form and its text form.
+pub struct DumpedRow {
+    pub table: String,
+    pub json: Value,
+    pub text: String,
+}
+
+/// Every row of every table in `schema`, as JSON and as PostgreSQL's row text.
+pub async fn dump_schema(client: &tokio_postgres::Client, schema: &str) -> Vec<DumpedRow> {
     let tables = client
         .query(
             "SELECT table_name::text FROM information_schema.tables \
@@ -212,10 +272,13 @@ pub async fn dump_schema(client: &tokio_postgres::Client, schema: &str) -> Vec<(
     for table in tables {
         let table: String = table.get(0);
         let statement =
-            format!("SELECT t::text, row_to_json(t)::text FROM \"{schema}\".\"{table}\" t");
+            format!("SELECT row_to_json(t)::text, t::text FROM \"{schema}\".\"{table}\" t");
         for row in client.query(&statement, &[]).await.expect("table dumps") {
-            dump.push((table.clone(), row.get::<_, String>(0)));
-            dump.push((table.clone(), row.get::<_, String>(1)));
+            dump.push(DumpedRow {
+                table: table.clone(),
+                json: serde_json::from_str(&row.get::<_, String>(0)).expect("row is JSON"),
+                text: row.get(1),
+            });
         }
     }
     dump
