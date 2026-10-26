@@ -18,7 +18,7 @@ use crate::finding::{FieldPath, Finding};
 ///
 /// `Engine::new` hands out three capabilities this crate must not have. Its
 /// module resolver opens the file an `import` statement names. Its print and
-/// debug handlers are `println!` (rhai 1.26.1, `src/engine.rs:305-318`), so an
+/// debug handlers print to standard output, so an
 /// authored `print` or `debug` writes to file descriptor 1, which in the editor
 /// process this crate is linked into is the JSON-RPC channel itself. Parsing
 /// asks for none of the three, so the engine as built would reach nothing, but

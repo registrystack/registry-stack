@@ -4678,6 +4678,12 @@ collection method. A separately governed action or hook script that does use
 one may reach the unchanged ceiling sooner and should be compiled and
 evaluated before activation.
 
+The compiled Rhai handler inventory now records 1.27.0, so recompiling a
+project with a Rhai handler produces a new behavior revision for each affected
+Action. Operators must regenerate and reseal governed packages, review those
+revisions, and activate them through the existing migration boundary rather
+than reusing a package compiled for 1.26.1.
+
 The shared platform test
 `rhai_maps_use_compact_string_keys_and_owned_unicode_round_trips` guards the
 backend selection. `native_plan_security` retains the BReg resource,

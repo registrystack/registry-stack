@@ -113,7 +113,7 @@ pub const MAX_PLAN_TARGETS: u16 = 16;
 pub const MAX_PLAN_FIELD_MUTATIONS: u16 = 128;
 pub const MAX_PLAN_SNAPSHOT_BYTES: u32 = 2_097_152;
 pub const MAX_PLAN_SOURCE_BYTES: usize = 65_536;
-pub const PLAN_RHAI_VERSION: &str = "1.26.1";
+pub const PLAN_RHAI_VERSION: &str = "1.27.0";
 pub(crate) fn valid_function_path(path: &str) -> bool {
     !path.is_empty()
         && path.len() <= 256

@@ -55,7 +55,7 @@ fn current_plan_inventory_round_trips_canonically() {
         .expect("the frozen action declares a handler");
     assert_eq!(handler.kind, CompiledPlanFunctionKind::Rhai);
     assert_eq!(handler.abi, registry_breg::contract::ACTION_PLAN_ABI_V1);
-    assert_eq!(handler.rhai_version.as_deref(), Some("1.26.1"));
+    assert_eq!(handler.rhai_version.as_deref(), Some("1.27.0"));
 
     let rendered = canonicalize_json(&serde_json::to_value(&inventory).unwrap()).unwrap();
     let decoded: CompiledActionInventory = serde_json::from_slice(&rendered).unwrap();

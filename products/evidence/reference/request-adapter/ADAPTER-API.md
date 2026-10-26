@@ -585,7 +585,7 @@ With the Version 1 additions, adapter scripts may construct `bool`, signed
 and unit/null values. Adapter outputs must be JSON-compatible; non-finite
 numbers and unsupported host-object values are rejected.
 
-The Version 1 ABI pins Rhai 1.26.1 core syntax plus the host registrations in
+The Version 1 ABI pins Rhai 1.27.0 core syntax plus the host registrations in
 this document. Rhai syntax does not grant host authority, but its observable
 behavior is still part of the reviewed-script contract. The supported surface
 includes:

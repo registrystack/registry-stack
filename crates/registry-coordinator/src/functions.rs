@@ -17,7 +17,7 @@ use crate::{CoordinatorError, Result};
 /// Changing this identity requires a new Workflow revision.
 pub const PURE_PROFILE: &str = "coordinator/bounded-pure/v1";
 
-pub const INTERPRETER_ABI: &str = "coordinator/pure-rhai-1.26.1/v1;named-input-object;raw-arithmetic-logic-string-array-map-iterator-instant;ops=100000;calls=32;expr=64;string=16384;array=256;map=256;source=65536;json=131072;depth=32";
+pub const INTERPRETER_ABI: &str = "coordinator/pure-rhai-1.27.0/v1;named-input-object;raw-arithmetic-logic-string-array-map-iterator-instant;ops=100000;calls=32;expr=64;string=16384;array=256;map=256;source=65536;json=131072;depth=32";
 
 pub(crate) const MAXIMUM_FUNCTION_OPERATIONS: u32 = 100_000;
 pub(crate) const MAXIMUM_FUNCTION_CALL_LEVELS: u32 = 32;
