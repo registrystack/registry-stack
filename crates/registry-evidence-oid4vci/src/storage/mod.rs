@@ -32,8 +32,8 @@ mod memory;
 pub mod postgres;
 mod sealing;
 
+pub use keys::{refuse_shared_keys, KeyError, KeyRing, VersionedKey, KEY_LENGTH};
 pub(crate) use keys::{tag, transaction_code_tag};
-pub use keys::{KeyError, KeyRing, VersionedKey, KEY_LENGTH};
 
 /// The value a deployment names its backing Evidence catalog by.
 ///
