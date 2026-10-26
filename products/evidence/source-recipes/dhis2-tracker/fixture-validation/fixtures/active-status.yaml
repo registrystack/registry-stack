@@ -1,0 +1,62 @@
+apiVersion: id.registrystack.org/formats/evidence/fixture/v1alpha1
+kind: EvidenceFixture
+syntheticOnly: true
+common:
+  observedAt: '2026-10-26T00:00:00Z'
+  selectors:
+    subject:
+      profile: dhis2-tracked-entity-id-v1
+      values: {record_reference: TeiSynthetic01}
+  derivationSelectorInputs:
+    subject:
+      profile: dhis2-tracked-entity-id-v1
+      values: {record_reference: TeiSynthetic01}
+  expectedRequestParts:
+    query:
+    - {name: program, value: Prg00000001}
+    - {name: orgUnits, value: Org00000001}
+    - {name: trackedEntities, value: TeiSynthetic01}
+    - {name: fields, value: 'trackedEntity,attributes[attribute,value]'}
+    - {name: pageSize, value: '2'}
+    - {name: page, value: '1'}
+    - {name: totalPages, value: 'true'}
+    body: null
+  expectedTransport:
+    path: /api/tracker/trackedEntities
+    fixedHeaders: [{name: Accept, value: application/json}]
+cases:
+- id: success
+  response:
+    pager: {page: 1, pageSize: 2, total: 1, pageCount: 1}
+    trackedEntities:
+    - trackedEntity: TeiSynthetic01
+      attributes: [{attribute: Sta00000001, value: ACTIVE}]
+  expected: {lookup: match, derivationRuns: true, value: true, signed: true}
+- id: no-match
+  response:
+    pager: {page: 1, pageSize: 2, total: 0, pageCount: 0}
+    trackedEntities: []
+  expected: {lookup: no_match, publicProblem: evidence.unavailable, derivationRuns: false, signed: false}
+- id: ambiguous
+  response:
+    pager: {page: 1, pageSize: 2, total: 2, pageCount: 1}
+    trackedEntities: [{attributes: []}, {attributes: []}]
+  expected: {lookup: ambiguous, publicProblem: evidence.unavailable, derivationRuns: false, signed: false}
+- id: pager-protocol-mismatch
+  response:
+    pager: {page: 1, pageSize: 2, total: 1, pageCount: 2}
+    trackedEntities:
+    - trackedEntity: TeiSynthetic01
+      attributes: [{attribute: Sta00000001, value: ACTIVE}]
+  expected: {error: source_protocol_error, derivationRuns: false, signed: false}
+- id: returned-identity-mismatch
+  response:
+    pager: {page: 1, pageSize: 2, total: 1, pageCount: 1}
+    trackedEntities:
+    - trackedEntity: TeiSyntheticOther
+      attributes: [{attribute: Sta00000001, value: ACTIVE}]
+  expected: {lookup: match, error: derivation_input_error, derivationRuns: true, signed: false}
+privacyExpectation:
+  evidenceContains: [urn:example:concept:dhis2-recipe-active-status:v1]
+  evidenceExcludes: [record_reference, status_code, TeiSynthetic01, TeiSyntheticOther]
+  diagnosticsExclude: [TeiSynthetic01, TeiSyntheticOther]

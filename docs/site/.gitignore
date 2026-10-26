@@ -21,6 +21,7 @@ openapi/*.openapi.json
 # scripts/generate-breg-evidence-starter.mjs on every npm run generate)
 public/examples/breg-evidence-starter.tar.gz
 public/examples/evidence-examples.tar.gz
+public/examples/evidence-source-recipes.tar.gz
 
 # Site reference outputs are rebuilt from authored data, schemas, and Clap.
 src/content/docs/reference/cli/

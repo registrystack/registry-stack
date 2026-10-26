@@ -24,10 +24,14 @@ use std::path::{Path, PathBuf};
 
 use serde_json::json;
 
+use registry_evidence::rhai_runtime::{
+    RequestPartRequirement, RequestPartsBounds, RequestPartsLimits, RhaiRuntime,
+};
+
 use emit::{CheckClassification, EmitInputs};
 use types::{
-    BoundKind, BoundNeed, BoundValues, NarrowOutcome, OperationKey, Provenance, SpecSource,
-    SuggestedBound,
+    BoundKind, BoundNeed, BoundValues, NarrowOutcome, OperationKey, Provenance, RequestMapping,
+    RequestTarget, SelectorReference, SelectorScalarType, SpecSource, SuggestedBound,
 };
 
 /// A schema exercising every case the response-schema renderer must handle:
@@ -133,7 +137,218 @@ fn base_inputs() -> EmitInputs {
         openapi: SpecSource::File(PathBuf::from("tests/fixtures/openapi/example.yaml")),
         sample_path: None,
         project: None,
+        request_mappings: Vec::new(),
     }
+}
+
+#[test]
+fn explicit_path_and_query_mappings_generate_an_ordinary_source_request() {
+    let mut inputs = base_inputs();
+    inputs.operation.path = "/v1/records/{record_id}".to_owned();
+    let selector = SelectorReference {
+        role: "subject".to_owned(),
+        profile: "subject-reference-v1".to_owned(),
+        field: "reference".to_owned(),
+        scalar_type: SelectorScalarType::String,
+        maximum_bytes: 128,
+    };
+    inputs.request_mappings = vec![
+        RequestMapping {
+            selector: selector.clone(),
+            target: RequestTarget::Path("record_id".to_owned()),
+        },
+        RequestMapping {
+            selector,
+            target: RequestTarget::Query("reference".to_owned()),
+        },
+    ];
+
+    let artifacts = emit::draft(&inputs).expect("mapped draft");
+    let source: serde_json::Value =
+        serde_json::from_str(&artifacts.authoring_source).expect("normalized Source JSON");
+    assert_eq!(
+        source["selectors"],
+        json!([{"role":"subject","profiles":["subject-reference-v1"]}])
+    );
+    assert_eq!(
+        source["request"]["pathBindings"]["record_id"],
+        json!({
+            "selector": {
+                "role":"subject",
+                "profile":"subject-reference-v1",
+                "field":"reference"
+            }
+        })
+    );
+    let prepare = file_contents(&artifacts, "functions/search-a-prepare.rhai");
+    assert!(
+        prepare.contains(
+            r#"query.push(query_pair("reference", selectors["subject"]["values"]["reference"]));"#
+        ),
+        "generated prepare Function was:\n{prepare}"
+    );
+    assert!(!prepare.contains("TODO(evidencectl)"), "{prepare}");
+}
+
+#[test]
+fn explicit_post_body_mappings_generate_a_closed_json_object() {
+    let mut inputs = base_inputs();
+    inputs.operation.method = "POST".to_owned();
+    inputs.operation.path = "/v1/search".to_owned();
+    inputs.request_mappings = vec![
+        RequestMapping {
+            selector: SelectorReference {
+                role: "subject".to_owned(),
+                profile: "person-v1".to_owned(),
+                field: "reference".to_owned(),
+                scalar_type: SelectorScalarType::String,
+                maximum_bytes: 128,
+            },
+            target: RequestTarget::Body("/subject/reference".to_owned()),
+        },
+        RequestMapping {
+            selector: SelectorReference {
+                role: "subject".to_owned(),
+                profile: "person-v1".to_owned(),
+                field: "active".to_owned(),
+                scalar_type: SelectorScalarType::Boolean,
+                maximum_bytes: 5,
+            },
+            target: RequestTarget::Body("/subject/active".to_owned()),
+        },
+    ];
+
+    let artifacts = emit::draft(&inputs).expect("mapped draft");
+    let prepare = file_contents(&artifacts, "functions/search-a-prepare.rhai");
+    assert!(prepare.contains("body: #{"), "{prepare}");
+    assert!(prepare.contains(r#""subject": #{"#), "{prepare}");
+    assert!(
+        prepare.contains(r#""reference": selectors["subject"]["values"]["reference"]"#),
+        "{prepare}"
+    );
+    assert!(
+        prepare.contains(r#""active": selectors["subject"]["values"]["active"]"#),
+        "{prepare}"
+    );
+    assert!(!prepare.contains("TODO(evidencectl)"), "{prepare}");
+}
+
+#[test]
+fn generated_prepare_executes_with_scalar_queries_and_an_escaped_json_body() {
+    let mut inputs = base_inputs();
+    inputs.operation.method = "POST".to_owned();
+    inputs.request_mappings = vec![
+        RequestMapping {
+            selector: SelectorReference {
+                role: "subject".to_owned(),
+                profile: "person-v1".to_owned(),
+                field: "reference".to_owned(),
+                scalar_type: SelectorScalarType::String,
+                maximum_bytes: 128,
+            },
+            target: RequestTarget::Query("external-reference".to_owned()),
+        },
+        RequestMapping {
+            selector: SelectorReference {
+                role: "subject".to_owned(),
+                profile: "person-v1".to_owned(),
+                field: "count".to_owned(),
+                scalar_type: SelectorScalarType::Integer,
+                maximum_bytes: 16,
+            },
+            target: RequestTarget::Query("count".to_owned()),
+        },
+        RequestMapping {
+            selector: SelectorReference {
+                role: "subject".to_owned(),
+                profile: "person-v1".to_owned(),
+                field: "active".to_owned(),
+                scalar_type: SelectorScalarType::Boolean,
+                maximum_bytes: 5,
+            },
+            target: RequestTarget::Query("active".to_owned()),
+        },
+        RequestMapping {
+            selector: SelectorReference {
+                role: "subject".to_owned(),
+                profile: "person-v1".to_owned(),
+                field: "reference".to_owned(),
+                scalar_type: SelectorScalarType::String,
+                maximum_bytes: 128,
+            },
+            target: RequestTarget::Body("/lookup~1key/value~0text".to_owned()),
+        },
+    ];
+    let artifacts = emit::draft(&inputs).expect("draft");
+    let prepare = file_contents(&artifacts, "functions/search-a-prepare.rhai");
+    let runtime = RhaiRuntime::new();
+    let compiled = runtime
+        .compile_preparation(prepare)
+        .expect("generated Function compiles in the real runtime");
+    let limits = RequestPartsLimits::new(
+        RequestPartRequirement::Required,
+        RequestPartRequirement::Required,
+        RequestPartsBounds {
+            maximum_query_pairs: 4,
+            maximum_query_name_bytes: 64,
+            maximum_query_value_bytes: 256,
+            maximum_json_depth: 8,
+            maximum_collection_items: 16,
+            maximum_string_bytes: 256,
+            maximum_normalized_bytes: 4096,
+        },
+    )
+    .expect("valid limits");
+    let prepared = runtime
+        .prepare(
+            &compiled,
+            &json!({
+                "subject": {
+                    "profile": "person-v1",
+                    "values": {"reference": "a&b=c", "count": 42, "active": true}
+                }
+            }),
+            &json!({}),
+            &limits,
+        )
+        .expect("generated Function prepares through the real ABI");
+    assert_eq!(
+        prepared
+            .query
+            .iter()
+            .map(|pair| (pair.name.as_str(), pair.value.as_str()))
+            .collect::<Vec<_>>(),
+        vec![
+            ("external-reference", "a&b=c"),
+            ("count", "42"),
+            ("active", "true"),
+        ]
+    );
+    assert_eq!(
+        prepared.body,
+        Some(json!({"lookup/key": {"value~text": "a&b=c"}}))
+    );
+    let request_schema = json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["lookup/key"],
+        "properties": {
+            "lookup/key": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["value~text"],
+                "properties": {"value~text": {"type": "string"}}
+            }
+        }
+    });
+    let validator = jsonschema::JSONSchema::options()
+        .with_draft(jsonschema::Draft::Draft202012)
+        .compile(&request_schema)
+        .expect("request schema compiles");
+    assert!(
+        validator.is_valid(prepared.body.as_ref().expect("body is present")),
+        "generated request body satisfies the resolved OpenAPI request schema"
+    );
 }
 
 fn file_contents<'a>(artifacts: &'a types::DraftArtifacts, bundle_relative_path: &str) -> &'a str {

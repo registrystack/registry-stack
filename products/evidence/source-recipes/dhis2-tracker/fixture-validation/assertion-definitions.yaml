@@ -1,0 +1,33 @@
+  active-status:
+    question: Does the synthetic tracked entity carry the configured active status?
+    semantics:
+      requirement: urn:example:requirement:dhis2-recipe-active-status:v1
+      kind: criterion
+      evidenceType: urn:example:evidence-type:dhis2-recipe-active-status:v1
+      referenceFrameworks: [urn:example:framework:source-recipe-validation:v1]
+    purpose: source-recipe-validation
+    grantCeiling:
+      authorities: [organizational]
+      actorKinds: [service]
+      valueOrigins: [request]
+      audiences: [urn:example:audience:source-recipe-validator]
+    subjects:
+    - role: subject
+      selectors: [dhis2-tracked-entity-id-v1]
+    acquisition: {type: single, source: dhis2-tracker}
+    derive:
+      function: derive-active-status
+      selectorInputs:
+      - role: subject
+        alternatives:
+        - profile: dhis2-tracked-entity-id-v1
+          fields: [record_reference]
+    outputs:
+      active:
+        concept: urn:example:concept:dhis2-recipe-active-status:v1
+        type: boolean
+    validitySeconds: 60
+    subjectBinding: audience-scoped
+    representations: [signed-jws]
+    observationTimezone: UTC
+    fixtures: fixtures/active-status.yaml

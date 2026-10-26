@@ -1,0 +1,19 @@
+apiVersion: id.registrystack.org/formats/evidence/target-authority/v1alpha1
+kind: EvidenceTargetAuthority
+target: local
+project: opencrvs-event-search-recipe-validation
+accessProfiles:
+  recipe-validator:
+    authority: organizational
+    actorKind: service
+    requesterTags: [source-recipe-validator]
+    grants:
+    - definition: registered-parent
+      purpose: source-recipe-validation
+      audienceFrom: authenticated-requester
+      representations: [signed-jws]
+      subjectBinding: audience-scoped
+      subjects:
+      - role: child
+        selectorProfile: opencrvs-tracking-id-v1
+        valueOrigin: request

@@ -19,7 +19,12 @@ pub mod sample;
 // through `super::`.
 pub use registry_evidence_authoring::openapi::{flatten, narrow, openapi, types};
 
-use std::{collections::BTreeMap, path::Path, process::ExitCode};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fs,
+    path::Path,
+    process::ExitCode,
+};
 
 use anyhow::{anyhow, bail, Context, Result};
 use clap::{ArgGroup, Args, Subcommand};
@@ -30,7 +35,9 @@ use emit::EmitInputs;
 use openapi::Spec;
 use types::{
     BoundKind, BoundNeed, BoundValues, CandidateLeaf, Decisions, DraftArtifacts, Observations,
-    OperationKey, OperationSummary, Provenance, ResolvedSchema, SuggestedBound,
+    OperationKey, OperationParameter, OperationSummary, ParameterLocation, Provenance,
+    RequestMapping, RequestTarget, ResolvedSchema, SelectorReference, SelectorScalarType,
+    SuggestedBound,
 };
 
 #[derive(Debug, Subcommand)]
@@ -89,6 +96,12 @@ pub struct SuggestArgs {
     /// Reviewed source origin to write into a newly created source draft.
     #[arg(long)]
     pub base_url: Option<String>,
+
+    /// Explicit selector-to-request mapping as
+    /// ROLE.PROFILE.FIELD=path:NAME, query:NAME, or body:/JSON/POINTER.
+    /// Repeat for each distinct request target. Requires an authoring project.
+    #[arg(long = "map-selector", value_name = "SELECTOR=TARGET")]
+    pub selector_mappings: Vec<String>,
 
     /// Evidence project directory; the draft is printed when this is absent.
     ///
@@ -349,6 +362,7 @@ pub(crate) fn prepare(args: &SuggestArgs, notes: &mut Notes) -> Result<PreparedS
         openapi: source.clone(),
         sample_path: args.sample.clone(),
         project: args.project.clone(),
+        request_mappings: plan_request_mappings(args, &spec, &decisions.operation)?,
     };
     let artifacts = emit::draft(&inputs)?;
 
@@ -427,6 +441,728 @@ fn suggestion_openapi(args: &SuggestArgs) -> Result<types::SpecSource> {
         (None, Some(openapi)) => fetch::spec_source(openapi),
         (None, None) => bail!("pass --openapi <path-or-https-url>, or name the authoring project: `evidencectl source suggest <project>`"),
     }
+}
+
+fn plan_request_mappings(
+    args: &SuggestArgs,
+    spec: &Spec,
+    operation: &OperationKey,
+) -> Result<Vec<RequestMapping>> {
+    if args.selector_mappings.is_empty() {
+        return Ok(Vec::new());
+    }
+    let project_dir = args.project.as_ref().ok_or_else(|| {
+        anyhow!("--map-selector requires an authoring PROJECT so selector profiles and types come from evidence.yaml")
+    })?;
+    let project_path = project_dir.join(registry_evidence_authoring::project::PROJECT_FILE);
+    let bytes =
+        fs::read(&project_path).with_context(|| format!("reading {}", project_path.display()))?;
+    let project = registry_evidence_authoring::project::read_project(
+        registry_evidence_authoring::project::PROJECT_FILE,
+        &bytes,
+    )
+    .map_err(|report| anyhow!("the authoring project cannot supply selector mappings: {report}"))?
+    .value;
+    let parameters = spec.operation_parameters(operation)?;
+    let body = spec.request_body_schema(operation)?;
+    let mut mappings = Vec::new();
+    let mut exact = BTreeSet::new();
+    let mut targets = BTreeSet::new();
+    let mut role_profiles = BTreeMap::<String, String>::new();
+
+    for raw in &args.selector_mappings {
+        let (selector_raw, target_raw) = raw.split_once('=').ok_or_else(|| {
+            anyhow!("--map-selector must be ROLE.PROFILE.FIELD=path:NAME, query:NAME, or body:/JSON/POINTER")
+        })?;
+        let parts = selector_raw.split('.').collect::<Vec<_>>();
+        if parts.len() != 3 || parts.iter().any(|part| part.is_empty()) {
+            bail!("selector `{selector_raw}` must contain exactly ROLE.PROFILE.FIELD");
+        }
+        let role = parts[0];
+        let profile = parts[1];
+        let field = parts[2];
+        let role_id = registry_platform_yaml::LocalId::new(role.to_owned())?;
+        let profile_id = registry_platform_yaml::LocalId::new(profile.to_owned())?;
+        let field_id = registry_platform_yaml::LocalId::new(field.to_owned())?;
+        let profile_definition = project
+            .selector_profiles
+            .get(&profile_id)
+            .ok_or_else(|| anyhow!("--map-selector names unknown selector profile `{profile}`"))?;
+        let subjects = project
+            .assertion_definitions
+            .values()
+            .flat_map(|definition| &definition.subjects)
+            .collect::<Vec<_>>();
+        if !subjects.iter().any(|subject| subject.role == role_id) {
+            bail!("--map-selector names unknown subject role `{role}`");
+        }
+        if !subjects
+            .iter()
+            .any(|subject| subject.role == role_id && subject.selectors.contains(&profile_id))
+        {
+            bail!("subject role `{role}` does not declare selector profile `{profile}`");
+        }
+        let selector_field = profile_definition
+            .fields
+            .get(&field_id)
+            .ok_or_else(|| anyhow!("selector profile `{profile}` has no field `{field}`"))?;
+        if let Some(previous) = role_profiles.insert(role.to_owned(), profile.to_owned()) {
+            if previous != profile {
+                bail!("one request cannot require alternative profiles `{previous}` and `{profile}` for role `{role}`");
+            }
+        }
+        let (scalar_type, maximum_bytes) = selector_scalar(selector_field);
+        let selector = SelectorReference {
+            role: role.to_owned(),
+            profile: profile.to_owned(),
+            field: field.to_owned(),
+            scalar_type,
+            maximum_bytes,
+        };
+        let target = parse_request_target(target_raw)?;
+        if !exact.insert((selector_raw.to_owned(), target.clone())) {
+            bail!("duplicate --map-selector assignment `{raw}`");
+        }
+        if !targets.insert(target.clone()) {
+            bail!(
+                "request target `{}` is assigned more than once",
+                display_target(&target)
+            );
+        }
+        validate_target(
+            &selector,
+            selector_field,
+            &target,
+            operation,
+            &parameters,
+            body.as_ref(),
+        )?;
+        mappings.push(RequestMapping { selector, target });
+    }
+    validate_preparation_bounds(&mappings)?;
+    validate_required_inputs(operation, &parameters, body.as_ref(), &mappings)?;
+    Ok(mappings)
+}
+
+fn selector_scalar(
+    field: &registry_evidence_authoring::selector::Field,
+) -> (SelectorScalarType, u64) {
+    use registry_evidence_authoring::selector::Field;
+    match field {
+        Field::String { maximum_bytes, .. } => (SelectorScalarType::String, maximum_bytes.get()),
+        Field::Date { .. } => (SelectorScalarType::String, 10),
+        Field::Uuid { .. } => (SelectorScalarType::String, 36),
+        Field::Integer {
+            minimum, maximum, ..
+        } => (
+            SelectorScalarType::Integer,
+            minimum.to_string().len().max(maximum.to_string().len()) as u64,
+        ),
+        Field::Boolean { .. } => (SelectorScalarType::Boolean, 5),
+        Field::ControlledCode { maximum_bytes, .. } => {
+            (SelectorScalarType::String, maximum_bytes.get())
+        }
+    }
+}
+
+fn parse_request_target(raw: &str) -> Result<RequestTarget> {
+    let (channel, value) = raw
+        .split_once(':')
+        .ok_or_else(|| anyhow!("request target `{raw}` must name path:, query:, or body:"))?;
+    if value.is_empty() || value.chars().any(char::is_control) {
+        bail!("request target `{raw}` has an empty or control-containing name");
+    }
+    match channel {
+        "path" => Ok(RequestTarget::Path(value.to_owned())),
+        "query" => Ok(RequestTarget::Query(value.to_owned())),
+        "body" => { parse_body_pointer(value)?; Ok(RequestTarget::Body(value.to_owned())) }
+        "header" | "cookie" | "auth" | "authentication" => bail!("request target `{channel}:` is unsupported: authentication is target configuration, and generated Functions cannot set headers or cookies"),
+        _ => bail!("request target `{raw}` uses unknown channel `{channel}`; use path:, query:, or body:"),
+    }
+}
+
+fn display_target(target: &RequestTarget) -> String {
+    match target {
+        RequestTarget::Path(value) => format!("path:{value}"),
+        RequestTarget::Query(value) => format!("query:{value}"),
+        RequestTarget::Body(value) => format!("body:{value}"),
+    }
+}
+
+fn validate_target(
+    selector: &SelectorReference,
+    selector_field: &registry_evidence_authoring::selector::Field,
+    target: &RequestTarget,
+    operation: &OperationKey,
+    parameters: &[OperationParameter],
+    body: Option<&types::OperationRequestBody>,
+) -> Result<()> {
+    let schema = match target {
+        RequestTarget::Path(name) => {
+            if !operation
+                .path
+                .split('/')
+                .any(|segment| segment == format!("{{{name}}}"))
+            {
+                bail!(
+                    "path parameter `{name}` is not one complete placeholder in {} {}",
+                    operation.method,
+                    operation.path
+                );
+            }
+            let parameter = find_parameter(parameters, name, ParameterLocation::Path)?;
+            validate_parameter_serialization(parameter)?;
+            &parameter.schema.0
+        }
+        RequestTarget::Query(name) => {
+            if name.len() > 64 {
+                bail!("query parameter `{name}` exceeds the 64-byte request-name ceiling");
+            }
+            if selector.maximum_bytes > 4096 {
+                bail!(
+                    "selector `{}.{}.{}` permits {} bytes, exceeding the 4096-byte query-value ceiling; use a narrower reviewed selector profile",
+                    selector.role,
+                    selector.profile,
+                    selector.field,
+                    selector.maximum_bytes
+                );
+            }
+            let parameter = find_parameter(parameters, name, ParameterLocation::Query)?;
+            validate_parameter_serialization(parameter)?;
+            &parameter.schema.0
+        }
+        RequestTarget::Body(pointer) => {
+            if !operation.method.eq_ignore_ascii_case("POST") {
+                bail!("body mappings require a POST operation");
+            }
+            if let Some(segment) = parse_body_pointer(pointer)?
+                .into_iter()
+                .find(|segment| segment.len() > 16_384)
+            {
+                bail!(
+                    "body target `{pointer}` contains a {}-byte property name, exceeding the 16384-byte prepared-string ceiling",
+                    segment.len()
+                );
+            }
+            let body = body.ok_or_else(|| {
+                anyhow!(
+                    "{} {} declares no application/json request body",
+                    operation.method,
+                    operation.path
+                )
+            })?;
+            body_pointer_schema(&body.schema.0, pointer)?
+        }
+    };
+    validate_scalar_compatibility(selector, selector_field, schema, target)
+}
+
+fn validate_parameter_serialization(parameter: &OperationParameter) -> Result<()> {
+    let expected_style = match parameter.location {
+        ParameterLocation::Path => "simple",
+        ParameterLocation::Query => "form",
+        ParameterLocation::Header | ParameterLocation::Cookie => {
+            bail!("generated mappings cannot set headers or cookies")
+        }
+    };
+    let actual_style = parameter.style.as_deref().unwrap_or(expected_style);
+    if actual_style != expected_style {
+        bail!(
+            "{} parameter `{}` uses unsupported OpenAPI serialization style `{actual_style}`; scalar {} mappings support only style `{expected_style}`",
+            parameter.location.as_str(),
+            parameter.name,
+            parameter.location.as_str()
+        );
+    }
+    if parameter.allow_reserved {
+        bail!(
+            "{} parameter `{}` declares `allowReserved: true`, which the fixed request encoder does not support",
+            parameter.location.as_str(),
+            parameter.name
+        );
+    }
+    Ok(())
+}
+
+fn validate_preparation_bounds(mappings: &[RequestMapping]) -> Result<()> {
+    let query_count = mappings
+        .iter()
+        .filter(|mapping| matches!(mapping.target, RequestTarget::Query(_)))
+        .count();
+    let body_count = mappings
+        .iter()
+        .filter(|mapping| matches!(mapping.target, RequestTarget::Body(_)))
+        .count();
+    if query_count > 64 {
+        bail!("{query_count} query mappings exceed the 64-pair request ceiling");
+    }
+    if body_count > 256 {
+        bail!("{body_count} body mappings exceed the 256-member JSON collection ceiling");
+    }
+    // JSON may encode one variable input byte as a six-byte `\u00XX` escape.
+    // Fixed names are serialized exactly below. The per-mapping allowance
+    // covers punctuation and the fixed RequestParts envelope; this
+    // intentionally overestimates rather than admitting a plan the runtime
+    // might reject after authorization.
+    let mut maximum_normalized_bytes = 256_u64;
+    for mapping in mappings {
+        match &mapping.target {
+            RequestTarget::Path(_) => continue,
+            RequestTarget::Query(name) => {
+                let encoded_name_bytes = serde_json::to_string(name)?.len() as u64;
+                maximum_normalized_bytes = maximum_normalized_bytes
+                    .saturating_add(encoded_name_bytes)
+                    .saturating_add(mapping.selector.maximum_bytes.saturating_mul(6))
+                    .saturating_add(128);
+            }
+            RequestTarget::Body(pointer) => {
+                let encoded_key_bytes = parse_body_pointer(pointer)?
+                    .iter()
+                    .map(|segment| serde_json::to_string(segment).map(|value| value.len() as u64))
+                    .collect::<Result<Vec<_>, _>>()?
+                    .into_iter()
+                    .sum::<u64>();
+                maximum_normalized_bytes = maximum_normalized_bytes
+                    .saturating_add(encoded_key_bytes)
+                    .saturating_add(mapping.selector.maximum_bytes.saturating_mul(6))
+                    .saturating_add(128);
+            }
+        }
+    }
+    if maximum_normalized_bytes > 65_536 {
+        bail!(
+            "the mapped request can require {maximum_normalized_bytes} normalized bytes, exceeding the 65536-byte request-parts ceiling; narrow the selector profiles or request shape"
+        );
+    }
+    Ok(())
+}
+
+fn find_parameter<'a>(
+    parameters: &'a [OperationParameter],
+    name: &str,
+    location: ParameterLocation,
+) -> Result<&'a OperationParameter> {
+    parameters
+        .iter()
+        .find(|parameter| parameter.name == name && parameter.location == location)
+        .ok_or_else(|| {
+            anyhow!(
+                "the selected operation declares no `{name}` {} parameter",
+                location.as_str()
+            )
+        })
+}
+
+fn validate_scalar_compatibility(
+    selector: &SelectorReference,
+    selector_field: &registry_evidence_authoring::selector::Field,
+    schema: &serde_json::Value,
+    target: &RequestTarget,
+) -> Result<()> {
+    let expected = match selector.scalar_type {
+        SelectorScalarType::String => "string",
+        SelectorScalarType::Integer => "integer",
+        SelectorScalarType::Boolean => "boolean",
+    };
+    let compatible = match schema.get("type") {
+        Some(serde_json::Value::String(actual)) => actual == expected,
+        Some(serde_json::Value::Array(values)) => {
+            values.len() == 2
+                && values.iter().any(|value| value == expected)
+                && values.iter().any(|value| value == "null")
+        }
+        _ => false,
+    };
+    if !compatible {
+        bail!(
+            "selector `{}.{}.{}` has type {expected}, but `{}` does not declare that scalar type",
+            selector.role,
+            selector.profile,
+            selector.field,
+            display_target(target)
+        );
+    }
+    if schema.get("readOnly") == Some(&serde_json::Value::Bool(true)) {
+        bail!(
+            "request target `{}` is readOnly and cannot be populated",
+            display_target(target)
+        );
+    }
+    validate_selector_domain(selector, selector_field, schema, target)?;
+    Ok(())
+}
+
+fn validate_selector_domain(
+    selector: &SelectorReference,
+    field: &registry_evidence_authoring::selector::Field,
+    schema: &serde_json::Value,
+    target: &RequestTarget,
+) -> Result<()> {
+    use registry_evidence_authoring::selector::Field;
+    for keyword in [
+        "enum",
+        "const",
+        "$dynamicRef",
+        "$recursiveRef",
+        "pattern",
+        "multipleOf",
+        "not",
+        "if",
+        "then",
+        "else",
+        "dependentSchemas",
+        "dependentRequired",
+        "allOf",
+        "anyOf",
+        "oneOf",
+        "unevaluatedProperties",
+    ] {
+        if schema.get(keyword).is_some() {
+            bail!(
+                "request target `{}` declares `{keyword}`, so the mapped selector domain cannot be proven compatible without a reviewed Function or narrower selector profile",
+                display_target(target)
+            );
+        }
+    }
+    let format = schema.get("format").and_then(serde_json::Value::as_str);
+    match field {
+        Field::String {
+            minimum_bytes,
+            maximum_bytes,
+            ..
+        } => {
+            if format.is_some() {
+                bail!("request target `{}` declares a string format that a general string selector cannot prove", display_target(target));
+            }
+            validate_string_lengths(
+                minimum_bytes.get().div_ceil(4),
+                maximum_bytes.get(),
+                schema,
+                selector,
+                target,
+            )?;
+        }
+        Field::ControlledCode { maximum_bytes, .. } => {
+            if format.is_some() || schema.get("minLength").is_some() {
+                bail!("request target `{}` declares string constraints that a controlled-code selector cannot prove without inspecting governed codelist values", display_target(target));
+            }
+            validate_string_lengths(0, maximum_bytes.get(), schema, selector, target)?;
+        }
+        Field::Date { .. } => {
+            if format.is_some_and(|value| value != "date") {
+                bail!(
+                    "date selector `{}.{}.{}` is incompatible with request format `{}`",
+                    selector.role,
+                    selector.profile,
+                    selector.field,
+                    format.unwrap_or_default()
+                );
+            }
+            validate_string_lengths(10, 10, schema, selector, target)?;
+        }
+        Field::Uuid { .. } => {
+            if format.is_some_and(|value| value != "uuid") {
+                bail!(
+                    "UUID selector `{}.{}.{}` is incompatible with request format `{}`",
+                    selector.role,
+                    selector.profile,
+                    selector.field,
+                    format.unwrap_or_default()
+                );
+            }
+            validate_string_lengths(36, 36, schema, selector, target)?;
+        }
+        Field::Integer {
+            minimum, maximum, ..
+        } => {
+            validate_integer_bounds(*minimum, *maximum, schema, selector, target)?;
+        }
+        Field::Boolean { .. } => {
+            if format.is_some() {
+                bail!(
+                    "boolean request target `{}` declares an unsupported format",
+                    display_target(target)
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_string_lengths(
+    guaranteed_minimum_codepoints: u64,
+    maximum_codepoints: u64,
+    schema: &serde_json::Value,
+    selector: &SelectorReference,
+    target: &RequestTarget,
+) -> Result<()> {
+    let minimum = schema
+        .get("minLength")
+        .map(|value| {
+            value.as_u64().ok_or_else(|| {
+                anyhow!(
+                    "request target `{}` has a non-integer minLength",
+                    display_target(target)
+                )
+            })
+        })
+        .transpose()?;
+    let maximum = schema
+        .get("maxLength")
+        .map(|value| {
+            value.as_u64().ok_or_else(|| {
+                anyhow!(
+                    "request target `{}` has a non-integer maxLength",
+                    display_target(target)
+                )
+            })
+        })
+        .transpose()?;
+    if minimum.is_some_and(|minimum| guaranteed_minimum_codepoints < minimum)
+        || maximum.is_some_and(|maximum| maximum_codepoints > maximum)
+    {
+        bail!(
+            "selector `{}.{}.{}` byte bounds cannot prove the string length constraints of request target `{}`; use a narrower reviewed selector profile",
+            selector.role,
+            selector.profile,
+            selector.field,
+            display_target(target)
+        );
+    }
+    Ok(())
+}
+
+fn validate_integer_bounds(
+    selector_minimum: i64,
+    selector_maximum: i64,
+    schema: &serde_json::Value,
+    selector: &SelectorReference,
+    target: &RequestTarget,
+) -> Result<()> {
+    let integer = |keyword: &str| -> Result<Option<i64>> {
+        schema
+            .get(keyword)
+            .map(|value| {
+                value.as_i64().ok_or_else(|| {
+                    anyhow!(
+                        "request target `{}` has a non-integer `{keyword}`",
+                        display_target(target)
+                    )
+                })
+            })
+            .transpose()
+    };
+    let minimum = integer("minimum")?;
+    let maximum = integer("maximum")?;
+    let exclusive_minimum = integer("exclusiveMinimum")?;
+    let exclusive_maximum = integer("exclusiveMaximum")?;
+    if schema
+        .get("exclusiveMinimum")
+        .is_some_and(serde_json::Value::is_boolean)
+        || schema
+            .get("exclusiveMaximum")
+            .is_some_and(serde_json::Value::is_boolean)
+        || minimum.is_some_and(|bound| selector_minimum < bound)
+        || maximum.is_some_and(|bound| selector_maximum > bound)
+        || exclusive_minimum.is_some_and(|bound| selector_minimum <= bound)
+        || exclusive_maximum.is_some_and(|bound| selector_maximum >= bound)
+    {
+        bail!(
+            "selector `{}.{}.{}` integer range is wider than request target `{}`; use a narrower reviewed selector profile",
+            selector.role,
+            selector.profile,
+            selector.field,
+            display_target(target)
+        );
+    }
+    Ok(())
+}
+
+fn validate_required_inputs(
+    operation: &OperationKey,
+    parameters: &[OperationParameter],
+    body: Option<&types::OperationRequestBody>,
+    mappings: &[RequestMapping],
+) -> Result<()> {
+    for parameter in parameters.iter().filter(|parameter| parameter.required) {
+        let target = match parameter.location {
+            ParameterLocation::Path => RequestTarget::Path(parameter.name.clone()),
+            ParameterLocation::Query => RequestTarget::Query(parameter.name.clone()),
+            ParameterLocation::Header | ParameterLocation::Cookie => bail!("{} {} requires {} parameter `{}`; generated mappings cannot set headers or cookies", operation.method, operation.path, parameter.location.as_str(), parameter.name),
+        };
+        if !mappings.iter().any(|mapping| mapping.target == target) {
+            bail!(
+                "required request input `{}` has no --map-selector assignment",
+                display_target(&target)
+            );
+        }
+    }
+    if let Some(body) = body {
+        let mapped = mappings
+            .iter()
+            .filter_map(|mapping| {
+                if let RequestTarget::Body(pointer) = &mapping.target {
+                    Some(pointer.as_str())
+                } else {
+                    None
+                }
+            })
+            .collect::<BTreeSet<_>>();
+        if body.required && mapped.is_empty() {
+            bail!("the required application/json request body has no --map-selector assignment");
+        }
+        if body.required || !mapped.is_empty() {
+            let mut required = BTreeSet::new();
+            collect_required_body_leaves(&body.schema.0, "", &mut required)?;
+            for pointer in required {
+                if !mapped.contains(pointer.as_str()) {
+                    bail!(
+                        "required request input `body:{pointer}` has no --map-selector assignment"
+                    );
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn parse_body_pointer(pointer: &str) -> Result<Vec<String>> {
+    if !pointer.starts_with('/') || pointer == "/" {
+        bail!("body target `{pointer}` must be a non-root RFC 6901 pointer");
+    }
+    let mut out = Vec::new();
+    for encoded in pointer[1..].split('/') {
+        if encoded.is_empty() || encoded == "*" {
+            bail!("body target `{pointer}` must contain object-property segments only");
+        }
+        let mut decoded = String::new();
+        let mut chars = encoded.chars();
+        while let Some(character) = chars.next() {
+            if character != '~' {
+                decoded.push(character);
+                continue;
+            }
+            match chars.next() {
+                Some('0') => decoded.push('~'),
+                Some('1') => decoded.push('/'),
+                _ => bail!("body target `{pointer}` is not a valid RFC 6901 pointer"),
+            }
+        }
+        out.push(decoded);
+    }
+    if out.len() > 31 {
+        bail!("body target `{pointer}` exceeds the generated JSON depth ceiling");
+    }
+    Ok(out)
+}
+
+fn body_pointer_schema<'a>(
+    schema: &'a serde_json::Value,
+    pointer: &str,
+) -> Result<&'a serde_json::Value> {
+    let segments = parse_body_pointer(pointer)?;
+    let mut node = schema;
+    for segment in &segments {
+        require_closed_object(node, pointer)?;
+        node = node
+            .get("properties")
+            .and_then(serde_json::Value::as_object)
+            .and_then(|properties| properties.get(segment))
+            .ok_or_else(|| anyhow!("body target `{pointer}` names no declared request property"))?;
+    }
+    if !matches!(
+        node.get("type").and_then(serde_json::Value::as_str),
+        Some("string" | "integer" | "boolean")
+    ) || node.get("oneOf").is_some()
+        || node.get("anyOf").is_some()
+        || node.get("allOf").is_some()
+    {
+        bail!("body target `{pointer}` must name one scalar in a simple closed JSON object");
+    }
+    Ok(node)
+}
+
+fn require_closed_object(schema: &serde_json::Value, pointer: &str) -> Result<()> {
+    if schema.get("type").and_then(serde_json::Value::as_str) != Some("object")
+        || schema
+            .get("properties")
+            .and_then(serde_json::Value::as_object)
+            .is_none()
+        || schema.get("additionalProperties") != Some(&serde_json::Value::Bool(false))
+        || schema.get("oneOf").is_some()
+        || schema.get("anyOf").is_some()
+        || schema.get("allOf").is_some()
+    {
+        bail!("body target `{pointer}` requires a simple closed object schema with `additionalProperties: false`; arrays and polymorphism are unsupported");
+    }
+    for keyword in [
+        "minProperties",
+        "maxProperties",
+        "$dynamicRef",
+        "$recursiveRef",
+        "propertyNames",
+        "patternProperties",
+        "dependentRequired",
+        "dependentSchemas",
+        "unevaluatedProperties",
+        "not",
+        "if",
+        "then",
+        "else",
+    ] {
+        if schema.get(keyword).is_some() {
+            bail!(
+                "body target `{pointer}` uses unsupported object constraint `{keyword}`; generated bodies support only explicit closed properties and required scalar leaves"
+            );
+        }
+    }
+    Ok(())
+}
+
+fn collect_required_body_leaves(
+    schema: &serde_json::Value,
+    pointer: &str,
+    out: &mut BTreeSet<String>,
+) -> Result<()> {
+    require_closed_object(
+        schema,
+        if pointer.is_empty() {
+            "(root)"
+        } else {
+            pointer
+        },
+    )?;
+    let properties = schema["properties"]
+        .as_object()
+        .expect("validated properties");
+    let required = schema
+        .get("required")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten();
+    for value in required {
+        let name = value
+            .as_str()
+            .ok_or_else(|| anyhow!("request-body `required` entries must be strings"))?;
+        let child = properties
+            .get(name)
+            .ok_or_else(|| anyhow!("request-body required property `{name}` has no schema"))?;
+        let child_pointer = format!("{pointer}/{}", name.replace('~', "~0").replace('/', "~1"));
+        match child.get("type").and_then(serde_json::Value::as_str) {
+            Some("object") => {
+                let before = out.len();
+                collect_required_body_leaves(child, &child_pointer, out)?;
+                if out.len() == before {
+                    bail!("required request object `body:{child_pointer}` has no required scalar leaves; generated empty-object bindings are unsupported");
+                }
+            }
+            Some("string" | "integer" | "boolean") => {
+                out.insert(child_pointer);
+            }
+            _ => bail!("required request input `body:{child_pointer}` is not a supported scalar or closed object"),
+        }
+    }
+    Ok(())
 }
 
 fn suggest(args: SuggestArgs, format: OutputFormat) -> Result<ExitCode> {

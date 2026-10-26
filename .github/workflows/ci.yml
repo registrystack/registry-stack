@@ -2256,6 +2256,11 @@ jobs:
             -- --ignored --exact \
             | tee "${RUNNER_TEMP}/evidence-fixture-evaluation.log"
           grep -q 'test result: ok\. 1 passed' "${RUNNER_TEMP}/evidence-fixture-evaluation.log" || { echo "::error::expected exactly one passing test for production_build_checks_and_evaluates_every_neutral_authoring_shape"; exit 1; }
+          cargo test --locked -p registry-evidencectl --test source_recipes \
+            curated_source_recipes_import_check_and_run_the_existing_evaluator \
+            -- --ignored --exact \
+            | tee "${RUNNER_TEMP}/evidence-source-recipes.log"
+          grep -q 'test result: ok\. 1 passed' "${RUNNER_TEMP}/evidence-source-recipes.log" || { echo "::error::expected exactly one passing test for curated_source_recipes_import_check_and_run_the_existing_evaluator"; exit 1; }
 
       - name: Execute the Evidence tutorials with the stock issuer
         shell: bash

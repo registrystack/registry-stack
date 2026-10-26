@@ -162,6 +162,7 @@ capabilities:
     - pure expressions and bounded array iteration
     - allowlisted primitive calls
     - bounded local map, array, and string construction and mutation
+    - explicit to_string conversion of signed 64-bit integers to canonical decimal text and Booleans to true or false text; no Dynamic or opaque-handle stringification
   denied:
     - filesystem, environment, network, process, import, eval, plugins, or modules
     - ambient clock, timezone lookup, randomness, UUID, logging, printing, diagnostics, audit, credentials, or signing

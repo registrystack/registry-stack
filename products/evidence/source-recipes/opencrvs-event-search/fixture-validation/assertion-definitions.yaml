@@ -1,0 +1,33 @@
+  registered-parent:
+    question: Does the synthetic registered birth event contain a configured parent reference?
+    semantics:
+      requirement: urn:example:requirement:opencrvs-recipe-registered-parent:v1
+      kind: criterion
+      evidenceType: urn:example:evidence-type:opencrvs-recipe-registered-parent:v1
+      referenceFrameworks: [urn:example:framework:source-recipe-validation:v1]
+    purpose: source-recipe-validation
+    grantCeiling:
+      authorities: [organizational]
+      actorKinds: [service]
+      valueOrigins: [request]
+      audiences: [urn:example:audience:source-recipe-validator]
+    subjects:
+    - role: child
+      selectors: [opencrvs-tracking-id-v1]
+    acquisition: {type: single, source: opencrvs-event-search}
+    derive:
+      function: derive-registered-parent
+      selectorInputs:
+      - role: child
+        alternatives:
+        - profile: opencrvs-tracking-id-v1
+          fields: [tracking_id]
+    outputs:
+      registered-parent-present:
+        concept: urn:example:concept:opencrvs-recipe-registered-parent:v1
+        type: boolean
+    validitySeconds: 60
+    subjectBinding: audience-scoped
+    representations: [signed-jws]
+    observationTimezone: UTC
+    fixtures: fixtures/registered-parent.yaml

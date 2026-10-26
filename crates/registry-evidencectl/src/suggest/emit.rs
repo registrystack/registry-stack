@@ -23,7 +23,7 @@ use serde_json::{json, Value};
 
 use super::types::{
     BoundKind, BoundNeed, BoundValues, DraftArtifacts, DraftFile, NarrowOutcome, OperationKey,
-    Provenance, SpecSource, SuggestedBound,
+    Provenance, RequestMapping, RequestTarget, SelectorScalarType, SpecSource, SuggestedBound,
 };
 
 /// Everything the emit stage needs to draft artifacts for one source. Built
@@ -66,6 +66,9 @@ pub struct EmitInputs {
     /// The deployment project the draft was (or would be) written into,
     /// echoed back in `equivalent_command`.
     pub project: Option<PathBuf>,
+    /// Author-validated selector assignments. Empty preserves the incomplete
+    /// review draft emitted by earlier releases.
+    pub request_mappings: Vec<RequestMapping>,
 }
 
 /// The outcome of running `evidence check` against a written draft.
@@ -159,7 +162,7 @@ pub fn draft(inputs: &EmitInputs) -> Result<DraftArtifacts> {
     let files = vec![
         DraftFile {
             bundle_relative_path: format!("functions/{}-prepare.rhai", inputs.source_id),
-            contents: render_prepare_script(),
+            contents: render_prepare_script(inputs)?,
         },
         DraftFile {
             bundle_relative_path: format!("functions/{}-extract.rhai", inputs.source_id),
@@ -177,14 +180,118 @@ pub fn draft(inputs: &EmitInputs) -> Result<DraftArtifacts> {
     })
 }
 
-fn render_prepare_script() -> String {
-    r#"fn prepare(selectors, context) {
+fn render_prepare_script(inputs: &EmitInputs) -> Result<String> {
+    if inputs.request_mappings.is_empty() {
+        return Ok(r#"fn prepare(selectors, context) {
     let parameters = context["parameters"];
     // TODO(evidencectl): bind only reviewed selector fields and fixed parameters.
     #{query: [], body: ()}
 }
 "#
-    .to_owned()
+        .to_owned());
+    }
+
+    let mut out = String::new();
+    out.push_str("fn query_pair(name, value) { #{name: name, value: value} }\n\n");
+    out.push_str("fn prepare(selectors, context) {\n");
+    out.push_str("    let parameters = context[\"parameters\"];\n");
+    out.push_str("    let query = [];\n");
+    for mapping in inputs
+        .request_mappings
+        .iter()
+        .filter(|mapping| matches!(mapping.target, RequestTarget::Query(_)))
+    {
+        let RequestTarget::Query(name) = &mapping.target else {
+            continue;
+        };
+        let access = selector_access(mapping);
+        let value = match mapping.selector.scalar_type {
+            SelectorScalarType::String => access,
+            SelectorScalarType::Integer | SelectorScalarType::Boolean => {
+                format!("to_string({access})")
+            }
+        };
+        out.push_str(&format!(
+            "    query.push(query_pair({}, {value}));\n",
+            rhai_string_literal(name)
+        ));
+    }
+    let body = render_body(inputs)?;
+    out.push_str(&format!("    #{{query: query, body: {body}}}\n"));
+    out.push_str("}\n");
+    Ok(out)
+}
+
+fn selector_access(mapping: &RequestMapping) -> String {
+    format!(
+        "selectors[{}][\"values\"][{}]",
+        rhai_string_literal(&mapping.selector.role),
+        rhai_string_literal(&mapping.selector.field)
+    )
+}
+
+#[derive(Default)]
+struct BodyNode {
+    value: Option<String>,
+    children: BTreeMap<String, BodyNode>,
+}
+
+fn render_body(inputs: &EmitInputs) -> Result<String> {
+    let body_mappings = inputs
+        .request_mappings
+        .iter()
+        .filter(|mapping| matches!(mapping.target, RequestTarget::Body(_)))
+        .collect::<Vec<_>>();
+    if body_mappings.is_empty() {
+        return Ok("()".to_owned());
+    }
+    let mut root = BodyNode::default();
+    for mapping in body_mappings {
+        let RequestTarget::Body(pointer) = &mapping.target else {
+            continue;
+        };
+        let mut node = &mut root;
+        for segment in decode_body_pointer(pointer)? {
+            node = node.children.entry(segment).or_default();
+        }
+        node.value = Some(selector_access(mapping));
+    }
+    Ok(render_body_node(&root))
+}
+
+fn decode_body_pointer(pointer: &str) -> Result<Vec<String>> {
+    pointer[1..]
+        .split('/')
+        .map(|encoded| {
+            let mut decoded = String::new();
+            let mut chars = encoded.chars();
+            while let Some(character) = chars.next() {
+                if character != '~' {
+                    decoded.push(character);
+                } else {
+                    match chars.next() {
+                        Some('0') => decoded.push('~'),
+                        Some('1') => decoded.push('/'),
+                        _ => bail!("invalid body pointer `{pointer}`"),
+                    }
+                }
+            }
+            Ok(decoded)
+        })
+        .collect()
+}
+
+fn render_body_node(node: &BodyNode) -> String {
+    if let Some(value) = &node.value {
+        return value.clone();
+    }
+    let entries = node
+        .children
+        .iter()
+        .map(|(key, child)| format!("{}: {}", rhai_string_literal(key), render_body_node(child)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("#{{{entries}}}")
 }
 
 /// Checks the operation's method against the runtime's fixed-request method
@@ -759,12 +866,36 @@ fn render_source_block(inputs: &EmitInputs, _method: &str) -> String {
 /// This keeps the authoring artifact identical to the runtime contract.
 fn render_authoring_source(inputs: &EmitInputs) -> String {
     let method = request_method(&inputs.operation.method).expect("validated method");
-    let source = json!({
+    let mut request = json!({"method":method,"path":request_path(inputs),"fixedHeaders":[{"name":"Accept","value":inputs.media_type}]});
+    let path_bindings = inputs.request_mappings.iter().filter_map(|mapping| {
+        let RequestTarget::Path(name) = &mapping.target else { return None };
+        Some((name.clone(), json!({"selector":{"role":&mapping.selector.role,"profile":&mapping.selector.profile,"field":&mapping.selector.field}})))
+    }).collect::<serde_json::Map<_, _>>();
+    if !path_bindings.is_empty() {
+        request["pathBindings"] = serde_json::Value::Object(path_bindings);
+    }
+    let selectors = inputs
+        .request_mappings
+        .iter()
+        .fold(
+            BTreeMap::<String, BTreeSet<String>>::new(),
+            |mut groups, mapping| {
+                groups
+                    .entry(mapping.selector.role.clone())
+                    .or_default()
+                    .insert(mapping.selector.profile.clone());
+                groups
+            },
+        )
+        .into_iter()
+        .map(|(role, profiles)| json!({"role":role,"profiles":profiles}))
+        .collect::<Vec<_>>();
+    let mut source = json!({
         "type":"http-json",
         "connection":inputs.source_id,
         "acquisitionPosture":"record-transformed",
-        "selectors":[],
-        "request":{"method":method,"path":request_path(inputs),"fixedHeaders":[{"name":"Accept","value":inputs.media_type}]},
+        "selectors":selectors,
+        "request":request,
         "response":{"projection":inputs.selection,"shape":inputs.narrowed.schema.clone(),"maximumBytes":65536},
         "prepare":{"function":format!("{}-prepare",inputs.source_id)},
         "extract":{"function":format!("{}-extract",inputs.source_id)},
@@ -773,6 +904,73 @@ fn render_authoring_source(inputs: &EmitInputs) -> String {
         "adapterParameters":{},
         "adapterParametersSchema":{"type":"object","additionalProperties":false,"properties":{}}
     });
+    let query = inputs
+        .request_mappings
+        .iter()
+        .filter(|mapping| matches!(mapping.target, RequestTarget::Query(_)))
+        .collect::<Vec<_>>();
+    let body = inputs
+        .request_mappings
+        .iter()
+        .filter(|mapping| matches!(mapping.target, RequestTarget::Body(_)))
+        .collect::<Vec<_>>();
+    if !query.is_empty() || !body.is_empty() {
+        let selector_maximum_bytes = query
+            .iter()
+            .chain(body.iter())
+            .map(|mapping| mapping.selector.maximum_bytes)
+            .max()
+            .unwrap_or(1)
+            .max(64);
+        let body_key_maximum_bytes = body
+            .iter()
+            .filter_map(|mapping| match &mapping.target {
+                RequestTarget::Body(pointer) => Some(pointer),
+                _ => None,
+            })
+            .flat_map(|pointer| {
+                decode_body_pointer(pointer)
+                    .expect("body pointer validated while rendering the prepare Function")
+            })
+            .map(|segment| segment.len() as u64)
+            .max()
+            .unwrap_or(1);
+        let maximum_string_bytes = selector_maximum_bytes.max(body_key_maximum_bytes);
+        let mut limits = json!({
+            "query": if query.is_empty() { "forbidden" } else { "required" },
+            "jsonBody": if body.is_empty() { "forbidden" } else { "required" },
+            "maximumStringBytes": maximum_string_bytes,
+            "maximumNormalizedBytes": 65536
+        });
+        if !query.is_empty() {
+            limits["maximumQueryPairs"] = json!(query.len());
+            limits["maximumQueryNameBytes"] = json!(query
+                .iter()
+                .filter_map(|mapping| match &mapping.target {
+                    RequestTarget::Query(name) => Some(name.len()),
+                    _ => None,
+                })
+                .max()
+                .unwrap_or(1));
+            limits["maximumQueryValueBytes"] = json!(query
+                .iter()
+                .map(|mapping| mapping.selector.maximum_bytes)
+                .max()
+                .unwrap_or(1));
+        }
+        if !body.is_empty() {
+            limits["maximumJsonDepth"] = json!(body
+                .iter()
+                .filter_map(|mapping| match &mapping.target {
+                    RequestTarget::Body(pointer) => Some(pointer.matches('/').count() + 1),
+                    _ => None,
+                })
+                .max()
+                .unwrap_or(1));
+            limits["maximumCollectionItems"] = json!(body.len().min(256));
+        }
+        source["preparationLimits"] = limits;
+    }
     serde_json::to_string(&source).expect("normalized Source serializes")
 }
 
@@ -930,6 +1128,20 @@ fn render_equivalent_command(inputs: &EmitInputs) -> String {
     for pointer in &inputs.selection {
         parts.push("--select".to_owned());
         parts.push(shell_quote(pointer));
+    }
+    for mapping in &inputs.request_mappings {
+        parts.push("--map-selector".to_owned());
+        parts.push(shell_quote(&format!(
+            "{}.{}.{}={}",
+            mapping.selector.role,
+            mapping.selector.profile,
+            mapping.selector.field,
+            match &mapping.target {
+                RequestTarget::Path(name) => format!("path:{name}"),
+                RequestTarget::Query(name) => format!("query:{name}"),
+                RequestTarget::Body(pointer) => format!("body:{pointer}"),
+            }
+        )));
     }
 
     parts.join(" ")

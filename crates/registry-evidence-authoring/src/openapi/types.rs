@@ -93,11 +93,62 @@ pub struct OperationParameter {
     pub name: String,
     pub location: ParameterLocation,
     pub required: bool,
+    /// Explicit OpenAPI serialization style, or `None` for the location's
+    /// specified default.
+    pub style: Option<String>,
+    /// Explicit OpenAPI explode choice, or `None` for the style's default.
+    pub explode: Option<bool>,
+    /// Whether reserved query characters bypass percent encoding.
+    pub allow_reserved: bool,
     pub schema: ResolvedSchema,
     /// The Parameter Object's own example, when present.
     pub example: Option<serde_json::Value>,
     /// The resolved parameter schema's default, when present.
     pub default: Option<serde_json::Value>,
+}
+
+/// The one request-body shape `source suggest` can map mechanically.
+#[derive(Debug, Clone)]
+pub struct OperationRequestBody {
+    pub required: bool,
+    pub media_type: String,
+    pub schema: ResolvedSchema,
+}
+
+/// Closed scalar types that can travel from a minimized selector into an
+/// OpenAPI request without provider-specific conversion logic.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SelectorScalarType {
+    String,
+    Integer,
+    Boolean,
+}
+
+/// One authoritative selector value in the normalized EvidenceProject.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SelectorReference {
+    pub role: String,
+    pub profile: String,
+    pub field: String,
+    pub scalar_type: SelectorScalarType,
+    /// Maximum serialized bytes admitted by the selector declaration.
+    pub maximum_bytes: u64,
+}
+
+/// One request destination supplied explicitly by the author.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum RequestTarget {
+    Path(String),
+    Query(String),
+    Body(String),
+}
+
+/// One explicit selector-to-request assignment. The same selector may serve
+/// several distinct targets, but one target has exactly one assignment.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RequestMapping {
+    pub selector: SelectorReference,
+    pub target: RequestTarget,
 }
 
 /// A response schema with every local `$ref` inlined and the dialect

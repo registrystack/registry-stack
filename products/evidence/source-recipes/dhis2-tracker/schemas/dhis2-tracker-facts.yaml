@@ -1,0 +1,6 @@
+type: object
+additionalProperties: false
+required: [record_reference, status_code]
+properties:
+  record_reference: {type: string, minLength: 1, maxLength: 64}
+  status_code: {type: string, minLength: 1, maxLength: 64}

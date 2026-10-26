@@ -942,6 +942,8 @@ fn register_language_essentials(engine: &mut Engine) {
         .register_fn("push", bounded_array_push)
         .register_fn("replace", literal_string_replace)
         .register_fn("parse_integer", parse_integer)
+        .register_fn("to_string", integer_to_string)
+        .register_fn("to_string", boolean_to_string)
         .register_fn(INDEX_GUARD_FUNCTION, guard_index)
         .register_fn(INDEX_GUARD_FUNCTION, guard_index_key);
 }
@@ -1066,6 +1068,17 @@ fn parse_decimal(input: &str) -> Result<Decimal, Box<EvalAltResult>> {
 
 fn integer_to_decimal(value: INT) -> Decimal {
     Decimal::from_integer(value)
+}
+
+/// Canonical lexical forms for scalar values placed in an HTTP query pair.
+/// These overloads stay deliberately closed instead of exposing generic
+/// Dynamic stringification, which would also stringify opaque capabilities.
+fn integer_to_string(value: INT) -> ImmutableString {
+    value.to_string().into()
+}
+
+fn boolean_to_string(value: bool) -> ImmutableString {
+    if value { "true" } else { "false" }.into()
 }
 
 fn add_calendar_years(date: CalendarDate, years: INT) -> Result<CalendarDate, Box<EvalAltResult>> {
@@ -3410,6 +3423,61 @@ mod tests {
                 Err(RhaiRuntimeError::ExtractionResult)
             );
         }
+    }
+
+    #[test]
+    fn to_string_formats_only_canonical_integer_and_boolean_query_values() {
+        let runtime = runtime();
+        let script = runtime
+            .compile_preparation(
+                r#"
+                fn pair(name, value) { #{name: name, value: value} }
+                fn prepare(selectors, context) {
+                    #{
+                        query: [
+                            pair("minimum", to_string(selectors.subject.values.minimum)),
+                            pair("maximum", to_string(selectors.subject.values.maximum)),
+                            pair("yes", to_string(selectors.subject.values.yes)),
+                            pair("no", to_string(selectors.subject.values.no))
+                        ],
+                        body: ()
+                    }
+                }
+                "#,
+            )
+            .expect("canonical request-text script compiles");
+        let prepared = runtime
+            .prepare(
+                &script,
+                &json!({"subject":{"values":{"minimum":i64::MIN,"maximum":i64::MAX,"yes":true,"no":false}}}),
+                &json!({}),
+                &request_limits(
+                    RequestPartRequirement::Required,
+                    RequestPartRequirement::Forbidden,
+                ),
+            )
+            .expect("canonical query values prepare");
+        assert_eq!(
+            prepared.query,
+            vec![
+                QueryPair {
+                    name: "minimum".to_owned(),
+                    value: i64::MIN.to_string()
+                },
+                QueryPair {
+                    name: "maximum".to_owned(),
+                    value: i64::MAX.to_string()
+                },
+                QueryPair {
+                    name: "yes".to_owned(),
+                    value: "true".to_owned()
+                },
+                QueryPair {
+                    name: "no".to_owned(),
+                    value: "false".to_owned()
+                },
+            ]
+        );
     }
 
     #[test]

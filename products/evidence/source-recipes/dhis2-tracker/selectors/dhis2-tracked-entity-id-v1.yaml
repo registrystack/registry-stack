@@ -1,0 +1,8 @@
+apiVersion: id.registrystack.org/formats/evidence/selector/v1alpha1
+kind: EvidenceSelector
+maximumAggregateBytes: 64
+fields:
+  record_reference:
+    type: string
+    minimumBytes: 1
+    maximumBytes: 64

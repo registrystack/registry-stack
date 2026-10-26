@@ -41,12 +41,62 @@ export const exampleFiles = [
   'standalone/serve-source.py',
 ].sort();
 
+export const sourceRecipeFiles = [
+  'LICENSE',
+  'README.md',
+  'run-fixtures.sh',
+  'dhis2-tracker/README.md',
+  'dhis2-tracker/adapters/dhis2-tracker-extract.rhai',
+  'dhis2-tracker/adapters/dhis2-tracker-prepare.rhai',
+  'dhis2-tracker/fixture-validation/assertion-definitions.yaml',
+  'dhis2-tracker/fixture-validation/authority.yaml',
+  'dhis2-tracker/fixture-validation/evidence.yaml',
+  'dhis2-tracker/fixture-validation/fixtures/active-status.yaml',
+  'dhis2-tracker/fixture-validation/functions/derive-active-status.rhai',
+  'dhis2-tracker/fixture-validation/functions/validation-seed-derive.rhai',
+  'dhis2-tracker/fixture-validation/functions/validation-seed-extract.rhai',
+  'dhis2-tracker/fixture-validation/local-target.yaml',
+  'dhis2-tracker/fixture-validation/public-key.jwk.json',
+  'dhis2-tracker/schemas/dhis2-tracker-facts.yaml',
+  'dhis2-tracker/schemas/dhis2-tracker-parameters.yaml',
+  'dhis2-tracker/schemas/dhis2-tracker-response.yaml',
+  'dhis2-tracker/selectors/dhis2-tracked-entity-id-v1.yaml',
+  'dhis2-tracker/source-export.json',
+  'dhis2-tracker/sources/dhis2-tracker.yaml',
+  'opencrvs-event-search/README.md',
+  'opencrvs-event-search/adapters/opencrvs-event-search-extract.rhai',
+  'opencrvs-event-search/adapters/opencrvs-event-search-prepare.rhai',
+  'opencrvs-event-search/fixture-validation/assertion-definitions.yaml',
+  'opencrvs-event-search/fixture-validation/authority.yaml',
+  'opencrvs-event-search/fixture-validation/evidence.yaml',
+  'opencrvs-event-search/fixture-validation/fixtures/registered-parent.yaml',
+  'opencrvs-event-search/fixture-validation/functions/derive-registered-parent.rhai',
+  'opencrvs-event-search/fixture-validation/functions/validation-seed-derive.rhai',
+  'opencrvs-event-search/fixture-validation/functions/validation-seed-extract.rhai',
+  'opencrvs-event-search/fixture-validation/local-target.yaml',
+  'opencrvs-event-search/fixture-validation/public-key.jwk.json',
+  'opencrvs-event-search/schemas/opencrvs-event-search-facts.yaml',
+  'opencrvs-event-search/schemas/opencrvs-event-search-parameters.yaml',
+  'opencrvs-event-search/schemas/opencrvs-event-search-response.yaml',
+  'opencrvs-event-search/selectors/opencrvs-tracking-id-v1.yaml',
+  'opencrvs-event-search/source-export.json',
+  'opencrvs-event-search/sources/opencrvs-event-search.yaml',
+].sort();
+
 export async function packageExamples(source, output) {
+  await packageReviewedFiles(source, output, exampleFiles, 'Example');
+}
+
+export async function packageSourceRecipes(source, output) {
+  await packageReviewedFiles(source, output, sourceRecipeFiles, 'Source recipe');
+}
+
+async function packageReviewedFiles(source, output, files, label) {
   // Explicit inventory excludes generated keys, dev sessions, and responses
-  // even if they exist beside the examples.
-  for (const file of exampleFiles) {
+  // even if they exist beside the reviewed inputs.
+  for (const file of files) {
     const info = await lstat(resolve(source, file));
-    if (!info.isFile() || info.isSymbolicLink()) throw new Error(`Example input is not a plain file: ${file}`);
+    if (!info.isFile() || info.isSymbolicLink()) throw new Error(`${label} input is not a plain file: ${file}`);
   }
   await mkdir(dirname(output), { recursive: true });
   await tar.create({
@@ -59,10 +109,11 @@ export async function packageExamples(source, output) {
     noPax: true,
     strict: true,
     filter(_path, info) { info.mode = (info.mode & ~0o7777) | 0o644; return true; },
-  }, exampleFiles);
+  }, files);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   const site = resolve(dirname(fileURLToPath(import.meta.url)), '..');
   await packageExamples(resolve(site, '../../products/evidence/examples'), resolve(site, 'public/examples/evidence-examples.tar.gz'));
+  await packageSourceRecipes(resolve(site, '../../products/evidence/source-recipes'), resolve(site, 'public/examples/evidence-source-recipes.tar.gz'));
 }
