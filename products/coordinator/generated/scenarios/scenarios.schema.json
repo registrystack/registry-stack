@@ -45,7 +45,7 @@
       "oneOf": [
         {
           "additionalProperties": false,
-          "description": "The call completed and returned `value`.",
+          "description": "The call completed and returned `value`. An `external.command/v1`\nstep takes a `response` reply instead.",
           "properties": {
             "type": {
               "const": "success",
@@ -102,7 +102,7 @@
         },
         {
           "additionalProperties": false,
-          "description": "The product returned a package-declared, no-effect business refusal.\nA supported call takes its `onDeclaredRefusal` edge when it has one;\notherwise the run stops as refused.",
+          "description": "The product returned a package-declared, no-effect business refusal.\nA supported call takes its `onDeclaredRefusal` edge when it has one;\notherwise the run stops as refused. An `external.command/v1` step\ntakes a `response` reply instead, which its interpretation Function\nmay turn into a declared refusal.",
           "properties": {
             "refusalCode": {
               "$ref": "#/$defs/DeclaredRefusalCode",
