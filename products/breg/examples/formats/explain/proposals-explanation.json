@@ -234,8 +234,8 @@
           },
           "systemApplyGrant": {
             "actionId": "correct-address",
-            "actionRevision": "sha256:70318e95008100a9871aef80bb45eef7f5eed9e98ea65d5ee3ee6bf2d74a6402",
-            "revision": "sha256:1afeab9fd55185d7ec5b63c8cc57fd20685c8801b7b688f60aeccaedb75e882c",
+            "actionRevision": "sha256:efb20d40704ae6c133b660f2fe3d556b4a00ee5478a5871cf1fd026e7d7b6b7a",
+            "revision": "sha256:b09c24636b3d208832104a44747d02487181ee91ed74305e6fe0db2fba63c6f6",
             "targets": [
               {
                 "fields": [],
@@ -338,7 +338,7 @@
           }
         }
       ],
-      "migrationReviewRevision": "sha256:0c2bfdcc4d48d0b8e7143ee4679c54c7e7a7265ade70c7c50b7c6b5fc4ccb495",
+      "migrationReviewRevision": "sha256:bf6bf99b13e7fe02e0a71b79b86847509d0d7311bc1e52cda533b7815753a16b",
       "permissions": [
         {
           "default": false,
@@ -415,7 +415,7 @@
           "refusals": {
             "invalid-postal-code": "Postal code is invalid"
           },
-          "rhaiVersion": "1.26.1",
+          "rhaiVersion": "1.27.0",
           "scriptSha256": "sha256:0270538e561991ed35b7fa004f47fd98b744e626bd395fec3f073d61bc02b830",
           "source": "plans/correct-address.rhai",
           "sourceModule": null,
@@ -458,7 +458,7 @@
         },
         "type": "function"
       },
-      "revision": "sha256:70318e95008100a9871aef80bb45eef7f5eed9e98ea65d5ee3ee6bf2d74a6402"
+      "revision": "sha256:efb20d40704ae6c133b660f2fe3d556b4a00ee5478a5871cf1fd026e7d7b6b7a"
     },
     {
       "apiName": "deactivateFacility",

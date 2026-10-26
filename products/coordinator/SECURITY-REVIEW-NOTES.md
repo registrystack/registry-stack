@@ -213,6 +213,13 @@ use no callback-based collection method. A separately authored workflow that
 does use one may reach its unchanged declared limit sooner and should pass
 `coordinatorctl test --project <directory>` before promotion.
 
+The interpreter identity in each frozen definition now names Rhai 1.27.0, so
+authoring the same project produces a new workflow revision. Before upgrading,
+operators must drain runs frozen under the 1.26.1 identity, then re-author and
+promote workflows under 1.27.0. The new runtime deliberately refuses recovery
+from an old snapshot instead of silently reinterpreting it with changed engine
+semantics.
+
 The shared platform test
 `rhai_maps_use_compact_string_keys_and_owned_unicode_round_trips` guards the
 backend selection. `pure_profile_has_no_clock_sleep_or_io_and_limits_computation`,

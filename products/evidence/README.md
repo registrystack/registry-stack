@@ -434,11 +434,11 @@ that edge.
 
 Evidence keeps its 100,000-operation ceiling and every existing string,
 collection, call-depth, expression-depth, source, and output bound. Rhai 1.27
-counts script callbacks invoked by native functions more accurately. Evidence
-registers no native helper that invokes a script callback, and its maintained
-scripts use no callback-based collection method; a separately governed script
-that does use one may exhaust the unchanged operation budget sooner and should
-pass `evidencectl test` before promotion.
+counts script callbacks invoked by native functions more accurately. Evidence's
+closed ABI exposes neither function pointers nor callback-based collection
+methods, and it registers no native helper that invokes a script callback.
+That accounting change is unreachable through the supported Evidence ABI.
+Governed scripts should pass `evidencectl test` before promotion.
 
 The shared platform regression
 `rhai_maps_use_compact_string_keys_and_owned_unicode_round_trips` guards the

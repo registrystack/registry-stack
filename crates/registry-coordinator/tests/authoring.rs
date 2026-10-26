@@ -456,6 +456,19 @@ fn snapshots_refuse_unsupported_abi_duplicate_fields_and_mutation() {
     );
 }
 
+#[test]
+fn snapshot_restore_refuses_retired_rhai_1_26_1_interpreter() {
+    let snapshot = fixture().snapshot().unwrap();
+    let mut value: Value = serde_json::from_str(&snapshot).unwrap();
+    value["interpreterAbi"] = json!(
+        "coordinator/pure-rhai-1.26.1/v1;named-input-object;raw-arithmetic-logic-string-array-map-iterator-instant;ops=100000;calls=32;expr=64;string=16384;array=256;map=256;source=65536;json=131072;depth=32"
+    );
+    assert_eq!(
+        refused(Definition::from_snapshot(&value.to_string())).code,
+        "definition.abi"
+    );
+}
+
 fn canonical(value: &Value) -> String {
     String::from_utf8(registry_platform_canonical_json::canonicalize_json(value).unwrap()).unwrap()
 }

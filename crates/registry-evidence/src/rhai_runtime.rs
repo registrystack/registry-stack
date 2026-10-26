@@ -1584,7 +1584,7 @@ fn validate_top_level_functions(source: &str) -> Result<(), RhaiRuntimeError> {
     Ok(())
 }
 
-/// Walks the script the way Rhai 1.25.1 tokenizes it, rejects the forbidden constructs,
+/// Walks the script the way Rhai tokenizes it, rejects the forbidden constructs,
 /// and reports where the index guard must wrap an index operand.
 fn review_script_bytes(source: &str) -> Result<Vec<(usize, IndexGuard)>, RhaiRuntimeError> {
     let mut cursor = ScriptCursor::new(source);
@@ -1800,7 +1800,7 @@ impl<'a> ScriptCursor<'a> {
         }
     }
 
-    /// Rhai 1.25.1 reads `#"..."#` and `##"..."##` as raw strings, whose bodies may
+    /// Rhai reads `#"..."#` and `##"..."##` as raw strings, whose bodies may
     /// contain quotes. Only `#{` stays inside the reviewed language, so every other `#`
     /// fails rather than letting this scanner and the Rhai tokenizer disagree about
     /// where a string ends.
