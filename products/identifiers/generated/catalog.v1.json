@@ -5102,7 +5102,7 @@
       },
       "artifact": {
         "path": "crates/registry-evidencectl/schemas/authoring/target.schema.json",
-        "sha256": "98a5983770a763c045cd661fb176f5d057e451bcfbde5211273c7b58a5543da3",
+        "sha256": "fc7898b8be0e7ac26fd46a4624d37854f4df52eb4a372dac2e6cbc0575b3aed3",
         "mediaType": "application/schema+json"
       }
     },
