@@ -255,8 +255,8 @@ pub(crate) fn compiler_diagnostic(refusal: &crate::authoring::AuthoredDiagnostic
 /// The change that clears a compiler refusal, by its code.
 fn compiler_action(code: &str) -> &'static str {
     match code {
-        "evidence.question.validity-exceeds-signing-maximum" => {
-            "Lower the question's governance.validitySeconds to the deployment target's signing.maximumAssertionValiditySeconds or below, or raise that maximum in the target's governance.yaml."
+        "evidence.definition.validity-exceeds-signing-maximum" => {
+            "Lower the definition's validitySeconds to the target's signing.maximumAssertionValiditySeconds or below, or raise that maximum under `signing` in the target document."
         }
         "evidence.question.source-missing" => {
             "Add the named source under sources/, or name a source the project declares."
@@ -587,6 +587,21 @@ mod tests {
         );
         let back: serde_json::Value = serde_norway::from_str(&rendered).expect("parse");
         assert_eq!(back, value);
+    }
+
+    #[test]
+    fn a_validity_past_the_signing_maximum_names_the_target_key_to_change() {
+        let refusal = crate::authoring::AuthoredDiagnostic {
+            code: "evidence.definition.validity-exceeds-signing-maximum".to_owned(),
+            path: "evidence.yaml:/assertionDefinitions/a/validitySeconds".to_owned(),
+            message: "the requirement validity exceeds the deployment target's signing maximum"
+                .to_owned(),
+        };
+        let action = compiler_diagnostic(&refusal).suggested_action;
+        assert_eq!(
+            action,
+            "Lower the definition's validitySeconds to the target's signing.maximumAssertionValiditySeconds or below, or raise that maximum under `signing` in the target document."
+        );
     }
 
     #[test]
