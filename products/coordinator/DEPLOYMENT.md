@@ -359,9 +359,11 @@ institutional endpoints; HTTP requires numeric loopback.
 For `external.command/v1`, add `commandPath` to an `external-http` connection: the one exact
 relative path, resolved against `baseUrl`, that the command may POST to. The command uses the
 connection's `authorization`, `responseSchema`, attempt timeout and response size bound, and its
-request body is limited to 65,536 bytes. Omit `commandPath` to keep a connection read-only; `paths`
-still lists at least one read path. Use a separate connection when commands need a different
-credential or scope than reads.
+request body is limited to 65,536 bytes. The attempt timeout also covers DNS resolution and token
+acquisition, so a slow token endpoint leaves less time for the answer and makes a timeout after
+the send, which holds the run as uncertain, more likely. Omit `commandPath` to keep a connection
+read-only; `paths` still lists at least one read path. Use a separate connection when commands
+need a different credential or scope than reads.
 
 ```yaml
 connections:
@@ -388,7 +390,8 @@ original result and never apply the command twice, for at least as long as a run
 retried, which is until its deadline. Coordinator sends the same key on every attempt of a step,
 including after a restart and `retry-same`. A provider that cannot deduplicate is not safe for
 same-command recovery: do not use `retry-same` with it, and resolve a held run from the
-provider's own records.
+provider's own records. Coordinator trusts a 429 to mean the provider did not process the
+command, so the provider must never answer 429 after applying it.
 
 For `evaluation.evaluate/v1`, use `type: evaluation` with protocol `system-one` or
 `openai-decisions`, `baseUrl`, `model`, and either `authorization.bearer` (`tokenRef` and stable
@@ -919,13 +922,17 @@ stays unresolved.
 
 An `external.command/v1` call has no read-only receipt either. `reconcile` reports
 `reconciliation-unavailable`, and `retry-same` resends the frozen body with its original
-`Idempotency-Key`. Status 429, and 503 before the tenth attempt, are definite busy answers
-retried on the schedule above; on the tenth attempt a 429 ends the call with
-`external-rate-limited` and a 503 holds it as uncertain. Any other server error, a redirect, a
+`Idempotency-Key`. Status 429 before the tenth attempt is a definite busy answer retried on the
+schedule above; on the tenth attempt it ends the call with `external-rate-limited`. Status 503
+before the tenth attempt is retried on the same schedule, but because it may follow an effect the
+step stays uncertain until a later attempt settles it: a run deadline reached first holds the run
+with the effect unknown, and on the tenth attempt a 503 holds it as uncertain. A command ignores a
+`Retry-After` it cannot use, such as a date, a duplicate field, a malformed value, or a wait over
+86,400 seconds, and retries on the ordinary backoff instead. Any other server error, a redirect, a
 timeout, a lost acknowledgement, or a response the interpretation Function cannot settle holds the
 run as uncertain. Before retrying, confirm with the provider that it still deduplicates that key.
-After an uncertain attempt, a declared refusal or busy answer keeps the run held; check the
-provider's record and cancel the run if no further step should follow.
+After an uncertain attempt, including a retried 503, a declared refusal or 429 keeps the run held;
+check the provider's record and cancel the run if no further step should follow.
 
 A `wait-for` observes a named completion, correlated to an earlier accepted call.
 Casework exposes `result`; external GET can

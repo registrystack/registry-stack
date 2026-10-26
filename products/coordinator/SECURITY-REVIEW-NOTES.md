@@ -51,9 +51,10 @@ no hidden mutation retry inside Coordinator.
 `external.command/v1` adds an outbound mutation to a provider outside Registry
 Stack and a recovery path that can send it again. Workflow data could try to
 steer the request to another host, path or credential. A lost acknowledgement,
-timeout, redirect or server error could be misread as failure, so a fresh
-command would apply the effect twice. A response, command body, request id or
-credential could leak through logs, problem details, `status` or `inspect`.
+timeout, redirect or server error, including a busy 503 whose retry never
+settles, could be misread as failure, so a fresh command would apply the effect
+twice. A response, command body, request id or credential could leak through
+logs, problem details, `status` or `inspect`.
 
 ### Enforcement and defaults
 
@@ -72,16 +73,28 @@ credential could leak through logs, problem details, `status` or `inspect`.
   recovery, so `retry-same` and restart replay the frozen request and never mint
   a new id.
 - Request bodies and responses are limited to 65,536 bytes, and each attempt to
-  the connection's timeout, at most 2,000 milliseconds. Only status 429, and
-  status 503 before the final attempt, are retried automatically, under the
-  existing retry-hint and spacing rules. Once the request may have left, a lost
-  or broken exchange, a timeout, a redirect, any other 5xx, and an oversize,
-  malformed or schema-invalid response are uncertain and hold the run.
+  the connection's timeout, at most 2,000 milliseconds, which also covers DNS
+  resolution and token acquisition. Only status 429, and status 503 before the
+  final attempt, are retried automatically, under the existing spacing rules. A
+  429 is trusted to mean the command was not processed. A 503 may follow an
+  effect, so `send_command` returns `CallOutcome::UncertainRetryable` and the
+  worker records the attempt as uncertain while it retries: a deadline or retry
+  limit reached before a later attempt settles it holds the run with the effect
+  unknown, and `Store::write_attempt` never ends such an attempt `expired` or
+  `failed`. A command honours a `Retry-After` only as one delta-seconds value of
+  at most 86,400 and otherwise ignores it. Once the request may have left, a
+  lost or broken exchange, a timeout, a redirect, any other 5xx, and an
+  oversize, malformed or schema-invalid response are uncertain and hold the
+  run.
 - `interpret_command` in `external_http.rs` checks the response against the
   alias's `responseSchema`, then runs the project's pinned pure Function. Only
   `accepted` with a result matching the step's declared output, or `refused`
   with a declared code, leaves the hold; everything else, including a Function
-  error, is uncertain. The worker and offline scenarios use the same function.
+  error, is uncertain. The worker and offline scenarios use the same function:
+  a scenario replies to a command step with a `response` that function
+  interprets, and scenario validation (`scenario.reply`) refuses a `success` or
+  `declared-refusal` reply to the step, so no scenario can reach a result or
+  refusal route the Function would not produce.
 - Outcomes carry fixed failure codes only. No body, response, request id or
   token is logged or placed in a problem, `status` or `inspect`.
 
@@ -103,13 +116,19 @@ credential could leak through logs, problem details, `status` or `inspect`.
   `check_refuses_a_command_without_its_bound_command_connection`,
   `the_workflow_cannot_name_a_destination_path_or_credential`,
   `the_worker_interprets_a_response_into_one_of_three_results`,
-  `a_command_without_a_refused_state_has_no_refusal_route`, and
-  `scenarios_interpret_provider_responses_with_the_pinned_function`.
+  `a_command_without_a_refused_state_has_no_refusal_route`,
+  `scenarios_interpret_provider_responses_with_the_pinned_function`, and
+  `a_command_reply_reaches_its_result_only_through_the_interpret_function`.
 - `crates/registry-coordinator/tests/external_command_postgres.rs`, under
   PostgreSQL: `a_lost_acknowledgement_holds_and_retry_same_sends_the_same_command`,
-  `a_timeout_holds_as_uncertain_and_never_claims_a_provider_failure`, and
-  `a_restart_between_persist_and_send_sends_the_prepared_command_once`, each
+  `a_timeout_holds_as_uncertain_and_never_claims_a_provider_failure`,
+  `a_restart_between_persist_and_send_sends_the_prepared_command_once`,
+  `a_busy_503_the_deadline_ends_holds_the_effect_as_unknown`,
+  `a_deadline_that_passes_before_a_busy_503_is_retried_holds_the_effect`, and
+  `a_busy_503_then_an_accepted_command_clears_the_unknown_effect`, each
   asserting that `status` and `inspect` carry no body, request id or token.
+- `crates/registry-coordinator/src/worker.rs`:
+  `a_busy_answer_that_may_follow_an_effect_retries_with_the_effect_unknown`.
 - `crates/registry-coordinator/src/operations.rs`:
   `operations_use_registered_execution_semantics`.
 
@@ -128,9 +147,15 @@ These are maintained references, not claims that the tests ran in this note.
   it. Coordinator does not independently verify the provider's effect, and a
   Function that maps an ambiguous answer to `accepted` is an authoring defect
   that scenarios and review must catch.
-- After an uncertain attempt, a later declared refusal is held rather than
-  routed, so a provider that replays a refusal for a repeated key leaves the
-  run for an operator to cancel.
+- After an uncertain attempt, a later declared refusal or 429 is held rather
+  than routed or retried, so a provider that replays a refusal for a repeated
+  key leaves the run for an operator to cancel. A retried 503 counts as an
+  uncertain attempt, so a 503 followed by a refusal or 429 reaches this hold
+  too.
+- A 429 is trusted to mean the provider did not process the command. A
+  provider that answers 429 after applying it lets the final attempt end the
+  run `failed` with `external-rate-limited`; the deployment runbook forbids
+  that answer.
 
 ## Coordinatorctl access-token files
 

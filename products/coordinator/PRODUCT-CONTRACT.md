@@ -118,16 +118,20 @@ a typed result, `refused` with one of its declared codes, or `uncertain`. The ac
 the step output. Only a declared code routes to `onDeclaredRefusal`, as `{refusalCode}`; an
 interpreter that never returns `refused` has no refusal route.
 
-The recovery class is same-command. Status 429, and status 503 before the last automatic attempt,
-are definite busy answers retried under the ordinary retry-hint and spacing rules. A connection
-that could not be opened carried nothing and is retried. Once the request may have reached the
-provider, a lost or broken exchange, a timeout, a redirect, any other server error, an oversize
-or malformed response, a response outside the declared schema, an interpreter error, and an
-`uncertain` interpretation each hold the run as uncertain. None is reported as a provider failure
-or a negative business decision. The operation has no original-result receipt, so `reconcile`
-cannot settle it. After an uncertain attempt, a later declared refusal or busy answer keeps the
-run held instead of routing. An accepted result is the provider's answer as the project
-interprets it; Coordinator does not independently verify the provider's effect.
+The recovery class is same-command. Status 429 is trusted to mean the provider did not process
+the command, and is retried under the ordinary retry-hint and spacing rules. Status 503 before
+the last automatic attempt is retried the same way, but it may follow an effect, so the step stays
+uncertain until a later attempt settles it: a deadline or retry limit reached first holds the run
+as uncertain. A `Retry-After` on either answer that is not one whole number of seconds up to
+86,400 is ignored, and the retry waits for the ordinary backoff. A connection that could not be
+opened carried nothing and is retried. Once the request may have reached the provider, a lost or
+broken exchange, a timeout, a redirect, any other server error, an oversize or malformed
+response, a response outside the declared schema, an interpreter error, and an `uncertain`
+interpretation each hold the run as uncertain. None is reported as a provider failure or a
+negative business decision. The operation has no original-result receipt, so `reconcile` cannot
+settle it. After an uncertain attempt, including a retried 503, a later declared refusal or 429
+keeps the run held instead of routing or retrying. An accepted result is the provider's answer
+as the project interprets it; Coordinator does not independently verify the provider's effect.
 
 ## Observation and uncertainty
 
