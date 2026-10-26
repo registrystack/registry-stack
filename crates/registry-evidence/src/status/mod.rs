@@ -6,21 +6,39 @@
 //! selector value, a record identifier, a raw holder key thumbprint, or an
 //! extract metadata value.
 
+mod error;
 mod inheritance;
+mod issuance;
 mod keys;
+mod ledger;
+mod pools;
 mod pseudonym;
 mod retention;
+mod schema;
 mod transition;
 
+pub use error::{SqlState, StatusError};
+
 pub use inheritance::{inherited_status, ObservedStatus, SourceRead};
+pub use issuance::{
+    AllocationFields, CredentialMembers, IssuanceTransaction, IDLE_IN_TRANSACTION_MARGIN,
+};
 pub use keys::{
     validate_key_separation, HolderDigestKeyRing, KeyError, KeyRing, KeyRole, KeySeparationError,
     KeyVersion, PseudonymKeyRing, StatusKey, MINIMUM_STATUS_KEY_BYTES,
+};
+pub use ledger::{
+    LedgerConfig, ListPolicy, StatusEntry, StatusLedger, StatusListId, StatusReference,
+    STATUS_LIST_BITS, STATUS_LIST_ENTRY_COUNT,
+};
+pub use pools::{
+    IssuancePool, ReservedPool, DEFAULT_ISSUANCE_POOL_SIZE, DEFAULT_RESERVED_POOL_SIZE,
 };
 pub use pseudonym::{
     HolderKeyDigest, HolderKeyThumbprint, PseudonymError, StatusPseudonym, StatusSubject,
 };
 pub use retention::{check_observation_retention, retention_floor, RetentionBelowFloor};
+pub use schema::{SchemaName, DEFAULT_SCHEMA};
 pub use transition::{transition, EntryStatus, Refusal, Transition, TransitionCause};
 
 use std::time::Duration;
