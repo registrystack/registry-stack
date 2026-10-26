@@ -281,16 +281,25 @@ async fn an_unrecognised_answer_holds_the_run_for_same_command_recovery() {
 }
 
 #[tokio::test]
-async fn a_busy_503_the_deadline_ends_holds_the_effect_as_unknown() {
+async fn a_busy_503_the_deadline_ends_holds_the_same_command_for_recovery() {
     // (status, run state, uncertain): a 429 is a definite "not processed",
-    // while a 503 may follow an effect, so only the 503 holds.
+    // while a 503 may follow an effect, so only the 503 holds, and the held
+    // command stays recoverable under its request id while the deadline is
+    // still in the future.
     for (status, state, uncertain) in [(503, "attention", true), (429, "expired", false)] {
         let h = Harness::new().await;
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/bills"))
             .respond_with(ResponseTemplate::new(status).insert_header("retry-after", "120"))
+            .up_to_n_times(1)
             .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/bills"))
+            .respond_with(ResponseTemplate::new(201).set_body_json(json!({"billId":"bill-001"})))
+            .expect(u64::from(uncertain))
             .mount(&server)
             .await;
         let adapters = h.adapter(&server.uri(), false);
@@ -298,7 +307,8 @@ async fn a_busy_503_the_deadline_ends_holds_the_effect_as_unknown() {
         // The retry the provider asks for would land after the run deadline.
         h.sql("UPDATE {schema}.runs SET deadline_at=clock_timestamp()+interval '30 seconds'")
             .await;
-        h.drain(&worker(&h.store, &adapters)).await;
+        let worker = worker(&h.store, &adapters);
+        h.drain(&worker).await;
 
         let inspection = h.read(run).await;
         assert_eq!(inspection["run"]["state"], state, "{status}");
@@ -317,6 +327,33 @@ async fn a_busy_503_the_deadline_ends_holds_the_effect_as_unknown() {
             .collect();
         let expected = if uncertain { vec!["unknown"] } else { vec![] };
         assert_eq!(effects, expected, "{status}");
+        let step = if uncertain { "unknown" } else { "expired" };
+        assert_eq!(inspection["steps"][0]["step"], "create", "{status}");
+        assert_eq!(inspection["steps"][0]["state"], step, "{status}");
+        assert_eq!(
+            inspection["recovery"]["retryAllowed"], uncertain,
+            "{status}: {}",
+            inspection["recovery"]
+        );
+
+        let retried = h.store.retry_same(run, BINDING).await;
+        if uncertain {
+            retried.unwrap_or_else(|error| panic!("{status}: {}", error.message));
+            h.drain(&worker).await;
+            let finished = h.read(run).await;
+            assert_eq!(finished["run"]["state"], "finished");
+            assert_eq!(finished["run"]["outcome"], "billed");
+            assert_eq!(finished["run"]["uncertain"], false);
+            assert_eq!(finished["effects"][0]["state"], "accepted");
+            let keys = h.keys();
+            assert_eq!(keys.len(), 2);
+            assert_eq!(keys[0], keys[1], "retry-same sends the same request id");
+        } else {
+            assert!(
+                retried.is_err(),
+                "a definite busy answer the deadline ended is not replayed"
+            );
+        }
         server.verify().await;
     }
 }
