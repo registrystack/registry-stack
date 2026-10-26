@@ -847,9 +847,8 @@ fn render_extract_script(inputs: &EmitInputs, get_paths: &[(String, String)]) ->
     out
 }
 
-/// Render only facts established mechanically by the selected OpenAPI
-/// operation. Governed source policy remains absent rather than receiving a
-/// plausible-looking default.
+/// Render the normalized Source draft, including generated request bindings
+/// and the explicit defaults named for review in the report.
 fn render_source_block(inputs: &EmitInputs, _method: &str) -> String {
     let source: Value = serde_json::from_str(&render_authoring_source(inputs))
         .expect("generated Source serializes as JSON");
@@ -1044,12 +1043,19 @@ fn render_report(inputs: &EmitInputs) -> String {
         ));
     }
     if inputs.base_url.is_none() {
-        out.push_str("  - source origin, ");
-    } else {
-        out.push_str("  - ");
+        out.push_str("  - Set the source origin.\n");
     }
-    out.push_str("posture, authentication, selector bindings, preparation,\n");
-    out.push_str("    and request limits are intentionally absent from the mechanical draft.\n\n");
+    out.push_str("  - Review the generated Source posture and default source limits.\n");
+    out.push_str("  - Configure target-owned authentication.\n");
+    if inputs.request_mappings.is_empty() {
+        out.push_str(
+            "  - Complete selector bindings, the preparation Function, and request limits.\n\n",
+        );
+    } else {
+        out.push_str(
+            "  - Review the generated selector bindings and preparation Function, plus the applicable request limits.\n\n",
+        );
+    }
 
     out.push_str("Next steps:\n");
     out.push_str(&format!(
@@ -1057,7 +1063,7 @@ fn render_report(inputs: &EmitInputs) -> String {
         inputs.source_id
     ));
     out.push_str(
-        "  2. Review the named Source, target connection, selector bindings, and private facts.\n",
+        "  2. Review the named Source, target connection, target authority, selector bindings, and private facts.\n",
     );
     out.push_str("  3. Complete or update the AssertionDefinitions that acquire this Source.\n");
     out

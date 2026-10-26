@@ -237,6 +237,7 @@ fn explicit_post_body_mappings_generate_a_closed_json_object() {
 fn generated_prepare_executes_with_scalar_queries_and_an_escaped_json_body() {
     let mut inputs = base_inputs();
     inputs.operation.method = "POST".to_owned();
+    let quoted_name = "trace\"'\\name";
     inputs.request_mappings = vec![
         RequestMapping {
             selector: SelectorReference {
@@ -267,6 +268,16 @@ fn generated_prepare_executes_with_scalar_queries_and_an_escaped_json_body() {
                 maximum_bytes: 5,
             },
             target: RequestTarget::Query("active".to_owned()),
+        },
+        RequestMapping {
+            selector: SelectorReference {
+                role: "subject".to_owned(),
+                profile: "person-v1".to_owned(),
+                field: "reference".to_owned(),
+                scalar_type: SelectorScalarType::String,
+                maximum_bytes: 128,
+            },
+            target: RequestTarget::Query(quoted_name.to_owned()),
         },
         RequestMapping {
             selector: SelectorReference {
@@ -332,6 +343,7 @@ fn generated_prepare_executes_with_scalar_queries_and_an_escaped_json_body() {
             ("external-reference", "a&b=c"),
             ("count", "42"),
             ("active", "true"),
+            (quoted_name, "a&b=c"),
         ]
     );
     assert_eq!(
@@ -850,7 +862,11 @@ fn an_explicit_base_url_is_active_and_overrides_the_openapi_suggestion() {
     assert!(artifacts
         .equivalent_command
         .contains("--base-url http://127.0.0.1:4010"));
-    assert!(!artifacts.report.contains("source origin, posture"));
+    assert!(
+        !artifacts.report.contains("Set the source origin."),
+        "{}",
+        artifacts.report
+    );
 }
 
 #[test]
@@ -988,14 +1004,124 @@ fn only_an_edited_or_invented_bound_is_reattributed_to_the_operator() {
     );
 }
 
-/// The report must name the governed decisions absent from a mechanical draft.
+/// An unmapped draft already carries a posture, a preparation Function, and
+/// default Source limits. The report must ask the adopter to complete and
+/// review those artifacts rather than claiming that they are absent.
 #[test]
-fn the_report_names_omitted_governed_source_decisions() {
+fn the_unmapped_report_distinguishes_generated_shells_from_remaining_work() {
     let artifacts = emit::draft(&base_inputs()).expect("draft");
+    let source: serde_json::Value =
+        serde_json::from_str(&artifacts.authoring_source).expect("normalized Source JSON");
+    let prepare = file_contents(&artifacts, "functions/search-a-prepare.rhai");
+
+    assert_eq!(source["acquisitionPosture"], json!("record-transformed"));
+    assert_eq!(source["prepare"]["function"], json!("search-a-prepare"));
+    assert_eq!(
+        source["limits"],
+        json!({"attemptTimeoutMilliseconds": 3000, "maximumConcurrency": 8})
+    );
+    assert_eq!(source["selectors"], json!([]));
+    assert!(source.get("preparationLimits").is_none());
+    assert!(prepare.contains("TODO(evidencectl)"), "{prepare}");
+
+    assert!(
+        artifacts.report.contains("source origin"),
+        "{}",
+        artifacts.report
+    );
     assert!(
         artifacts
             .report
-            .contains("source origin, posture, authentication, selector bindings"),
+            .contains("Review the generated Source posture and default source limits."),
+        "{}",
+        artifacts.report
+    );
+    assert!(
+        artifacts
+            .report
+            .contains("Complete selector bindings, the preparation Function, and request limits."),
+        "{}",
+        artifacts.report
+    );
+    assert!(
+        artifacts
+            .report
+            .contains("Configure target-owned authentication."),
+        "{}",
+        artifacts.report
+    );
+    assert!(
+        artifacts.report.contains("functions/search-a-extract.rhai")
+            && artifacts.report.contains("target authority"),
+        "{}",
+        artifacts.report
+    );
+    assert!(
+        !artifacts.report.contains("intentionally absent"),
+        "{}",
+        artifacts.report
+    );
+}
+
+/// Explicit mappings generate the selector bindings, executable preparation,
+/// and the request-channel limits. With a chosen origin, all of those inputs
+/// exist and the report's remaining work is review, not completion or absence.
+#[test]
+fn the_mapped_report_names_generated_request_artifacts_as_review_work() {
+    let mut inputs = base_inputs();
+    inputs.base_url = Some("http://127.0.0.1:4010".to_owned());
+    inputs.request_mappings = vec![RequestMapping {
+        selector: SelectorReference {
+            role: "subject".to_owned(),
+            profile: "subject-reference-v1".to_owned(),
+            field: "reference".to_owned(),
+            scalar_type: SelectorScalarType::String,
+            maximum_bytes: 128,
+        },
+        target: RequestTarget::Query("reference".to_owned()),
+    }];
+
+    let artifacts = emit::draft(&inputs).expect("mapped draft");
+    let source: serde_json::Value =
+        serde_json::from_str(&artifacts.authoring_source).expect("normalized Source JSON");
+    let prepare = file_contents(&artifacts, "functions/search-a-prepare.rhai");
+
+    assert_eq!(
+        source["selectors"],
+        json!([{"role": "subject", "profiles": ["subject-reference-v1"]}])
+    );
+    assert_eq!(source["preparationLimits"]["query"], json!("required"));
+    assert_eq!(source["preparationLimits"]["maximumQueryPairs"], json!(1));
+    assert!(!prepare.contains("TODO(evidencectl)"), "{prepare}");
+
+    assert!(
+        artifacts.report.contains(
+            "Review the generated selector bindings and preparation Function, plus the applicable request limits."
+        ),
+        "{}",
+        artifacts.report
+    );
+    assert!(
+        artifacts
+            .report
+            .contains("Configure target-owned authentication."),
+        "{}",
+        artifacts.report
+    );
+    assert!(
+        artifacts
+            .report
+            .contains("Review the generated Source posture and default source limits."),
+        "{}",
+        artifacts.report
+    );
+    assert!(
+        !artifacts.report.contains("source origin"),
+        "{}",
+        artifacts.report
+    );
+    assert!(
+        !artifacts.report.contains("intentionally absent"),
         "{}",
         artifacts.report
     );

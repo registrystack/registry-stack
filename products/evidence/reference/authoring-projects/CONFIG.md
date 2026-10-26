@@ -164,9 +164,15 @@ closed object properties. Arrays, polymorphic bodies, arbitrary headers,
 cookies and authentication mappings are refused. Credentials remain in the
 target connection.
 
+The planner checks effective required inputs after operation overrides; optional
+inputs are inspected only when you map them. Parameter and request-body
+references must resolve locally so their requiredness is known.
+
 Scalar types must agree, and the selector's admitted domain must fit the
-supported string-length or integer-range constraints. Date and UUID formats
-require the corresponding selector type. Generation refuses unproven enums,
+supported string-length or integer-range constraints. Integer formats `int32`
+and `int64` are supported; `int32` requires the entire selector range to fit
+the signed 32-bit range. Date and UUID formats require the corresponding
+selector type. Generation refuses unproven enums,
 constants, patterns and conditional constraints, nonstandard parameter
 serialization, and object constraints outside this subset. Use a reviewed
 preparation Function for those contracts.

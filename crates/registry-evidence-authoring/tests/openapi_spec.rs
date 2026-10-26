@@ -219,6 +219,45 @@ fn operation_parameters_resolve_refs_and_apply_operation_overrides() {
 }
 
 #[test]
+fn operation_parameters_resolve_only_the_effective_override_schema() {
+    let spec = Spec::from_value(
+        json!({
+            "openapi": "3.1.0",
+            "info": {"title": "Source", "version": "1"},
+            "paths": {
+                "/records": {
+                    "parameters": [{
+                        "name": "filter",
+                        "in": "query",
+                        "required": true,
+                        "schema": {"$ref": "https://schemas.example.invalid/filter.json"}
+                    }],
+                    "get": {
+                        "parameters": [{
+                            "name": "filter",
+                            "in": "query",
+                            "required": false,
+                            "schema": {"type": "string"}
+                        }]
+                    }
+                }
+            }
+        }),
+        "parameter override",
+    )
+    .expect("valid OpenAPI document");
+
+    let parameters = spec
+        .operation_parameters(&operation("GET", "/records"))
+        .expect("the shadowed schema is not resolved");
+    assert_eq!(parameters.len(), 1);
+    assert_eq!(parameters[0].name, "filter");
+    assert_eq!(parameters[0].location, ParameterLocation::Query);
+    assert!(!parameters[0].required);
+    assert_eq!(parameters[0].schema.0["type"], "string");
+}
+
+#[test]
 fn request_body_schema_resolves_a_required_json_body() {
     let spec = Spec::from_value(
         json!({

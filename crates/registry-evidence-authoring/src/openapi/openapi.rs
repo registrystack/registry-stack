@@ -24,7 +24,7 @@
 //! state; each is reported as a note so the reading stays the operator's to
 //! reject.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{anyhow, bail, Context, Result};
 use serde_json::Value;
@@ -90,6 +90,13 @@ pub struct Spec {
     document: Value,
     dialect: OpenApiDialect,
     openapi_version: String,
+}
+
+struct EffectiveParameter<'a> {
+    value: &'a Value,
+    name: String,
+    location: ParameterLocation,
+    required: bool,
 }
 
 impl Spec {
@@ -363,6 +370,34 @@ impl Spec {
     /// parameter is appended. Local Parameter Object and Schema Object
     /// references are resolved before the typed values are returned.
     pub fn operation_parameters(&self, key: &OperationKey) -> Result<Vec<OperationParameter>> {
+        self.effective_parameters(key)?
+            .into_iter()
+            .map(|parameter| self.parse_parameter(parameter))
+            .collect()
+    }
+
+    /// Required parameters and explicitly selected optional parameters for a
+    /// generated request, after OpenAPI operation overrides are applied.
+    ///
+    /// Parameter Object references and identity metadata are always resolved
+    /// so unresolved inputs cannot be presumed optional. Schemas are resolved
+    /// only for effective parameters that the generated request must provide.
+    pub fn operation_parameters_for_targets(
+        &self,
+        key: &OperationKey,
+        selected: &BTreeSet<(String, ParameterLocation)>,
+    ) -> Result<Vec<OperationParameter>> {
+        self.effective_parameters(key)?
+            .into_iter()
+            .filter(|parameter| {
+                parameter.required
+                    || selected.contains(&(parameter.name.clone(), parameter.location))
+            })
+            .map(|parameter| self.parse_parameter(parameter))
+            .collect()
+    }
+
+    fn effective_parameters(&self, key: &OperationKey) -> Result<Vec<EffectiveParameter<'_>>> {
         let paths = self
             .document
             .get("paths")
@@ -376,11 +411,11 @@ impl Spec {
             .with_context(|| format!("resolving path item `{}`", key.path))?;
         let operation = self.find_operation(key)?;
 
-        let path_parameters = self.parameters_at(
+        let path_parameters = self.parameter_metadata_at(
             path_item.get("parameters"),
             &format!("path item `{}`", key.path),
         )?;
-        let operation_parameters = self.parameters_at(
+        let operation_parameters = self.parameter_metadata_at(
             operation.get("parameters"),
             &format!("{} {} operation", key.method, key.path),
         )?;
@@ -430,6 +465,36 @@ impl Spec {
     /// are never substituted because the Evidence fixed HTTP adapter sends a
     /// JSON body only.
     pub fn request_body_schema(&self, key: &OperationKey) -> Result<Option<OperationRequestBody>> {
+        let Some((body, required)) = self.request_body_metadata(key)? else {
+            return Ok(None);
+        };
+        self.parse_json_request_body(key, body, required, true)
+    }
+
+    /// The JSON body relevant to one generated request mapping.
+    ///
+    /// A required body is always resolved. An optional body is resolved only
+    /// when the author explicitly maps a selector into it. Top-level Request
+    /// Body Object references are resolved before that decision so unresolved
+    /// metadata is never treated as optional.
+    pub fn request_body_schema_for_mapping(
+        &self,
+        key: &OperationKey,
+        selected: bool,
+    ) -> Result<Option<OperationRequestBody>> {
+        let Some((body, required)) = self.request_body_metadata(key)? else {
+            return Ok(None);
+        };
+        if !required && !selected {
+            return Ok(None);
+        }
+        self.parse_json_request_body(key, body, required, false)
+    }
+
+    fn request_body_metadata<'a>(
+        &'a self,
+        key: &OperationKey,
+    ) -> Result<Option<(&'a serde_json::Map<String, Value>, bool)>> {
         let operation = self.find_operation(key)?;
         let Some(raw) = operation.get("requestBody") else {
             return Ok(None);
@@ -451,6 +516,16 @@ impl Spec {
             ),
             None => false,
         };
+        Ok(Some((body, required)))
+    }
+
+    fn parse_json_request_body(
+        &self,
+        key: &OperationKey,
+        body: &serde_json::Map<String, Value>,
+        required: bool,
+        optional_unsupported_is_absent: bool,
+    ) -> Result<Option<OperationRequestBody>> {
         let content = body
             .get("content")
             .and_then(Value::as_object)
@@ -462,14 +537,14 @@ impl Spec {
                 )
             })?;
         let Some(media) = content.get("application/json") else {
-            if required {
-                bail!(
-                    "{} {} request body has no `application/json` content; selector mapping supports only an exact application/json body",
-                    key.method,
-                    key.path
-                );
+            if !required && optional_unsupported_is_absent {
+                return Ok(None);
             }
-            return Ok(None);
+            bail!(
+                "{} {} request body has no `application/json` content; selector mapping supports only an exact application/json body",
+                key.method,
+                key.path
+            );
         };
         let schema = media.get("schema").ok_or_else(|| {
             anyhow!(
@@ -493,7 +568,11 @@ impl Spec {
         }))
     }
 
-    fn parameters_at(&self, value: Option<&Value>, owner: &str) -> Result<Vec<OperationParameter>> {
+    fn parameter_metadata_at<'a>(
+        &'a self,
+        value: Option<&'a Value>,
+        owner: &str,
+    ) -> Result<Vec<EffectiveParameter<'a>>> {
         let Some(value) = value else {
             return Ok(Vec::new());
         };
@@ -504,13 +583,16 @@ impl Spec {
             .iter()
             .enumerate()
             .map(|(index, parameter)| {
-                self.parse_parameter(parameter)
+                self.parameter_metadata(parameter)
                     .with_context(|| format!("reading {owner} parameter {index}"))
             })
             .collect()
     }
 
-    fn parse_parameter(&self, parameter_raw: &Value) -> Result<OperationParameter> {
+    fn parameter_metadata<'a>(
+        &'a self,
+        parameter_raw: &'a Value,
+    ) -> Result<EffectiveParameter<'a>> {
         let parameter = self.resolve_top_ref(parameter_raw, &mut Vec::new())?;
         let parameter = parameter
             .as_object()
@@ -536,6 +618,25 @@ impl Spec {
         if location == ParameterLocation::Path && !required {
             bail!("path parameter `{name}` must declare `required: true`");
         }
+        Ok(EffectiveParameter {
+            value: parameter_raw,
+            name: name.to_owned(),
+            location,
+            required,
+        })
+    }
+
+    fn parse_parameter(&self, metadata: EffectiveParameter<'_>) -> Result<OperationParameter> {
+        let parameter = self.resolve_top_ref(metadata.value, &mut Vec::new())?;
+        let parameter = parameter
+            .as_object()
+            .expect("effective parameter metadata validated an object");
+        let EffectiveParameter {
+            name,
+            location,
+            required,
+            ..
+        } = metadata;
         let style = match parameter.get("style") {
             Some(Value::String(style)) if !style.is_empty() => Some(style.clone()),
             Some(_) => bail!("parameter `{name}` has a non-string or empty `style` field"),
@@ -565,7 +666,7 @@ impl Spec {
             .cloned();
         let default = schema.get("default").cloned();
         Ok(OperationParameter {
-            name: name.to_owned(),
+            name,
             location,
             required,
             style,

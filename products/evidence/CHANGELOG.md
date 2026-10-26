@@ -5,6 +5,16 @@
 - `evidencectl check` reads an optional `check-acceptances.yaml`. An exact,
   reasoned acceptance keeps its advisory warning visible while allowing
   `--deny-warnings` to pass; errors remain refusals.
+- `evidencectl source suggest --map-selector` generates fixed path, query, and
+  simple JSON request bindings from declared selector fields, with explicit
+  mappings and validation of the supported request schema and preparation bounds.
+- Rhai provides typed `to_string` overloads for canonical signed-integer and
+  Boolean request text; opaque values and other types remain unconvertible.
+- Human `evidencectl explain` output shows the Source-to-Output flow, fixed HTTP
+  operations, named connections, Functions, private fact names, and limits.
+- The downloadable source recipe catalogue includes checksum-covered DHIS2
+  Tracker and OpenCRVS examples with reusable identity checks and synthetic
+  fixture projects, using the existing source import and update lifecycle.
 - BREAKING: the OID4VCI wallet delivery runtime requires an `audit` block. It
   records each offer's creating client and subject as keyed pseudonyms, and
   each wallet delivery outcome, in a durable journal. To upgrade, store a

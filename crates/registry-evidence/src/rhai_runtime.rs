@@ -3481,6 +3481,40 @@ mod tests {
     }
 
     #[test]
+    fn to_string_refuses_values_outside_its_integer_and_boolean_overloads() {
+        let runtime = runtime();
+        for (case, expression) in [
+            ("float", "1.25"),
+            ("Decimal", "parse_decimal(\"1.25\")"),
+            ("string", "\"plain-canary\""),
+            ("map", "#{key: \"value\"}"),
+            ("array", "[1, 2]"),
+            ("unit", "()"),
+            ("opaque seed", "entity_reference_seed(\"protected-canary\")"),
+        ] {
+            let source = format!(
+                "fn prepare(selectors, context) {{ #{{query: [#{{name: \"value\", value: to_string({expression})}}], body: ()}} }}"
+            );
+            let script = runtime
+                .compile_preparation(&source)
+                .unwrap_or_else(|error| panic!("{case} expression compiles: {error:?}"));
+            assert_eq!(
+                runtime.prepare(
+                    &script,
+                    &json!({}),
+                    &json!({}),
+                    &request_limits(
+                        RequestPartRequirement::Required,
+                        RequestPartRequirement::Forbidden,
+                    ),
+                ),
+                Err(RhaiRuntimeError::Invocation),
+                "{case} must not acquire a string-conversion overload"
+            );
+        }
+    }
+
+    #[test]
     fn selector_aware_extraction_checks_exact_alternative_identity_before_facts() {
         let runtime = runtime();
         let script = runtime

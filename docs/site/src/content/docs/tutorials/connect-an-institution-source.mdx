@@ -103,11 +103,13 @@ rstack evidence source suggest --openapi source.openapi.yaml \
 
 ```text test-excerpt
 Still needs your input (the source block below):
-  - source origin, posture, authentication, selector bindings, preparation,
-    and request limits are intentionally absent from the mechanical draft.
+  - Set the source origin.
+  - Review the generated Source posture and default source limits.
+  - Configure target-owned authentication.
+  - Complete selector bindings, the preparation Function, and request limits.
 ```
 
-This print-only draft leaves the request bindings for review. For another operation,
+This print-only draft needs request bindings and preparation completed. For another operation,
 [explicit selector mappings](../../products/registry-evidence/authoring-form/#generate-explicit-openapi-request-bindings)
 generate routine request preparation from profiles already in your project. The reviewed source
 in `evidence.yaml` uses this fixed request shape:
@@ -156,7 +158,7 @@ as your first assertion's target does. For your own description,
 `rstack evidence init <dir> --openapi <doc> --profile local` writes a project and
 `rstack evidence source suggest <dir>` writes the draft into it.
 
-{/* Evidence: crates/registry-evidencectl/src/suggest/emit.rs, intentionally absent;
+{/* Evidence: crates/registry-evidencectl/src/suggest/emit.rs, Review the generated Source posture;
     crates/registry-evidence/src/config.rs, AcquisitionPosture; products/evidence/OPERATOR-CONTRACT.md, record-transformed;
     products/evidence/examples/{fhir,standalone}/local-target.yaml, connections. */}
 
