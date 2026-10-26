@@ -34,6 +34,9 @@ pub const REQUIREMENT_ID: &str = "practice-permit";
 pub const OTHER_REQUIREMENT_ID: &str = "disability-benefit";
 pub const PSEUDONYM_KEY_BYTE: u8 = 0x51;
 pub const HOLDER_DIGEST_KEY_BYTE: u8 = 0x52;
+/// The ledger's advisory lock class for a pseudonym. A test holds it from
+/// its own connection to interleave with the ledger deterministically.
+pub const PSEUDONYM_LOCK_CLASS: i32 = 0x6576_7031;
 
 /// A migrated ledger in its own schema, with both pools.
 pub struct TestLedger {
@@ -135,6 +138,46 @@ pub fn pseudonym_keys() -> PseudonymKeyRing {
 
 pub fn holder_digest_keys() -> HolderDigestKeyRing {
     HolderDigestKeyRing::new(KeyRing::new(key(1, HOLDER_DIGEST_KEY_BYTE), Vec::new()).unwrap())
+}
+
+/// The ledger's second advisory lock key for `subject`'s pseudonym under the
+/// current key of `keys`: its first four bytes.
+pub fn pseudonym_lock_key(keys: &PseudonymKeyRing, subject: &StatusSubject) -> i32 {
+    let pseudonym = keys.pseudonym(subject).expect("subject has a pseudonym");
+    let bytes = pseudonym.as_bytes();
+    i32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])
+}
+
+/// Wait until some session waits on the pseudonym lock `key`, while `pending`
+/// keeps being polled and must not finish.
+pub async fn until_waiting_on_pseudonym_lock<F>(
+    inspector: &tokio_postgres::Client,
+    key: i32,
+    pending: &mut std::pin::Pin<&mut F>,
+) where
+    F: std::future::Future,
+{
+    for _ in 0..100 {
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), pending.as_mut())
+                .await
+                .is_err(),
+            "the ledger finished while the pseudonym lock was held"
+        );
+        let waiting: i64 = inspector
+            .query_one(
+                "SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND NOT granted \
+                 AND classid = $1::integer::oid AND objid = $2::integer::oid AND objsubid = 2",
+                &[&PSEUDONYM_LOCK_CLASS, &key],
+            )
+            .await
+            .expect("locks read")
+            .get(0);
+        if waiting > 0 {
+            return;
+        }
+    }
+    panic!("no session waited on the pseudonym lock");
 }
 
 pub fn selector_profile() -> SelectorProfile {

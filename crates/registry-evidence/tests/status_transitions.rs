@@ -980,6 +980,71 @@ async fn a_withdrawal_observed_while_the_signer_runs_is_inherited_at_commit() {
 }
 
 #[tokio::test]
+async fn a_commit_waits_for_an_observation_being_recorded_and_inherits_it() {
+    let ledger = ledger().await;
+    register(&ledger, 1).await;
+    let person = subject("person-8150");
+    let issued_at = now();
+    let fields = registry_evidence::status::AllocationFields {
+        requirement_id: REQUIREMENT_ID,
+        subject: &person,
+        issued_at,
+        not_after: issued_at + TimeDelta::days(30),
+        source_read: http_read(issued_at),
+    };
+    let mut transaction = ledger
+        .ledger
+        .begin(&ledger.issuance, Duration::from_secs(20))
+        .await
+        .unwrap();
+    let references = transaction
+        .allocate(&fields, CredentialMembers::Unbound { count: 1 })
+        .await
+        .unwrap();
+
+    // Another writer holds the subject's pseudonym lock, as hook intake does
+    // while it records an observation.
+    let writer = inspector().await;
+    let key = status_support::pseudonym_lock_key(&status_support::pseudonym_keys(), &person);
+    writer.batch_execute("BEGIN").await.unwrap();
+    writer
+        .execute(
+            "SELECT pg_advisory_xact_lock($1, $2)",
+            &[&status_support::PSEUDONYM_LOCK_CLASS, &key],
+        )
+        .await
+        .unwrap();
+    let commit = transaction.commit();
+    tokio::pin!(commit);
+    status_support::until_waiting_on_pseudonym_lock(&inspector().await, key, &mut commit).await;
+
+    // The withdrawal lands while the commit waits, then the lock is released.
+    let pseudonym = status_support::pseudonym_keys().pseudonym(&person).unwrap();
+    writer
+        .execute(
+            &format!(
+                "INSERT INTO \"{}\".observations (requirement_id, selector_pseudonym, \
+                 pseudonym_key_version, status, source_revision, captured_at, mapping_version) \
+                 VALUES ($1, $2, 1, 1, 2, $3, 1)",
+                ledger.schema
+            ),
+            &[
+                &REQUIREMENT_ID,
+                &pseudonym.as_bytes().as_slice(),
+                &(issued_at + TimeDelta::seconds(1)),
+            ],
+        )
+        .await
+        .unwrap();
+    writer.batch_execute("COMMIT").await.unwrap();
+    commit.await.unwrap();
+
+    let row = allocation_row(&ledger, references[0].entry()).await;
+    assert_eq!(row["status"], 1);
+    assert_eq!(row["last_applied_source_revision"], 2);
+}
+
+#[tokio::test]
 async fn the_staleness_clock_holds_the_last_complete_run_observation() {
     let ledger = ledger().await;
     let clock = || async {
