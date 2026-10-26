@@ -351,6 +351,9 @@ impl PostgresStore {
             .collect()
     }
 
+    /// The live offer under the first of `tags` that holds one. The tags come
+    /// current key first, so if a code was drawn twice during a rotation, the
+    /// ledger under the current key is the one read.
     async fn read_offer(
         &self,
         transaction: &Transaction<'_>,
@@ -365,6 +368,7 @@ impl PostgresStore {
                      FROM {ledgers} l \
                      LEFT JOIN {offers} o ON o.offer_tag = l.offer_tag AND o.expires_at > $2 \
                      WHERE l.offer_tag = ANY($1) AND l.expires_at > $2 \
+                     ORDER BY array_position($1, l.offer_tag) \
                      LIMIT 1",
                     ledgers = self.table("offer_ledgers"),
                     offers = self.table("offers"),
@@ -745,11 +749,19 @@ impl Store for PostgresStore {
             .await
             .map_err(failed("size the offer key-space"))?;
         let (held, live): (i64, i64) = (row.get(0), row.get(1));
-        if held > 0 {
-            return Err(StoreError::AlreadyRedeemed);
-        }
-        if live >= self.capacity {
-            return Err(StoreError::Saturated);
+        let refusal = if held > 0 {
+            Some(StoreError::AlreadyRedeemed)
+        } else if live >= self.capacity {
+            Some(StoreError::Saturated)
+        } else {
+            None
+        };
+        if let Some(refusal) = refusal {
+            transaction
+                .rollback()
+                .await
+                .map_err(failed("roll back a refused offer"))?;
+            return Err(refusal);
         }
         let expires_at = now.saturating_add(self.offer_lifetime_seconds);
         // An expired ledger under the same tag would collide with the new
