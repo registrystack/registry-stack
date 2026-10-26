@@ -1712,6 +1712,26 @@ class MessagingClientWorkflowStructureTest(unittest.TestCase):
     """Client packaging follows Messaging's shared release boundary."""
 
     def test_render_and_oid4vci_smokes_follow_the_shared_release_roster(self) -> None:
+        catalog = json.loads(
+            (ROOT / "crates/registry-cli-docs/catalog.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        render = next(
+            binary
+            for binary in catalog["binaries"]
+            if binary["invocation"] == "registry-render"
+        )
+        compile_command = next(
+            command
+            for command in render["subcommands"]
+            if command["invocation"] == "registry-render compile"
+        )
+        compile_options = {
+            option
+            for entry in compile_command["options"]
+            for option in re.findall(r"--[a-z][a-z-]*", entry["display"])
+        }
         for name, job in (
             ("release-candidate.yml", "build-canonical"),
             ("release-rehearsal.yml", "canonical-linux"),
@@ -1730,7 +1750,14 @@ class MessagingClientWorkflowStructureTest(unittest.TestCase):
                 self.assertIn('"${render_binary}" package --bundle "${render_project}"', smoke)
                 self.assertIn('"${render_binary}" compile --bundle "${render_package}"', smoke)
                 self.assertIn("--issued-at 2026-01-01T00:00:00Z", smoke)
-                self.assertIn('--strict --out "${RUNNER_TEMP}/release-render-letter.pdf"', smoke)
+                compile_invocation = smoke.split(
+                    '"${render_binary}" compile ', 1
+                )[1].split('\n  test -s "${RUNNER_TEMP}/release-render-letter.pdf"', 1)[0]
+                used_options = set(
+                    re.findall(r"(?<!\S)--[a-z][a-z-]*", compile_invocation)
+                )
+                self.assertLessEqual(used_options, compile_options)
+                self.assertIn("--output", used_options)
 
     @mock.patch.object(release_roster, "COORDINATOR_FIRST_RELEASE", (0, 42, 0))
     def test_coordinator_smokes_follow_the_shared_release_roster(self) -> None:

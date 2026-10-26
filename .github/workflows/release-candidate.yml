@@ -574,7 +574,7 @@ jobs:
             "${render_binary}" package --bundle "${render_project}" --output "${render_package}"
             "${render_binary}" compile --bundle "${render_package}" --type letter \
               --data "${render_project}/fixtures/data.json" --issued-at 2026-01-01T00:00:00Z \
-              --strict --out "${RUNNER_TEMP}/release-render-letter.pdf"
+              --strict --output "${RUNNER_TEMP}/release-render-letter.pdf"
             test -s "${RUNNER_TEMP}/release-render-letter.pdf"
           fi
           oid4vci_image_in_release="$(python3 release/scripts/release_roster.py \

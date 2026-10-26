@@ -460,6 +460,10 @@ class ReleaseRehearsalTest(unittest.TestCase):
         )
         self.assertIn('dist/image-bin/${breg_service}" --version', merge)
         self.assertNotIn("${{ inputs.", merge)
+        self.assertIn(
+            '--output "${RUNNER_TEMP}/release-render-letter.pdf"', merge
+        )
+        self.assertNotIn('--out "${RUNNER_TEMP}/release-render-letter.pdf"', merge)
         for forbidden in (
             "npm publish",
             "gh release",
