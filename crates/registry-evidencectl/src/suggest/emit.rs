@@ -147,6 +147,10 @@ const ADMITTED_METHODS: [&str; 2] = ["GET", "POST"];
 /// source, from already-decided inputs.
 pub fn draft(inputs: &EmitInputs) -> Result<DraftArtifacts> {
     let method = request_method(&inputs.operation.method)?;
+    if !inputs.request_mappings.is_empty() {
+        validate_mapped_request_path(inputs)
+            .context("generated request path is outside the Evidence fixed-request contract")?;
+    }
 
     let mut get_paths = Vec::with_capacity(inputs.selection.len());
     for pointer in &inputs.selection {
@@ -319,6 +323,108 @@ fn request_path(inputs: &EmitInputs) -> String {
         .map(|server| server.path_prefix.as_str())
         .unwrap_or_default();
     format!("{prefix}{}", inputs.operation.path)
+}
+
+/// Mirror the pure FixedRequest path rules without linking the runtime into
+/// authoring. The runtime-admission parity test covers the complete rendered
+/// path, including its server prefix, bounds, escapes and binding names.
+fn validate_mapped_request_path(inputs: &EmitInputs) -> Result<()> {
+    let path = request_path(inputs);
+    if !(2..=2048).contains(&path.len()) || !path.starts_with('/') || !path.is_ascii() {
+        bail!("request paths must be absolute ASCII paths between 2 and 2048 bytes");
+    }
+    let bindings = inputs
+        .request_mappings
+        .iter()
+        .filter_map(|mapping| {
+            if let RequestTarget::Path(name) = &mapping.target {
+                Some(name.as_str())
+            } else {
+                None
+            }
+        })
+        .collect::<BTreeSet<_>>();
+    let mut placeholders = BTreeSet::new();
+    let mut normalized = String::with_capacity(path.len());
+    for segment in path.split('/').skip(1) {
+        if segment.is_empty() || matches!(segment, "." | "..") {
+            bail!("request paths must not contain empty or dot segments");
+        }
+        normalized.push('/');
+        if segment.contains(['{', '}']) {
+            let name = segment
+                .strip_prefix('{')
+                .and_then(|value| value.strip_suffix('}'))
+                .ok_or_else(|| {
+                    anyhow::anyhow!("a path placeholder must occupy one complete segment")
+                })?;
+            LocalId::new(name).with_context(|| {
+                format!(
+                    "path parameter `{name}` must be a Registry Stack LocalId for a path binding"
+                )
+            })?;
+            if !placeholders.insert(name) {
+                bail!("path placeholders must be unique: `{name}` is repeated");
+            }
+            if !bindings.contains(name) {
+                bail!("required request input `path:{name}` has no --map-selector assignment");
+            }
+            normalized.push('x');
+        } else {
+            normalized.push_str(segment);
+        }
+    }
+    if placeholders != bindings {
+        bail!("path bindings must exactly match the generated path placeholders");
+    }
+    let bytes = normalized.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        let byte = bytes[index];
+        if byte == b'%' {
+            if index + 2 >= bytes.len()
+                || !bytes[index + 1].is_ascii_hexdigit()
+                || !bytes[index + 2].is_ascii_hexdigit()
+                || bytes[index + 1].is_ascii_lowercase()
+                || bytes[index + 2].is_ascii_lowercase()
+            {
+                bail!("request path contains a non-canonical escape");
+            }
+            let decoded = u8::from_str_radix(&normalized[index + 1..index + 3], 16)?;
+            if decoded.is_ascii_alphanumeric()
+                || matches!(decoded, b'-' | b'.' | b'_' | b'~' | b'/' | b'\\')
+            {
+                bail!("request path contains an ambiguous escape");
+            }
+            index += 3;
+        } else if byte.is_ascii_alphanumeric()
+            || matches!(
+                byte,
+                b'/' | b'.'
+                    | b'_'
+                    | b'~'
+                    | b'!'
+                    | b'$'
+                    | b'&'
+                    | b'\''
+                    | b'('
+                    | b')'
+                    | b'*'
+                    | b'+'
+                    | b','
+                    | b';'
+                    | b'='
+                    | b':'
+                    | b'@'
+                    | b'-'
+            )
+        {
+            index += 1;
+        } else {
+            bail!("request path contains a prohibited character");
+        }
+    }
+    Ok(())
 }
 
 /// Write every named Function asset under `<project>/`, creating parent
