@@ -257,12 +257,16 @@ result, `refused` with a declared code, or `uncertain`. The step output is the a
 typed by the `bill` schema here. A declared code takes `onDeclaredRefusal` as `{refusalCode}`.
 Return `uncertain` for any answer the Function does not recognise, so the run holds instead of
 guessing. Scenarios reply to the step with `type: response` and a `{status, body}` value, which
-the same Function interprets; a `success` or `declared-refusal` reply to the step is refused.
+the same Function interprets; a `success` or `declared-refusal` reply to the step is refused. The
+status must be one the Function sees at run time. Coordinator holds a redirect or a server error
+and retries a 429 or 503 before interpretation, so a scenario models those with `type: uncertain`
+or `type: retryable`, and a `response` reply with such a status is refused.
 
 Coordinator persists the command and its request id before the first send and sends the id as
 `Idempotency-Key` on every attempt. A 429 is retried automatically as a command the provider did
 not process. A 503 before the last attempt is retried automatically too, but the effect stays
-unknown until a later attempt settles it, so a deadline reached first holds the run. A lost
+unknown until a later attempt settles it, so a deadline reached first holds the run. A 503 whose
+retry could not land before the deadline holds the run at once instead of expiring it. A lost
 acknowledgement, timeout, redirect, other server error, or unusable response holds the run as
 uncertain; `retry-same` sends the same body with the same id. The provider must deduplicate on
 that header. See

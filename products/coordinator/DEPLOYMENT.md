@@ -926,9 +926,13 @@ An `external.command/v1` call has no read-only receipt either. `reconcile` repor
 schedule above; on the tenth attempt it ends the call with `external-rate-limited`. Status 503
 before the tenth attempt is retried on the same schedule, but because it may follow an effect the
 step stays uncertain until a later attempt settles it: a run deadline reached first holds the run
-with the effect unknown, and on the tenth attempt a 503 holds it as uncertain. A command ignores a
-`Retry-After` it cannot use, such as a date, a duplicate field, a malformed value, or a wait over
-86,400 seconds, and retries on the ordinary backoff instead. Any other server error, a redirect, a
+with the effect unknown, and on the tenth attempt a 503 holds it as uncertain. When the longest
+wait the schedule allows after a 503, including its `Retry-After` and counted from the end of the
+attempt's lease, would reach the run deadline, the retry is not scheduled: the run holds at once
+with the effect unknown, and `retry-same` resends the same command while the deadline is still in
+the future. A 429 the deadline ends still ends the run `expired`. A command ignores a `Retry-After`
+it cannot use, such as a date, a duplicate field, a malformed value, or a wait over 86,400
+seconds, and retries on the ordinary backoff instead. Any other server error, a redirect, a
 timeout, a lost acknowledgement, or a response the interpretation Function cannot settle holds the
 run as uncertain. Before retrying, confirm with the provider that it still deduplicates that key.
 After an uncertain attempt, including a retried 503, a declared refusal or 429 keeps the run held;

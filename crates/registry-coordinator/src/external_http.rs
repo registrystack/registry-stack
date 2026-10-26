@@ -266,9 +266,12 @@ impl ExternalHttpConnection {
     /// answer is uncertain, never a provider failure. A 429 is trusted to mean
     /// the command was not processed and is retried. A 503 before the final
     /// attempt is retried too, but stays uncertain until a later attempt
-    /// settles it, since it may follow an effect. A `Retry-After` either
-    /// answer carries that the command cannot use is ignored. The response is
-    /// returned for the operation's pinned interpretation Function.
+    /// settles it, since it may follow an effect; the worker holds it as
+    /// unknown at once when that retry could not land before the run deadline,
+    /// so the same command can still be retried. A `Retry-After` either
+    /// answer carries that the command cannot use is ignored. Only a status
+    /// `command_status` classifies as interpreted reaches the operation's
+    /// pinned interpretation Function, which receives the response.
     pub async fn command(
         &self,
         input: &Value,
