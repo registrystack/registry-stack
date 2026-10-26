@@ -171,14 +171,15 @@ Evidence vocabulary.
     safe outer problem with no partial results.
 
 Version 1 stops before documents, credential issuance protocols and credential
-lifecycle, replay or nonce state beyond the stateless request-nonce echo and
+lifecycle (except the credential status profile of `CONCEPT.md` section 15.9), replay or nonce state beyond the stateless request-nonce echo and
 comparison, server-issued challenges, OOTS, delegated agents, federation,
 workflow, a public requester-entitlement or definition catalog, a searchable,
 mutable, aggregate, or federated catalog, runtime bundle mutation, source
 planning, multi-source fulfillment, and a general policy engine. The SD-JWT VC
 response format is a serialization of the same assertion under
 `sd-jwt-vc-profile.yaml`; it introduces no offer, code, nonce, status, or
-persisted credential state. Authenticated definition discovery is a closed projection of
+persisted credential state; version 2 adds the status reference and the ledger
+of `CONCEPT.md` section 15.9, and nothing else. Authenticated definition discovery is a closed projection of
 existing authority, not an authorization source or catalog. The separately
 packaged public provider advertisement exposes only closed service facts for
 external indexing and creates neither trust nor access. No contract here

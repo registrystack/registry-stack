@@ -904,7 +904,7 @@ follow-up issue.
 
 | Area | Done when |
 |---|---|
-| Scope and architecture | One `registry-evidence` crate and one `evidence` binary implement the complete Version 1 path without any `registry-notary*`, PDP, credential-issuance, replay, worker, or interoperability subsystem dependency. |
+| Scope and architecture | One `registry-evidence` crate and one `evidence` binary implement the complete Version 1 path without any `registry-notary*`, PDP, credential-issuance, replay, worker, or interoperability subsystem dependency; the optional status module of `CONCEPT.md` section 15.9 is the one exception, and its scheduler runs in process rather than as a worker. |
 | Public contracts | The CCCEV-aligned Evidence JSON profile, Registry Discovery provider-publication profile, singular and multi-subject request schemas, request nonce, selector schemas, flattened JWS, unsigned, and request-batch responses, exact content negotiation, governed-bundle and runtime YAML schemas, closed `prepare/2`, `extract/2`, `prepare_batch/2`, `extract_batch/2`, and selector-aware `derive/3` Rhai ABIs, projection and fixture contracts, audit events, problem codes, JSON Schema, and OpenAPI are reviewed, versioned, generated where applicable, and protected by CI drift tests. Subject-array order is not semantic; Rust resolves unique roles and emits declaration order internally. |
 | Initial assertion cases | Adult status, residence region, professional licence status, and legal-parent relationship each pass offline and through the real HTTP service, including authentication, authorization, response-format permission, source access, both audit gates, output validation, signed JWS, explicitly authorized unsigned output, and strict verification. The multi-subject request-batch path exercises the same domain-neutral resolution and signing path without adding a preferred definition or domain branch. |
 | Generic domain model | The four cases use one model and operation. Production Rust has no adult, age, residence, licence, parentage, personal-name-part, national-identifier, or other acceptance-case or jurisdiction-specific type, field, operation, route, feature, or conditional. Deployment-defined selector field names are opaque stable names. |
@@ -925,8 +925,8 @@ follow-up issue.
 | Production build | An editable project remains local until its author supplies exact governance metadata, stable concept identifiers, and one synthetic fixture per question. `evidencectl package` consumes one explicit closed production target, follows no symlink or outside-project reference, creates no secret or runtime residue, delegates bundle validation and every fixture to the real `evidence` binary, atomically publishes only a complete candidate, and reproduces identical bundle bytes and revision from identical inputs. It creates no keys, callers, approvals, deployments, or network side effects. |
 | Target-host handoff | A reviewed candidate with independently provisioned owner-only production secrets passes `evidencectl doctor --runtime-config <absolute-file>`, `evidencectl test`, and real startup. One authorized synthetic-subject HTTP request yields a signed assertion that `evidence verify` accepts only under independent `production` policy and trusted keys; the resulting access and disclosure audit entries are written under the `registry.evidence.audit/v2` envelope. |
 | Issuer handoff | External HTTPS OIDC is independently configured. Registered-client token acquisition and Evidence acceptance pass; issuer, audience, scope and grant-boundary mismatches fail without credentials, selectors, or source values in output. Local tooling uses pinned stock ThunderID. |
-| Compose and bare-binary journey | The maintained Compose guidance mounts the candidate package unchanged and read-only, uses a separate container runtime document, separate read-only secrets, persistent audit storage, a private listener, and operator TLS. It documents service UID and secret modes, public HTTPS issuer routing, and image provenance without generating Compose output. The production tutorials execute from released bare binaries and include a real Curl boundary. |
-| Stop boundary | No deferred capability from `CONCEPT.md` section 4 or section 15 is implemented or stubbed beyond the explicitly closed acquisition kinds, each of which fixes every call it may make in configuration before any call is made. This includes document evidence, credential lifecycle, OID4VCI, status lists, presentation verification, nonce or replay storage beyond stateless request-nonce echo and comparison, OOTS XML or AS4, citizen-to-agent delegation, agent runtimes or MCP, federation, workflow, a public requester-entitlement or definition catalog, searchable, mutable, aggregate, or federated catalogs, runtime bundle mutation, script-selected transport, response-led or general multi-call planning, an evidence-data call no declared acquisition fixed, response-led multi-source fulfillment, a policy engine, application database, message broker, or worker process. The package-derived public provider advertisement remains inside the boundary as a closed publication for external indexing, not a catalog runtime. |
+| Compose and bare-binary journey | The maintained Compose guidance mounts the candidate package unchanged and read-only, uses a separate container runtime document, separate read-only secrets, persistent audit storage, a private listener, and operator TLS. A deployment that enables the status module of `CONCEPT.md` section 15.9 adds a PostgreSQL service and exposes the public status list route only through a path-restricted proxy. It documents service UID and secret modes, public HTTPS issuer routing, and image provenance without generating Compose output. The production tutorials execute from released bare binaries and include a real Curl boundary. |
+| Stop boundary | No deferred capability from `CONCEPT.md` section 4 or section 15 is implemented or stubbed beyond the explicitly closed acquisition kinds, each of which fixes every call it may make in configuration before any call is made. This includes document evidence, credential lifecycle, OID4VCI, status lists, presentation verification, nonce or replay storage beyond stateless request-nonce echo and comparison, OOTS XML or AS4, citizen-to-agent delegation, agent runtimes or MCP, federation, workflow, a public requester-entitlement or definition catalog, searchable, mutable, aggregate, or federated catalogs, runtime bundle mutation, script-selected transport, response-led or general multi-call planning, an evidence-data call no declared acquisition fixed, response-led multi-source fulfillment, a policy engine, application database, message broker, or worker process. The credential status profile of `CONCEPT.md` section 15.9 is the one exception, implemented only under its own plan and negative tests. The package-derived public provider advertisement remains inside the boundary as a closed publication for external indexing, not a catalog runtime. |
 
 ## Required Version 1 acceptance tests
 
@@ -1313,7 +1313,9 @@ well as the final workspace gates.
 
 ## Explicitly deferred
 
-The Version 1 schedule and DoD stop before every item below. Do not add
+The Version 1 schedule and DoD stop before every item below. Runtime enablement
+of an approved capability, such as the status module of `CONCEPT.md` section
+15.9, is configuration, not a feature flag for a deferred item. Do not add
 implementations, stubs, placeholder schemas, empty modules, feature flags, or
 extension APIs for them:
 
@@ -1335,10 +1337,17 @@ extension APIs for them:
   key-binding verification, wallet onboarding, or holder-scoped subject
   identifiers. The SD-JWT VC response format is a serialization of the same
   stateless assertion under `contracts/sd-jwt-vc-profile.yaml`, and the optional
-  holder key is embedded without ever being validated as possession;
-- nonce or replay storage beyond stateless request-nonce echo and comparison;
+  holder key is embedded without ever being validated as possession. Status lists
+  and revocation are the one exception, specified only by `CONCEPT.md` section
+  15.9;
+- nonce or replay storage beyond stateless request-nonce echo and comparison,
+  except the status module's intake idempotency keys, which are not request
+  nonces;
 - OOTS XML, AS4, Evidence Broker, or DSD runtime code;
 - federation, agents, MCP, workflow, or public, cross-requester, searchable,
   mutable, or federated catalog endpoints;
-- runtime bundle upload, mutation, hot reload, or approval workflows;
-- an application database, message broker, or worker process.
+- runtime bundle upload, mutation, hot reload, or approval workflows (operator
+  approval of status actions under `CONCEPT.md` section 15.9 is the exception);
+- an application database (unless status is enabled, `CONCEPT.md` section
+  15.9), message broker, or worker process; the status scheduler runs in
+  process and is not a worker.

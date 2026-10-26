@@ -368,8 +368,10 @@ when signing fails.
 The SD-JWT VC format is a second encoding of the one stateless assertion the
 signed default carries, under the frozen RFC 9901 and SD-JWT VC draft 18 profile in
 [the SD-JWT VC profile](contracts/sd-jwt-vc-profile.yaml). It is not a
-credential lifecycle: no issuance session, no holder binding ceremony, no
-status list, no revocation, and no presentation or key-binding verification. The
+credential lifecycle: no issuance session, no holder binding ceremony, and no
+presentation or key-binding verification. Without credential status there is no
+status list and no revocation; version 2 of the profile adds both for a
+requirement that declares credential status (`CONCEPT.md` section 15.9). The
 shipped verifier checks an SD-JWT VC for exactly what it checks for a signed
 JWS, namely issuer authenticity against a pinned key set and the output
 contract, and it never falls back to the credential format when signing fails.
