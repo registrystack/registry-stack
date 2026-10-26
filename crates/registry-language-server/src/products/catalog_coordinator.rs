@@ -33,6 +33,7 @@ const REFERENCES: &[N] = &[
         "operations/*/completions/*/interpret",
         "Coordinator Function",
     ),
+    N::global("operations/*/interpret", "Coordinator Function"),
     // Mapping inputs and fields hold References, so literal JSON payloads are never walked.
     N {
         only_when: Some(("type", "function")),

@@ -291,9 +291,13 @@
           "$ref": "#/$defs/DisplayText",
           "description": "An optional explanation for readers; it has no execution or authorization effect."
         },
+        "interpret": {
+          "$ref": "#/$defs/LocalId",
+          "description": "The typed pure Function that interprets an external command's provider\nresponse into an accepted result, a declared refusal or an uncertain\noutcome. Required on, and accepted only on, `external.command/v1`."
+        },
         "responseSchema": {
           "$ref": "#/$defs/Schema",
-          "description": "An optional typed response specialization for the bounded external GET Operation."
+          "description": "An optional typed response specialization for the bounded external GET\nor external command Operation."
         },
         "title": {
           "$ref": "#/$defs/DisplayText",
@@ -720,7 +724,8 @@
         "evaluation.evaluate/v1",
         "casework.submit-review-request/v1",
         "casework.cancel-review-request/v1",
-        "scheduling.preview-availability/v1"
+        "scheduling.preview-availability/v1",
+        "external.command/v1"
       ],
       "type": "string"
     },
