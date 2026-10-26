@@ -84,6 +84,541 @@ const SAMPLE_RESPONSE: &str = r#"{
 }
 "#;
 
+const MAPPED_GET_OPENAPI: &str = r#"openapi: 3.1.0
+info:
+  title: Mapped record service
+  version: "1.0.0"
+paths:
+  /records/{record_id}:
+    get:
+      parameters:
+        - name: record_id
+          in: path
+          required: true
+          schema: {type: string}
+        - name: reference
+          in: query
+          required: true
+          schema: {type: string}
+      responses:
+        "200":
+          description: record
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [allowed]
+                properties:
+                  allowed: {type: boolean}
+"#;
+
+#[test]
+fn explicit_selector_mappings_generate_path_bindings_and_query_preparation() {
+    let workspace = tempfile::tempdir().expect("tempdir");
+    let project = scaffold(workspace.path(), MAPPED_GET_OPENAPI);
+    let output = evidencectl(&[
+        "source".to_owned(),
+        "suggest".to_owned(),
+        "--operation".to_owned(),
+        "GET /records/{record_id}".to_owned(),
+        "--select".to_owned(),
+        "/allowed".to_owned(),
+        "--source-id".to_owned(),
+        "mapped".to_owned(),
+        "--map-selector".to_owned(),
+        "subject.subject-reference-v1.reference=path:record_id".to_owned(),
+        "--map-selector".to_owned(),
+        "subject.subject-reference-v1.reference=query:reference".to_owned(),
+        path_argument(&project),
+    ]);
+    assert!(
+        output.status.success(),
+        "source suggest failed: {}",
+        stderr_of(&output)
+    );
+
+    let document: Value = serde_norway::from_str(
+        &std::fs::read_to_string(project.join("evidence.yaml")).expect("read project"),
+    )
+    .expect("parse project");
+    let source = &document["sources"]["mapped"];
+    assert_eq!(
+        source["selectors"],
+        serde_json::json!([{"role":"subject","profiles":["subject-reference-v1"]}])
+    );
+    assert_eq!(
+        source["request"]["pathBindings"]["record_id"]["selector"]["field"],
+        "reference"
+    );
+    let prepare = std::fs::read_to_string(project.join("functions/mapped-prepare.rhai"))
+        .expect("read prepare Function");
+    assert!(prepare.contains(r#"query_pair("reference""#), "{prepare}");
+    assert!(!prepare.contains("TODO(evidencectl)"), "{prepare}");
+}
+
+#[test]
+fn invalid_selector_mappings_refuse_before_mutating_the_project() {
+    struct Case {
+        name: &'static str,
+        document: String,
+        mappings: Vec<String>,
+        add_alternate_field: bool,
+        expected: &'static str,
+    }
+
+    let string_query = request_openapi(
+        "GET",
+        "/records",
+        vec![parameter("reference", "query", true, "string")],
+        None,
+    );
+    let integer_query = request_openapi(
+        "GET",
+        "/records",
+        vec![parameter("reference", "query", true, "integer")],
+        None,
+    );
+    let mut short_string_parameter = parameter("reference", "query", true, "string");
+    short_string_parameter["schema"]["maxLength"] = serde_json::json!(8);
+    let short_string_query = request_openapi("GET", "/records", vec![short_string_parameter], None);
+    let mut bounded_integer_parameter = parameter("value", "query", true, "integer");
+    bounded_integer_parameter["schema"]["minimum"] = serde_json::json!(0);
+    bounded_integer_parameter["schema"]["maximum"] = serde_json::json!(10);
+    let bounded_integer_query =
+        request_openapi("GET", "/records", vec![bounded_integer_parameter], None);
+    let mut patterned_parameter = parameter("reference", "query", true, "string");
+    patterned_parameter["schema"]["pattern"] = serde_json::json!("^[A-Z]+$");
+    let patterned_query = request_openapi("GET", "/records", vec![patterned_parameter], None);
+    let mut negated_parameter = parameter("reference", "query", true, "string");
+    negated_parameter["schema"]["not"] = serde_json::json!({"const":"forbidden"});
+    let negated_query = request_openapi("GET", "/records", vec![negated_parameter], None);
+    let mut dynamic_parameter = parameter("reference", "query", true, "string");
+    dynamic_parameter["schema"]["$dynamicRef"] = serde_json::json!("#restricted");
+    let dynamic_query = request_openapi("GET", "/records", vec![dynamic_parameter], None);
+    let recursive_object_body = request_openapi(
+        "POST",
+        "/records",
+        Vec::new(),
+        Some(json_body(
+            true,
+            serde_json::json!({
+                "type":"object", "additionalProperties":false,
+                "$recursiveRef":"#restricted",
+                "required":["reference"],
+                "properties":{"reference":{"type":"string"}}
+            }),
+        )),
+    );
+    let required_header = request_openapi(
+        "GET",
+        "/records",
+        vec![
+            parameter("reference", "query", true, "string"),
+            parameter("X-Required", "header", true, "string"),
+        ],
+        None,
+    );
+    let required_cookie = request_openapi(
+        "GET",
+        "/records",
+        vec![
+            parameter("reference", "query", true, "string"),
+            parameter("session", "cookie", true, "string"),
+        ],
+        None,
+    );
+    let required_path_and_query = request_openapi(
+        "GET",
+        "/records/{record_id}",
+        vec![
+            parameter("record_id", "path", true, "string"),
+            parameter("reference", "query", true, "string"),
+        ],
+        None,
+    );
+    let mut matrix_path_parameter = parameter("record_id", "path", true, "string");
+    matrix_path_parameter["style"] = serde_json::json!("matrix");
+    matrix_path_parameter["explode"] = serde_json::json!(false);
+    let matrix_path = request_openapi(
+        "GET",
+        "/records/{record_id}",
+        vec![matrix_path_parameter],
+        None,
+    );
+    let mut deep_object_query_parameter = parameter("reference", "query", true, "string");
+    deep_object_query_parameter["style"] = serde_json::json!("deepObject");
+    deep_object_query_parameter["explode"] = serde_json::json!(true);
+    let deep_object_query =
+        request_openapi("GET", "/records", vec![deep_object_query_parameter], None);
+    let array_body = request_openapi(
+        "POST",
+        "/records",
+        Vec::new(),
+        Some(json_body(
+            true,
+            serde_json::json!({
+                "type":"object", "additionalProperties":false,
+                "required":["values"],
+                "properties":{"values":{"type":"array","items":{"type":"string"}}}
+            }),
+        )),
+    );
+    let open_body = request_openapi(
+        "POST",
+        "/records",
+        Vec::new(),
+        Some(json_body(
+            true,
+            serde_json::json!({
+                "type":"object", "additionalProperties":true,
+                "required":["reference"],
+                "properties":{"reference":{"type":"string"}}
+            }),
+        )),
+    );
+    let constrained_object_body = request_openapi(
+        "POST",
+        "/records",
+        Vec::new(),
+        Some(json_body(
+            true,
+            serde_json::json!({
+                "type":"object", "additionalProperties":false, "minProperties":2,
+                "required":["reference"],
+                "properties":{"reference":{"type":"string"}}
+            }),
+        )),
+    );
+    let optional_body = request_openapi(
+        "POST",
+        "/records",
+        Vec::new(),
+        Some(json_body(
+            false,
+            serde_json::json!({
+                "type":"object", "additionalProperties":false,
+                "required":["required_value"],
+                "properties":{
+                    "required_value":{"type":"string"},
+                    "optional_value":{"type":"string"}
+                }
+            }),
+        )),
+    );
+    let required_empty_object = request_openapi(
+        "POST",
+        "/records",
+        Vec::new(),
+        Some(json_body(
+            true,
+            serde_json::json!({
+                "type":"object", "additionalProperties":false,
+                "required":["reference","criteria"],
+                "properties":{
+                    "reference":{"type":"string"},
+                    "criteria":{"type":"object","additionalProperties":false,"properties":{}}
+                }
+            }),
+        )),
+    );
+    let cases = vec![
+        Case {
+            name: "unknown role",
+            document: string_query.clone(),
+            mappings: vec!["other.subject-reference-v1.reference=query:reference".to_owned()],
+            add_alternate_field: false,
+            expected: "unknown subject role",
+        },
+        Case {
+            name: "unknown profile",
+            document: string_query.clone(),
+            mappings: vec!["subject.other-v1.reference=query:reference".to_owned()],
+            add_alternate_field: false,
+            expected: "unknown selector profile",
+        },
+        Case {
+            name: "unknown field",
+            document: string_query.clone(),
+            mappings: vec!["subject.subject-reference-v1.other=query:reference".to_owned()],
+            add_alternate_field: false,
+            expected: "has no field",
+        },
+        Case {
+            name: "incompatible type",
+            document: integer_query,
+            mappings: vec!["subject.subject-reference-v1.reference=query:reference".to_owned()],
+            add_alternate_field: false,
+            expected: "does not declare that scalar type",
+        },
+        Case {
+            name: "string domain wider than maxLength",
+            document: short_string_query,
+            mappings: vec!["subject.subject-reference-v1.reference=query:reference".to_owned()],
+            add_alternate_field: false,
+            expected: "byte bounds cannot prove",
+        },
+        Case {
+            name: "integer domain wider than maximum",
+            document: bounded_integer_query,
+            mappings: vec!["subject.integer-v1.value=query:value".to_owned()],
+            add_alternate_field: false,
+            expected: "integer range is wider",
+        },
+        Case {
+            name: "pattern cannot be proven",
+            document: patterned_query,
+            mappings: vec!["subject.subject-reference-v1.reference=query:reference".to_owned()],
+            add_alternate_field: false,
+            expected: "cannot be proven compatible",
+        },
+        Case {
+            name: "negated scalar schema cannot be proven",
+            document: negated_query,
+            mappings: vec!["subject.subject-reference-v1.reference=query:reference".to_owned()],
+            add_alternate_field: false,
+            expected: "declares `not`",
+        },
+        Case {
+            name: "dynamic scalar reference is unsupported",
+            document: dynamic_query,
+            mappings: vec!["subject.subject-reference-v1.reference=query:reference".to_owned()],
+            add_alternate_field: false,
+            expected: "declares `$dynamicRef`",
+        },
+        Case {
+            name: "recursive object reference is unsupported",
+            document: recursive_object_body,
+            mappings: vec!["subject.subject-reference-v1.reference=body:/reference".to_owned()],
+            add_alternate_field: false,
+            expected: "unsupported object constraint `$recursiveRef`",
+        },
+        Case {
+            name: "duplicate target",
+            document: string_query.clone(),
+            mappings: vec![
+                "subject.subject-reference-v1.reference=query:reference".to_owned(),
+                "subject.subject-reference-v1.alternate=query:reference".to_owned(),
+            ],
+            add_alternate_field: true,
+            expected: "assigned more than once",
+        },
+        Case {
+            name: "missing required query",
+            document: required_path_and_query,
+            mappings: vec!["subject.subject-reference-v1.reference=path:record_id".to_owned()],
+            add_alternate_field: false,
+            expected: "required request input `query:reference`",
+        },
+        Case {
+            name: "matrix path serialization",
+            document: matrix_path,
+            mappings: vec!["subject.subject-reference-v1.reference=path:record_id".to_owned()],
+            add_alternate_field: false,
+            expected: "unsupported OpenAPI serialization",
+        },
+        Case {
+            name: "deep-object query serialization",
+            document: deep_object_query,
+            mappings: vec!["subject.subject-reference-v1.reference=query:reference".to_owned()],
+            add_alternate_field: false,
+            expected: "unsupported OpenAPI serialization",
+        },
+        Case {
+            name: "required header",
+            document: required_header,
+            mappings: vec!["subject.subject-reference-v1.reference=query:reference".to_owned()],
+            add_alternate_field: false,
+            expected: "cannot set headers or cookies",
+        },
+        Case {
+            name: "required cookie",
+            document: required_cookie,
+            mappings: vec!["subject.subject-reference-v1.reference=query:reference".to_owned()],
+            add_alternate_field: false,
+            expected: "cannot set headers or cookies",
+        },
+        Case {
+            name: "array body",
+            document: array_body,
+            mappings: vec!["subject.subject-reference-v1.reference=body:/values".to_owned()],
+            add_alternate_field: false,
+            expected: "must name one scalar",
+        },
+        Case {
+            name: "open body",
+            document: open_body,
+            mappings: vec!["subject.subject-reference-v1.reference=body:/reference".to_owned()],
+            add_alternate_field: false,
+            expected: "simple closed object schema",
+        },
+        Case {
+            name: "constrained body object",
+            document: constrained_object_body,
+            mappings: vec!["subject.subject-reference-v1.reference=body:/reference".to_owned()],
+            add_alternate_field: false,
+            expected: "unsupported object constraint `minProperties`",
+        },
+        Case {
+            name: "optional body becomes present",
+            document: optional_body,
+            mappings: vec![
+                "subject.subject-reference-v1.reference=body:/optional_value".to_owned(),
+            ],
+            add_alternate_field: false,
+            expected: "body:/required_value",
+        },
+        Case {
+            name: "required empty object",
+            document: required_empty_object,
+            mappings: vec!["subject.subject-reference-v1.reference=body:/reference".to_owned()],
+            add_alternate_field: false,
+            expected: "no required scalar leaves",
+        },
+    ];
+
+    for case in cases {
+        let workspace = tempfile::tempdir().expect("tempdir");
+        let project = scaffold(workspace.path(), &case.document);
+        if case.add_alternate_field {
+            add_string_selector_field(&project, "alternate", 128);
+        }
+        assert_mapping_failure_is_atomic(&project, &case.mappings, case.expected, case.name);
+    }
+}
+
+#[test]
+fn optional_request_body_may_remain_absent_when_only_query_is_mapped() {
+    let document = request_openapi(
+        "POST",
+        "/records",
+        vec![parameter("reference", "query", true, "string")],
+        Some(json_body(
+            false,
+            serde_json::json!({
+                "type":"object", "additionalProperties":false,
+                "required":["required_value"],
+                "properties":{"required_value":{"type":"string"}}
+            }),
+        )),
+    );
+    let workspace = tempfile::tempdir().expect("tempdir");
+    let project = scaffold(workspace.path(), &document);
+    let output = mapped_suggest(
+        &project,
+        &["subject.subject-reference-v1.reference=query:reference".to_owned()],
+    );
+    assert!(output.status.success(), "{}", stderr_of(&output));
+    let prepare = std::fs::read_to_string(project.join("functions/mapped-prepare.rhai"))
+        .expect("generated prepare Function");
+    assert!(prepare.contains("body: ()"), "{prepare}");
+}
+
+#[test]
+fn request_mapping_runtime_bounds_accept_the_limit_and_refuse_one_past_it() {
+    for (count, succeeds) in [(64_usize, true), (65, false)] {
+        let parameters = (0..count)
+            .map(|index| parameter(&format!("q{index}"), "query", true, "string"))
+            .collect();
+        let document = request_openapi("GET", "/records", parameters, None);
+        let workspace = tempfile::tempdir().expect("tempdir");
+        let project = scaffold(workspace.path(), &document);
+        let mappings = (0..count)
+            .map(|index| format!("subject.subject-reference-v1.reference=query:q{index}"))
+            .collect::<Vec<_>>();
+        let before = project_snapshot(&project);
+        let output = mapped_suggest(&project, &mappings);
+        assert_eq!(output.status.success(), succeeds, "{}", stderr_of(&output));
+        if !succeeds {
+            assert!(stderr_of(&output).contains("64-pair"));
+            assert_eq!(project_snapshot(&project), before);
+        }
+    }
+
+    for (name_bytes, succeeds) in [(64_usize, true), (65, false)] {
+        let name = "q".repeat(name_bytes);
+        let document = request_openapi(
+            "GET",
+            "/records",
+            vec![parameter(&name, "query", true, "string")],
+            None,
+        );
+        let workspace = tempfile::tempdir().expect("tempdir");
+        let project = scaffold(workspace.path(), &document);
+        let output = mapped_suggest(
+            &project,
+            &[format!(
+                "subject.subject-reference-v1.reference=query:{name}"
+            )],
+        );
+        assert_eq!(output.status.success(), succeeds, "{}", stderr_of(&output));
+    }
+
+    for (maximum_bytes, succeeds) in [(4096_u64, true), (4097, false)] {
+        let document = request_openapi(
+            "GET",
+            "/records",
+            vec![parameter("reference", "query", true, "string")],
+            None,
+        );
+        let workspace = tempfile::tempdir().expect("tempdir");
+        let project = scaffold(workspace.path(), &document);
+        set_reference_selector_maximum(&project, maximum_bytes);
+        let output = mapped_suggest(
+            &project,
+            &["subject.subject-reference-v1.reference=query:reference".to_owned()],
+        );
+        assert_eq!(output.status.success(), succeeds, "{}", stderr_of(&output));
+    }
+
+    let document = request_openapi(
+        "GET",
+        "/records",
+        (0..3)
+            .map(|index| parameter(&format!("q{index}"), "query", true, "string"))
+            .collect(),
+        None,
+    );
+    let workspace = tempfile::tempdir().expect("tempdir");
+    let project = scaffold(workspace.path(), &document);
+    set_reference_selector_maximum(&project, 4096);
+    assert_mapping_failure_is_atomic(
+        &project,
+        &(0..3)
+            .map(|index| format!("subject.subject-reference-v1.reference=query:q{index}"))
+            .collect::<Vec<_>>(),
+        "normalized bytes",
+        "worst-case escaped query values",
+    );
+
+    for (key_bytes, succeeds) in [(16_384_usize, true), (16_385, false)] {
+        let key = "k".repeat(key_bytes);
+        let mut properties = serde_json::Map::new();
+        properties.insert(key.clone(), serde_json::json!({"type":"string"}));
+        let document = request_openapi(
+            "POST",
+            "/records",
+            Vec::new(),
+            Some(json_body(
+                true,
+                serde_json::json!({
+                    "type":"object", "additionalProperties":false,
+                    "required":[&key], "properties":properties
+                }),
+            )),
+        );
+        let workspace = tempfile::tempdir().expect("tempdir");
+        let project = scaffold(workspace.path(), &document);
+        let output = mapped_suggest(
+            &project,
+            &[format!(
+                "subject.subject-reference-v1.reference=body:/{key}"
+            )],
+        );
+        assert_eq!(output.status.success(), succeeds, "{}", stderr_of(&output));
+    }
+}
+
 #[test]
 fn drafts_into_a_project_and_then_refuses_to_overwrite_the_draft() {
     let workspace = tempfile::tempdir().expect("tempdir");
@@ -448,6 +983,165 @@ fn evidencectl(arguments: &[String]) -> Output {
         .expect("running evidencectl")
 }
 
+fn parameter(name: &str, location: &str, required: bool, scalar_type: &str) -> Value {
+    serde_json::json!({
+        "name": name,
+        "in": location,
+        "required": required,
+        "schema": {"type": scalar_type}
+    })
+}
+
+fn json_body(required: bool, schema: Value) -> Value {
+    serde_json::json!({
+        "required": required,
+        "content": {"application/json": {"schema": schema}}
+    })
+}
+
+fn request_openapi(
+    method: &str,
+    path: &str,
+    parameters: Vec<Value>,
+    request_body: Option<Value>,
+) -> String {
+    let mut operation = serde_json::json!({
+        "parameters": parameters,
+        "responses": {
+            "200": {
+                "description": "record",
+                "content": {
+                    "application/json": {
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": ["allowed"],
+                            "properties": {"allowed": {"type": "boolean"}}
+                        }
+                    }
+                }
+            }
+        }
+    });
+    if let Some(request_body) = request_body {
+        operation["requestBody"] = request_body;
+    }
+    let mut path_item = serde_json::Map::new();
+    path_item.insert(method.to_ascii_lowercase(), operation);
+    let mut paths = serde_json::Map::new();
+    paths.insert(path.to_owned(), Value::Object(path_item));
+    serde_norway::to_string(&serde_json::json!({
+        "openapi": "3.1.0",
+        "info": {"title": "Mapped source", "version": "1"},
+        "paths": paths
+    }))
+    .expect("OpenAPI renders")
+}
+
+fn mapped_suggest(project: &Path, mappings: &[String]) -> Output {
+    let openapi: Value = serde_norway::from_str(
+        &std::fs::read_to_string(project.join("source.openapi.yaml")).expect("read OpenAPI"),
+    )
+    .expect("parse OpenAPI");
+    let (path, path_item) = openapi["paths"]
+        .as_object()
+        .and_then(|paths| paths.iter().next())
+        .expect("one path");
+    let method = ["get", "post"]
+        .into_iter()
+        .find(|method| path_item.get(*method).is_some())
+        .expect("GET or POST operation");
+    let mut arguments = vec![
+        "source".to_owned(),
+        "suggest".to_owned(),
+        "--operation".to_owned(),
+        format!("{} {path}", method.to_ascii_uppercase()),
+        "--select".to_owned(),
+        "/allowed".to_owned(),
+        "--source-id".to_owned(),
+        "mapped".to_owned(),
+    ];
+    for mapping in mappings {
+        arguments.push("--map-selector".to_owned());
+        arguments.push(mapping.clone());
+    }
+    arguments.push(path_argument(project));
+    evidencectl(&arguments)
+}
+
+fn project_snapshot(project: &Path) -> Vec<(PathBuf, Vec<u8>)> {
+    let mut paths = vec![project.join("evidence.yaml")];
+    paths.extend(
+        std::fs::read_dir(project.join("functions"))
+            .expect("read Functions")
+            .map(|entry| entry.expect("Function entry").path()),
+    );
+    paths.sort();
+    paths
+        .into_iter()
+        .map(|path| {
+            let relative = path
+                .strip_prefix(project)
+                .expect("project path")
+                .to_path_buf();
+            let bytes = std::fs::read(&path).expect("read project artifact");
+            (relative, bytes)
+        })
+        .collect()
+}
+
+fn assert_mapping_failure_is_atomic(
+    project: &Path,
+    mappings: &[String],
+    expected: &str,
+    case: &str,
+) {
+    let before = project_snapshot(project);
+    let output = mapped_suggest(project, mappings);
+    assert!(!output.status.success(), "{case} unexpectedly succeeded");
+    assert!(
+        stderr_of(&output).contains(expected),
+        "{case}: expected `{expected}` in {}",
+        stderr_of(&output)
+    );
+    assert_eq!(
+        project_snapshot(project),
+        before,
+        "{case} mutated the project after refusal"
+    );
+}
+
+fn edit_project(project: &Path, edit: impl FnOnce(&mut Value)) {
+    let path = project.join("evidence.yaml");
+    let mut document: Value = serde_json::from_slice(&std::fs::read(&path).expect("read project"))
+        .expect("parse project JSON");
+    edit(&mut document);
+    std::fs::write(
+        path,
+        serde_json::to_vec_pretty(&document).expect("render project JSON"),
+    )
+    .expect("write project");
+}
+
+fn add_string_selector_field(project: &Path, field: &str, maximum_bytes: u64) {
+    edit_project(project, |document| {
+        document["selectorProfiles"]["subject-reference-v1"]["fields"][field] = serde_json::json!({
+            "type":"string", "minimumBytes":1, "maximumBytes":maximum_bytes
+        });
+        document["selectorProfiles"]["subject-reference-v1"]["maximumAggregateBytes"] =
+            serde_json::json!(8192);
+    });
+}
+
+fn set_reference_selector_maximum(project: &Path, maximum_bytes: u64) {
+    edit_project(project, |document| {
+        document["selectorProfiles"]["subject-reference-v1"]["fields"]["reference"]
+            ["maximumBytes"] = serde_json::json!(maximum_bytes);
+        document["selectorProfiles"]["subject-reference-v1"]["maximumAggregateBytes"] =
+            serde_json::json!(8192);
+    });
+}
+
 /// Create the only precondition `source suggest --project` requires: an
 /// existing project directory. `new` is tested separately and now owns the
 /// OpenAPI path itself.
@@ -459,7 +1153,10 @@ fn scaffold(root: &Path, openapi: &str) -> PathBuf {
         "apiVersion":"id.registrystack.org/formats/evidence/project/v1alpha1",
         "kind":"EvidenceProject",
         "id":"suggest-e2e",
-        "selectorProfiles":{"subject-reference-v1":{"maximumAggregateBytes":128,"fields":{"reference":{"type":"string","minimumBytes":1,"maximumBytes":128}}}},
+        "selectorProfiles":{
+            "subject-reference-v1":{"maximumAggregateBytes":128,"fields":{"reference":{"type":"string","minimumBytes":1,"maximumBytes":128}}},
+            "integer-v1":{"maximumAggregateBytes":32,"fields":{"value":{"type":"integer","minimum":0,"maximum":100}}}
+        },
         "functions":[
             {"id":"baseline-prepare","interface":"source-prepare/v1","source":"functions/baseline-prepare.rhai"},
             {"id":"baseline-extract","interface":"source-extract/v1","source":"functions/baseline-extract.rhai"},
@@ -478,7 +1175,7 @@ fn scaffold(root: &Path, openapi: &str) -> PathBuf {
             "question":"Is the baseline condition satisfied?",
             "semantics":{"requirement":"urn:example:requirements:baseline:v1","kind":"criterion","evidenceType":"urn:example:evidence-types:baseline:v1","referenceFrameworks":["urn:example:frameworks:baseline:v1"]},
             "purpose":"testing","grantCeiling":{"authorities":["organizational"],"actorKinds":["service"],"valueOrigins":["request"],"audiences":["urn:example:audiences:test"]},
-            "subjects":[{"role":"subject","selectors":["subject-reference-v1"]}],
+            "subjects":[{"role":"subject","selectors":["subject-reference-v1","integer-v1"]}],
             "acquisition":{"type":"single","source":"baseline"},"derive":{"function":"baseline-derive"},
             "outputs":{"allowed":{"concept":"urn:example:concepts:allowed","type":"boolean"}},
             "validitySeconds":300,"subjectBinding":"audience-scoped","representations":["signed-jws"]

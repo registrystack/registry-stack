@@ -1379,6 +1379,9 @@ def classify(
             "products/breg/contracts/client-capabilities.json",
             "products/breg/evidence/**",
             "products/evidence/reference/authoring-projects/SOURCE-EXPORT.md",
+            # The downloadable source-recipe archive contains these reviewed
+            # inputs, so asset-only updates must rebuild and verify it.
+            "products/evidence/source-recipes/**",
             "products/evidence/reference/request-adapter/deployment-projects/SOURCE-CREDENTIAL-ROTATION.md",
             # The same page names the product reference that explains each
             # schema, and the docs tests read those references to prove the

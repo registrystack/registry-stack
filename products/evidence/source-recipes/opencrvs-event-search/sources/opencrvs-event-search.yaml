@@ -1,0 +1,49 @@
+apiVersion: id.registrystack.org/formats/evidence/source/v1alpha1
+kind: EvidenceSource
+type: http-json
+posture: record-transformed
+connection: opencrvs-event-search
+behaviorRevision: sha256:9a0610183f8aaf31756fb416084797644d440657a3012509b432bb1a69fdb3a8
+request:
+  method: POST
+  path: /events/search
+  fixedHeaders:
+  - {name: Accept, value: application/json}
+  selectorInputs:
+  - role: child
+    alternatives:
+    - {profile: opencrvs-tracking-id-v1, fields: [tracking_id]}
+  projection:
+  - /total
+  - /results/*/type
+  - /results/*/status
+  - /results/*/trackingId
+  - /results/*/declaration/mother.personReference
+  - /results/*/declaration/father.personReference
+  prepareScript: adapters/opencrvs-event-search-prepare.rhai
+  adapterParameters:
+    eventType: birth
+    registeredStatus: REGISTERED
+    resultLimit: 2
+    resultOffset: 0
+    parentReferenceFields: [mother.personReference, father.personReference]
+    minimumParentReferences: 1
+    maximumParentReferences: 2
+    parentReferenceNamespace: urn:gov:example:opencrvs:person
+    relationshipSetContract: urn:gov:example:opencrvs:registered-parent-set:v1
+    relationshipSetComplete: true
+    absentConfiguredFieldMeansNoRegisteredParent: true
+  adapterParametersSchema: schemas/opencrvs-event-search-parameters.yaml
+  preparationLimits:
+    query: forbidden
+    jsonBody: required
+    maximumJsonDepth: 16
+    maximumCollectionItems: 128
+    maximumStringBytes: 1024
+    maximumNormalizedBytes: 16384
+  redirects: deny
+  attemptTimeoutMilliseconds: 3000
+  maximumResponseBytes: 262144
+responseSchema: schemas/opencrvs-event-search-response.yaml
+extractScript: adapters/opencrvs-event-search-extract.rhai
+factSchema: schemas/opencrvs-event-search-facts.yaml

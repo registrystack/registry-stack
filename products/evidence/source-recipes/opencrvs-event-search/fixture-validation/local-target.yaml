@@ -1,0 +1,48 @@
+apiVersion: id.registrystack.org/formats/evidence/target/v1alpha1
+kind: EvidenceTarget
+id: local
+project: opencrvs-event-search-recipe-validation
+package: {root: .generated/package}
+authority: authority.yaml
+service:
+  providerId: urn:example:provider:opencrvs-recipe-validation
+  issuer: urn:example:issuer:opencrvs-recipe-validation
+  publicOrigin: http://127.0.0.1:8080
+  trustDomain: urn:example:trust:source-recipe-validation
+listener: {bind: '127.0.0.1:8080', trustProxyIdentityHeaders: false}
+authentication:
+  oidc:
+    issuer: http://127.0.0.1:8082
+    audience: urn:example:resource:source-recipe-validation
+    tokenTypes: [at+jwt]
+    algorithms: [RS256]
+    jwksSource: {type: uri, uri: 'http://127.0.0.1:8082/oauth2/jwks'}
+    principalClaim: sub
+    requesterTagsClaim: evidence_tags
+    evidenceAudienceClaim: evidence_audience
+    requiredScopes: ['evidence:request']
+    maximumTokenLifetimeSeconds: 300
+connections:
+  validation-seed:
+    origin: http://127.0.0.1:8090
+    authentication: {type: bearer, tokenRef: 'secret:file/validation-seed-token'}
+  opencrvs-event-search:
+    origin: http://127.0.0.1:8081
+    authentication:
+      type: oauth2-client-credentials
+      tokenEndpoint: http://127.0.0.1:8083/token
+      clientIdRef: secret:file/opencrvs-client-id
+      clientSecretRef: secret:file/opencrvs-client-secret
+      scope: recordsearch
+      credentialPlacement: form-body
+      maximumCacheSeconds: 300
+      assumedLifetimeSeconds: 600
+secretProviders: {file: {root: .generated/secrets}}
+signer:
+  type: local-jwk
+  algorithm: ES256
+  privateKeyRef: secret:file/signing-private.jwk
+  publicJwkFile: public-key.jwk.json
+subjectBinding: {secretRef: 'secret:file/subject-binding-key', keyVersion: 1}
+audit: {path: .generated/audit/evidence.jsonl, hashKeyRef: 'secret:file/audit-key', hashKeyVersion: 1}
+rateLimits: {requestsPerPrincipalPerMinute: 60, burstPerPrincipal: 16, failedSelectorAttemptsPerPrincipalAuthorityPerMinute: 10}

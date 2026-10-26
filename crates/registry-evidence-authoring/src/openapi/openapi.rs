@@ -30,8 +30,8 @@ use anyhow::{anyhow, bail, Context, Result};
 use serde_json::Value;
 
 use super::types::{
-    OpenApiDialect, OperationKey, OperationParameter, OperationSummary, ParameterLocation,
-    ResolvedResponse, ResolvedSchema, RECURSIVE_REF_KEY,
+    OpenApiDialect, OperationKey, OperationParameter, OperationRequestBody, OperationSummary,
+    ParameterLocation, ResolvedResponse, ResolvedSchema, RECURSIVE_REF_KEY,
 };
 
 /// Path Item Object keys this pipeline can draft a source from.
@@ -422,6 +422,72 @@ impl Spec {
         Ok(merged)
     }
 
+    /// The operation's `application/json` request body, when declared.
+    ///
+    /// Local Request Body Object and Schema Object references are resolved.
+    /// Other media types are not substituted because the Evidence fixed HTTP
+    /// adapter sends a JSON body only.
+    pub fn request_body_schema(&self, key: &OperationKey) -> Result<Option<OperationRequestBody>> {
+        let operation = self.find_operation(key)?;
+        let Some(raw) = operation.get("requestBody") else {
+            return Ok(None);
+        };
+        let body = self
+            .resolve_top_ref(raw, &mut Vec::new())
+            .with_context(|| {
+                format!("resolving the request body of {} {}", key.method, key.path)
+            })?;
+        let body = body
+            .as_object()
+            .ok_or_else(|| anyhow!("{} {} request body is not an object", key.method, key.path))?;
+        let required = match body.get("required") {
+            Some(Value::Bool(required)) => *required,
+            Some(_) => bail!(
+                "{} {} request body has a non-Boolean `required` field",
+                key.method,
+                key.path
+            ),
+            None => false,
+        };
+        let content = body
+            .get("content")
+            .and_then(Value::as_object)
+            .ok_or_else(|| {
+                anyhow!(
+                    "{} {} request body declares no `content`",
+                    key.method,
+                    key.path
+                )
+            })?;
+        let media = content.get("application/json").ok_or_else(|| {
+            anyhow!(
+                "{} {} request body has no `application/json` content; selector mapping supports only an exact application/json body",
+                key.method,
+                key.path
+            )
+        })?;
+        let schema = media.get("schema").ok_or_else(|| {
+            anyhow!(
+                "{} {} `application/json` request body declares no `schema`",
+                key.method,
+                key.path
+            )
+        })?;
+        let resolved = self
+            .inline_schema(schema, "", &mut Vec::new(), &mut Vec::new())
+            .with_context(|| {
+                format!(
+                    "resolving the `application/json` request body schema of {} {}",
+                    key.method, key.path
+                )
+            })?;
+        Ok(Some(OperationRequestBody {
+            required,
+            media_type: "application/json".to_owned(),
+            schema: ResolvedSchema(resolved),
+        }))
+    }
+
     fn parameters_at(&self, value: Option<&Value>, owner: &str) -> Result<Vec<OperationParameter>> {
         let Some(value) = value else {
             return Ok(Vec::new());
@@ -465,6 +531,21 @@ impl Spec {
         if location == ParameterLocation::Path && !required {
             bail!("path parameter `{name}` must declare `required: true`");
         }
+        let style = match parameter.get("style") {
+            Some(Value::String(style)) if !style.is_empty() => Some(style.clone()),
+            Some(_) => bail!("parameter `{name}` has a non-string or empty `style` field"),
+            None => None,
+        };
+        let explode = match parameter.get("explode") {
+            Some(Value::Bool(explode)) => Some(*explode),
+            Some(_) => bail!("parameter `{name}` has a non-Boolean `explode` field"),
+            None => None,
+        };
+        let allow_reserved = match parameter.get("allowReserved") {
+            Some(Value::Bool(value)) => *value,
+            Some(_) => bail!("parameter `{name}` has a non-Boolean `allowReserved` field"),
+            None => false,
+        };
         let schema_raw = parameter.get("schema").ok_or_else(|| {
             anyhow!(
                 "parameter `{name}` declares no `schema`; content-based parameters are not supported"
@@ -482,6 +563,9 @@ impl Spec {
             name: name.to_owned(),
             location,
             required,
+            style,
+            explode,
+            allow_reserved,
             schema: ResolvedSchema(schema),
             example,
             default,

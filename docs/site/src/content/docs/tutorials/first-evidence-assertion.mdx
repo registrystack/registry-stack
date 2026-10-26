@@ -97,13 +97,20 @@ rstack evidence explain . --target local-target.yaml
 
 ```text test-excerpt
 Definition adult-status: urn:example:requirement:adult-status:v1
-  Acquisition: {"source":"person-record","type":"single"}; derive: "derive-adult-status"
-  Outputs: {"adult":{"concept":"urn:example:concept:adult-status:v1","type":"boolean"}}; grant ceiling: {"actorKinds":["service"],"audiences":["urn:example:audience:standalone-app"],"authorities":["organizational"],"valueOrigins":["request"]}
+  Acquisition: single
+    Source person-record: http-json GET /people/{record-id}; connection synthetic-register
+      Prepare: generated; extract: Function extract-person
+      Facts: address-canary, birth-date, residence-region
+      Limits: 2000 ms attempt, 8 concurrent, 16384 bytes response
+  Derive: Function derive-adult-status
+  Outputs: adult
 ```
 
 `adult-status` is an [assertion definition](../../reference/glossary/#assertion-definition): one fixed question, named by its
 [Requirement URI](../../reference/glossary/#requirement). It reads the [source](../../reference/glossary/#source) `person-record`
 and may return one output, the Boolean `adult`. The report goes on to three other definitions.
+The source section names the request, Functions, private facts and limits used to produce that
+output; the report prints names and bounds, without the underlying source values.
 
 Run the fixture cases offline:
 

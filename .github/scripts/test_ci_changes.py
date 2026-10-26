@@ -1390,6 +1390,14 @@ class CiChangesTest(unittest.TestCase):
                     )
                 )
 
+    def test_evidence_recipe_assets_rebuild_the_documentation_archive(self) -> None:
+        for path in (
+            "products/evidence/source-recipes/dhis2-tracker/source-export.json",
+            "products/evidence/source-recipes/opencrvs-event-search/adapters/opencrvs-event-search-extract.rhai",
+        ):
+            with self.subTest(path=path):
+                self.assertTrue(classify(self.workspace, (path,))["docs"])
+
     def test_evidence_tutorial_routing(self) -> None:
         infrastructure = (
             "docs/site/scripts/run-tutorial.mjs",
@@ -1400,6 +1408,8 @@ class CiChangesTest(unittest.TestCase):
             "docs/site/package.json",
             "products/evidence/examples/fhir/serve-source.py",
             "products/evidence/examples/standalone/evidence.yaml",
+            "products/evidence/source-recipes/dhis2-tracker/source-export.json",
+            "products/evidence/source-recipes/opencrvs-event-search/fixture-validation/evidence.yaml",
         )
         for path in infrastructure:
             with self.subTest(path=path):

@@ -1,0 +1,46 @@
+apiVersion: id.registrystack.org/formats/evidence/source/v1alpha1
+kind: EvidenceSource
+type: http-json
+posture: record-transformed
+connection: dhis2-tracker
+behaviorRevision: sha256:4915494ed020df2a67b4d738319925b77346ed957ac91f31d0da82547fd65d3c
+request:
+  method: GET
+  path: /api/tracker/trackedEntities
+  fixedHeaders:
+  - {name: Accept, value: application/json}
+  selectorInputs:
+  - role: subject
+    alternatives:
+    - {profile: dhis2-tracked-entity-id-v1, fields: [record_reference]}
+  projection:
+  - /pager/page
+  - /pager/pageSize
+  - /pager/total
+  - /pager/pageCount
+  - /trackedEntities/*/trackedEntity
+  - /trackedEntities/*/attributes/*/attribute
+  - /trackedEntities/*/attributes/*/value
+  prepareScript: adapters/dhis2-tracker-prepare.rhai
+  adapterParameters:
+    program: Prg00000001
+    organisationUnit: Org00000001
+    projection: trackedEntity,attributes[attribute,value]
+    pageSize: '2'
+    page: '1'
+    totalPages: 'true'
+    statusAttribute: Sta00000001
+  adapterParametersSchema: schemas/dhis2-tracker-parameters.yaml
+  preparationLimits:
+    query: allowed
+    jsonBody: forbidden
+    maximumQueryPairs: 16
+    maximumQueryNameBytes: 64
+    maximumQueryValueBytes: 1024
+    maximumNormalizedBytes: 8192
+  redirects: deny
+  attemptTimeoutMilliseconds: 3000
+  maximumResponseBytes: 65536
+responseSchema: schemas/dhis2-tracker-response.yaml
+extractScript: adapters/dhis2-tracker-extract.rhai
+factSchema: schemas/dhis2-tracker-facts.yaml

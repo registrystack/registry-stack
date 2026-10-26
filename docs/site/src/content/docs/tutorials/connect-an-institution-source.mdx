@@ -49,6 +49,13 @@ Settle three things about the operation you connect:
 Without a real API at hand, you connect a FHIR R4 `Coverage` read on a synthetic public server.
 Each step applies to your own API.
 
+For an existing DHIS2 Tracker or OpenCRVS integration, the
+[source recipe catalog](https://github.com/registrystack/registry-stack/tree/main/products/evidence/source-recipes)
+provides reviewed exports and synthetic fixture projects. Download the
+[source recipes archive](../../examples/evidence-source-recipes.tar.gz) and follow its README
+to validate the recipe with matching binaries, then import it through the existing source
+lifecycle. Its contract notes identify the provider shapes you need to check against your deployment.
+
 ## Get the project and prove it offline
 
 Download the [Evidence example projects](../../examples/evidence-examples.tar.gz) into a fresh
@@ -101,8 +108,10 @@ Still needs your input (the source block below):
     and request limits are intentionally absent from the mechanical draft.
 ```
 
-The draft copies shapes and leaves every decision to you. The reviewed source in `evidence.yaml`
-holds them. Its request is the fixed shape:
+This print-only draft leaves the request bindings for review. For another operation,
+[explicit selector mappings](../../products/registry-evidence/authoring-form/#generate-explicit-openapi-request-bindings)
+generate routine request preparation from profiles already in your project. The reviewed source
+in `evidence.yaml` uses this fixed request shape:
 
 ```yaml test-excerpt="evidence.yaml"
 coverage-record:

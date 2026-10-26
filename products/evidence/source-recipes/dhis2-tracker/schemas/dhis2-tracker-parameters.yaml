@@ -1,0 +1,11 @@
+type: object
+additionalProperties: false
+required: [program, organisationUnit, projection, pageSize, page, totalPages, statusAttribute]
+properties:
+  program: {type: string, minLength: 1, maxLength: 64}
+  organisationUnit: {type: string, minLength: 1, maxLength: 64}
+  projection: {type: string, minLength: 1, maxLength: 1024}
+  pageSize: {const: '2'}
+  page: {const: '1'}
+  totalPages: {const: 'true'}
+  statusAttribute: {type: string, minLength: 1, maxLength: 64}

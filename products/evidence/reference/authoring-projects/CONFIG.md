@@ -131,6 +131,58 @@ and the Source-to-Fact-to-Output flow without source values or secrets. `types`
 generates TypeScript or Python declarations from that same model. A scalar
 FactSet value does not become public merely because its type is visible.
 
+### Generate explicit OpenAPI request bindings
+
+`evidencectl source suggest <project>` reads the project's retained
+`source.openapi.yaml`. Repeat `--map-selector
+<role>.<profile>.<field>=<target>` to bind an existing selector field to one
+request input. The role and profile must already be used by an assertion in
+that project. A mapping never creates a selector profile or caller authority.
+
+| Target | Generated artifact |
+|---|---|
+| `path:<parameter>` | A fixed complete-segment path template with Rust-owned `request.pathBindings` |
+| `query:<parameter>` | A logical string query pair in the reviewed preparation Function |
+| `body:</json/pointer>` | A scalar property in a closed JSON object for a fixed POST request |
+
+For the FHIR example's existing `coverage-record` role and `coverage-by-id`
+profile, generate a separate draft source:
+
+```sh
+evidencectl source suggest ./fhir-record-evidence \
+  --operation 'GET /Coverage/{coverage_id}' --source-id coverage-record-draft \
+  --select /status --select /beneficiary/reference \
+  --map-selector 'coverage-record.coverage-by-id.coverage_id=path:coverage_id'
+```
+
+Each dynamic input is explicit. One field may populate several distinct
+targets; duplicate target assignments and unmapped required inputs are refused
+before files change. Scalar string, integer and Boolean inputs are supported.
+Integer and Boolean query values use canonical text; Rust percent-encodes the
+logical query strings. JSON body pointers use RFC 6901 escaping and traverse
+closed object properties. Arrays, polymorphic bodies, arbitrary headers,
+cookies and authentication mappings are refused. Credentials remain in the
+target connection.
+
+Scalar types must agree, and the selector's admitted domain must fit the
+supported string-length or integer-range constraints. Date and UUID formats
+require the corresponding selector type. Generation refuses unproven enums,
+constants, patterns and conditional constraints, nonstandard parameter
+serialization, and object constraints outside this subset. Use a reviewed
+preparation Function for those contracts.
+
+Source selector inputs retain the existing complete role/profile field set.
+Use a narrowly reviewed profile when an integration needs fewer fields; only
+explicitly mapped fields enter the generated request. The generated request
+must fit the existing preparation bounds, including 64 query pairs, 64-byte
+query names and 4096-byte query values. Unsupported shapes and bounds need a
+reviewed preparation Function.
+
+The generated preparation and extraction files remain ordinary project
+Functions. Review the extraction's unique-match and identity checks, resolve
+the draft markers and supply the assertion semantics before packaging. A run
+without `--map-selector` keeps the incomplete mechanical draft workflow.
+
 ## Selector and Output fields
 
 ### Selector fields and derivation references

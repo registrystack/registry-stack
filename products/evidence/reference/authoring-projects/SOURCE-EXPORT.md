@@ -11,6 +11,16 @@ the provider, runs external setup commands, creates authority, or starts a
 service. Target validation may execute reviewed bounded adapters against local
 synthetic fixtures through the ordinary Evidence evaluator.
 
+## Maintained source recipes
+
+The [maintained source recipes](../../source-recipes/README.md) distribute
+ordinary exports for DHIS2 Tracker and OpenCRVS event search. Each recipe carries
+its supported technical contract, exact artifact checksums and a separate
+synthetic fixture-validation project. That project supplies example assertion
+meaning and local target bindings; those files are not imported into an
+institution's project. Run its checks and fixtures, then verify compatibility
+with the exact provider deployment before relying on the source.
+
 ## Export manifest
 
 The export directory contains `source-export.json`:

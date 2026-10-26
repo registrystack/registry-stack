@@ -4,7 +4,12 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { test } from 'node:test';
 import * as tar from 'tar';
-import { packageExamples, exampleFiles } from './generate-evidence-examples.mjs';
+import {
+  packageExamples,
+  exampleFiles,
+  packageSourceRecipes,
+  sourceRecipeFiles,
+} from './generate-evidence-examples.mjs';
 
 test('examples archive is repeatable and contains only reviewed inputs', async () => {
   const root = await mkdtemp(join(tmpdir(), 'evidence-examples-archive-'));
@@ -40,4 +45,41 @@ test('the inventory names every file of the maintained example projects', async 
     }
   }
   assert.deepEqual(found.sort(), exampleFiles);
+});
+
+test('source recipes archive is repeatable and excludes private local state', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'evidence-source-recipes-archive-'));
+  try {
+    for (const path of sourceRecipeFiles) {
+      await mkdir(dirname(join(root, path)), { recursive: true });
+      await writeFile(join(root, path), `reviewed ${path}\n`);
+    }
+    await mkdir(join(root, 'dhis2-tracker/fixture-validation/.evidence/source-imports'), { recursive: true });
+    await writeFile(join(root, 'dhis2-tracker/fixture-validation/.evidence/source-imports/state.json'), 'MUST NOT BE PACKAGED');
+    await mkdir(join(root, 'opencrvs-event-search/fixture-validation/.generated/secrets'), { recursive: true });
+    await writeFile(join(root, 'opencrvs-event-search/fixture-validation/.generated/secrets/client-secret'), 'MUST NOT BE PACKAGED');
+
+    await packageSourceRecipes(root, join(root, 'first.tar.gz'));
+    await packageSourceRecipes(root, join(root, 'second.tar.gz'));
+    assert.deepEqual(await readFile(join(root, 'first.tar.gz')), await readFile(join(root, 'second.tar.gz')));
+    const entries = [];
+    await tar.list({ file: join(root, 'first.tar.gz'), onReadEntry: entry => { entries.push(entry.path); entry.resume(); } });
+    assert.deepEqual(entries, sourceRecipeFiles);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('the source recipe inventory names every maintained recipe file', async () => {
+  const site = join(dirname(new URL(import.meta.url).pathname), '..');
+  const recipes = join(site, '../../products/evidence/source-recipes');
+  const { readdir } = await import('node:fs/promises');
+  const found = [];
+  for (const entry of await readdir(recipes, { recursive: true, withFileTypes: true })) {
+    if (!entry.isFile()) continue;
+    const relative = join(entry.parentPath, entry.name).slice(recipes.length + 1);
+    if (relative.includes('/.generated/') || relative.includes('/.evidence/')) continue;
+    found.push(relative);
+  }
+  assert.deepEqual(found.sort(), sourceRecipeFiles);
 });

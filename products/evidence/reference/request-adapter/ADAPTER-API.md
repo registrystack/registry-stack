@@ -654,6 +654,7 @@ otherwise permitted construct.
 | `map.contains(name)` | Whether an exact string key exists |
 | Array iteration | `for value in array`, bounded by the operation and array limits |
 | `type_of(value)` | Pinned Rhai type name, including registered opaque type names |
+| `to_string(value)` | Signed 64-bit integer to canonical decimal text, or Boolean to `true`/`false`; only these two typed overloads exist. Registered opaque handles cannot be converted to text. |
 
 ### Evidence primitives
 

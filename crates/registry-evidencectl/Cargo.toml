@@ -70,5 +70,6 @@ name = "authoring-schema"
 required-features = ["schema"]
 
 [dev-dependencies]
+registry-evidence.workspace = true
 registry-evidence-authoring.workspace = true
 tower.workspace = true

@@ -73,9 +73,17 @@ to create broader authority.
 description for source authoring. `source suggest` and the source import commands
 produce reviewed source contracts and named Function assets. The author supplies
 the fixed assertion semantics and resolves any reported review markers.
+Explicit `source suggest --map-selector` assignments generate fixed path, query
+and JSON-body bindings from the project's existing selector profiles. Generated
+Functions remain ordinary reviewed project assets.
 `evidencectl init <dir> --transport sqlite-extract --profile local` creates a
 runnable synthetic SQLite project. `init --starter <dir> --profile local` copies
 a reviewed normalized project.
+
+The [source recipe catalog](source-recipes/README.md) provides reusable DHIS2
+Tracker and OpenCRVS event-search exports with synthetic fixture projects.
+Import and customize them through the existing source lifecycle; bind origins
+and credentials in the target and supply the assertion's own meaning and grants.
 
 ```sh
 evidencectl check '<project>' --target '<target.yaml>'
@@ -90,6 +98,11 @@ check. Missing deployment inputs are reported explicitly. `--production` require
 production or evidence-grade assurance; `--deny-warnings` refuses warnings.
 Checks resolve no secrets and make no dependency request. Fixtures execute the
 bounded source/extraction/derivation path using supplied synthetic responses.
+
+`explain` shows each definition's ordered source operations, preparation and
+extraction Functions, private fact names, derivation and output names, with
+connection identifiers and source limits. Sources not referenced by a definition
+are listed separately. The human report contains no source values or credentials.
 
 `evidencectl check --file <file>` checks one tooling file offline, including a
 client profile, local access client registration, reviewed contracts, development state or source-import document.

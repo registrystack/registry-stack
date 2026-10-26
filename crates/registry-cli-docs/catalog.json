@@ -17083,6 +17083,15 @@
                   "environment": null
                 },
                 {
+                  "display": "--map-selector <SELECTOR=TARGET>",
+                  "description": "Explicit selector-to-request mapping as ROLE.PROFILE.FIELD=path:NAME, query:NAME, or body:/JSON/POINTER. Repeat for each distinct request target. Requires an authoring project",
+                  "always_required": false,
+                  "repeatable": true,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
                   "display": "--format <FORMAT>",
                   "description": "Emit the selected command's report in this format. `junit` is accepted only by `test` and `fixtures run`",
                   "always_required": false,

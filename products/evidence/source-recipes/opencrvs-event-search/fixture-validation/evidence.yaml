@@ -1,0 +1,59 @@
+apiVersion: id.registrystack.org/formats/evidence/project/v1alpha1
+kind: EvidenceProject
+id: opencrvs-event-search-recipe-validation
+selectorProfiles:
+  validation-seed:
+    maximumAggregateBytes: 8
+    fields:
+      id: {type: string, minimumBytes: 1, maximumBytes: 8}
+functions:
+- id: derive-registered-parent
+  interface: assertion-derive/v1
+  source: functions/derive-registered-parent.rhai
+- id: validation-seed-extract
+  interface: source-extract/v1
+  source: functions/validation-seed-extract.rhai
+- id: validation-seed-derive
+  interface: assertion-derive/v1
+  source: functions/validation-seed-derive.rhai
+sources:
+  validation-seed:
+    type: http-json
+    connection: validation-seed
+    acquisitionPosture: record-transformed
+    selectors: [{role: seed, profiles: [validation-seed]}]
+    request: {method: GET, path: /seed}
+    response:
+      projection: [/matched]
+      shape:
+        type: object
+        additionalProperties: false
+        required: [matched]
+        properties: {matched: {type: boolean}}
+      maximumBytes: 1024
+    extract: {function: validation-seed-extract}
+    facts: {matched: {type: boolean}}
+    limits: {attemptTimeoutMilliseconds: 1000, maximumConcurrency: 1}
+assertionDefinitions:
+  validation-seed:
+    question: Does the local validation seed match?
+    semantics:
+      requirement: urn:example:requirement:source-recipe-validation-seed:v1
+      kind: criterion
+      evidenceType: urn:example:evidence-type:source-recipe-validation-seed:v1
+      referenceFrameworks: [urn:example:framework:source-recipe-validation:v1]
+    purpose: source-recipe-validation
+    grantCeiling:
+      authorities: [organizational]
+      actorKinds: [service]
+      valueOrigins: [request]
+      audiences: [urn:example:audience:source-recipe-validator]
+    subjects: [{role: seed, selectors: [validation-seed]}]
+    acquisition: {type: single, source: validation-seed}
+    derive: {function: validation-seed-derive}
+    outputs:
+      matched: {concept: 'urn:example:concept:source-recipe-validation-seed:v1', type: boolean}
+    validitySeconds: 60
+    subjectBinding: audience-scoped
+    representations: [signed-jws]
+# SOURCE_RECIPE_ASSERTION_DEFINITIONS

@@ -219,6 +219,85 @@ fn operation_parameters_resolve_refs_and_apply_operation_overrides() {
 }
 
 #[test]
+fn request_body_schema_resolves_a_required_json_body() {
+    let spec = Spec::from_value(
+        json!({
+            "openapi": "3.1.0",
+            "info": {"title": "Source", "version": "1"},
+            "paths": {
+                "/records/search": {
+                    "post": {
+                        "requestBody": {"$ref": "#/components/requestBodies/Search"}
+                    }
+                }
+            },
+            "components": {
+                "requestBodies": {
+                    "Search": {
+                        "required": true,
+                        "content": {
+                            "application/json": {
+                                "schema": {"$ref": "#/components/schemas/Search"}
+                            }
+                        }
+                    }
+                },
+                "schemas": {
+                    "Search": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["record_id"],
+                        "properties": {
+                            "record_id": {"type": "string"},
+                            "active": {"type": "boolean"}
+                        }
+                    }
+                }
+            }
+        }),
+        "request body",
+    )
+    .expect("valid OpenAPI document");
+
+    let body = spec
+        .request_body_schema(&operation("POST", "/records/search"))
+        .expect("request body resolves")
+        .expect("request body is declared");
+    assert!(body.required);
+    assert_eq!(body.media_type, "application/json");
+    assert_eq!(body.schema.0["properties"]["record_id"]["type"], "string");
+}
+
+#[test]
+fn request_body_schema_refuses_non_json_content() {
+    let spec = Spec::from_value(
+        json!({
+            "openapi": "3.1.0",
+            "info": {"title": "Source", "version": "1"},
+            "paths": {
+                "/records": {
+                    "post": {
+                        "requestBody": {
+                            "content": {
+                                "application/problem+json": {"schema": {"type": "object"}}
+                            }
+                        }
+                    }
+                }
+            }
+        }),
+        "unsupported request body",
+    )
+    .expect("valid OpenAPI document");
+
+    let error = spec
+        .request_body_schema(&operation("POST", "/records"))
+        .expect_err("only application/json is supported")
+        .to_string();
+    assert!(error.contains("application/json"), "message was: {error}");
+}
+
+#[test]
 fn openapi31_ref_annotations_are_retained_and_constraint_siblings_are_refused() {
     let annotated = Spec::from_value(
         json!({

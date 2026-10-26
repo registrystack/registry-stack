@@ -2,7 +2,7 @@
 use anyhow::Result;
 use registry_platform_yaml::{Diagnostic, Report};
 use serde_json::{json, Value};
-use std::{io, path::Path};
+use std::{collections::BTreeSet, io, path::Path};
 #[derive(Debug)]
 pub(crate) struct Checked {
     pub(crate) report: Value,
@@ -200,6 +200,91 @@ fn refused(command: &str, project: &Path, target: Option<&Path>, found: &Report)
         json!({"project":project,"target":target,"proof":"authoring","diagnostics":found.to_json_value(),"projectPresentation":null,"selectorProfiles":{},"capabilityCeilings":null,"assertionDefinitions":[],"sources":[],"functions":[],"authority":null,"offline":true,"networkAccess":false,"secretResolution":false,"fixtureExecution":false}),
     )
 }
+
+fn object_keys(value: &Value) -> String {
+    let mut keys = value
+        .as_object()
+        .into_iter()
+        .flat_map(|object| object.keys())
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    keys.sort_unstable();
+    if keys.is_empty() {
+        "none".to_owned()
+    } else {
+        keys.join(", ")
+    }
+}
+
+fn acquisition_source_ids(acquisition: &Value) -> Vec<&str> {
+    match acquisition["type"].as_str() {
+        Some("single") => acquisition["source"].as_str().into_iter().collect(),
+        Some("search-then-fetch") => [
+            acquisition["search"].as_str(),
+            acquisition["fetch"].as_str(),
+        ]
+        .into_iter()
+        .flatten()
+        .collect(),
+        Some("search-then-fetch-set") => acquisition["search"]
+            .as_str()
+            .into_iter()
+            .chain(
+                acquisition["fetch"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|fetch| fetch["source"].as_str()),
+            )
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn render_source(source: &Value, out: &mut dyn io::Write) -> io::Result<()> {
+    let id = source["id"].as_str().unwrap_or("unknown");
+    let source_type = source["type"].as_str().unwrap_or("unknown");
+    write!(out, "    Source {id}: {source_type}")?;
+    if let (Some(method), Some(path)) = (
+        source["operation"]["method"].as_str(),
+        source["operation"]["path"].as_str(),
+    ) {
+        write!(out, " {method} {path}")?;
+    }
+    if let Some(connection) = source["connection"].as_str() {
+        writeln!(out, "; connection {connection}")?;
+    } else {
+        writeln!(out, "; no named connection")?;
+    }
+
+    let preparation = if source["resolvedPreparation"]["generated"] == true {
+        "generated".to_owned()
+    } else if let Some(function) = source["prepare"]["function"].as_str() {
+        format!("Function {function}")
+    } else {
+        "authored".to_owned()
+    };
+    writeln!(
+        out,
+        "      Prepare: {preparation}; extract: Function {}",
+        source["extract"]["function"].as_str().unwrap_or("unknown")
+    )?;
+    writeln!(out, "      Facts: {}", object_keys(&source["facts"]))?;
+
+    let attempt = source["limits"]["attemptTimeoutMilliseconds"].as_u64();
+    let concurrency = source["limits"]["maximumConcurrency"].as_u64();
+    let response_bytes = source["response"]["maximumBytes"].as_u64();
+    if let (Some(attempt), Some(concurrency), Some(response_bytes)) =
+        (attempt, concurrency, response_bytes)
+    {
+        writeln!(
+            out,
+            "      Limits: {attempt} ms attempt, {concurrency} concurrent, {response_bytes} bytes response"
+        )?;
+    }
+    Ok(())
+}
+
 pub(crate) fn render_human(
     report: &Value,
     diagnostics: &Report,
@@ -220,6 +305,7 @@ pub(crate) fn render_human(
         writeln!(out, "Target: {target}")?;
     }
     if report["command"] == "explain" {
+        let mut referenced_sources = BTreeSet::new();
         for definition in report["assertionDefinitions"]
             .as_array()
             .into_iter()
@@ -231,16 +317,50 @@ pub(crate) fn render_human(
                 definition["id"].as_str().unwrap_or("unknown"),
                 definition["requirement"].as_str().unwrap_or("unknown")
             )?;
+            let acquisition = &definition["acquisition"];
             writeln!(
                 out,
-                "  Acquisition: {}; derive: {}",
-                definition["acquisition"], definition["derive"]["function"]
+                "  Acquisition: {}",
+                acquisition["type"].as_str().unwrap_or("unknown")
             )?;
+            for source_id in acquisition_source_ids(acquisition) {
+                referenced_sources.insert(source_id.to_owned());
+                if let Some(source) = report["sources"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .find(|source| source["id"].as_str() == Some(source_id))
+                {
+                    render_source(source, out)?;
+                } else {
+                    writeln!(out, "    Source {source_id}: unresolved")?;
+                }
+            }
             writeln!(
                 out,
-                "  Outputs: {}; grant ceiling: {}",
-                definition["outputs"], definition["grantCeiling"]
+                "  Derive: Function {}",
+                definition["derive"]["function"]
+                    .as_str()
+                    .unwrap_or("unknown")
             )?;
+            writeln!(out, "  Outputs: {}", object_keys(&definition["outputs"]))?;
+            writeln!(out, "  Grant ceiling: {}", definition["grantCeiling"])?;
+        }
+        let unreferenced_sources = report["sources"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|source| {
+                source["id"]
+                    .as_str()
+                    .is_some_and(|id| !referenced_sources.contains(id))
+            })
+            .collect::<Vec<_>>();
+        if !unreferenced_sources.is_empty() {
+            writeln!(out, "Sources not referenced by definitions:")?;
+            for source in unreferenced_sources {
+                render_source(source, out)?;
+            }
         }
         for function in report["functions"].as_array().into_iter().flatten() {
             writeln!(
@@ -770,13 +890,112 @@ acceptances:
         );
     }
     #[test]
-    fn explain_renders_named_definitions_functions_and_authority() {
-        let report = json!({"command":"explain","status":"complete","project":"example","assertionDefinitions":[{"id":"active","requirement":"urn:example:active","acquisition":{"type":"single","source":"records"},"derive":{"function":"derive-active"},"outputs":{"active":{"type":"boolean"}},"grantCeiling":{"authorities":["organizational"]}}],"functions":[{"id":"derive-active","interface":"assertion-derive/v1","digest":"sha256:reviewed","callSites":["/assertionDefinitions/active/derive"],"inputs":["private-facts"],"outputs":["declared-outputs"],"capabilities":["declared-outputs"]}],"authority":{"authorityRevision":"sha256:active"}});
+    fn explain_renders_the_ordered_source_to_output_flow_without_private_values() {
+        let report = json!({
+            "command":"explain",
+            "status":"complete",
+            "project":"example",
+            "assertionDefinitions":[{
+                "id":"eligible",
+                "requirement":"urn:example:eligible",
+                "acquisition":{
+                    "type":"search-then-fetch-set",
+                    "search":"records-search",
+                    "fetch":[
+                        {"source":"income-record","factInputs":["record-id"]},
+                        {"source":"residence-record","factInputs":["record-id"]}
+                    ],
+                    "maximumAcquisitionMilliseconds":8000
+                },
+                "derive":{"function":"derive-eligible"},
+                "outputs":{"eligible":{"type":"boolean"},"reason":{"type":"string"}},
+                "grantCeiling":{"authorities":["organizational"]}
+            }],
+            "sources":[
+                {
+                    "id":"income-record",
+                    "type":"http-json",
+                    "connection":"benefits-api",
+                    "operation":{"method":"GET","path":"/income/{record_id}"},
+                    "facts":{"income":{"type":"integer"}},
+                    "response":{"shape":{"const":"PRIVATE-SOURCE-CANARY"},"maximumBytes":32768},
+                    "prepare":{"function":"prepare-income"},
+                    "resolvedPreparation":{"generated":false},
+                    "extract":{"function":"extract-income"},
+                    "limits":{"attemptTimeoutMilliseconds":2000,"maximumConcurrency":4}
+                },
+                {
+                    "id":"records-search",
+                    "type":"http-json",
+                    "connection":"registry-api",
+                    "operation":{"method":"POST","path":"/records/search"},
+                    "facts":{"record-id":{"type":"string"}},
+                    "response":{"maximumBytes":65536},
+                    "prepare":null,
+                    "resolvedPreparation":{"generated":true},
+                    "extract":{"function":"extract-search"},
+                    "limits":{"attemptTimeoutMilliseconds":3000,"maximumConcurrency":8}
+                },
+                {
+                    "id":"residence-record",
+                    "type":"sqlite-extract",
+                    "connection":null,
+                    "operation":{"method":null,"path":null},
+                    "facts":{"region":{"type":"string"}},
+                    "response":{"maximumBytes":16384},
+                    "prepare":null,
+                    "resolvedPreparation":{"generated":true},
+                    "extract":{"function":"extract-residence"},
+                    "limits":{"attemptTimeoutMilliseconds":1000,"maximumConcurrency":2}
+                },
+                {
+                    "id":"draft-source",
+                    "type":"http-json",
+                    "connection":"draft-api",
+                    "operation":{"method":"GET","path":"/draft"},
+                    "facts":{"draft-id":{"type":"string"}},
+                    "response":{"maximumBytes":8192},
+                    "prepare":null,
+                    "resolvedPreparation":{"generated":true},
+                    "extract":{"function":"extract-draft"},
+                    "limits":{"attemptTimeoutMilliseconds":1000,"maximumConcurrency":1}
+                }
+            ],
+            "functions":[{"id":"derive-eligible","interface":"assertion-derive/v1","digest":"sha256:reviewed","callSites":["/assertionDefinitions/eligible/derive"],"bindings":{},"capabilities":["declared-outputs"]}],
+            "authority":{"authorityRevision":"sha256:active"}
+        });
         let mut output = Vec::new();
         render_human(&report, &Report::new(Vec::new()), &mut output).unwrap();
         let output = String::from_utf8(output).unwrap();
-        assert!(output.contains("Definition active"));
-        assert!(output.contains("Function derive-active"));
+        let search = output.find("Source records-search").expect("search source");
+        let first_fetch = output
+            .find("Source income-record")
+            .expect("first fetch source");
+        let second_fetch = output
+            .find("Source residence-record")
+            .expect("second fetch source");
+        assert!(
+            search < first_fetch && first_fetch < second_fetch,
+            "{output}"
+        );
+        assert!(output.contains(
+            "Source records-search: http-json POST /records/search; connection registry-api"
+        ));
+        assert!(output.contains("Prepare: generated; extract: Function extract-search"));
+        assert!(output.contains(
+            "Source income-record: http-json GET /income/{record_id}; connection benefits-api"
+        ));
+        assert!(
+            output.contains("Prepare: Function prepare-income; extract: Function extract-income")
+        );
+        assert!(output.contains("Facts: income"));
+        assert!(output.contains("Limits: 2000 ms attempt, 4 concurrent, 32768 bytes response"));
+        assert!(output.contains("Derive: Function derive-eligible"));
+        assert!(output.contains("Outputs: eligible, reason"));
+        assert!(output.contains("Sources not referenced by definitions:"));
+        assert!(output.contains("Source draft-source: http-json GET /draft; connection draft-api"));
+        assert!(output.contains("Function derive-eligible"));
         assert!(output.contains("authorityRevision"));
+        assert!(!output.contains("PRIVATE-SOURCE-CANARY"), "{output}");
     }
 }
