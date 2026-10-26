@@ -29,7 +29,7 @@ use std::{
     future::{Future, IntoFuture},
     io,
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicU8, Ordering},
         Arc,
     },
     time::Duration,
@@ -409,21 +409,43 @@ pub fn build_app(service: Arc<DeliveryService>) -> Router {
         .layer(from_fn(add_no_store))
 }
 
-/// Data-free request-local state shared by the credential handler and timeout.
+/// Data-free request-local state shared by the token and credential handlers
+/// and the timeout.
 ///
-/// It carries no token, request identifier, or other caller material. The one
-/// bit distinguishes a retryable timeout from one that occurred after the
-/// request's single-use authorization had already been consumed.
+/// It carries no code, token, request identifier, or other caller material.
+/// It distinguishes a retryable timeout from one that occurred once the
+/// request had begun to spend its single-use authorization. A handler marks
+/// the stage before it asks the store to spend, not after: a shared store can
+/// commit the spend after the request has stopped waiting for the reply, and
+/// a timeout in that window must not invite a retry that can only be refused.
+///
+/// The default, zero, is a request that has spent nothing.
 #[derive(Clone, Default)]
-struct CredentialRequestStage(Arc<AtomicBool>);
+struct RequestStage(Arc<AtomicU8>);
 
-impl CredentialRequestStage {
-    fn mark_claimed(&self) {
-        self.0.store(true, Ordering::SeqCst);
+impl RequestStage {
+    const REDEEMING_CODE: u8 = 1;
+    const CLAIMING_TOKEN: u8 = 2;
+
+    fn mark_redeeming_code(&self) {
+        self.0.store(Self::REDEEMING_CODE, Ordering::SeqCst);
     }
 
-    fn is_claimed(&self) -> bool {
-        self.0.load(Ordering::SeqCst)
+    fn mark_claiming_token(&self) {
+        self.0.store(Self::CLAIMING_TOKEN, Ordering::SeqCst);
+    }
+
+    /// What a request that outlived the timeout is told.
+    fn timeout_response(&self) -> Response {
+        match self.0.load(Ordering::SeqCst) {
+            Self::REDEEMING_CODE => unredeemable_code_response(),
+            Self::CLAIMING_TOKEN => terminal_credential_response(),
+            _ => problem(
+                StatusCode::REQUEST_TIMEOUT,
+                "invalid_request",
+                "the request took longer than this service waits",
+            ),
+        }
     }
 }
 
@@ -747,6 +769,7 @@ struct TokenRequest {
 /// which is where a nonce this service can recompute comes from.
 async fn token(
     State(service): State<Arc<DeliveryService>>,
+    Extension(stage): Extension<RequestStage>,
     Form(request): Form<TokenRequest>,
 ) -> Response {
     if request.grant_type != crate::PRE_AUTHORIZED_CODE_GRANT_TYPE {
@@ -761,6 +784,7 @@ async fn token(
     let access_token = generate_secret();
     // Redeeming and binding are one step. A refusal between them would spend
     // the offer and leave the wallet a retryable answer it can never act on.
+    stage.mark_redeeming_code();
     if let Err(error) = service
         .store
         .redeem_offer_for_access_token(
@@ -775,9 +799,9 @@ async fn token(
         return store_response(&service, &error, Outcome::CodeClaimRefused).await;
     }
     service.metrics.record_outcome(Outcome::CodeRedeemed);
-    service
-        .metrics
-        .record_store_entries(service.store.maximum_keyspace_len().await);
+    // The code is spent and the token bound, so nothing may stand between
+    // them and the wallet, the bookkeeping least of all.
+    refresh_store_entries_in_background(&service);
     value_response(
         StatusCode::OK,
         &json!({
@@ -845,7 +869,7 @@ struct CredentialProofs {
 /// being a place to try proofs against a live token until one is accepted.
 async fn credential(
     State(service): State<Arc<DeliveryService>>,
-    Extension(stage): Extension<CredentialRequestStage>,
+    Extension(stage): Extension<RequestStage>,
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
@@ -853,6 +877,7 @@ async fn credential(
         return unauthorized("a bearer access token is required");
     };
     let access_token = Zeroizing::new(access_token.to_owned());
+    stage.mark_claiming_token();
     let prepared = match service
         .store
         .claim_access_token(&access_token, &service.generation, service.now())
@@ -865,7 +890,6 @@ async fn credential(
         }
         Err(error) => return store_response(&service, &error, Outcome::TokenClaimRefused).await,
     };
-    stage.mark_claimed();
     service.metrics.record_outcome(Outcome::TokenClaimed);
     let expired = service.store.sweep(service.now()).await;
     service.metrics.record_cleanup(expired);
@@ -1236,11 +1260,7 @@ async fn store_response(
         StoreError::Unknown
         | StoreError::AlreadyRedeemed
         | StoreError::TransactionCodeRefused
-        | StoreError::LockedOut => problem(
-            StatusCode::BAD_REQUEST,
-            "invalid_grant",
-            "the pre-authorized code cannot be redeemed",
-        ),
+        | StoreError::LockedOut => unredeemable_code_response(),
         StoreError::Saturated | StoreError::Poisoned | StoreError::Unavailable => {
             tracing::warn!(
                 target: "registry_evidence_oid4vci::service",
@@ -1253,6 +1273,24 @@ async fn store_response(
             )
         }
     }
+}
+
+fn unredeemable_code_response() -> Response {
+    problem(
+        StatusCode::BAD_REQUEST,
+        "invalid_grant",
+        "the pre-authorized code cannot be redeemed",
+    )
+}
+
+/// Refresh the store-entries gauge without making the request wait for it.
+fn refresh_store_entries_in_background(service: &Arc<DeliveryService>) {
+    let service = Arc::clone(service);
+    tokio::spawn(async move {
+        service
+            .metrics
+            .record_store_entries(service.store.maximum_keyspace_len().await);
+    });
 }
 
 fn record_issuance_outcome(service: &DeliveryService, error: &IssuanceError) {
@@ -1391,8 +1429,8 @@ async fn refuse_a_stalled_request(
     mut request: Request<Body>,
     next: Next,
 ) -> Response {
-    let credential_stage = CredentialRequestStage::default();
-    request.extensions_mut().insert(credential_stage.clone());
+    let stage = RequestStage::default();
+    request.extensions_mut().insert(stage.clone());
     match tokio::time::timeout(bound, next.run(request)).await {
         Ok(response) => response,
         Err(_) => {
@@ -1400,15 +1438,7 @@ async fn refuse_a_stalled_request(
                 target: "registry_evidence_oid4vci::service",
                 "a request outlived the configured timeout and was refused"
             );
-            if credential_stage.is_claimed() {
-                terminal_credential_response()
-            } else {
-                problem(
-                    StatusCode::REQUEST_TIMEOUT,
-                    "invalid_request",
-                    "the request took longer than this service waits",
-                )
-            }
+            stage.timeout_response()
         }
     }
 }
@@ -3649,6 +3679,247 @@ mod tests {
             .metrics
             .render()
             .contains("outcome=\"store-fault\"} 3"));
+    }
+
+    /// Where a [`LateStore`] holds its answer back.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum Late {
+        Redemption,
+        Claim,
+        Count,
+    }
+
+    /// A store that does what it is asked and answers late once, at one place,
+    /// as a database does when its commit lands but the reply arrives after
+    /// the request has stopped waiting for it.
+    #[derive(Debug)]
+    struct LateStore {
+        inner: Box<dyn Store>,
+        late: Late,
+        answered_late: std::sync::atomic::AtomicBool,
+    }
+
+    /// Longer than [`LATE_STORE_TIMEOUT`], so the request always times out
+    /// while the store holds its answer back.
+    const LATE_BY: Duration = Duration::from_millis(800);
+    const LATE_STORE_TIMEOUT: u64 = 200;
+
+    impl LateStore {
+        async fn answer_late(&self, at: Late) {
+            if self.late == at && !self.answered_late.swap(true, Ordering::SeqCst) {
+                tokio::time::sleep(LATE_BY).await;
+            }
+        }
+    }
+
+    #[async_trait]
+    impl Store for LateStore {
+        async fn remember_offer(
+            &self,
+            code: &str,
+            transaction_code: Option<&str>,
+            generation: &CatalogGeneration,
+            prepared: PreparedRequest,
+            now: i64,
+        ) -> Result<(), StoreError> {
+            self.inner
+                .remember_offer(code, transaction_code, generation, prepared, now)
+                .await
+        }
+
+        async fn redeem_offer(
+            &self,
+            code: &str,
+            transaction_code: Option<&str>,
+            generation: &CatalogGeneration,
+            now: i64,
+        ) -> Result<PreparedRequest, StoreError> {
+            self.inner
+                .redeem_offer(code, transaction_code, generation, now)
+                .await
+        }
+
+        async fn redeem_offer_for_access_token(
+            &self,
+            code: &str,
+            transaction_code: Option<&str>,
+            access_token: &str,
+            generation: &CatalogGeneration,
+            now: i64,
+        ) -> Result<(), StoreError> {
+            let redeemed = self
+                .inner
+                .redeem_offer_for_access_token(
+                    code,
+                    transaction_code,
+                    access_token,
+                    generation,
+                    now,
+                )
+                .await;
+            self.answer_late(Late::Redemption).await;
+            redeemed
+        }
+
+        async fn bind_access_token(
+            &self,
+            access_token: &str,
+            generation: &CatalogGeneration,
+            prepared: PreparedRequest,
+            now: i64,
+        ) -> Result<(), StoreError> {
+            self.inner
+                .bind_access_token(access_token, generation, prepared, now)
+                .await
+        }
+
+        async fn claim_access_token(
+            &self,
+            access_token: &str,
+            generation: &CatalogGeneration,
+            now: i64,
+        ) -> Result<PreparedRequest, StoreError> {
+            let claimed = self
+                .inner
+                .claim_access_token(access_token, generation, now)
+                .await;
+            self.answer_late(Late::Claim).await;
+            claimed
+        }
+
+        async fn sweep(&self, now: i64) -> usize {
+            self.inner.sweep(now).await
+        }
+
+        async fn len(&self) -> usize {
+            self.inner.len().await
+        }
+
+        async fn maximum_keyspace_len(&self) -> Option<usize> {
+            let held = self.inner.maximum_keyspace_len().await;
+            self.answer_late(Late::Count).await;
+            held
+        }
+    }
+
+    /// A service over a [`LateStore`] whose requests time out well before the
+    /// store answers.
+    fn late_service(late: Late) -> (TestServer, Arc<DeliveryService>, Arc<RecordingIssuer>) {
+        let directory = canonical_tempdir();
+        let mut config = load_deployment(directory.path());
+        config.listener.request_timeout_milliseconds = LATE_STORE_TIMEOUT;
+        let store = Arc::new(LateStore {
+            inner: Box::new(OfferStore::new(&config.store)),
+            late,
+            answered_late: std::sync::atomic::AtomicBool::new(false),
+        });
+        let (service, issuer) = wired_service_over(config);
+        let service = Arc::new(
+            Arc::into_inner(service)
+                .expect("the only handle on the service")
+                .with_store(store, CatalogGeneration::default()),
+        );
+        (
+            TestServer::new(build_app(Arc::clone(&service))),
+            service,
+            issuer,
+        )
+    }
+
+    /// Remember an offer straight in the store, past the offer endpoint.
+    async fn remembered_code(service: &DeliveryService) -> &'static str {
+        const CODE: &str = "remembered-pre-authorized-code";
+        service
+            .store
+            .remember_offer(
+                CODE,
+                None,
+                &service.generation,
+                PreparedRequest::new("exchange-1", CONFIGURATION_ID, "{}", 1),
+                service.now(),
+            )
+            .await
+            .expect("remember an offer");
+        CODE
+    }
+
+    fn assert_unredeemable(response: &axum_test::TestResponse) {
+        assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
+        let body = response.json::<Value>();
+        assert_eq!(body["error"], json!("invalid_grant"), "{body}");
+        assert_eq!(
+            body["error_description"],
+            json!("the pre-authorized code cannot be redeemed"),
+            "{body}"
+        );
+        assert!(body.get("access_token").is_none(), "{body}");
+    }
+
+    /// A redemption whose reply comes back after the request timed out may
+    /// already have spent the code. Answering 408 would invite a retry that
+    /// can only be refused, so the wallet is told what the retry would say.
+    #[tokio::test]
+    async fn a_redemption_answered_after_the_timeout_is_not_retryable() {
+        let (server, service, _issuer) = late_service(Late::Redemption);
+        let code = remembered_code(&service).await;
+
+        let timed_out = server.post(TOKEN_PATH).form(&token_form(code, None)).await;
+        assert_unredeemable(&timed_out);
+        let retried = server.post(TOKEN_PATH).form(&token_form(code, None)).await;
+        assert_unredeemable(&retried);
+    }
+
+    /// A claim whose reply comes back after the request timed out has spent the
+    /// token. The wallet gets the terminal answer, not a 408 that its retry
+    /// would turn into a 401, and nothing reaches the credential source.
+    #[tokio::test]
+    async fn a_claim_answered_after_the_timeout_is_terminal() {
+        let (server, _service, issuer) = late_service(Late::Claim);
+        let access_token = access_token(&server).await;
+        let request = json!({"credential_configuration_id": CONFIGURATION_ID});
+
+        let timed_out = server
+            .post(CREDENTIAL_PATH)
+            .add_header("authorization", format!("Bearer {access_token}"))
+            .json(&request)
+            .await;
+        assert_eq!(timed_out.status_code(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            timed_out.json::<Value>()["error"],
+            json!("credential_request_denied")
+        );
+        let retried = server
+            .post(CREDENTIAL_PATH)
+            .add_header("authorization", format!("Bearer {access_token}"))
+            .json(&request)
+            .await;
+        assert_eq!(retried.status_code(), StatusCode::UNAUTHORIZED);
+        assert!(issuer.requests().is_empty());
+    }
+
+    /// Counting what the store holds is bookkeeping. A slow count must not
+    /// cost the wallet the access token its redemption already bound.
+    #[tokio::test]
+    async fn a_slow_count_after_a_redemption_does_not_hold_the_token_back() {
+        let (server, service, _issuer) = late_service(Late::Count);
+        let code = remembered_code(&service).await;
+
+        let granted = server.post(TOKEN_PATH).form(&token_form(code, None)).await;
+        assert_eq!(granted.status_code(), StatusCode::OK);
+        assert!(granted.json::<Value>()["access_token"].is_string());
+
+        // The count still lands once the store answers: one ledger, one token.
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !service
+                .metrics
+                .render()
+                .contains("evidence_oid4vci_store_entries 1\n")
+            {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("the store-entries gauge is refreshed after the answer");
     }
 
     /// A request refused after the token was claimed does not give the token
