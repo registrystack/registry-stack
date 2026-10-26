@@ -140,7 +140,7 @@
         },
         {
           "additionalProperties": false,
-          "description": "The provider answered an `external.command/v1` call with `value`. The\noperation's pinned interpretation Function turns it into an accepted\nresult, a declared refusal or an uncertain outcome, as it would at run\ntime.",
+          "description": "The provider answered an `external.command/v1` call with `value`. The\noperation's pinned interpretation Function turns it into an accepted\nresult, a declared refusal or an uncertain outcome, as it would at run\ntime. The status must be one the worker hands to that Function: a\nredirect, a 429 or a 5xx never reaches it, so a scenario models those\nwith an `uncertain` or `retryable` reply.",
           "properties": {
             "type": {
               "const": "response",

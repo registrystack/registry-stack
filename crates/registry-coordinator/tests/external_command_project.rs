@@ -380,8 +380,17 @@ fn the_workflow_cannot_name_a_destination_path_or_credential() {
 fn scenario_reports(
     scenarios: &str,
 ) -> registry_coordinator::Result<Vec<scenarios::ScenarioReport>> {
+    scenario_reports_in(&[], scenarios)
+}
+
+/// Scenario reports for the fee bill project with each workflow replacement
+/// applied once.
+fn scenario_reports_in(
+    replacements: &[(&str, &str)],
+    scenarios: &str,
+) -> registry_coordinator::Result<Vec<scenarios::ScenarioReport>> {
     let root = tempfile::tempdir().unwrap();
-    project(root.path(), &[]);
+    project(root.path(), replacements);
     let definition = Definition::load(root.path()).unwrap();
     let document = scenarios::decode(scenarios, "scenarios.yaml")?;
     scenarios::check(&definition, &document)
@@ -520,5 +529,66 @@ fn a_command_reply_reaches_its_result_only_through_the_interpret_function() {
             .find(|report| report.name == "unrecognised-answer-holds")
             .unwrap();
         assert_eq!(report.state, state);
+    }
+}
+
+#[test]
+fn a_command_response_reply_carries_only_a_status_the_worker_interprets() {
+    // The worker holds a redirect or a server failure and retries a 429
+    // before the interpretation Function runs, so a scenario cannot show the
+    // Function reading any of them. Each refusal names the reply that models
+    // what the worker does instead.
+    const ANY_STATUS: (&str, &str) = (
+        "status: {type: integer, minimum: 200, maximum: 499}",
+        "status: {type: integer, minimum: 100, maximum: 599}",
+    );
+    let with_status = |status: u16| {
+        replaced(
+            SCENARIOS,
+            &[(
+                "value: {status: 202, body: {}}",
+                &format!("value: {{status: {status}, body: {{}}}}"),
+            )],
+        )
+    };
+    for (status, modelled) in [
+        (302, "type: uncertain"),
+        (429, "type: retryable"),
+        (500, "type: uncertain"),
+        (503, "type: uncertain"),
+    ] {
+        let error = scenario_reports_in(&[ANY_STATUS], &with_status(status))
+            .err()
+            .unwrap_or_else(|| panic!("a {status} response reply is refused"));
+        assert_eq!(error.code, "scenario.reply", "{status}");
+        assert_eq!(
+            error.field.as_deref(),
+            Some("/cases/2/replies/create/0/value/status"),
+            "{status}"
+        );
+        assert!(
+            error.message.contains(&status.to_string())
+                && error.message.contains("external.command/v1"),
+            "{status}: {}",
+            error.message
+        );
+        assert!(
+            error
+                .suggested_action
+                .as_deref()
+                .is_some_and(|action| action.contains(modelled)),
+            "{status}: {:?}",
+            error.suggested_action
+        );
+    }
+    // A status the worker hands to the Function stays a response reply.
+    for status in [200, 404, 409] {
+        let reports = scenario_reports_in(&[ANY_STATUS], &with_status(status))
+            .unwrap_or_else(|error| panic!("{status}: {}", error.message));
+        let report = reports
+            .iter()
+            .find(|report| report.name == "unrecognised-answer-holds")
+            .unwrap();
+        assert_eq!(report.state, "uncertain", "{status}");
     }
 }
