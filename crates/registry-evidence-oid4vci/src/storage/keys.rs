@@ -15,6 +15,8 @@ use registry_platform_crypto::hmac_sha256_base64url_no_pad;
 use thiserror::Error;
 use zeroize::Zeroizing;
 
+use crate::store::TRANSACTION_CODE_DOMAIN;
+
 /// The length of every key in a [`KeyRing`], in bytes.
 pub const KEY_LENGTH: usize = 32;
 
@@ -167,6 +169,25 @@ pub(crate) fn tag(key: &VersionedKey, domain: &str, secret: &str) -> Zeroizing<S
     Zeroizing::new(hmac_sha256_base64url_no_pad(key.bytes(), input.as_bytes()))
 }
 
+/// Tag a transaction code for the one offer it guards, under the key that
+/// offer was tagged with. The offer's tag is part of the input, so one code
+/// tags differently on every offer: a reader of the stored tags cannot tell
+/// which offers share a code, and tags collected from offers the reader made
+/// say nothing about anyone else's.
+pub(crate) fn transaction_code_tag(
+    key: &VersionedKey,
+    offer_tag: &str,
+    transaction_code: &str,
+) -> Zeroizing<String> {
+    let mut input = Zeroizing::new(String::with_capacity(
+        offer_tag.len() + transaction_code.len() + 1,
+    ));
+    input.push_str(offer_tag);
+    input.push('\u{0}');
+    input.push_str(transaction_code);
+    tag(key, TRANSACTION_CODE_DOMAIN, &input)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -235,5 +256,15 @@ mod tests {
         assert_ne!(*under_first, *under_second);
         assert!(!under_first.contains("code-1"));
         assert_ne!(*under_first, *tag(&first, "oid4vci.access-token", "code-1"));
+    }
+
+    #[test]
+    fn one_transaction_code_tags_differently_for_every_offer() {
+        let key = VersionedKey::new(1, &[1u8; 32]).expect("a key");
+        let first = transaction_code_tag(&key, "offer-tag-a", "4711");
+        assert_ne!(*first, *transaction_code_tag(&key, "offer-tag-b", "4711"));
+        assert_eq!(*first, *transaction_code_tag(&key, "offer-tag-a", "4711"));
+        assert_ne!(*first, *tag(&key, TRANSACTION_CODE_DOMAIN, "4711"));
+        assert!(!first.contains("4711"));
     }
 }
