@@ -238,6 +238,17 @@ pub struct ResolvedOperation {
     pub refusal: Option<Value>,
     pub completions: BTreeMap<String, CompletionDefinition>,
     pub revision: String,
+    /// The pinned pure Function that turns an external command's saved
+    /// command and bounded provider response into an accepted result, a
+    /// declared refusal or an uncertain outcome. Present only on
+    /// `external.command/v1`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub interpret: Option<String>,
+    /// The bounded provider response the interpretation Function reads.
+    /// Present only on `external.command/v1`, whose `output` is the
+    /// interpreted accepted result.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub response: Option<Value>,
     /// Exact imported specialization, when the owning product exports one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub action: Option<crate::breg_action::ActionContract>,
@@ -634,7 +645,9 @@ impl Definition {
                 operation.output.clone(),
                 operation.refusal.clone(),
                 operation.action.clone(),
-            ) {
+            )
+            .and_then(|contract| contract.with_response(operation.response.as_ref()))
+            {
                 Ok(contract) => {
                     operation_contracts.insert(alias.clone(), Arc::new(contract));
                 }
@@ -1099,13 +1112,45 @@ fn seal_revisions(workflow: &mut Workflow, sources: &BTreeMap<String, String>) -
                 &serde_json::json!({"kind":completion.kind,"output":semantic_schema(&completion.output),"function":function}),
             )?;
         }
-        operation.revision = semantic_hash(
-            &serde_json::json!({"uses":operation.uses.identity(),"host":operation.uses.descriptor().host_contract(),"connection":operation.connection,
+        let mut identity = serde_json::json!({"uses":operation.uses.identity(),"host":operation.uses.descriptor().host_contract(),"connection":operation.connection,
             "input":semantic_schema(&operation.input),"output":semantic_schema(&operation.output),"refusal":operation.refusal.as_ref().map(semantic_schema),
-            "completions":operation.completions.iter().map(|(name,completion)| (name,&completion.revision)).collect::<BTreeMap<_,_>>(),"action":operation.action}),
-        )?;
+            "completions":operation.completions.iter().map(|(name,completion)| (name,&completion.revision)).collect::<BTreeMap<_,_>>(),"action":operation.action});
+        // Only a command carries an interpretation, so every other
+        // operation keeps its existing revision.
+        if let Some(interpret) = &operation.interpret {
+            let function = &workflow
+                .functions
+                .get(interpret)
+                .ok_or_else(|| fail("definition.abi"))?
+                .revision;
+            identity["interpret"] = serde_json::json!(function);
+        }
+        if let Some(response) = &operation.response {
+            identity["response"] = semantic_schema(response);
+        }
+        operation.revision = semantic_hash(&identity)?;
     }
     Ok(())
+}
+
+/// An external command pins one interpretation Function over its exact
+/// command and response schemas, and its output and refusal are exactly what
+/// that Function declares. No other operation carries an interpretation.
+fn command_interpretation_valid(flow: &Workflow, operation: &ResolvedOperation) -> bool {
+    if operation.uses != Operation::ExternalCommand {
+        return operation.interpret.is_none() && operation.response.is_none();
+    }
+    let (Some(interpret), Some(response)) = (&operation.interpret, &operation.response) else {
+        return false;
+    };
+    flow.functions.get(interpret).is_some_and(|function| {
+        function.inputs.len() == 2
+            && function.inputs.get("command") == Some(&operation.input)
+            && function.inputs.get("response") == Some(response)
+            && crate::authoring::command_interpretation(&function.output, "").is_ok_and(
+                |(output, refusal)| output == operation.output && refusal == operation.refusal,
+            )
+    })
 }
 
 fn semantic_hash(value: &Value) -> Result<String> {
@@ -1397,6 +1442,10 @@ fn workflow_findings(flow: &Workflow) -> Vec<CoordinatorError> {
         }
         if operation.refusal.is_some() && !operation.uses.descriptor().declared_refusal {
             findings.push(fail("definition.abi"));
+        }
+        if !command_interpretation_valid(flow, operation) {
+            findings.push(authored("definition.abi", &format!("/operations/{alias}/interpret"),
+                "the command interpretation does not match its host-enforced Operation contract", "Recompile the canonical project; local metadata cannot change how a provider response is interpreted."));
         }
     }
     for (name, step) in &flow.steps {
