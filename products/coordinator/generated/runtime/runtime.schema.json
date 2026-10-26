@@ -374,6 +374,10 @@
               "$ref": "#/$defs/Url",
               "pattern": "^[^\\s\\\\]+$"
             },
+            "commandPath": {
+              "$ref": "#/$defs/ExternalId",
+              "description": "The one exact relative path that `external.command/v1` may POST to.\nOmission keeps the connection read-only."
+            },
             "maximumResponseBytes": {
               "default": 65536,
               "format": "uint64",

@@ -140,6 +140,25 @@
         },
         {
           "additionalProperties": false,
+          "description": "The provider answered an `external.command/v1` call with `value`. The\noperation's pinned interpretation Function turns it into an accepted\nresult, a declared refusal or an uncertain outcome, as it would at run\ntime.",
+          "properties": {
+            "type": {
+              "const": "response",
+              "type": "string"
+            },
+            "value": {
+              "description": "The complete `{status, body}` response, which must satisfy the\noperation's declared response schema.",
+              "x-registry-foreign": "json"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
           "description": "The product's receipt for the call expired, so the original command\ncannot be confirmed; the run stops as uncertain and no later reply is\nconsumed.",
           "properties": {
             "type": {

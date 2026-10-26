@@ -325,7 +325,8 @@
               "evaluation.evaluate/v1",
               "casework.submit-review-request/v1",
               "casework.cancel-review-request/v1",
-              "scheduling.preview-availability/v1"
+              "scheduling.preview-availability/v1",
+              "external.command/v1"
             ],
             "type": "string"
           },
