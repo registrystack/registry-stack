@@ -4684,11 +4684,11 @@
       "description": "Registry Coordinator deterministic scenario authoring JSON Schema.",
       "source": {
         "path": "crates/registry-coordinator/src/scenarios.rs",
-        "sha256": "95385a114efc65fefd15ed146e732ab68bcd8601aa5d570d2639e6f31ff33eca"
+        "sha256": "78c0bc562ac7d32104b9b5a8818ff7a7d4c7a1ca737ab39e8f4c688cf6e14f04"
       },
       "artifact": {
         "path": "products/coordinator/generated/scenarios/scenarios.schema.json",
-        "sha256": "469020cf4172366899cbd69894f9f2fedc9e17f0a478bba77183a648fff3bb10",
+        "sha256": "e42e044eb828ff7e12f0a199fc95065c04baeadf91773c2d28ba9a1b0252090e",
         "mediaType": "application/schema+json"
       }
     },
