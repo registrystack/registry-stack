@@ -44,6 +44,94 @@ no hidden mutation retry inside Coordinator.
   invalid response, or server failure after dispatch remains uncertain until an
   operator resolves or cancels the held run.
 
+## Bounded external command
+
+### Threat
+
+`external.command/v1` adds an outbound mutation to a provider outside Registry
+Stack and a recovery path that can send it again. Workflow data could try to
+steer the request to another host, path or credential. A lost acknowledgement,
+timeout, redirect or server error could be misread as failure, so a fresh
+command would apply the effect twice. A response, command body, request id or
+credential could leak through logs, problem details, `status` or `inspect`.
+
+### Enforcement and defaults
+
+- The destination is operator configuration. `ExternalHttpConfig` in
+  `crates/registry-coordinator/src/external_http.rs` holds one exact relative
+  `commandPath` beside `baseUrl` and `authorization`; the Workflow supplies only
+  a JSON object body. `ExternalHttpConnection::command` sends one POST, follows
+  no redirect, and validates the destination under the same fetch policy as
+  `external.get/v1`. A connection without `commandPath` is read-only, and
+  `RuntimeConfig::validate_workflow` (`workflow-binding`) refuses a command
+  alias bound to it or to another connection type at `coordinatorctl check`.
+- The command and its request id are frozen and persisted before the first
+  send. The id is derived from the run's start identity and the step, and is
+  sent as `Idempotency-Key` on every attempt; the catalog entry in
+  `crates/registry-coordinator/src/operations.rs` declares same-command
+  recovery, so `retry-same` and restart replay the frozen request and never mint
+  a new id.
+- Request bodies and responses are limited to 65,536 bytes, and each attempt to
+  the connection's timeout, at most 2,000 milliseconds. Only status 429, and
+  status 503 before the final attempt, are retried automatically, under the
+  existing retry-hint and spacing rules. Once the request may have left, a lost
+  or broken exchange, a timeout, a redirect, any other 5xx, and an oversize,
+  malformed or schema-invalid response are uncertain and hold the run.
+- `interpret_command` in `external_http.rs` checks the response against the
+  alias's `responseSchema`, then runs the project's pinned pure Function. Only
+  `accepted` with a result matching the step's declared output, or `refused`
+  with a declared code, leaves the hold; everything else, including a Function
+  error, is uncertain. The worker and offline scenarios use the same function.
+- Outcomes carry fixed failure codes only. No body, response, request id or
+  token is logged or placed in a problem, `status` or `inspect`.
+
+### Tests
+
+- `crates/registry-coordinator/tests/external_command.rs`:
+  `a_command_posts_the_frozen_body_and_request_id_to_the_configured_path`,
+  `workflow_input_cannot_choose_destination_headers_or_credentials`,
+  `a_lost_acknowledgement_is_uncertain_and_the_same_request_id_is_sent_again`,
+  `a_timeout_after_sending_is_uncertain_and_never_a_provider_failure`,
+  `failures_before_anything_is_sent_stay_retryable_or_refused`,
+  `an_oversize_or_unusable_response_is_held_without_releasing_its_body`,
+  `a_redirect_is_not_followed_and_the_credential_stays_at_the_origin`,
+  `provider_statuses_are_classified_without_claiming_a_provider_failure`,
+  `no_secret_body_or_request_id_reaches_logs_or_outcomes`,
+  `the_runtime_routes_a_frozen_command_with_its_original_request_id`, and
+  `the_command_path_is_an_exact_operator_owned_relative_path`.
+- `crates/registry-coordinator/tests/external_command_project.rs`:
+  `check_refuses_a_command_without_its_bound_command_connection`,
+  `the_workflow_cannot_name_a_destination_path_or_credential`,
+  `the_worker_interprets_a_response_into_one_of_three_results`,
+  `a_command_without_a_refused_state_has_no_refusal_route`, and
+  `scenarios_interpret_provider_responses_with_the_pinned_function`.
+- `crates/registry-coordinator/tests/external_command_postgres.rs`, under
+  PostgreSQL: `a_lost_acknowledgement_holds_and_retry_same_sends_the_same_command`,
+  `a_timeout_holds_as_uncertain_and_never_claims_a_provider_failure`, and
+  `a_restart_between_persist_and_send_sends_the_prepared_command_once`, each
+  asserting that `status` and `inspect` carry no body, request id or token.
+- `crates/registry-coordinator/src/operations.rs`:
+  `operations_use_registered_execution_semantics`.
+
+These are maintained references, not claims that the tests ran in this note.
+
+### Accepted residuals
+
+- Same-command recovery is only as safe as the provider's deduplication on
+  `Idempotency-Key`. Coordinator cannot verify it; the deployment runbook makes
+  it a provider requirement, and an operator should not use `retry-same`
+  against a provider that lacks it.
+- The operation has no original-result receipt, so `reconcile` cannot settle an
+  uncertain command. An operator checks the provider's own records, then
+  retries or cancels the held run.
+- An accepted result is the provider's answer as the project's Function reads
+  it. Coordinator does not independently verify the provider's effect, and a
+  Function that maps an ambiguous answer to `accepted` is an authoring defect
+  that scenarios and review must catch.
+- After an uncertain attempt, a later declared refusal is held rather than
+  routed, so a provider that replays a refusal for a repeated key leaves the
+  run for an operator to cancel.
+
 ## Coordinatorctl access-token files
 
 ### Threat

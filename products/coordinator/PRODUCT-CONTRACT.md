@@ -95,7 +95,39 @@ An `external.get/v1` alias can specialize its validated response and declare a n
 latest validated response and returns `pending`, `complete` with a typed result, or a declared
 `refused` code. The host owns GET transport, credentials, permitted destinations, scheduling,
 correlation, and durable read budgets. External polling is independent of Casework and BReg.
-There is no external write operation, arbitrary HTTP method, or dynamic destination.
+Neither external operation offers an arbitrary HTTP method or a dynamic destination.
+
+## Bounded external command
+
+`external.command/v1` sends one POST to the single exact relative `commandPath` configured on a
+runtime `external-http` connection. The runtime file owns the origin, the path, the credential,
+and the size and time bounds. A Workflow supplies only the JSON object body, built by its input
+mapping and checked against the operation input contract. Redirects are never followed. A
+connection without `commandPath` stays read-only, and `coordinatorctl check` refuses a command
+alias bound to it or to a connection of another type.
+
+Before the first send, Coordinator freezes the command body and a request id derived from the
+run's start identity and the step, and persists both. Every attempt sends that id as
+`Idempotency-Key`. Automatic retry, restart, and `retry-same` send the same stored body with the
+same id; no new id is minted for the step. Same-command recovery is safe only when the provider
+deduplicates on that header.
+
+The alias's required `interpret` Function receives the frozen `command` and the `{status, body}`
+response, after the response is held to the alias's `responseSchema`. It returns `accepted` with
+a typed result, `refused` with one of its declared codes, or `uncertain`. The accepted result is
+the step output. Only a declared code routes to `onDeclaredRefusal`, as `{refusalCode}`; an
+interpreter that never returns `refused` has no refusal route.
+
+The recovery class is same-command. Status 429, and status 503 before the last automatic attempt,
+are definite busy answers retried under the ordinary retry-hint and spacing rules. A connection
+that could not be opened carried nothing and is retried. Once the request may have reached the
+provider, a lost or broken exchange, a timeout, a redirect, any other server error, an oversize
+or malformed response, a response outside the declared schema, an interpreter error, and an
+`uncertain` interpretation each hold the run as uncertain. None is reported as a provider failure
+or a negative business decision. The operation has no original-result receipt, so `reconcile`
+cannot settle it. After an uncertain attempt, a later declared refusal or busy answer keeps the
+run held instead of routing. An accepted result is the provider's answer as the project
+interprets it; Coordinator does not independently verify the provider's effect.
 
 ## Observation and uncertainty
 

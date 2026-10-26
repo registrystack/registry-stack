@@ -205,6 +205,66 @@ Standalone Casework review is independent of BReg. Its submission includes an ex
 subject, and submission digest. Casework owns reviewer authority and outcomes. Review completion
 creates no registry effect. A later BReg or Messaging call requires its own authority.
 
+## External commands
+
+`external.command/v1` sends one POST to a provider the operator configured. Workflow data
+supplies only the JSON body; the runtime connection fixes the origin, the exact `commandPath`,
+and the credential. The alias names a required `interpret` Function and can specialize the
+provider's `{status, body}` response:
+
+```yaml
+types:
+  bill-outcome:
+    oneOf:
+      - type: object
+        additionalProperties: false
+        required: [state, result]
+        properties:
+          state: {type: string, const: accepted}
+          result: {typeRef: bill}
+      - type: object
+        additionalProperties: false
+        required: [state, code]
+        properties:
+          state: {type: string, const: refused}
+          code: {type: string, enum: [account-closed]}
+      - type: object
+        additionalProperties: false
+        required: [state]
+        properties:
+          state: {type: string, const: uncertain}
+
+functions:
+  bill-outcome:
+    runtime: rhai
+    source: functions.rhai
+    entrypoint: bill_outcome
+    inputs:
+      command: {operationInput: create-bill}
+      response: {operationOutput: create-bill}
+    output: {typeRef: bill-outcome}
+
+operations:
+  create-bill:
+    uses: external.command/v1
+    connection: payments
+    responseSchema: {typeRef: bill-response}
+    interpret: bill-outcome
+```
+
+The Function reads the frozen command and the validated response and returns `accepted` with a
+result, `refused` with a declared code, or `uncertain`. The step output is the accepted `result`,
+typed by the `bill` schema here. A declared code takes `onDeclaredRefusal` as `{refusalCode}`.
+Return `uncertain` for any answer the Function does not recognise, so the run holds instead of
+guessing. Scenarios reply to the step with `type: response` and a `{status, body}` value, which
+the same Function interprets.
+
+Coordinator persists the command and its request id before the first send and sends the id as
+`Idempotency-Key` on every attempt. A lost acknowledgement, timeout, redirect, server error, or
+unusable response holds the run as uncertain; `retry-same` sends the same body with the same id.
+The provider must deduplicate on that header. See
+[the deployment runbook](DEPLOYMENT.md#configure-the-deployment) for the connection.
+
 ## Package and deploy
 
 ```sh

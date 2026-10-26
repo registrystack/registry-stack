@@ -356,6 +356,40 @@ for `{status, body}`. Omitted authorization means a public read. Attempt timeout
 2000 milliseconds and response size to 65,536 bytes; both can be reduced. Use HTTPS for
 institutional endpoints; HTTP requires numeric loopback.
 
+For `external.command/v1`, add `commandPath` to an `external-http` connection: the one exact
+relative path, resolved against `baseUrl`, that the command may POST to. The command uses the
+connection's `authorization`, `responseSchema`, attempt timeout and response size bound, and its
+request body is limited to 65,536 bytes. Omit `commandPath` to keep a connection read-only; `paths`
+still lists at least one read path. Use a separate connection when commands need a different
+credential or scope than reads.
+
+```yaml
+connections:
+  payments:
+    type: external-http
+    baseUrl: https://payments.example.org/v1/
+    paths: [bills/status]
+    commandPath: bills
+    authorization:
+      tokenEndpoint: https://issuer.example.org/oauth/token
+      clientId: coordinator-payments
+      signingKeyRef: secret:file/payments-jwk
+      resource: https://payments.example.org
+      scopes: [bills:create]
+    responseSchema:
+      type: object
+      required: [status, body]
+      properties:
+        status: {type: integer}
+```
+
+The provider must deduplicate on the `Idempotency-Key` header. A repeated key must return the
+original result and never apply the command twice, for at least as long as a run can be held and
+retried, which is until its deadline. Coordinator sends the same key on every attempt of a step,
+including after a restart and `retry-same`. A provider that cannot deduplicate is not safe for
+same-command recovery: do not use `retry-same` with it, and resolve a held run from the
+provider's own records.
+
 For `evaluation.evaluate/v1`, use `type: evaluation` with protocol `system-one` or
 `openai-decisions`, `baseUrl`, `model`, and either `authorization.bearer` (`tokenRef` and stable
 account `principal`) or explicit `authorization.local: {}` on numeric loopback. Request and
@@ -882,6 +916,16 @@ Casework review requests have no read-only receipt either. `reconcile` reports
 original key. Casework answers a repeated key with its stored response while
 it keeps one; after that the step reports an expired receipt and the effect
 stays unresolved.
+
+An `external.command/v1` call has no read-only receipt either. `reconcile` reports
+`reconciliation-unavailable`, and `retry-same` resends the frozen body with its original
+`Idempotency-Key`. Status 429, and 503 before the tenth attempt, are definite busy answers
+retried on the schedule above; on the tenth attempt a 429 ends the call with
+`external-rate-limited` and a 503 holds it as uncertain. Any other server error, a redirect, a
+timeout, a lost acknowledgement, or a response the interpretation Function cannot settle holds the
+run as uncertain. Before retrying, confirm with the provider that it still deduplicates that key.
+After an uncertain attempt, a declared refusal or busy answer keeps the run held; check the
+provider's record and cancel the run if no further step should follow.
 
 A `wait-for` observes a named completion, correlated to an earlier accepted call.
 Casework exposes `result`; external GET can
