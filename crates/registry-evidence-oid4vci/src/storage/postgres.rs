@@ -44,7 +44,9 @@
 //!   server, and the requests waiting on it refuse in time, spending nothing.
 //!
 //! Database failures refuse with [`StoreError::Unavailable`] and are logged by
-//! operation and SQLSTATE only, never with a value.
+//! operation and SQLSTATE only, never with a value. A connection the pool
+//! cannot give is logged by its cause (a timeout, a closed pool or a failed
+//! connection) and the server's SQLSTATE, never with the server's message.
 //!
 //! The caller builds the pool, so the connection's TLS and credentials are the
 //! caller's decision. [`PostgresStore::migrate`] creates the schema and applies
@@ -56,7 +58,7 @@
 use std::time::Duration;
 
 use async_trait::async_trait;
-use deadpool_postgres::{Object, Pool, Transaction};
+use deadpool_postgres::{HookError, Object, Pool, PoolError, TimeoutType, Transaction};
 use subtle::ConstantTimeEq;
 use thiserror::Error;
 use tokio_postgres::IsolationLevel;
@@ -192,8 +194,8 @@ impl PostgresStore {
     /// has not seen, in one transaction. Replicas that migrate at once wait for
     /// each other on an advisory lock, and each version is applied once.
     pub async fn migrate(&self) -> Result<(), PostgresSetupError> {
-        let mut client = self.pool.get().await.map_err(|_| {
-            tracing::error!(target: LOG_TARGET, "the store database is unreachable");
+        let mut client = self.pool.get().await.map_err(|error| {
+            log_unreachable(&error);
             PostgresSetupError::Unreachable
         })?;
         let refused = |error: tokio_postgres::Error| {
@@ -279,8 +281,8 @@ impl PostgresStore {
     }
 
     async fn client(&self) -> Result<Object, StoreError> {
-        self.pool.get().await.map_err(|_| {
-            tracing::error!(target: LOG_TARGET, "the store database is unreachable");
+        self.pool.get().await.map_err(|error| {
+            log_unreachable(&error);
             StoreError::Unavailable
         })
     }
@@ -1026,6 +1028,35 @@ fn sqlstate(error: &tokio_postgres::Error) -> &str {
     error.code().map_or("none", |code| code.code())
 }
 
+/// Why the pool gave no connection, coarse enough to log: the kind of failure
+/// and the server's SQLSTATE when the server answered. The message is left
+/// out, because it can name the host, the database or the user.
+fn pool_failure(error: &PoolError) -> (&'static str, &str) {
+    match error {
+        PoolError::Timeout(TimeoutType::Wait) => ("wait timeout", "none"),
+        PoolError::Timeout(TimeoutType::Create) => ("connect timeout", "none"),
+        PoolError::Timeout(TimeoutType::Recycle) => ("recycle timeout", "none"),
+        PoolError::Backend(error) => ("connect", sqlstate(error)),
+        PoolError::Closed => ("closed", "none"),
+        PoolError::NoRuntimeSpecified => ("no runtime", "none"),
+        PoolError::PostCreateHook(HookError::Backend(error)) => {
+            ("post-create hook", sqlstate(error))
+        }
+        PoolError::PostCreateHook(HookError::Message(_)) => ("post-create hook", "none"),
+    }
+}
+
+/// Log that the pool gave no connection, by cause and SQLSTATE only.
+fn log_unreachable(error: &PoolError) {
+    let (cause, sqlstate) = pool_failure(error);
+    tracing::error!(
+        target: LOG_TARGET,
+        cause,
+        sqlstate,
+        "the store database is unreachable"
+    );
+}
+
 /// Log a database failure by operation and SQLSTATE, and refuse.
 fn failed(operation: &'static str) -> impl Fn(tokio_postgres::Error) -> StoreError {
     move |error| {
@@ -1084,6 +1115,23 @@ mod tests {
              SET LOCAL idle_in_transaction_session_timeout = '1ms';"
         );
         assert!(transaction_waits(Duration::MAX).contains(&format!("'{}ms'", i32::MAX)));
+    }
+
+    #[test]
+    fn a_pool_failure_is_named_by_its_cause_without_its_message() {
+        for (error, cause) in [
+            (PoolError::Timeout(TimeoutType::Wait), "wait timeout"),
+            (PoolError::Timeout(TimeoutType::Create), "connect timeout"),
+            (PoolError::Timeout(TimeoutType::Recycle), "recycle timeout"),
+            (PoolError::Closed, "closed"),
+            (PoolError::NoRuntimeSpecified, "no runtime"),
+            (
+                PoolError::PostCreateHook(HookError::Message("names the host".into())),
+                "post-create hook",
+            ),
+        ] {
+            assert_eq!(pool_failure(&error), (cause, "none"), "{error:?}");
+        }
     }
 
     #[test]

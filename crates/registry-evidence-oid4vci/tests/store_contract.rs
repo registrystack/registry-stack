@@ -517,8 +517,8 @@ mod postgres_only {
     use tokio::sync::Barrier;
 
     use super::store_support::postgres::{
-        admin, count, dump, isolated_schema_name, open_over, pool, pool_with_options, unmigrated,
-        LOCK_NAMESPACE, REQUEST_TIMEOUT,
+        admin, count, dump, isolated_schema_name, open_over, pool, pool_with_options,
+        pool_with_password, unmigrated, LOCK_NAMESPACE, REQUEST_TIMEOUT,
     };
     use super::store_support::{
         assert_prepared, bounds, generation, prepared, Deployment, Keys, Kind, Logs, Ring,
@@ -1642,6 +1642,75 @@ store:
             "{rendered}"
         );
         assert!(!rendered.contains("20240101000000"), "{rendered}");
+    }
+
+    /// A pool that cannot sign in, or that has been closed, refuses as
+    /// unavailable. The log names the cause and the server's SQLSTATE, so an
+    /// operator can tell a rejected password from a timeout, and never what
+    /// the server said.
+    #[tokio::test]
+    async fn a_connection_failure_is_logged_by_its_cause_only() {
+        let catalog = generation("catalog-1");
+        let rejected = unmigrated(
+            pool_with_password("not-the-server-secret"),
+            &isolated_schema_name(),
+            &bounds(),
+            Keys::default(),
+            REQUEST_TIMEOUT,
+        );
+        let closed_pool = pool();
+        closed_pool.close();
+        let closed = unmigrated(
+            closed_pool,
+            &isolated_schema_name(),
+            &bounds(),
+            Keys::default(),
+            REQUEST_TIMEOUT,
+        );
+
+        let (logs, _guard) = Logs::capture();
+        let migration = rejected.migrate().await;
+        assert!(
+            matches!(migration, Err(PostgresSetupError::Unreachable)),
+            "{migration:?}"
+        );
+        assert_eq!(
+            rejected
+                .redeem_offer("any-code", None, &catalog, NOW)
+                .await
+                .err(),
+            Some(StoreError::Unavailable)
+        );
+        assert_eq!(
+            closed
+                .redeem_offer("any-code", None, &catalog, NOW)
+                .await
+                .err(),
+            Some(StoreError::Unavailable)
+        );
+        let rendered = logs.rendered();
+        assert_eq!(
+            rendered
+                .matches(r#"cause="connect" sqlstate="28P01""#)
+                .count(),
+            2,
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains(r#"cause="closed" sqlstate="none""#),
+            "{rendered}"
+        );
+        for value in [
+            "not-the-server-secret",
+            "password",
+            "authentication",
+            "user",
+        ] {
+            assert!(
+                !rendered.contains(value),
+                "the log names {value}: {rendered}"
+            );
+        }
     }
 
     async fn join<T: Send + 'static>(handles: Vec<tokio::task::JoinHandle<T>>) -> Vec<T> {
