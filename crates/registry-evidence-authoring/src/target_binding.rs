@@ -576,6 +576,17 @@ pub struct TargetRateLimits {
     pub failed_selector_attempts_per_principal_authority_per_minute: BoundedU32<1, 100_000>,
 }
 
+/// What the target may sign, beyond the signer binding. When the target
+/// omits this block, it signs for at most 300 seconds.
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TargetSigning {
+    /// The longest validity, in seconds, any definition on this target may
+    /// sign an assertion for.
+    pub maximum_assertion_validity_seconds: BoundedU64<1, { crate::project::MAX_VALIDITY_SECONDS }>,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

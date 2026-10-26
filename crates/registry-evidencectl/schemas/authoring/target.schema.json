@@ -1047,6 +1047,23 @@
         }
       ]
     },
+    "TargetSigning": {
+      "additionalProperties": false,
+      "description": "What the target may sign, beyond the signer binding. When the target\nomits this block, it signs for at most 300 seconds.",
+      "properties": {
+        "maximumAssertionValiditySeconds": {
+          "description": "The longest validity, in seconds, any definition on this target may\nsign an assertion for.",
+          "format": "uint64",
+          "maximum": 31536000,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "maximumAssertionValiditySeconds"
+      ],
+      "type": "object"
+    },
     "TargetSigningAlgorithm": {
       "enum": [
         "ES256"
@@ -1212,6 +1229,16 @@
     },
     "signer": {
       "$ref": "#/$defs/TargetSigner"
+    },
+    "signing": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/TargetSigning"
+        },
+        {
+          "type": "null"
+        }
+      ]
     },
     "subjectBinding": {
       "$ref": "#/$defs/TargetSubjectBinding"

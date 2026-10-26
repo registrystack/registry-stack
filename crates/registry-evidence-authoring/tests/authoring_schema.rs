@@ -1270,3 +1270,69 @@ fn retired_target_documents_are_refused() {
         assert!(target::read_target("local-target.yaml", document.as_bytes()).is_err());
     }
 }
+
+#[test]
+fn target_signing_maximum_is_optional_and_retained_when_stated() {
+    let absent = yaml_as_json(NORMALIZED_TARGET);
+    assert!(absent.get("signing").is_none());
+    let decoded = target::read_target(
+        "target.yaml",
+        &serde_json::to_vec(&absent).expect("target renders"),
+    )
+    .expect("a target without a signing block reads");
+    assert!(decoded.value.signing.is_none());
+
+    for seconds in [1_u64, 604_800, 31_536_000] {
+        let mut document = yaml_as_json(NORMALIZED_TARGET);
+        document["signing"] = serde_json::json!({"maximumAssertionValiditySeconds": seconds});
+        assert!(
+            schema(TARGET_SCHEMA_FILE).is_valid(&document),
+            "the target schema refused a signing maximum of {seconds}",
+        );
+        let decoded = target::read_target(
+            "target.yaml",
+            &serde_json::to_vec(&document).expect("target renders"),
+        )
+        .expect("a stated signing maximum reads");
+        let signing = decoded.value.signing.expect("the signing block is kept");
+        assert_eq!(signing.maximum_assertion_validity_seconds.get(), seconds);
+    }
+}
+
+#[test]
+fn target_signing_maximum_is_bounded_like_the_runtime() {
+    for seconds in [0_u64, 31_536_001] {
+        let mut document = yaml_as_json(NORMALIZED_TARGET);
+        document["signing"] = serde_json::json!({"maximumAssertionValiditySeconds": seconds});
+        assert_target_value_refused(&document, "/signing/maximumAssertionValiditySeconds");
+    }
+}
+
+#[test]
+fn target_signing_block_is_closed_and_complete() {
+    let mut document = yaml_as_json(NORMALIZED_TARGET);
+    document["signing"] = serde_json::json!({
+        "maximumAssertionValiditySeconds": 900,
+        "algorithm": "ES256",
+    });
+    assert!(!schema(TARGET_SCHEMA_FILE).is_valid(&document));
+    let report = target::read_target(
+        "target.yaml",
+        &serde_json::to_vec(&document).expect("target renders"),
+    )
+    .expect_err("an unknown member under signing is refused");
+    let diagnostic = report
+        .diagnostics()
+        .iter()
+        .find(|diagnostic| diagnostic.path == "/signing/algorithm")
+        .expect("the unknown member has an exact path");
+    assert_eq!(diagnostic.code, "config.unknown-key");
+
+    document["signing"] = serde_json::json!({});
+    assert!(!schema(TARGET_SCHEMA_FILE).is_valid(&document));
+    target::read_target(
+        "target.yaml",
+        &serde_json::to_vec(&document).expect("target renders"),
+    )
+    .expect_err("an empty signing block states nothing and is refused");
+}
