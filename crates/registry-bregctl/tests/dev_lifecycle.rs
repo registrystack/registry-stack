@@ -50,12 +50,33 @@ impl Session {
                 &self.project.parent().unwrap().join("native-failure.json"),
                 &output.stdout,
             );
+            let status = output
+                .status
+                .code()
+                .map(|code| format!("exit status {code}"))
+                .unwrap_or_else(|| "termination without an exit status".to_owned());
+            let diagnostics = serde_json::from_slice::<Value>(&output.stdout)
+                .ok()
+                .and_then(|report| {
+                    let diagnostics: Vec<String> = report["diagnostics"]
+                        .as_array()?
+                        .iter()
+                        .filter_map(|diagnostic| {
+                            Some(format!(
+                                "{}: {}",
+                                diagnostic["code"].as_str()?,
+                                diagnostic["message"].as_str()?
+                            ))
+                        })
+                        .collect();
+                    (!diagnostics.is_empty()).then(|| diagnostics.join("; "))
+                })
+                .unwrap_or_else(|| "no readable public diagnostics".to_owned());
+            panic!(
+                "native lifecycle failed with {status}: {diagnostics}; retained private workspace {}",
+                self.project.display()
+            );
         }
-        assert!(
-            output.status.success(),
-            "native lifecycle failed; retained private workspace {}",
-            self.project.display()
-        );
         serde_json::from_slice(&output.stdout).expect("native JSON report")
     }
     #[track_caller]
@@ -171,6 +192,92 @@ fn newest_log(root: &Path, prefix: &str) -> std::time::SystemTime {
 fn write(path: &Path, bytes: &[u8]) {
     fs::write(path, bytes).unwrap();
     fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
+}
+
+fn failed_report_panic(stdout: &[u8], stderr: &[u8], code: i32) -> String {
+    use std::os::unix::process::ExitStatusExt as _;
+
+    let temporary = tempfile::tempdir().unwrap();
+    let project = temporary.path().join("registry");
+    // This synthetic session never starts anything. Suppress its Docker-backed
+    // Drop cleanup so the test exercises only the report boundary.
+    let session = std::mem::ManuallyDrop::new(Session {
+        project,
+        path: std::ffi::OsString::new(),
+        docker: PathBuf::from("/not-used"),
+    });
+    let output = std::process::Output {
+        status: std::process::ExitStatus::from_raw(code << 8),
+        stdout: stdout.to_vec(),
+        stderr: stderr.to_vec(),
+    };
+    let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        session.report(output);
+    }))
+    .expect_err("a failed native command must panic");
+    assert_eq!(
+        fs::read(temporary.path().join("native-failure.json")).unwrap(),
+        stdout,
+        "the complete public report remains available in the private workspace"
+    );
+    if let Some(message) = panic.downcast_ref::<String>() {
+        message.clone()
+    } else if let Some(message) = panic.downcast_ref::<&str>() {
+        (*message).to_owned()
+    } else {
+        panic!("failed report used a non-string panic payload")
+    }
+}
+
+#[test]
+fn failed_session_report_surfaces_only_public_diagnostics() {
+    let stdout = br#"{
+      "diagnostics": [
+        {
+          "code": "dev.failed",
+          "message": "the supervised start was refused",
+          "path": "/private/canary-path",
+          "subject": "canary-subject"
+        },
+        {
+          "code": "dev.recovery",
+          "message": "retry the retained session",
+          "path": "/private/canary-recovery-path"
+        }
+      ],
+      "internalCanary": "canary-other-json"
+    }"#;
+    let panic = failed_report_panic(stdout, b"canary-raw-stderr", 17);
+
+    for public in [
+        "exit status 17",
+        "dev.failed",
+        "the supervised start was refused",
+        "dev.recovery",
+        "retry the retained session",
+    ] {
+        assert!(panic.contains(public), "missing {public}: {panic}");
+    }
+    for private in [
+        "canary-path",
+        "canary-subject",
+        "canary-recovery-path",
+        "canary-other-json",
+        "canary-raw-stderr",
+    ] {
+        assert!(!panic.contains(private), "disclosed {private}: {panic}");
+    }
+}
+
+#[test]
+fn failed_session_report_uses_a_stable_fallback_for_malformed_json() {
+    let panic = failed_report_panic(b"not-json canary-raw-stdout", b"canary-raw-stderr", 23);
+
+    assert!(panic.contains("exit status 23"), "{panic}");
+    assert!(panic.contains("no readable public diagnostics"), "{panic}");
+    for private in ["canary-raw-stdout", "canary-raw-stderr"] {
+        assert!(!panic.contains(private), "disclosed {private}: {panic}");
+    }
 }
 
 /// The operator lifecycle exercises the maintained generic workflow fixture;
