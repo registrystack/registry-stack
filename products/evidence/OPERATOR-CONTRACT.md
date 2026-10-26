@@ -50,8 +50,10 @@ distrustful issuers or customers require separate processes and bundles. The
 authentication profile admits exactly one token issuer and one set of claim
 names, so a second issuer, or one issuer whose clients carry the same authority
 under different claim names, requires a second deployment even when the
-operators trust each other. Evidence Version 1 has no application database and
-persists no selector, source, evidence, or response data. An external durable
+operators trust each other. Evidence Version 1 has no application database, unless
+status is enabled (`CONCEPT.md` section 15.9), and persists no selector, source,
+evidence, or response data; the status ledger holds keyed pseudonyms and
+digests, never raw values. An external durable
 audit service may own its own storage.
 
 A gateway may provide publication, protocol integration, routing, and
@@ -213,7 +215,10 @@ separate container runtime file and owner-readable secret mounts, gives only
 the audit path persistent writable storage while serving, activates target
 authority explicitly through a one-shot service, mounts that activated state
 read-only into the serving process, binds Evidence privately, and
-keeps public TLS and routing operator-controlled. The OIDC issuer retains its
+keeps public TLS and routing operator-controlled. A deployment that enables the
+status module of `CONCEPT.md` section 15.9 adds a PostgreSQL service, and
+exposes the public status list route only through a path-restricted proxy that
+forwards `GET` on the list path and nothing else. The OIDC issuer retains its
 public HTTPS issuer identity and JWKS URI: internal plain-HTTP service
 names do not replace either value. Container images and their provenance are
 operator responsibilities; Version 1 proves this journey with released bare
@@ -461,8 +466,10 @@ values `signed`, `unsigned`, and `sd-jwt-vc`; `signingKeyId` is present for the
 two cryptographically protected modes and forbidden for unsigned output.
 
 Enabling `sd-jwt-vc` adds a serialization, not a credential lifecycle. There is
-no issuance session, holder binding ceremony, status list, revocation, or
-presentation verification, and `/.well-known/jwt-vc-issuer` publishes no
+no issuance session, holder binding ceremony, or presentation verification. A
+status list and revocation exist only for a requirement that declares credential
+status under the version 2 profiles of `CONCEPT.md` section 15.9.
+`/.well-known/jwt-vc-issuer` publishes no
 per-requester or per-requirement information. The `vct` claim is the
 requirement's declared `isConformantTo` identifier, so the credential type is a
 governed bundle decision rather than a client choice. The subject identifier

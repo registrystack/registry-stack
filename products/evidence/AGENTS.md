@@ -52,7 +52,8 @@ Signing and required audit failures release nothing. Signed flattened JWS is
 the mandatory default; unsigned and SD-JWT forms require their explicit bundle
 and complete matched-grant permissions and never act as failure fallbacks.
 Request nonces bind audience-scoped requests and responses; they do not create
-a replay store. Holder-bound assertions follow their separate closed profile.
+a replay store. Intake idempotency keys of the status module are not request
+nonces. Holder-bound assertions follow their separate closed profile.
 
 Production behavior stays source-product and domain neutral. Adult status,
 residence, licence, and legal-parent relationship are coequal acceptance cases,

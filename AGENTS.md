@@ -203,7 +203,15 @@ tracked product material; do not call the product implemented on a subset of
 that DoD, and stop before the approved concept's non-goals and future
 profiles. `registry-evidence-oid4vci` delivers Evidence credentials to a
 wallet over OID4VCI 1.0 Final; it never signs, never holds a holder private
-key, and no Evidence crate depends on it at runtime.
+key, and no Evidence crate depends on it at runtime. The optional credential
+status module inside `registry-evidence` (`products/evidence/CONCEPT.md`
+section 15.9, approved and not implemented) follows these rules: it is the only
+writer of its PostgreSQL ledger; allocation happens inside the signing
+transaction; nothing outside Evidence reads the ledger; hook intake and the
+operator endpoints are the only mutation surface; with status disabled there is
+no PostgreSQL requirement; it never decides eligibility; it stores no raw
+selector value or record identifier; and intake is source-neutral, verified
+through `registry-platform-hooks`.
 
 **Registry Casework** (`registry-casework`, `registry-casework-core`,
 `registry-casework-breg`, `registry-caseworkctl`, its clients) coordinates
