@@ -454,6 +454,63 @@ impl ExternalHttpConnection {
     }
 }
 
+/// Interpret one provider response to an `external.command/v1` call with the
+/// project's pinned pure Function. The response is held to its declared
+/// schema before the Function reads it. Anything the Function cannot turn into
+/// an accepted result or a declared refusal leaves the command uncertain,
+/// never failed: the provider may already have applied it. No code carries a
+/// response or command value.
+pub fn interpret_command(
+    definition: &crate::definition::Definition,
+    call: &crate::definition::Call,
+    command: &Value,
+    response: Value,
+    synthetic: bool,
+) -> CallOutcome {
+    const FAILED: &str = "external-interpretation-failed";
+    let Ok(contract) = definition.operation_contract(call) else {
+        return uncertain(FAILED);
+    };
+    if contract.check_response(&response).is_err() {
+        return uncertain("external-invalid-response");
+    }
+    let Some(interpret) = definition
+        .workflow
+        .operations
+        .get(&call.alias)
+        .and_then(|operation| operation.interpret.as_deref())
+    else {
+        return uncertain(FAILED);
+    };
+    let inputs = serde_json::json!({"command":command,"response":response});
+    let Ok(mut value) = definition.evaluate_function(interpret, &inputs, synthetic) else {
+        return uncertain(FAILED);
+    };
+    // The accepted result and the refusal are held to the step's own
+    // contracts, so no other value can take either route.
+    match value.get("state").and_then(Value::as_str) {
+        Some("accepted") => match value.get_mut("result").map(Value::take) {
+            Some(result) if contract.check_output(&result).is_ok() => CallOutcome::Success(result),
+            _ => uncertain(FAILED),
+        },
+        Some("refused") => match value
+            .get("code")
+            .and_then(Value::as_str)
+            .and_then(crate::protocol::DeclaredRefusal::new)
+        {
+            Some(refusal)
+                if serde_json::to_value(&refusal)
+                    .is_ok_and(|value| contract.check_refusal(&value).is_ok()) =>
+            {
+                CallOutcome::DeclaredRefusal(refusal)
+            }
+            _ => uncertain(FAILED),
+        },
+        Some("uncertain") => uncertain("external-uncertain"),
+        _ => uncertain(FAILED),
+    }
+}
+
 /// A busy answer that names a usable wait.
 fn busy(code: &str, headers: &reqwest::header::HeaderMap) -> CallOutcome {
     CallOutcome::Retryable {

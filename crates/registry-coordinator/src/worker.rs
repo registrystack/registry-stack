@@ -519,6 +519,22 @@ impl Worker {
                         retry_after: None,
                     },
                 };
+                // A command's provider response becomes its step result only
+                // through the project's pinned interpretation Function.
+                let result = match result {
+                    CallOutcome::Success(response)
+                        if request.operation == crate::protocol::Operation::ExternalCommand =>
+                    {
+                        crate::external_http::interpret_command(
+                            &definition,
+                            call,
+                            &request.input,
+                            response,
+                            false,
+                        )
+                    }
+                    result => result,
+                };
                 let contract = definition
                     .operation_contract(call)
                     .map_err(|_| DispatchError::Unavailable)?;

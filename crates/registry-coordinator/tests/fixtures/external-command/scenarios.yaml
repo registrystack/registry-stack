@@ -1,0 +1,53 @@
+apiVersion: id.registrystack.org/formats/coordinator/scenarios/v1alpha1
+kind: CoordinatorScenarios
+cases:
+- id: billed
+  admittedAt: '2026-10-27T00:00:00Z'
+  input: {applicationId: application-001, amount: 2500}
+  replies:
+    create:
+    - type: response
+      value: {status: 201, body: {billId: bill-001}}
+  expect:
+    path: [create, billed]
+    state: completed
+    outcome: {type: named, value: billed}
+    output: {billId: bill-001}
+- id: account-closed
+  admittedAt: '2026-10-27T00:00:00Z'
+  input: {applicationId: application-001, amount: 2500}
+  replies:
+    create:
+    - type: response
+      value: {status: 422, body: {reason: account-closed}}
+  expect:
+    path: [create, not-billed]
+    state: completed
+    outcome: {type: named, value: not-billed}
+    output: {refusalCode: account-closed}
+- id: unrecognised-answer-holds
+  admittedAt: '2026-10-27T00:00:00Z'
+  input: {applicationId: application-001, amount: 2500}
+  replies:
+    create:
+    - type: response
+      value: {status: 202, body: {}}
+  expect:
+    path: [create]
+    state: uncertain
+- id: lost-acknowledgement-sends-the-same-command
+  admittedAt: '2026-10-27T00:00:00Z'
+  input: {applicationId: application-001, amount: 2500}
+  replies:
+    create:
+    - type: uncertain
+      code: transport-uncertain
+    - type: response
+      value: {status: 200, body: {billId: bill-001}}
+  recovery:
+    create: retry-same
+  expect:
+    path: [create, billed]
+    state: completed
+    outcome: {type: named, value: billed}
+    output: {billId: bill-001}

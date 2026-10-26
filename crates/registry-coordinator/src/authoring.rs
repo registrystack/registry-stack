@@ -133,9 +133,15 @@ struct AuthoredOperation {
     /// An exact BReg Action specialization from one generated contract import.
     #[serde(default)]
     action: Option<ActionReference>,
-    /// An optional typed response specialization for the bounded external GET Operation.
+    /// An optional typed response specialization for the bounded external GET
+    /// or external command Operation.
     #[serde(default)]
     response_schema: Option<Schema>,
+    /// The typed pure Function that interprets an external command's provider
+    /// response into an accepted result, a declared refusal or an uncertain
+    /// outcome. Required on, and accepted only on, `external.command/v1`.
+    #[serde(default)]
+    interpret: Option<LocalId>,
     /// Named bounded completion contracts; the host enforces their observation semantics.
     #[serde(default)]
     completions: BTreeMap<LocalId, AuthoredCompletion>,
@@ -923,6 +929,7 @@ fn compile(project: CoordinatorProject, path: &Path) -> Result<Workflow> {
         .collect::<BTreeMap<_, _>>();
     let mut operations = BTreeMap::new();
     let mut authored_completions = BTreeMap::new();
+    let mut command_interpreters = BTreeMap::new();
     for (id, operation) in project.operations {
         let id = id.into_string();
         let uses = Operation::from_catalog_id(&operation.uses).ok_or_else(|| {
@@ -969,11 +976,31 @@ fn compile(project: CoordinatorProject, path: &Path) -> Result<Workflow> {
             .map(|action| json!({"contract":action.contract.as_str(),"id":action.id.as_str()}));
         let contract = crate::contracts::resolve_operation(uses, action.as_ref(), &imported)
             .map_err(|error| error.at("workflow.yaml", contract_field))?;
-        if operation.response_schema.is_some() && uses != Operation::ExternalGet {
+        if operation.response_schema.is_some()
+            && !matches!(uses, Operation::ExternalGet | Operation::ExternalCommand)
+        {
             return Err(schema_error(
                 format!("/operations/{id}/responseSchema"),
-                "only the bounded external GET profile accepts a response specialization",
+                "only the bounded external GET and external command profiles accept a response specialization",
             ));
+        }
+        match (uses, operation.interpret) {
+            (Operation::ExternalCommand, Some(interpret)) => {
+                command_interpreters.insert(id.clone(), interpret);
+            }
+            (Operation::ExternalCommand, None) => {
+                return Err(schema_error(
+                    format!("/operations/{id}/interpret"),
+                    "external.command/v1 requires interpret: the Function that turns the provider response into an accepted result, a declared refusal or an uncertain outcome",
+                ));
+            }
+            (_, Some(_)) => {
+                return Err(schema_error(
+                    format!("/operations/{id}/interpret"),
+                    "only external.command/v1 accepts an interpretation Function",
+                ));
+            }
+            (_, None) => {}
         }
         let mut completions = BTreeMap::new();
         if uses == Operation::SubmitReviewRequest {
@@ -1000,6 +1027,8 @@ fn compile(project: CoordinatorProject, path: &Path) -> Result<Workflow> {
                 refusal: contract.declared_refusal,
                 completions,
                 revision: String::new(),
+                interpret: None,
+                response: None,
                 action: contract.action,
                 title: operation.title,
                 description: operation.description,
@@ -1039,6 +1068,11 @@ fn compile(project: CoordinatorProject, path: &Path) -> Result<Workflow> {
         .map(|completion| match completion {
             AuthoredCompletion::BoundedPoll { interpret, .. } => interpret.as_str().to_owned(),
         })
+        .chain(
+            command_interpreters
+                .values()
+                .map(|interpret| interpret.as_str().to_owned()),
+        )
         .collect::<BTreeSet<_>>();
     let mut functions = BTreeMap::new();
     let mut downstream = Vec::new();
@@ -1051,6 +1085,28 @@ fn compile(project: CoordinatorProject, path: &Path) -> Result<Workflow> {
         } else {
             downstream.push((id, function));
         }
+    }
+    // A command's interpretation reads the raw bounded response. Its accepted
+    // result then becomes the step output downstream readers see.
+    for (operation_id, interpret) in command_interpreters {
+        let operation = operations
+            .get_mut(&operation_id)
+            .expect("the base alias exists");
+        let field = format!("/operations/{operation_id}/interpret");
+        let function = functions.get(interpret.as_str()).ok_or_else(|| {
+            schema_error(field.clone(), "the interpretation Function is not declared")
+        })?;
+        if function.inputs.len() != 2
+            || function.inputs.get("command") != Some(&operation.input)
+            || function.inputs.get("response") != Some(&operation.output)
+        {
+            return Err(schema_error(field, "the interpretation Function must take command and response with the command's exact input and response schemas"));
+        }
+        let (output, refusal) =
+            command_interpretation(&function.output, &format!("/functions/{interpret}/output"))?;
+        operation.response = Some(std::mem::replace(&mut operation.output, output));
+        operation.refusal = refusal;
+        operation.interpret = Some(interpret.into_string());
     }
     for (operation_id, completions) in authored_completions {
         for (name, completion) in completions {
@@ -1759,6 +1815,80 @@ fn rebase_schema(schema: &mut Value, prefix: &str, field: &str) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// The step output and declared refusal an external command's interpretation
+/// establishes. The Function returns one closed object per state: `accepted`
+/// with a required `result`, and optionally `refused` with a required closed
+/// enum `code` and `uncertain`. The step output is the accepted result, still
+/// bound to the interpretation's own local definitions; the refusal admits only
+/// the declared codes.
+pub(crate) fn command_interpretation(
+    schema: &Value,
+    field: &str,
+) -> Result<(Value, Option<Value>)> {
+    let shape = "a command interpretation declares accepted, and optionally refused and uncertain, as distinct closed objects requiring a constant state, with oneOf";
+    let branches = schema
+        .get("oneOf")
+        .and_then(Value::as_array)
+        .ok_or_else(|| schema_error(field.into(), shape))?;
+    let mut states = BTreeSet::new();
+    let mut accepted = None;
+    let mut codes = None;
+    for (index, branch) in branches.iter().enumerate() {
+        let state = branch
+            .pointer("/properties/state/const")
+            .and_then(Value::as_str)
+            .ok_or_else(|| schema_error(field.into(), shape))?;
+        let required = branch.get("required").and_then(Value::as_array);
+        if !states.insert(state)
+            || branch.get("type") != Some(&json!("object"))
+            || branch.get("additionalProperties") != Some(&json!(false))
+            || !required.is_some_and(|required| required.contains(&json!("state")))
+        {
+            return Err(schema_error(field.into(), shape));
+        }
+        let requires = |member: &str| {
+            required.is_some_and(|required| required.contains(&json!(member)))
+                && branch.pointer(&format!("/properties/{member}")).is_some()
+        };
+        match state {
+            "accepted" if requires("result") => accepted = Some(index),
+            "refused" if requires("code") => {
+                let declared = branch
+                    .pointer("/properties/code/enum")
+                    .and_then(Value::as_array)
+                    .filter(|declared| {
+                        !declared.is_empty()
+                            && declared.iter().all(|code| {
+                                code.as_str()
+                                    .and_then(crate::protocol::DeclaredRefusal::new)
+                                    .is_some()
+                            })
+                    })
+                    .ok_or_else(|| schema_error(field.into(), "refused requires a closed enum code of non-empty strings, each at most 128 characters without control characters"))?;
+                codes = Some(declared.clone());
+            }
+            "uncertain" => {}
+            _ => return Err(schema_error(field.into(), "accepted requires result; refused requires a closed enum code; only accepted, refused and uncertain states exist")),
+        }
+    }
+    let accepted = accepted.ok_or_else(|| {
+        schema_error(
+            field.into(),
+            "a command interpretation must declare an accepted state with a result",
+        )
+    })?;
+    let prefix = "/$defs/interpretation";
+    let output = json!({
+        "$defs": {"interpretation": embed_schema(schema, prefix)?},
+        "$ref": format!("#{prefix}/oneOf/{accepted}/properties/result"),
+    });
+    let refusal = codes.map(|codes| {
+        json!({"type":"object","additionalProperties":false,"required":["refusalCode"],
+            "properties":{"refusalCode":{"type":"string","enum":codes}}})
+    });
+    Ok((output, refusal))
 }
 
 pub(crate) fn terminal_schema(schema: &Value, field: &str) -> Result<Value> {

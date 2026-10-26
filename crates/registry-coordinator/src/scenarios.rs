@@ -132,6 +132,15 @@ enum AuthoredReply {
         /// The code the reply carries, such as transport-uncertain.
         code: LocalId,
     },
+    /// The provider answered an `external.command/v1` call with `value`. The
+    /// operation's pinned interpretation Function turns it into an accepted
+    /// result, a declared refusal or an uncertain outcome, as it would at run
+    /// time.
+    Response {
+        /// The complete `{status, body}` response, which must satisfy the
+        /// operation's declared response schema.
+        value: ForeignValue,
+    },
     /// The product's receipt for the call expired, so the original command
     /// cannot be confirmed; the run stops as uncertain and no later reply is
     /// consumed.
@@ -351,6 +360,9 @@ pub enum Reply {
         #[serde(rename = "receiptExpired")]
         receipt_expired: bool,
     },
+    Response {
+        response: Value,
+    },
 }
 
 /// What a wait-for step receives: the event it waits for, or its timeout.
@@ -565,6 +577,9 @@ impl CoordinatorScenarios {
                                     AuthoredReply::ReceiptExpired {} => Reply::ReceiptExpired {
                                         receipt_expired: true,
                                     },
+                                    AuthoredReply::Response { value } => Reply::Response {
+                                        response: value.into_value(),
+                                    },
                                 })
                                 .collect(),
                         )
@@ -735,7 +750,7 @@ fn execute(definition: &Definition, scenario: &Scenario) -> Result<ScenarioRepor
                             "scenario.reply",
                             format!("/replies/{step}/{index}"),
                             format!("step {step} calls {operation}, which cannot return a package-declared business refusal"),
-                            "Use declared-refusal only for invoke-breg-action; use refused for an operational or authority refusal.",
+                            "Use declared-refusal only for an operation that declares business refusals; use refused for an operational or authority refusal.",
                         ));
                     }
                     if !declared_refusal_valid(definition, call, declared_refusal)? {
@@ -746,6 +761,27 @@ fn execute(definition: &Definition, scenario: &Scenario) -> Result<ScenarioRepor
                             "Write a non-empty package-declared refusal code of at most 128 characters without control characters.",
                         ));
                     }
+                }
+                Reply::Response { response } => {
+                    if call.operation != crate::protocol::Operation::ExternalCommand {
+                        return Err(error(
+                            "scenario.reply",
+                            format!("/replies/{step}/{index}"),
+                            format!("step {step} calls {operation}, which takes no provider response reply"),
+                            "Use response only for external.command/v1; use success for this operation's output.",
+                        ));
+                    }
+                    definition.operation_contract(call)?
+                        .check_response(response)
+                        .map_err(|violation| {
+                            contract_error(
+                                "scenario.reply-output",
+                                format!("/replies/{step}/{index}/value{}", violation.path),
+                                &violation,
+                                &format!("in a response reply to step {step}, as its declared response schema requires; the synthetic response does not match"),
+                                "Correct the synthetic response so it satisfies the operation's responseSchema.",
+                            )
+                        })?;
                 }
                 _ => {}
             }
@@ -1102,6 +1138,23 @@ fn execute(definition: &Definition, scenario: &Scenario) -> Result<ScenarioRepor
                         return Err(replayed());
                     }
                     *report.call_attempts.entry(step.clone()).or_default() += 1;
+                    // A provider response reaches the run only through the
+                    // operation's pinned interpretation, as at run time.
+                    let interpreted;
+                    let reply = match reply {
+                        Reply::Response { response } => {
+                            interpreted =
+                                interpreted_reply(crate::external_http::interpret_command(
+                                    definition,
+                                    call,
+                                    &command.input,
+                                    response.clone(),
+                                    true,
+                                ));
+                            &interpreted
+                        }
+                        reply => reply,
+                    };
                     match reply {
                         Reply::Success { success: value } => {
                             completion = Some((next.clone(), value.clone()));
@@ -1181,6 +1234,7 @@ fn execute(definition: &Definition, scenario: &Scenario) -> Result<ScenarioRepor
                             }
                             .into();
                         }
+                        Reply::Response { .. } => return Err(replayed()),
                     }
                 }
                 if let Some((target, value)) = completion {
@@ -1203,6 +1257,23 @@ fn execute(definition: &Definition, scenario: &Scenario) -> Result<ScenarioRepor
         ));
     }
     Ok(report)
+}
+
+/// The synthetic reply an interpreted provider response stands for.
+fn interpreted_reply(outcome: crate::protocol::CallOutcome) -> Reply {
+    use crate::protocol::CallOutcome;
+    match outcome {
+        CallOutcome::Success(success) => Reply::Success { success },
+        CallOutcome::DeclaredRefusal(refusal) => Reply::DeclaredRefusal {
+            declared_refusal: refusal.refusal_code().to_owned(),
+        },
+        CallOutcome::Retryable { code, .. } => Reply::Retryable { retryable: code },
+        CallOutcome::Refused { code } => Reply::Refused { refused: code },
+        CallOutcome::Uncertain { code } => Reply::Uncertain { uncertain: code },
+        CallOutcome::ReceiptExpired => Reply::ReceiptExpired {
+            receipt_expired: true,
+        },
+    }
 }
 
 /// The action that names the wait-for steps a case may state waits for.

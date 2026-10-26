@@ -24,6 +24,9 @@ pub struct OperationContract {
     input_validator: JSONSchema,
     output_validator: JSONSchema,
     refusal_validator: Option<JSONSchema>,
+    /// The complete provider response an `external.command/v1` interpretation
+    /// Function reads, before it becomes an accepted result or a refusal.
+    response_validator: Option<JSONSchema>,
 }
 
 /// Where a value leaves a contract. The path is an RFC 6901 pointer into the
@@ -153,8 +156,30 @@ impl OperationContract {
             input_validator,
             output_validator,
             refusal_validator,
+            response_validator: None,
         })
     }
+
+    /// Adds the bounded provider response schema an interpreted command reads.
+    pub(crate) fn with_response(mut self, response: Option<&Value>) -> crate::Result<Self> {
+        self.response_validator = response
+            .map(crate::definition::compile_schema)
+            .transpose()?;
+        Ok(self)
+    }
+
+    /// Checks a provider response before an interpretation Function reads it.
+    /// An operation without a declared response accepts none.
+    pub fn check_response(&self, value: &Value) -> Result<(), Violation> {
+        match &self.response_validator {
+            Some(validator) => first_violation(validator, value),
+            None => Err(Violation {
+                path: String::new(),
+                expected: "an Operation declaring an interpreted provider response".into(),
+            }),
+        }
+    }
+
     /// Checks a value the operation's adapter would decode.
     pub fn check_input(&self, value: &Value) -> Result<(), Violation> {
         first_violation(&self.input_validator, value)

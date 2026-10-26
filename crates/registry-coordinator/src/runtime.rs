@@ -889,6 +889,23 @@ impl RuntimeConfig {
                         call.connection,
                     )));
                 }
+                if call.operation == crate::protocol::Operation::ExternalCommand
+                    && self
+                        .connections
+                        .get(&call.connection)
+                        .and_then(ConnectionConfig::external_http)
+                        .is_some_and(|binding| binding.command_path.is_none())
+                {
+                    return Err(CoordinatorError::new(
+                        "workflow-binding",
+                        "external.command/v1 requires the connection's commandPath; without it the connection is read-only",
+                    )
+                    .at(
+                        "runtime.yaml",
+                        pointer(&format!("connections.{}.commandPath", call.connection)),
+                    )
+                    .suggest("Configure the one exact relative path the provider accepts commands on as commandPath in runtime.yaml."));
+                }
             }
         }
         Ok(())
