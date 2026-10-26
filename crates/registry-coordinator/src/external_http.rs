@@ -263,8 +263,12 @@ impl ExternalHttpConnection {
     /// request id as `Idempotency-Key` so the provider can deduplicate a
     /// repeated attempt. Nothing is retried inside the attempt. Once the
     /// request may have reached the provider, a lost, ambiguous or unusable
-    /// answer is uncertain, never a provider failure. The response is returned
-    /// for the operation's pinned interpretation Function.
+    /// answer is uncertain, never a provider failure. A 429 is trusted to mean
+    /// the command was not processed and is retried. A 503 before the final
+    /// attempt is retried too, but stays uncertain until a later attempt
+    /// settles it, since it may follow an effect. A `Retry-After` either
+    /// answer carries that the command cannot use is ignored. The response is
+    /// returned for the operation's pinned interpretation Function.
     pub async fn command(
         &self,
         input: &Value,
@@ -332,9 +336,20 @@ impl ExternalHttpConnection {
         }
         // Only an explicit busy answer is retried; any other server failure
         // may follow an effect, so the run holds for same-command recovery.
+        // A 503 may follow an effect too, so its retry keeps it unknown.
         match status.as_u16() {
-            429 => return busy("external-rate-limited", response.headers()),
-            503 if !final_attempt => return busy("external-unavailable", response.headers()),
+            429 => {
+                return CallOutcome::Retryable {
+                    code: "external-rate-limited".into(),
+                    retry_after: command_retry_after(response.headers()),
+                }
+            }
+            503 if !final_attempt => {
+                return CallOutcome::UncertainRetryable {
+                    code: "external-unavailable".into(),
+                    retry_after: command_retry_after(response.headers()),
+                }
+            }
             500..=599 => return uncertain("external-uncertain"),
             _ => {}
         }
@@ -522,6 +537,18 @@ fn busy(code: &str, headers: &reqwest::header::HeaderMap) -> CallOutcome {
             }
             _ => return refused("external-unusable-retry-after"),
         },
+    }
+}
+
+/// The wait a command's busy answer names. The status alone is the busy
+/// answer, so a hint the command cannot use is ignored and the retry follows
+/// the ordinary backoff schedule.
+fn command_retry_after(headers: &reqwest::header::HeaderMap) -> Option<Duration> {
+    match RetryAfter::from_headers(headers) {
+        RetryAfter::Seconds(seconds) if seconds <= MAXIMUM_RETRY_AFTER_SECONDS => {
+            Some(Duration::from_secs(seconds))
+        }
+        _ => None,
     }
 }
 

@@ -107,6 +107,12 @@ fn call_result(
             detail: Detail::failure(safe_code(&code, "remote-retryable"), false),
         },
         CallOutcome::Retryable { code, .. } => failed(safe_code(&code, "remote-retryable"), true),
+        // The retry is automatic, and the attempt stays uncertain so that an
+        // expiry before a later attempt settles it holds the run.
+        CallOutcome::UncertainRetryable { code, retry_after } => Sent {
+            outcome: SendOutcome::Transient { retry_after },
+            detail: Detail::failure(safe_code(&code, "remote-uncertain"), true),
+        },
         CallOutcome::Refused { code } => failed(safe_code(&code, "remote-refused"), uncertain),
         CallOutcome::DeclaredRefusal(refusal) if !uncertain => {
             let Some(step) = on_declared_refusal else {
@@ -853,6 +859,39 @@ mod tests {
             call_result(rate_limited(hint), "next", None, true).outcome,
             SendOutcome::MaybeSent
         );
+    }
+
+    #[test]
+    fn a_busy_answer_that_may_follow_an_effect_retries_with_the_effect_unknown() {
+        let unavailable = |code: &str, retry_after| CallOutcome::UncertainRetryable {
+            code: code.into(),
+            retry_after,
+        };
+        let hint = Some(Duration::from_secs(30));
+        // The retry is scheduled like a definite one, and the attempt stays
+        // uncertain, so an expiry before a later attempt settles it holds the
+        // run instead of ending it.
+        for prior_uncertainty in [false, true] {
+            let sent = call_result(
+                unavailable("external-unavailable", hint),
+                "next",
+                None,
+                prior_uncertainty,
+            );
+            assert_eq!(sent.outcome, SendOutcome::Transient { retry_after: hint });
+            assert_eq!(sent.detail.failure_code, Some("external-unavailable"));
+            assert!(sent.detail.uncertain);
+            assert_eq!(sent.detail.next, None);
+            assert_eq!(sent.detail.output, None);
+        }
+        let sent = call_result(
+            unavailable("Bearer synthetic-secret-canary", None),
+            "next",
+            None,
+            false,
+        );
+        assert_eq!(sent.outcome, SendOutcome::Transient { retry_after: None });
+        assert_eq!(sent.detail.failure_code, Some("remote-uncertain"));
     }
 
     #[test]

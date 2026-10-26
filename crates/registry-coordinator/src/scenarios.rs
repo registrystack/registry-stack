@@ -1269,7 +1269,9 @@ fn interpreted_reply(outcome: crate::protocol::CallOutcome) -> Reply {
         },
         CallOutcome::Retryable { code, .. } => Reply::Retryable { retryable: code },
         CallOutcome::Refused { code } => Reply::Refused { refused: code },
-        CallOutcome::Uncertain { code } => Reply::Uncertain { uncertain: code },
+        CallOutcome::Uncertain { code } | CallOutcome::UncertainRetryable { code, .. } => {
+            Reply::Uncertain { uncertain: code }
+        }
         CallOutcome::ReceiptExpired => Reply::ReceiptExpired {
             receipt_expired: true,
         },

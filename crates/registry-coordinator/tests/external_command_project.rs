@@ -176,6 +176,7 @@ fn interpreted(response: Value) -> String {
         CallOutcome::DeclaredRefusal(refusal) => format!("refusal {}", refusal.refusal_code()),
         CallOutcome::Uncertain { code } => format!("uncertain {code}"),
         CallOutcome::Retryable { code, .. } => format!("retryable {code}"),
+        CallOutcome::UncertainRetryable { code, .. } => format!("uncertain-retryable {code}"),
         CallOutcome::Refused { code } => format!("refused {code}"),
         CallOutcome::ReceiptExpired => "receipt-expired".into(),
     }

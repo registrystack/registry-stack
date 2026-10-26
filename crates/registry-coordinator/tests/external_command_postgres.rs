@@ -280,6 +280,120 @@ async fn an_unrecognised_answer_holds_the_run_for_same_command_recovery() {
     assert_eq!(inspection["recovery"]["retryAllowed"], true);
 }
 
+#[tokio::test]
+async fn a_busy_503_the_deadline_ends_holds_the_effect_as_unknown() {
+    // (status, run state, uncertain): a 429 is a definite "not processed",
+    // while a 503 may follow an effect, so only the 503 holds.
+    for (status, state, uncertain) in [(503, "attention", true), (429, "expired", false)] {
+        let h = Harness::new().await;
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/bills"))
+            .respond_with(ResponseTemplate::new(status).insert_header("retry-after", "120"))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let adapters = h.adapter(&server.uri(), false);
+        let run = h.start().await;
+        // The retry the provider asks for would land after the run deadline.
+        h.sql("UPDATE {schema}.runs SET deadline_at=clock_timestamp()+interval '30 seconds'")
+            .await;
+        h.drain(&worker(&h.store, &adapters)).await;
+
+        let inspection = h.read(run).await;
+        assert_eq!(inspection["run"]["state"], state, "{status}");
+        assert_eq!(inspection["run"]["uncertain"], uncertain, "{status}");
+        let code = if status == 503 {
+            "external-unavailable"
+        } else {
+            "external-rate-limited"
+        };
+        assert_eq!(inspection["run"]["failureCode"], code, "{status}");
+        let effects: Vec<&Value> = inspection["effects"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|effect| &effect["state"])
+            .collect();
+        let expected = if uncertain { vec!["unknown"] } else { vec![] };
+        assert_eq!(effects, expected, "{status}");
+        server.verify().await;
+    }
+}
+
+#[tokio::test]
+async fn a_deadline_that_passes_before_a_busy_503_is_retried_holds_the_effect() {
+    let h = Harness::new().await;
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/bills"))
+        .respond_with(ResponseTemplate::new(503))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let adapters = h.adapter(&server.uri(), false);
+    let run = h.start().await;
+    let worker = worker(&h.store, &adapters);
+    h.drain(&worker).await;
+    assert_eq!(h.read(run).await["run"]["state"], "running");
+
+    // The deadline passes while the automatic retry is still pending.
+    h.sql("UPDATE {schema}.runs SET deadline_at=clock_timestamp()-interval '1 second'; UPDATE {schema}.jobs SET next_attempt_at=clock_timestamp() WHERE state='pending'")
+        .await;
+    h.drain(&worker).await;
+    let inspection = h.read(run).await;
+    assert_eq!(inspection["run"]["state"], "attention");
+    assert_eq!(inspection["run"]["uncertain"], true);
+    assert_eq!(inspection["run"]["failureCode"], "deadline-reached");
+    assert_eq!(inspection["effects"][0]["state"], "unknown");
+    server.verify().await;
+}
+
+#[tokio::test]
+async fn a_busy_503_then_an_accepted_command_clears_the_unknown_effect() {
+    let h = Harness::new().await;
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/bills"))
+        .respond_with(ResponseTemplate::new(503).insert_header("retry-after", "60"))
+        .up_to_n_times(1)
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/bills"))
+        .respond_with(ResponseTemplate::new(201).set_body_json(json!({"billId":"bill-001"})))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let adapters = h.adapter(&server.uri(), false);
+    let run = h.start().await;
+    let worker = worker(&h.store, &adapters);
+    h.drain(&worker).await;
+
+    // The automatic retry is scheduled, and until it settles the command
+    // the effect of the first attempt is reported as unknown.
+    let retrying = h.read(run).await;
+    assert_eq!(retrying["run"]["state"], "running");
+    assert_eq!(retrying["run"]["uncertain"], true);
+    assert_eq!(retrying["run"]["failureCode"], "external-unavailable");
+    assert_eq!(retrying["effects"][0]["state"], "unknown");
+
+    h.sql("UPDATE {schema}.jobs SET next_attempt_at=clock_timestamp() WHERE state='pending'")
+        .await;
+    h.drain(&worker).await;
+    let finished = h.read(run).await;
+    assert_eq!(finished["run"]["state"], "finished");
+    assert_eq!(finished["run"]["outcome"], "billed");
+    assert_eq!(finished["run"]["uncertain"], false);
+    assert_eq!(finished["run"]["output"], json!({"billId":"bill-001"}));
+    assert_eq!(finished["effects"][0]["state"], "accepted");
+    let keys = h.keys();
+    assert_eq!(keys.len(), 2);
+    assert_eq!(keys[0], keys[1], "the retry sends the same request id");
+    server.verify().await;
+}
+
 /// Reads one complete request, returning its head and body.
 async fn read_request(socket: &mut tokio::net::TcpStream) -> (String, Vec<u8>) {
     let mut buffer = Vec::new();

@@ -104,6 +104,7 @@ fn describe(outcome: &CallOutcome) -> String {
     match outcome {
         CallOutcome::Success(_) => "success".into(),
         CallOutcome::Retryable { code, .. } => format!("retryable {code}"),
+        CallOutcome::UncertainRetryable { code, .. } => format!("uncertain-retryable {code}"),
         CallOutcome::Refused { code } => format!("refused {code}"),
         CallOutcome::DeclaredRefusal(_) => "declared-refusal".into(),
         CallOutcome::Uncertain { code } => format!("uncertain {code}"),
