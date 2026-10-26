@@ -7,12 +7,12 @@ mod status_support;
 
 use std::time::Duration;
 
-use chrono::{DateTime, TimeDelta, Utc};
+use chrono::{DateTime, DurationRound, TimeDelta, Utc};
 use proptest::prelude::*;
 use registry_evidence::status::{
     transition, CredentialMembers, EntryStatus, MappingRegistration, MappingVersion, Observation,
-    ObservationOutcome, Provenance, Refusal, StatusEntry, StatusError, StatusReference, Transition,
-    TransitionCause, TransitionOutcome, TransitionRequest,
+    ObservationOutcome, Provenance, Refusal, SourceTime, StatusEntry, StatusError, StatusReference,
+    Transition, TransitionCause, TransitionOutcome, TransitionRequest,
 };
 use serde_json::Value;
 use status_support::{
@@ -68,12 +68,27 @@ fn provenance(cause: TransitionCause, mapping: u32, source_revision: i64) -> Pro
     }
 }
 
+/// A request whose hook or reconciliation input the source produced now.
 fn request(entry: &StatusEntry, to: EntryStatus, provenance: Provenance) -> TransitionRequest {
+    let source_time = match provenance.cause() {
+        TransitionCause::Operator => None,
+        TransitionCause::Hook | TransitionCause::Reconciliation => Some(SourceTime::new(now())),
+    };
+    request_at(entry, to, provenance, source_time)
+}
+
+fn request_at(
+    entry: &StatusEntry,
+    to: EntryStatus,
+    provenance: Provenance,
+    source_time: Option<SourceTime>,
+) -> TransitionRequest {
     TransitionRequest {
         entry: entry.clone(),
         to,
         reason: reason("test-category"),
         provenance,
+        source_time,
     }
 }
 
@@ -514,6 +529,123 @@ async fn invalid_stays_terminal_even_against_a_direct_update() {
         .unwrap_err();
     assert_eq!(error.code().map(|code| code.code()), Some("23514"));
     assert_eq!(status_of(&ledger, &entry).await, EntryStatus::Invalid);
+}
+
+#[tokio::test]
+async fn an_input_older_than_the_entry_source_read_less_the_skew_changes_nothing() {
+    let ledger = ledger().await;
+    register(&ledger, 1).await;
+    let hour = (now() - TimeDelta::hours(3))
+        .duration_trunc(TimeDelta::hours(1))
+        .unwrap();
+    let source_read = hour + TimeDelta::minutes(40);
+    let entry = allocate_for(
+        &ledger,
+        &subject("person-6006"),
+        http_read(source_read),
+        CredentialMembers::Unbound { count: 1 },
+    )
+    .await[0]
+        .entry()
+        .clone();
+    let stored: DateTime<Utc> = inspector()
+        .await
+        .query_one(
+            &format!(
+                "SELECT source_read_hour FROM \"{}\".allocations WHERE list_id = $1 AND idx = $2",
+                ledger.schema
+            ),
+            &[
+                &entry.list_id().as_str(),
+                &i32::try_from(entry.idx()).unwrap(),
+            ],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(stored, hour);
+
+    let before_skew = Some(SourceTime::new(hour - TimeDelta::minutes(11)));
+    let stale = apply(
+        &ledger,
+        &request_at(&entry, EntryStatus::Invalid, hook(1, 5), before_skew),
+    )
+    .await
+    .unwrap();
+    assert_eq!(stale, TransitionOutcome::StaleSource);
+    let stale = apply(
+        &ledger,
+        &request_at(
+            &entry,
+            EntryStatus::Invalid,
+            reconciliation(1, None),
+            before_skew,
+        ),
+    )
+    .await
+    .unwrap();
+    assert_eq!(stale, TransitionOutcome::StaleSource);
+    assert_eq!(status_of(&ledger, &entry).await, EntryStatus::Valid);
+    assert_eq!(
+        allocation_row(&ledger, &entry).await["last_applied_source_revision"],
+        Value::Null
+    );
+    assert!(transition_rows(&ledger).await.is_empty());
+
+    // Older than the exact read, but not than its hour: the stored hour is
+    // all the ledger compares with.
+    let within_hour = Some(SourceTime::new(hour + TimeDelta::minutes(20)));
+    let applied = apply(
+        &ledger,
+        &request_at(&entry, EntryStatus::Suspended, hook(1, 5), within_hour),
+    )
+    .await
+    .unwrap();
+    assert!(
+        matches!(applied, TransitionOutcome::Applied { .. }),
+        "{applied:?}"
+    );
+    // Exactly the clock-skew allowance before the hour is not stale.
+    let at_skew = Some(SourceTime::new(hour - TimeDelta::minutes(10)));
+    let applied = apply(
+        &ledger,
+        &request_at(
+            &entry,
+            EntryStatus::Invalid,
+            reconciliation(1, None),
+            at_skew,
+        ),
+    )
+    .await
+    .unwrap();
+    assert!(
+        matches!(applied, TransitionOutcome::Applied { .. }),
+        "{applied:?}"
+    );
+    assert_eq!(transition_rows(&ledger).await.len(), 2);
+}
+
+#[tokio::test]
+async fn only_a_hook_or_reconciliation_request_names_a_source_time() {
+    let ledger = ledger().await;
+    register(&ledger, 1).await;
+    let entry = allocate(&ledger, "person-6007", 1).await[0].entry().clone();
+    let source_time = Some(SourceTime::new(now()));
+    for invalid in [
+        request_at(&entry, EntryStatus::Suspended, operator(), source_time),
+        request_at(&entry, EntryStatus::Suspended, hook(1, 2), None),
+        request_at(
+            &entry,
+            EntryStatus::Suspended,
+            reconciliation(1, Some(2)),
+            None,
+        ),
+    ] {
+        let error = apply(&ledger, &invalid).await.unwrap_err();
+        assert!(matches!(error, StatusError::InvalidInput(_)), "{error:?}");
+    }
+    assert_eq!(status_of(&ledger, &entry).await, EntryStatus::Valid);
+    assert!(transition_rows(&ledger).await.is_empty());
 }
 
 #[tokio::test]

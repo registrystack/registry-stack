@@ -268,6 +268,12 @@ impl IssuanceTransaction<'_> {
                 "a credential must expire after it is issued",
             ));
         }
+        let source_read_hour = fields
+            .source_read
+            .read_hour()
+            .ok_or(StatusError::InvalidInput(
+                "the source read instant cannot be rounded to the hour",
+            ))?;
         let count = members.len();
         if count == 0 {
             return Err(StatusError::InvalidInput(
@@ -299,6 +305,7 @@ impl IssuanceTransaction<'_> {
             lock_keys,
             issued_at: fields.issued_at,
             not_after: fields.not_after,
+            source_read_hour,
             holder_digests,
         })
     }
@@ -333,6 +340,8 @@ struct AllocationRows {
     lock_keys: Vec<i32>,
     issued_at: DateTime<Utc>,
     not_after: DateTime<Utc>,
+    /// The source read, rounded down to the hour.
+    source_read_hour: DateTime<Utc>,
     holder_digests: Vec<Option<HolderKeyDigest>>,
 }
 
@@ -390,6 +399,7 @@ async fn allocate_rows(
                         &status,
                         &None::<i64>,
                         &None::<i32>,
+                        &rows.source_read_hour,
                     ],
                 )
                 .await

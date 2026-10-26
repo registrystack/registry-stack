@@ -1,14 +1,22 @@
-//! Whether a new allocation inherits an observed status.
+//! Whether a new allocation inherits an observed status, and whether a later
+//! input is older than what the allocation's evaluation already read.
 //!
 //! A hook processed between Evidence's source read and the allocation commit
-//! finds no allocation, so intake keeps the latest observation per pseudonym.
-//! A new allocation inherits that status only when it is not VALID and was
-//! captured after the evaluation's source read less the clock-skew allowance.
+//! finds no allocation, so intake keeps the latest observation per
+//! requirement and pseudonym. A new allocation inherits that status only
+//! when it is not VALID and was captured after the evaluation's source read
+//! less the clock-skew allowance.
+//!
+//! An allocation stores its source read rounded down to the hour, which keeps
+//! an exact extract `publishedAt` out of the ledger. A hook or reconciliation
+//! input whose source time is earlier than that hour less the clock-skew
+//! allowance is stale for the entry. Rounding down errs toward applying,
+//! never discarding, newer input.
 
 use std::fmt;
 use std::time::Duration;
 
-use chrono::{DateTime, TimeDelta, Utc};
+use chrono::{DateTime, TimeDelta, Timelike, Utc};
 
 use super::transition::EntryStatus;
 
@@ -40,6 +48,31 @@ impl SourceRead {
             Self::Http { request_time } => *request_time,
         }
     }
+
+    /// The source read instant rounded down to the hour, as an allocation
+    /// stores it.
+    #[must_use]
+    pub fn read_hour(&self) -> Option<DateTime<Utc>> {
+        self.instant()
+            .with_minute(0)
+            .and_then(|instant| instant.with_second(0))
+            .and_then(|instant| instant.with_nanosecond(0))
+    }
+}
+
+/// Whether an input with `source_time` predates an entry's source read: it is
+/// earlier than the stored read hour less the clock-skew allowance. A skew
+/// too large to subtract makes no input stale.
+#[must_use]
+pub(crate) fn predates_source_read(
+    source_time: DateTime<Utc>,
+    read_hour: DateTime<Utc>,
+    clock_skew: Duration,
+) -> bool {
+    TimeDelta::from_std(clock_skew)
+        .ok()
+        .and_then(|skew| read_hour.checked_sub_signed(skew))
+        .is_some_and(|threshold| source_time < threshold)
 }
 
 // `publishedAt` is extract metadata and never reaches logs or diagnostics.
@@ -90,7 +123,7 @@ mod tests {
 
     use chrono::{DateTime, TimeDelta, TimeZone, Utc};
 
-    use super::{inherited_status, ObservedStatus, SourceRead};
+    use super::{inherited_status, predates_source_read, ObservedStatus, SourceRead};
     use crate::status::{EntryStatus, DEFAULT_CLOCK_SKEW};
 
     fn at(seconds: i64) -> DateTime<Utc> {
@@ -267,5 +300,49 @@ mod tests {
         assert!(!rendered.contains(&at(12_345).to_string()), "{rendered}");
         assert!(!rendered.contains("2027"), "{rendered}");
         assert!(!rendered.contains("1800012345"), "{rendered}");
+    }
+
+    #[test]
+    fn an_allocation_stores_its_source_read_rounded_down_to_the_hour() {
+        let read = SourceRead::Extract {
+            published_at: at(1_049) + TimeDelta::milliseconds(250),
+            evaluation_instant: at(5_000),
+        };
+        assert_eq!(read.read_hour(), Some(at(0)));
+        let read = SourceRead::Http {
+            request_time: at(3_599),
+        };
+        assert_eq!(read.read_hour(), Some(at(0)));
+        let read = SourceRead::Http {
+            request_time: at(3_600),
+        };
+        assert_eq!(read.read_hour(), Some(at(3_600)));
+        let read = SourceRead::Http {
+            request_time: at(-1),
+        };
+        assert_eq!(read.read_hour(), Some(at(-3_600)));
+    }
+
+    #[test]
+    fn an_input_earlier_than_the_read_hour_less_skew_predates_the_read() {
+        let read_hour = at(0);
+        assert!(predates_source_read(
+            at(-SKEW_SECONDS) - TimeDelta::milliseconds(1),
+            read_hour,
+            DEFAULT_CLOCK_SKEW
+        ));
+        for source_time in [at(-SKEW_SECONDS), at(-1), at(0), at(1_800)] {
+            assert!(!predates_source_read(
+                source_time,
+                read_hour,
+                DEFAULT_CLOCK_SKEW
+            ));
+        }
+        // A skew too large to subtract makes no input stale.
+        assert!(!predates_source_read(
+            DateTime::<Utc>::MIN_UTC,
+            read_hour,
+            Duration::MAX
+        ));
     }
 }

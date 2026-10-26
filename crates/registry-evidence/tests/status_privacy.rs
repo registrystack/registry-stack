@@ -17,8 +17,8 @@ use chrono::{DateTime, TimeDelta, TimeZone, Utc};
 use registry_evidence::status::{
     check_observation_retention, validate_key_separation, AllocationFields, CredentialMembers,
     EntryStatus, HolderKeyThumbprint, KeyRing, KeyVersion, LedgerConfig, ListPolicy, Observation,
-    Provenance, ReasonCategory, SchemaName, StatusError, StatusKey, StatusLedger, StatusListId,
-    StatusSubject, TransitionRequest, DEFAULT_CLOCK_SKEW,
+    Provenance, ReasonCategory, SchemaName, SourceTime, StatusError, StatusKey, StatusLedger,
+    StatusListId, StatusSubject, TransitionRequest, DEFAULT_CLOCK_SKEW,
 };
 use serde_json::{Map, Value};
 use status_support::{
@@ -200,6 +200,7 @@ async fn no_canary_reaches_any_ledger_table() {
                 package_revision: text("sha256:5e1f"),
                 source: text("urn:example:registry"),
             },
+            source_time: Some(SourceTime::new(run_instant)),
         },
         TransitionRequest {
             entry: unbound[0].entry().clone(),
@@ -209,6 +210,7 @@ async fn no_canary_reaches_any_ledger_table() {
                 principals: vec![text("operator-a"), text("operator-b")],
                 case_reference: text("case-17"),
             },
+            source_time: None,
         },
         TransitionRequest {
             entry: unbound[1].entry().clone(),
@@ -220,6 +222,7 @@ async fn no_canary_reaches_any_ledger_table() {
                 extract_digest: [0x3c; 32],
                 revision: None,
             },
+            source_time: Some(SourceTime::new(published)),
         },
     ];
     for request in &requests {
@@ -264,6 +267,12 @@ async fn no_canary_reaches_any_ledger_table() {
         assert!(tables.contains(table), "the dump has no {table} row");
     }
     let mut published_at_seen = false;
+    let read_hour = Utc.with_ymd_and_hms(2026, 10, 19, 3, 0, 0).unwrap();
+    for row in dump.iter().filter(|row| row.table == "allocations") {
+        let stored: DateTime<Utc> =
+            serde_json::from_value(row.json["source_read_hour"].clone()).unwrap();
+        assert_eq!(stored, read_hour);
+    }
     for row in &dump {
         if row.table == "staleness_clock" {
             let mut json = row.json.clone();
@@ -434,6 +443,7 @@ async fn no_error_or_key_type_formats_a_canary_or_key_bytes() {
     push(None, format!("{person:?}"));
     let read = extract_read(published, now());
     push(None, format!("{read:?}"));
+    push(None, format!("{:?}", SourceTime::new(published)));
     let fields = AllocationFields {
         requirement_id: REQUIREMENT_ID,
         subject: &person,
@@ -477,6 +487,19 @@ async fn no_error_or_key_type_formats_a_canary_or_key_bytes() {
         .unwrap();
     push(None, format!("{references:?}"));
     transaction.commit().await.unwrap();
+    let request = TransitionRequest {
+        entry: references[0].entry().clone(),
+        to: EntryStatus::Invalid,
+        reason: reason("absent-from-extract"),
+        provenance: Provenance::Reconciliation {
+            mapping_version: mapping_version(1),
+            run_id: Uuid::new_v4(),
+            extract_digest: [0x3c; 32],
+            revision: None,
+        },
+        source_time: Some(SourceTime::new(published)),
+    };
+    push(None, format!("{request:?}"));
 
     let mut forms = canary_forms();
     forms.extend(key_byte_forms());

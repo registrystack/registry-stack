@@ -353,10 +353,10 @@ impl Statements {
                 "INSERT INTO {s}.allocations \
                  (list_id, idx, holder_key_digest, holder_digest_key_version, requirement_id, \
                   selector_pseudonym, pseudonym_key_version, issued_at, not_after, status, \
-                  last_applied_source_revision, mapping_version) \
+                  last_applied_source_revision, mapping_version, source_read_hour) \
                  SELECT $1::text, $2::integer, $3::bytea, $4::integer, $5::text, $6::bytea, \
                         $7::integer, $8::timestamptz, $9::timestamptz, $10::smallint, \
-                        $11::bigint, $12::integer \
+                        $11::bigint, $12::integer, $13::timestamptz \
                  WHERE pg_try_advisory_xact_lock((hashtext($1::text)::bigint << 32) | $2::bigint) \
                  ON CONFLICT ON CONSTRAINT allocations_pkey DO NOTHING \
                  RETURNING idx"
@@ -370,8 +370,8 @@ impl Statements {
                 "SELECT status FROM {s}.allocations WHERE list_id = $1 AND idx = $2"
             ),
             lock_entry: format!(
-                "SELECT status, last_applied_source_revision FROM {s}.allocations \
-                 WHERE list_id = $1 AND idx = $2 FOR UPDATE"
+                "SELECT status, last_applied_source_revision, source_read_hour \
+                 FROM {s}.allocations WHERE list_id = $1 AND idx = $2 FOR UPDATE"
             ),
             record_entry_revision: format!(
                 "UPDATE {s}.allocations \
