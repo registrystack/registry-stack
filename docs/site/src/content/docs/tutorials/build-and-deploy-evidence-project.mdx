@@ -163,8 +163,13 @@ rstack evidence check adult-status --target deploy-target/target.yaml --producti
 ```
 
 ```text test-expect
-error[evidence.target.production-assurance-required] deployment-target deploy-target/target.yaml:/assuranceProfile: --production requires production or evidence-grade target assurance
+Evidence project check: domain-refusal
+Project: adult-status
+Target: deploy-target/target.yaml
+error[evidence.target.production-assurance-required] deploy-target/target.yaml:/assuranceProfile
+  --production requires production or evidence-grade target assurance
   next: Correct the selected project or target artifact and rerun check.
+1 error, 0 warnings in 1 file
 ```
 
 A local key file cannot meet a production `assuranceProfile`, so this target declares none and
