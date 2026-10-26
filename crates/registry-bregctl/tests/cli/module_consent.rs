@@ -262,6 +262,22 @@ fn module_add_consent_writes_pins_and_compiles_once_a_profile_requires_consent()
     let report = json_stdout(&added);
     assert_eq!(report["ok"], true);
     assert_eq!(report["command"], "module add consent");
+    let module_finding = report["findings"]
+        .as_array()
+        .expect("findings array")
+        .iter()
+        .find(|finding| finding["code"] == "breg.access.target-unrestricted-rows")
+        .expect("the generated module carries its access finding");
+    assert_eq!(
+        module_finding["source"]["file"],
+        path(&project.path().join("registry.yaml"))
+    );
+    assert!(module_finding["source"]["line"]
+        .as_u64()
+        .is_some_and(|line| line > 0));
+    assert!(module_finding["source"]["column"]
+        .as_u64()
+        .is_some_and(|column| column > 0));
     let explanation = &report["explanation"];
     assert_eq!(explanation["subject"], "person");
     assert_eq!(explanation["module"], "consent-person");

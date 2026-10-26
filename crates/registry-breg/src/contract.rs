@@ -89,7 +89,7 @@ pub struct RegistryProject {
     #[serde(default, deserialize_with = "local_id_map")]
     #[cfg_attr(
         feature = "schema",
-        schemars(schema_with = "local_id_map_schema::<FieldTypeSource>")
+        schemars(schema_with = "local_id_map_schema::<ReusableValueTypeSchema>")
     )]
     pub value_types: BTreeMap<String, FieldTypeSource>,
     #[serde(default)]
@@ -1289,7 +1289,7 @@ pub struct RegistryModule {
     #[serde(default, deserialize_with = "local_id_map")]
     #[cfg_attr(
         feature = "schema",
-        schemars(schema_with = "local_id_map_schema::<FieldTypeSource>")
+        schemars(schema_with = "local_id_map_schema::<ReusableValueTypeSchema>")
     )]
     pub value_types: BTreeMap<String, FieldTypeSource>,
     #[serde(default)]
@@ -5613,6 +5613,40 @@ pub(crate) fn local_id_map_schema<V: schemars::JsonSchema>(
         "propertyNames": names,
         "additionalProperties": generator.subschema_for::<V>(),
     })
+}
+
+#[cfg(feature = "schema")]
+struct ReusableValueTypeSchema;
+
+#[cfg(feature = "schema")]
+impl schemars::JsonSchema for ReusableValueTypeSchema {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("ReusableValueTypeSource")
+    }
+
+    fn schema_id() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed(concat!(module_path!(), "::ReusableValueTypeSchema"))
+    }
+
+    /// Derive reusable scalar branches from the one field-type schema, then
+    /// remove only the use-site-specific compound variants.
+    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        let mut value_type = <FieldTypeSource as schemars::JsonSchema>::json_schema(generator);
+        let branches = value_type
+            .as_object_mut()
+            .and_then(|schema| schema.get_mut("oneOf"))
+            .and_then(Value::as_array_mut)
+            .expect("the field type schema is a tagged union");
+        branches.retain(|branch| {
+            !matches!(
+                branch
+                    .pointer("/properties/type/const")
+                    .and_then(Value::as_str),
+                Some("reference" | "crs84-point" | "structured")
+            )
+        });
+        value_type
+    }
 }
 
 /// The schema of an [`external_id_map`] member: an object whose property

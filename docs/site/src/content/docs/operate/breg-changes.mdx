@@ -25,6 +25,40 @@ the active package as its baseline. Each successor names the digest of the packa
 each database keeps an activation ledger that `bregctl status` reads. Paths given to
 `--runtime-config`, `--package`, `--backup`, and `--output` must be absolute.
 
+## Normalize module value types for the fresh baseline
+
+The current release accepts only scalar aliases in module `valueTypes`. If your authored source
+uses a reusable `reference`, `crs84-point`, or `structured` type, replace each `typeRef` with the
+same type and constraints declared directly on that Record field or Action input. Remove the
+compound alias, advance the edited module's version, and refresh its lock with the current CLI:
+
+```sh
+bregctl project lock ./normalized-registry
+bregctl check ./normalized-registry --production
+```
+
+Review the normalized source to confirm that requiredness, classification, grants, identifiers,
+and constraints are unchanged. Then use the current, matching `bregctl` and `breg` release to
+[check, test, and package](../breg/#check-test-package) the normalized project as an initial
+package.
+
+This release does not upgrade the previous database or package in place. Provision a fresh
+database as [deploy and serve](../breg/#provision-postgresql) describes, rehearse the initial
+activation with `bregctl plan`, and activate the new package with `bregctl apply --initial` by
+following [activate and serve](../breg/#activate-and-serve). Do not use the previous package as a
+successor baseline.
+
+:::caution
+Keep the previous database and audit journal for reconciliation. The fresh activation does not
+carry its Records, pending work, or audit history into the new database.
+:::
+
+{/* Evidence: crates/registry-breg/src/authoring_integrity.rs, add_value_type_diagnostics();
+    crates/registry-breg/src/compiler.rs, validate_local_value_types();
+    crates/registry-breg/src/package.rs, compile_package_sources();
+    crates/registry-bregctl/src/lib.rs, PRE_1_0_SCHEMA_RECOVERY;
+    CONTRIBUTING.md, pre-1.0 compatibility contract. */}
+
 ## What changes safely and what needs review
 
 `bregctl` sorts every change between two packages into a class. A compatible additive change, such

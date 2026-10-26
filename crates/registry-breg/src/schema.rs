@@ -524,6 +524,20 @@ mod tests {
         }
     }
 
+    fn tagged_variant_index(document: &Value, pointer: &str, tag: &str) -> Option<usize> {
+        document
+            .pointer(pointer)
+            .and_then(Value::as_array)
+            .and_then(|branches| {
+                branches.iter().position(|branch| {
+                    branch
+                        .pointer("/properties/type/const")
+                        .and_then(Value::as_str)
+                        == Some(tag)
+                })
+            })
+    }
+
     #[test]
     fn embedded_structured_schemas_carry_the_foreign_marker() {
         for file in [REGISTRY_PROJECT_SCHEMA_FILE, REGISTRY_MODULE_SCHEMA_FILE] {
@@ -532,8 +546,38 @@ mod tests {
                     .expect("the schema is JSON");
             let mut found = Vec::new();
             embedded_schema_members(&document, "", &mut found);
-            assert_eq!(found.len(), 4, "{file}: {found:#?}");
-            for (pointer, member) in found {
+
+            let mut expected =
+                vec!["/$defs/StructuredFieldSourceSchema/properties/schema".to_owned()];
+            for pointer in [
+                "/$defs/ActionInputSource/anyOf/0/oneOf",
+                "/$defs/DerivedFieldSource/oneOf",
+            ] {
+                let index = tagged_variant_index(&document, pointer, "structured")
+                    .unwrap_or_else(|| panic!("{file}{pointer}: structured branch is missing"));
+                expected.push(format!("{pointer}/{index}/properties/schema"));
+            }
+            expected.sort();
+
+            let mut actual = found
+                .iter()
+                .map(|(pointer, _)| pointer.clone())
+                .collect::<Vec<_>>();
+            actual.sort();
+            assert_eq!(
+                actual, expected,
+                "{file}: embedded schemas belong exactly to direct fields, Action inputs, and derived fields"
+            );
+            assert_eq!(
+                tagged_variant_index(
+                    &document,
+                    "/$defs/ReusableValueTypeSource/oneOf",
+                    "structured"
+                ),
+                None,
+                "{file}: reusable value types remain scalar-only"
+            );
+            for (pointer, member) in &found {
                 assert_eq!(
                     member.get("x-registry-foreign"),
                     Some(&Value::String("json-schema-2020-12".to_owned())),

@@ -29,6 +29,74 @@ pub(crate) struct ProjectedManifestArtifacts {
     pub dcat: Vec<u8>,
 }
 
+/// Explain reference relationships that the portable projection deliberately
+/// omits even though every referenced member is visible in this publication.
+pub(crate) fn cross_dataset_reference_findings(
+    projection: &CompiledManifestProjection,
+    entities: &BTreeMap<String, CompiledEntity>,
+) -> Vec<Diagnostic> {
+    let publication = ManifestPublicationContext::of(projection);
+    let visible_datasets = visible_dataset_ids(projection, publication);
+    let visible_entity_ids = projection
+        .datasets
+        .values()
+        .filter(|dataset| visible_datasets.contains(dataset.source.id.as_str()))
+        .map(|dataset| {
+            (
+                dataset.source.id.as_str(),
+                visible_entities(dataset, entities)
+                    .into_iter()
+                    .map(|entity| entity.id.as_str())
+                    .collect::<BTreeSet<_>>(),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    let mut findings = Vec::new();
+
+    for dataset in projection
+        .datasets
+        .values()
+        .filter(|dataset| visible_datasets.contains(dataset.source.id.as_str()))
+    {
+        let visible_source_entities = &visible_entity_ids[dataset.source.id.as_str()];
+        for entity in entities
+            .values()
+            .filter(|entity| visible_source_entities.contains(entity.id.as_str()))
+        {
+            let readable_fields =
+                &entity.access_profiles[&dataset.effective_access_profile].readable_fields;
+            for field in entity.fields.values().filter(|field| {
+                readable_fields.contains(&field.id)
+                    && field.classification <= dataset.effective_classification_ceiling
+            }) {
+                let FieldTypeSource::Reference { target, .. } = &field.field_type else {
+                    continue;
+                };
+                let Some(target_dataset) = projection.entity_datasets.get(target.as_str()) else {
+                    continue;
+                };
+                if target_dataset == &dataset.source.id
+                    || !visible_datasets.contains(target_dataset.as_str())
+                    || !visible_entity_ids
+                        .get(target_dataset.as_str())
+                        .is_some_and(|members| members.contains(target.as_str()))
+                {
+                    continue;
+                }
+                findings.push(Diagnostic::finding(
+                    "breg.manifest-projection.cross-dataset-reference-omitted",
+                    format!(
+                        "recordTypes[id={}].fields[id={}]",
+                        entity.id, field.id
+                    ),
+                    "Registry Manifest omits this reference relationship because its target is in a different dataset; keep the runtime reference unchanged, and either place both Record types in the same projected dataset or account for the omitted metadata edge in consumers",
+                ));
+            }
+        }
+    }
+    findings
+}
+
 pub(crate) fn project_manifest_artifacts(
     registry_id: &str,
     projection: &CompiledManifestProjection,

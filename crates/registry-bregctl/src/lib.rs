@@ -8171,7 +8171,7 @@ fn project_lock(project_path: &Path, check_only: bool) -> Result<SuccessReport, 
         revision: Some(compiled.revision().to_owned()),
         registry_revision: None,
         package_digest: None,
-        findings: compiler_findings(&compiled),
+        findings: positioned_compiler_findings(&compiled, &source),
         artifacts,
         explanation: Some(json!({
             "changed": changed,
@@ -8223,7 +8223,7 @@ fn generate_requested(args: &GenerateArgs) -> Result<SuccessReport, FailureRepor
         connection: required(&args.connection, "--connection")?,
     };
     let profile = profile(args.production);
-    let compiled = compile(&args.project, profile, "generate")?;
+    let (compiled, source) = compile_with_source(&args.project, profile, "generate")?;
     let export = registry_breg::evidence_source::export_evidence_source(&compiled, &options)
         .map_err(|diagnostic| {
             source_failure(
@@ -8248,7 +8248,7 @@ fn generate_requested(args: &GenerateArgs) -> Result<SuccessReport, FailureRepor
         revision: Some(compiled.revision().to_owned()),
         registry_revision: None,
         package_digest: None,
-        findings: compiler_findings(&compiled),
+        findings: positioned_compiler_findings(&compiled, &source),
         artifacts: export
             .artifacts
             .iter()
@@ -8267,7 +8267,8 @@ fn generate(
     profile: ProfileArg,
     output: &Path,
 ) -> Result<SuccessReport, FailureReport> {
-    let compiled = compile(project_path, profile, "generate")?;
+    let (compiled, source) = compile_with_source(project_path, profile, "generate")?;
+    let findings = positioned_compiler_findings(&compiled, &source);
     let selected =
         selected_artifacts(compiled.artifacts(), selector).map_err(|diagnostic| FailureReport {
             ok: false,
@@ -8298,7 +8299,7 @@ fn generate(
         revision: Some(compiled.revision().to_owned()),
         registry_revision: None,
         package_digest: None,
-        findings: compiler_findings(&compiled),
+        findings,
         artifacts,
         explanation: None,
         next_steps: Vec::new(),
@@ -8738,6 +8739,24 @@ fn refuse_deployment_identity(
                 })
                 .collect(),
         },
+    })
+}
+
+fn positioned_compiler_findings(
+    compiled: &CompiledRegistry,
+    source: &CapturedProjectSource,
+) -> Vec<registry_platform_yaml::Diagnostic> {
+    let compiler_findings = compiled
+        .findings()
+        .iter()
+        .cloned()
+        .map(|diagnostic| remap_derived_diagnostic_path(diagnostic, source))
+        .collect::<Vec<_>>();
+    check::place_captured_diagnostics(source, compiler_findings.clone()).unwrap_or_else(|| {
+        compiler_findings
+            .into_iter()
+            .map(check::compiler_diagnostic)
+            .collect()
     })
 }
 

@@ -490,6 +490,16 @@ therefore keeps the operational reference valid while omitting that edge from
 the lossy portable projection until Registry Manifest defines cross-dataset
 relationship semantics.
 
+When the source dataset, source Record type, reference field, target dataset,
+and target Record type are all visible in this publication slice, authoring
+commands report `breg.manifest-projection.cross-dataset-reference-omitted` at
+the reference field. The warning does not invalidate the runtime reference.
+Keep the dataset split and account for the missing metadata relationship in
+consumers, or place the Record types in the same projected dataset if that
+fits the intended model. The warning is omitted when any of those members
+is concealed; it does not reveal hidden relationships. `bregctl check
+--deny-warnings` treats it as a failed check.
+
 The business-establishments fixture defines two datasets, one data service that
 serves both, one distribution attached to the registered-businesses dataset,
 and entities with explicit primary-dataset membership. Its local example concept URIs demonstrate semantic metadata

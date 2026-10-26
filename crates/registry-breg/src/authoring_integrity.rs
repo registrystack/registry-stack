@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use registry_platform_yaml::{
     duplicate_display_text_diagnostics, duplicate_display_text_location_diagnostics,
     local_id_collision_diagnostics, lookalike_local_id_pairs, AuthoredDisplayText,
-    AuthoredDisplayTextLocation, AuthoredId, Decoded,
+    AuthoredDisplayTextLocation, AuthoredId, Decoded, Severity,
 };
 
 use crate::compiler::derived_constraint_id;
@@ -183,6 +183,34 @@ fn add_key_collisions(
         code,
         &key_id_entries(values),
     ));
+}
+
+fn add_value_type_diagnostics(
+    document: &registry_platform_yaml::Document,
+    errors: &mut Vec<registry_platform_yaml::Diagnostic>,
+    value_types: &BTreeMap<String, FieldTypeSource>,
+) {
+    for (id, field_type) in value_types {
+        if !matches!(
+            field_type,
+            FieldTypeSource::Reference { .. }
+                | FieldTypeSource::Crs84Point { .. }
+                | FieldTypeSource::Structured { .. }
+        ) {
+            continue;
+        }
+        let pointer = format!(
+            "/valueTypes/{}",
+            registry_platform_yaml::escape_pointer_segment(id)
+        );
+        errors.push(document.diagnostic_at_value(
+            Severity::Error,
+            "breg.value-type.scalar-required",
+            &pointer,
+            "reusable value types must declare scalar constraints",
+            "Declare the reference, crs84-point, or structured type directly on each record field or Action input.",
+        ));
+    }
 }
 
 fn add_cross_group_collisions(
@@ -589,6 +617,7 @@ pub(crate) fn project_diagnostics(
         "breg.value-type.id-collision",
         &map_ids("/valueTypes", &project.value_types),
     );
+    add_value_type_diagnostics(document, &mut errors, &project.value_types);
     if let Some(recipients) = &project.recipients {
         let mut values = indexed_ids(
             "/recipients/organizations",
@@ -1157,6 +1186,7 @@ pub(crate) fn module_diagnostics(
         "breg.value-type.id-collision",
         &map_ids("/valueTypes", &module.value_types),
     );
+    add_value_type_diagnostics(document, &mut errors, &module.value_types);
     extension_integrity(
         document,
         &mut errors,

@@ -1406,7 +1406,7 @@ jobs:
       # of this feature set.
       - name: Base Registry Engine schema-gated tests
         if: matrix.lane == 'contracts'
-        run: cargo test --locked -p registry-breg --features runtime,tooling,schema --lib --test action_evidence_compiler --test proposal_hooks
+        run: cargo test --locked -p registry-breg --features runtime,tooling,schema --lib --test action_evidence_compiler --test proposal_hooks --test value_type_consistency
 
       - name: BReg client contract consistency
         if: matrix.lane == 'contracts'

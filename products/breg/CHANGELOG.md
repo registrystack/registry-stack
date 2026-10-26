@@ -19,6 +19,21 @@
 - Add an event record view to the Rust, Node and Python BReg clients, projecting
   a record, its caller-filtered descriptor and its creation revision into one
   generic document.
+- Warn when Manifest generation omits a cross-dataset reference whose field,
+  endpoints, and datasets are visible in the publication context. `check`,
+  `diff`, and `generate` identify the authored field; the portable format and
+  runtime reference are unchanged.
+- BREAKING: enforce scalar-only `valueTypes` in modules as well as projects,
+  including their authoring schemas. The compiler now applies the same value
+  type identifier and bounds validation to modules and projects. Authoring
+  diagnostics identify the invalid declaration; package verification keeps the
+  generic derivation/build-mismatch refusal. Replace reusable reference,
+  `crs84-point`, or structured definitions with direct declarations on each
+  field or Action input, then refresh module locks, check, test, and package with
+  the current CLI. This release does not upgrade the previous database or
+  package in place: apply the package with `--initial` to a fresh database and
+  retain the previous database and audit journal for reconciliation. Follow
+  [the fresh-baseline procedure](../../docs/site/src/content/docs/operate/breg-changes.mdx#normalize-module-value-types-for-the-fresh-baseline).
 - Support up to 4,096 migration statements consistently in packages and the
   PostgreSQL activation ledger. Production checks warn when a full initial
   schema exceeds that bound; successor packages check their actual migration

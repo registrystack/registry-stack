@@ -1,6 +1,6 @@
 ---
 title: Derive a registry from PublicSchema
-description: Derive a registry of people and households from the PublicSchema reference model, start it, create a person, and derive it again from an edited selection.
+description: Derive and run a registry from PublicSchema, then reconcile local changes into a newly derived candidate.
 status: current
 owner: registry-docs
 source_repos:
@@ -18,14 +18,15 @@ tutorial_test:
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
 If you would rather start your registry from a published data model than type its fields yourself,
-derive one from PublicSchema with Base Registry Engine (BReg). In about 20 minutes you will have a
-registry of people, households, and household memberships running on your machine, with one person
-in it that your operator client can read in full and your reader client can read without the
-sensitive field.
+derive one from PublicSchema with Base Registry Engine (BReg). In about 30 to 45 minutes you will
+have a registry of people, households, and household memberships running on your machine, with one
+person in it that your operator client can read in full and your reader client can read without the
+sensitive field. You will then edit the saved selection, compare the newly derived candidate with
+the running package, and carry a local field and its access policy into the intended successor.
 
 <QuickstartMeta
-  outcome="A registry derived from PublicSchema, running locally, holding one person record."
-  time="About 20 minutes, plus image downloads"
+  outcome="A running registry derived from PublicSchema, plus a checked successor that retains a local customization."
+  time="About 30 to 45 minutes, plus image downloads"
   level="Local evaluation only"
   prerequisites={[
     { label: 'Registry Stack with the BReg component', href: '/tutorials/first-breg/' },
@@ -146,7 +147,8 @@ the model. Keep this notice with the project and with any package built from it.
 
 Keep it with the project and with any package you build from it.
 
-`model/selection.yaml` is the input the project was derived from. You edit it in the last step.
+`model/selection.yaml` is the input the project was derived from. You edit it later when you derive
+a candidate.
 
 Check the project:
 
@@ -162,6 +164,42 @@ The same two warnings follow, each pointing at the line of `registry.yaml` it is
 
 {/* Evidence: crates/registry-bregctl/src/init_from_model/render.rs, readme();
     crates/registry-linkml/src/publicschema.rs, LICENSE_NOTICE. */}
+
+## Add an institution-specific field
+
+The selection records what came from PublicSchema, but the derived project is the source you own.
+Add an optional note to the `person` Record type for a local registration reference:
+
+```diff lang="yaml" title="household-registry/registry.yaml" test-edit
+       - {id: phone-number, type: string, maximumLength: 255, classification: internal}
+       - {id: marital-status, type: vocabulary-code, vocabulary: marital-status, classification: restricted}
++      - {id: registration-note, type: string, maximumLength: 120, classification: internal}
+     constraints:
+```
+
+Give the operator permission to read and write the field. Do not add it to the reader profile,
+because this registry's reporting client does not need the local reference:
+
+```diff lang="yaml" title="household-registry/registry.yaml" test-edit
+-        readableFields: [person-code, given-name, family-name, date-of-birth, sex, preferred-language, phone-number, marital-status]
+-        writableFields: [person-code, given-name, family-name, date-of-birth, sex, preferred-language, phone-number, marital-status]
++        readableFields: [person-code, given-name, family-name, date-of-birth, sex, preferred-language, phone-number, marital-status, registration-note]
++        writableFields: [person-code, given-name, family-name, date-of-birth, sex, preferred-language, phone-number, marital-status, registration-note]
+         filterableFields: [person-code, given-name, family-name, sex, preferred-language, phone-number, marital-status]
+```
+
+Check after an ordinary source edit, before the local runtime packages it:
+
+```sh
+rstack breg check household-registry
+```
+
+The check still passes with the two classification warnings. A missing writable grant would instead
+report that the optional stored field has no writer; correct the field or its intended grant before
+you continue.
+
+{/* Evidence: crates/registry-breg/src/compiler.rs, stored_field_fillability_findings();
+    crates/registry-bregctl/src/check.rs. */}
 
 ## Start the registry
 
@@ -195,7 +233,8 @@ Save the person you will create. The API takes field names in camel case, `perso
     "givenName": "Ama",
     "familyName": "Mensah",
     "dateOfBirth": "1990-04-12",
-    "maritalStatus": "married"
+    "maritalStatus": "married",
+    "registrationNote": "local-ref-17"
   }
 }
 ```
@@ -222,6 +261,7 @@ rstack breg api /v1/records/persons \
     "personCode": "P-0001",
     "phoneNumber": null,
     "preferredLanguage": null,
+    "registrationNote": "local-ref-17",
     "sex": null
   },
   "recordIdentifier": "<uuid>",
@@ -264,14 +304,14 @@ rstack breg api '/v1/records/persons?accessProfile=reader' \
 }
 ```
 
-The same person comes back without `maritalStatus`. The `reader` profile reads only fields that are
-not `restricted`, and the derivation classified that field `restricted` because PublicSchema marks
-it sensitive.
+The same person comes back without `maritalStatus` or `registrationNote`. The derivation left the
+sensitive PublicSchema field out of the reader grant, and your local policy did the same for the
+institution-specific field.
 
 {/* Evidence: crates/registry-bregctl/src/init_from_model/render.rs, READER_PROFILE and readme();
     crates/registry-breg/src/access.rs. */}
 
-## Edit the selection and derive again
+## Edit the saved selection and derive a candidate
 
 Open `household-registry/model/selection.yaml` and remove `marital_status` from `Person`:
 
@@ -288,7 +328,8 @@ Open `household-registry/model/selection.yaml` and remove `marital_status` from 
  - concept: Household
 ```
 
-Derive a second project from the edited file, into a new directory:
+Derive a candidate from the edited file into a fresh directory. Do not derive over the project you
+run: a fresh directory keeps the generated result separate from source you have governed locally.
 
 ```sh
 rstack breg init household-registry-2 --from publicschema --selection household-registry/model/selection.yaml
@@ -302,14 +343,153 @@ warning[breg.access.profile-higher-classification] recordTypes[id=group-membersh
   next: Remove the field from readableFields, or confirm that the profile scopes and purposes admit only callers cleared for this classification.
 ```
 
-Every change to what you derive follows the same cycle: edit `model/selection.yaml`, derive into a
-new directory, and read the new README. To build a selection by answering questions instead, run
-`rstack breg init <directory> --from publicschema` at a terminal;
-[The PublicSchema wizard prompts](../../reference/bregctl-publicschema-wizard/) describes each
-question.
+Check the generated candidate, then compare its compiled result with the package the local runtime
+configuration binds:
+
+```sh
+rstack breg check household-registry-2
+rstack breg diff household-registry-2 \
+  --runtime-config "$(pwd)/household-registry/.breg/dev/runtime.yaml"
+```
+
+```text test-excerpt
+  baseline assurance           runtime-bound
+```
+
+```text test-excerpt
+             changes.person.marital-status
+             changes.person.registration-note
+```
+
+The check passes with the one warning. The diff says `baseline assurance runtime-bound` and reports
+both the intended PublicSchema removal and the unintended loss of `registration-note` and its
+operator grants. Do not seek migration approval for this result: first compare the source and
+restore the local decision.
+
+To build a selection by answering questions instead, run `rstack breg init <directory> --from
+publicschema` at a terminal. [The PublicSchema wizard
+prompts](../../reference/bregctl-publicschema-wizard/) describes each question.
 
 {/* Evidence: crates/registry-bregctl/src/lib.rs, init_from_model::Source::File and init_from_model::Source::Interactive;
     crates/registry-bregctl/src/init_from_model/{selection,resolve,render,wizard}.rs. */}
+
+## Compare the source and reconcile the customization
+
+Compare the authored registry files before treating the generated directory as a successor:
+
+```sh test-exit="1"
+diff -u household-registry/registry.yaml household-registry-2/registry.yaml
+```
+
+`diff` exits `1` when it finds differences and `2` when the comparison itself fails. Read the
+whole comparison. It includes the intended removal of `marital-status`, but it also shows that the
+fresh derivation has no `registration-note` field or operator grants. The selection can reproduce
+model-derived choices; it does not own local fields, classifications, grants, Actions, or other
+policy that you added to the project.
+
+Reconcile those decisions manually. Add the field to the candidate:
+
+```diff lang="yaml" title="household-registry-2/registry.yaml" test-edit
+       - {id: phone-number, type: string, maximumLength: 255, classification: internal}
++      - {id: registration-note, type: string, maximumLength: 120, classification: internal}
+     constraints:
+```
+
+Restore only the operator grants, preserving the decision not to disclose the field to the reader:
+
+```diff lang="yaml" title="household-registry-2/registry.yaml" test-edit
+-        readableFields: [person-code, given-name, family-name, date-of-birth, sex, preferred-language, phone-number]
+-        writableFields: [person-code, given-name, family-name, date-of-birth, sex, preferred-language, phone-number]
++        readableFields: [person-code, given-name, family-name, date-of-birth, sex, preferred-language, phone-number, registration-note]
++        writableFields: [person-code, given-name, family-name, date-of-birth, sex, preferred-language, phone-number, registration-note]
+         filterableFields: [person-code, given-name, family-name, sex, preferred-language, phone-number]
+```
+
+Do not use an automatic merge tool for this step. Generated source and governed local source have
+different owners, so review each difference and copy only the intended model and local decisions
+into the candidate.
+
+Recheck the reconciled project:
+
+```sh
+rstack breg check household-registry-2
+```
+
+The check passes with one warning, for the operator reading the membership's link to a person.
+Inspect the compiled model and access policy as well as the YAML:
+
+```sh
+rstack breg explain model household-registry-2
+rstack breg explain access household-registry-2
+```
+
+```text test-excerpt
+    registration-note: internal, optional
+```
+
+```text test-excerpt
+      readable fields         ["date-of-birth","family-name","given-name","person-code","phone-number","preferred-language","registration-note","sex"]
+      writable fields         ["date-of-birth","family-name","given-name","person-code","phone-number","preferred-language","registration-note","sex"]
+```
+
+```text test-excerpt
+      readable fields         ["date-of-birth","family-name","given-name","person-code","phone-number","preferred-language","sex"]
+      writable fields         none
+```
+
+Confirm that `registration-note` remains `internal`, the operator can read and write it, and the
+reader cannot read it. If any of those checks disagree with the policy you intended, edit the
+candidate and repeat `check` and both explanations before comparing packages.
+
+{/* Evidence: crates/registry-bregctl/src/lib.rs, ExplainSubject::{Model, Access};
+    crates/registry-breg/src/access_preview.rs. */}
+
+## Compare the reconciled candidate again
+
+Repeat the package comparison. `rstack breg diff` compares the compiled candidate with a package, not
+with another source directory. Use the absolute local runtime path so the report verifies the
+runtime configuration and its exact package digest binding:
+
+```sh
+rstack breg diff household-registry-2 \
+  --runtime-config "$(pwd)/household-registry/.breg/dev/runtime.yaml"
+```
+
+```text test-excerpt
+  baseline assurance           runtime-bound
+```
+
+```text test-excerpt
+  finding  diff.history.removed-values-retained  changes.person.marital-status
+```
+
+Read all changes and findings again. The report still says `baseline assurance runtime-bound`, but
+the removal of `registration-note` and its operator grants is gone. This candidate removes
+`marital-status` and its grants while retaining `registration-note` and its operator-only policy.
+
+If you have the active package directory but no runtime file, use `--package <absolute-directory>`
+instead. That path verifies the package's checksums and re-derives its contents, but the report says
+`integrity-only` because no runtime configuration binds that directory and digest.
+
+The three comparisons answer different questions:
+
+- The source comparison exposes generated and local edits that need manual reconciliation.
+- The package diff classifies the effective candidate against the deployed or otherwise verified
+  package.
+- Migration approval is a later decision. `diff` neither approves a destructive or access change
+  nor authorizes activation.
+
+When the package diff matches your intent, continue with [Change an active
+registry](../../operate/breg-changes/). That procedure explains which classifications need a
+reviewed migration, how to test and package the successor with the active package as its baseline,
+and how the migration credential holder reviews and activates it. If the diff contains an
+unexpected removal, disclosure change, or unsupported change, keep the running project unchanged,
+correct the candidate, then run `check`, the explanations, and `diff` again.
+
+{/* Evidence: crates/registry-bregctl/src/lib.rs, DiffArgs and diff();
+    crates/registry-breg/src/tooling.rs, classify_registry_diff();
+    crates/registry-bregctl/tests/diff.rs,
+    a_runtime_bound_baseline_is_verified_without_opening_runtime_dependencies. */}
 
 ## Stop the registry
 
