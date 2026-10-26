@@ -239,6 +239,12 @@ impl PostgresStore {
             .iter()
             .find(|version| !MIGRATIONS.iter().any(|(known, _)| known == *version))
         {
+            tracing::error!(
+                target: LOG_TARGET,
+                operation = "check the applied migrations",
+                version = *unknown,
+                "the store schema carries a migration this build does not know"
+            );
             return Err(PostgresSetupError::SchemaVersion(*unknown));
         }
         for (version, migration) in MIGRATIONS {
