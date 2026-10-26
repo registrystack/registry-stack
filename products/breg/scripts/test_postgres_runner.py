@@ -409,7 +409,7 @@ class PostgresRunnerTests(unittest.TestCase):
             login["if"],
         )
         self.assertEqual(
-            "docker/login-action@dbcb813823bdd20940b903addbd779551569679f",
+            "docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6",
             login["uses"],
         )
         start = steps["Start PostgreSQL 18"]

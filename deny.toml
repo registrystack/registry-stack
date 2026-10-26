@@ -11,21 +11,16 @@ db-path = "~/.cargo/advisory-db"
 db-urls = ["https://github.com/rustsec/advisory-db"]
 # Advisory ignores must include a scoped rationale and a review trigger.
 ignore = [
-    # RUSTSEC-2026-0249: `smartstring` 1.0.1 is unmaintained and has no patched
-    # release. Its safe `From<String>` conversion has reported undefined
-    # behavior (bodil/smartstring#49), also reproduced through Rhai's
-    # `ImmutableString` (rhaiscript/rhai#816). Rhai 1.26.1 pulls it into
-    # Evidence, its authoring tools, and the shared language server exposed
-    # through `evidencectl`, where the affected owned-string conversion is
-    # reachable. Evidence accepts governed, hash-covered scripts only and
-    # bounds adapter strings, arrays, and maps before converting them for Rhai;
-    # these controls limit exposure but do not remove the reported unsoundness.
-    # This ignore records accepted residual risk, not a fix. Reviewed 2026-09-22
-    # after selector-aware extraction added another bounded conversion path.
-    # Review by 2026-10-06, when Rhai replaces `smartstring`, if a maintained
-    # patched release appears, after further changes to Evidence's Rhai string
-    # flow, before accepting untrusted scripts, or if upstream publishes further
-    # security findings.
+    # RUSTSEC-2026-0249: Rhai 1.27.0 still declares smartstring 1.0.1 as an
+    # unconditional dependency. The workspace enables Rhai's compact_str
+    # feature, so its map keys and ImmutableString use CompactString and the
+    # reported unsound owned-String conversion is outside the compiled Rhai
+    # path. registry-platform-script's backend/Unicode regression pins that
+    # feature choice. This ignore covers the declared unused package, not a
+    # new reachable smartstring use. Owner: Registry Stack maintainers.
+    # Reviewed 2026-10-26. Revisit when Rhai or its selected features change,
+    # when upstream makes smartstring optional/removes it, or when another
+    # dependency introduces a runtime smartstring path.
     "RUSTSEC-2026-0249",
     # The following advisories all arrive through the Typst rendering tree
     # (`typst`/`typst-pdf`/`krilla`/`typst-library`), which

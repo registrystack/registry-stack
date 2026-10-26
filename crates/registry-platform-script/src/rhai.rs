@@ -420,6 +420,34 @@ mod tests {
     }
 
     #[test]
+    fn rhai_maps_use_compact_string_keys_and_owned_unicode_round_trips() {
+        let profile = breg_shaped_profile();
+        let engine = build_engine(&profile, None, |_| {});
+        let ast = compile_entrypoint(
+            &profile,
+            "fn entry(value) { let result = #{}; result[value] = value; result }",
+            "entry",
+            &[1],
+        )
+        .unwrap();
+        let owned = String::from("สวัสดี 🌍");
+
+        let result = call_with_fresh_scope(&engine, &ast, "entry", (owned.clone(),))
+            .unwrap()
+            .cast::<rhai::Map>();
+        let (key, value) = result.into_iter().next().unwrap();
+
+        // This names the feature-selected backend deliberately: reverting to
+        // Rhai's smartstring default restores its unsafe owned-string path.
+        assert_eq!(
+            std::any::type_name_of_val(&key),
+            "compact_str::CompactString"
+        );
+        assert_eq!(key.as_str(), owned);
+        assert_eq!(value.cast::<rhai::ImmutableString>().as_str(), owned);
+    }
+
+    #[test]
     fn raw_base_engine_carries_no_standard_packages() {
         let raw = profile_with(|profile| profile.base = RhaiBaseEngine::Raw);
         // A string method from the standard packages: present on Standard,

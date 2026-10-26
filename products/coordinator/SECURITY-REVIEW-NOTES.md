@@ -194,3 +194,29 @@ warning from `insecure_http_startup_diagnostic`.
   private origin is refused at startup. The changelog names the migration:
   declare the key endpoint as `jwksSource.uri`, or serve it from the issuer's
   origin.
+
+## Rhai 1.27 dependency review
+
+The workspace selects Rhai's `compact_str` backend, keeping Coordinator's
+owned strings, `ImmutableString` values, identifiers, and object-map keys off
+`smartstring`'s reported unsound conversion. Rhai still declares
+`smartstring` unconditionally, so the unused package remains in the resolved
+dependency and advisory graph. The workspace exception stays scoped to that
+residual until upstream removes the edge.
+
+Coordinator keeps the 100,000-operation maximum and every authored lower
+limit, along with its existing call-depth, expression-depth, source, string,
+array, map, and result bounds. Rhai 1.27 now charges operations performed by a
+script callback that a native function invokes. Coordinator registers no
+native helper that invokes a script callback, and its maintained Rhai files
+use no callback-based collection method. A separately authored workflow that
+does use one may reach its unchanged declared limit sooner and should pass
+`coordinatorctl test --project <directory>` before promotion.
+
+The shared platform test
+`rhai_maps_use_compact_string_keys_and_owned_unicode_round_trips` guards the
+backend selection. `pure_profile_has_no_clock_sleep_or_io_and_limits_computation`,
+`resource_limits_include_recursion_input_values_and_non_object_commands`, and
+the `authoring_findings` suite retain the Coordinator resource and value-free
+diagnostic boundaries. Existing package and protected CI gates cover the
+change; no new blocking gate is introduced.
