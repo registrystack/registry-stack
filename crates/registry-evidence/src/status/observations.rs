@@ -5,11 +5,14 @@
 //! hook it never saw inherits what the hook observed (concept 5.3 item 4).
 //! Source revisions are per record, so two requirements that share a
 //! selector profile keep separate observations. Recording an observation and
-//! committing an allocation for the same pseudonym serialize on a
-//! transaction-scoped advisory lock: an allocation either commits first, and
-//! is then visible to whoever applies the observation to live allocations,
-//! or reads the observation before it commits. Hook intake therefore records
-//! the observation before it looks up live allocations.
+//! committing an allocation for the same subject serialize on
+//! transaction-scoped advisory locks, one for the subject's pseudonym under
+//! each key in the ring: an allocation either commits first, and is then
+//! visible to whoever applies the observation to live allocations, or reads
+//! the observation before it commits. Hook intake therefore records the
+//! observation before it looks up live allocations. Two processes meet on a
+//! lock only through a pseudonym key both hold, so a pseudonym key rotation
+//! deploys the new key as retained on every process before promoting it.
 //!
 //! The staleness clock holds the last successful source observation time,
 //! the one place an exact extract `publishedAt` may persist.
@@ -29,14 +32,36 @@ use super::pseudonym::{StatusPseudonym, StatusSubject};
 use super::transition::EntryStatus;
 
 /// Advisory lock class that serializes observations and allocation commits
-/// for one pseudonym. The second key is taken from the pseudonym under the
-/// current key; two pseudonyms that share it only wait for each other.
+/// for one subject. The second keys are taken from the subject's pseudonym
+/// under every key in the ring; two subjects that share one only wait for
+/// each other.
 pub(crate) const PSEUDONYM_LOCK_CLASS: i32 = 0x6576_7031;
+
+/// Take the exclusive pseudonym locks ($1 the class, $2 the keys) in the
+/// order given, in one statement.
+pub(crate) const LOCK_PSEUDONYMS: &str = "SELECT pg_advisory_xact_lock($1, key) \
+     FROM unnest($2::integer[]) WITH ORDINALITY AS keys(key, position) ORDER BY position";
+
+/// Take the shared pseudonym locks ($1 the class, $2 the keys) in the order
+/// given, in one statement.
+pub(crate) const SHARE_PSEUDONYMS: &str = "SELECT pg_advisory_xact_lock_shared($1, key) \
+     FROM unnest($2::integer[]) WITH ORDINALITY AS keys(key, position) ORDER BY position";
 
 /// The second advisory lock key for a pseudonym.
 pub(crate) fn pseudonym_lock_key(pseudonym: &StatusPseudonym) -> i32 {
     let bytes = pseudonym.as_bytes();
     i32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])
+}
+
+/// The lock keys for a subject's pseudonyms under every ring key, ascending
+/// and without repeats. Every process takes all of them in this order, so
+/// processes whose rings share a key meet on a common lock and never wait
+/// on each other in opposite orders.
+pub(crate) fn pseudonym_lock_keys(pseudonyms: &[StatusPseudonym]) -> Vec<i32> {
+    let mut keys: Vec<i32> = pseudonyms.iter().map(pseudonym_lock_key).collect();
+    keys.sort_unstable();
+    keys.dedup();
+    keys
 }
 
 /// One observed mapped status for a subject.
@@ -101,6 +126,7 @@ impl StatusLedger {
         validate_requirement_id(requirement_id)?;
         let pseudonym = self.pseudonym_keys.pseudonym(subject)?;
         let lookups = self.pseudonym_keys.lookup_pseudonyms(subject)?;
+        let lock_keys = pseudonym_lock_keys(&lookups);
         let lookups: Vec<&[u8]> = lookups
             .iter()
             .map(|pseudonym| pseudonym.as_bytes().as_slice())
@@ -110,10 +136,7 @@ impl StatusLedger {
         self.require_current_mapping(&transaction, observation.mapping_version)
             .await?;
         transaction
-            .execute(
-                "SELECT pg_advisory_xact_lock($1, $2)",
-                &[&PSEUDONYM_LOCK_CLASS, &pseudonym_lock_key(&pseudonym)],
-            )
+            .execute(LOCK_PSEUDONYMS, &[&PSEUDONYM_LOCK_CLASS, &lock_keys])
             .await
             .map_err(|error| failed(&error))?;
         let latest: Option<i64> = transaction
@@ -219,15 +242,31 @@ impl StatusLedger {
 mod tests {
     use chrono::{TimeZone, Utc};
 
-    use super::{pseudonym_lock_key, SourceObservationTime};
+    use super::{pseudonym_lock_key, pseudonym_lock_keys, SourceObservationTime};
     use crate::status::{KeyVersion, StatusPseudonym};
+
+    fn pseudonym(version: u32, prefix: [u8; 4]) -> StatusPseudonym {
+        let mut digest = [0_u8; 32];
+        digest[..4].copy_from_slice(&prefix);
+        StatusPseudonym::from_parts(KeyVersion::new(version).unwrap(), digest)
+    }
 
     #[test]
     fn the_lock_key_is_the_first_four_pseudonym_bytes() {
-        let mut digest = [0_u8; 32];
-        digest[..4].copy_from_slice(&[0x80, 0x00, 0x00, 0x01]);
-        let pseudonym = StatusPseudonym::from_parts(KeyVersion::new(1).unwrap(), digest);
-        assert_eq!(pseudonym_lock_key(&pseudonym), i32::MIN + 1);
+        assert_eq!(
+            pseudonym_lock_key(&pseudonym(1, [0x80, 0x00, 0x00, 0x01])),
+            i32::MIN + 1
+        );
+    }
+
+    #[test]
+    fn the_lock_keys_of_a_ring_are_ascending_and_distinct() {
+        let keys = pseudonym_lock_keys(&[
+            pseudonym(3, [0x00, 0x00, 0x00, 0x07]),
+            pseudonym(2, [0x80, 0x00, 0x00, 0x01]),
+            pseudonym(1, [0x00, 0x00, 0x00, 0x07]),
+        ]);
+        assert_eq!(keys, vec![i32::MIN + 1, 7]);
     }
 
     #[test]

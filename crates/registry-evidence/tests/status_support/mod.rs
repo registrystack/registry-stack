@@ -34,6 +34,7 @@ pub const REQUIREMENT_ID: &str = "practice-permit";
 pub const OTHER_REQUIREMENT_ID: &str = "disability-benefit";
 pub const PSEUDONYM_KEY_BYTE: u8 = 0x51;
 pub const HOLDER_DIGEST_KEY_BYTE: u8 = 0x52;
+pub const PROMOTED_PSEUDONYM_KEY_BYTE: u8 = 0x53;
 /// The ledger's advisory lock class for a pseudonym. A test holds it from
 /// its own connection to interleave with the ledger deterministically.
 pub const PSEUDONYM_LOCK_CLASS: i32 = 0x6576_7031;
@@ -102,6 +103,21 @@ pub async fn ledger_with(
     }
 }
 
+/// A second ledger over `schema`, as another process sharing the database
+/// with its own pseudonym key ring holds it.
+pub fn ledger_on(schema: &str, pseudonym_keys: PseudonymKeyRing) -> StatusLedger {
+    StatusLedger::new(LedgerConfig {
+        schema: SchemaName::new(schema).expect("test schema name is valid"),
+        public_origin: PUBLIC_ORIGIN.to_owned(),
+        list_policy: ListPolicy::new(Duration::from_secs(30 * 24 * 60 * 60))
+            .expect("policy is valid"),
+        pseudonym_keys,
+        holder_digest_keys: holder_digest_keys(),
+        clock_skew: DEFAULT_CLOCK_SKEW,
+    })
+    .expect("test ledger configuration is valid")
+}
+
 /// A ledger with production list sizes and one key per ring.
 pub async fn ledger() -> TestLedger {
     ledger_with(
@@ -134,6 +150,18 @@ pub fn key(version: u32, byte: u8) -> StatusKey {
 
 pub fn pseudonym_keys() -> PseudonymKeyRing {
     PseudonymKeyRing::new(KeyRing::new(key(1, PSEUDONYM_KEY_BYTE), Vec::new()).unwrap())
+}
+
+/// The pseudonym ring after a rotation promotes a second key and retains
+/// the first.
+pub fn promoted_pseudonym_keys() -> PseudonymKeyRing {
+    PseudonymKeyRing::new(
+        KeyRing::new(
+            key(2, PROMOTED_PSEUDONYM_KEY_BYTE),
+            vec![key(1, PSEUDONYM_KEY_BYTE)],
+        )
+        .unwrap(),
+    )
 }
 
 pub fn holder_digest_keys() -> HolderDigestKeyRing {

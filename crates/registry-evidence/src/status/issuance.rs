@@ -27,7 +27,7 @@ use super::inheritance::{inherited_status, ObservedStatus, SourceRead};
 use super::ledger::{
     version_column, StatusEntry, StatusLedger, StatusListId, StatusReference, STATUS_LIST_BITS,
 };
-use super::observations::{pseudonym_lock_key, PSEUDONYM_LOCK_CLASS};
+use super::observations::{pseudonym_lock_keys, PSEUDONYM_LOCK_CLASS, SHARE_PSEUDONYMS};
 use super::pools::IssuancePool;
 use super::pseudonym::{HolderKeyDigest, HolderKeyThumbprint, StatusSubject};
 use super::transition::EntryStatus;
@@ -118,7 +118,7 @@ struct Inheritance {
     indices: Vec<i32>,
     requirement_id: String,
     lookup_pseudonyms: Vec<[u8; 32]>,
-    lock_key: i32,
+    lock_keys: Vec<i32>,
     source_read: SourceRead,
 }
 
@@ -198,7 +198,7 @@ impl IssuanceTransaction<'_> {
                     indices: allocated.indices,
                     requirement_id: rows.requirement_id,
                     lookup_pseudonyms: rows.lookup_pseudonyms,
-                    lock_key: rows.lock_key,
+                    lock_keys: rows.lock_keys,
                     source_read: fields.source_read,
                 });
                 self.state = State::Open;
@@ -278,13 +278,12 @@ impl IssuanceTransaction<'_> {
             return Err(StatusError::BatchTooLarge { requested: count });
         }
         let pseudonym = self.ledger.pseudonym_keys.pseudonym(fields.subject)?;
-        let lookup_pseudonyms = self
+        let lookups = self
             .ledger
             .pseudonym_keys
-            .lookup_pseudonyms(fields.subject)?
-            .iter()
-            .map(|lookup| *lookup.as_bytes())
-            .collect();
+            .lookup_pseudonyms(fields.subject)?;
+        let lock_keys = pseudonym_lock_keys(&lookups);
+        let lookup_pseudonyms = lookups.iter().map(|lookup| *lookup.as_bytes()).collect();
         let holder_digests = match members {
             CredentialMembers::Unbound { count } => vec![None; count],
             CredentialMembers::HolderBound(holders) => holders
@@ -297,7 +296,7 @@ impl IssuanceTransaction<'_> {
             selector_pseudonym: *pseudonym.as_bytes(),
             pseudonym_key_version: version_column(pseudonym.key_version())?,
             lookup_pseudonyms,
-            lock_key: pseudonym_lock_key(&pseudonym),
+            lock_keys,
             issued_at: fields.issued_at,
             not_after: fields.not_after,
             holder_digests,
@@ -330,7 +329,8 @@ struct AllocationRows {
     /// The subject's pseudonym under every retained key, for reading
     /// observations.
     lookup_pseudonyms: Vec<[u8; 32]>,
-    lock_key: i32,
+    /// The pseudonym lock keys under every ring key, ascending.
+    lock_keys: Vec<i32>,
     issued_at: DateTime<Utc>,
     not_after: DateTime<Utc>,
     holder_digests: Vec<Option<HolderKeyDigest>>,
@@ -411,7 +411,7 @@ async fn allocate_rows(
     })
 }
 
-/// Under the subject's shared pseudonym lock, which an observation being
+/// Under the subject's shared pseudonym locks, which an observation being
 /// recorded holds exclusively, give the batch the status it inherits from
 /// the latest observation for its requirement, then commit. An observation,
 /// inherited or not, also records its revision and mapping version, so a
@@ -425,8 +425,8 @@ async fn inherit_and_commit(
     let failed = |error: tokio_postgres::Error| StatusError::database(&error);
     client
         .execute(
-            "SELECT pg_advisory_xact_lock_shared($1, $2)",
-            &[&PSEUDONYM_LOCK_CLASS, &inheritance.lock_key],
+            SHARE_PSEUDONYMS,
+            &[&PSEUDONYM_LOCK_CLASS, &inheritance.lock_keys],
         )
         .await
         .map_err(failed)?;
