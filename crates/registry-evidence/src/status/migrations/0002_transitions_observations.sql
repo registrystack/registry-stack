@@ -6,7 +6,12 @@
 -- extract `publishedAt`.
 
 -- INVALID is terminal. The ledger already refuses to move an entry out of
--- it; this trigger refuses it for any writer of the table too.
+-- it; this trigger refuses it for any UPDATE of the status column too. It
+-- covers UPDATE OF status only: a DELETE followed by a re-INSERT, a
+-- TRUNCATE, or a table owner disabling the trigger bypasses it. It is
+-- defence in depth against the ledger's own writers, not a barrier against
+-- a hostile one. When the ledger gets its own runtime role, that role is
+-- granted no DELETE or TRUNCATE on allocations.
 CREATE FUNCTION allocations_invalid_is_terminal() RETURNS trigger
 LANGUAGE plpgsql AS $$
 BEGIN
