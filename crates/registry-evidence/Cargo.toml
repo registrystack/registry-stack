@@ -89,6 +89,11 @@ tempfile.workspace = true
 tokio-rustls.workspace = true
 wiremock.workspace = true
 
+[[test]]
+name = "status_ledger"
+path = "tests/status_ledger.rs"
+required-features = ["postgres-test"]
+
 [[bench]]
 name = "audit_bench"
 harness = false
