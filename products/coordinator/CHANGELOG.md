@@ -21,6 +21,13 @@ First release of Registry Coordinator.
 - Named completions share `completion: {step, name}` across Casework results and bounded external
   job observation. Persistent read floors, retry ceilings, and
   observation budgets survive restarts and wake-ups. Blocked or uncertain evidence remains held.
+- `external.command/v1` sends one bounded POST to the exact `commandPath` an operator configures
+  on an `external-http` connection. The command and its request id are persisted before the first
+  send and the id travels as `Idempotency-Key`; a required pure `interpret` Function maps the
+  validated response to an accepted result, a declared refusal, or an uncertain hold. Lost
+  acknowledgements, timeouts, redirects, server errors, and unusable responses hold the run, and
+  `retry-same` resends the same command with the same id. Scenarios reply to it with
+  `type: response`. Providers must deduplicate on the request id.
 - Base Registry Engine (BReg) Action aliases import owner-generated exact contracts for immediate
   Actions, which can route declared no-effect refusals explicitly. The applicant drives a Proposal
   in BReg; a Workflow follows it by product event or record read.
