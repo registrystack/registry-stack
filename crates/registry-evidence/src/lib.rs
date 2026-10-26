@@ -35,6 +35,7 @@ pub mod signing;
 pub mod source;
 pub mod source_evidence;
 pub mod source_sqlite;
+pub mod status;
 pub mod trace;
 pub mod values;
 pub mod verification_policy;
