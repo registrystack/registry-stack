@@ -63,7 +63,6 @@ cp -R "$repository_root/products/breg/acceptance/facility" "$project"
 export CARGO_INCREMENTAL=0
 export CARGO_PROFILE_DEV_DEBUG=0
 export CARGO_PROFILE_TEST_DEBUG=0
-export RUSTC_WRAPPER="${RUSTC_WRAPPER-}"
 
 checkpoint "building the native binaries"
 if [[ "${BREG_SKIP_BUILD:-0}" != "1" ]]; then

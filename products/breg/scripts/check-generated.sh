@@ -27,7 +27,6 @@ temporary_root=$(mktemp -d "$repository_root/.breg-generated.XXXXXX")
 export CARGO_INCREMENTAL=0
 export CARGO_PROFILE_DEV_DEBUG=0
 export CARGO_PROFILE_TEST_DEBUG=0
-export RUSTC_WRAPPER="${RUSTC_WRAPPER-}"
 
 authoring_candidate="$temporary_root/authoring"
 runtime_candidate="$temporary_root/runtime"

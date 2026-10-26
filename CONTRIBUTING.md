@@ -309,6 +309,18 @@ cargo test --locked --workspace
 cargo deny check
 ```
 
+Ordinary build and test scripts honor the compiler wrapper configured in Cargo
+or supplied through `RUSTC_WRAPPER`. Leave the variable unset to use Cargo's
+configuration, or set it explicitly to select a wrapper. An explicit
+`RUSTC_WRAPPER=""` disables that wrapper; isolated proof scripts may do this
+intentionally.
+
+Keep one stable `CARGO_TARGET_DIR` per worktree while iterating, and do not
+share a writable target directory between worktrees. Reusing that directory
+avoids rebuilding unchanged artifacts. A compiler cache can help when outputs
+must be rebuilt, but does not guarantee reuse across worktree paths. Keep
+active build outputs until their consumers finish.
+
 On macOS, the workspace's FIPS build of AWS-LC is a dynamic library in Cargo's
 fingerprinted build output. Product gate scripts prepare the exact directory
 from Cargo's `build-script-executed` message before they execute a built binary,

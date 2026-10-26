@@ -239,7 +239,6 @@ breg=${BREG_BIN:-"$target_directory/debug/breg"}
 export CARGO_INCREMENTAL=0
 export CARGO_PROFILE_DEV_DEBUG=0
 export CARGO_PROFILE_TEST_DEBUG=0
-export RUSTC_WRAPPER="${RUSTC_WRAPPER-}"
 if [[ "${MESSAGING_SHARED_ISSUER_SKIP_BUILD:-0}" != 1 ]]; then
   checkpoint "building Messaging and BReg development binaries"
   registry_cargo_build "$repository_root" --manifest-path "$repository_root/Cargo.toml" \
