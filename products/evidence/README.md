@@ -422,3 +422,30 @@ trust, signing, source credentials, or selector handling require explicit
 security review notes naming the threat, Rust enforcement point, and negative
 test. Report suspected vulnerabilities through the repository process in
 `SECURITY.md`, not a public issue.
+
+### Rhai 1.27 dependency review
+
+The workspace enables Rhai's `compact_str` backend so Evidence's owned-string
+inputs, `ImmutableString` values, identifiers, and map keys do not use
+`smartstring`'s reported unsound conversion. Rhai still declares
+`smartstring` unconditionally, so the unused package remains in the dependency
+and advisory graph; the workspace exception remains until upstream removes
+that edge.
+
+Evidence keeps its 100,000-operation ceiling and every existing string,
+collection, call-depth, expression-depth, source, and output bound. Rhai 1.27
+counts script callbacks invoked by native functions more accurately. Evidence
+registers no native helper that invokes a script callback, and its maintained
+scripts use no callback-based collection method; a separately governed script
+that does use one may exhaust the unchanged operation budget sooner and should
+pass `evidencectl test` before promotion.
+
+The shared platform regression
+`rhai_maps_use_compact_string_keys_and_owned_unicode_round_trips` guards the
+backend choice. Evidence's
+`engine_has_exact_normative_limits_and_disabled_module_syntax`,
+`operation_exhaustion_terminates_a_hostile_script_with_a_value_free_error`,
+`operation_limit_and_fresh_scope_fail_closed`, and
+`all_four_acceptance_script_pairs_run_through_one_runtime` retain the product
+boundary. Existing package and protected CI gates cover the change; no new
+blocking gate is introduced.

@@ -1190,3 +1190,29 @@ profile does not admit) logs no scope line.
 `a_scope_refusal_logs_the_expected_claim_and_scope_and_no_token_contents` and
 `an_actor_kind_refusal_logs_no_scope_advice` in `auth.rs` capture the log and
 pin both.
+
+## Rhai 1.27 dependency review
+
+The workspace selects Rhai's `compact_str` backend, keeping Messaging's owned
+strings, `ImmutableString` values, identifiers, and object-map keys off
+`smartstring`'s reported unsound conversion. Rhai still declares
+`smartstring` unconditionally, so the unused package remains in the resolved
+dependency and advisory graph. The workspace exception stays scoped to that
+residual until upstream removes the edge.
+
+Messaging keeps the 100,000-operation ceiling, send deadline, fresh scope,
+output ceilings, and closed script inputs documented under HTTP provider
+egress. Rhai 1.27 now charges operations performed by a script callback that a
+native function invokes. Messaging registers no native helper that invokes a
+script callback, and its maintained provider scripts use no callback-based
+collection method. A separately governed provider script that does use one may
+reach the unchanged ceiling sooner and should pass package activation and
+example evaluation before promotion.
+
+The shared platform test
+`rhai_maps_use_compact_string_keys_and_owned_unicode_round_trips` guards the
+backend selection.
+`a_runaway_prepare_script_exhausts_its_budget_and_nothing_is_sent` retains the
+Messaging resource and no-send boundary, while the checked-in provider example
+tests retain script compatibility. Existing package and protected CI gates
+cover the change; no new blocking gate is introduced.

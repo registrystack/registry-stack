@@ -336,21 +336,71 @@ async fn the_attempt_deadline_includes_credential_acquisition() {
 
 #[tokio::test]
 async fn streamed_bodies_are_bounded_without_a_content_length_header() {
-    use tokio::{io::AsyncWriteExt, net::TcpListener};
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let address = listener.local_addr().unwrap();
-    let server = tokio::spawn(async move {
-        let (mut socket, _) = listener.accept().await.unwrap();
-        let response = format!(
-            "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n81\r\n{}\r\n0\r\n\r\n",
-            "x".repeat(129)
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::TcpListener,
+    };
+
+    fn body_with_size(size: usize) -> String {
+        let mut body = json!({"items":[{"id":"x".repeat(64)},{"id":""}]});
+        let encoded = serde_json::to_string(&body).unwrap();
+        let padding = size.checked_sub(encoded.len()).unwrap();
+        assert!(
+            padding <= 64,
+            "the padding stays within the response schema"
         );
-        socket.write_all(response.as_bytes()).await.unwrap();
-    });
-    let mut config = config(&format!("http://{address}"));
+        body["items"][1]["id"] = json!("x".repeat(padding));
+        let encoded = serde_json::to_string(&body).unwrap();
+        assert_eq!(encoded.len(), size);
+        encoded
+    }
+
+    async fn chunked_server(bodies: Vec<String>) -> (String, tokio::task::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            for body in bodies {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = [0_u8; 4096];
+                let mut received = 0;
+                loop {
+                    let read = socket.read(&mut request[received..]).await.unwrap();
+                    assert!(read > 0, "the client sends complete request headers");
+                    received += read;
+                    if request[..received].windows(4).any(|end| end == b"\r\n\r\n") {
+                        break;
+                    }
+                    assert!(
+                        received < request.len(),
+                        "the client request headers stay bounded"
+                    );
+                }
+                assert!(request[..received].starts_with(b"GET /offices HTTP/1.1\r\n"));
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n{:x}\r\n{}\r\n0\r\n\r\n",
+                    body.len(),
+                    body
+                );
+                socket.write_all(response.as_bytes()).await.unwrap();
+                socket.shutdown().await.unwrap();
+            }
+        });
+        (format!("http://{address}"), server)
+    }
+
+    let within_limit_body = body_with_size(128);
+    let expected_body: serde_json::Value = serde_json::from_str(&within_limit_body).unwrap();
+    let oversized_body = body_with_size(129);
+    let (base, server) = chunked_server(vec![within_limit_body, oversized_body]).await;
+    let mut config = config(&base);
     config.maximum_response_bytes = 128.try_into().unwrap();
+    let connection = connection(&config);
+    assert!(matches!(
+        connection.get(&json!({"path":"offices"}), false).await,
+        CallOutcome::Success(reply) if reply == json!({"status":200,"body":expected_body})
+    ));
     assert!(
-        matches!(connection(&config).get(&json!({"path":"offices"}), false).await,
+        matches!(connection.get(&json!({"path":"offices"}), false).await,
         CallOutcome::Refused { code } if code == "external-invalid-response")
     );
     server.await.unwrap();

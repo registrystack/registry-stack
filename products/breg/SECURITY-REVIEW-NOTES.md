@@ -4660,3 +4660,27 @@ record, fields, and operation.
   `registry-cli-api` security boundary.
 
 These are maintained test references, not claims of execution in this note.
+
+## Rhai 1.27 dependency review
+
+The workspace selects Rhai's `compact_str` backend, keeping BReg's owned
+strings, `ImmutableString` values, identifiers, and object-map keys off
+`smartstring`'s reported unsound conversion. Rhai still declares
+`smartstring` unconditionally, so the unused package remains in the resolved
+dependency and advisory graph. The workspace exception stays scoped to that
+residual until upstream removes the edge.
+
+BReg keeps its 100,000-operation ceiling and its existing deadline and value
+bounds. Rhai 1.27 now charges operations performed by a script callback that a
+native function invokes. BReg's registered Evidence helper does not invoke a
+script callback, and the maintained Rhai files use no callback-based
+collection method. A separately governed action or hook script that does use
+one may reach the unchanged ceiling sooner and should be compiled and
+evaluated before activation.
+
+The shared platform test
+`rhai_maps_use_compact_string_keys_and_owned_unicode_round_trips` guards the
+backend selection. `native_plan_security` retains the BReg resource,
+deadline, fresh-call recovery, closed-capability, and value-free error checks.
+Existing package and protected CI gates cover the change; no new blocking gate
+is introduced.
