@@ -9,7 +9,7 @@
     "validation": "sanitized reference adapter and local synthetic fixtures"
   },
   "artifacts": [
-    {"path": "adapters/opencrvs-event-search-extract.rhai", "digest": "sha256:b3880914fe87ff4b18c0e4784e3a8cfb77c4960236a70e001541fed8d7f755ae"},
+    {"path": "adapters/opencrvs-event-search-extract.rhai", "digest": "sha256:390941ddbed1f4e63d365e3e23ffb5d5df9834f09a8401a8bb5f7fc3d4d8e4a2"},
     {"path": "adapters/opencrvs-event-search-prepare.rhai", "digest": "sha256:c688b34c515be86f6b34abe62a6cba5126dd650b6cac9a0e4a8a48f13709b58e"},
     {"path": "schemas/opencrvs-event-search-facts.yaml", "digest": "sha256:fc9babb51b2c8425d584202a3e63f69d334de219d7d266cdd2c98ae0fdb16485"},
     {"path": "schemas/opencrvs-event-search-parameters.yaml", "digest": "sha256:f749015332a3234afc5952b36ba000cd631bf95c628b68caf5b3cffefcdc7794"},

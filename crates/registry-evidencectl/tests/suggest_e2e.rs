@@ -515,6 +515,212 @@ fn optional_request_body_may_remain_absent_when_only_query_is_mapped() {
 }
 
 #[test]
+fn mapped_optional_object_requires_its_required_sibling_without_mutation() {
+    let document = request_openapi(
+        "POST",
+        "/records",
+        Vec::new(),
+        Some(json_body(
+            true,
+            serde_json::json!({
+                "type":"object", "additionalProperties":false,
+                "required":["request_id"],
+                "properties":{
+                    "request_id":{"type":"string"},
+                    "criteria":{
+                        "type":"object", "additionalProperties":false,
+                        "required":["reference","required_sibling"],
+                        "properties":{
+                            "reference":{"type":"string"},
+                            "required_sibling":{"type":"string"}
+                        }
+                    }
+                }
+            }),
+        )),
+    );
+    let workspace = tempfile::tempdir().expect("tempdir");
+    let project = scaffold(workspace.path(), &document);
+    assert_mapping_failure_is_atomic(
+        &project,
+        &[
+            "subject.subject-reference-v1.reference=body:/request_id".to_owned(),
+            "subject.subject-reference-v1.reference=body:/criteria/reference".to_owned(),
+        ],
+        "required request input `body:/criteria/required_sibling`",
+        "mapped optional object with an omitted required sibling",
+    );
+}
+
+#[test]
+fn mapped_deep_optional_object_requires_its_required_sibling_without_mutation() {
+    let document = request_openapi(
+        "POST",
+        "/records",
+        Vec::new(),
+        Some(json_body(
+            true,
+            serde_json::json!({
+                "type":"object", "additionalProperties":false,
+                "required":["request_id"],
+                "properties":{
+                    "request_id":{"type":"string"},
+                    "envelope":{
+                        "type":"object", "additionalProperties":false,
+                        "properties":{
+                            "criteria":{
+                                "type":"object", "additionalProperties":false,
+                                "required":["reference","required_sibling"],
+                                "properties":{
+                                    "reference":{"type":"string"},
+                                    "required_sibling":{"type":"string"}
+                                }
+                            }
+                        }
+                    }
+                }
+            }),
+        )),
+    );
+    let workspace = tempfile::tempdir().expect("tempdir");
+    let project = scaffold(workspace.path(), &document);
+    assert_mapping_failure_is_atomic(
+        &project,
+        &[
+            "subject.subject-reference-v1.reference=body:/request_id".to_owned(),
+            "subject.subject-reference-v1.reference=body:/envelope/criteria/reference".to_owned(),
+        ],
+        "required request input `body:/envelope/criteria/required_sibling`",
+        "mapped object below two optional ancestors with an omitted required sibling",
+    );
+}
+
+#[test]
+fn complete_optional_object_materialization_succeeds() {
+    let document = request_openapi(
+        "POST",
+        "/records",
+        Vec::new(),
+        Some(json_body(
+            true,
+            serde_json::json!({
+                "type":"object", "additionalProperties":false,
+                "required":["request_id"],
+                "properties":{
+                    "request_id":{"type":"string"},
+                    "criteria":{
+                        "type":"object", "additionalProperties":false,
+                        "required":["reference","required_sibling"],
+                        "properties":{
+                            "reference":{"type":"string"},
+                            "required_sibling":{"type":"string"}
+                        }
+                    }
+                }
+            }),
+        )),
+    );
+    let workspace = tempfile::tempdir().expect("tempdir");
+    let project = scaffold(workspace.path(), &document);
+    let output = mapped_suggest(
+        &project,
+        &[
+            "subject.subject-reference-v1.reference=body:/request_id".to_owned(),
+            "subject.subject-reference-v1.reference=body:/criteria/reference".to_owned(),
+            "subject.subject-reference-v1.reference=body:/criteria/required_sibling".to_owned(),
+        ],
+    );
+    assert!(output.status.success(), "{}", stderr_of(&output));
+    let prepare = std::fs::read_to_string(project.join("functions/mapped-prepare.rhai"))
+        .expect("generated prepare Function");
+    assert!(prepare.contains(r#""criteria": #{"#), "{prepare}");
+    assert!(prepare.contains(r#""required_sibling":"#), "{prepare}");
+}
+
+#[test]
+fn fully_required_nested_object_with_shared_mapped_leaves_succeeds() {
+    let document = request_openapi(
+        "POST",
+        "/records",
+        Vec::new(),
+        Some(json_body(
+            true,
+            serde_json::json!({
+                "type":"object", "additionalProperties":false,
+                "required":["outer"],
+                "properties":{
+                    "outer":{
+                        "type":"object", "additionalProperties":false,
+                        "required":["inner"],
+                        "properties":{
+                            "inner":{
+                                "type":"object", "additionalProperties":false,
+                                "required":["reference","required_sibling"],
+                                "properties":{
+                                    "reference":{"type":"string"},
+                                    "required_sibling":{"type":"string"}
+                                }
+                            }
+                        }
+                    }
+                }
+            }),
+        )),
+    );
+    let workspace = tempfile::tempdir().expect("tempdir");
+    let project = scaffold(workspace.path(), &document);
+    let output = mapped_suggest(
+        &project,
+        &[
+            "subject.subject-reference-v1.reference=body:/outer/inner/reference".to_owned(),
+            "subject.subject-reference-v1.reference=body:/outer/inner/required_sibling".to_owned(),
+        ],
+    );
+    assert!(output.status.success(), "{}", stderr_of(&output));
+    let prepare = std::fs::read_to_string(project.join("functions/mapped-prepare.rhai"))
+        .expect("generated prepare Function");
+    assert!(prepare.contains(r#""outer": #{"#), "{prepare}");
+    assert!(prepare.contains(r#""inner": #{"#), "{prepare}");
+}
+
+#[test]
+fn wholly_absent_optional_object_stays_omitted() {
+    let document = request_openapi(
+        "POST",
+        "/records",
+        Vec::new(),
+        Some(json_body(
+            true,
+            serde_json::json!({
+                "type":"object", "additionalProperties":false,
+                "required":["request_id"],
+                "properties":{
+                    "request_id":{"type":"string"},
+                    "criteria":{
+                        "type":"object", "additionalProperties":false,
+                        "required":["reference","required_sibling"],
+                        "properties":{
+                            "reference":{"type":"string"},
+                            "required_sibling":{"type":"string"}
+                        }
+                    }
+                }
+            }),
+        )),
+    );
+    let workspace = tempfile::tempdir().expect("tempdir");
+    let project = scaffold(workspace.path(), &document);
+    let output = mapped_suggest(
+        &project,
+        &["subject.subject-reference-v1.reference=body:/request_id".to_owned()],
+    );
+    assert!(output.status.success(), "{}", stderr_of(&output));
+    let prepare = std::fs::read_to_string(project.join("functions/mapped-prepare.rhai"))
+        .expect("generated prepare Function");
+    assert!(!prepare.contains(r#""criteria""#), "{prepare}");
+}
+
+#[test]
 fn request_mapping_runtime_bounds_accept_the_limit_and_refuse_one_past_it() {
     for (count, succeeds) in [(64_usize, true), (65, false)] {
         let parameters = (0..count)

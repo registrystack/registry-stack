@@ -15,13 +15,7 @@
     - role: child
       selectors: [opencrvs-tracking-id-v1]
     acquisition: {type: single, source: opencrvs-event-search}
-    derive:
-      function: derive-registered-parent
-      selectorInputs:
-      - role: child
-        alternatives:
-        - profile: opencrvs-tracking-id-v1
-          fields: [tracking_id]
+    derive: {function: derive-registered-parent}
     outputs:
       registered-parent-present:
         concept: urn:example:concept:opencrvs-recipe-registered-parent:v1

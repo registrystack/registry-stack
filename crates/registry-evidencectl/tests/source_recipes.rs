@@ -4,9 +4,14 @@
     reason = "the integration test copies reviewed recipe assets"
 )]
 
-use serde_json::Value;
+use registry_evidence::{
+    model::LookupResult,
+    rhai_runtime::{RhaiRuntime, RhaiRuntimeError},
+};
+use serde_json::{json, Value};
 use sha2::{Digest as _, Sha256};
 use std::{
+    collections::BTreeMap,
     ffi::OsStr,
     fs,
     path::{Path, PathBuf},
@@ -17,6 +22,169 @@ const RECIPES: [(&str, &str); 2] = [
     ("dhis2-tracker", "dhis2-tracker"),
     ("opencrvs-event-search", "opencrvs-event-search"),
 ];
+
+#[test]
+fn exported_recipe_extractors_refuse_returned_identity_mismatch_before_facts() {
+    assert_extractor_identity_contract(
+        "dhis2-tracker",
+        json!({
+            "program": "Prg00000001",
+            "organisationUnit": "Org00000001",
+            "projection": "trackedEntity,attributes[attribute,value]",
+            "pageSize": "2",
+            "page": "1",
+            "totalPages": "true",
+            "statusAttribute": "Sta00000001"
+        }),
+        json!({
+            "subject": {
+                "profile": "dhis2-tracked-entity-id-v1",
+                "values": {"record_reference": "TeiSynthetic01"}
+            }
+        }),
+        dhis2_response(json!("TeiSynthetic01")),
+        dhis2_response(json!("TeiSyntheticOther")),
+        dhis2_response(json!(1001)),
+        json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["record_reference", "status_code"],
+            "properties": {
+                "record_reference": {"type": "string"},
+                "status_code": {"type": "string"}
+            }
+        }),
+    );
+    assert_extractor_identity_contract(
+        "opencrvs-event-search",
+        json!({
+            "eventType": "birth",
+            "registeredStatus": "REGISTERED",
+            "resultLimit": 2,
+            "resultOffset": 0,
+            "parentReferenceFields": ["mother.personReference", "father.personReference"],
+            "minimumParentReferences": 1,
+            "maximumParentReferences": 2,
+            "parentReferenceNamespace": "urn:gov:example:opencrvs:person",
+            "relationshipSetContract": "urn:gov:example:opencrvs:registered-parent-set:v1",
+            "relationshipSetComplete": true,
+            "absentConfiguredFieldMeansNoRegisteredParent": true
+        }),
+        json!({
+            "child": {
+                "profile": "opencrvs-tracking-id-v1",
+                "values": {"tracking_id": "TrackingSynthetic01"}
+            }
+        }),
+        opencrvs_response(json!("TrackingSynthetic01")),
+        opencrvs_response(json!("TrackingSyntheticOther")),
+        opencrvs_response(json!(1001)),
+        json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+                "record_tracking_id",
+                "parent_references",
+                "reference_namespace",
+                "relationship_set_contract",
+                "relationship_set_complete"
+            ],
+            "properties": {
+                "record_tracking_id": {"type": "string"},
+                "parent_references": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 2,
+                    "uniqueItems": true,
+                    "items": {"type": "string"}
+                },
+                "reference_namespace": {"const": "urn:gov:example:opencrvs:person"},
+                "relationship_set_contract": {"const": "urn:gov:example:opencrvs:registered-parent-set:v1"},
+                "relationship_set_complete": {"const": true}
+            }
+        }),
+    );
+}
+
+fn assert_extractor_identity_contract(
+    recipe: &str,
+    parameters: Value,
+    selectors: Value,
+    matching_response: Value,
+    mismatching_response: Value,
+    wrong_type_response: Value,
+    fact_schema: Value,
+) {
+    let source_id = recipe;
+    let script_path = recipe_root(recipe)
+        .join("adapters")
+        .join(format!("{source_id}-extract.rhai"));
+    let script_source = fs::read_to_string(&script_path).expect("reviewed extraction Function");
+    let runtime = RhaiRuntime::new();
+    let script = runtime
+        .compile_extraction(&script_source)
+        .expect("recipe extraction Function compiles in the real runtime");
+    let schema = jsonschema::JSONSchema::compile(&fact_schema).expect("recipe fact schema");
+    let prior_facts = BTreeMap::new();
+
+    let matched = runtime
+        .extract_with_selectors(
+            &script,
+            &matching_response,
+            &selectors,
+            &parameters,
+            &prior_facts,
+            &schema,
+        )
+        .expect("matching returned identity extracts facts");
+    assert!(matches!(matched, LookupResult::Match(_)));
+
+    for (case, response) in [
+        ("different value", mismatching_response),
+        ("different scalar type", wrong_type_response),
+    ] {
+        match runtime.extract_with_selectors(
+            &script,
+            &response,
+            &selectors,
+            &parameters,
+            &prior_facts,
+            &schema,
+        ) {
+            Err(RhaiRuntimeError::SourceProtocol) => {}
+            Err(other) => panic!(
+                "{} {case} must be a source protocol error, got {other:?}",
+                script_path.display()
+            ),
+            Ok(_) => panic!(
+                "{} {case} must be refused before facts",
+                script_path.display()
+            ),
+        }
+    }
+}
+
+fn dhis2_response(record_reference: Value) -> Value {
+    json!({
+        "pager": {"page": 1, "pageSize": 2, "total": 1, "pageCount": 1},
+        "trackedEntities": [{
+            "trackedEntity": record_reference,
+            "attributes": [{"attribute": "Sta00000001", "value": "ACTIVE"}]
+        }]
+    })
+}
+
+fn opencrvs_response(tracking_id: Value) -> Value {
+    json!({
+        "total": 1,
+        "results": [{
+            "type": "birth",
+            "status": "REGISTERED",
+            "trackingId": tracking_id,
+            "declaration": {"mother.personReference": "PersonSyntheticA"}
+        }]
+    })
+}
 
 #[test]
 fn curated_source_recipes_cover_the_source_import_lifecycle() {
@@ -220,11 +388,11 @@ fn curated_source_recipes_import_check_and_run_the_existing_evaluator() {
     assert_success(&output);
     let report = printed(&output);
     assert!(
-        report.contains("fixtures/active-status.yaml (5 cases)"),
+        report.contains("fixtures/active-status.yaml (6 cases)"),
         "{report}"
     );
     assert!(
-        report.contains("fixtures/registered-parent.yaml (5 cases)"),
+        report.contains("fixtures/registered-parent.yaml (6 cases)"),
         "{report}"
     );
 }

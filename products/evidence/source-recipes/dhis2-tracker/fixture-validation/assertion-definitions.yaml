@@ -15,13 +15,7 @@
     - role: subject
       selectors: [dhis2-tracked-entity-id-v1]
     acquisition: {type: single, source: dhis2-tracker}
-    derive:
-      function: derive-active-status
-      selectorInputs:
-      - role: subject
-        alternatives:
-        - profile: dhis2-tracked-entity-id-v1
-          fields: [record_reference]
+    derive: {function: derive-active-status}
     outputs:
       active:
         concept: urn:example:concept:dhis2-recipe-active-status:v1

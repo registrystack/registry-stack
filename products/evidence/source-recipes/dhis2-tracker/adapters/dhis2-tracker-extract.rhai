@@ -1,7 +1,7 @@
-// Pager consistency and unique-match extraction remain reviewed recipe logic.
-// The returned identity becomes a private fact so assertion derivation can
-// refuse a provider response for a different requested subject.
-fn extract(source_response, context) {
+// Pager consistency, exact returned identity, and unique-match extraction
+// remain reviewed recipe logic. The returned identity also remains a private
+// fact for assertion semantics that need it.
+fn extract(source_response, selectors, context) {
     let parameters = context["parameters"];
     let pager = source_response["pager"];
     let records = source_response["trackedEntities"];
@@ -20,6 +20,12 @@ fn extract(source_response, context) {
 
     let record = records[0];
     if is_missing(record["trackedEntity"]) { throw("source_protocol_error"); }
+    let returned_reference = record["trackedEntity"];
+    let expected_reference = selectors["subject"]["values"]["record_reference"];
+    if type_of(returned_reference) != type_of(expected_reference) ||
+       returned_reference != expected_reference {
+        throw("source_protocol_error");
+    }
     let found_status = false;
     let status_code = ();
     for attribute in record["attributes"] {
@@ -31,7 +37,7 @@ fn extract(source_response, context) {
     }
     if !found_status { throw("source_protocol_error"); }
     #{outcome: "match", facts: #{
-        record_reference: record["trackedEntity"],
+        record_reference: returned_reference,
         status_code: status_code
     }}
 }

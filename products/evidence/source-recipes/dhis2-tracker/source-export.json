@@ -9,7 +9,7 @@
     "validation": "sanitized reference adapter and local synthetic fixtures"
   },
   "artifacts": [
-    {"path": "adapters/dhis2-tracker-extract.rhai", "digest": "sha256:ff60b47a41b2ab44f3ad2f93673055eb379ab28c1e6d63d660b85f93f4a1848a"},
+    {"path": "adapters/dhis2-tracker-extract.rhai", "digest": "sha256:462b5a120e942ffeeb0c911a076f55c548934d682ca384ebb4b1cf3403573d3e"},
     {"path": "adapters/dhis2-tracker-prepare.rhai", "digest": "sha256:f79cd8d6c17c4ad20f68f08f106f4ade0fed38ba5b4fe8b777386889010c9aee"},
     {"path": "schemas/dhis2-tracker-facts.yaml", "digest": "sha256:6d9a3916debbe9f4c721e3285b1a6b5b3cdba37d3cdd6777ec21fae4d7b94d46"},
     {"path": "schemas/dhis2-tracker-parameters.yaml", "digest": "sha256:e41e95f7b91a0f02a7a6fe65e13fdf240565ab66c9cc8d7cd03dc0264cd12a42"},

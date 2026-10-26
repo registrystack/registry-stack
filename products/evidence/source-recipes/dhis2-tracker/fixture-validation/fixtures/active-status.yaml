@@ -7,10 +7,6 @@ common:
     subject:
       profile: dhis2-tracked-entity-id-v1
       values: {record_reference: TeiSynthetic01}
-  derivationSelectorInputs:
-    subject:
-      profile: dhis2-tracked-entity-id-v1
-      values: {record_reference: TeiSynthetic01}
   expectedRequestParts:
     query:
     - {name: program, value: Prg00000001}
@@ -55,7 +51,14 @@ cases:
     trackedEntities:
     - trackedEntity: TeiSyntheticOther
       attributes: [{attribute: Sta00000001, value: ACTIVE}]
-  expected: {lookup: match, error: derivation_input_error, derivationRuns: true, signed: false}
+  expected: {error: source_protocol_error, derivationRuns: false, signed: false}
+- id: returned-identity-type-mismatch
+  response:
+    pager: {page: 1, pageSize: 2, total: 1, pageCount: 1}
+    trackedEntities:
+    - trackedEntity: 1001
+      attributes: [{attribute: Sta00000001, value: ACTIVE}]
+  expected: {error: source_protocol_error, derivationRuns: false, signed: false}
 privacyExpectation:
   evidenceContains: [urn:example:concept:dhis2-recipe-active-status:v1]
   evidenceExcludes: [record_reference, status_code, TeiSynthetic01, TeiSyntheticOther]
