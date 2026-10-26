@@ -212,8 +212,9 @@ impl IssuanceTransaction<'_> {
     }
 
     /// Apply the inherited status to the batch, then commit. Past the
-    /// deadline the transaction is rolled back instead and the credentials
-    /// signed inside it must not be issued.
+    /// deadline this returns [`StatusError::DeadlineExceeded`] and discards
+    /// the connection: the transaction may have committed or rolled back;
+    /// the signed credentials must not be issued either way.
     pub async fn commit(mut self) -> Result<(), StatusError> {
         match self.state {
             State::Ended => return Err(StatusError::TransactionEnded),
