@@ -1,10 +1,10 @@
 //! The observation retention floor.
 //!
 //! An observation must outlive every evaluation that read the source before
-//! it. An evaluation from an extract can commit an allocation as late as the
-//! extract's maximum age after its publication, so the floor is anchored on
-//! that age; a requirement with only HTTP sources commits within the signing
-//! transaction deadline of its request.
+//! it. An evaluation from an extract can read it as late as the extract's
+//! maximum age after its publication and then commit an allocation as late
+//! as the signing transaction deadline after that, so the floor adds both; a
+//! requirement with only HTTP sources has no extract age to add.
 
 use std::time::Duration;
 
@@ -12,23 +12,18 @@ use thiserror::Error;
 
 /// The shortest observation retention a deployment may configure.
 ///
-/// With extract sources: the largest `maximumExtractAgeSeconds` among the
-/// evaluation sources of status-required requirements, plus the clock-skew
-/// allowance. With only HTTP sources: the signing transaction deadline plus
-/// the clock-skew allowance.
+/// The largest `maximumExtractAgeSeconds` among the evaluation sources of
+/// status-required requirements (zero with only HTTP sources), plus the
+/// signing transaction deadline, plus the clock-skew allowance.
 #[must_use]
 pub fn retention_floor(
     largest_maximum_extract_age: Duration,
     signing_deadline: Duration,
     clock_skew: Duration,
-    has_extract_sources: bool,
 ) -> Duration {
-    let anchor = if has_extract_sources {
-        largest_maximum_extract_age
-    } else {
-        signing_deadline
-    };
-    anchor.saturating_add(clock_skew)
+    largest_maximum_extract_age
+        .saturating_add(signing_deadline)
+        .saturating_add(clock_skew)
 }
 
 /// A configured observation retention below its floor.
@@ -66,35 +61,49 @@ mod tests {
     const SIX_HOURS: Duration = Duration::from_secs(6 * 60 * 60);
 
     #[test]
-    fn extract_sources_anchor_the_floor_on_the_largest_maximum_extract_age() {
+    fn the_floor_adds_the_signing_deadline_and_skew_to_the_largest_extract_age() {
         assert_eq!(
             retention_floor(
                 SIX_HOURS,
                 DEFAULT_SIGNING_TRANSACTION_DEADLINE,
                 DEFAULT_CLOCK_SKEW,
-                true
             ),
-            Duration::from_secs(6 * 60 * 60 + 10 * 60)
+            Duration::from_secs(6 * 60 * 60 + 20 + 10 * 60)
         );
     }
 
     #[test]
-    fn http_only_sources_anchor_the_floor_on_the_signing_deadline() {
+    fn http_only_sources_have_no_extract_age_to_add() {
         assert_eq!(
             retention_floor(
-                SIX_HOURS,
+                Duration::ZERO,
                 DEFAULT_SIGNING_TRANSACTION_DEADLINE,
                 DEFAULT_CLOCK_SKEW,
-                false
             ),
             Duration::from_secs(20 + 10 * 60)
         );
     }
 
     #[test]
+    fn an_extract_age_below_the_signing_deadline_still_counts_both() {
+        assert_eq!(
+            retention_floor(
+                Duration::from_secs(5),
+                DEFAULT_SIGNING_TRANSACTION_DEADLINE,
+                DEFAULT_CLOCK_SKEW,
+            ),
+            Duration::from_secs(5 + 20 + 10 * 60)
+        );
+    }
+
+    #[test]
     fn a_floor_that_would_overflow_saturates() {
         assert_eq!(
-            retention_floor(Duration::MAX, Duration::ZERO, Duration::from_secs(1), true),
+            retention_floor(Duration::MAX, Duration::ZERO, Duration::from_secs(1)),
+            Duration::MAX
+        );
+        assert_eq!(
+            retention_floor(Duration::from_secs(1), Duration::MAX, Duration::ZERO),
             Duration::MAX
         );
     }
@@ -105,7 +114,6 @@ mod tests {
             SIX_HOURS,
             DEFAULT_SIGNING_TRANSACTION_DEADLINE,
             DEFAULT_CLOCK_SKEW,
-            true,
         );
         assert_eq!(check_observation_retention(floor, floor), Ok(()));
         assert_eq!(
@@ -116,13 +124,13 @@ mod tests {
         assert_eq!(
             refused,
             Err(RetentionBelowFloor {
-                configured_seconds: 22_199,
-                floor_seconds: 22_200,
+                configured_seconds: 22_219,
+                floor_seconds: 22_220,
             })
         );
         assert_eq!(
             refused.unwrap_err().to_string(),
-            "the observation retention of 22199 s is below its floor of 22200 s"
+            "the observation retention of 22219 s is below its floor of 22220 s"
         );
         assert!(check_observation_retention(floor - Duration::from_millis(1), floor).is_err());
     }
