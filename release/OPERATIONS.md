@@ -177,21 +177,20 @@ printf '%s' "${GHCR_BOOTSTRAP_TOKEN:?set a classic PAT with write:packages}" \
    `release/scripts/cleanup-release-candidates.py`, with its matching test.
    Do not wait for the first real candidate. Keep `<name>` in
    `PUBLIC_PACKAGES` so cleanup can never reach the released image.
-5. If the image has no reviewed advisory baseline, prepare a clean, committed,
-   but unopened release branch and run one explicitly named baseline-bootstrap
-   rehearsal with `advisory_evidence=true` outside the release clock. That input
-   permits only the missing baseline during the initial image-onboarding check,
-   so the read-only canonical Linux job can upload exact review evidence. The
-   ordinary rehearsal job remains strict and is expected to stop at the missing
-   baseline. The workflow has no publication permission, cannot seal or attest
-   a candidate, and does not supply publication bytes. Do not copy another
-   product's baseline or add a provisional bypass.
+5. If the image has no reviewed advisory baseline, prepare a clean, committed
+   branch and run one explicitly named evidence-only baseline bootstrap with
+   `advisory_evidence=true` outside the release clock. That mode requires no
+   release ID or manifest and permits only the missing baseline during the
+   initial image-onboarding check, so the read-only canonical Linux job can
+   upload exact review evidence. It skips the ordinary rehearsal job, has no
+   publication permission, cannot seal or attest a candidate, and does not
+   supply publication bytes. Do not copy another product's baseline or add a
+   provisional bypass.
 6. Wait for the canonical Linux evidence job to succeed and upload its artifact.
-   The bootstrap workflow as a whole is expected to fail at the normal
-   rehearsal's strict baseline check. Download the evidence artifact from that
-   run using the advisory-evidence procedure below; no private image is
-   published by the rehearsal. Use the artifact's exact image evidence and the
-   procedure in "Renew an image advisory fingerprint" to author and review
+   The evidence-only workflow should succeed. Download its artifact using the
+   advisory-evidence procedure below; no private image is published. Use the
+   artifact's exact image evidence and the procedure in "Renew an image advisory
+   fingerprint" to author and review
    `release/security/<name>-advisory-baseline.json`. Merge the reviewed baseline
    change.
 7. Run protected-main CI and the strict read-only release rehearsal. Only after
@@ -358,13 +357,14 @@ A missing-baseline rehearsal does not relax these ownership prerequisites.
 
 Then use one clean, committed baseline-bootstrap branch with the intended
 Coordinator runtime image roster and the existing `release-rehearsal.yml`
-workflow. Supply `unit=stack`, the prepared `version` and `release_id`, an
-explicit `coordinator-baseline-bootstrap-...` request ID, and
-`advisory_evidence=true`. This dispatch has no publication permission. The
-canonical Linux evidence job must succeed; the ordinary strict rehearsal is
-expected to fail while `release/security/coordinator-advisory-baseline.json`
-is missing. Do not substitute a macOS binary, another service's fingerprint,
-or an unreviewed placeholder baseline.
+workflow. Supply `unit=stack`, the intended `version`, an explicit
+`coordinator-baseline-bootstrap-...` request ID, and `advisory_evidence=true`;
+omit `release_id`. This dispatch has no publication permission. The canonical
+Linux evidence job and evidence-only workflow must succeed. The ordinary strict
+rehearsal remains unavailable while
+`release/security/coordinator-advisory-baseline.json` is missing. Do not
+substitute a macOS binary, another service's fingerprint, or an unreviewed
+placeholder baseline.
 
 Review that job's exact source, OCI config and digest, native Syft and Grype
 reports, exported rootfs, and exposure reports for both
@@ -727,22 +727,41 @@ archive and mode check by downloading all native shards and running
 `merge-release-native-platform-shards.py` again with the same source, version,
 purpose, and group inputs.
 
-When an image advisory baseline needs review for the prepared version, add
-`-f advisory_evidence=true` to the rehearsal dispatch. The canonical Linux job
-then builds every image in that version's owned roster from the same local
-payload and pinned image recipes, transfers the layouts only through a pinned
-ephemeral local registry, and uploads the full OCI configs, daemon-backed Syft
-and Grype reports, exact exported root filesystem archives, and one ELF
-exposure report per image, plus one for each operator tool an image carries
-from v0.36.0. The artifact is review input for a deliberate
-baseline or live-pin update. It neither accepts an advisory nor supplies
-publication bytes, and the release candidate still rebuilds and checks its exact
-protected-main images under the normal release policy.
+When an image advisory baseline needs review, dispatch the evidence-only mode
+from a clean, committed branch. It does not require or accept a prepared
+release ID, and it skips the ordinary future-tag rehearsal and unrelated client
+jobs:
 
-Wait for the canonical Linux job to finish successfully and upload the artifact.
-For a missing-baseline bootstrap, the normal rehearsal job fails as expected;
-use the artifact from that run even though the overall run did not succeed.
-Download that exact rehearsal artifact, copy the source revision from GitHub's
+```sh
+version=<version>
+evidence_branch="$(git branch --show-current)"
+evidence_request_id="$(openssl rand -hex 16)"
+gh workflow run release-rehearsal.yml \
+  --repo registrystack/registry-stack \
+  --ref "${evidence_branch}" \
+  -f unit=stack \
+  -f version="${version}" \
+  -f request_id="${evidence_request_id}" \
+  -f advisory_evidence=true
+```
+
+The workflow still validates complete image onboarding, then the canonical
+Linux jobs build every image in that version's owned roster from the exact
+dispatched source, the same local payload, and pinned image recipes. They
+transfer the layouts only through a pinned ephemeral local registry and upload
+the full OCI configs, daemon-backed Syft and Grype reports, exact exported root
+filesystem archives, and one ELF exposure report per image, plus one for each
+operator tool an image carries from v0.36.0. The artifact is review input for a
+deliberate baseline or live-pin update. It neither accepts an advisory nor
+supplies publication bytes, and the release candidate still rebuilds and checks
+its exact protected-main images under the normal release policy. After the
+reviewed baseline change is committed, run the ordinary strict rehearsal with
+its prepared release ID before opening a release PR.
+
+Wait for the evidence-only workflow and canonical Linux job to finish
+successfully and upload the artifact. A missing-baseline bootstrap may succeed
+only in this mode; the separately dispatched ordinary rehearsal remains strict.
+Download that exact evidence artifact, copy the source revision from GitHub's
 record of the run rather than from the artifact, and dry-run the renewal for the
 whole image roster:
 
@@ -833,7 +852,7 @@ the independently reviewed baseline and live-pin changes through the normal
 review, then let the release candidate rebuild and enforce them against its own
 protected-source image bytes.
 
-The rehearsal requires the future tag to remain absent. It validates the
+The ordinary rehearsal requires the future tag to remain absent. It validates the
 prepared plan, current manifest and source model, reproduces the exact archive
 lock on Ubuntu, exercises unpublished-tag archive bootstrap, and checks the
 production-shaped `/dev/` documentation links. It publishes nothing and stays
