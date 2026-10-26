@@ -1013,7 +1013,7 @@ fn validate_required_inputs(
         }
         if body.required || !mapped.is_empty() {
             let mut required = BTreeSet::new();
-            collect_required_body_leaves(&body.schema.0, "", &mut required)?;
+            collect_materialized_body_requirements(&body.schema.0, &mapped, &mut required)?;
             for pointer in required {
                 if !mapped.contains(pointer.as_str()) {
                     bail!(
@@ -1021,6 +1021,38 @@ fn validate_required_inputs(
                     );
                 }
             }
+        }
+    }
+    Ok(())
+}
+
+fn collect_materialized_body_requirements(
+    schema: &serde_json::Value,
+    mapped: &BTreeSet<&str>,
+    out: &mut BTreeSet<String>,
+) -> Result<()> {
+    collect_required_body_leaves(schema, "", out)?;
+    for pointer in mapped {
+        let segments = parse_body_pointer(pointer)?;
+        let mut node = schema;
+        let mut object_pointer = String::new();
+        for segment in segments.iter().take(segments.len().saturating_sub(1)) {
+            require_closed_object(
+                node,
+                if object_pointer.is_empty() {
+                    "(root)"
+                } else {
+                    &object_pointer
+                },
+            )?;
+            node = node["properties"].get(segment.as_str()).ok_or_else(|| {
+                anyhow!("body target `{pointer}` names no declared request property")
+            })?;
+            object_pointer.push('/');
+            object_pointer.push_str(&segment.replace('~', "~0").replace('/', "~1"));
+            let mut object_required = BTreeSet::new();
+            collect_required_body_leaves(node, &object_pointer, &mut object_required)?;
+            out.extend(object_required);
         }
     }
     Ok(())

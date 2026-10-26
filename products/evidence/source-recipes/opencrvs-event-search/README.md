@@ -6,6 +6,13 @@ birth-event search by tracking ID, limits the result to two records so ambiguity
 is observable, validates the returned event type and status, and extracts the
 configured complete parent-reference set plus the returned record identity.
 
+Extraction receives the same minimized authorized selector used for request
+preparation. A unique response becomes a match only when its `trackingId` is the
+same scalar type and exact value as the requested `tracking_id`. Missing,
+wrongly typed, or different returned identity is a source protocol error before
+facts, assertion derivation, or signing. Business derivations do not need to
+repeat this reusable source-identity check.
+
 It assumes the selected OpenCRVS deployment supports:
 
 - `POST /events/search` with the pinned `and` query, exact status and tracking-ID
@@ -26,8 +33,9 @@ The `fixture-validation/` project is the seed used by the maintained integration
 gate. The gate imports the recipe first, then adds the separately reviewed
 synthetic assertion definitions, because a source export must never supply
 assertion meaning. Its cases cover success, no match, ambiguity, an event-type
-protocol mismatch, and a returned tracking-ID mismatch. Run it from the Registry
-Stack source tree or the downloaded catalog with matching installed binaries:
+protocol mismatch, and returned tracking-ID value and scalar-type mismatches.
+Run it from the Registry Stack source tree or the downloaded catalog with
+matching installed binaries:
 
 ```sh
 bash ../run-fixtures.sh

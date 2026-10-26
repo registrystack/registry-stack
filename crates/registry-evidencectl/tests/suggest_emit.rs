@@ -278,6 +278,16 @@ fn generated_prepare_executes_with_scalar_queries_and_an_escaped_json_body() {
             },
             target: RequestTarget::Body("/lookup~1key/value~0text".to_owned()),
         },
+        RequestMapping {
+            selector: SelectorReference {
+                role: "subject".to_owned(),
+                profile: "person-v1".to_owned(),
+                field: "active".to_owned(),
+                scalar_type: SelectorScalarType::Boolean,
+                maximum_bytes: 5,
+            },
+            target: RequestTarget::Body("/lookup~1key/required~0flag".to_owned()),
+        },
     ];
     let artifacts = emit::draft(&inputs).expect("draft");
     let prepare = file_contents(&artifacts, "functions/search-a-prepare.rhai");
@@ -326,18 +336,21 @@ fn generated_prepare_executes_with_scalar_queries_and_an_escaped_json_body() {
     );
     assert_eq!(
         prepared.body,
-        Some(json!({"lookup/key": {"value~text": "a&b=c"}}))
+        Some(json!({"lookup/key": {"required~flag": true, "value~text": "a&b=c"}}))
     );
     let request_schema = json!({
         "type": "object",
         "additionalProperties": false,
-        "required": ["lookup/key"],
+        "required": [],
         "properties": {
             "lookup/key": {
                 "type": "object",
                 "additionalProperties": false,
-                "required": ["value~text"],
-                "properties": {"value~text": {"type": "string"}}
+                "required": ["value~text", "required~flag"],
+                "properties": {
+                    "value~text": {"type": "string"},
+                    "required~flag": {"type": "boolean"}
+                }
             }
         }
     });

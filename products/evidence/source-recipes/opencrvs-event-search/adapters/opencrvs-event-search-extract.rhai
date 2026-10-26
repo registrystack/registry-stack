@@ -1,6 +1,7 @@
 // Extract one exact event and its configured complete parent-reference set.
-// Selector-to-record identity comparison remains in assertion derivation.
-fn extract(source_response, context) {
+// Returned identity is checked against the minimized authorized selector before
+// any private facts are released to assertion derivation.
+fn extract(source_response, selectors, context) {
     let parameters = context["parameters"];
     let total = source_response["total"];
     let results = source_response["results"];
@@ -21,6 +22,12 @@ fn extract(source_response, context) {
        is_missing(result["trackingId"]) {
         throw("source_protocol_error");
     }
+    let returned_tracking_id = result["trackingId"];
+    let expected_tracking_id = selectors["child"]["values"]["tracking_id"];
+    if type_of(returned_tracking_id) != type_of(expected_tracking_id) ||
+       returned_tracking_id != expected_tracking_id {
+        throw("source_protocol_error");
+    }
     let parent_references = [];
     for field in parameters["parentReferenceFields"] {
         if result["declaration"].contains(field) {
@@ -34,7 +41,7 @@ fn extract(source_response, context) {
         throw("source_protocol_error");
     }
     #{outcome: "match", facts: #{
-        record_tracking_id: result["trackingId"],
+        record_tracking_id: returned_tracking_id,
         parent_references: parent_references,
         reference_namespace: parameters["parentReferenceNamespace"],
         relationship_set_contract: parameters["relationshipSetContract"],

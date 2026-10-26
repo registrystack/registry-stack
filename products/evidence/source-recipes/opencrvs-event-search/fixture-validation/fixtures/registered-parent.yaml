@@ -7,10 +7,6 @@ common:
     child:
       profile: opencrvs-tracking-id-v1
       values: {tracking_id: TrackingSynthetic01}
-  derivationSelectorInputs:
-    child:
-      profile: opencrvs-tracking-id-v1
-      values: {tracking_id: TrackingSynthetic01}
   expectedRequestParts:
     query: []
     body:
@@ -62,7 +58,16 @@ cases:
       status: REGISTERED
       trackingId: TrackingSyntheticOther
       declaration: {mother.personReference: PersonSyntheticA}
-  expected: {lookup: match, error: derivation_input_error, derivationRuns: true, signed: false}
+  expected: {error: source_protocol_error, derivationRuns: false, signed: false}
+- id: returned-identity-type-mismatch
+  response:
+    total: 1
+    results:
+    - type: birth
+      status: REGISTERED
+      trackingId: [TrackingSynthetic01]
+      declaration: {mother.personReference: PersonSyntheticA}
+  expected: {error: source_protocol_error, derivationRuns: false, signed: false}
 privacyExpectation:
   evidenceContains: [urn:example:concept:opencrvs-recipe-registered-parent:v1]
   evidenceExcludes: [record_tracking_id, parent_references, TrackingSynthetic01, PersonSyntheticA]
