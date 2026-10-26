@@ -1044,6 +1044,96 @@ async fn a_commit_waits_for_an_observation_being_recorded_and_inherits_it() {
     assert_eq!(row["last_applied_source_revision"], 2);
 }
 
+/// Hold the advisory lock a process holding only the first pseudonym key
+/// takes for `person`, from another session, and return that session and
+/// the lock key.
+async fn hold_retained_key_lock(person: &str, mode: &str) -> (tokio_postgres::Client, i32) {
+    let session = inspector().await;
+    let key =
+        status_support::pseudonym_lock_key(&status_support::pseudonym_keys(), &subject(person));
+    session.batch_execute("BEGIN").await.unwrap();
+    session
+        .execute(
+            &format!("SELECT pg_advisory_xact_lock{mode}($1, $2)"),
+            &[&status_support::PSEUDONYM_LOCK_CLASS, &key],
+        )
+        .await
+        .unwrap();
+    (session, key)
+}
+
+#[tokio::test]
+async fn a_commit_under_a_promoted_key_waits_for_an_observation_under_the_retained_key() {
+    let ledger = ledger().await;
+    register(&ledger, 1).await;
+    let promoted =
+        status_support::ledger_on(&ledger.schema, status_support::promoted_pseudonym_keys());
+    let person = subject("person-8160");
+    let issued_at = now();
+    let fields = registry_evidence::status::AllocationFields {
+        requirement_id: REQUIREMENT_ID,
+        subject: &person,
+        issued_at,
+        not_after: issued_at + TimeDelta::days(30),
+        source_read: http_read(issued_at),
+    };
+    let mut transaction = promoted
+        .begin(&ledger.issuance, Duration::from_secs(20))
+        .await
+        .unwrap();
+    let references = transaction
+        .allocate(&fields, CredentialMembers::Unbound { count: 1 })
+        .await
+        .unwrap();
+
+    // A process not yet holding the promoted key records a withdrawal.
+    let (writer, key) = hold_retained_key_lock("person-8160", "").await;
+    let commit = transaction.commit();
+    tokio::pin!(commit);
+    status_support::until_waiting_on_pseudonym_lock(&inspector().await, key, &mut commit).await;
+    let pseudonym = status_support::pseudonym_keys().pseudonym(&person).unwrap();
+    writer
+        .execute(
+            &format!(
+                "INSERT INTO \"{}\".observations (requirement_id, selector_pseudonym, \
+                 pseudonym_key_version, status, source_revision, captured_at, mapping_version) \
+                 VALUES ($1, $2, 1, 1, 2, $3, 1)",
+                ledger.schema
+            ),
+            &[
+                &REQUIREMENT_ID,
+                &pseudonym.as_bytes().as_slice(),
+                &(issued_at + TimeDelta::seconds(1)),
+            ],
+        )
+        .await
+        .unwrap();
+    writer.batch_execute("COMMIT").await.unwrap();
+    commit.await.unwrap();
+    assert_eq!(
+        allocation_row(&ledger, references[0].entry()).await["status"],
+        1
+    );
+}
+
+#[tokio::test]
+async fn an_observation_under_a_promoted_key_waits_for_a_commit_under_the_retained_key() {
+    let ledger = ledger().await;
+    register(&ledger, 1).await;
+    let promoted =
+        status_support::ledger_on(&ledger.schema, status_support::promoted_pseudonym_keys());
+
+    // A process not yet holding the promoted key is committing an issuance.
+    let (issuer, key) = hold_retained_key_lock("person-8170", "_shared").await;
+    let person = subject("person-8170");
+    let recorded = observation(EntryStatus::Invalid, 2, now());
+    let record = promoted.record_observation(&ledger.reserved, REQUIREMENT_ID, &person, &recorded);
+    tokio::pin!(record);
+    status_support::until_waiting_on_pseudonym_lock(&inspector().await, key, &mut record).await;
+    issuer.batch_execute("COMMIT").await.unwrap();
+    assert_eq!(record.await.unwrap(), ObservationOutcome::Recorded);
+}
+
 #[tokio::test]
 async fn the_staleness_clock_holds_the_last_complete_run_observation() {
     let ledger = ledger().await;
