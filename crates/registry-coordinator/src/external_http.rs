@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Configured, bounded external JSON reads. This capability never sends a mutation.
+//! Configured, bounded external JSON reads and one configured external command.
+//! A read never sends a mutation. A command sends one JSON object by POST to
+//! the operator's configured command path and nowhere else.
 
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
@@ -35,6 +37,10 @@ pub struct ExternalHttpConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "schema", schemars(extend("not" = serde_json::json!({"required":["taskAuthority"]}))))]
     pub authorization: Option<AuthorizationConfig>,
+    /// The one exact relative path that `external.command/v1` may POST to.
+    /// Omission keeps the connection read-only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command_path: Option<ExternalId>,
     /// Local JSON Schema for the complete {status, body} response.
     #[cfg_attr(feature = "schema", schemars(extend("x-registry-foreign" = "json-schema-2020-12")))]
     pub response_schema: ForeignValue,
@@ -114,6 +120,14 @@ impl ExternalHttpConfig {
         {
             refuse("paths", "Declare between one and sixteen exact relative service paths without empty or dot segments, query, fragment or backslashes.");
         }
+        if self.command_path.as_ref().is_some_and(|path| {
+            path.as_str().contains('\\')
+                || base
+                    .as_ref()
+                    .is_ok_and(|base| base.join(path.as_str()).is_err())
+        }) {
+            refuse("commandPath", "Declare one exact relative service path without empty or dot segments, query, fragment or backslashes, or omit commandPath to keep the connection read-only.");
+        }
         if self
             .query_parameters
             .as_ref()
@@ -146,8 +160,9 @@ impl ExternalHttpConfig {
     }
 }
 
-/// Credentials remain attempt-local; no request body, headers or URL can be
-/// supplied by a workflow. The parent durable boundary records successful reads.
+/// Credentials remain attempt-local; no headers, URL or credential can be
+/// supplied by a workflow, which supplies only a command body. The parent
+/// durable boundary records successful reads and freezes each command first.
 pub struct ExternalHttpConnection {
     config: ExternalHttpConfig,
     base: ServiceBaseUrl,
@@ -243,7 +258,140 @@ impl ExternalHttpConnection {
         }
     }
 
+    /// One attempt at the configured command: a single POST of the exact
+    /// command body to the operator's command path, carrying the frozen
+    /// request id as `Idempotency-Key` so the provider can deduplicate a
+    /// repeated attempt. Nothing is retried inside the attempt. Once the
+    /// request may have reached the provider, a lost, ambiguous or unusable
+    /// answer is uncertain, never a provider failure. The response is returned
+    /// for the operation's pinned interpretation Function.
+    pub async fn command(
+        &self,
+        input: &Value,
+        request_id: &str,
+        final_attempt: bool,
+    ) -> CallOutcome {
+        let Some(path) = &self.config.command_path else {
+            return refused("operation-unbound");
+        };
+        if !crate::adapters::valid_key(request_id) {
+            return refused("invalid-command");
+        }
+        let body = match serde_json::to_vec(input) {
+            Ok(body)
+                if input.is_object()
+                    && body.len() as u64 <= crate::operations::MAXIMUM_HTTP_RESPONSE_BYTES =>
+            {
+                body
+            }
+            _ => return refused("external-invalid-command"),
+        };
+        let url = match self.base.join(path.as_str()) {
+            Ok(url) => url,
+            Err(_) => return refused("external-invalid-command"),
+        };
+        let timeout = Duration::from_millis(self.config.attempt_timeout_milliseconds.get());
+        let deadline = tokio::time::Instant::now() + timeout;
+        // Nothing has been sent while the destination and credential are prepared.
+        let request = match tokio::time::timeout_at(
+            deadline,
+            self.request(url, reqwest::Method::POST, timeout),
+        )
+        .await
+        {
+            Ok(Ok(request)) => request,
+            Ok(Err(outcome)) => return outcome,
+            Err(_) => return unavailable(),
+        };
+        let request = request
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .header("Idempotency-Key", request_id)
+            .body(body);
+        match tokio::time::timeout_at(deadline, self.send_command(request, final_attempt)).await {
+            Ok(outcome) => outcome,
+            Err(_) => uncertain("attempt-timeout"),
+        }
+    }
+
+    async fn send_command(
+        &self,
+        request: reqwest::RequestBuilder,
+        final_attempt: bool,
+    ) -> CallOutcome {
+        let response = match request.send().await {
+            Ok(response) => response,
+            // A refused or failed connection carried no request.
+            Err(error) if error.is_connect() => return unavailable(),
+            Err(error) if error.is_timeout() => return uncertain("attempt-timeout"),
+            Err(_) => return uncertain("transport-uncertain"),
+        };
+        let status = response.status();
+        // A redirect is never followed. It may answer an accepted command.
+        if status.is_redirection() {
+            return uncertain("external-redirect");
+        }
+        // Only an explicit busy answer is retried; any other server failure
+        // may follow an effect, so the run holds for same-command recovery.
+        match status.as_u16() {
+            429 => return busy("external-rate-limited", response.headers()),
+            503 if !final_attempt => return busy("external-unavailable", response.headers()),
+            500..=599 => return uncertain("external-uncertain"),
+            _ => {}
+        }
+        let bytes = match read_bounded(response, self.config.maximum_response_bytes.get()).await {
+            Ok(bytes) => bytes,
+            Err(BoundedReadError::Transport(_)) => return uncertain("transport-uncertain"),
+            Err(_) => return uncertain("external-invalid-response"),
+        };
+        match self.reply(status, &bytes) {
+            Some(reply) => CallOutcome::Success(reply),
+            None => uncertain("external-invalid-response"),
+        }
+    }
+
     async fn fetch(&self, url: Url, timeout: Duration, final_attempt: bool) -> CallOutcome {
+        let request = match self.request(url, reqwest::Method::GET, timeout).await {
+            Ok(request) => request,
+            Err(outcome) => return outcome,
+        };
+        let response = match request.send().await {
+            Ok(response) => response,
+            Err(_) => return unavailable(),
+        };
+        let status = response.status();
+        if status.is_redirection() {
+            return refused("external-redirect");
+        }
+        if !final_attempt {
+            // A gateway's error page is rarely JSON, so a retried status is
+            // reported before its body is read.
+            let code = match status.as_u16() {
+                429 => Some("external-rate-limited"),
+                502..=504 => Some("external-unavailable"),
+                _ => None,
+            };
+            if let Some(code) = code {
+                return busy(code, response.headers());
+            }
+        }
+        let bytes = match read_bounded(response, self.config.maximum_response_bytes.get()).await {
+            Ok(bytes) => bytes,
+            Err(BoundedReadError::Transport(_)) => return unavailable(),
+            Err(_) => return refused("external-invalid-response"),
+        };
+        match self.reply(status, &bytes) {
+            Some(reply) => CallOutcome::Success(reply),
+            None => refused("external-invalid-response"),
+        }
+    }
+
+    /// A request to the validated destination with its attempt credential.
+    async fn request(
+        &self,
+        url: Url,
+        method: reqwest::Method,
+        timeout: Duration,
+    ) -> std::result::Result<reqwest::RequestBuilder, CallOutcome> {
         // The destination was reviewed by the operator. Institutional HTTPS
         // peers may be private, but metadata and non-loopback cleartext remain
         // denied. Each request connects to only the addresses validated here.
@@ -269,77 +417,59 @@ impl ExternalHttpConnection {
                 | FetchUrlError::NoAddresses
                 | FetchUrlError::ValidationTimeout { .. }
                 | FetchUrlError::ValidationTask(_),
-            ) => return unavailable(),
-            Err(_) => return refused("external-destination-refused"),
+            ) => return Err(unavailable()),
+            Err(_) => return Err(refused("external-destination-refused")),
         };
-        let mut request = match validated.immediate_get_with_timeout(timeout) {
+        let mut request = match validated.immediate_request_with_timeout(method, timeout) {
             Ok(request) => request.header(reqwest::header::ACCEPT, "application/json"),
-            Err(_) => return refused("external-destination-refused"),
+            Err(_) => return Err(refused("external-destination-refused")),
         };
         if let Some(tokens) = &self.tokens {
             let token = match tokens.bearer_token().await {
                 Ok(token) => token,
-                Err(error) => return crate::adapters::token_failure(&error),
+                Err(error) => return Err(crate::adapters::token_failure(&error)),
             };
             request = request.header(
                 reqwest::header::AUTHORIZATION,
                 token.authorization_header_value(),
             );
         }
-        let response = match request.send().await {
-            Ok(response) => response,
-            Err(_) => return unavailable(),
-        };
-        let status = response.status();
-        if status.is_redirection() {
-            return refused("external-redirect");
-        }
-        if !final_attempt {
-            // A gateway's error page is rarely JSON, so a retried status is
-            // reported before its body is read.
-            let code = match status.as_u16() {
-                429 => Some("external-rate-limited"),
-                502..=504 => Some("external-unavailable"),
-                _ => None,
-            };
-            if let Some(code) = code {
-                return CallOutcome::Retryable {
-                    code: code.into(),
-                    retry_after: match RetryAfter::from_headers(response.headers()) {
-                        RetryAfter::Absent => None,
-                        RetryAfter::Seconds(seconds) if seconds <= MAXIMUM_RETRY_AFTER_SECONDS => {
-                            Some(Duration::from_secs(seconds))
-                        }
-                        _ => return refused("external-unusable-retry-after"),
-                    },
-                };
-            }
-        }
-        let bytes = match read_bounded(response, self.config.maximum_response_bytes.get()).await {
-            Ok(bytes) => bytes,
-            Err(BoundedReadError::Transport(_)) => return unavailable(),
-            Err(_) => return refused("external-invalid-response"),
-        };
+        Ok(request)
+    }
+
+    /// The typed `{status, body}` reply, when the body is strict JSON (or
+    /// empty) and the operator's response schema accepts it.
+    fn reply(&self, status: reqwest::StatusCode, bytes: &[u8]) -> Option<Value> {
         let body = if bytes.is_empty() {
             Value::Null
         } else {
-            match parse_json_strict(&bytes) {
-                Ok(body) => body,
-                Err(_) => return refused("external-invalid-response"),
-            }
+            parse_json_strict(bytes).ok()?
         };
-        let reply = match serde_json::to_value(ExternalResponse {
+        let reply = serde_json::to_value(ExternalResponse {
             status: status.as_u16(),
             body,
-        }) {
-            Ok(reply) => reply,
-            Err(_) => return refused("external-invalid-response"),
-        };
-        if !self.response_schema.is_valid(&reply) {
-            return refused("external-invalid-response");
-        }
-        CallOutcome::Success(reply)
+        })
+        .ok()?;
+        self.response_schema.is_valid(&reply).then_some(reply)
     }
+}
+
+/// A busy answer that names a usable wait.
+fn busy(code: &str, headers: &reqwest::header::HeaderMap) -> CallOutcome {
+    CallOutcome::Retryable {
+        code: code.into(),
+        retry_after: match RetryAfter::from_headers(headers) {
+            RetryAfter::Absent => None,
+            RetryAfter::Seconds(seconds) if seconds <= MAXIMUM_RETRY_AFTER_SECONDS => {
+                Some(Duration::from_secs(seconds))
+            }
+            _ => return refused("external-unusable-retry-after"),
+        },
+    }
+}
+
+fn uncertain(code: &str) -> CallOutcome {
+    CallOutcome::Uncertain { code: code.into() }
 }
 
 fn refused(code: &str) -> CallOutcome {

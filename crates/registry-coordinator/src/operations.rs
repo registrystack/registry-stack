@@ -125,6 +125,12 @@ impl OperationDescriptor {
             fields.remove("connectTimeoutMilliseconds");
             fields.insert("connectionMayLowerLimits".into(), json!(true));
             fields.insert("redirects".into(), json!("refused"));
+            if self.id == Operation::ExternalCommand.as_str() {
+                fields.insert(
+                    "maximumRequestBytes".into(),
+                    json!(MAXIMUM_HTTP_RESPONSE_BYTES),
+                );
+            }
             if self.product == "evaluation" {
                 fields.insert(
                     "attemptTimeoutMilliseconds".into(),
@@ -273,6 +279,7 @@ macro_rules! operation_catalog {
             SubmitReviewRequest => "casework.submit-review-request/v1", mutation("casework", false, false), submit_review_request;
             CancelReviewRequest => "casework.cancel-review-request/v1", mutation("casework", false, false), cancel_review_request;
             PreviewAvailability => "scheduling.preview-availability/v1", read("scheduling"), preview_availability;
+            ExternalCommand => "external.command/v1", declared_mutation("external-http", false, false), external_command;
         }
     };
 }
@@ -322,6 +329,8 @@ pub fn failure_code(code: &str) -> Option<&'static str> {
         "external-invalid-response" => Some("external-invalid-response"),
         "external-unavailable" => Some("external-unavailable"),
         "external-rate-limited" => Some("external-rate-limited"),
+        "external-uncertain" => Some("external-uncertain"),
+        "external-interpretation-failed" => Some("external-interpretation-failed"),
         "decision-invalid-command" => Some("decision-invalid-command"),
         "decision-invalid-response" => Some("decision-invalid-response"),
         "decision-unavailable" => Some("decision-unavailable"),
@@ -378,6 +387,7 @@ mod tests {
                 Operation::PreviewAvailability,
                 "scheduling.preview-availability/v1",
             ),
+            (Operation::ExternalCommand, "external.command/v1"),
         ];
         assert_eq!(
             descriptors()
@@ -463,6 +473,29 @@ mod tests {
         assert!(Operation::ExternalGet.is_read());
         assert!(!Operation::ExternalGet.requires_key());
         assert!(!Operation::ExternalGet.requires_preparation());
+        assert!(Operation::ExternalCommand.is_mutating());
+        assert!(Operation::ExternalCommand.requires_key());
+        assert!(Operation::ExternalCommand.has_dispatch_risk());
+        assert!(Operation::ExternalCommand.can_retry_after_unknown());
+        assert!(!Operation::ExternalCommand.requires_preparation());
+        assert!(!Operation::ExternalCommand.supports_read_receipt());
+        assert_eq!(Operation::ExternalCommand.product(), "external-http");
+        assert_eq!(
+            Operation::ExternalCommand.recovery(),
+            RecoverySemantics::SameCommand
+        );
+        assert!(Operation::ExternalCommand.descriptor().declared_refusal);
+        let http =
+            Operation::ExternalCommand.descriptor().host_contract()["limits"]["http"].clone();
+        assert_eq!(http["maximumRequestBytes"], MAXIMUM_HTTP_RESPONSE_BYTES);
+        assert_eq!(http["maximumResponseBytes"], MAXIMUM_HTTP_RESPONSE_BYTES);
+        assert_eq!(http["redirects"], "refused");
+        assert_eq!(http["connectionMayLowerLimits"], true);
+        assert!(
+            Operation::ExternalGet.descriptor().host_contract()["limits"]["http"]
+                .get("maximumRequestBytes")
+                .is_none()
+        );
         assert!(Operation::EvaluateDecision.is_evaluation());
         assert!(!Operation::EvaluateDecision.is_mutating());
         assert!(!Operation::EvaluateDecision.is_read());
@@ -537,6 +570,8 @@ mod tests {
             "external-invalid-response",
             "external-unavailable",
             "external-rate-limited",
+            "external-uncertain",
+            "external-interpretation-failed",
         ] {
             assert_eq!(failure_code(code), Some(code));
         }

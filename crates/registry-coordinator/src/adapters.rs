@@ -572,6 +572,12 @@ impl AdapterSet for HttpAdapters {
             (Some(Connection::External(connection)), Operation::ExternalGet, None) => {
                 connection.get(&request.input, final_attempt).await
             }
+            (Some(Connection::External(connection)), Operation::ExternalCommand, None) => {
+                let Some(key) = &request.idempotency_key else {
+                    return refused("invalid-command");
+                };
+                connection.command(&request.input, key, final_attempt).await
+            }
             _ => self.call_prepared(request, prepared).await,
         }
     }
@@ -580,6 +586,12 @@ impl AdapterSet for HttpAdapters {
         match (self.connections.get(&request.connection), request.operation) {
             (Some(Connection::External(connection)), Operation::ExternalGet) => {
                 connection.get(&request.input, false).await
+            }
+            (Some(Connection::External(connection)), Operation::ExternalCommand) => {
+                let Some(key) = &request.idempotency_key else {
+                    return refused("invalid-command");
+                };
+                connection.command(&request.input, key, false).await
             }
             (
                 Some(Connection::Breg {

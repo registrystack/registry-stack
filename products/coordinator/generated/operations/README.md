@@ -22,6 +22,7 @@ Each catalog operation has an input contract, the type its adapter decodes, and 
 | [`casework.submit-review-request/v1`](#casework.submit-review-request/v1) | 1 | `casework` | mutation | required | none | same-command | none | none |
 | [`casework.cancel-review-request/v1`](#casework.cancel-review-request/v1) | 1 | `casework` | mutation | required | none | same-command | none | none |
 | [`scheduling.preview-availability/v1`](#scheduling.preview-availability/v1) | 1 | `scheduling` | read | none | none | read-again | none | none |
+| [`external.command/v1`](#external.command/v1) | 1 | `external-http` | mutation | required | none | same-command | none | [`onDeclaredRefusal`](external.command.v1.declared-refusal.schema.json) |
 
 ## breg.read-record/v1
 
@@ -1231,6 +1232,73 @@ Output ([`scheduling.preview-availability.v1.output.schema.json`](scheduling.pre
 | `start` | string (date-time) | yes |
 
 Other members are tolerated.
+
+## external.command/v1
+
+Host execution and completion contract:
+
+```json
+{
+  "authority": "current-bound-connection-authority",
+  "completionObservation": null,
+  "connectionInterface": "external-http",
+  "identity": {
+    "effect": "mutation",
+    "id": "external.command/v1",
+    "keyRequirement": "required",
+    "product": "external-http",
+    "readReceipt": false,
+    "recovery": "same-command",
+    "requiresPreparation": false,
+    "version": 1
+  },
+  "limits": {
+    "attemptTimeoutSeconds": 10,
+    "http": {
+      "attemptTimeoutMilliseconds": 2000,
+      "connectionMayLowerLimits": true,
+      "maximumMutationRetries": 0,
+      "maximumRequestBytes": 65536,
+      "maximumResponseBytes": 65536,
+      "redirects": "refused"
+    },
+    "maximumCallAttempts": 10,
+    "maximumCallRetryDelaySeconds": 300,
+    "maximumConcurrentAttemptsPerRun": 1,
+    "maximumPreparationBytes": 65536,
+    "maximumRunDurationSeconds": 31536000,
+    "value": {
+      "maximumArrayItems": 256,
+      "maximumBytes": 131072,
+      "maximumDepth": 32,
+      "maximumNodes": 4096,
+      "maximumObjectMembers": 256,
+      "maximumStringBytes": 16384
+    }
+  }
+}
+```
+
+Input ([`external.command.v1.input.schema.json`](external.command.v1.input.schema.json)):
+
+Any JSON value.
+
+Output ([`external.command.v1.output.schema.json`](external.command.v1.output.schema.json)):
+
+| Member | Type | Required |
+|---|---|---|
+| `body` | any | yes |
+| `status` | integer | yes |
+
+Other members are tolerated.
+
+Declared-refusal output ([`external.command.v1.declared-refusal.schema.json`](external.command.v1.declared-refusal.schema.json)):
+
+| Member | Type | Required |
+|---|---|---|
+| `refusalCode` | string | yes |
+
+No other members are accepted.
 
 ## Completions
 
