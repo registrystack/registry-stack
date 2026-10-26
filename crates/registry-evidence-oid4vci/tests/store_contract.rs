@@ -492,11 +492,14 @@ mod postgres_only {
     use std::time::{Duration, Instant};
 
     use registry_evidence_oid4vci::config::StoreConfig;
+    use registry_evidence_oid4vci::storage::postgres::PostgresSetupError;
     use registry_evidence_oid4vci::storage::Store;
     use registry_evidence_oid4vci::store::{PreparedRequest, StoreError};
+    use tokio::sync::Barrier;
 
     use super::store_support::postgres::{
-        admin, count, dump, open_over, pool, pool_with_options, unmigrated, LOCK_NAMESPACE,
+        admin, count, dump, isolated_schema_name, open_over, pool, pool_with_options, unmigrated,
+        LOCK_NAMESPACE, REQUEST_TIMEOUT,
     };
     use super::store_support::{
         assert_prepared, bounds, generation, prepared, Deployment, Keys, Kind, Logs, Ring,
@@ -1060,6 +1063,69 @@ mod postgres_only {
             deployment.reopen(Keys::default()),
         );
         assert_eq!(count(deployment.schema(), "schema_migrations").await, 1);
+    }
+
+    /// Replicas installed together all find an empty database. Their first
+    /// migrations race to create the same schema and tables, which only the
+    /// migration lock keeps from colliding. Several fresh schemas are raced,
+    /// each from four replicas whose connections are open before the start.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn first_migrations_of_a_fresh_schema_serialize() {
+        const REPLICAS: usize = 4;
+        for _ in 0..8 {
+            let schema = isolated_schema_name();
+            let start = Arc::new(Barrier::new(REPLICAS));
+            let mut replicas = Vec::new();
+            for _ in 0..REPLICAS {
+                let pool = pool();
+                drop(pool.get().await.expect("open a replica's connection"));
+                let store = unmigrated(pool, &schema, &bounds(), Keys::default(), REQUEST_TIMEOUT);
+                let start = Arc::clone(&start);
+                replicas.push(tokio::spawn(async move {
+                    start.wait().await;
+                    store.migrate().await
+                }));
+            }
+            let outcomes = join(replicas).await;
+            assert!(
+                outcomes.iter().all(Result::is_ok),
+                "every first migration succeeds: {outcomes:?}"
+            );
+            assert_eq!(count(&schema, "schema_migrations").await, 1);
+        }
+    }
+
+    /// A schema a later build migrated is refused rather than served by a
+    /// build that does not know its shape, and the refusal is logged with the
+    /// version it found and nothing else.
+    #[tokio::test]
+    async fn a_schema_carrying_an_unknown_migration_is_refused() {
+        let (deployment, _store) =
+            Deployment::open(Kind::Postgres, bounds(), Keys::default()).await;
+        let schema = deployment.schema().to_owned();
+        admin()
+            .await
+            .execute(
+                &format!("INSERT INTO {schema}.schema_migrations (version) VALUES (999)"),
+                &[],
+            )
+            .await
+            .expect("record a migration from a later build");
+
+        let (logs, _guard) = Logs::capture();
+        let refused = unmigrated(pool(), &schema, &bounds(), Keys::default(), REQUEST_TIMEOUT)
+            .migrate()
+            .await;
+        assert!(
+            matches!(refused, Err(PostgresSetupError::SchemaVersion(999))),
+            "{refused:?}"
+        );
+        let rendered = logs.rendered();
+        assert!(
+            rendered.contains(r#"operation="check the applied migrations" version=999"#),
+            "{rendered}"
+        );
+        assert!(!rendered.contains(&schema), "{rendered}");
     }
 
     async fn join<T: Send + 'static>(handles: Vec<tokio::task::JoinHandle<T>>) -> Vec<T> {
