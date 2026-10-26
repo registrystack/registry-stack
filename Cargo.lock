@@ -6298,6 +6298,7 @@ dependencies = [
  "registry-messaging-core",
  "registry-platform-audit",
  "registry-platform-buildinfo",
+ "registry-platform-config",
  "registry-platform-crypto",
  "registry-platform-dispatch",
  "registry-platform-httputil",

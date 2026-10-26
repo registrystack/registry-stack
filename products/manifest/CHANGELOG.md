@@ -7,6 +7,10 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+- `registry-manifest validate` and `validate-profiles` read an optional
+  `check-acceptances.yaml`. An exact, reasoned acceptance keeps its warning
+  visible while allowing `--deny-warnings` to pass; errors remain refusals.
+
 - BREAKING: `render` selects its artifact with `--artifact-format`; report
   `--format` does not apply to artifact stdout. `publish` writes its bundle to
   `--output` and can emit a separate human or JSON report. Replace `render

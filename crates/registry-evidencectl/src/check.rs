@@ -1,6 +1,6 @@
 //! Offline inspection uses the normalized project model and compiler.
 use anyhow::Result;
-use registry_platform_yaml::Report;
+use registry_platform_yaml::{Diagnostic, Report};
 use serde_json::{json, Value};
 use std::{io, path::Path};
 #[derive(Debug)]
@@ -16,72 +16,100 @@ pub(crate) fn check(
 ) -> Result<Checked> {
     let target_path = target.map(crate::target::target_path);
     let target = target_path.as_deref();
-    if production {
-        let target = target
+    let assurance_refusal = if production {
+        let path = target
             .ok_or_else(|| anyhow::anyhow!("--production requires an explicit EvidenceTarget"))?;
-        let bytes = crate::authored::read_authored_file(target, "EvidenceTarget")?;
+        let bytes = crate::authored::read_authored_file(path, "EvidenceTarget")?;
         let target_model =
-            registry_evidence_authoring::target::read_target(&target.to_string_lossy(), &bytes)?
+            registry_evidence_authoring::target::read_target(&path.to_string_lossy(), &bytes)?
                 .value;
-        if !matches!(
+        (!matches!(
             target_model.assurance_profile,
             Some(
                 registry_evidence_authoring::target::TargetAssuranceProfile::Production
                     | registry_evidence_authoring::target::TargetAssuranceProfile::EvidenceGrade
             )
-        ) {
-            return Err(crate::build::TargetDocumentDiagnostic {
-                code: "evidence.target.production-assurance-required",
-                path: format!("{}:/assuranceProfile", target.display()),
-                message: "--production requires production or evidence-grade target assurance"
-                    .to_owned(),
+        ))
+        .then(|| crate::build::TargetDocumentDiagnostic {
+            code: "evidence.target.production-assurance-required",
+            path: format!("{}:/assuranceProfile", path.display()),
+            message: "--production requires production or evidence-grade target assurance"
+                .to_owned(),
+        })
+    } else {
+        None
+    };
+    let inspected_target = if assurance_refusal.is_some() {
+        None
+    } else {
+        target
+    };
+    let mut checked = match crate::normalized::inspect(project, inspected_target, "check") {
+        Ok(checked) => checked,
+        Err(error) => {
+            let Some(report) = error.downcast_ref::<Report>() else {
+                return Err(error);
+            };
+            let mut report = report.clone();
+            registry_platform_config::apply_check_acceptances(project, &mut report);
+            if let Some(refusal) = &assurance_refusal {
+                report.push(target_document_diagnostic(refusal));
             }
-            .into());
+            return Err(report.into());
         }
+    };
+    registry_platform_config::apply_check_acceptances(project, &mut checked.diagnostics);
+    if let Some(refusal) = &assurance_refusal {
+        checked
+            .diagnostics
+            .push(target_document_diagnostic(refusal));
     }
-    let mut checked = crate::normalized::inspect(project, target, "check")?;
-    if let Some(path) = target {
-        let bytes = crate::authored::read_authored_file(path, "EvidenceTarget")?;
-        let target_model =
-            registry_evidence_authoring::target::read_target(&path.to_string_lossy(), &bytes)?
-                .value;
-        let root = crate::normalized::target_directory(path);
-        let key = target_model.signer.public_jwk_file();
-        if std::fs::symlink_metadata(root.join(key)).is_ok() {
-            crate::normalized::safe_asset(root, key)?;
-            let evidence = crate::evidence_binary::resolve_matching(None)?;
-            let documents = crate::build::read_target_documents(path)?;
-            let stage = tempfile::Builder::new()
-                .prefix("evidencectl-check-")
-                .tempdir()?;
-            use std::os::unix::fs::PermissionsExt as _;
-            std::fs::set_permissions(stage.path(), std::fs::Permissions::from_mode(0o700))?;
-            let stage_root = stage.path().canonicalize()?;
-            let result = (|| {
-                let compiled = crate::build::compile_with_target(
-                    project,
-                    &documents,
-                    &stage_root,
-                    &evidence,
-                    None,
-                )?;
-                crate::build::reject_review_markers(&compiled.bundle_path)?;
-                crate::build::check_compiled_bundle(
-                    &evidence,
-                    &compiled.bundle_path,
-                    &compiled.runtime_path,
-                    Some(path),
-                    project,
-                    &compiled.fixture_paths,
-                )
-            })();
-            crate::build::make_tree_removable(stage.path())?;
-            let result = result?;
-            checked.report["proof"] = json!("compiled-target");
-            checked.report["packageDigest"] = json!(result.package_digest);
-            checked.report["definitionRevisions"] = json!(result.requirements.iter().map(|definition| json!({"requirement":definition.id,"configurationRevision":definition.configuration_revision})).collect::<Vec<_>>());
-        } else {
-            if production {
+    checked.report["diagnostics"] = checked.diagnostics.to_json_value();
+    if checked.diagnostics.has_errors() {
+        return Err(checked.diagnostics.into());
+    }
+    let target_check = (|| -> Result<()> {
+        if let Some(path) = target {
+            let bytes = crate::authored::read_authored_file(path, "EvidenceTarget")?;
+            let target_model =
+                registry_evidence_authoring::target::read_target(&path.to_string_lossy(), &bytes)?
+                    .value;
+            let root = crate::normalized::target_directory(path);
+            let key = target_model.signer.public_jwk_file();
+            if std::fs::symlink_metadata(root.join(key)).is_ok() {
+                crate::normalized::safe_asset(root, key)?;
+                let evidence = crate::evidence_binary::resolve_matching(None)?;
+                let documents = crate::build::read_target_documents(path)?;
+                let stage = tempfile::Builder::new()
+                    .prefix("evidencectl-check-")
+                    .tempdir()?;
+                use std::os::unix::fs::PermissionsExt as _;
+                std::fs::set_permissions(stage.path(), std::fs::Permissions::from_mode(0o700))?;
+                let stage_root = stage.path().canonicalize()?;
+                let result = (|| {
+                    let compiled = crate::build::compile_with_target(
+                        project,
+                        &documents,
+                        &stage_root,
+                        &evidence,
+                        None,
+                    )?;
+                    crate::build::reject_review_markers(&compiled.bundle_path)?;
+                    crate::build::check_compiled_bundle(
+                        &evidence,
+                        &compiled.bundle_path,
+                        &compiled.runtime_path,
+                        Some(path),
+                        project,
+                        &compiled.fixture_paths,
+                    )
+                })();
+                crate::build::make_tree_removable(stage.path())?;
+                let result = result?;
+                checked.report["proof"] = json!("compiled-target");
+                checked.report["packageDigest"] = json!(result.package_digest);
+                checked.report["definitionRevisions"] = json!(result.requirements.iter().map(|definition| json!({"requirement":definition.id,"configurationRevision":definition.configuration_revision})).collect::<Vec<_>>());
+            } else if production {
                 return Err(crate::build::TargetDocumentDiagnostic {
                     code: "evidence.target.signing-key-missing",
                     path: format!("{}:/signer/publicJwkFile", path.display()),
@@ -89,15 +117,55 @@ pub(crate) fn check(
                         .to_owned(),
                 }
                 .into());
+            } else {
+                checked.report["deploymentInputs"] =
+                    json!({"complete":false,"missing":["signer.publicJwkFile"]});
             }
-            checked.report["deploymentInputs"] =
-                json!({"complete":false,"missing":["signer.publicJwkFile"]});
         }
+        Ok(())
+    })();
+    if let Err(error) = target_check {
+        return Err(merge_target_refusal(checked.diagnostics, error));
     }
     if refuses_warnings(&checked.diagnostics, deny_warnings) {
         return Err(checked.diagnostics.into());
     }
     Ok(checked)
+}
+
+fn merge_target_refusal(mut diagnostics: Report, error: anyhow::Error) -> anyhow::Error {
+    if let Some(report) = crate::authored::report_in(&error) {
+        diagnostics.extend(report.clone());
+        return diagnostics.into();
+    }
+    if let Some(refusal) = error
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<crate::build::TargetDocumentDiagnostic>())
+    {
+        diagnostics.push(target_document_diagnostic(refusal));
+        return diagnostics.into();
+    }
+    if let Some(refusal) = error
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<crate::authoring::AuthoredDiagnostic>())
+    {
+        let mut diagnostic = crate::authored::compiler_diagnostic(refusal);
+        diagnostic.artifact = Some("deployment-target".to_owned());
+        diagnostics.push(diagnostic);
+        return diagnostics.into();
+    }
+    error
+}
+
+fn target_document_diagnostic(refusal: &crate::build::TargetDocumentDiagnostic) -> Diagnostic {
+    let mut diagnostic = Diagnostic::error(
+        refusal.code,
+        &refusal.path,
+        &refusal.message,
+        "Correct the selected project or target artifact and rerun check.",
+    );
+    diagnostic.artifact = Some("deployment-target".to_owned());
+    diagnostic
 }
 
 pub(crate) fn refuses_warnings(diagnostics: &Report, deny_warnings: bool) -> bool {
@@ -117,9 +185,18 @@ pub(crate) fn refused_explain_report(
     refused("explain", project, target, found)
 }
 fn refused(command: &str, project: &Path, target: Option<&Path>, found: &Report) -> Value {
+    let status = if found
+        .diagnostics()
+        .iter()
+        .any(|diagnostic| diagnostic.artifact.as_deref() == Some("deployment-target"))
+    {
+        "domain-refusal"
+    } else {
+        "refused"
+    };
     crate::report::refused(
         command,
-        "refused",
+        status,
         json!({"project":project,"target":target,"proof":"authoring","diagnostics":found.to_json_value(),"projectPresentation":null,"selectorProfiles":{},"capabilityCeilings":null,"assertionDefinitions":[],"sources":[],"functions":[],"authority":null,"offline":true,"networkAccess":false,"secretResolution":false,"fixtureExecution":false}),
     )
 }
@@ -266,6 +343,69 @@ mod tests {
             report.diagnostics()[0].source.as_ref().unwrap().file,
             project_file.to_string_lossy()
         );
+
+        fs::write(
+            temporary.path().join("check-acceptances.yaml"),
+            r#"apiVersion: id.registrystack.org/formats/platform/check-acceptances/v1alpha1
+kind: PlatformCheckAcceptances
+acceptances:
+  - code: evidence.project.duplicate-source-label
+    scope:
+      file: evidence.yaml
+      path: /sources/person-record/label
+    reason: These source labels are intentionally aligned for this reviewed project.
+"#,
+        )
+        .unwrap();
+        let accepted = check(temporary.path(), None, false, true)
+            .expect("an accepted warning does not fail --deny-warnings");
+        assert_eq!(accepted.diagnostics.error_count(), 0);
+        assert_eq!(accepted.diagnostics.warning_count(), 0);
+        assert_eq!(accepted.diagnostics.accepted_warning_count(), 1);
+        assert_eq!(accepted.diagnostics.diagnostics().len(), 1);
+        let warning = &accepted.diagnostics.diagnostics()[0];
+        assert_eq!(warning.severity, registry_platform_yaml::Severity::Warning);
+        assert_eq!(
+            warning.scope.as_ref(),
+            Some(&registry_platform_yaml::CheckScope {
+                file: "evidence.yaml".to_owned(),
+                path: "/sources/person-record/label".to_owned(),
+            })
+        );
+        assert_eq!(
+            warning.accepted_reason.as_deref(),
+            Some("These source labels are intentionally aligned for this reviewed project.")
+        );
+        assert_eq!(
+            accepted.report["diagnostics"][0]["acceptedReason"],
+            "These source labels are intentionally aligned for this reviewed project."
+        );
+    }
+
+    #[test]
+    fn malformed_check_acceptances_refuse_the_evidence_project() {
+        let temporary = tempfile::tempdir().unwrap();
+        let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../products/evidence/examples/standalone");
+        copy_tree(&source, temporary.path());
+        fs::write(
+            temporary.path().join("check-acceptances.yaml"),
+            "apiVersion: id.registrystack.org/formats/platform/check-acceptances/v1alpha1\nkind: PlatformCheckAcceptances\nacceptances: invalid\n",
+        )
+        .unwrap();
+
+        let error = check(temporary.path(), None, false, false)
+            .expect_err("a malformed acceptance file refuses the project");
+        let report = error
+            .downcast_ref::<Report>()
+            .expect("malformed acceptances produce a structured diagnostic report");
+        assert!(report.has_errors());
+        assert!(report.diagnostics().iter().any(|diagnostic| {
+            diagnostic
+                .source
+                .as_ref()
+                .is_some_and(|source| source.file.ends_with("check-acceptances.yaml"))
+        }));
     }
     #[test]
     fn check_preserves_duplicate_display_warning_when_function_compilation_fails() {
@@ -324,6 +464,151 @@ mod tests {
         assert_eq!(warning_source.file, project_file.to_string_lossy());
         assert!(warning_source.line.is_some());
         assert!(warning_source.column.is_some());
+
+        fs::write(
+            temporary.path().join("check-acceptances.yaml"),
+            r#"apiVersion: id.registrystack.org/formats/platform/check-acceptances/v1alpha1
+kind: PlatformCheckAcceptances
+acceptances:
+  - code: evidence.project.duplicate-source-label
+    scope:
+      file: evidence.yaml
+      path: /sources/person-record/label
+    reason: These source labels are intentionally aligned for this reviewed project.
+"#,
+        )
+        .unwrap();
+        let error = check(temporary.path(), None, false, true)
+            .expect_err("the Function error still refuses a project with an accepted warning");
+        let report = error
+            .downcast_ref::<Report>()
+            .expect("the mixed refusal remains a structured report");
+        assert_eq!(report.error_count(), 1);
+        assert_eq!(report.warning_count(), 0);
+        assert_eq!(report.accepted_warning_count(), 1);
+        let warning = report
+            .diagnostics()
+            .iter()
+            .find(|diagnostic| diagnostic.code == "evidence.project.duplicate-source-label")
+            .expect("the accepted warning remains beside the error");
+        assert_eq!(
+            warning.accepted_reason.as_deref(),
+            Some("These source labels are intentionally aligned for this reviewed project.")
+        );
+    }
+    #[test]
+    fn check_preserves_an_accepted_warning_with_target_refusals() {
+        for (assurance, refusal_code) in [
+            (None, "evidence.target.production-assurance-required"),
+            (Some("production"), "evidence.target.signing-key-missing"),
+        ] {
+            let temporary = tempfile::tempdir().unwrap();
+            let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../products/evidence/examples/standalone");
+            copy_tree(&source, temporary.path());
+            let project_file = temporary.path().join("evidence.yaml");
+            let authored = fs::read_to_string(&project_file)
+                .unwrap()
+                .replacen(
+                    "  person-record:\n",
+                    "  person-record:\n    label: Registry source\n",
+                    1,
+                )
+                .replacen(
+                    "  licence-record:\n",
+                    "  licence-record:\n    label: registry source\n",
+                    1,
+                );
+            fs::write(&project_file, authored).unwrap();
+            fs::write(
+                temporary.path().join("check-acceptances.yaml"),
+                r#"apiVersion: id.registrystack.org/formats/platform/check-acceptances/v1alpha1
+kind: PlatformCheckAcceptances
+acceptances:
+  - code: evidence.project.duplicate-source-label
+    scope:
+      file: evidence.yaml
+      path: /sources/person-record/label
+    reason: These source labels are intentionally aligned for this reviewed project.
+"#,
+            )
+            .unwrap();
+            if let Some(assurance) = assurance {
+                let target_file = temporary.path().join("local-target.yaml");
+                let authored = fs::read_to_string(&target_file).unwrap().replacen(
+                    "project: standalone-evidence\n",
+                    &format!("project: standalone-evidence\nassuranceProfile: {assurance}\n"),
+                    1,
+                );
+                fs::write(target_file, authored).unwrap();
+            } else {
+                fs::remove_file(temporary.path().join("dev-authority.yaml")).unwrap();
+            }
+
+            let error = check(
+                temporary.path(),
+                Some(&temporary.path().join("local-target.yaml")),
+                true,
+                true,
+            )
+            .expect_err("the target refusal still refuses a project with an accepted warning");
+            let report = error
+                .downcast_ref::<Report>()
+                .expect("the target refusal is merged into the project report");
+            assert_eq!(report.error_count(), 1);
+            assert_eq!(report.warning_count(), 0);
+            assert_eq!(report.accepted_warning_count(), 1);
+            assert!(report
+                .diagnostics()
+                .iter()
+                .any(|diagnostic| diagnostic.code == refusal_code));
+            let warning = report
+                .diagnostics()
+                .iter()
+                .find(|diagnostic| diagnostic.code == "evidence.project.duplicate-source-label")
+                .expect("the accepted warning remains beside the target refusal");
+            assert_eq!(
+                warning.accepted_reason.as_deref(),
+                Some("These source labels are intentionally aligned for this reviewed project.")
+            );
+        }
+    }
+    #[test]
+    fn merge_target_refusal_preserves_an_authored_domain_diagnostic() {
+        let mut warning = registry_platform_yaml::Diagnostic::warning(
+            "evidence.test.warning",
+            "/test",
+            "the accepted warning",
+            "Review the warning.",
+        );
+        warning.accepted_reason = Some("Reviewed for this project.".to_owned());
+        let error = merge_target_refusal(
+            Report::new(vec![warning]),
+            crate::authoring::AuthoredDiagnostic {
+                code: "evidence.target.publication-invalid".to_owned(),
+                path: "target.yaml:/publication".to_owned(),
+                message: "the publication is invalid".to_owned(),
+            }
+            .into(),
+        );
+
+        let report = error
+            .downcast_ref::<Report>()
+            .expect("the authored target refusal is merged into the report");
+        assert_eq!(report.error_count(), 1);
+        assert_eq!(report.warning_count(), 0);
+        assert_eq!(report.accepted_warning_count(), 1);
+        let refusal = report
+            .diagnostics()
+            .iter()
+            .find(|diagnostic| diagnostic.code == "evidence.target.publication-invalid")
+            .expect("the authored target refusal is retained");
+        assert_eq!(refusal.path, "/publication");
+        assert_eq!(
+            refusal.source.as_ref().map(|source| source.file.as_str()),
+            Some("target.yaml")
+        );
+        assert_eq!(refusal.artifact.as_deref(), Some("deployment-target"));
     }
     #[test]
     fn check_caps_project_warnings_with_a_function_compilation_error() {

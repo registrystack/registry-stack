@@ -190,6 +190,10 @@ pub(super) fn run(
     if outcome.files > 0 {
         outcome.report.set_files_checked(outcome.files);
     }
+    if let Some(project) = request.project {
+        registry_platform_config::apply_check_acceptances(project, &mut outcome.report);
+        outcome.files = outcome.report.files_checked().unwrap_or(outcome.files);
+    }
     let denied = request.deny_warnings && outcome.report.warning_count() > 0;
     let exit = if outcome.unavailable {
         OPERATIONAL_FAILURE_EXIT
@@ -845,10 +849,12 @@ pub(super) fn compile_for_inspection(
         )
     })?;
     let mut outcome = Outcome::default();
+    let compiled = compile_project_with_documents(&selected, profile, &mut outcome);
+    registry_platform_config::apply_check_acceptances(&selected, &mut outcome.report);
     // A production compile can succeed while `check --production` still
     // refuses the project, as for a deployment identity a package must not
     // carry, so an error in the report refuses inspection too.
-    match compile_project_with_documents(&selected, profile, &mut outcome) {
+    match compiled {
         Some((compiled, documents)) if !outcome.report.has_errors() => {
             let authoring = documents.model_authoring(&compiled);
             Ok((compiled, outcome.report.into_diagnostics(), authoring))

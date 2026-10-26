@@ -507,12 +507,17 @@ fn run(command: Command) -> Result<Value> {
         Command::Serve(_) => unreachable!("serve replaces the ctl process before report dispatch"),
         Command::Init { project, template } => project::init(&project, &template),
         Command::Check(args) => {
-            let mut result = project::check(&args.project, args.production, args.deny_warnings);
+            let mut result = if args.runtime_config.is_some() {
+                project::check(&args.project, args.production, false)
+            } else {
+                project::check_with_acceptances(&args.project, args.production, args.deny_warnings)
+            };
             if let Some(runtime) = args.runtime_config {
                 result = project::check_runtime_config(
                     &args.project,
                     &runtime,
                     args.environment,
+                    args.deny_warnings,
                     result,
                 );
             }
@@ -771,11 +776,14 @@ fn render_human(value: &Value, out: &mut (impl Write + ?Sized)) -> io::Result<()
     let diagnostics: Vec<registry_platform_yaml::Diagnostic> =
         serde_json::from_value(value["diagnostics"].clone()).map_err(io::Error::other)?;
     if !diagnostics.is_empty() {
-        write!(
-            out,
-            "{}",
-            registry_platform_yaml::Report::new(diagnostics).render_human()
-        )?;
+        let mut report = registry_platform_yaml::Report::new(diagnostics);
+        if let Some(files) = value["filesChecked"]
+            .as_u64()
+            .and_then(|files| usize::try_from(files).ok())
+        {
+            report.set_files_checked(files);
+        }
+        write!(out, "{}", report.render_human())?;
         if value["ok"] == false && value["command"] != "provider-add" {
             return Ok(());
         }

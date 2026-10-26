@@ -1910,6 +1910,7 @@ pub(super) fn add(
             &staged_project,
             &staged_project.join("runtime.example.yaml"),
             false,
+            false,
             Ok(check),
         )?,
         "caseworkctl check --runtime-config",

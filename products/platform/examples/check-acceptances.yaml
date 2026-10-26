@@ -1,0 +1,8 @@
+apiVersion: id.registrystack.org/formats/platform/check-acceptances/v1alpha1
+kind: PlatformCheckAcceptances
+acceptances:
+  - code: breg.access.target-unrestricted-rows
+    scope:
+      file: registry.yaml
+      path: /accessProfiles/@id=registrar/permissions/actions/@action=correct-facility/targets/@recordType=facility/rowBoundaries
+    reason: National registrars intentionally manage facilities across all districts.

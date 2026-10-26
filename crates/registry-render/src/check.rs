@@ -156,6 +156,10 @@ pub fn run(request: &CheckRequest<'_>, stdout: &mut dyn Write, stderr: &mut dyn 
     }
     let mut report = Report::new(diagnostics);
     report.set_files_checked(files);
+    if let Some(dir) = bundle_dir {
+        registry_platform_config::apply_check_acceptances(dir, &mut report);
+        files = report.files_checked().unwrap_or(files);
+    }
     let exit = if unavailable {
         OPERATIONAL_FAILURE_EXIT
     } else if report.has_errors() || (request.deny_warnings && report.warning_count() > 0) {
@@ -428,7 +432,10 @@ fn load_refusal(dir: &Path, problem: RenderProblem) -> Vec<Diagnostic> {
 /// label table were read when the bundle loaded. Returns the findings and
 /// the number of files read.
 fn scan_unread_yaml(dir: &Path, bundle: &Bundle) -> (Vec<Diagnostic>, usize) {
-    let mut read = BTreeSet::from([MANIFEST_FILE.to_owned()]);
+    let mut read = BTreeSet::from([
+        MANIFEST_FILE.to_owned(),
+        registry_platform_yaml::CHECK_ACCEPTANCES_FILE.to_owned(),
+    ]);
     read.extend(
         bundle
             .label_sources

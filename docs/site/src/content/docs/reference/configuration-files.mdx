@@ -419,6 +419,50 @@ error[config.invalid-value] /private/tmp/agent-R5-work/my-registry/registry.yaml
     crates/registry-breg/src/contract/sentinel.rs, Scopes and RequiredScopes;
     crates/registry-bregctl/src/lib.rs, canonicalize_project_path. */}
 
+## Accept an intentional project warning
+
+If a project warning describes behavior you intend, record the decision in
+`check-acceptances.yaml` at the project root. The project check reads this optional file
+automatically. For Registry Render, put it at the bundle root. Registry Manifest reads it beside
+the metadata manifest or at the root passed to `validate-profiles`.
+
+Run your project's check with `--format json`, then copy the warning's `code` and `scope` into
+an entry with a reason. For example, a Base Registry Engine project might deliberately allow a
+national registrar to correct facilities in every district:
+
+```yaml
+apiVersion: id.registrystack.org/formats/platform/check-acceptances/v1alpha1
+kind: PlatformCheckAcceptances
+acceptances:
+  - code: breg.access.target-unrestricted-rows
+    scope:
+      file: registry.yaml
+      path: /accessProfiles/@id=registrar/permissions/actions/@action=correct-facility/targets/@recordType=facility/rowBoundaries
+    reason: National registrars intentionally manage facilities across all districts.
+```
+
+Copy `scope.path` exactly from your check report. It uses existing resource identifiers where
+available; it is separate from the diagnostic's numeric JSON pointer. `scope.file` is relative
+to the project, so the decision also works in another checkout. Matching is exact, with no
+wildcards. Use a reason suitable for version control and check reports.
+
+Run the project check again. The warning remains in its JSON report with `acceptedReason`, and
+human output groups accepted warnings with their reasons. `--deny-warnings` refuses only warnings
+that remain active. Errors always refuse the check, and a malformed acceptance file is itself an
+error. You can also check this file on its own with `bregctl check --file check-acceptances.yaml`
+or `evidencectl check --file check-acceptances.yaml`.
+
+Commit the file alongside the project. The acceptance remains until someone edits or removes
+it, including when the configuration changes. There is no expiry or automatic reapproval, and
+unused entries do not block checks. To restore a warning to the active list, remove its entry
+and rerun the check. Acceptances change reporting, not runtime permissions or validation.
+
+{/* Evidence: crates/registry-platform-yaml/src/check_acceptances.rs, CheckAcceptances and
+    check_scope_path(); crates/registry-platform-config/src/check_acceptances.rs,
+    apply_check_acceptances(); crates/registry-platform-yaml/tests/check_acceptances.rs;
+    crates/registry-bregctl/tests/cli.rs; crates/registry-evidencectl/src/file_check.rs;
+    crates/registry-render/src/check.rs; crates/registry-manifest-cli/src/main.rs. */}
+
 ## Check a file before you deploy it
 
 The Check command column under [formats by product](#formats-by-product) names the command that

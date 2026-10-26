@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- `registry-render check --bundle` reads an optional
+  `check-acceptances.yaml`. An exact, reasoned acceptance keeps its warning
+  visible while allowing `--deny-warnings` to pass; errors remain refusals.
 - Add shared OIDC resource-token authentication to the serving adapter, with
   `render:render` scope and cached signing-key readiness. Legacy API keys remain
   available. Audit callers fingerprint the exact verified credential.

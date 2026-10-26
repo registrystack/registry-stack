@@ -32,6 +32,9 @@
   restricted to the caller.
 - Preserve bounded authentication-refusal warnings after a poisoned timestamp
   lock, while retaining their rate limit.
+- `bregctl check` and project-backed `explain` read an optional
+  `check-acceptances.yaml`. An exact, reasoned acceptance keeps its warning
+  visible while allowing `--deny-warnings` to pass; errors remain refusals.
 - Name one `ALTER .. OWNER TO <migration>` statement for each registry object
   a split-role runtime role owns when apply refuses that ownership, in place
   of `REASSIGN OWNED BY`, which also moved what the runtime role owns outside

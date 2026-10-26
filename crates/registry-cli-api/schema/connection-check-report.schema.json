@@ -1,5 +1,24 @@
 {
   "$defs": {
+    "CheckScope": {
+      "additionalProperties": false,
+      "description": "A source file relative to the project and the resource path a check reports.",
+      "properties": {
+        "file": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "path": {
+          "description": "A pointer whose list positions use existing unique identifiers when available.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "file",
+        "path"
+      ],
+      "type": "object"
+    },
     "ConnectionCheckStatus": {
       "enum": [
         "complete",
@@ -10,8 +29,15 @@
     },
     "Diagnostic": {
       "additionalProperties": false,
-      "description": "One problem, in the shape every checking command reports (CFG-DIAG-1).\n\nA diagnostic names keys, the path, accepted values, bounds, and the\nexpected envelope. It never repeats a scalar value read from a file or the\nenvironment (CFG-SEC-3).",
+      "description": "One problem, in the shape every checking command reports (CFG-DIAG-1).\n\nMessages name keys, paths, accepted values, bounds, and the expected\nenvelope without repeating rejected scalar values (CFG-SEC-3). Warning\nacceptance metadata separately identifies the resource and carries the\nproject's deliberately authored reason.",
       "properties": {
+        "acceptedReason": {
+          "description": "The project's reason for accepting this advisory warning.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "artifact": {
           "description": "The document's `kind`, or the expected kind when the document's own is\nabsent or wrong and the reader expected exactly one.",
           "type": [
@@ -34,6 +60,17 @@
             "$ref": "#/$defs/Related"
           },
           "type": "array"
+        },
+        "scope": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CheckScope"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Project-relative identity copied into a check acceptance."
         },
         "severity": {
           "$ref": "#/$defs/Severity"

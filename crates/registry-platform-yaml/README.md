@@ -17,7 +17,7 @@ that may reach a terminal, a CI log, or an agent's context:
   the input;
 - anchors, aliases, merge keys, tags, several documents, and non-string keys
   are refused, so a document is a plain tree and an alias cannot expand it;
-- a diagnostic never repeats a scalar value from the file or the
+- a diagnostic's message never repeats a rejected scalar value from the file or the
   environment (CFG-SEC-3). Messages name keys, paths, accepted values,
   bounds, and the expected envelope. A message a type's own `Deserialize`
   code writes is never passed through, and keys and file names are escaped
@@ -177,6 +177,8 @@ Reader codes have two segments; product codes have three.
 | `config.out-of-range` | a number is outside its bounds |
 | `config.substitution` | a `${...}` expression cannot be filled: it is not well formed, its variable is unset or empty, `${NAME:?message}` refused, or the value holds a NUL byte (reported by a substitution hook) |
 | `config.substitution-not-allowed` | a `${...}` expression is written where substitution is not allowed, or an envelope member was substituted |
+| `config.check-acceptance-invalid` | an acceptance needs a valid check code, project-relative scope, and nonblank reason |
+| `config.check-acceptance-duplicate` | the same check code and scope have more than one acceptance |
 | `config.too-many-problems` | the file has more problems than the reader shows; this last diagnostic counts the rest |
 
 A test fails when a code in the source is missing from this table or the
@@ -471,6 +473,21 @@ What the reader adds on top of the parser, and why:
   any version bump, re-audit every `ScanError::new` call site for text
   built from input**, rerun the suite comparison, and re-check the depth and
   empty-value behavior above.
+
+## Project check acceptances
+
+`read_check_acceptances` reads the shared `PlatformCheckAcceptances` format.
+Each entry matches a warning's exact `code` and `scope` (`file`, `path`) and
+provides a nonblank reason. `CheckAcceptances::apply` keeps the diagnostic,
+its severity, and its reason, while `Report::warning_count` counts only active
+warnings. `Report::accepted_warning_count` counts the accepted warnings.
+Errors are never accepted. Unmatched entries are harmless.
+
+`check_scope_path` uses existing unique `id`, `action`, and `recordType`
+values to address resource list entries; it records no behavior fingerprint.
+The caller supplies the project-relative file. File discovery belongs to
+`registry-platform-config::apply_check_acceptances`, so this crate stays free
+of filesystem and environment I/O.
 
 ## Tests
 
