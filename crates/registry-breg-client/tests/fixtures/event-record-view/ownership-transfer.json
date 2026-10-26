@@ -1,5 +1,5 @@
 {
-  "contract": "id.registrystack.org/formats/breg/occurrence-view/v1alpha1",
+  "contract": "id.registrystack.org/formats/breg/event-record-view/v1alpha1",
   "correction": {
     "status": "unavailable"
   },

@@ -458,11 +458,10 @@ Application clients consume the [caller-filtered metadata contract](metadata.md)
 from `/v1/registry`, including exact route/profile fields, schemas, selectors,
 reference bindings, and query capabilities.
 
-A record type may also declare a [domain occurrence](occurrences.md): a
-descriptor of subjects, occurrence and effective time, sources, correction
-links and source event identity over fields it already stores, plus optional
-display purpose and grouping for Records and Actions. It adds no storage or
-authority.
+A record type may also declare an [event record](event-records.md)
+descriptor: subjects, occurred and effective time, sources, correction links
+and source event identity over fields it already stores, plus optional display
+purpose and grouping for Records and Actions. It adds no storage or authority.
 
 Domain-semantic entries in `manifestProjection` are optional overlays on the
 configured data model. One project declares one publisher authority, one public

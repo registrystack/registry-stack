@@ -2380,10 +2380,10 @@ impl ReadinessProbe for ControlledReadiness {
     }
 }
 
-const OCCURRENCE_PROJECT: &str = r#"
+const EVENT_RECORD_PROJECT: &str = r#"
 apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
 kind: BRegProject
-project: {id: occurrence-http-registry, version: "1", defaultLanguage: en, canonicalBaseIri: https://occurrence-http.example.test}
+project: {id: event-record-http-registry, version: "1", defaultLanguage: en, canonicalBaseIri: https://event-record-http.example.test}
 datasets: [{id: test-dataset}]
 recordTypes:
   - id: item
@@ -2406,7 +2406,7 @@ recordTypes:
       - {id: basis-reference, type: string, maximumLength: 80, required: false, classification: restricted}
       - {id: summary, type: text, maximumLength: 500, required: false, classification: restricted}
       - {id: corrects, type: reference, target: decision, required: false, classification: restricted}
-    occurrence:
+    eventRecord:
       label: Decision recorded
       subjects:
         - {role: item, field: item, label: Item, target: item}
@@ -2445,8 +2445,8 @@ accessProfiles:
 "#;
 
 #[tokio::test]
-async fn occurrence_metadata_is_caller_filtered() {
-    let app = Harness::from_project(OCCURRENCE_PROJECT, true).app;
+async fn event_record_metadata_is_caller_filtered() {
+    let app = Harness::from_project(EVENT_RECORD_PROJECT, true).app;
 
     let full = send_to(
         &app,
@@ -2465,12 +2465,12 @@ async fn occurrence_metadata_is_caller_filtered() {
     assert!(
         find(full_types, "item")
             .expect("the ordinary record type is visible")
-            .get("occurrence")
+            .get("eventRecord")
             .is_none(),
-        "a record type without a descriptor carries no occurrence member"
+        "a record type without a descriptor carries no event record member"
     );
     assert_eq!(
-        find(full_types, "decision").expect("decision is visible")["occurrence"],
+        find(full_types, "decision").expect("decision is visible")["eventRecord"],
         json!({
             "descriptorVersion": 1,
             "label": "Decision recorded",
@@ -2508,7 +2508,7 @@ async fn occurrence_metadata_is_caller_filtered() {
     );
     let decision = find(narrow_types, "decision").expect("decision is visible");
     assert_eq!(
-        decision["occurrence"],
+        decision["eventRecord"],
         json!({
             "descriptorVersion": 1,
             "label": "Decision recorded",

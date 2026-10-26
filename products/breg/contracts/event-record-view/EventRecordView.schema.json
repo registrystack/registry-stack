@@ -1,13 +1,13 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://id.registrystack.org/schemas/breg/occurrence-view/occurrence-view.v1alpha1.schema.json",
-  "title": "OccurrenceView",
-  "description": "Wire shape of the occurrence view that the BReg client projects from one record revision, its occurrence descriptor and optional evidence. Written by hand and held to the client's output by its contract test. The view is inert data: a status word (available, declaredUnknown, unavailable, unsupported) says what the client could state, never a guess.",
+  "$id": "https://id.registrystack.org/schemas/breg/event-record-view/event-record-view.v1alpha1.schema.json",
+  "title": "EventRecordView",
+  "description": "Wire shape of the event record view that the BReg client projects from one record revision, its event record descriptor and optional evidence. Written by hand and held to the client's output by its contract test. The view is inert data: a status word (available, declaredUnknown, unavailable, unsupported) says what the client could state, never a guess.",
   "type": "object",
   "additionalProperties": false,
   "properties": {
     "contract": {
-      "const": "id.registrystack.org/formats/breg/occurrence-view/v1alpha1"
+      "const": "id.registrystack.org/formats/breg/event-record-view/v1alpha1"
     },
     "descriptorVersion": {
       "type": "integer",

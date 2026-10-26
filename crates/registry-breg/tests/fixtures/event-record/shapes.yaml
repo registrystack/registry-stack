@@ -1,6 +1,6 @@
 apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
 kind: BRegProject
-project: {id: occurrence-shapes, version: "1", defaultLanguage: en, canonicalBaseIri: https://occurrence-shapes.example.test}
+project: {id: event-record-shapes, version: "1", defaultLanguage: en, canonicalBaseIri: https://event-record-shapes.example.test}
 datasets: [{id: test-dataset}]
 vocabularies:
   - {id: grant-status, values: [active, paused]}
@@ -32,7 +32,7 @@ recordTypes:
       - {id: corrects, type: reference, target: entry-registration, required: false, classification: restricted}
     constraints:
       - {id: one-per-source, type: unique, fields: [source-reference]}
-    occurrence:
+    eventRecord:
       label: Entry registered
       subjects:
         - {role: entry, field: entry, label: Entry, target: entry}
@@ -73,7 +73,7 @@ recordTypes:
       - {id: corrects, type: reference, target: grant-pause-decision, required: false, classification: restricted}
     constraints:
       - {id: effective-order, type: compare, left: effective-from, operator: less-than, right: effective-until}
-    occurrence:
+    eventRecord:
       label: Grant pause decided
       subjects:
         - {role: grant, field: grant, label: Grant, target: grant}
@@ -119,7 +119,7 @@ recordTypes:
     constraints:
       - {id: one-per-deed, type: unique, fields: [deed-reference]}
       - {id: agreement-window, type: compare, left: agreed-not-before, operator: less-than, right: agreed-before}
-    occurrence:
+    eventRecord:
       label: Custody handed over
       subjects:
         - {role: item, field: item, label: Item, target: item}

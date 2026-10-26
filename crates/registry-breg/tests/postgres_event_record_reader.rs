@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! One generic reader projects three differently shaped occurrence record
+//! One generic reader projects three differently shaped event record
 //! types served by a real PostgreSQL-backed registry: the descriptor comes
 //! from the served metadata, the record from an ordinary read and the recorded
 //! time from the creation revision. The projection code never branches on a
@@ -21,13 +21,13 @@ use registry_breg::api::VerifiedRequestClaims;
 use registry_breg::compiler::{compile_project, CompileProfile};
 use registry_breg::contract::parse_project_yaml;
 use registry_breg_client::{
-    occurrence_view, BRegActionInvocationRequest, BRegCreateRequest, BRegDirectWrite,
-    BRegIdempotencyKey, BRegMetadata, BRegOccurrenceDescriptor, BRegOccurrenceError,
-    BRegOccurrenceEvidence, BRegRecordFormat, BRegRecordOptions, BaseRegistryClient,
+    event_record_view, BRegActionInvocationRequest, BRegCreateRequest, BRegDirectWrite,
+    BRegEventRecordDescriptor, BRegEventRecordError, BRegEventRecordEvidence, BRegIdempotencyKey,
+    BRegMetadata, BRegRecordFormat, BRegRecordOptions, BaseRegistryClient,
 };
 use serde_json::{json, Value};
 
-const SHAPES: &str = include_str!("fixtures/occurrence/shapes.yaml");
+const SHAPES: &str = include_str!("fixtures/event-record/shapes.yaml");
 
 /// Every record type the reader needs, with the fields the profile may read
 /// and write. Reference fields that no journey fills are left out.
@@ -127,7 +127,7 @@ fn registry_with_actions() -> registry_breg::CompiledRegistry {
 fn claims() -> VerifiedRequestClaims {
     VerifiedRequestClaims::authenticated(
         "registry_principal",
-        "occurrence-reader-fixture",
+        "event-record-reader-fixture",
         BTreeSet::new(),
         None,
         BTreeMap::new(),
@@ -172,7 +172,7 @@ impl Journey<'_> {
     async fn project(&self, record_type: &str, route: &str, id: &str) -> Value {
         let descriptor = self
             .contract
-            .occurrence(record_type)
+            .event_record(record_type)
             .expect("the served metadata carries the descriptor");
         let record = self
             .client
@@ -183,16 +183,16 @@ impl Journey<'_> {
             .data;
         let creation = self
             .client
-            .occurrence_creation_revision(route, id, None)
+            .event_record_creation_revision(route, id, None)
             .await
             .expect("creation revision read")
             .expect("the profile may read the creation revision");
-        let view = occurrence_view(
+        let view = event_record_view(
             self.contract.registry_revision(),
             record_type,
             &descriptor,
             &record,
-            &BRegOccurrenceEvidence {
+            &BRegEventRecordEvidence {
                 creation_revision: Some(&creation),
                 ..Default::default()
             },
@@ -384,40 +384,40 @@ async fn one_reader_projects_three_schemas() {
         );
     }
 
-    // A record type without a descriptor is not an occurrence.
+    // A record type without a descriptor is not an event record.
     assert!(matches!(
-        contract.occurrence("entry"),
-        Err(BRegOccurrenceError::NotAnOccurrence)
+        contract.event_record("entry"),
+        Err(BRegEventRecordError::NotAnEventRecord)
     ));
     assert!(matches!(
-        contract.occurrence("no-such-record-type"),
-        Err(BRegOccurrenceError::NotAnOccurrence)
+        contract.event_record("no-such-record-type"),
+        Err(BRegEventRecordError::NotAnEventRecord)
     ));
 
     // The served descriptor is the reader's contract: a malformed member and
     // an unsupported version are refused rather than guessed.
     let served = contract
-        .occurrence("grant-pause-decision")
+        .event_record("grant-pause-decision")
         .expect("served descriptor")
         .to_value();
     let mut malformed = served.clone();
     malformed["subjects"] = json!("not-a-list");
-    let error = BRegOccurrenceDescriptor::from_value(&malformed)
+    let error = BRegEventRecordDescriptor::from_value(&malformed)
         .expect_err("a descriptor with non-list subjects is malformed");
     assert!(
-        matches!(error, BRegOccurrenceError::MalformedDescriptor { .. }),
+        matches!(error, BRegEventRecordError::MalformedDescriptor { .. }),
         "{error:?}"
     );
     let mut unsupported = served;
     unsupported["descriptorVersion"] = json!(2);
     assert!(matches!(
-        BRegOccurrenceDescriptor::from_value(&unsupported),
-        Err(BRegOccurrenceError::UnsupportedVersion { .. })
+        BRegEventRecordDescriptor::from_value(&unsupported),
+        Err(BRegEventRecordError::UnsupportedVersion { .. })
     ));
 
     // Evidence read for a different record is refused, never merged.
     let descriptor = contract
-        .occurrence("grant-pause-decision")
+        .event_record("grant-pause-decision")
         .expect("served descriptor");
     let record = client
         .get_record(
@@ -430,30 +430,30 @@ async fn one_reader_projects_three_schemas() {
         .value
         .data;
     let other = client
-        .occurrence_creation_revision("entry-registrations", &registration, None)
+        .event_record_creation_revision("entry-registrations", &registration, None)
         .await
         .expect("creation revision read")
         .expect("the profile may read the creation revision");
-    let refused = occurrence_view(
+    let refused = event_record_view(
         contract.registry_revision(),
         "grant-pause-decision",
         &descriptor,
         &record,
-        &BRegOccurrenceEvidence {
+        &BRegEventRecordEvidence {
             creation_revision: Some(&other),
             ..Default::default()
         },
     )
     .expect_err("another record's creation revision is not evidence");
     assert!(
-        matches!(refused, BRegOccurrenceError::WrongRecordEvidence { .. }),
+        matches!(refused, BRegEventRecordError::WrongRecordEvidence { .. }),
         "{refused:?}"
     );
 
     // A creation revision for an unreadable or absent history is None, and the
     // view then reports the recorded time as unavailable.
     let absent = client
-        .occurrence_creation_revision(
+        .event_record_creation_revision(
             "grant-pause-decisions",
             "00000000-0000-4000-8000-0000000000ff",
             None,
@@ -461,12 +461,12 @@ async fn one_reader_projects_three_schemas() {
         .await
         .expect("an absent history is not a failure");
     assert!(absent.is_none());
-    let view = occurrence_view(
+    let view = event_record_view(
         contract.registry_revision(),
         "grant-pause-decision",
         &descriptor,
         &record,
-        &BRegOccurrenceEvidence::default(),
+        &BRegEventRecordEvidence::default(),
     )
     .expect("the view projects without creation evidence");
     let view = serde_json::to_value(view).expect("view serializes");
@@ -523,7 +523,7 @@ async fn an_action_created_record_has_a_readable_creation_revision() {
         .to_string();
 
     let creation = client
-        .occurrence_creation_revision("grant-pause-decisions", &decision, None)
+        .event_record_creation_revision("grant-pause-decisions", &decision, None)
         .await
         .expect("creation revision read")
         .expect("the profile may read the creation revision of an Action-created record");
@@ -535,7 +535,7 @@ async fn an_action_created_record_has_a_readable_creation_revision() {
     );
 
     let descriptor = contract
-        .occurrence("grant-pause-decision")
+        .event_record("grant-pause-decision")
         .expect("served descriptor");
     let record = client
         .get_record(
@@ -547,12 +547,12 @@ async fn an_action_created_record_has_a_readable_creation_revision() {
         .expect("record read")
         .value
         .data;
-    let view = occurrence_view(
+    let view = event_record_view(
         contract.registry_revision(),
         "grant-pause-decision",
         &descriptor,
         &record,
-        &BRegOccurrenceEvidence {
+        &BRegEventRecordEvidence {
             creation_revision: Some(&creation),
             action_receipts: &[(&receipt, "decision")],
             ..Default::default()

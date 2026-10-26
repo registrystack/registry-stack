@@ -409,10 +409,10 @@ async fn real_postgres_revision_http_lists_internal_migration_revisions() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn occurrence_history_is_caller_bounded() {
+async fn event_record_history_is_caller_bounded() {
     let database = TestDatabase::create(4).await;
     let (migration, migration_task) = database.connect_migration().await;
-    let registry = Arc::new(occurrence_registry());
+    let registry = Arc::new(event_record_registry());
     install_compiled_schema(&migration, &registry, &database.runtime_role)
         .await
         .expect("migration installs the complete compiled PostgreSQL schema");
@@ -441,7 +441,7 @@ async fn occurrence_history_is_caller_bounded() {
             "create",
             json!({
                 "jurisdiction": jurisdiction,
-                "label": "occurrence",
+                "label": "event record",
                 "holder": holder,
                 "occurred-on": "2026-10-20",
                 "secret": SECRET_CANARY,
@@ -462,7 +462,7 @@ async fn occurrence_history_is_caller_bounded() {
     );
     let app = revision_router(pool, Arc::clone(&registry), identity, lock_key, audit, None);
 
-    // The creation revision is the occurrence evidence, bounded to the fields
+    // The creation revision is the event record evidence, bounded to the fields
     // the profile may read.
     let list = send(
         &app,
@@ -480,7 +480,7 @@ async fn occurrence_history_is_caller_bounded() {
     assert_eq!(items[0]["operationIdentifier"], "records.widget.create");
     assert_eq!(
         items[0]["domainData"],
-        json!({"holder": holder, "label": "occurrence", "occurredOn": "2026-10-20"})
+        json!({"holder": holder, "label": "event record", "occurredOn": "2026-10-20"})
     );
     assert!(
         !String::from_utf8(list_bytes)
@@ -1007,7 +1007,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
         .expect("revision HTTP fixture compiles")
 }
 
-fn occurrence_registry() -> registry_breg::CompiledRegistry {
+fn event_record_registry() -> registry_breg::CompiledRegistry {
     let project = parse_project_json(
         br#"{"datasets":[{"id": "test-dataset"}],
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
@@ -1029,8 +1029,8 @@ fn occurrence_registry() -> registry_breg::CompiledRegistry {
               {"id":"occurred-on","type":"date","required":true,"classification":"internal"},
               {"id":"secret","type":"string","required":true,"maximumLength":100,"classification":"restricted"}
             ],
-            "occurrence":{
-              "label":"Occurrence",
+            "eventRecord":{
+              "label":"Event record",
               "subjects":[{"role":"holder","field":"holder","label":"Holder","target":"holder"}],
               "occurredAt":{"at":"occurred-on"}
             }
@@ -1056,7 +1056,7 @@ fn occurrence_registry() -> registry_breg::CompiledRegistry {
           }]
         }"#,
     )
-    .expect("occurrence history fixture parses");
+    .expect("event record history fixture parses");
     compile_project(&project, &[], CompileProfile::Authoring)
-        .expect("occurrence history fixture compiles")
+        .expect("event record history fixture compiles")
 }

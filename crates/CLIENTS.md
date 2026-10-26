@@ -67,12 +67,12 @@ or unify distinct authority contracts. Shared HTTP/token primitives live in
   permissions in a binding. Validate a mutation before token acquisition or
   I/O; never generate its idempotency key, and resend it only through the
   bounded same-key retry. Record ETags and lifecycle-action ETags are distinct.
-- The BReg occurrence view (`id.registrystack.org/formats/breg/occurrence-view/v1alpha1`)
+- The BReg event record view (`id.registrystack.org/formats/breg/event-record-view/v1alpha1`)
   is a pure, read-only projection of one record revision, built from the
-  caller-filtered occurrence descriptor in Registry Metadata, the record, and
+  caller-filtered event record descriptor in Registry Metadata, the record, and
   evidence the caller supplies. It reads no clock and performs no exchange.
   Recorded time comes only from the creation revision of that record, which
-  `occurrence_creation_revision` reads as exactly revision 1 and reports as
+  `event_record_creation_revision` reads as exactly revision 1 and reports as
   absent only for a 403 or 404 answer, which means the caller cannot see that
   revision; every other status is returned as an error. Its compact
   `{recordType, recordId, revision, createdAt}` form retains the response's
@@ -82,11 +82,11 @@ or unify distinct authority contracts. Shared HTTP/token primitives live in
   uppercase `T` and `Z` and the offset the
   registry served (it serves stored timestamps in UTC with `+00:00`); dates stay
   dates. The Rust projection is the single implementation:
-  the Node and Python exports (`occurrenceView`, `occurrence_view`, and the
-  metadata `occurrenceDescriptor` or `occurrence_descriptor` accessor) pass
+  the Node and Python exports (`eventRecordView`, `event_record_view`, and the
+  metadata `eventRecordDescriptor` or `event_record_descriptor` accessor) pass
   JSON through it unchanged and add no semantics. The view shape, its status
-  words and its error codes are documented in `products/breg/occurrences.md`
-  and published as `products/breg/contracts/occurrence-view/OccurrenceView.schema.json`.
+  words and its error codes are documented in `products/breg/event-records.md`
+  and published as `products/breg/contracts/event-record-view/EventRecordView.schema.json`.
 - Messaging submissions take a caller-chosen idempotency key; a binding never
   generates one. Only the Rust client's bounded same-key retry resends a
   submission, and a cancellation is never resent. Message, template,

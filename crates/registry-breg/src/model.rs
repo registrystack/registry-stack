@@ -976,10 +976,10 @@ pub struct CompiledEntity {
     /// identity.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub grouping: Option<CompiledGrouping>,
-    /// The resolved occurrence descriptor; excluded from every execution
+    /// The resolved event record descriptor; excluded from every execution
     /// identity.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub occurrence: Option<CompiledOccurrence>,
+    pub event_record: Option<CompiledEventRecord>,
     pub definition_revision: String,
 }
 
@@ -992,42 +992,42 @@ pub struct CompiledGrouping {
 }
 
 /// The descriptor version this compiler emits.
-pub const OCCURRENCE_DESCRIPTOR_VERSION: u64 = 1;
+pub const EVENT_RECORD_DESCRIPTOR_VERSION: u64 = 1;
 
-/// A record type's occurrence mapping with every field resolved once. The
+/// A record type's event record mapping with every field resolved once. The
 /// serialized form is the descriptor shown in the model explanation; runtime
 /// metadata filters it per caller.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct CompiledOccurrence {
+pub struct CompiledEventRecord {
     pub descriptor_version: u64,
     pub label: String,
-    pub subjects: Vec<CompiledOccurrenceRole>,
-    pub summary: Option<CompiledOccurrenceField>,
-    pub occurred_at: Option<CompiledOccurrenceTime>,
-    pub effective: Option<CompiledOccurrenceTime>,
-    pub sources: Vec<CompiledOccurrenceRole>,
-    pub correction: Option<CompiledOccurrenceCorrection>,
+    pub subjects: Vec<CompiledEventRecordRole>,
+    pub summary: Option<CompiledEventRecordField>,
+    pub occurred_at: Option<CompiledEventRecordTime>,
+    pub effective: Option<CompiledEventRecordTime>,
+    pub sources: Vec<CompiledEventRecordRole>,
+    pub correction: Option<CompiledEventRecordCorrection>,
     pub source_event_id: Option<CompiledSourceEventId>,
     pub recorded_time: CompiledRecordedTime,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct CompiledOccurrenceRole {
+pub struct CompiledEventRecordRole {
     pub role: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
-    pub kind: OccurrenceRoleKind,
+    pub kind: EventRecordRoleKind,
     /// The namespace of an external identifier.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub namespace: Option<String>,
-    pub field: CompiledOccurrenceField,
+    pub field: CompiledEventRecordField,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
-pub enum OccurrenceRoleKind {
+pub enum EventRecordRoleKind {
     /// A reference to a record of this registry.
     Native,
     /// An opaque identifier owned by another system; never resolved.
@@ -1037,20 +1037,20 @@ pub enum OccurrenceRoleKind {
 /// A stored field named by id and by its API name.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct CompiledOccurrenceField {
+pub struct CompiledEventRecordField {
     pub id: String,
     pub api_name: String,
     #[serde(rename = "type")]
-    pub value_type: OccurrenceValueType,
+    pub value_type: EventRecordValueType,
     /// The record type a `reference` field points at.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target: Option<String>,
 }
 
-/// The field types an occurrence role can map.
+/// The field types an event record role can map.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
-pub enum OccurrenceValueType {
+pub enum EventRecordValueType {
     Reference,
     String,
     Text,
@@ -1060,7 +1060,7 @@ pub enum OccurrenceValueType {
     VocabularyCode,
 }
 
-impl OccurrenceValueType {
+impl EventRecordValueType {
     /// The field type's kebab-case name, as authored.
     pub fn name(self) -> &'static str {
         match self {
@@ -1077,31 +1077,31 @@ impl OccurrenceValueType {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "kebab-case", deny_unknown_fields)]
-pub enum CompiledOccurrenceTime {
+pub enum CompiledEventRecordTime {
     Point {
-        at: CompiledOccurrenceField,
+        at: CompiledEventRecordField,
     },
     Interval {
         meaning: crate::contract::IntervalMeaning,
-        start: CompiledOccurrenceField,
+        start: CompiledEventRecordField,
         /// Absent for an open-ended span.
-        end: Option<CompiledOccurrenceField>,
+        end: Option<CompiledEventRecordField>,
     },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct CompiledOccurrenceCorrection {
+pub struct CompiledEventRecordCorrection {
     pub relation: crate::contract::CorrectionRelation,
-    pub field: CompiledOccurrenceField,
+    pub field: CompiledEventRecordField,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct CompiledSourceEventId {
-    pub field: CompiledOccurrenceField,
+    pub field: CompiledEventRecordField,
     pub namespace: Option<String>,
-    pub namespace_field: Option<CompiledOccurrenceField>,
+    pub namespace_field: Option<CompiledEventRecordField>,
     pub duplicates: crate::contract::DuplicatePolicy,
     pub constraint: Option<String>,
 }

@@ -9975,11 +9975,11 @@ fn explain_routes(compiled: &CompiledRegistry) -> serde_json::Result<Value> {
 
 fn explain_actions(compiled: &CompiledRegistry) -> serde_json::Result<Value> {
     let mut inspection = registry_breg::artifacts::inspect_registry(compiled);
-    // Occurrence descriptors and display grouping are model-explanation members; the
+    // Event record descriptors and display grouping are model-explanation members; the
     // actions contract does not carry them.
     for (collection, members) in [
         ("actions", &["grouping"][..]),
-        ("recordTypes", &["grouping", "occurrence"][..]),
+        ("recordTypes", &["grouping", "eventRecord"][..]),
     ] {
         for item in inspection[collection]
             .as_array_mut()

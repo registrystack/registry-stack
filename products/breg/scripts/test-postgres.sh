@@ -124,8 +124,8 @@ postgres_targets=(
   postgres_immediate_action_activation
   postgres_consent_examples
   postgres_registry_extensibility
-  postgres_occurrence_examples
-  postgres_occurrence_reader
+  postgres_event_record_examples
+  postgres_event_record_reader
   postgres_action_handlers
   postgres_field_encryption
   postgres_generated_identifier_batch_import

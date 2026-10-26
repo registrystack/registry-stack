@@ -761,7 +761,7 @@ impl BaseRegistryClient {
     }
 
     /// Read the creation revision (revision 1) of one record, the only source
-    /// of an occurrence's recorded time.
+    /// of an event record's recorded time.
     ///
     /// Performs exactly one exchange. Returns `None` when the caller cannot
     /// read that revision (a 403 or 404 problem answer); the absence is never
@@ -769,7 +769,7 @@ impl BaseRegistryClient {
     /// revision 1 document that is not the record's creation is a body failure.
     /// The retained evidence binds the response's record type, record identifier,
     /// revision and creation time.
-    pub async fn occurrence_creation_revision(
+    pub async fn event_record_creation_revision(
         &self,
         entity_route: &str,
         record_identifier: &str,

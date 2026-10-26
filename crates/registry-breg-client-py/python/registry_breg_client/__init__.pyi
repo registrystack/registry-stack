@@ -186,13 +186,13 @@ def verify_hook_delivery(
     Apply delivery-time skew and deduplication policy before acting on the body."""
     ...
 
-def occurrence_view(arguments: dict[str, JsonValue]) -> dict[str, JsonValue]:
-    """Project one record revision into the occurrence view.
+def event_record_view(arguments: dict[str, JsonValue]) -> dict[str, JsonValue]:
+    """Project one record revision into the event record view.
 
     `arguments` carries `registryRevision`, `recordType`, `descriptor`, `record`
     and the optional `creationRevision`, `actionReceipts` and
     `proposalApplications`. Refusal raises `BaseRegistryClientError` with kind
-    `occurrence` and one of the codes `not-an-occurrence`, `unsupported-version`,
+    `event-record` and one of the codes `not-an-event-record`, `unsupported-version`,
     `malformed-descriptor`, `wrong-record-evidence`, `revision-mismatch`,
     `incompatible-metadata` or `invalid-input`."""
     ...
@@ -263,8 +263,8 @@ class BRegProposalActionDescriptor(TypedDict):
     readable_context_fields: Sequence[str]
 
 class BRegMetadata:
-    def occurrence_descriptor(self, record_type: str) -> dict[str, JsonValue]:
-        """The occurrence descriptor declared for a record type."""
+    def event_record_descriptor(self, record_type: str) -> dict[str, JsonValue]:
+        """The event record descriptor declared for a record type."""
         ...
     @property
     def proposal_actions(self) -> Sequence[BRegProposalActionDescriptor]: ...
@@ -330,7 +330,7 @@ class BaseRegistryClient:
     def ready(self) -> dict[str, Any]: ...
     def openapi(self, access_profile: str | None = None) -> dict[str, Any]: ...
     def registry_metadata(self, access_profile: str | None = None) -> dict[str, Any]: ...
-    def occurrence_creation_revision(
+    def event_record_creation_revision(
         self,
         entity_route: str,
         record_identifier: str,

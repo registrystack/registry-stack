@@ -30,16 +30,16 @@ render them as plain text. A title exposes only fields the current profile may
 read. Reference descriptors and bounded forward/inverse navigation reuse normal
 record authority. A link or relationship never grants target disclosure.
 
-## Domain occurrences
+## Event records
 
-A record type that declares a domain occurrence descriptor carries an
-`occurrence` member, filtered for the caller and profile: `descriptorVersion`,
+A record type that declares an event record descriptor carries an
+`eventRecord` member, filtered for the caller and profile: `descriptorVersion`,
 `label`, `recordedTime`, and only those subjects, sources, summary, correction,
 source event identifier, and time mappings whose fields the profile may read.
 Withheld and undeclared members are omitted, never `null`. A native `target` is
 kept only when that record type is visible to the caller. The member is
 additive and ignorable within `metadataVersion: "2"`, and it grants nothing.
-See [Domain occurrences](occurrences.md).
+See [Event records](event-records.md).
 
 ## Actions
 

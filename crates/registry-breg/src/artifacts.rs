@@ -658,7 +658,7 @@ pub fn inspect_registry(registry: &crate::model::CompiledRegistry) -> Value {
             json!({
                 "id": record_type.id, "apiName": record_type.api_name,
                 "revision": record_type.definition_revision, "display": record_type.display,
-                "grouping": record_type.grouping, "occurrence": record_type.occurrence,
+                "grouping": record_type.grouping, "eventRecord": record_type.event_record,
                 "sourceModule": record_type.source_module,
                 "moduleOrigins": record_type.module_origins,
                 "primaryDataset": record_type.primary_dataset, "route": record_type.route,

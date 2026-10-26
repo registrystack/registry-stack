@@ -22,13 +22,13 @@ mod batch;
 mod client;
 mod config;
 mod error;
+mod event_record;
 mod extended_mutation;
 mod geojson;
 mod hook;
 mod ingestion;
 mod metadata;
 mod mutation;
-mod occurrence;
 mod proposal;
 mod query;
 mod read;
@@ -47,12 +47,12 @@ pub use error::{
     BRegConstraintViolation, BRegProblemCode, BRegProblemFieldPath, BRegProtocolFailure,
     BRegRefusalCode, BaseRegistryClientError, TransportKind,
 };
+pub use event_record::*;
 pub use geojson::*;
 pub use hook::*;
 pub use ingestion::*;
 pub use metadata::*;
 pub use mutation::*;
-pub use occurrence::*;
 pub use proposal::*;
 pub use query::*;
 pub use read::*;

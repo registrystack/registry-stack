@@ -519,8 +519,8 @@ async fn active_references_refuse_tombstones_and_preserve_retained_links() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn occurrence_references_restrict_tombstone_and_mutable_source_control() {
-    let fixture = Fixture::start_with(10, occurrence_registry()).await;
+async fn event_record_references_restrict_tombstone_and_mutable_source_control() {
+    let fixture = Fixture::start_with(10, event_record_registry()).await;
     let subject_create = plan(&fixture, "records.subject.create");
     let subject_tombstone = plan(&fixture, "records.subject.tombstone");
     let decision_create = plan(&fixture, "records.decision.create");
@@ -528,11 +528,11 @@ async fn occurrence_references_restrict_tombstone_and_mutable_source_control() {
     let journal_tombstone = plan(&fixture, "records.journal.tombstone");
     assert!(
         MutationPlan::from_compiled(&fixture.registry, "records.decision.tombstone").is_err(),
-        "a create-only occurrence record has no tombstone operation"
+        "a create-only event record has no tombstone operation"
     );
     assert!(
         MutationPlan::from_compiled(&fixture.registry, "records.decision.patch").is_err(),
-        "a create-only occurrence record has no patch operation"
+        "a create-only event record has no patch operation"
     );
     let subject_claims = claims(&fixture.registry, "subject", "subject-operator", "zone-a");
     let recorder_claims = claims(&fixture.registry, "decision", "recorder", "zone-a");
@@ -604,7 +604,7 @@ async fn occurrence_references_restrict_tombstone_and_mutable_source_control() {
     let subject_id = response_id(&subject);
     let subject_etag = response_etag(&subject);
 
-    // A correction is a second occurrence that names the first; the first
+    // A correction is a second event record that names the first; the first
     // keeps its single revision and its content.
     let original = fixture
         .mutations
@@ -619,7 +619,7 @@ async fn occurrence_references_restrict_tombstone_and_mutable_source_control() {
             ),
         )
         .await
-        .expect("occurrence create commits");
+        .expect("event record create commits");
     let original_id = response_id(&original);
     let correction = fixture
         .mutations
@@ -658,15 +658,15 @@ async fn occurrence_references_restrict_tombstone_and_mutable_source_control() {
             ),
         )
         .await
-        .expect_err("a correction names an existing occurrence");
+        .expect_err("a correction names an existing event record");
     assert!(
         !format!("{refused:?} {refused}").contains(&missing),
         "the refusal carries no submitted identifier"
     );
     assert_eq!(decision_rows(&fixture).await, rows_before);
 
-    // Occurrence references restrict tombstoning the subject. The occurrence
-    // is create-only, so the restriction cannot be released.
+    // References from an event record restrict tombstoning the subject. The
+    // event record is create-only, so the restriction cannot be released.
     let refused = tombstone(
         &fixture.mutations,
         &mut client,
@@ -678,11 +678,11 @@ async fn occurrence_references_restrict_tombstone_and_mutable_source_control() {
         &["jurisdiction", "name"],
     )
     .await
-    .expect_err("an occurrence that references the subject prevents its tombstone");
+    .expect_err("an event record that references the subject prevents its tombstone");
     assert_value_free_conflict(refused, &fixture.registry, &[&subject_id, &original_id]);
     assert_record(&fixture, "subject", &subject_id, "active", 1).await;
 
-    // A mutable record that maps an occurrence restricts the same way, and
+    // A mutable record that maps an event record restricts the same way, and
     // tombstoning it releases the restriction while its link stays stored.
     let held = fixture
         .mutations
@@ -713,7 +713,7 @@ async fn occurrence_references_restrict_tombstone_and_mutable_source_control() {
             ),
         )
         .await
-        .expect("mutable occurrence source create commits");
+        .expect("mutable event record source create commits");
     let journal_id = response_id(&journal);
     let journal_etag = response_etag(&journal);
     let refused = tombstone(
@@ -799,11 +799,11 @@ async fn decision_rows(fixture: &Fixture) -> i64 {
             &[],
         )
         .await
-        .expect("administrator counts occurrence rows")
+        .expect("administrator counts event record rows")
         .get(0)
 }
 
-fn occurrence_registry() -> registry_breg::CompiledRegistry {
+fn event_record_registry() -> registry_breg::CompiledRegistry {
     let project = parse_project_json(
         br#"{
           "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
@@ -824,7 +824,7 @@ fn occurrence_registry() -> registry_breg::CompiledRegistry {
               {"id":"corrects","type":"reference","target":"decision","onDelete":"restrict","classification":"internal"},
               {"id":"occurred-on","type":"date","required":true,"classification":"internal"}
             ],
-            "occurrence":{
+            "eventRecord":{
               "label":"Decision made",
               "subjects":[{"role":"subject","field":"subject","label":"Subject","target":"subject"}],
               "occurredAt":{"at":"occurred-on"},
@@ -837,7 +837,7 @@ fn occurrence_registry() -> registry_breg::CompiledRegistry {
               {"id":"subject","type":"reference","target":"subject","onDelete":"restrict","required":true,"classification":"internal"},
               {"id":"noted-on","type":"date","required":true,"classification":"internal"}
             ],
-            "occurrence":{
+            "eventRecord":{
               "label":"Note made",
               "subjects":[{"role":"subject","field":"subject","label":"Subject","target":"subject"}],
               "occurredAt":{"at":"noted-on"}
@@ -866,9 +866,9 @@ fn occurrence_registry() -> registry_breg::CompiledRegistry {
           }]
         }"#,
     )
-    .expect("occurrence reference fixture parses");
+    .expect("event record reference fixture parses");
     compile_project(&project, &[], CompileProfile::Authoring)
-        .expect("occurrence reference fixture compiles")
+        .expect("event record reference fixture compiles")
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

@@ -208,7 +208,7 @@ enum Change {
     Required,
     PolicyOnly,
     DisplayOnly,
-    OccurrenceOnly,
+    EventRecordOnly,
 }
 
 async fn shape_journey(change: Change) {
@@ -226,8 +226,8 @@ async fn shape_journey(change: Change) {
         json!([{"id":"local-review","protocol":"id.registrystack.org/protocols/review/v1"}]);
     let policy =
         json!({"id":"name-correction","version":"1","digest":format!("sha256:{}", "b".repeat(64))});
-    if matches!(&change, Change::OccurrenceOnly) {
-        // The fields an occurrence descriptor maps exist before the descriptor
+    if matches!(&change, Change::EventRecordOnly) {
+        // The fields an event record descriptor maps exist before the descriptor
         // is declared, so the successor differs only by the descriptor.
         let fields = source["recordTypes"][0]["fields"].as_array_mut().unwrap();
         fields.push(json!({"id":"parent","type":"reference","target":"target","required":false,"classification":"internal"}));
@@ -235,7 +235,7 @@ async fn shape_journey(change: Change) {
             json!({"id":"noted-on","type":"date","required":false,"classification":"internal"}),
         );
     }
-    let review_source = if matches!(&change, Change::DisplayOnly | Change::OccurrenceOnly) {
+    let review_source = if matches!(&change, Change::DisplayOnly | Change::EventRecordOnly) {
         "shared.facility.registry:v1"
     } else {
         "proposal-test"
@@ -311,7 +311,7 @@ async fn shape_journey(change: Change) {
         "only the first request is approved"
     );
     assert_eq!(counts.get::<_, i64>(2), 0, "neither request applied");
-    if !matches!(change, Change::DisplayOnly | Change::OccurrenceOnly) {
+    if !matches!(change, Change::DisplayOnly | Change::EventRecordOnly) {
         source["actions"][0]["execution"]["proposal"]["review"]["policy"]["digest"] =
             json!(format!("sha256:{}", "c".repeat(64)));
     }
@@ -332,8 +332,8 @@ async fn shape_journey(change: Change) {
         Change::DisplayOnly => {
             source["actions"][0]["display"] = json!({"label":"A display-only update"})
         }
-        Change::OccurrenceOnly => {
-            source["recordTypes"][0]["occurrence"] = json!({
+        Change::EventRecordOnly => {
+            source["recordTypes"][0]["eventRecord"] = json!({
                 "label":"Target noted",
                 "subjects":[{"role":"parent","field":"parent","label":"Parent","target":"target"}],
                 "occurredAt":{"at":"noted-on"}
@@ -342,10 +342,10 @@ async fn shape_journey(change: Change) {
         }
     }
     let candidate = shape_package::candidate(&fixture, &source).await;
-    if matches!(change, Change::OccurrenceOnly) {
-        assert!(fixture.registry.entities()["target"].occurrence.is_none());
+    if matches!(change, Change::EventRecordOnly) {
+        assert!(fixture.registry.entities()["target"].event_record.is_none());
         assert!(candidate.registry().entities()["target"]
-            .occurrence
+            .event_record
             .is_some());
     }
     let inventory = registry_breg::proposal_retention::prepare_proposal_activation_compatibility(
@@ -421,7 +421,7 @@ async fn shape_journey(change: Change) {
     let get = metadata.value.select_proposal_get("clerk").unwrap();
     let shape_changed = !matches!(
         change,
-        Change::PolicyOnly | Change::DisplayOnly | Change::OccurrenceOnly
+        Change::PolicyOnly | Change::DisplayOnly | Change::EventRecordOnly
     );
     for original in [&approved, &reviewing] {
         let request = current
@@ -500,7 +500,7 @@ async fn shape_journey(change: Change) {
             assert_eq!(row.get::<_, i64>(3), 0, "old approval cannot follow Rebase");
         }
     }
-    if matches!(change, Change::OccurrenceOnly) {
+    if matches!(change, Change::EventRecordOnly) {
         // The submission frozen before the descriptor existed applies after
         // it, with the effects it froze and without a second review.
         let request = current
@@ -624,8 +624,8 @@ async fn policy_only_change_retains_review_compatibility() {
     shape_journey(Change::PolicyOnly).await;
 }
 #[tokio::test]
-async fn occurrence_descriptor_change_does_not_block_waiting_requests() {
-    shape_journey(Change::OccurrenceOnly).await;
+async fn event_record_descriptor_change_does_not_block_waiting_requests() {
+    shape_journey(Change::EventRecordOnly).await;
 }
 #[tokio::test]
 async fn unrelated_display_change_does_not_block_waiting_requests() {

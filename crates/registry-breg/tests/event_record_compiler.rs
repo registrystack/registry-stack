@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Domain occurrence descriptors and display grouping compile onto the model
+//! Event record descriptors and display grouping compile onto the model
 //! without touching any execution identity.
 
 use registry_breg::compiler::{compile_project, CompileProfile};
@@ -9,10 +9,10 @@ use registry_breg::immediate_actions::migration_review_revision;
 use registry_breg::CompiledRegistry;
 use serde_json::{json, Value};
 
-const SHAPES: &[u8] = include_bytes!("fixtures/occurrence/shapes.yaml");
+const SHAPES: &[u8] = include_bytes!("fixtures/event-record/shapes.yaml");
 
 fn shapes_project() -> RegistryProject {
-    parse_project_yaml(SHAPES).expect("the occurrence shapes fixture parses")
+    parse_project_yaml(SHAPES).expect("the event record shapes fixture parses")
 }
 
 fn compile(project: &RegistryProject) -> CompiledRegistry {
@@ -22,24 +22,24 @@ fn compile(project: &RegistryProject) -> CompiledRegistry {
     }
 }
 
-fn occurrence_json(registry: &CompiledRegistry, record_type: &str) -> Value {
+fn event_record_json(registry: &CompiledRegistry, record_type: &str) -> Value {
     serde_json::to_value(
         registry
             .entities()
             .get(record_type)
             .expect("the record type compiles")
-            .occurrence
+            .event_record
             .as_ref(),
     )
     .expect("the descriptor serializes")
 }
 
 #[test]
-fn three_occurrence_shapes_and_an_ordinary_record_compile() {
+fn three_event_record_shapes_and_an_ordinary_record_compile() {
     let registry = compile(&shapes_project());
 
     assert_eq!(
-        occurrence_json(&registry, "entry-registration"),
+        event_record_json(&registry, "entry-registration"),
         json!({
             "descriptorVersion": 1,
             "label": "Entry registered",
@@ -66,7 +66,7 @@ fn three_occurrence_shapes_and_an_ordinary_record_compile() {
         })
     );
     assert_eq!(
-        occurrence_json(&registry, "grant-pause-decision"),
+        event_record_json(&registry, "grant-pause-decision"),
         json!({
             "descriptorVersion": 1,
             "label": "Grant pause decided",
@@ -89,7 +89,7 @@ fn three_occurrence_shapes_and_an_ordinary_record_compile() {
         })
     );
     assert_eq!(
-        occurrence_json(&registry, "custody-handover"),
+        event_record_json(&registry, "custody-handover"),
         json!({
             "descriptorVersion": 1,
             "label": "Custody handed over",
@@ -125,8 +125,8 @@ fn three_occurrence_shapes_and_an_ordinary_record_compile() {
 
     for ordinary in ["review-note", "entry", "grant", "item", "custody-record"] {
         assert!(
-            registry.entities()[ordinary].occurrence.is_none(),
-            "{ordinary} declares no occurrence"
+            registry.entities()[ordinary].event_record.is_none(),
+            "{ordinary} declares no event record"
         );
     }
 }
@@ -134,7 +134,7 @@ fn three_occurrence_shapes_and_an_ordinary_record_compile() {
 const CASES: &str = r#"
 apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
 kind: BRegProject
-project: {id: occurrence-cases, version: "1", defaultLanguage: en, canonicalBaseIri: https://occurrence-cases.example.test}
+project: {id: event-record-cases, version: "1", defaultLanguage: en, canonicalBaseIri: https://event-record-cases.example.test}
 datasets: [{id: test-dataset}]
 vocabularies:
   - {id: ns-vocab, values: [alpha, beta]}
@@ -179,7 +179,7 @@ recordTypes:
       - {id: u-ext-when, type: unique, fields: [ext-id], when: [{type: field-is-not-null, field: ext-id}]}
       - {id: u-uuid, type: unique, fields: [ext-uuid]}
       - {id: window, type: compare, left: d1, operator: less-than, right: d2}
-@@OCCURRENCE@@
+@@EVENT_RECORD@@
 "#;
 
 /// An error diagnostic as (code, path, message).
@@ -187,26 +187,26 @@ type Diag = (String, String, String);
 
 const SUBJECT: &str = "subjects: [{role: a, field: ref-a}]";
 
-fn case_yaml(display: &str, occurrence: &str) -> String {
+fn case_yaml(display: &str, event_record: &str) -> String {
     let display = if display.is_empty() {
         String::new()
     } else {
         format!("    display: {display}")
     };
-    let occurrence = if occurrence.is_empty() {
+    let event_record = if event_record.is_empty() {
         String::new()
     } else {
-        format!("    occurrence: {occurrence}")
+        format!("    eventRecord: {event_record}")
     };
     CASES
         .replace("@@DISPLAY@@", &display)
-        .replace("@@OCCURRENCE@@", &occurrence)
+        .replace("@@EVENT_RECORD@@", &event_record)
 }
 
 /// The error diagnostics (code, path, message) of a case, from the parser or
 /// the compiler, sorted for comparison.
-fn case_errors(display: &str, occurrence: &str) -> Vec<Diag> {
-    let failure = match parse_project_yaml(case_yaml(display, occurrence).as_bytes()) {
+fn case_errors(display: &str, event_record: &str) -> Vec<Diag> {
+    let failure = match parse_project_yaml(case_yaml(display, event_record).as_bytes()) {
         Err(failure) => failure,
         Ok(project) => match compile_project(&project, &[], CompileProfile::Authoring) {
             Ok(_) => return Vec::new(),
@@ -232,13 +232,13 @@ fn case_errors(display: &str, occurrence: &str) -> Vec<Diag> {
 fn error(code: &str, path: &str, message: &str) -> Diag {
     (
         code.to_owned(),
-        format!("recordTypes[id=event].occurrence{path}"),
+        format!("recordTypes[id=event].eventRecord{path}"),
         message.to_owned(),
     )
 }
 
-fn compiled_case(display: &str, occurrence: &str) -> CompiledRegistry {
-    let project = parse_project_yaml(case_yaml(display, occurrence).as_bytes())
+fn compiled_case(display: &str, event_record: &str) -> CompiledRegistry {
+    let project = parse_project_yaml(case_yaml(display, event_record).as_bytes())
         .expect("the case project parses");
     compile(&project)
 }
@@ -250,16 +250,16 @@ fn invalid_mappings_fail_at_authored_paths() {
             "subjects-empty",
             "{subjects: []}".to_owned(),
             vec![error(
-                "breg.occurrence.subjects-empty",
+                "breg.event-record.subjects-empty",
                 ".subjects",
-                "an occurrence declares at least one subject",
+                "an event record declares at least one subject",
             )],
         ),
         (
             "role-invalid",
             "{subjects: [{role: Bad_Role, field: ref-a}]}".to_owned(),
             vec![error(
-                "breg.occurrence.role-invalid",
+                "breg.event-record.role-invalid",
                 ".subjects[0].role",
                 "role \"Bad_Role\" must start with a lowercase letter and contain only lowercase letters, digits, hyphens and underscores, at most 64 characters",
             )],
@@ -268,27 +268,27 @@ fn invalid_mappings_fail_at_authored_paths() {
             "role-duplicate-across-subjects-and-sources",
             "{subjects: [{role: a, field: ref-a}], sources: [{role: a, field: ref-b}]}".to_owned(),
             vec![error(
-                "breg.occurrence.role-duplicate",
+                "breg.event-record.role-duplicate",
                 ".sources[0].role",
-                "role \"a\" is declared more than once in this occurrence",
+                "role \"a\" is declared more than once in this event record",
             )],
         ),
         (
             "field-unknown",
             "{subjects: [{role: a, field: missing}]}".to_owned(),
             vec![error(
-                "breg.occurrence.field-unknown",
+                "breg.event-record.field-unknown",
                 ".subjects[role=a].field",
-                "occurrence field \"missing\" names no stored field of record type \"event\"",
+                "event record field \"missing\" names no stored field of record type \"event\"",
             )],
         ),
         (
             "field-unknown-in-time-bound",
             format!("{{{SUBJECT}, occurredAt: {{start: missing, end: d2, meaning: span}}}}"),
             vec![error(
-                "breg.occurrence.field-unknown",
+                "breg.event-record.field-unknown",
                 ".occurredAt.start",
-                "occurrence field \"missing\" names no stored field of record type \"event\"",
+                "event record field \"missing\" names no stored field of record type \"event\"",
             )],
         ),
         (
@@ -297,16 +297,16 @@ fn invalid_mappings_fail_at_authored_paths() {
                 "{{{SUBJECT}, sourceEventId: {{field: ext-id, namespaceField: missing, duplicates: allow}}}}"
             ),
             vec![error(
-                "breg.occurrence.field-unknown",
+                "breg.event-record.field-unknown",
                 ".sourceEventId.namespaceField",
-                "occurrence field \"missing\" names no stored field of record type \"event\"",
+                "event record field \"missing\" names no stored field of record type \"event\"",
             )],
         ),
         (
             "subject-field-type",
             "{subjects: [{role: a, field: ext-id}]}".to_owned(),
             vec![error(
-                "breg.occurrence.field-type",
+                "breg.event-record.field-type",
                 ".subjects[role=a].field",
                 "subjects[role=a].field requires a reference field; field \"ext-id\" is string",
             )],
@@ -315,7 +315,7 @@ fn invalid_mappings_fail_at_authored_paths() {
             "external-source-field-type",
             format!("{{{SUBJECT}, sources: [{{role: s, field: ref-b, external: {{namespace: \"urn:example:ns\"}}}}]}}"),
             vec![error(
-                "breg.occurrence.field-type",
+                "breg.event-record.field-type",
                 ".sources[role=s].field",
                 "sources[role=s].field requires a string or uuid field; field \"ref-b\" is reference",
             )],
@@ -324,7 +324,7 @@ fn invalid_mappings_fail_at_authored_paths() {
             "summary-field-type",
             format!("{{{SUBJECT}, summary: number}}"),
             vec![error(
-                "breg.occurrence.field-type",
+                "breg.event-record.field-type",
                 ".summary",
                 "summary requires a string or text field; field \"number\" is int64",
             )],
@@ -333,7 +333,7 @@ fn invalid_mappings_fail_at_authored_paths() {
             "occurred-at-field-type",
             format!("{{{SUBJECT}, occurredAt: {{at: note}}}}"),
             vec![error(
-                "breg.occurrence.field-type",
+                "breg.event-record.field-type",
                 ".occurredAt.at",
                 "occurredAt.at requires a date or timestamp field; field \"note\" is text",
             )],
@@ -342,7 +342,7 @@ fn invalid_mappings_fail_at_authored_paths() {
             "effective-end-field-type",
             format!("{{{SUBJECT}, effective: {{start: d1, end: number}}}}"),
             vec![error(
-                "breg.occurrence.field-type",
+                "breg.event-record.field-type",
                 ".effective.end",
                 "effective.end requires a date or timestamp field; field \"number\" is int64",
             )],
@@ -351,7 +351,7 @@ fn invalid_mappings_fail_at_authored_paths() {
             "correction-field-type",
             format!("{{{SUBJECT}, correction: {{field: ext-id, relation: corrects}}}}"),
             vec![error(
-                "breg.occurrence.field-type",
+                "breg.event-record.field-type",
                 ".correction.field",
                 "correction.field requires a reference field; field \"ext-id\" is string",
             )],
@@ -362,7 +362,7 @@ fn invalid_mappings_fail_at_authored_paths() {
                 "{{{SUBJECT}, sourceEventId: {{field: number, namespace: \"urn:example:ns\", duplicates: allow}}}}"
             ),
             vec![error(
-                "breg.occurrence.field-type",
+                "breg.event-record.field-type",
                 ".sourceEventId.field",
                 "sourceEventId.field requires a string or uuid field; field \"number\" is int64",
             )],
@@ -373,7 +373,7 @@ fn invalid_mappings_fail_at_authored_paths() {
                 "{{{SUBJECT}, sourceEventId: {{field: ext-id, namespaceField: number, duplicates: allow}}}}"
             ),
             vec![error(
-                "breg.occurrence.field-type",
+                "breg.event-record.field-type",
                 ".sourceEventId.namespaceField",
                 "sourceEventId.namespaceField requires a string or vocabulary-code field; field \"number\" is int64",
             )],
@@ -382,7 +382,7 @@ fn invalid_mappings_fail_at_authored_paths() {
             "field-reused-between-subjects",
             "{subjects: [{role: a, field: ref-a}, {role: b, field: ref-a}]}".to_owned(),
             vec![error(
-                "breg.occurrence.field-reused",
+                "breg.event-record.field-reused",
                 ".subjects[role=b].field",
                 "field \"ref-a\" is already mapped by subjects[role=a]",
             )],
@@ -393,7 +393,7 @@ fn invalid_mappings_fail_at_authored_paths() {
                 "{{{SUBJECT}, sources: [{{role: s, field: ext-id, external: {{namespace: \"urn:example:ns\"}}}}], summary: ext-id}}"
             ),
             vec![error(
-                "breg.occurrence.field-reused",
+                "breg.event-record.field-reused",
                 ".summary",
                 "field \"ext-id\" is already mapped by sources[role=s]",
             )],
@@ -403,7 +403,7 @@ fn invalid_mappings_fail_at_authored_paths() {
             "{subjects: [{role: a, field: to-self}], correction: {field: to-self, relation: corrects}}"
                 .to_owned(),
             vec![error(
-                "breg.occurrence.field-reused",
+                "breg.event-record.field-reused",
                 ".correction.field",
                 "field \"to-self\" is already mapped by subjects[role=a]",
             )],
@@ -412,7 +412,7 @@ fn invalid_mappings_fail_at_authored_paths() {
             "reference-target",
             "{subjects: [{role: a, field: ref-a, target: plain}]}".to_owned(),
             vec![error(
-                "breg.occurrence.reference-target",
+                "breg.event-record.reference-target",
                 ".subjects[role=a].target",
                 "target \"plain\" does not match reference target \"subject-record\" of field \"ref-a\"",
             )],
@@ -423,7 +423,7 @@ fn invalid_mappings_fail_at_authored_paths() {
                 "{{{SUBJECT}, sources: [{{role: s, field: ext-id, target: plain, external: {{namespace: \"urn:example:ns\"}}}}]}}"
             ),
             vec![error(
-                "breg.occurrence.external-target",
+                "breg.event-record.external-target",
                 ".sources[role=s].target",
                 "an external reference has no native target",
             )],
@@ -434,7 +434,7 @@ fn invalid_mappings_fail_at_authored_paths() {
                 "{{{SUBJECT}, sources: [{{role: s, field: ext-id, external: {{namespace: \"not a uri\"}}}}]}}"
             ),
             vec![error(
-                "breg.occurrence.external-namespace",
+                "breg.event-record.external-namespace",
                 ".sources[role=s].external.namespace",
                 "namespace must be an absolute URI of at most 512 bytes",
             )],
@@ -446,7 +446,7 @@ fn invalid_mappings_fail_at_authored_paths() {
                 "a".repeat(600)
             ),
             vec![error(
-                "breg.occurrence.external-namespace",
+                "breg.event-record.external-namespace",
                 ".sources[role=s].external.namespace",
                 "namespace must be an absolute URI of at most 512 bytes",
             )],
@@ -457,7 +457,7 @@ fn invalid_mappings_fail_at_authored_paths() {
                 "{{{SUBJECT}, sourceEventId: {{field: ext-id, namespace: \"not a uri\", duplicates: allow}}}}"
             ),
             vec![error(
-                "breg.occurrence.external-namespace",
+                "breg.event-record.external-namespace",
                 ".sourceEventId.namespace",
                 "namespace must be an absolute URI of at most 512 bytes",
             )],
@@ -466,7 +466,7 @@ fn invalid_mappings_fail_at_authored_paths() {
             "occurred-at-both-at-and-start",
             format!("{{{SUBJECT}, occurredAt: {{at: d1, start: d2, meaning: span}}}}"),
             vec![error(
-                "breg.occurrence.time-shape",
+                "breg.event-record.time-shape",
                 ".occurredAt",
                 "declare either \"at\" or \"start\", not both",
             )],
@@ -475,7 +475,7 @@ fn invalid_mappings_fail_at_authored_paths() {
             "occurred-at-empty",
             format!("{{{SUBJECT}, occurredAt: {{}}}}"),
             vec![error(
-                "breg.occurrence.time-shape",
+                "breg.event-record.time-shape",
                 ".occurredAt",
                 "declare \"at\" or \"start\"",
             )],
@@ -484,7 +484,7 @@ fn invalid_mappings_fail_at_authored_paths() {
             "occurred-at-end-without-start",
             format!("{{{SUBJECT}, occurredAt: {{end: d2}}}}"),
             vec![error(
-                "breg.occurrence.time-shape",
+                "breg.event-record.time-shape",
                 ".occurredAt",
                 "\"end\" requires \"start\"",
             )],
@@ -493,7 +493,7 @@ fn invalid_mappings_fail_at_authored_paths() {
             "occurred-at-meaning-on-a-point",
             format!("{{{SUBJECT}, occurredAt: {{at: d1, meaning: span}}}}"),
             vec![error(
-                "breg.occurrence.time-shape",
+                "breg.event-record.time-shape",
                 ".occurredAt",
                 "\"meaning\" applies only to an interval",
             )],
@@ -502,7 +502,7 @@ fn invalid_mappings_fail_at_authored_paths() {
             "occurred-at-interval-without-meaning",
             format!("{{{SUBJECT}, occurredAt: {{start: d1, end: d2}}}}"),
             vec![error(
-                "breg.occurrence.time-shape",
+                "breg.event-record.time-shape",
                 ".occurredAt",
                 "an interval declares \"meaning\": span or within",
             )],
@@ -511,7 +511,7 @@ fn invalid_mappings_fail_at_authored_paths() {
             "occurred-at-within-without-end",
             format!("{{{SUBJECT}, occurredAt: {{start: d1, meaning: within}}}}"),
             vec![error(
-                "breg.occurrence.time-shape",
+                "breg.event-record.time-shape",
                 ".occurredAt",
                 "\"within\" requires \"end\"",
             )],
@@ -520,7 +520,7 @@ fn invalid_mappings_fail_at_authored_paths() {
             "effective-both-at-and-start",
             format!("{{{SUBJECT}, effective: {{at: d1, start: d2}}}}"),
             vec![error(
-                "breg.occurrence.time-shape",
+                "breg.event-record.time-shape",
                 ".effective",
                 "declare either \"at\" or \"start\", not both",
             )],
@@ -529,7 +529,7 @@ fn invalid_mappings_fail_at_authored_paths() {
             "effective-empty",
             format!("{{{SUBJECT}, effective: {{}}}}"),
             vec![error(
-                "breg.occurrence.time-shape",
+                "breg.event-record.time-shape",
                 ".effective",
                 "declare \"at\" or \"start\"",
             )],
@@ -538,7 +538,7 @@ fn invalid_mappings_fail_at_authored_paths() {
             "effective-end-without-start",
             format!("{{{SUBJECT}, effective: {{end: d2}}}}"),
             vec![error(
-                "breg.occurrence.time-shape",
+                "breg.event-record.time-shape",
                 ".effective",
                 "\"end\" requires \"start\"",
             )],
@@ -547,7 +547,7 @@ fn invalid_mappings_fail_at_authored_paths() {
             "occurred-at-interval-type-mismatch",
             format!("{{{SUBJECT}, occurredAt: {{start: d1, end: t1, meaning: span}}}}"),
             vec![error(
-                "breg.occurrence.interval-type-mismatch",
+                "breg.event-record.interval-type-mismatch",
                 ".occurredAt.end",
                 "interval bounds must share one type; start is date, end is timestamp",
             )],
@@ -556,25 +556,25 @@ fn invalid_mappings_fail_at_authored_paths() {
             "effective-interval-type-mismatch",
             format!("{{{SUBJECT}, effective: {{start: t1, end: d1}}}}"),
             vec![error(
-                "breg.occurrence.interval-type-mismatch",
+                "breg.event-record.interval-type-mismatch",
                 ".effective.end",
                 "interval bounds must share one type; start is timestamp, end is date",
             )],
         ),
         (
-            "correction-target-declares-no-occurrence",
+            "correction-target-declares-no-event-record",
             format!("{{{SUBJECT}, correction: {{field: to-plain, relation: corrects}}}}"),
             vec![error(
-                "breg.occurrence.correction-target",
+                "breg.event-record.correction-target",
                 ".correction.field",
-                "correction field \"to-plain\" targets record type \"plain\", which declares no occurrence",
+                "correction field \"to-plain\" targets record type \"plain\", which declares no event record",
             )],
         ),
         (
             "source-event-neither-namespace",
             format!("{{{SUBJECT}, sourceEventId: {{field: ext-id, duplicates: allow}}}}"),
             vec![error(
-                "breg.occurrence.source-event-namespace",
+                "breg.event-record.source-event-namespace",
                 ".sourceEventId",
                 "declare exactly one of \"namespace\" or \"namespaceField\"",
             )],
@@ -585,7 +585,7 @@ fn invalid_mappings_fail_at_authored_paths() {
                 "{{{SUBJECT}, sourceEventId: {{field: ext-id, namespace: \"urn:example:ns\", namespaceField: ns-code, duplicates: allow}}}}"
             ),
             vec![error(
-                "breg.occurrence.source-event-namespace",
+                "breg.event-record.source-event-namespace",
                 ".sourceEventId",
                 "declare exactly one of \"namespace\" or \"namespaceField\"",
             )],
@@ -596,7 +596,7 @@ fn invalid_mappings_fail_at_authored_paths() {
                 "{{{SUBJECT}, sourceEventId: {{field: ext-id, namespace: \"urn:example:ns\", duplicates: reject}}}}"
             ),
             vec![error(
-                "breg.occurrence.source-event-constraint",
+                "breg.event-record.source-event-constraint",
                 ".sourceEventId.constraint",
                 "duplicates: reject requires \"constraint\"",
             )],
@@ -607,7 +607,7 @@ fn invalid_mappings_fail_at_authored_paths() {
                 "{{{SUBJECT}, sourceEventId: {{field: ext-id, namespace: \"urn:example:ns\", duplicates: allow, constraint: u-ext}}}}"
             ),
             vec![error(
-                "breg.occurrence.source-event-constraint",
+                "breg.event-record.source-event-constraint",
                 ".sourceEventId.constraint",
                 "\"constraint\" applies only to duplicates: reject",
             )],
@@ -618,7 +618,7 @@ fn invalid_mappings_fail_at_authored_paths() {
                 "{{{SUBJECT}, sourceEventId: {{field: ext-id, namespace: \"urn:example:ns\", duplicates: reject, constraint: window}}}}"
             ),
             vec![error(
-                "breg.occurrence.source-event-constraint",
+                "breg.event-record.source-event-constraint",
                 ".sourceEventId.constraint",
                 "constraint \"window\" is not a unique constraint of record type \"event\"",
             )],
@@ -629,7 +629,7 @@ fn invalid_mappings_fail_at_authored_paths() {
                 "{{{SUBJECT}, sourceEventId: {{field: ext-id, namespace: \"urn:example:ns\", duplicates: reject, constraint: absent}}}}"
             ),
             vec![error(
-                "breg.occurrence.source-event-constraint",
+                "breg.event-record.source-event-constraint",
                 ".sourceEventId.constraint",
                 "constraint \"absent\" is not a unique constraint of record type \"event\"",
             )],
@@ -640,7 +640,7 @@ fn invalid_mappings_fail_at_authored_paths() {
                 "{{{SUBJECT}, sourceEventId: {{field: ext-id, namespace: \"urn:example:ns\", duplicates: reject, constraint: u-uuid}}}}"
             ),
             vec![error(
-                "breg.occurrence.source-event-constraint",
+                "breg.event-record.source-event-constraint",
                 ".sourceEventId.constraint",
                 "constraint \"u-uuid\" must cover exactly \"ext-id\" without \"when\"",
             )],
@@ -651,7 +651,7 @@ fn invalid_mappings_fail_at_authored_paths() {
                 "{{{SUBJECT}, sourceEventId: {{field: ext-id, namespace: \"urn:example:ns\", duplicates: reject, constraint: u-ext-when}}}}"
             ),
             vec![error(
-                "breg.occurrence.source-event-constraint",
+                "breg.event-record.source-event-constraint",
                 ".sourceEventId.constraint",
                 "constraint \"u-ext-when\" must cover exactly \"ext-id\" without \"when\"",
             )],
@@ -662,16 +662,16 @@ fn invalid_mappings_fail_at_authored_paths() {
                 "{{{SUBJECT}, sourceEventId: {{field: ext-id, namespaceField: ns-code, duplicates: reject, constraint: u-ext}}}}"
             ),
             vec![error(
-                "breg.occurrence.source-event-constraint",
+                "breg.event-record.source-event-constraint",
                 ".sourceEventId.constraint",
                 "constraint \"u-ext\" must cover exactly \"ext-id\", \"ns-code\" without \"when\"",
             )],
         ),
     ];
-    for (name, occurrence, expected) in cases {
+    for (name, event_record, expected) in cases {
         let mut expected = expected;
         expected.sort();
-        assert_eq!(case_errors("", &occurrence), expected, "case {name}");
+        assert_eq!(case_errors("", &event_record), expected, "case {name}");
     }
 }
 
@@ -682,13 +682,13 @@ fn more_than_sixteen_subjects_are_refused_with_each_reuse_reported() {
         .collect::<Vec<_>>()
         .join(", ");
     let mut expected = vec![error(
-        "breg.occurrence.roles-too-many",
+        "breg.event-record.roles-too-many",
         ".subjects",
-        "an occurrence declares at most 16 subjects",
+        "an event record declares at most 16 subjects",
     )];
     expected.extend((2..=17).map(|n| {
         error(
-            "breg.occurrence.field-reused",
+            "breg.event-record.field-reused",
             &format!(".subjects[role=r{n}].field"),
             "field \"ref-a\" is already mapped by subjects[role=r1]",
         )
@@ -701,7 +701,7 @@ fn more_than_sixteen_subjects_are_refused_with_each_reuse_reported() {
 }
 
 #[test]
-fn a_valid_occurrence_with_every_member_family_compiles() {
+fn a_valid_event_record_with_every_member_family_compiles() {
     let registry = compiled_case(
         "",
         "{label: Event, subjects: [{role: a, field: ref-a, target: subject-record}, {role: b, field: ref-b}], \
@@ -710,7 +710,7 @@ fn a_valid_occurrence_with_every_member_family_compiles() {
          correction: {field: to-self, relation: supersedes}, \
          sourceEventId: {field: ext-id, namespaceField: ns-code, duplicates: reject, constraint: u-ext-ns}}",
     );
-    let descriptor = occurrence_json(&registry, "event");
+    let descriptor = event_record_json(&registry, "event");
     assert_eq!(descriptor["effective"]["type"], "interval");
     assert_eq!(descriptor["effective"]["end"], Value::Null);
     assert_eq!(descriptor["correction"]["relation"], "supersedes");
@@ -724,7 +724,7 @@ fn a_valid_occurrence_with_every_member_family_compiles() {
         "",
         &format!("{{{SUBJECT}, sourceEventId: {{field: ext-id, namespace: \"urn:example:ns\", duplicates: allow}}}}"),
     );
-    let descriptor = occurrence_json(&allowing, "event");
+    let descriptor = event_record_json(&allowing, "event");
     assert_eq!(descriptor["sourceEventId"]["duplicates"], "allow");
     assert_eq!(descriptor["sourceEventId"]["constraint"], Value::Null);
 }
@@ -813,7 +813,7 @@ fn grouping_compiles_onto_records_and_actions() {
 }
 
 #[test]
-fn directly_constructed_occurrence_and_group_text_is_validated() {
+fn directly_constructed_event_record_and_group_text_is_validated() {
     let unsafe_text = "reordered\u{202e}".to_owned();
     let mut project = shapes_project();
     let entry = project
@@ -827,10 +827,10 @@ fn directly_constructed_occurrence_and_group_text_is_validated() {
         .iter_mut()
         .find(|entity| entity.id == "entry-registration")
         .unwrap();
-    let occurrence = registration.occurrence.as_mut().unwrap();
-    occurrence.label = Some(unsafe_text.clone());
-    occurrence.subjects[0].label = Some(unsafe_text.clone());
-    occurrence.sources[0].label = Some(unsafe_text.clone());
+    let event_record = registration.event_record.as_mut().unwrap();
+    event_record.label = Some(unsafe_text.clone());
+    event_record.subjects[0].label = Some(unsafe_text.clone());
+    event_record.sources[0].label = Some(unsafe_text.clone());
     let action = project
         .actions
         .iter_mut()
@@ -851,9 +851,9 @@ fn directly_constructed_occurrence_and_group_text_is_validated() {
         paths,
         vec![
             "actions[id=record-grant-pause].display.group",
-            "recordTypes[id=entry-registration].occurrence.label",
-            "recordTypes[id=entry-registration].occurrence.sources[role=source].label",
-            "recordTypes[id=entry-registration].occurrence.subjects[role=entry].label",
+            "recordTypes[id=entry-registration].eventRecord.label",
+            "recordTypes[id=entry-registration].eventRecord.sources[role=source].label",
+            "recordTypes[id=entry-registration].eventRecord.subjects[role=entry].label",
             "recordTypes[id=entry].display.group",
         ]
     );
@@ -865,7 +865,7 @@ fn descriptor_and_grouping_leave_execution_identities_unchanged() {
 
     let mut stripped = shapes_project();
     for entity in &mut stripped.entities {
-        entity.occurrence = None;
+        entity.event_record = None;
         entity.display.purpose = None;
         entity.display.group = None;
     }
@@ -878,7 +878,7 @@ fn descriptor_and_grouping_leave_execution_identities_unchanged() {
     assert!(plain
         .entities()
         .values()
-        .all(|entity| entity.occurrence.is_none()));
+        .all(|entity| entity.event_record.is_none()));
     assert!(plain
         .entities()
         .values()
@@ -952,12 +952,12 @@ fn descriptor_and_grouping_leave_execution_identities_unchanged() {
 
 #[test]
 fn descriptor_does_not_change_temporal_roles() {
-    let yaml = |occurrence: &str| {
+    let yaml = |event_record: &str| {
         format!(
             r#"
 apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
 kind: BRegProject
-project: {{id: occurrence-temporal, version: "1", defaultLanguage: en, canonicalBaseIri: https://occurrence-temporal.example.test}}
+project: {{id: event-record-temporal, version: "1", defaultLanguage: en, canonicalBaseIri: https://event-record-temporal.example.test}}
 datasets: [{{id: test-dataset}}]
 recordTypes:
   - id: subject-record
@@ -977,13 +977,13 @@ recordTypes:
       - {{id: subject, type: reference, target: subject-record, classification: restricted}}
       - {{id: starts, type: date, required: true, classification: restricted}}
       - {{id: ends, type: date, classification: restricted}}
-{occurrence}
+{event_record}
 "#
         )
     };
     let mapped = compile(
         &parse_project_yaml(
-            yaml("    occurrence: {subjects: [{role: subject, field: subject}], effective: {start: starts, end: ends}}")
+            yaml("    eventRecord: {subjects: [{role: subject, field: subject}], effective: {start: starts, end: ends}}")
                 .as_bytes(),
         )
         .unwrap(),
@@ -991,12 +991,12 @@ recordTypes:
     let unmapped = compile(&parse_project_yaml(yaml("").as_bytes()).unwrap());
 
     let mut mapped_entity = serde_json::to_value(&mapped.entities()["assignment"]).unwrap();
-    assert!(mapped_entity["occurrence"].is_object());
-    mapped_entity.as_object_mut().unwrap().remove("occurrence");
+    assert!(mapped_entity["eventRecord"].is_object());
+    mapped_entity.as_object_mut().unwrap().remove("eventRecord");
     assert_eq!(
         mapped_entity,
         serde_json::to_value(&unmapped.entities()["assignment"]).unwrap(),
-        "the compiled record type differs only by its occurrence"
+        "the compiled record type differs only by its event record"
     );
     for (id, role) in [("starts", "valid-from"), ("ends", "valid-to")] {
         let field = mapped.entities()["assignment"]
@@ -1013,53 +1013,53 @@ recordTypes:
 }
 
 #[test]
-fn unknown_occurrence_members_and_variants_are_refused_by_the_parser() {
+fn unknown_event_record_members_and_variants_are_refused_by_the_parser() {
     let cases = [
         (
             "recordedAt is never authored",
             "{subjects: [{role: a, field: ref-a}], recordedAt: {at: d1}}",
             "config.unknown-key",
-            "project.recordTypes[2].occurrence.recordedAt",
+            "project.recordTypes[2].eventRecord.recordedAt",
         ),
         (
             "there is no event time member",
             "{subjects: [{role: a, field: ref-a}], event: {at: d1}}",
             "config.unknown-key",
-            "project.recordTypes[2].occurrence.event",
+            "project.recordTypes[2].eventRecord.event",
         ),
         (
             "effective has no meaning",
             "{subjects: [{role: a, field: ref-a}], effective: {at: d1, meaning: span}}",
             "config.unknown-key",
-            "project.recordTypes[2].occurrence.effective.meaning",
+            "project.recordTypes[2].eventRecord.effective.meaning",
         ),
         (
             "unknown interval meaning",
             "{subjects: [{role: a, field: ref-a}], occurredAt: {start: d1, end: d2, meaning: around}}",
             "config.unknown-variant",
-            "project.recordTypes[2].occurrence.occurredAt.meaning",
+            "project.recordTypes[2].eventRecord.occurredAt.meaning",
         ),
         (
             "unknown correction relation",
             "{subjects: [{role: a, field: ref-a}], correction: {field: to-self, relation: replaces}}",
             "config.unknown-variant",
-            "project.recordTypes[2].occurrence.correction.relation",
+            "project.recordTypes[2].eventRecord.correction.relation",
         ),
         (
             "unknown duplicate policy",
             "{subjects: [{role: a, field: ref-a}], sourceEventId: {field: ext-id, namespace: \"urn:example:ns\", duplicates: maybe}}",
             "config.unknown-variant",
-            "project.recordTypes[2].occurrence.sourceEventId.duplicates",
+            "project.recordTypes[2].eventRecord.sourceEventId.duplicates",
         ),
         (
             "the duplicate policy is required",
             "{subjects: [{role: a, field: ref-a}], sourceEventId: {field: ext-id, namespace: \"urn:example:ns\"}}",
             "config.missing-key",
-            "project.recordTypes[2].occurrence.sourceEventId",
+            "project.recordTypes[2].eventRecord.sourceEventId",
         ),
     ];
-    for (name, occurrence, code, path) in cases {
-        let errors = case_errors("", occurrence);
+    for (name, event_record, code, path) in cases {
+        let errors = case_errors("", event_record);
         assert_eq!(errors.len(), 1, "case {name}: {errors:?}");
         assert_eq!(
             (errors[0].0.as_str(), errors[0].1.as_str()),
