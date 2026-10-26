@@ -8,7 +8,8 @@
 //!
 //! The PostgreSQL-only cases at the end cover what a single process cannot
 //! show: two replicas contending for one offer, one lockout counter and one
-//! capacity shared between them, and what the database holds at rest.
+//! capacity shared between them, what the database holds at rest, and how a
+//! real database failure is logged and answered.
 
 mod store_support;
 
@@ -488,13 +489,31 @@ async fn a_catalog_generation_mismatch_is_refused_without_spending_anything(kind
 mod postgres_only {
     //! What only a shared database can show.
 
+    use std::io;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
     use std::time::{Duration, Instant};
 
-    use registry_evidence_oid4vci::config::StoreConfig;
+    use async_trait::async_trait;
+    use axum::http::StatusCode;
+    use axum_test::TestServer;
+    use registry_evidence_client::{EvidenceDefinitionsDocument, HolderBoundRequestSpec};
+    use registry_evidence_oid4vci::audit::DeliveryAudit;
+    use registry_evidence_oid4vci::authorizer::{
+        AuthorizationError, AuthorizedOffer, OfferAuthorizer,
+    };
+    use registry_evidence_oid4vci::config::{DeliveryConfig, StoreConfig};
+    use registry_evidence_oid4vci::issuer::{CredentialIssuer, IssuanceError};
+    use registry_evidence_oid4vci::metadata::CredentialCatalog;
+    use registry_evidence_oid4vci::service::{
+        build_app, DeliveryService, CREDENTIAL_PATH, OFFERS_PATH, TOKEN_PATH,
+    };
     use registry_evidence_oid4vci::storage::postgres::PostgresSetupError;
     use registry_evidence_oid4vci::storage::Store;
     use registry_evidence_oid4vci::store::{PreparedRequest, StoreError};
+    use registry_evidence_oid4vci::PRE_AUTHORIZED_CODE_GRANT_TYPE;
+    use registry_platform_audit::AuditWriter;
+    use serde_json::{json, Value};
     use tokio::sync::Barrier;
 
     use super::store_support::postgres::{
@@ -813,6 +832,392 @@ mod postgres_only {
             .expect("the refused redemption spent nothing");
     }
 
+    /// A database error's message and detail carry values: a check violation
+    /// prints the row it refused. The store logs the operation and SQLSTATE
+    /// and nothing the server said, and the refusal spends nothing.
+    #[tokio::test]
+    async fn a_database_refusal_is_logged_by_operation_and_sqlstate_only() {
+        let (deployment, store) = Deployment::open(Kind::Postgres, bounds(), Keys::default()).await;
+        let schema = deployment.schema().to_owned();
+        let catalog = generation("catalog-1");
+        store
+            .remember_offer("refused-code", None, &catalog, prepared(), NOW)
+            .await
+            .expect("the offer is remembered");
+        let admin = admin().await;
+        let offer_tag: String = admin
+            .query_one(
+                &format!("SELECT offer_tag FROM {schema}.offer_ledgers"),
+                &[],
+            )
+            .await
+            .expect("read the offer's tag")
+            .get(0);
+        // A constraint the store does not expect makes the server refuse the
+        // redemption's update and name the failing row in the error.
+        admin
+            .batch_execute(&format!(
+                "ALTER TABLE {schema}.offer_ledgers \
+                 ADD CONSTRAINT refuse_every_redemption CHECK (state <> 'redeemed') NOT VALID"
+            ))
+            .await
+            .expect("add a constraint the redemption violates");
+
+        let (logs, _guard) = Logs::capture();
+        assert_eq!(
+            store
+                .redeem_offer("refused-code", None, &catalog, NOW)
+                .await
+                .err(),
+            Some(StoreError::Unavailable)
+        );
+        let rendered = logs.rendered();
+        assert!(
+            rendered.contains(r#"operation="redeem an offer" sqlstate="23514""#),
+            "{rendered}"
+        );
+        for value in [
+            offer_tag.as_str(),
+            "refused-code",
+            "refuse_every_redemption",
+            "Failing row",
+            "offer_ledgers",
+            schema.as_str(),
+        ] {
+            assert!(
+                !rendered.contains(value),
+                "the log names {value}: {rendered}"
+            );
+        }
+
+        admin
+            .batch_execute(&format!(
+                "ALTER TABLE {schema}.offer_ledgers DROP CONSTRAINT refuse_every_redemption"
+            ))
+            .await
+            .expect("drop the constraint");
+        assert_prepared(
+            &store
+                .redeem_offer("refused-code", None, &catalog, NOW)
+                .await
+                .expect("the refused redemption spent nothing"),
+        );
+    }
+
+    /// A store whose tables are missing meets a real PostgreSQL error at
+    /// every step, and the service answers each one with the retryable 503
+    /// every store fault gets, going no further.
+    #[tokio::test]
+    async fn a_database_error_is_answered_as_temporarily_unavailable() {
+        let store = unmigrated(
+            pool(),
+            &isolated_schema_name(),
+            &bounds(),
+            Keys::default(),
+            REQUEST_TIMEOUT,
+        );
+        let issuer = Arc::new(CountingIssuer::new());
+        let server = service_over(Arc::new(store), Arc::clone(&issuer));
+
+        let (logs, _guard) = Logs::capture();
+        let created = server
+            .post(OFFERS_PATH)
+            .add_header("authorization", "Bearer offer-token")
+            .json(&json!({
+                "credentialConfigurationId": CONFIGURATION_ID,
+                "subjects": [{"role": "primary", "selectorValues": {"identifier": "subject"}}],
+                "transactionCode": false,
+            }))
+            .await;
+        let granted = server
+            .post(TOKEN_PATH)
+            .form(&[
+                ("grant_type", PRE_AUTHORIZED_CODE_GRANT_TYPE),
+                ("pre-authorized_code", "any-code"),
+            ])
+            .await;
+        let claimed = server
+            .post(CREDENTIAL_PATH)
+            .add_header("authorization", "Bearer any-token")
+            .json(&json!({"credential_configuration_id": CONFIGURATION_ID}))
+            .await;
+        for response in [&created, &granted, &claimed] {
+            assert_eq!(response.status_code(), StatusCode::SERVICE_UNAVAILABLE);
+            assert_eq!(
+                response.json::<Value>()["error"],
+                json!("temporarily_unavailable")
+            );
+        }
+        assert_eq!(issuer.issued.load(Ordering::SeqCst), 0);
+        let rendered = logs.rendered();
+        for operation in [
+            "size the offer key-space",
+            "size the token key-space",
+            "claim an access token",
+        ] {
+            assert!(
+                rendered.contains(&format!(r#"operation="{operation}" sqlstate="42P01""#)),
+                "{rendered}"
+            );
+        }
+    }
+
+    const CONFIGURATION_ID: &str = "urn:example:requirement:holder-bound";
+
+    const SERVICE_CONFIG: &str = r#"
+apiVersion: id.registrystack.org/formats/evidence/oid4vci-runtime/v1alpha1
+kind: EvidenceOid4vciRuntimeConfig
+credentialIssuer: https://wallet.example.org
+listener: {bind: "127.0.0.1:8090"}
+secretProviders:
+  file:
+    root: /run/secrets/evidence-oid4vci
+audit:
+  destination: stdout
+  hashKeyRef: secret:file/unused-audit-hash-key
+evidence:
+  baseUrl: https://evidence.example.org
+tokenClient:
+  tokenEndpoint: https://mint.example.org/token
+  clientId: evidence-oid4vci
+  privateKeyRef: secret:file/unused-delivery-client.jwk.json
+offers:
+  issuer: https://mint.example.org
+  jwksUri: https://mint.example.org/.well-known/jwks.json
+  audiences: ["https://wallet.example.org"]
+  algorithms: [EdDSA]
+  authorizedClients: [adopter-front-end]
+  requiredScopes: unrestricted
+  maximumTokenLifetimeSeconds: 900
+store:
+  maximumOffers: 4096
+  offerLifetimeSeconds: 300
+  accessTokenLifetimeSeconds: 300
+  nonceLifetimeSeconds: 120
+  maximumTransactionCodeAttempts: 3
+"#;
+
+    const DEFINITIONS: &str = r#"{
+  "schema": "registry.evidence-definitions/v1",
+  "assuranceProfile": "local",
+  "audience": "https://wallet.example.org",
+  "issuedBy": "https://registry.example.org",
+  "providedBy": "https://provider.example.org",
+  "maximumHolderBoundBatchSize": 4,
+  "definitions": [{
+    "handle": "holder-bound",
+    "requirement": "urn:example:requirement:holder-bound",
+    "configurationRevision": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "kind": "criterion",
+    "subjectBindingMode": "holder-bound",
+    "evidenceType": "urn:example:evidence-type:holder-bound",
+    "purpose": "urn:example:purpose:demonstration",
+    "responseFormats": ["sd-jwt-vc", "sd-jwt-vc-batch"],
+    "referenceFrameworks": ["urn:example:framework:synthetic"],
+    "subjects": [{
+      "role": "primary",
+      "cardinality": "one",
+      "selector": {
+        "profile": "synthetic-identifier-v1",
+        "valueOrigin": "request",
+        "fields": [{
+          "type": "string",
+          "name": "identifier",
+          "minimumBytes": 1,
+          "maximumBytes": 64
+        }]
+      }
+    }],
+    "concepts": [{"handle": "outcome", "concept": "urn:example:concept:outcome", "required": true, "form": {"type": "boolean"}}]
+  }]
+}"#;
+
+    /// Lets every offer request through as the one authorized client.
+    struct AnyClient;
+
+    #[async_trait]
+    impl OfferAuthorizer for AnyClient {
+        async fn authorize(
+            &self,
+            _credential: &str,
+        ) -> Result<AuthorizedOffer, AuthorizationError> {
+            Ok(AuthorizedOffer {
+                client: Some("adopter-front-end".to_owned()),
+                subject: None,
+            })
+        }
+    }
+
+    /// Serves the test catalog and counts every request that reaches
+    /// issuance.
+    struct CountingIssuer {
+        catalog: Arc<CredentialCatalog>,
+        issued: AtomicUsize,
+    }
+
+    impl CountingIssuer {
+        fn new() -> Self {
+            let document: EvidenceDefinitionsDocument =
+                serde_json::from_str(DEFINITIONS).expect("the test definitions parse");
+            Self {
+                catalog: Arc::new(
+                    CredentialCatalog::derive(&document).expect("the catalog is valid"),
+                ),
+                issued: AtomicUsize::new(0),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl CredentialIssuer for CountingIssuer {
+        async fn catalog(&self) -> Result<Arc<CredentialCatalog>, IssuanceError> {
+            Ok(Arc::clone(&self.catalog))
+        }
+
+        async fn issue(&self, _spec: HolderBoundRequestSpec) -> Result<Vec<String>, IssuanceError> {
+            self.issued.fetch_add(1, Ordering::SeqCst);
+            Err(IssuanceError::Unavailable)
+        }
+    }
+
+    /// The service, holding its offers in `store`.
+    fn service_over(store: Arc<dyn Store>, issuer: Arc<CountingIssuer>) -> TestServer {
+        // The configuration reader refuses a path through a symbolic link,
+        // and the system temporary directory is one on some hosts.
+        let base = std::env::temp_dir()
+            .canonicalize()
+            .expect("the temporary directory resolves");
+        let directory = tempfile::tempdir_in(base).expect("a temporary deployment directory");
+        let path = directory.path().join("oid4vci.yaml");
+        std::fs::write(&path, SERVICE_CONFIG).expect("write the test deployment");
+        let config = DeliveryConfig::load(&path).expect("the test deployment loads");
+        let audit = DeliveryAudit::with_writer(
+            AuditWriter::from_line_sink(Box::new(io::sink())),
+            b"0123456789abcdef0123456789abcdef".to_vec(),
+        )
+        .expect("the test audit profile is valid");
+        let service =
+            DeliveryService::with_halves(config, Arc::new(AnyClient), issuer, Arc::new(audit))
+                .with_store(store, generation("catalog-1"));
+        TestServer::new(build_app(Arc::new(service)))
+    }
+
+    /// Two wrong transaction codes leave an offer one attempt from its
+    /// lockout. The right code and a third wrong one then arrive together at
+    /// two replicas, and exactly one of them decides the offer: either it
+    /// redeems and the wrong code finds it spent, or the lockout lands and
+    /// the right code finds it locked. The right code takes the token
+    /// endpoint's path. The wrong one takes it too in even rounds, where the
+    /// token key-space lock orders the two, and in odd rounds goes without
+    /// that lock, so only the ledger row orders them.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn the_right_code_and_the_locking_wrong_code_reach_one_outcome() {
+        const ROUNDS: usize = 24;
+        let (_deployment, first, second) = two_replicas(StoreConfig {
+            maximum_offers: 64,
+            ..bounds()
+        })
+        .await;
+        let catalog = generation("catalog-1");
+        for round in 0..ROUNDS {
+            let code = format!("racing-{round}");
+            first
+                .remember_offer(&code, Some("4711"), &catalog, prepared(), NOW)
+                .await
+                .expect("the offer is remembered");
+            for wrong in ["0001", "0002"] {
+                assert_eq!(
+                    second
+                        .redeem_offer(&code, Some(wrong), &catalog, NOW)
+                        .await
+                        .err(),
+                    Some(StoreError::TransactionCodeRefused)
+                );
+            }
+
+            let start = Arc::new(Barrier::new(2));
+            let right = {
+                let (store, code, catalog, start) = (
+                    replica(round, &first, &second),
+                    code.clone(),
+                    catalog.clone(),
+                    Arc::clone(&start),
+                );
+                tokio::spawn(async move {
+                    start.wait().await;
+                    store
+                        .redeem_offer_for_access_token(
+                            &code,
+                            Some("4711"),
+                            &format!("right-{round}"),
+                            &catalog,
+                            NOW,
+                        )
+                        .await
+                })
+            };
+            let wrong = {
+                let (store, code, catalog, start) = (
+                    replica(round + 1, &first, &second),
+                    code.clone(),
+                    catalog.clone(),
+                    Arc::clone(&start),
+                );
+                tokio::spawn(async move {
+                    start.wait().await;
+                    if round.is_multiple_of(2) {
+                        store
+                            .redeem_offer_for_access_token(
+                                &code,
+                                Some("0003"),
+                                &format!("wrong-{round}"),
+                                &catalog,
+                                NOW,
+                            )
+                            .await
+                    } else {
+                        store
+                            .redeem_offer(&code, Some("0003"), &catalog, NOW)
+                            .await
+                            .map(|_| ())
+                    }
+                })
+            };
+            let right = right.await.expect("the right code's task joins");
+            let wrong = wrong.await.expect("the wrong code's task joins");
+
+            let claimed = first
+                .claim_access_token(&format!("right-{round}"), &catalog, NOW)
+                .await;
+            match (right, wrong) {
+                (Ok(()), Err(StoreError::AlreadyRedeemed)) => {
+                    assert_prepared(&claimed.expect("the redeemed offer's request is bound"));
+                }
+                (Err(StoreError::LockedOut), Err(StoreError::TransactionCodeRefused)) => {
+                    assert_eq!(claimed.err(), Some(StoreError::Unknown));
+                    assert_eq!(
+                        second
+                            .redeem_offer(&code, Some("4711"), &catalog, NOW)
+                            .await
+                            .err(),
+                        Some(StoreError::LockedOut)
+                    );
+                }
+                (right, wrong) => {
+                    panic!("round {round}: the right code got {right:?}, the wrong one {wrong:?}")
+                }
+            }
+            assert_eq!(
+                second
+                    .claim_access_token(&format!("wrong-{round}"), &catalog, NOW)
+                    .await
+                    .err(),
+                Some(StoreError::Unknown),
+                "a wrong code never binds a token"
+            );
+        }
+    }
+
     /// Every row in `schema`, in a stable order.
     async fn at_rest(schema: &str) -> Vec<(String, String)> {
         let mut rows = dump(schema).await;
@@ -835,8 +1240,9 @@ mod postgres_only {
     const CODE: &str = "canary-offer-secret-51be";
     const TRANSACTION_CODE: &str = "canary-tx-8812";
     const TOKEN: &str = "canary-access-token-c0de";
+    const LOCKED_CODE: &str = "canary-locked-offer-93e1";
 
-    fn canaries() -> [&'static str; 7] {
+    fn canaries() -> [&'static str; 8] {
         [
             SELECTOR,
             SECOND_SELECTOR,
@@ -845,6 +1251,7 @@ mod postgres_only {
             CODE,
             TRANSACTION_CODE,
             TOKEN,
+            LOCKED_CODE,
         ]
     }
 
@@ -880,7 +1287,7 @@ mod postgres_only {
     }
 
     #[tokio::test]
-    async fn prepared_requests_are_sealed_at_rest_and_gone_after_claim_and_expiry() {
+    async fn prepared_requests_are_sealed_at_rest_and_gone_after_claim_lockout_and_expiry() {
         let (deployment, store) = Deployment::open(Kind::Postgres, bounds(), Keys::default()).await;
         let schema = deployment.schema().to_owned();
         let catalog = generation("catalog-1");
@@ -924,6 +1331,44 @@ mod postgres_only {
         );
         assert_no_canary_at_rest(&schema, "after the token is claimed").await;
 
+        // An offer locked out by wrong transaction codes can never be opened,
+        // so its sealed request goes with the attempt that locks it, and only
+        // the ledger stays to keep refusing the right code.
+        store
+            .remember_offer(
+                LOCKED_CODE,
+                Some(TRANSACTION_CODE),
+                &catalog,
+                canary_request(),
+                NOW,
+            )
+            .await
+            .expect("the offer is remembered");
+        assert_eq!(count(&schema, "offers").await, 1);
+        for wrong in ["wrong-1", "wrong-2", "wrong-3"] {
+            assert_eq!(
+                store
+                    .redeem_offer(LOCKED_CODE, Some(wrong), &catalog, NOW)
+                    .await
+                    .err(),
+                Some(StoreError::TransactionCodeRefused)
+            );
+        }
+        assert_eq!(
+            count(&schema, "offers").await,
+            0,
+            "the locked-out offer's sealed request is gone"
+        );
+        assert_eq!(
+            store
+                .redeem_offer(LOCKED_CODE, Some(TRANSACTION_CODE), &catalog, NOW)
+                .await
+                .err(),
+            Some(StoreError::LockedOut),
+            "the ledger keeps the lockout standing"
+        );
+        assert_no_canary_at_rest(&schema, "after the offer is locked out").await;
+
         store
             .remember_offer(
                 "expiring-code",
@@ -941,8 +1386,8 @@ mod postgres_only {
         assert_no_canary_at_rest(&schema, "before the purge").await;
         assert_eq!(
             store.sweep(NOW + LIFETIME).await,
-            4,
-            "two offers' ledgers, one offer, one token"
+            5,
+            "three offers' ledgers, one offer, one token"
         );
         for table in ["offers", "offer_ledgers", "access_tokens"] {
             assert_eq!(count(&schema, table).await, 0, "{table} after expiry");
