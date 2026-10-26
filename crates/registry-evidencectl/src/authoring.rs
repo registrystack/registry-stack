@@ -2382,6 +2382,103 @@ mod tests {
             .expect("a target stating no maximum is validated by the runtime, not assumed");
     }
 
+    /// The governance a normalized target compiles to, from the standalone
+    /// example's target document with `signing` appended when given.
+    fn standalone_target_governance(signing: Option<&str>) -> Value {
+        let example = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../products/evidence/examples/standalone");
+        let root = tempfile::tempdir().expect("tempdir");
+        let mut target = fs::read_to_string(example.join("local-target.yaml")).expect("target");
+        if let Some(signing) = signing {
+            target.push_str(signing);
+        }
+        fs::write(root.path().join("local-target.yaml"), target).expect("write target");
+        fs::copy(
+            example.join("dev-authority.yaml"),
+            root.path().join("dev-authority.yaml"),
+        )
+        .expect("copy authority");
+        crate::normalized::read_target_documents(&root.path().join("local-target.yaml"))
+            .expect("the standalone target compiles to governance")
+            .governed_bundle
+    }
+
+    #[test]
+    fn a_target_stating_no_signing_maximum_compiles_to_the_local_baseline() {
+        let governance = standalone_target_governance(None);
+        assert_eq!(
+            governance["signing"]["maximumAssertionValiditySeconds"],
+            300
+        );
+        let key = governance["signing"]["activePublicJwkFile"]
+            .as_str()
+            .expect("the active key file");
+        let baseline = local_target_governance(key).expect("baseline");
+        assert_eq!(governance["signing"], baseline["signing"]);
+    }
+
+    #[test]
+    fn a_target_signing_maximum_is_carried_into_governance_and_measured() {
+        let signing = "signing:\n  maximumAssertionValiditySeconds: 604800\n";
+        let governance = standalone_target_governance(Some(signing));
+        assert_eq!(
+            governance["signing"]["maximumAssertionValiditySeconds"],
+            604_800
+        );
+        // Only the stated member changes.
+        let baseline = local_target_governance("unused.jwk.json").expect("baseline");
+        for member in [
+            "format",
+            "algorithm",
+            "jwksPath",
+            "verifierClockSkewSeconds",
+        ] {
+            assert_eq!(governance["signing"][member], baseline["signing"][member]);
+        }
+        let plan = |validity_seconds, governance: &Value| CompilePlan {
+            bundle: governance.clone(),
+            ..plan_with_validity(validity_seconds, json!({}))
+        };
+        check_target_signing_validity(&plan(604_800, &governance))
+            .expect("a definition at the stated maximum is covered");
+        let error = check_target_signing_validity(&plan(604_801, &governance))
+            .expect_err("a definition past the stated maximum is refused");
+        assert_eq!(
+            error
+                .downcast_ref::<AuthoredDiagnostic>()
+                .expect("an authored diagnostic")
+                .code,
+            "evidence.definition.validity-exceeds-signing-maximum"
+        );
+    }
+
+    #[test]
+    fn a_seven_day_definition_is_refused_by_a_smaller_or_unstated_target_maximum() {
+        let smaller = "signing:\n  maximumAssertionValiditySeconds: 604799\n";
+        for governance in [
+            standalone_target_governance(Some(smaller)),
+            standalone_target_governance(None),
+        ] {
+            let plan = CompilePlan {
+                bundle: governance,
+                ..plan_with_validity(604_800, json!({}))
+            };
+            let error = check_target_signing_validity(&plan)
+                .expect_err("seven days exceeds the target's maximum");
+            let diagnostic = error
+                .downcast_ref::<AuthoredDiagnostic>()
+                .expect("an authored diagnostic");
+            assert_eq!(
+                diagnostic.code,
+                "evidence.definition.validity-exceeds-signing-maximum"
+            );
+            assert_eq!(
+                diagnostic.path,
+                "evidence.yaml:/assertionDefinitions/record-status/validitySeconds"
+            );
+        }
+    }
+
     #[test]
     fn normalized_plan_preserves_sources_definitions_and_ceiling_enforcement() {
         let project_root = Path::new(env!("CARGO_MANIFEST_DIR"))
