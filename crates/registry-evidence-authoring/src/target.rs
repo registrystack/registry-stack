@@ -115,6 +115,8 @@ pub struct EvidenceTarget {
     pub connections: BTreeMap<LocalId, TargetConnection>,
     pub secret_providers: TargetSecretProviders,
     pub signer: TargetSigner,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signing: Option<TargetSigning>,
     pub subject_binding: TargetSubjectBinding,
     pub audit: TargetAudit,
     pub rate_limits: TargetRateLimits,
