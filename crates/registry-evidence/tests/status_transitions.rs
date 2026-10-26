@@ -17,7 +17,8 @@ use registry_evidence::status::{
 use serde_json::Value;
 use status_support::{
     allocate_for, allocate_under, extract_read, http_read, inspector, ledger, mapping_version, now,
-    reason, revision, rows, subject, text, TestLedger, OTHER_REQUIREMENT_ID, REQUIREMENT_ID,
+    reason, revision, rows, subject, text, TestLedger, MAPPING_BLOCK, OTHER_MAPPING_BLOCK,
+    OTHER_REQUIREMENT_ID, REQUIREMENT_ID,
 };
 use uuid::Uuid;
 
@@ -1272,7 +1273,7 @@ async fn the_staleness_clock_holds_the_last_complete_run_observation() {
     let clock = || async {
         ledger
             .ledger
-            .staleness_clock(&ledger.reserved)
+            .staleness_clock(&ledger.reserved, &[MAPPING_BLOCK])
             .await
             .unwrap()
             .map(|observed| observed.instant())
@@ -1282,7 +1283,7 @@ async fn the_staleness_clock_holds_the_last_complete_run_observation() {
     let published = run - TimeDelta::hours(5);
     ledger
         .ledger
-        .advance_staleness_clock(&ledger.reserved, published, run)
+        .advance_staleness_clock(&ledger.reserved, MAPPING_BLOCK, published, run)
         .await
         .unwrap();
     assert_eq!(clock().await, Some(published));
@@ -1291,7 +1292,12 @@ async fn the_staleness_clock_holds_the_last_complete_run_observation() {
     let next_run = run + TimeDelta::hours(1);
     ledger
         .ledger
-        .advance_staleness_clock(&ledger.reserved, next_run + TimeDelta::minutes(5), next_run)
+        .advance_staleness_clock(
+            &ledger.reserved,
+            MAPPING_BLOCK,
+            next_run + TimeDelta::minutes(5),
+            next_run,
+        )
         .await
         .unwrap();
     assert_eq!(clock().await, Some(next_run));
@@ -1299,7 +1305,12 @@ async fn the_staleness_clock_holds_the_last_complete_run_observation() {
     // An extract dated beyond the skew allowance is refused.
     let error = ledger
         .ledger
-        .advance_staleness_clock(&ledger.reserved, next_run + TimeDelta::hours(1), next_run)
+        .advance_staleness_clock(
+            &ledger.reserved,
+            MAPPING_BLOCK,
+            next_run + TimeDelta::hours(1),
+            next_run,
+        )
         .await
         .unwrap_err();
     assert!(matches!(error, StatusError::InvalidInput(_)), "{error:?}");
@@ -1308,7 +1319,7 @@ async fn the_staleness_clock_holds_the_last_complete_run_observation() {
     // The clock is the last complete run's observation, even when older.
     ledger
         .ledger
-        .advance_staleness_clock(&ledger.reserved, published, next_run)
+        .advance_staleness_clock(&ledger.reserved, MAPPING_BLOCK, published, next_run)
         .await
         .unwrap();
     assert_eq!(clock().await, Some(published));
@@ -1318,6 +1329,87 @@ async fn the_staleness_clock_holds_the_last_complete_run_observation() {
             .len(),
         1
     );
+}
+
+async fn clock_of(ledger: &TestLedger, blocks: &[&str]) -> Option<DateTime<Utc>> {
+    ledger
+        .ledger
+        .staleness_clock(&ledger.reserved, blocks)
+        .await
+        .unwrap()
+        .map(|observed| observed.instant())
+}
+
+async fn advance_clock(
+    ledger: &TestLedger,
+    block: &str,
+    published: DateTime<Utc>,
+    run: DateTime<Utc>,
+) {
+    ledger
+        .ledger
+        .advance_staleness_clock(&ledger.reserved, block, published, run)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn the_publisher_reads_the_oldest_clock_of_its_reconciliation_extracts() {
+    let ledger = ledger().await;
+    let both = [MAPPING_BLOCK, OTHER_MAPPING_BLOCK];
+    let run = now();
+    let permits_published = run - TimeDelta::hours(1);
+    advance_clock(&ledger, MAPPING_BLOCK, permits_published, run).await;
+    assert_eq!(
+        clock_of(&ledger, &[MAPPING_BLOCK]).await,
+        Some(permits_published)
+    );
+    // An extract with no complete run yet holds the publisher's clock back.
+    assert_eq!(clock_of(&ledger, &both).await, None);
+
+    // The permit extract's publisher breaks; benefit runs keep succeeding.
+    for hours in 1..=3 {
+        let benefit_run = run + TimeDelta::hours(hours);
+        advance_clock(
+            &ledger,
+            OTHER_MAPPING_BLOCK,
+            benefit_run - TimeDelta::minutes(5),
+            benefit_run,
+        )
+        .await;
+        assert_eq!(clock_of(&ledger, &both).await, Some(permits_published));
+    }
+    let later = run + TimeDelta::hours(4);
+    advance_clock(
+        &ledger,
+        MAPPING_BLOCK,
+        later - TimeDelta::minutes(20),
+        later,
+    )
+    .await;
+    assert_eq!(
+        clock_of(&ledger, &both).await,
+        Some(run + TimeDelta::hours(3) - TimeDelta::minutes(5))
+    );
+    assert_eq!(
+        rows(&inspector().await, &ledger.schema, "staleness_clock")
+            .await
+            .len(),
+        2
+    );
+
+    let error = ledger
+        .ledger
+        .staleness_clock(&ledger.reserved, &[])
+        .await
+        .unwrap_err();
+    assert!(matches!(error, StatusError::InvalidInput(_)), "{error:?}");
+    let error = ledger
+        .ledger
+        .advance_staleness_clock(&ledger.reserved, "", run, run)
+        .await
+        .unwrap_err();
+    assert!(matches!(error, StatusError::InvalidInput(_)), "{error:?}");
 }
 
 fn status_strategy() -> impl Strategy<Value = EntryStatus> {

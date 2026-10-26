@@ -24,7 +24,8 @@ use serde_json::{Map, Value};
 use status_support::{
     allocate_for, dump_schema, extract_read, holder_digest_keys, inspector, key, ledger,
     mapping_version, now, pseudonym_keys, reason, revision, selector_profile, subject, text,
-    HOLDER_DIGEST_KEY_BYTE, PSEUDONYM_KEY_BYTE, PUBLIC_ORIGIN, REQUIREMENT_ID, SELECTOR_PROFILE_ID,
+    HOLDER_DIGEST_KEY_BYTE, MAPPING_BLOCK, PSEUDONYM_KEY_BYTE, PUBLIC_ORIGIN, REQUIREMENT_ID,
+    SELECTOR_PROFILE_ID,
 };
 use uuid::Uuid;
 use zeroize::Zeroizing;
@@ -234,7 +235,7 @@ async fn no_canary_reaches_any_ledger_table() {
     }
     ledger
         .ledger
-        .advance_staleness_clock(&ledger.reserved, published, run_instant)
+        .advance_staleness_clock(&ledger.reserved, MAPPING_BLOCK, published, run_instant)
         .await
         .unwrap();
     ledger
@@ -244,7 +245,7 @@ async fn no_canary_reaches_any_ledger_table() {
         .unwrap();
     let clock = ledger
         .ledger
-        .staleness_clock(&ledger.reserved)
+        .staleness_clock(&ledger.reserved, &[MAPPING_BLOCK])
         .await
         .unwrap()
         .unwrap();
@@ -362,7 +363,12 @@ async fn no_error_or_key_type_formats_a_canary_or_key_bytes() {
     let published = published_at_canary();
     let error = ledger
         .ledger
-        .advance_staleness_clock(&ledger.reserved, published, published - TimeDelta::days(1))
+        .advance_staleness_clock(
+            &ledger.reserved,
+            MAPPING_BLOCK,
+            published,
+            published - TimeDelta::days(1),
+        )
         .await
         .unwrap_err();
     push(Some(error.to_string()), format!("{error:?}"));
@@ -466,12 +472,12 @@ async fn no_error_or_key_type_formats_a_canary_or_key_bytes() {
         .unwrap();
     ledger
         .ledger
-        .advance_staleness_clock(&ledger.reserved, published, now())
+        .advance_staleness_clock(&ledger.reserved, MAPPING_BLOCK, published, now())
         .await
         .unwrap();
     let clock = ledger
         .ledger
-        .staleness_clock(&ledger.reserved)
+        .staleness_clock(&ledger.reserved, &[MAPPING_BLOCK])
         .await
         .unwrap()
         .unwrap();

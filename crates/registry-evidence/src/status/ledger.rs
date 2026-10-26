@@ -440,13 +440,14 @@ impl Statements {
                        - ($1::bigint::double precision * interval '1 millisecond')"
             ),
             set_staleness_clock: format!(
-                "INSERT INTO {s}.staleness_clock (singleton, last_observed_at) \
-                 VALUES (true, $1) \
-                 ON CONFLICT (singleton) DO UPDATE \
+                "INSERT INTO {s}.staleness_clock (mapping_block, last_observed_at) \
+                 VALUES ($1, $2) \
+                 ON CONFLICT (mapping_block) DO UPDATE \
                  SET last_observed_at = EXCLUDED.last_observed_at"
             ),
             staleness_clock: format!(
-                "SELECT last_observed_at FROM {s}.staleness_clock WHERE singleton"
+                "SELECT count(*), min(last_observed_at) FROM {s}.staleness_clock \
+                 WHERE mapping_block = ANY($1::text[])"
             ),
         }
     }
