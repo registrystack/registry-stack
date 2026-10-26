@@ -10,10 +10,17 @@ use crate::{
     CoordinatorError, Result,
 };
 use async_trait::async_trait;
-use registry_platform_dispatch::postgres::{DispatchOutcome, DispatchTransport, LeasedJob};
-use registry_platform_dispatch::{DispatchError, FailureCode, SendOutcome, Sent};
+use registry_platform_dispatch::postgres::{
+    DispatchOutcome, DispatchTransport, LeasedJob, LEASE_FINALIZATION_ALLOWANCE,
+};
+use registry_platform_dispatch::{
+    Backoff, DispatchError, FailureCode, Jitter, JobPolicy, RetrySchedule, SendOutcome, Sent,
+};
 use serde_json::Value;
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::Arc,
+    time::{Duration, SystemTime},
+};
 
 pub struct Worker {
     store: Arc<Store>,
@@ -133,6 +140,59 @@ fn call_result(
             sent
         }
     }
+}
+
+/// A busy answer that may follow an effect keeps its automatic retry only
+/// when Dispatch is sure to schedule it. Dispatch expires a job whose retry
+/// would land at or after its expiry, and an expired job cannot be replayed,
+/// so such an answer holds the command as unknown instead: the operator can
+/// still send it again under the same request id.
+fn retry_or_hold(result: CallOutcome, job: &LeasedJob<Job>) -> CallOutcome {
+    match result {
+        CallOutcome::UncertainRetryable { code, retry_after }
+            if !retry_fits(
+                &job.policy,
+                job.attempt,
+                job.attempt_started_at,
+                retry_after,
+            ) =>
+        {
+            CallOutcome::Uncertain { code }
+        }
+        result => result,
+    }
+}
+
+/// Whether the retry after `attempt` lands before the job's expiry whatever
+/// the finish draws: the longest delay the schedule allows, counted from the
+/// end of the attempt's lease, by which the finish records its answer.
+fn retry_fits(
+    policy: &JobPolicy,
+    attempt: i16,
+    attempt_started_at: SystemTime,
+    retry_after: Option<Duration>,
+) -> bool {
+    let Some(expires_at) = policy.expires_at else {
+        return true;
+    };
+    let longest = match &policy.retry {
+        RetrySchedule::Backoff(backoff) => RetrySchedule::Backoff(Backoff {
+            jitter: Jitter::None,
+            ..*backoff
+        }),
+        schedule => schedule.clone(),
+    };
+    longest
+        .delay_after(attempt, retry_after, 0)
+        .ok()
+        .and_then(|delay| u64::try_from(delay).ok())
+        .and_then(|delay| {
+            attempt_started_at
+                .checked_add(policy.attempt_timeout)?
+                .checked_add(LEASE_FINALIZATION_ALLOWANCE)?
+                .checked_add(Duration::from_millis(delay))
+        })
+        .is_some_and(|latest| latest < expires_at)
 }
 
 /// One authenticated observation. Business refusal is a typed terminal result;
@@ -557,7 +617,7 @@ impl Worker {
                     ));
                 }
                 Ok(call_result(
-                    result,
+                    retry_or_hold(result, job),
                     next,
                     on_declared_refusal.as_deref(),
                     job.job.uncertain,
@@ -603,15 +663,17 @@ mod leased_wait_deadline_tests;
 
 #[cfg(test)]
 mod tests {
-    use super::{attempt_class, call_result, safe_code, wait_result};
+    use super::{attempt_class, call_result, retry_fits, safe_code, wait_result};
     use crate::{
         contracts::CompletionContract,
         metrics::StepAttempt,
         protocol::{CallOutcome, CompletionObservation, DeclaredRefusal},
     };
-    use registry_platform_dispatch::SendOutcome;
+    use registry_platform_dispatch::{
+        Backoff, Jitter, JobPolicy, RetrySchedule, SendOutcome, UncertainOutcome,
+    };
     use serde_json::{json, Value};
-    use std::time::Duration;
+    use std::time::{Duration, SystemTime};
 
     fn review() -> &'static CompletionContract {
         static CONTRACT: std::sync::OnceLock<CompletionContract> = std::sync::OnceLock::new();
@@ -892,6 +954,35 @@ mod tests {
         );
         assert_eq!(sent.outcome, SendOutcome::Transient { retry_after: None });
         assert_eq!(sent.detail.failure_code, Some("remote-uncertain"));
+    }
+
+    #[test]
+    fn a_busy_answer_that_may_follow_an_effect_retries_only_when_the_retry_fits() {
+        let started = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000);
+        let policy = |expires_in: Option<u64>| JobPolicy {
+            attempt_timeout: Duration::from_secs(10),
+            maximum_attempts: 10,
+            retry: RetrySchedule::Backoff(Backoff {
+                initial: Duration::from_secs(1),
+                maximum: Duration::from_secs(300),
+                multiplier: 2,
+                jitter: Jitter::Equal,
+            }),
+            on_uncertain: UncertainOutcome::Hold,
+            expires_at: expires_in.map(|seconds| started + Duration::from_secs(seconds)),
+        };
+        // The lease ends 15 seconds after the attempt starts, so a retry a
+        // 120-second hint asks for lands 135 seconds in at the latest, and
+        // Dispatch expires a job whose retry would land at its expiry.
+        let hint = Some(Duration::from_secs(120));
+        assert!(retry_fits(&policy(Some(136)), 1, started, hint));
+        assert!(!retry_fits(&policy(Some(135)), 1, started, hint));
+        // Without a hint the longest backoff draw counts: 16 seconds after
+        // the fifth attempt, whatever the jitter.
+        assert!(retry_fits(&policy(Some(32)), 5, started, None));
+        assert!(!retry_fits(&policy(Some(31)), 5, started, None));
+        // A job without an expiry is always retried.
+        assert!(retry_fits(&policy(None), 1, started, hint));
     }
 
     #[test]

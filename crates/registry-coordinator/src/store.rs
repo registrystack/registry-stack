@@ -2126,8 +2126,11 @@ pub(crate) const RETRY_MAXIMUM_DELAY: Duration =
 /// the next attempt.
 /// A product's bounded `Retry-After` is a floor on that wait, capped at five
 /// minutes. A wait that would reach the run deadline is never scheduled: the
-/// step expires the run there, the way a deadline already ends it. Pure steps
-/// call no product and carry no deadline of their own.
+/// step expires the run there, the way a deadline already ends it. A busy
+/// answer that may follow an effect is retried only when the longest such
+/// wait clears the deadline; otherwise the worker holds the step as unknown,
+/// so the same command can still be retried. Pure steps call no product and
+/// carry no deadline of their own.
 fn policy(job: &Job) -> JobPolicy {
     // A task-grant read can use four sequential two-second HTTP exchanges.
     // Dispatch owns the additional five-second lease finalization allowance.
