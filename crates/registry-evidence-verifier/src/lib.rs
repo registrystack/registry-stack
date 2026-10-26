@@ -15,6 +15,7 @@
 pub mod contracts;
 pub mod model;
 pub mod sdjwt_vc;
+pub mod status_list;
 pub mod verifier;
 
 // Test tooling outside this crate (the Evidence fuzz harnesses) builds
