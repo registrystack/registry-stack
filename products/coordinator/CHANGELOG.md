@@ -26,10 +26,13 @@ First release of Registry Coordinator.
   send and the id travels as `Idempotency-Key`; a required pure `interpret` Function maps the
   validated response to an accepted result, a declared refusal, or an uncertain hold. A 429 is
   retried as not processed; a 503 before the last attempt is retried with the effect held as
-  unknown until a later attempt settles it. Lost acknowledgements, timeouts, redirects, other
-  server errors, and unusable responses hold the run, and `retry-same` resends the same command
-  with the same id. Scenarios reply to it with `type: response`, never with a synthetic
-  `success` or `declared-refusal`. Providers must deduplicate on the request id.
+  unknown until a later attempt settles it, and a 503 whose retry could not land before the run
+  deadline holds the run at once. Lost acknowledgements, timeouts, redirects, other server
+  errors, and unusable responses hold the run, and `retry-same` resends the same command with the
+  same id. Scenarios reply to it with `type: response`, never with a synthetic `success` or
+  `declared-refusal`, and only with a status that reaches the interpretation Function; a
+  redirect, 429 or 5xx takes an `uncertain` or `retryable` reply instead. Providers must
+  deduplicate on the request id.
 - Base Registry Engine (BReg) Action aliases import owner-generated exact contracts for immediate
   Actions, which can route declared no-effect refusals explicitly. The applicant drives a Proposal
   in BReg; a Workflow follows it by product event or record read.

@@ -80,8 +80,14 @@ logs, problem details, `status` or `inspect`.
   effect, so `send_command` returns `CallOutcome::UncertainRetryable` and the
   worker records the attempt as uncertain while it retries: a deadline or retry
   limit reached before a later attempt settles it holds the run with the effect
-  unknown, and `Store::write_attempt` never ends such an attempt `expired` or
-  `failed`. A command honours a `Retry-After` only as one delta-seconds value of
+  unknown, and `Store::write_attempt` never reports such a run `expired` or
+  `failed`. The worker keeps that retry only when the longest wait the retry
+  schedule allows, counted from the end of the attempt's lease, clears the run
+  deadline (`retry_or_hold` in `crates/registry-coordinator/src/worker.rs`).
+  Otherwise it reports the attempt uncertain without a retry, so Dispatch holds
+  the job `unknown` instead of expiring it, and `retry-same` can send the same
+  command under the same id while the deadline is in the future. A command
+  honours a `Retry-After` only as one delta-seconds value of
   at most 86,400 and otherwise ignores it. Once the request may have left, a
   lost or broken exchange, a timeout, a redirect, any other 5xx, and an
   oversize, malformed or schema-invalid response are uncertain and hold the
@@ -94,7 +100,11 @@ logs, problem details, `status` or `inspect`.
   a scenario replies to a command step with a `response` that function
   interprets, and scenario validation (`scenario.reply`) refuses a `success` or
   `declared-refusal` reply to the step, so no scenario can reach a result or
-  refusal route the Function would not produce.
+  refusal route the Function would not produce. The transport and scenario
+  validation share one status classification (`command_status` in
+  `external_http.rs`), so a `response` reply with a status the worker holds or
+  retries before interpretation (a redirect, a 429 or any 5xx) is refused too,
+  with the `uncertain` or `retryable` reply that models it named in the repair.
 - Outcomes carry fixed failure codes only. No body, response, request id or
   token is logged or placed in a problem, `status` or `inspect`.
 
@@ -117,18 +127,20 @@ logs, problem details, `status` or `inspect`.
   `the_workflow_cannot_name_a_destination_path_or_credential`,
   `the_worker_interprets_a_response_into_one_of_three_results`,
   `a_command_without_a_refused_state_has_no_refusal_route`,
-  `scenarios_interpret_provider_responses_with_the_pinned_function`, and
-  `a_command_reply_reaches_its_result_only_through_the_interpret_function`.
+  `scenarios_interpret_provider_responses_with_the_pinned_function`,
+  `a_command_reply_reaches_its_result_only_through_the_interpret_function`, and
+  `a_command_response_reply_carries_only_a_status_the_worker_interprets`.
 - `crates/registry-coordinator/tests/external_command_postgres.rs`, under
   PostgreSQL: `a_lost_acknowledgement_holds_and_retry_same_sends_the_same_command`,
   `a_timeout_holds_as_uncertain_and_never_claims_a_provider_failure`,
   `a_restart_between_persist_and_send_sends_the_prepared_command_once`,
-  `a_busy_503_the_deadline_ends_holds_the_effect_as_unknown`,
+  `a_busy_503_the_deadline_ends_holds_the_same_command_for_recovery`,
   `a_deadline_that_passes_before_a_busy_503_is_retried_holds_the_effect`, and
   `a_busy_503_then_an_accepted_command_clears_the_unknown_effect`, each
   asserting that `status` and `inspect` carry no body, request id or token.
 - `crates/registry-coordinator/src/worker.rs`:
-  `a_busy_answer_that_may_follow_an_effect_retries_with_the_effect_unknown`.
+  `a_busy_answer_that_may_follow_an_effect_retries_with_the_effect_unknown` and
+  `a_busy_answer_that_may_follow_an_effect_retries_only_when_the_retry_fits`.
 - `crates/registry-coordinator/src/operations.rs`:
   `operations_use_registered_execution_semantics`.
 
@@ -152,6 +164,13 @@ These are maintained references, not claims that the tests ran in this note.
   key leaves the run for an operator to cancel. A retried 503 counts as an
   uncertain attempt, so a 503 followed by a refusal or 429 reaches this hold
   too.
+- The check that keeps a 503's retry counts from the end of the attempt's
+  lease, by which a live worker normally records its answer. A worker that
+  records it later, after its lease has ended, can still see Dispatch expire
+  the job; the run then shows `attention` with the effect unknown, but
+  `retry-same` refuses the expired job and the operator checks the provider's
+  records and cancels the run. Closing that window needs Dispatch itself to
+  hold, rather than expire, a retryable answer that may follow an effect.
 - A 429 is trusted to mean the provider did not process the command. A
   provider that answers 429 after applying it lets the final attempt end the
   run `failed` with `external-rate-limited`; the deployment runbook forbids

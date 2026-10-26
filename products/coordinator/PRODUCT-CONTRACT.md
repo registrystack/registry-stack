@@ -116,21 +116,26 @@ The alias's required `interpret` Function receives the frozen `command` and the 
 response, after the response is held to the alias's `responseSchema`. It returns `accepted` with
 a typed result, `refused` with one of its declared codes, or `uncertain`. The accepted result is
 the step output. Only a declared code routes to `onDeclaredRefusal`, as `{refusalCode}`; an
-interpreter that never returns `refused` has no refusal route.
+interpreter that never returns `refused` has no refusal route. Only a response whose status
+Coordinator neither holds nor retries reaches the Function: a redirect, a 429 and any 5xx never
+do. `coordinatorctl test` therefore refuses a scenario `response` reply with one of those
+statuses at `scenario.reply`, naming the `uncertain` or `retryable` reply that models it.
 
 The recovery class is same-command. Status 429 is trusted to mean the provider did not process
 the command, and is retried under the ordinary retry-hint and spacing rules. Status 503 before
 the last automatic attempt is retried the same way, but it may follow an effect, so the step stays
 uncertain until a later attempt settles it: a deadline or retry limit reached first holds the run
-as uncertain. A `Retry-After` on either answer that is not one whole number of seconds up to
-86,400 is ignored, and the retry waits for the ordinary backoff. A connection that could not be
-opened carried nothing and is retried. Once the request may have reached the provider, a lost or
-broken exchange, a timeout, a redirect, any other server error, an oversize or malformed
-response, a response outside the declared schema, an interpreter error, and an `uncertain`
-interpretation each hold the run as uncertain. None is reported as a provider failure or a
-negative business decision. The operation has no original-result receipt, so `reconcile` cannot
-settle it. After an uncertain attempt, including a retried 503, a later declared refusal or 429
-keeps the run held instead of routing or retrying. An accepted result is the provider's answer
+as uncertain. A 503 whose retry could land at or after the run deadline is not retried; the step
+is held as unknown at once, so `retry-same` can still send the same command with the same id while
+the deadline is in the future. A `Retry-After` on either answer that is not one whole number of
+seconds up to 86,400 is ignored, and the retry waits for the ordinary backoff. A connection that
+could not be opened carried nothing and is retried. Once the request may have reached the
+provider, a lost or broken exchange, a timeout, a redirect, any other server error, an oversize or
+malformed response, a response outside the declared schema, an interpreter error, and an
+`uncertain` interpretation each hold the run as uncertain. None is reported as a provider failure
+or a negative business decision. The operation has no original-result receipt, so `reconcile`
+cannot settle it. After an uncertain attempt, including a retried 503, a later declared refusal or
+429 keeps the run held instead of routing or retrying. An accepted result is the provider's answer
 as the project interprets it; Coordinator does not independently verify the provider's effect.
 
 ## Observation and uncertainty
