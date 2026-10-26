@@ -489,15 +489,18 @@ mod postgres_only {
     //! What only a shared database can show.
 
     use std::sync::Arc;
+    use std::time::{Duration, Instant};
 
     use registry_evidence_oid4vci::config::StoreConfig;
     use registry_evidence_oid4vci::storage::Store;
     use registry_evidence_oid4vci::store::{PreparedRequest, StoreError};
 
-    use super::store_support::postgres::{admin, count, dump, open_over, pool_with_options};
+    use super::store_support::postgres::{
+        admin, count, dump, open_over, pool, pool_with_options, unmigrated, LOCK_NAMESPACE,
+    };
     use super::store_support::{
-        assert_prepared, bounds, generation, prepared, Deployment, Keys, Kind, Ring, LIFETIME, NOW,
-        SEAL_ONE, SEAL_THREE, SEAL_TWO, TAG_ONE,
+        assert_prepared, bounds, generation, prepared, Deployment, Keys, Kind, Logs, Ring,
+        LIFETIME, NOW, SEAL_ONE, SEAL_THREE, SEAL_TWO, TAG_ONE,
     };
 
     const CONTENDERS: usize = 24;
@@ -722,6 +725,104 @@ mod postgres_only {
             .all(|error| *error == StoreError::Saturated));
         assert_eq!(first.maximum_keyspace_len().await, Some(4));
         assert_eq!(second.maximum_keyspace_len().await, Some(4));
+    }
+
+    /// A replica that hangs while it holds a key-space lock must not hold
+    /// every other replica's requests past their timeout. Each transaction
+    /// bounds its own waits from the service's request timeout, so a writer
+    /// that meets a held lock gives up inside that timeout, answers as any
+    /// database failure does, and leaves nothing spent.
+    #[tokio::test]
+    async fn a_held_keyspace_lock_refuses_within_the_bound_and_spends_nothing() {
+        const REQUEST_TIMEOUT: Duration = Duration::from_secs(1);
+        let (deployment, _store) =
+            Deployment::open(Kind::Postgres, bounds(), Keys::default()).await;
+        let schema = deployment.schema().to_owned();
+        let store = unmigrated(pool(), &schema, &bounds(), Keys::default(), REQUEST_TIMEOUT);
+        let catalog = generation("catalog-1");
+        store
+            .remember_offer("waiting", None, &catalog, prepared(), NOW)
+            .await
+            .expect("an offer to redeem once the lock is free");
+        let held = at_rest(&schema).await;
+
+        let holder = admin().await;
+        for keyspace in ["offers", "access_tokens"] {
+            holder
+                .execute(
+                    "SELECT pg_advisory_lock($1, hashtext($2))",
+                    &[&LOCK_NAMESPACE, &format!("{schema}.{keyspace}")],
+                )
+                .await
+                .expect("hold a key-space lock as a hung replica would");
+        }
+
+        let (logs, _guard) = Logs::capture();
+        let started = Instant::now();
+        let created =
+            within_the_test_bound(store.remember_offer("blocked", None, &catalog, prepared(), NOW))
+                .await;
+        assert_eq!(created, Err(StoreError::Unavailable));
+        assert!(
+            started.elapsed() < REQUEST_TIMEOUT,
+            "offer creation gave up after {:?}",
+            started.elapsed()
+        );
+        let started = Instant::now();
+        let redeemed = within_the_test_bound(
+            store.redeem_offer_for_access_token("waiting", None, "token", &catalog, NOW),
+        )
+        .await;
+        assert_eq!(redeemed, Err(StoreError::Unavailable));
+        assert!(
+            started.elapsed() < REQUEST_TIMEOUT,
+            "redemption gave up after {:?}",
+            started.elapsed()
+        );
+        assert_eq!(at_rest(&schema).await, held, "nothing was written or spent");
+
+        let rendered = logs.rendered();
+        assert_eq!(
+            rendered
+                .matches(r#"operation="lock a key-space" sqlstate="55P03""#)
+                .count(),
+            2,
+            "{rendered}"
+        );
+        for value in ["blocked", "waiting", "token", schema.as_str()] {
+            assert!(
+                !rendered.contains(value),
+                "the log names {value}: {rendered}"
+            );
+        }
+
+        holder
+            .execute("SELECT pg_advisory_unlock_all()", &[])
+            .await
+            .expect("release the key-space locks");
+        store
+            .remember_offer("blocked", None, &catalog, prepared(), NOW)
+            .await
+            .expect("the refused offer can be created once the lock is free");
+        store
+            .redeem_offer_for_access_token("waiting", None, "token", &catalog, NOW)
+            .await
+            .expect("the refused redemption spent nothing");
+    }
+
+    /// Every row in `schema`, in a stable order.
+    async fn at_rest(schema: &str) -> Vec<(String, String)> {
+        let mut rows = dump(schema).await;
+        rows.sort();
+        rows
+    }
+
+    /// Await `operation`, failing the test rather than hanging it when the
+    /// store waits without bound.
+    async fn within_the_test_bound<T>(operation: impl std::future::Future<Output = T>) -> T {
+        tokio::time::timeout(Duration::from_secs(5), operation)
+            .await
+            .expect("the store answers rather than waiting on a held lock")
     }
 
     const SELECTOR: &str = "canary-selector-7f3a9c";
