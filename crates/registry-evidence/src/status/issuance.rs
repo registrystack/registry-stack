@@ -11,8 +11,8 @@
 //!
 //! Entries are written VALID. Just before the commit, under the subject's
 //! pseudonym lock, the batch takes the status it inherits from the latest
-//! observation for its subject (concept 5.3 item 4), so a hook processed
-//! while the credential was being signed is not lost.
+//! observation for its requirement and subject (concept 5.3 item 4), so a
+//! hook processed while the credential was being signed is not lost.
 
 use std::time::Duration;
 
@@ -38,6 +38,16 @@ pub const IDLE_IN_TRANSACTION_MARGIN: Duration = Duration::from_secs(5);
 
 /// Longest accepted requirement identifier, in bytes.
 const MAXIMUM_REQUIREMENT_ID_BYTES: usize = 256;
+
+/// Refuse a requirement identifier the ledger cannot store.
+pub(crate) fn validate_requirement_id(requirement_id: &str) -> Result<(), StatusError> {
+    if requirement_id.is_empty() || requirement_id.len() > MAXIMUM_REQUIREMENT_ID_BYTES {
+        return Err(StatusError::InvalidInput(
+            "the requirement identifier must be 1 to 256 bytes",
+        ));
+    }
+    Ok(())
+}
 
 /// Random draws per member before the allocation gives up. Each list takes
 /// at most half its entries, so a draw finds a free index at least half the
@@ -101,10 +111,12 @@ pub struct IssuanceTransaction<'l> {
     inheritance: Option<Inheritance>,
 }
 
-/// The allocated batch and the subject keys its inherited status is read by.
+/// The allocated batch and the requirement and subject keys its inherited
+/// status is read by.
 struct Inheritance {
     list_id: StatusListId,
     indices: Vec<i32>,
+    requirement_id: String,
     lookup_pseudonyms: Vec<[u8; 32]>,
     lock_key: i32,
     source_read: SourceRead,
@@ -184,6 +196,7 @@ impl IssuanceTransaction<'_> {
                 self.inheritance = Some(Inheritance {
                     list_id: allocated.list_id,
                     indices: allocated.indices,
+                    requirement_id: rows.requirement_id,
                     lookup_pseudonyms: rows.lookup_pseudonyms,
                     lock_key: rows.lock_key,
                     source_read: fields.source_read,
@@ -249,13 +262,7 @@ impl IssuanceTransaction<'_> {
         fields: &AllocationFields<'_>,
         members: CredentialMembers<'_>,
     ) -> Result<AllocationRows, StatusError> {
-        if fields.requirement_id.is_empty()
-            || fields.requirement_id.len() > MAXIMUM_REQUIREMENT_ID_BYTES
-        {
-            return Err(StatusError::InvalidInput(
-                "the requirement identifier must be 1 to 256 bytes",
-            ));
-        }
+        validate_requirement_id(fields.requirement_id)?;
         if fields.not_after <= fields.issued_at {
             return Err(StatusError::InvalidInput(
                 "a credential must expire after it is issued",
@@ -406,9 +413,10 @@ async fn allocate_rows(
 
 /// Under the subject's shared pseudonym lock, which an observation being
 /// recorded holds exclusively, give the batch the status it inherits from
-/// the latest observation, then commit. An observation, inherited or not,
-/// also records its revision and mapping version, so a delivery older than
-/// what the evaluation could have read is stale for these entries.
+/// the latest observation for its requirement, then commit. An observation,
+/// inherited or not, also records its revision and mapping version, so a
+/// delivery older than what the evaluation could have read is stale for
+/// these entries.
 async fn inherit_and_commit(
     ledger: &StatusLedger,
     client: &Object,
@@ -428,7 +436,10 @@ async fn inherit_and_commit(
         .map(<[u8; 32]>::as_slice)
         .collect();
     let latest = client
-        .query_opt(&ledger.statements.latest_observation, &[&lookups])
+        .query_opt(
+            &ledger.statements.latest_observation,
+            &[&inheritance.requirement_id, &lookups],
+        )
         .await
         .map_err(failed)?;
     if let Some(row) = latest {

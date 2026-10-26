@@ -84,17 +84,21 @@ CREATE TABLE transitions (
 
 CREATE INDEX transitions_by_entry ON transitions (list_id, idx);
 
--- The latest observed mapped status per selector pseudonym, kept so an
--- allocation committed after a hook can inherit what the hook observed.
--- `captured_at` is the source's capture time of the change; rows are purged
--- by it once the observation retention passes.
+-- The latest observed mapped status per requirement and selector pseudonym,
+-- kept so an allocation committed after a hook can inherit what the hook
+-- observed. Source revisions are per record, so the observations of two
+-- requirements that share a selector profile are kept apart and never
+-- compared. `captured_at` is the source's capture time of the change; rows
+-- are purged by it once the observation retention passes.
 CREATE TABLE observations (
-    selector_pseudonym bytea PRIMARY KEY CHECK (octet_length(selector_pseudonym) = 32),
+    requirement_id text NOT NULL CHECK (octet_length(requirement_id) BETWEEN 1 AND 256),
+    selector_pseudonym bytea NOT NULL CHECK (octet_length(selector_pseudonym) = 32),
     pseudonym_key_version integer NOT NULL CHECK (pseudonym_key_version > 0),
     status smallint NOT NULL CHECK (status IN (0, 1, 2)),
     source_revision bigint NOT NULL CHECK (source_revision > 0),
     captured_at timestamptz NOT NULL,
-    mapping_version integer NOT NULL CHECK (mapping_version > 0)
+    mapping_version integer NOT NULL CHECK (mapping_version > 0),
+    PRIMARY KEY (requirement_id, selector_pseudonym)
 );
 
 CREATE INDEX observations_by_capture_time ON observations (captured_at);

@@ -1,8 +1,10 @@
 //! The observation store and the staleness clock.
 //!
-//! The observation store keeps the latest observed mapped status per selector
-//! pseudonym, so an allocation committed after a hook it never saw inherits
-//! what the hook observed (concept 5.3 item 4). Recording an observation and
+//! The observation store keeps the latest observed mapped status per
+//! requirement and selector pseudonym, so an allocation committed after a
+//! hook it never saw inherits what the hook observed (concept 5.3 item 4).
+//! Source revisions are per record, so two requirements that share a
+//! selector profile keep separate observations. Recording an observation and
 //! committing an allocation for the same pseudonym serialize on a
 //! transaction-scoped advisory lock: an allocation either commits first, and
 //! is then visible to whoever applies the observation to live allocations,
@@ -19,6 +21,7 @@ use chrono::{DateTime, TimeDelta, Utc};
 
 use super::apply::status_column;
 use super::error::StatusError;
+use super::issuance::validate_requirement_id;
 use super::ledger::{version_column, StatusLedger};
 use super::pools::ReservedPool;
 use super::provenance::{MappingVersion, SourceRevision};
@@ -84,15 +87,18 @@ fn failed(error: &tokio_postgres::Error) -> StatusError {
 }
 
 impl StatusLedger {
-    /// Record an observation for `subject` if it is newer than every one the
-    /// store holds for it, under any retained pseudonym key. The mapping
-    /// version must be the highest registered one.
+    /// Record an observation of `subject`'s record for `requirement_id` if
+    /// it is newer than every one the store holds for that requirement and
+    /// subject, under any retained pseudonym key. The mapping version must
+    /// be the highest registered one.
     pub async fn record_observation(
         &self,
         pool: &ReservedPool,
+        requirement_id: &str,
         subject: &StatusSubject,
         observation: &Observation,
     ) -> Result<ObservationOutcome, StatusError> {
+        validate_requirement_id(requirement_id)?;
         let pseudonym = self.pseudonym_keys.pseudonym(subject)?;
         let lookups = self.pseudonym_keys.lookup_pseudonyms(subject)?;
         let lookups: Vec<&[u8]> = lookups
@@ -111,7 +117,10 @@ impl StatusLedger {
             .await
             .map_err(|error| failed(&error))?;
         let latest: Option<i64> = transaction
-            .query_one(&self.statements.latest_observed_revision, &[&lookups])
+            .query_one(
+                &self.statements.latest_observed_revision,
+                &[&requirement_id, &lookups],
+            )
             .await
             .map_err(|error| failed(&error))?
             .get(0);
@@ -126,6 +135,7 @@ impl StatusLedger {
             .execute(
                 &self.statements.upsert_observation,
                 &[
+                    &requirement_id,
                     &pseudonym.as_bytes().as_slice(),
                     &version_column(pseudonym.key_version())?,
                     &status_column(observation.status),
