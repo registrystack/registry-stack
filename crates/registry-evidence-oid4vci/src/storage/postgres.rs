@@ -12,6 +12,9 @@
 //!    live rows every replica wrote, taken in the same transaction as the
 //!    insert and under a transaction advisory lock, so two replicas cannot
 //!    both take the last place. A full store refuses; nothing is evicted.
+//!    Every transaction runs at READ COMMITTED whatever the server, role or
+//!    database default, so the count sees what the previous lock holder
+//!    committed.
 //! 3. **A transaction code lockout outlives the request it refused, across
 //!    replicas.** Attempts are counted by a conditional
 //!    `UPDATE ... WHERE state = 'open' ... RETURNING`, so concurrent attempts
@@ -46,6 +49,7 @@ use async_trait::async_trait;
 use deadpool_postgres::{Object, Pool, Transaction};
 use subtle::ConstantTimeEq;
 use thiserror::Error;
+use tokio_postgres::IsolationLevel;
 use zeroize::Zeroizing;
 
 use super::sealing::{self, Binding, Purpose, SealError, Sealed};
@@ -179,7 +183,12 @@ impl PostgresStore {
             tracing::error!(target: LOG_TARGET, sqlstate = code, "the store migration was refused");
             PostgresSetupError::Refused(code.to_owned())
         };
-        let transaction = client.transaction().await.map_err(refused)?;
+        let transaction = client
+            .build_transaction()
+            .isolation_level(IsolationLevel::ReadCommitted)
+            .start()
+            .await
+            .map_err(refused)?;
         transaction
             .execute(
                 "SELECT pg_advisory_xact_lock($1, hashtext($2))",
@@ -242,6 +251,22 @@ impl PostgresStore {
             tracing::error!(target: LOG_TARGET, "the store database is unreachable");
             StoreError::Unavailable
         })
+    }
+
+    /// Begin a transaction at READ COMMITTED, whatever the server, role or
+    /// database default is. A count taken after an advisory lock is granted
+    /// must see what the previous holder committed; under REPEATABLE READ or
+    /// SERIALIZABLE the snapshot would date from before the lock wait.
+    async fn begin<'c>(
+        client: &'c mut Object,
+        operation: &'static str,
+    ) -> Result<Transaction<'c>, StoreError> {
+        client
+            .build_transaction()
+            .isolation_level(IsolationLevel::ReadCommitted)
+            .start()
+            .await
+            .map_err(failed(operation))
     }
 
     /// Serialize every writer of one key-space across replicas until the
@@ -648,10 +673,7 @@ impl Store for PostgresStore {
         let ledgers = self.table("offer_ledgers");
 
         let mut client = self.client().await?;
-        let transaction = client
-            .transaction()
-            .await
-            .map_err(failed("begin remembering an offer"))?;
+        let transaction = Self::begin(&mut client, "begin remembering an offer").await?;
         self.lock_keyspace(&transaction, "offers").await?;
         let row = transaction
             .query_one(
@@ -726,10 +748,7 @@ impl Store for PostgresStore {
         now: i64,
     ) -> Result<PreparedRequest, StoreError> {
         let mut client = self.client().await?;
-        let transaction = client
-            .transaction()
-            .await
-            .map_err(failed("begin a redemption"))?;
+        let transaction = Self::begin(&mut client, "begin a redemption").await?;
         let outcome = self
             .redeem_in(&transaction, code, transaction_code, generation, now)
             .await;
@@ -745,10 +764,7 @@ impl Store for PostgresStore {
         now: i64,
     ) -> Result<(), StoreError> {
         let mut client = self.client().await?;
-        let transaction = client
-            .transaction()
-            .await
-            .map_err(failed("begin a redemption"))?;
+        let transaction = Self::begin(&mut client, "begin a redemption").await?;
         // The token key-space is sized before the offer is spent, and stays
         // locked until the token is bound, so a saturated store refuses
         // having changed nothing.
@@ -776,10 +792,7 @@ impl Store for PostgresStore {
         now: i64,
     ) -> Result<(), StoreError> {
         let mut client = self.client().await?;
-        let transaction = client
-            .transaction()
-            .await
-            .map_err(failed("begin binding an access token"))?;
+        let transaction = Self::begin(&mut client, "begin binding an access token").await?;
         self.lock_keyspace(&transaction, "access_tokens").await?;
         self.reserve_token_room(&transaction, access_token, now)
             .await?;
@@ -800,10 +813,7 @@ impl Store for PostgresStore {
         let candidates = self.candidate_tags(ACCESS_TOKEN_DOMAIN, access_token);
         let tags: Vec<&str> = candidates.iter().map(|(_, tag)| tag.as_str()).collect();
         let mut client = self.client().await?;
-        let transaction = client
-            .transaction()
-            .await
-            .map_err(failed("begin a claim"))?;
+        let transaction = Self::begin(&mut client, "begin a claim").await?;
         // Deleting is claiming: of two claims of one token, one deletes the
         // row and the other finds nothing to delete. Claiming under another
         // catalog generation deletes nothing.

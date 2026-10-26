@@ -233,8 +233,21 @@ pub mod postgres {
     /// A pool of its own, as a separate replica would hold.
     #[must_use]
     pub fn pool() -> Pool {
+        pool_over(config())
+    }
+
+    /// A pool of its own whose sessions start with the server settings in
+    /// `options`, as a role or database default would set them.
+    #[must_use]
+    pub fn pool_with_options(options: &str) -> Pool {
+        let mut config = config();
+        config.options(options);
+        pool_over(config)
+    }
+
+    fn pool_over(config: tokio_postgres::Config) -> Pool {
         let manager = Manager::from_config(
-            config(),
+            config,
             NoTls,
             ManagerConfig {
                 recycling_method: RecyclingMethod::Verified,
@@ -249,8 +262,18 @@ pub mod postgres {
 
     /// A migrated store over `schema`, with a pool of its own.
     pub async fn open(schema: &str, bounds: &StoreConfig, keys: Keys) -> Arc<dyn Store> {
+        open_over(pool(), schema, bounds, keys).await
+    }
+
+    /// A migrated store over `schema`, reached through `pool`.
+    pub async fn open_over(
+        pool: Pool,
+        schema: &str,
+        bounds: &StoreConfig,
+        keys: Keys,
+    ) -> Arc<dyn Store> {
         let store = PostgresStore::new(
-            pool(),
+            pool,
             schema,
             bounds,
             keys.tags.build(),
