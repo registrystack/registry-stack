@@ -328,6 +328,10 @@ pub(crate) fn read_target_documents(path: &Path) -> Result<crate::build::TargetD
     governance["issuer"] = issuer;
     governance["authentication"] = target.authentication.governed_value()?;
     governance["subjectBinding"] = serde_json::to_value(&target.subject_binding)?;
+    if let Some(signing) = &target.signing {
+        governance["signing"]["maximumAssertionValiditySeconds"] =
+            json!(signing.maximum_assertion_validity_seconds);
+    }
     governance["audit"] = target.audit.governed_value();
     governance["rateLimits"] = target.rate_limits.governed_value()?;
     if let Some(formats) = &target.response_formats {
