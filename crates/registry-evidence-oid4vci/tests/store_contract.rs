@@ -513,7 +513,11 @@ mod postgres_only {
         first: &'a Arc<dyn Store>,
         second: &'a Arc<dyn Store>,
     ) -> Arc<dyn Store> {
-        Arc::clone(if index.is_multiple_of(2) { first } else { second })
+        Arc::clone(if index.is_multiple_of(2) {
+            first
+        } else {
+            second
+        })
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
