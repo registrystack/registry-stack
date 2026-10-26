@@ -222,6 +222,7 @@ lettre = { version = "0.11.23", default-features = false, features = ["builder",
 # Every default feature stays off here; each member enables only the features
 # its own templates need, and states why in its manifest.
 minijinja = { version = "2.24", default-features = false }
+miniz_oxide = "=0.8.5"
 napi = { version = "3.12.0", features = ["async", "serde-json"] }
 napi-build = { version = "2.4.0" }
 napi-derive = { version = "3.6.2" }

@@ -22,6 +22,7 @@ fixtures = []
 base64.workspace = true
 chrono.workspace = true
 jsonschema.workspace = true
+miniz_oxide.workspace = true
 p256.workspace = true
 registry-platform-crypto.workspace = true
 registry-platform-sdjwt.workspace = true
@@ -33,5 +34,6 @@ thiserror.workspace = true
 utoipa.workspace = true
 
 [dev-dependencies]
+proptest.workspace = true
 serde_norway.workspace = true
 tokio.workspace = true
