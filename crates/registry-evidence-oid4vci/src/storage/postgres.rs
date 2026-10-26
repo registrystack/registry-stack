@@ -82,11 +82,13 @@ const LOG_TARGET: &str = "registry_evidence_oid4vci::storage";
 pub enum PostgresSetupError {
     #[error(
         "the store schema name must be 1 to 63 lowercase ASCII letters, digits or underscores, \
-         and must not start with a digit"
+         must not start with a digit or with pg_, and must not be public or information_schema"
     )]
     SchemaName,
     #[error("the store schema carries migration {0}, which this build does not know")]
     SchemaVersion(i64),
+    #[error("the store schema holds a migration table this store did not make")]
+    MigrationTable,
     #[error("the store database could not be reached")]
     Unreachable,
     #[error("the store database refused the migration (SQLSTATE {0})")]
@@ -216,23 +218,31 @@ impl PostgresStore {
             .batch_execute(&format!(
                 "CREATE SCHEMA IF NOT EXISTS {schema}; \
                  SET LOCAL search_path TO {schema}; \
-                 CREATE TABLE IF NOT EXISTS schema_migrations (\
+                 CREATE TABLE IF NOT EXISTS oid4vci_schema_migrations (\
                  version bigint PRIMARY KEY CHECK (version > 0), \
                  applied_at timestamptz NOT NULL DEFAULT now());",
                 schema = self.schema
             ))
             .await
             .map_err(refused)?;
-        let applied: Vec<i64> = transaction
+        let applied = transaction
             .query(
-                "SELECT version FROM schema_migrations ORDER BY version",
+                "SELECT version FROM oid4vci_schema_migrations ORDER BY version",
                 &[],
             )
             .await
             .map_err(refused)?
             .iter()
-            .map(|row| row.get(0))
-            .collect();
+            .map(|row| row.try_get::<_, i64>(0))
+            .collect::<Result<Vec<i64>, _>>()
+            .map_err(|_| {
+                tracing::error!(
+                    target: LOG_TARGET,
+                    operation = "read the applied migrations",
+                    "the store schema holds a migration table this store did not make"
+                );
+                PostgresSetupError::MigrationTable
+            })?;
         if let Some(unknown) = applied
             .iter()
             .find(|version| !MIGRATIONS.iter().any(|(known, _)| known == *version))
@@ -255,7 +265,7 @@ impl PostgresStore {
                 .map_err(refused)?;
             transaction
                 .execute(
-                    "INSERT INTO schema_migrations (version) VALUES ($1)",
+                    "INSERT INTO oid4vci_schema_migrations (version) VALUES ($1)",
                     &[&version],
                 )
                 .await
@@ -971,7 +981,9 @@ fn transaction_waits(request_timeout: Duration) -> String {
     )
 }
 
-/// A schema name this store can interpolate into SQL without quoting.
+/// A schema name this store can interpolate into SQL without quoting, and
+/// one it can own: `public` is shared with whatever else uses the database,
+/// and `information_schema` and the `pg_` prefix belong to PostgreSQL.
 fn valid_schema_name(schema: &str) -> bool {
     let mut bytes = schema.bytes();
     let Some(first) = bytes.next() else {
@@ -980,6 +992,8 @@ fn valid_schema_name(schema: &str) -> bool {
     schema.len() <= 63
         && (first.is_ascii_lowercase() || first == b'_')
         && bytes.all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
+        && !matches!(schema, "public" | "information_schema")
+        && !schema.starts_with("pg_")
 }
 
 fn state_refusal(state: &str) -> StoreError {
@@ -1043,6 +1057,11 @@ mod tests {
             "store;drop",
             "store \"x\"",
             &"s".repeat(64),
+            // Shared with other tools, or reserved by PostgreSQL.
+            "public",
+            "information_schema",
+            "pg_catalog",
+            "pg_store",
         ] {
             assert!(!valid_schema_name(refused), "{refused}");
         }
