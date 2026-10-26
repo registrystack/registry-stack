@@ -7,10 +7,12 @@
 //! (hooks and reconciliation) apply only under the highest registered mapping
 //! version.
 
+use chrono::{DateTime, Utc};
 use deadpool_postgres::Transaction as DatabaseTransaction;
 use uuid::Uuid;
 
 use super::error::StatusError;
+use super::inheritance::predates_source_read;
 use super::ledger::{StatusEntry, StatusLedger};
 use super::pools::ReservedPool;
 use super::provenance::{MappingVersion, Provenance, TransitionOutcome, TransitionRequest};
@@ -107,13 +109,15 @@ impl StatusLedger {
     /// highest registered one is refused with
     /// [`StatusError::MappingVersionNotCurrent`] and changes nothing. A
     /// request reflecting a source revision older than the entry's last
-    /// applied one is [`TransitionOutcome::StaleRevision`].
+    /// applied one is [`TransitionOutcome::StaleRevision`]. A request whose
+    /// source time is earlier than the entry's source read less the
+    /// clock-skew allowance is [`TransitionOutcome::StaleSource`].
     pub async fn apply_transition(
         &self,
         pool: &ReservedPool,
         request: &TransitionRequest,
     ) -> Result<TransitionOutcome, StatusError> {
-        request.provenance.validate()?;
+        request.validate()?;
         let idx = request.entry.idx_column()?;
         let mut client = pool.client().await?;
         let transaction = client.transaction().await.map_err(|error| failed(&error))?;
@@ -134,6 +138,14 @@ impl StatusLedger {
             if revision.get() < last_applied {
                 return finish(transaction, TransitionOutcome::StaleRevision).await;
             }
+        }
+        // The entry's evaluation read a source state at least as new as this
+        // input, so the input says nothing about the entry.
+        let source_read_hour: DateTime<Utc> = row.get(2);
+        if request.source_time.is_some_and(|source_time| {
+            predates_source_read(source_time.instant(), source_read_hour, self.clock_skew)
+        }) {
+            return finish(transaction, TransitionOutcome::StaleSource).await;
         }
         // The mapping version stored with an entry is the one its last
         // applied source revision was mapped under.
@@ -294,7 +306,9 @@ async fn finish(
     outcome: TransitionOutcome,
 ) -> Result<TransitionOutcome, StatusError> {
     match outcome {
-        TransitionOutcome::StaleRevision | TransitionOutcome::Refused(_) => transaction
+        TransitionOutcome::StaleRevision
+        | TransitionOutcome::StaleSource
+        | TransitionOutcome::Refused(_) => transaction
             .rollback()
             .await
             .map_err(|error| failed(&error))?,

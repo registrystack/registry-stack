@@ -25,7 +25,10 @@ CREATE UNIQUE INDEX lists_one_open ON lists ((closed_at IS NULL))
 -- One row per issued credential. The primary key is the uniqueness of
 -- (list_id, idx): an index is allocated once and never reused.
 -- Status codes are the Token Status List values: 0 VALID, 1 INVALID,
--- 2 SUSPENDED.
+-- 2 SUSPENDED. `source_read_hour` is when the evaluation behind the
+-- credential read its source, rounded down to the hour so an exact extract
+-- `publishedAt` never persists here; an input older than it, less the
+-- clock-skew allowance, is stale for the entry.
 CREATE TABLE allocations (
     list_id text NOT NULL REFERENCES lists (list_id),
     idx integer NOT NULL CHECK (idx >= 0),
@@ -39,6 +42,8 @@ CREATE TABLE allocations (
     status smallint NOT NULL CHECK (status IN (0, 1, 2)),
     last_applied_source_revision bigint CHECK (last_applied_source_revision > 0),
     mapping_version integer CHECK (mapping_version > 0),
+    source_read_hour timestamptz NOT NULL
+        CHECK (mod(extract(epoch FROM source_read_hour), 3600) = 0),
     CONSTRAINT allocations_pkey PRIMARY KEY (list_id, idx),
     CONSTRAINT allocations_holder_digest_versioned
         CHECK ((holder_key_digest IS NULL) = (holder_digest_key_version IS NULL)),

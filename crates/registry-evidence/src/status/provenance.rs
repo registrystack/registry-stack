@@ -1,8 +1,10 @@
-//! What a transition request carries: the target status, a reason category
-//! and the closed provenance of its cause.
+//! What a transition request carries: the target status, a reason category,
+//! the closed provenance of its cause and, for a mapped cause, the source
+//! time of its input.
 
 use std::fmt;
 
+use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
 use super::error::StatusError;
@@ -211,6 +213,31 @@ impl Provenance {
     }
 }
 
+/// When the source produced a hook or reconciliation input: the hook's
+/// CloudEvent `time` or the extract's `publishedAt`. The ledger compares it
+/// with an entry's source read and never stores it, and `Debug` never shows
+/// it.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct SourceTime(DateTime<Utc>);
+
+impl SourceTime {
+    #[must_use]
+    pub const fn new(instant: DateTime<Utc>) -> Self {
+        Self(instant)
+    }
+
+    #[must_use]
+    pub const fn instant(&self) -> DateTime<Utc> {
+        self.0
+    }
+}
+
+impl fmt::Debug for SourceTime {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("SourceTime([REDACTED])")
+    }
+}
+
 /// One request to move a status entry.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TransitionRequest {
@@ -218,6 +245,26 @@ pub struct TransitionRequest {
     pub to: EntryStatus,
     pub reason: ReasonCategory,
     pub provenance: Provenance,
+    /// The source time of a hook or reconciliation input; an operator
+    /// request has none.
+    pub source_time: Option<SourceTime>,
+}
+
+impl TransitionRequest {
+    pub(crate) fn validate(&self) -> Result<(), StatusError> {
+        self.provenance.validate()?;
+        match (self.provenance.cause(), self.source_time) {
+            (TransitionCause::Operator, Some(_)) => Err(StatusError::InvalidInput(
+                "an operator transition has no source time",
+            )),
+            (TransitionCause::Hook | TransitionCause::Reconciliation, None) => {
+                Err(StatusError::InvalidInput(
+                    "a hook or reconciliation transition names its source time",
+                ))
+            }
+            _ => Ok(()),
+        }
+    }
 }
 
 /// What a transition request did.
@@ -235,13 +282,21 @@ pub enum TransitionOutcome {
     /// The request reflects a source revision older than the last applied
     /// one, so it changes nothing.
     StaleRevision,
+    /// The request's source time is earlier than the entry's source read
+    /// less the clock-skew allowance: the evaluation behind the entry read a
+    /// newer source state, so the request changes nothing.
+    StaleSource,
     /// The transition table refuses the request; nothing changed.
     Refused(Refusal),
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{MappingVersion, Provenance, ProvenanceText, ReasonCategory, SourceRevision};
+    use chrono::{TimeZone, Utc};
+
+    use super::{
+        MappingVersion, Provenance, ProvenanceText, ReasonCategory, SourceRevision, SourceTime,
+    };
 
     fn text(value: &str) -> ProvenanceText {
         ProvenanceText::new(value).unwrap()
@@ -275,6 +330,12 @@ mod tests {
         ] {
             assert!(ReasonCategory::new(invalid).is_err(), "{invalid}");
         }
+    }
+
+    #[test]
+    fn a_source_time_never_formats() {
+        let source_time = SourceTime::new(Utc.with_ymd_and_hms(2026, 10, 19, 3, 17, 29).unwrap());
+        assert_eq!(format!("{source_time:?}"), "SourceTime([REDACTED])");
     }
 
     #[test]

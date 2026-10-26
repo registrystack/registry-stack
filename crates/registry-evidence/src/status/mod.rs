@@ -40,8 +40,8 @@ pub use pools::{
     IssuancePool, ReservedPool, DEFAULT_ISSUANCE_POOL_SIZE, DEFAULT_RESERVED_POOL_SIZE,
 };
 pub use provenance::{
-    MappingVersion, Provenance, ProvenanceText, ReasonCategory, SourceRevision, TransitionOutcome,
-    TransitionRequest,
+    MappingVersion, Provenance, ProvenanceText, ReasonCategory, SourceRevision, SourceTime,
+    TransitionOutcome, TransitionRequest,
 };
 pub use pseudonym::{
     HolderKeyDigest, HolderKeyThumbprint, PseudonymError, StatusPseudonym, StatusSubject,
