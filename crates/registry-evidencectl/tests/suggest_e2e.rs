@@ -238,6 +238,59 @@ fn mapped_get_and_post_projects_pass_the_offline_compiler() {
 }
 
 #[test]
+fn unsupported_path_placeholders_are_refused_without_mutation() {
+    for name in [
+        "RecordId".to_owned(),
+        "1record".to_owned(),
+        "record.id".to_owned(),
+        "récord".to_owned(),
+        "r".repeat(65),
+    ] {
+        let document = request_openapi(
+            "GET",
+            &format!("/records/{{{name}}}"),
+            vec![parameter(&name, "path", true, "string")],
+            None,
+        );
+        let workspace = tempfile::tempdir().expect("tempdir");
+        let project = scaffold(workspace.path(), &document);
+        assert_mapping_failure_is_atomic(
+            &project,
+            &[format!(
+                "subject.subject-reference-v1.reference=path:{name}"
+            )],
+            "must be a Registry Stack LocalId",
+            &format!("unsupported path placeholder {name}"),
+        );
+    }
+    for (path, parameters, mapping, expected) in [
+        (
+            "/records/{record_id}/{record_id}",
+            vec![parameter("record_id", "path", true, "string")],
+            "subject.subject-reference-v1.reference=path:record_id",
+            "path placeholders must be unique",
+        ),
+        (
+            "/records/{missing}",
+            vec![parameter("reference", "query", true, "string")],
+            "subject.subject-reference-v1.reference=query:reference",
+            "path:missing",
+        ),
+        (
+            "/records/prefix-{record_id}",
+            vec![parameter("reference", "query", true, "string")],
+            "subject.subject-reference-v1.reference=query:reference",
+            "path placeholder must occupy one complete segment",
+        ),
+    ] {
+        let document = request_openapi("GET", path, parameters, None);
+        let workspace = tempfile::tempdir().expect("tempdir");
+        let project = scaffold(workspace.path(), &document);
+        assert_mapping_failure_is_atomic(&project, &[mapping.to_owned()], expected, path);
+    }
+}
+
+#[test]
 fn invalid_selector_mappings_refuse_before_mutating_the_project() {
     struct Case {
         name: &'static str,
