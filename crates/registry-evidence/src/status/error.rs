@@ -51,6 +51,10 @@ pub enum StatusError {
     /// The status entry does not exist.
     #[error("the status entry does not exist")]
     UnknownEntry,
+    /// The entry changed between its lock and its update, so nothing was
+    /// applied. Retrying the request is safe.
+    #[error("the status entry changed concurrently; nothing was applied")]
+    ConcurrentChange,
     /// A selector or holder key could not be keyed.
     #[error(transparent)]
     Pseudonym(#[from] PseudonymError),
@@ -66,6 +70,7 @@ impl StatusError {
             self,
             Self::Unavailable
                 | Self::Database(_)
+                | Self::ConcurrentChange
                 | Self::DeadlineExceeded
                 | Self::IndexDrawExhausted
                 | Self::Randomness

@@ -8,6 +8,11 @@
 //! returned to the pool, and PostgreSQL rolls the transaction back. The server
 //! also ends a session idle in transaction for longer than the deadline plus
 //! five seconds, so a process stalled in its signer cannot hold entries.
+//!
+//! Entries are written VALID. Just before the commit, under the subject's
+//! pseudonym lock, the batch takes the status it inherits from the latest
+//! observation for its subject (concept 5.3 item 4), so a hook processed
+//! while the credential was being signed is not lost.
 
 use std::time::Duration;
 
@@ -16,11 +21,13 @@ use deadpool_postgres::Object;
 use rand_core::{OsRng, RngCore};
 use tokio::time::{timeout_at, Instant};
 
+use super::apply::{entry_status_column, status_column};
 use super::error::StatusError;
-use super::inheritance::SourceRead;
+use super::inheritance::{inherited_status, ObservedStatus, SourceRead};
 use super::ledger::{
     version_column, StatusEntry, StatusLedger, StatusListId, StatusReference, STATUS_LIST_BITS,
 };
+use super::observations::{pseudonym_lock_key, PSEUDONYM_LOCK_CLASS};
 use super::pools::IssuancePool;
 use super::pseudonym::{HolderKeyDigest, HolderKeyThumbprint, StatusSubject};
 use super::transition::EntryStatus;
@@ -90,6 +97,17 @@ pub struct IssuanceTransaction<'l> {
     deadline: Instant,
     idle_timeout: String,
     state: State,
+    /// What the commit needs to apply the inherited status to the batch.
+    inheritance: Option<Inheritance>,
+}
+
+/// The allocated batch and the subject keys its inherited status is read by.
+struct Inheritance {
+    list_id: StatusListId,
+    indices: Vec<i32>,
+    lookup_pseudonyms: Vec<[u8; 32]>,
+    lock_key: i32,
+    source_read: SourceRead,
 }
 
 impl StatusLedger {
@@ -128,6 +146,7 @@ impl StatusLedger {
             deadline,
             idle_timeout: idle_timeout.to_string(),
             state: State::Idle,
+            inheritance: None,
         })
     }
 }
@@ -161,9 +180,16 @@ impl IssuanceTransaction<'_> {
             .unwrap_or(Err(StatusError::DeadlineExceeded))
         };
         match result {
-            Ok(references) => {
+            Ok(allocated) => {
+                self.inheritance = Some(Inheritance {
+                    list_id: allocated.list_id,
+                    indices: allocated.indices,
+                    lookup_pseudonyms: rows.lookup_pseudonyms,
+                    lock_key: rows.lock_key,
+                    source_read: fields.source_read,
+                });
                 self.state = State::Open;
-                Ok(references)
+                Ok(allocated.references)
             }
             Err(error) => {
                 self.discard();
@@ -172,8 +198,9 @@ impl IssuanceTransaction<'_> {
         }
     }
 
-    /// Commit the allocation. Past the deadline the transaction is rolled
-    /// back instead and the credentials signed inside it must not be issued.
+    /// Apply the inherited status to the batch, then commit. Past the
+    /// deadline the transaction is rolled back instead and the credentials
+    /// signed inside it must not be issued.
     pub async fn commit(mut self) -> Result<(), StatusError> {
         match self.state {
             State::Ended => return Err(StatusError::TransactionEnded),
@@ -187,16 +214,20 @@ impl IssuanceTransaction<'_> {
             }
             State::Open => {}
         }
-        let Some(client) = self.client.as_ref() else {
+        let (Some(client), Some(inheritance)) = (self.client.as_ref(), self.inheritance.as_ref())
+        else {
+            self.discard();
             return Err(StatusError::TransactionEnded);
         };
         let result = if Instant::now() >= self.deadline {
             Err(StatusError::DeadlineExceeded)
         } else {
-            timeout_at(self.deadline, client.batch_execute("COMMIT"))
-                .await
-                .map_err(|_| StatusError::DeadlineExceeded)
-                .and_then(|committed| committed.map_err(|error| StatusError::database(&error)))
+            timeout_at(
+                self.deadline,
+                inherit_and_commit(self.ledger, client, inheritance),
+            )
+            .await
+            .unwrap_or(Err(StatusError::DeadlineExceeded))
         };
         match result {
             Ok(()) => {
@@ -240,6 +271,13 @@ impl IssuanceTransaction<'_> {
             return Err(StatusError::BatchTooLarge { requested: count });
         }
         let pseudonym = self.ledger.pseudonym_keys.pseudonym(fields.subject)?;
+        let lookup_pseudonyms = self
+            .ledger
+            .pseudonym_keys
+            .lookup_pseudonyms(fields.subject)?
+            .iter()
+            .map(|lookup| *lookup.as_bytes())
+            .collect();
         let holder_digests = match members {
             CredentialMembers::Unbound { count } => vec![None; count],
             CredentialMembers::HolderBound(holders) => holders
@@ -251,9 +289,10 @@ impl IssuanceTransaction<'_> {
             requirement_id: fields.requirement_id.to_owned(),
             selector_pseudonym: *pseudonym.as_bytes(),
             pseudonym_key_version: version_column(pseudonym.key_version())?,
+            lookup_pseudonyms,
+            lock_key: pseudonym_lock_key(&pseudonym),
             issued_at: fields.issued_at,
             not_after: fields.not_after,
-            status: EntryStatus::Valid,
             holder_digests,
         })
     }
@@ -281,10 +320,20 @@ struct AllocationRows {
     requirement_id: String,
     selector_pseudonym: [u8; 32],
     pseudonym_key_version: i32,
+    /// The subject's pseudonym under every retained key, for reading
+    /// observations.
+    lookup_pseudonyms: Vec<[u8; 32]>,
+    lock_key: i32,
     issued_at: DateTime<Utc>,
     not_after: DateTime<Utc>,
-    status: EntryStatus,
     holder_digests: Vec<Option<HolderKeyDigest>>,
+}
+
+/// The entries one transaction allocated, all on one list.
+struct Allocated {
+    list_id: StatusListId,
+    indices: Vec<i32>,
+    references: Vec<StatusReference>,
 }
 
 async fn allocate_rows(
@@ -292,7 +341,7 @@ async fn allocate_rows(
     client: &Object,
     idle_timeout: &str,
     rows: &AllocationRows,
-) -> Result<Vec<StatusReference>, StatusError> {
+) -> Result<Allocated, StatusError> {
     let count = rows.holder_digests.len();
     let (list_id, entry_count) = reserve(ledger, client, count).await?;
     let failed = |error: tokio_postgres::Error| StatusError::database(&error);
@@ -304,7 +353,9 @@ async fn allocate_rows(
         )
         .await
         .map_err(failed)?;
-    let status = i16::from(rows.status.code());
+    // Every entry starts VALID; the commit applies the inherited status.
+    let status = status_column(EntryStatus::Valid);
+    let mut indices = Vec::with_capacity(count);
     let mut references = Vec::with_capacity(count);
     for digest in &rows.holder_digests {
         let digest_bytes = digest.as_ref().map(|digest| digest.as_bytes().as_slice());
@@ -342,10 +393,67 @@ async fn allocate_rows(
             }
         }
         let idx = stored.ok_or(StatusError::IndexDrawExhausted)?;
+        indices.push(idx);
         let idx = u32::try_from(idx).map_err(|_| StatusError::IndexDrawExhausted)?;
         references.push(ledger.reference(StatusEntry::new(list_id.clone(), idx)));
     }
-    Ok(references)
+    Ok(Allocated {
+        list_id,
+        indices,
+        references,
+    })
+}
+
+/// Under the subject's shared pseudonym lock, which an observation being
+/// recorded holds exclusively, give the batch the status it inherits from
+/// the latest observation, then commit. An observation, inherited or not,
+/// also records its revision and mapping version, so a delivery older than
+/// what the evaluation could have read is stale for these entries.
+async fn inherit_and_commit(
+    ledger: &StatusLedger,
+    client: &Object,
+    inheritance: &Inheritance,
+) -> Result<(), StatusError> {
+    let failed = |error: tokio_postgres::Error| StatusError::database(&error);
+    client
+        .execute(
+            "SELECT pg_advisory_xact_lock_shared($1, $2)",
+            &[&PSEUDONYM_LOCK_CLASS, &inheritance.lock_key],
+        )
+        .await
+        .map_err(failed)?;
+    let lookups: Vec<&[u8]> = inheritance
+        .lookup_pseudonyms
+        .iter()
+        .map(<[u8; 32]>::as_slice)
+        .collect();
+    let latest = client
+        .query_opt(&ledger.statements.latest_observation, &[&lookups])
+        .await
+        .map_err(failed)?;
+    if let Some(row) = latest {
+        let observed = ObservedStatus {
+            status: entry_status_column(row.get(0))?,
+            captured_at: row.get(2),
+        };
+        let status = inherited_status(Some(observed), inheritance.source_read, ledger.clock_skew);
+        let revision: i64 = row.get(1);
+        let mapping_version: i32 = row.get(3);
+        client
+            .execute(
+                &ledger.statements.inherit,
+                &[
+                    &inheritance.list_id.as_str(),
+                    &inheritance.indices,
+                    &status_column(status),
+                    &revision,
+                    &mapping_version,
+                ],
+            )
+            .await
+            .map_err(failed)?;
+    }
+    client.batch_execute("COMMIT").await.map_err(failed)
 }
 
 /// Reserve `count` entries on the open list, rotating to a fresh list when

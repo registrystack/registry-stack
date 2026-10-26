@@ -16,8 +16,13 @@ pub const DEFAULT_SCHEMA: &str = "evidence_status";
 /// Ordered migrations: a version and the SQL that creates it. The SQL names
 /// tables unqualified; it runs with the ledger schema first on the search
 /// path.
-const MIGRATIONS: [(i64, &str); 1] =
-    [(1, include_str!("migrations/0001_lists_and_allocations.sql"))];
+const MIGRATIONS: [(i64, &str); 2] = [
+    (1, include_str!("migrations/0001_lists_and_allocations.sql")),
+    (
+        2,
+        include_str!("migrations/0002_transitions_observations.sql"),
+    ),
+];
 
 /// Advisory lock class for migrations; the second key is the schema name's
 /// hash, so ledgers in different schemas migrate independently.

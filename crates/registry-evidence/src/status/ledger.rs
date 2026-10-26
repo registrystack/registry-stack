@@ -148,6 +148,11 @@ impl StatusEntry {
     pub const fn idx(&self) -> u32 {
         self.idx
     }
+
+    /// The index as stored.
+    pub(crate) fn idx_column(&self) -> Result<i32, StatusError> {
+        i32::try_from(self.idx).map_err(|_| StatusError::UnknownEntry)
+    }
 }
 
 impl fmt::Debug for StatusEntry {
@@ -301,6 +306,21 @@ pub(crate) struct Statements {
     pub(crate) close_open_list: String,
     pub(crate) open_list: String,
     pub(crate) insert_allocation: String,
+    pub(crate) inherit: String,
+    pub(crate) entry_status: String,
+    pub(crate) lock_entry: String,
+    pub(crate) record_entry_revision: String,
+    pub(crate) change_entry_status: String,
+    pub(crate) insert_transition: String,
+    pub(crate) highest_mapping_version: String,
+    pub(crate) share_highest_mapping_version: String,
+    pub(crate) register_mapping_version: String,
+    pub(crate) latest_observed_revision: String,
+    pub(crate) latest_observation: String,
+    pub(crate) upsert_observation: String,
+    pub(crate) purge_observations: String,
+    pub(crate) set_staleness_clock: String,
+    pub(crate) staleness_clock: String,
 }
 
 impl Statements {
@@ -340,6 +360,92 @@ impl Statements {
                  WHERE pg_try_advisory_xact_lock((hashtext($1::text)::bigint << 32) | $2::bigint) \
                  ON CONFLICT ON CONSTRAINT allocations_pkey DO NOTHING \
                  RETURNING idx"
+            ),
+            inherit: format!(
+                "UPDATE {s}.allocations \
+                 SET status = $3, last_applied_source_revision = $4, mapping_version = $5 \
+                 WHERE list_id = $1 AND idx = ANY($2::integer[])"
+            ),
+            entry_status: format!(
+                "SELECT status FROM {s}.allocations WHERE list_id = $1 AND idx = $2"
+            ),
+            lock_entry: format!(
+                "SELECT status, last_applied_source_revision FROM {s}.allocations \
+                 WHERE list_id = $1 AND idx = $2 FOR UPDATE"
+            ),
+            record_entry_revision: format!(
+                "UPDATE {s}.allocations \
+                 SET last_applied_source_revision = $3, mapping_version = $4 \
+                 WHERE list_id = $1 AND idx = $2"
+            ),
+            // Conditional on the status the transition table was applied to,
+            // so a writer that read a stale status changes nothing.
+            change_entry_status: format!(
+                "UPDATE {s}.allocations \
+                 SET status = $3, \
+                     last_applied_source_revision = \
+                         COALESCE($5::bigint, last_applied_source_revision), \
+                     mapping_version = COALESCE($6::integer, mapping_version) \
+                 WHERE list_id = $1 AND idx = $2 AND status = $4"
+            ),
+            insert_transition: format!(
+                "INSERT INTO {s}.transitions \
+                 (transition_id, list_id, idx, from_status, to_status, cause, mapping_version, \
+                  reason_category, event_id, source_revision, package_revision, event_source, \
+                  operator_principals, case_reference, run_id, extract_digest, occurred_at) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, \
+                         statement_timestamp())"
+            ),
+            highest_mapping_version: format!(
+                "SELECT highest FROM {s}.mapping_versions WHERE singleton"
+            ),
+            // Held until the transition commits, so a registration of a
+            // higher version waits for it and every later transition sees
+            // the new version.
+            share_highest_mapping_version: format!(
+                "SELECT highest FROM {s}.mapping_versions WHERE singleton FOR SHARE"
+            ),
+            register_mapping_version: format!(
+                "INSERT INTO {s}.mapping_versions AS registered (singleton, highest) \
+                 VALUES (true, $1) \
+                 ON CONFLICT (singleton) DO UPDATE \
+                 SET highest = GREATEST(registered.highest, EXCLUDED.highest) \
+                 RETURNING highest"
+            ),
+            latest_observed_revision: format!(
+                "SELECT max(source_revision) FROM {s}.observations \
+                 WHERE selector_pseudonym = ANY($1::bytea[])"
+            ),
+            latest_observation: format!(
+                "SELECT status, source_revision, captured_at, mapping_version \
+                 FROM {s}.observations WHERE selector_pseudonym = ANY($1::bytea[]) \
+                 ORDER BY source_revision DESC, captured_at DESC LIMIT 1"
+            ),
+            upsert_observation: format!(
+                "INSERT INTO {s}.observations \
+                 (selector_pseudonym, pseudonym_key_version, status, source_revision, \
+                  captured_at, mapping_version) \
+                 VALUES ($1, $2, $3, $4, $5, $6) \
+                 ON CONFLICT (selector_pseudonym) DO UPDATE \
+                 SET pseudonym_key_version = EXCLUDED.pseudonym_key_version, \
+                     status = EXCLUDED.status, \
+                     source_revision = EXCLUDED.source_revision, \
+                     captured_at = EXCLUDED.captured_at, \
+                     mapping_version = EXCLUDED.mapping_version"
+            ),
+            purge_observations: format!(
+                "DELETE FROM {s}.observations \
+                 WHERE captured_at < statement_timestamp() \
+                       - ($1::bigint::double precision * interval '1 millisecond')"
+            ),
+            set_staleness_clock: format!(
+                "INSERT INTO {s}.staleness_clock (singleton, last_observed_at) \
+                 VALUES (true, $1) \
+                 ON CONFLICT (singleton) DO UPDATE \
+                 SET last_observed_at = EXCLUDED.last_observed_at"
+            ),
+            staleness_clock: format!(
+                "SELECT last_observed_at FROM {s}.staleness_clock WHERE singleton"
             ),
         }
     }

@@ -94,6 +94,16 @@ name = "status_ledger"
 path = "tests/status_ledger.rs"
 required-features = ["postgres-test"]
 
+[[test]]
+name = "status_transitions"
+path = "tests/status_transitions.rs"
+required-features = ["postgres-test"]
+
+[[test]]
+name = "status_privacy"
+path = "tests/status_privacy.rs"
+required-features = ["postgres-test"]
+
 [[bench]]
 name = "audit_bench"
 harness = false

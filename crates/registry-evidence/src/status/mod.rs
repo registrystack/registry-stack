@@ -6,17 +6,21 @@
 //! selector value, a record identifier, a raw holder key thumbprint, or an
 //! extract metadata value.
 
+mod apply;
 mod error;
 mod inheritance;
 mod issuance;
 mod keys;
 mod ledger;
+mod observations;
 mod pools;
+mod provenance;
 mod pseudonym;
 mod retention;
 mod schema;
 mod transition;
 
+pub use apply::MappingRegistration;
 pub use error::{SqlState, StatusError};
 
 pub use inheritance::{inherited_status, ObservedStatus, SourceRead};
@@ -31,8 +35,13 @@ pub use ledger::{
     LedgerConfig, ListPolicy, StatusEntry, StatusLedger, StatusListId, StatusReference,
     STATUS_LIST_BITS, STATUS_LIST_ENTRY_COUNT,
 };
+pub use observations::{Observation, ObservationOutcome, SourceObservationTime};
 pub use pools::{
     IssuancePool, ReservedPool, DEFAULT_ISSUANCE_POOL_SIZE, DEFAULT_RESERVED_POOL_SIZE,
+};
+pub use provenance::{
+    MappingVersion, Provenance, ProvenanceText, ReasonCategory, SourceRevision, TransitionOutcome,
+    TransitionRequest,
 };
 pub use pseudonym::{
     HolderKeyDigest, HolderKeyThumbprint, PseudonymError, StatusPseudonym, StatusSubject,
