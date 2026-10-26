@@ -1391,7 +1391,10 @@ fn bounded(actual: usize, minimum: u64, maximum: u64) -> bool {
     u64::try_from(actual).is_ok_and(|actual| (minimum..=maximum).contains(&actual))
 }
 
-fn push_component(output: &mut Vec<u8>, component: &[u8]) -> Result<(), AuthorizationError> {
+pub(crate) fn push_component(
+    output: &mut Vec<u8>,
+    component: &[u8],
+) -> Result<(), AuthorizationError> {
     if component.is_empty() || output.len().saturating_add(component.len()) > MAX_CANONICAL_BYTES {
         return Err(AuthorizationError::Selector);
     }
@@ -1401,7 +1404,7 @@ fn push_component(output: &mut Vec<u8>, component: &[u8]) -> Result<(), Authoriz
     Ok(())
 }
 
-fn push_count(output: &mut Vec<u8>, count: usize) -> Result<(), AuthorizationError> {
+pub(crate) fn push_count(output: &mut Vec<u8>, count: usize) -> Result<(), AuthorizationError> {
     let count = u32::try_from(count).map_err(|_| AuthorizationError::Selector)?;
     output.extend_from_slice(&count.to_be_bytes());
     Ok(())
