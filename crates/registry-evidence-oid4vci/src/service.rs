@@ -1182,7 +1182,7 @@ fn now() -> i64 {
 fn store_response(service: &DeliveryService, error: &StoreError, refused: Outcome) -> Response {
     service.metrics.record_outcome(match error {
         StoreError::Saturated => Outcome::StoreSaturated,
-        StoreError::Poisoned => Outcome::StoreFault,
+        StoreError::Poisoned | StoreError::Unavailable => Outcome::StoreFault,
         _ => refused,
     });
     service
@@ -1197,7 +1197,7 @@ fn store_response(service: &DeliveryService, error: &StoreError, refused: Outcom
             "invalid_grant",
             "the pre-authorized code cannot be redeemed",
         ),
-        StoreError::Saturated | StoreError::Poisoned => {
+        StoreError::Saturated | StoreError::Poisoned | StoreError::Unavailable => {
             tracing::warn!(
                 target: "registry_evidence_oid4vci::service",
                 "the offer store cannot take this request"

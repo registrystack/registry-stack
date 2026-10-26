@@ -49,6 +49,7 @@ pub mod offer;
 #[cfg(feature = "schema")]
 pub mod schema;
 pub mod service;
+pub mod storage;
 pub mod store;
 
 pub use cli::command;
