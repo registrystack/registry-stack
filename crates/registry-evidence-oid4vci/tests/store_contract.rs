@@ -494,7 +494,7 @@ mod postgres_only {
     use registry_evidence_oid4vci::storage::Store;
     use registry_evidence_oid4vci::store::{PreparedRequest, StoreError};
 
-    use super::store_support::postgres::{admin, count, dump};
+    use super::store_support::postgres::{admin, count, dump, open_over, pool_with_options};
     use super::store_support::{
         assert_prepared, bounds, generation, prepared, Deployment, Keys, Kind, Ring, LIFETIME, NOW,
         SEAL_ONE, SEAL_THREE, SEAL_TWO, TAG_ONE,
@@ -633,18 +633,63 @@ mod postgres_only {
         }
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn two_replicas_count_capacity_together() {
-        let bounds = StoreConfig {
+    fn four_places() -> StoreConfig {
+        StoreConfig {
             maximum_offers: 4,
             ..bounds()
-        };
-        let (_deployment, first, second) = two_replicas(bounds).await;
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn two_replicas_count_capacity_together() {
+        let (_deployment, first, second) = two_replicas(four_places()).await;
+        count_capacity_together(&first, &second).await;
+    }
+
+    /// A role or database whose sessions default to REPEATABLE READ, as some
+    /// hardening baselines set, takes each transaction's snapshot at its first
+    /// statement, before the advisory lock is granted. A count taken under
+    /// that snapshot misses the offer the previous lock holder committed, so
+    /// the store has to choose its own isolation rather than inherit one.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn capacity_holds_when_sessions_default_to_repeatable_read() {
+        const REPEATABLE_READ: &str = "-c default_transaction_isolation=repeatable\\ read";
+        let (deployment, _store) =
+            Deployment::open(Kind::Postgres, four_places(), Keys::default()).await;
+        let session = pool_with_options(REPEATABLE_READ);
+        let default: String = session
+            .get()
+            .await
+            .expect("a session under the repeatable read default")
+            .query_one("SHOW default_transaction_isolation", &[])
+            .await
+            .expect("read the session default")
+            .get(0);
+        assert_eq!(default, "repeatable read", "the session default took hold");
+
+        let first = open_over(
+            session,
+            deployment.schema(),
+            &four_places(),
+            Keys::default(),
+        )
+        .await;
+        let second = open_over(
+            pool_with_options(REPEATABLE_READ),
+            deployment.schema(),
+            &four_places(),
+            Keys::default(),
+        )
+        .await;
+        count_capacity_together(&first, &second).await;
+    }
+
+    async fn count_capacity_together(first: &Arc<dyn Store>, second: &Arc<dyn Store>) {
         let catalog = generation("catalog-1");
 
         let mut contenders = Vec::new();
         for index in 0..CONTENDERS {
-            let store = replica(index, &first, &second);
+            let store = replica(index, first, second);
             let catalog = catalog.clone();
             contenders.push(tokio::spawn(async move {
                 store
@@ -661,7 +706,7 @@ mod postgres_only {
 
         let mut contenders = Vec::new();
         for index in 0..CONTENDERS {
-            let store = replica(index, &first, &second);
+            let store = replica(index, first, second);
             let catalog = catalog.clone();
             contenders.push(tokio::spawn(async move {
                 store
