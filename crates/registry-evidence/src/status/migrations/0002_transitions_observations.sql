@@ -103,11 +103,13 @@ CREATE TABLE observations (
 
 CREATE INDEX observations_by_capture_time ON observations (captured_at);
 
--- The last successful source observation: the `publishedAt` of the extract
--- behind the last complete reconciliation run, or the run instant if that is
--- earlier. One row.
+-- The last successful source observation per reconciliation extract, keyed
+-- by the mapping block the extract serves: the `publishedAt` of the extract
+-- behind that block's last complete reconciliation run, or the run instant
+-- if that is earlier. The status list publisher uses the oldest of them, so
+-- one extract's fresh runs never hide another's failing ones.
 CREATE TABLE staleness_clock (
-    singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton),
+    mapping_block text PRIMARY KEY CHECK (octet_length(mapping_block) BETWEEN 1 AND 256),
     last_observed_at timestamptz NOT NULL
 );
 

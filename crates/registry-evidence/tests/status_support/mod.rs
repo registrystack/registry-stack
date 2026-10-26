@@ -32,6 +32,10 @@ pub const SELECTOR_PROFILE_ID: &str = "person-reference";
 pub const REQUIREMENT_ID: &str = "practice-permit";
 /// A second status-required requirement keyed by the same selector profile.
 pub const OTHER_REQUIREMENT_ID: &str = "disability-benefit";
+/// The mapping blocks whose reconciliation extracts serve the two
+/// requirements.
+pub const MAPPING_BLOCK: &str = "practice-permits";
+pub const OTHER_MAPPING_BLOCK: &str = "disability-benefits";
 pub const PSEUDONYM_KEY_BYTE: u8 = 0x51;
 pub const HOLDER_DIGEST_KEY_BYTE: u8 = 0x52;
 pub const PROMOTED_PSEUDONYM_KEY_BYTE: u8 = 0x53;

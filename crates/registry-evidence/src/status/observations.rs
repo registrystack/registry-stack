@@ -14,8 +14,10 @@
 //! lock only through a pseudonym key both hold, so a pseudonym key rotation
 //! deploys the new key as retained on every process before promoting it.
 //!
-//! The staleness clock holds the last successful source observation time,
-//! the one place an exact extract `publishedAt` may persist.
+//! The staleness clock holds the last successful source observation time per
+//! reconciliation extract, the one place an exact extract `publishedAt` may
+//! persist. The status list publisher reads the oldest of the extracts it
+//! serves, so one extract's fresh runs never hide another's failing ones.
 
 use std::fmt;
 use std::time::Duration;
@@ -111,6 +113,19 @@ fn failed(error: &tokio_postgres::Error) -> StatusError {
     StatusError::database(error)
 }
 
+/// The longest mapping block identifier the staleness clock stores.
+const MAXIMUM_MAPPING_BLOCK_BYTES: usize = 256;
+
+/// Refuse a mapping block identifier the staleness clock cannot store.
+fn validate_mapping_block(mapping_block: &str) -> Result<(), StatusError> {
+    if mapping_block.is_empty() || mapping_block.len() > MAXIMUM_MAPPING_BLOCK_BYTES {
+        return Err(StatusError::InvalidInput(
+            "the mapping block identifier must be 1 to 256 bytes",
+        ));
+    }
+    Ok(())
+}
+
 impl StatusLedger {
     /// Record an observation of `subject`'s record for `requirement_id` if
     /// it is newer than every one the store holds for that requirement and
@@ -194,18 +209,21 @@ impl StatusLedger {
             .map_err(|error| failed(&error))
     }
 
-    /// Set the staleness clock after a complete reconciliation run: to the
-    /// extract's `publishedAt`, or to the run instant if that is earlier. An
-    /// extract dated later than the run instant plus the clock-skew allowance
-    /// is refused and leaves the clock where it was. Only a complete run
-    /// calls this, so the clock is always the last complete run's
-    /// observation, even when it is older than the one it replaces.
+    /// Set the staleness clock of the reconciliation extract that serves
+    /// `mapping_block` after a complete run: to the extract's `publishedAt`,
+    /// or to the run instant if that is earlier. An extract dated later than
+    /// the run instant plus the clock-skew allowance is refused and leaves
+    /// the clock where it was. Only a complete run calls this, so the clock
+    /// is always the block's last complete run's observation, even when it is
+    /// older than the one it replaces.
     pub async fn advance_staleness_clock(
         &self,
         pool: &ReservedPool,
+        mapping_block: &str,
         published_at: DateTime<Utc>,
         run_instant: DateTime<Utc>,
     ) -> Result<(), StatusError> {
+        validate_mapping_block(mapping_block)?;
         let latest_accepted = TimeDelta::from_std(self.clock_skew)
             .ok()
             .and_then(|skew| run_instant.checked_add_signed(skew));
@@ -217,24 +235,46 @@ impl StatusLedger {
         let observed = published_at.min(run_instant);
         let client = pool.client().await?;
         client
-            .execute(&self.statements.set_staleness_clock, &[&observed])
+            .execute(
+                &self.statements.set_staleness_clock,
+                &[&mapping_block, &observed],
+            )
             .await
             .map_err(|error| failed(&error))?;
         Ok(())
     }
 
-    /// The last successful source observation time, if a complete run has
-    /// set it.
+    /// The oldest last successful source observation among the
+    /// reconciliation extracts serving `mapping_blocks`, the ones a status
+    /// list publisher serves. `None` until a complete run has set the clock
+    /// of every one of them.
     pub async fn staleness_clock(
         &self,
         pool: &ReservedPool,
+        mapping_blocks: &[&str],
     ) -> Result<Option<SourceObservationTime>, StatusError> {
+        if mapping_blocks.is_empty() {
+            return Err(StatusError::InvalidInput(
+                "the staleness clock reads at least one mapping block",
+            ));
+        }
+        for mapping_block in mapping_blocks {
+            validate_mapping_block(mapping_block)?;
+        }
+        let mut blocks = mapping_blocks.to_vec();
+        blocks.sort_unstable();
+        blocks.dedup();
         let client = pool.client().await?;
-        Ok(client
-            .query_opt(&self.statements.staleness_clock, &[])
+        let row = client
+            .query_one(&self.statements.staleness_clock, &[&blocks])
             .await
-            .map_err(|error| failed(&error))?
-            .map(|row| SourceObservationTime(row.get(0))))
+            .map_err(|error| failed(&error))?;
+        let observed: i64 = row.get(0);
+        let oldest: Option<DateTime<Utc>> = row.get(1);
+        if usize::try_from(observed).ok() != Some(blocks.len()) {
+            return Ok(None);
+        }
+        Ok(oldest.map(SourceObservationTime))
     }
 }
 
