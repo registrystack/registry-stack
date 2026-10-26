@@ -515,6 +515,57 @@ fn optional_request_body_may_remain_absent_when_only_query_is_mapped() {
 }
 
 #[test]
+fn optional_non_json_request_body_may_remain_unused_by_query_mapping() {
+    let document = request_openapi(
+        "POST",
+        "/records",
+        vec![parameter("reference", "query", true, "string")],
+        Some(form_body(false)),
+    );
+    let workspace = tempfile::tempdir().expect("tempdir");
+    let project = scaffold(workspace.path(), &document);
+    let output = mapped_suggest(
+        &project,
+        &["subject.subject-reference-v1.reference=query:reference".to_owned()],
+    );
+    assert!(output.status.success(), "{}", stderr_of(&output));
+    let prepare = std::fs::read_to_string(project.join("functions/mapped-prepare.rhai"))
+        .expect("generated prepare Function");
+    assert!(prepare.contains("body: ()"), "{prepare}");
+}
+
+#[test]
+fn required_non_json_request_body_is_refused_without_mutation() {
+    let document = request_openapi(
+        "POST",
+        "/records",
+        vec![parameter("reference", "query", true, "string")],
+        Some(form_body(true)),
+    );
+    let workspace = tempfile::tempdir().expect("tempdir");
+    let project = scaffold(workspace.path(), &document);
+    assert_mapping_failure_is_atomic(
+        &project,
+        &["subject.subject-reference-v1.reference=query:reference".to_owned()],
+        "has no `application/json` content",
+        "required non-JSON body",
+    );
+}
+
+#[test]
+fn explicit_mapping_to_optional_non_json_body_is_refused_without_mutation() {
+    let document = request_openapi("POST", "/records", Vec::new(), Some(form_body(false)));
+    let workspace = tempfile::tempdir().expect("tempdir");
+    let project = scaffold(workspace.path(), &document);
+    assert_mapping_failure_is_atomic(
+        &project,
+        &["subject.subject-reference-v1.reference=body:/reference".to_owned()],
+        "declares no application/json request body",
+        "explicit mapping to an optional non-JSON body",
+    );
+}
+
+#[test]
 fn mapped_optional_object_requires_its_required_sibling_without_mutation() {
     let document = request_openapi(
         "POST",
@@ -1202,6 +1253,22 @@ fn json_body(required: bool, schema: Value) -> Value {
     serde_json::json!({
         "required": required,
         "content": {"application/json": {"schema": schema}}
+    })
+}
+
+fn form_body(required: bool) -> Value {
+    serde_json::json!({
+        "required": required,
+        "content": {
+            "application/x-www-form-urlencoded": {
+                "schema": {
+                    "type":"object",
+                    "additionalProperties":false,
+                    "required":["reference"],
+                    "properties":{"reference":{"type":"string"}}
+                }
+            }
+        }
     })
 }
 

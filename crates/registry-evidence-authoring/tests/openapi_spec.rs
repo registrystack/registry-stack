@@ -269,7 +269,7 @@ fn request_body_schema_resolves_a_required_json_body() {
 }
 
 #[test]
-fn request_body_schema_refuses_non_json_content() {
+fn request_body_schema_ignores_optional_non_json_content() {
     let spec = Spec::from_value(
         json!({
             "openapi": "3.1.0",
@@ -279,7 +279,7 @@ fn request_body_schema_refuses_non_json_content() {
                     "post": {
                         "requestBody": {
                             "content": {
-                                "application/problem+json": {"schema": {"type": "object"}}
+                                "application/x-www-form-urlencoded": {"schema": {"type": "object"}}
                             }
                         }
                     }
@@ -290,9 +290,38 @@ fn request_body_schema_refuses_non_json_content() {
     )
     .expect("valid OpenAPI document");
 
+    let body = spec
+        .request_body_schema(&operation("POST", "/records"))
+        .expect("optional unsupported body is not selected");
+    assert!(body.is_none());
+}
+
+#[test]
+fn request_body_schema_refuses_required_non_json_content() {
+    let spec = Spec::from_value(
+        json!({
+            "openapi": "3.1.0",
+            "info": {"title": "Source", "version": "1"},
+            "paths": {
+                "/records": {
+                    "post": {
+                        "requestBody": {
+                            "required": true,
+                            "content": {
+                                "application/x-www-form-urlencoded": {"schema": {"type": "object"}}
+                            }
+                        }
+                    }
+                }
+            }
+        }),
+        "required unsupported request body",
+    )
+    .expect("valid OpenAPI document");
+
     let error = spec
         .request_body_schema(&operation("POST", "/records"))
-        .expect_err("only application/json is supported")
+        .expect_err("required non-JSON body is unsupported")
         .to_string();
     assert!(error.contains("application/json"), "message was: {error}");
 }

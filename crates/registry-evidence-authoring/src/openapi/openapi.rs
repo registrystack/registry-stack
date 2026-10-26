@@ -425,8 +425,10 @@ impl Spec {
     /// The operation's `application/json` request body, when declared.
     ///
     /// Local Request Body Object and Schema Object references are resolved.
-    /// Other media types are not substituted because the Evidence fixed HTTP
-    /// adapter sends a JSON body only.
+    /// An optional body with no exact `application/json` content is ignored
+    /// when unused. A required unsupported body is refused. Other media types
+    /// are never substituted because the Evidence fixed HTTP adapter sends a
+    /// JSON body only.
     pub fn request_body_schema(&self, key: &OperationKey) -> Result<Option<OperationRequestBody>> {
         let operation = self.find_operation(key)?;
         let Some(raw) = operation.get("requestBody") else {
@@ -459,13 +461,16 @@ impl Spec {
                     key.path
                 )
             })?;
-        let media = content.get("application/json").ok_or_else(|| {
-            anyhow!(
-                "{} {} request body has no `application/json` content; selector mapping supports only an exact application/json body",
-                key.method,
-                key.path
-            )
-        })?;
+        let Some(media) = content.get("application/json") else {
+            if required {
+                bail!(
+                    "{} {} request body has no `application/json` content; selector mapping supports only an exact application/json body",
+                    key.method,
+                    key.path
+                );
+            }
+            return Ok(None);
+        };
         let schema = media.get("schema").ok_or_else(|| {
             anyhow!(
                 "{} {} `application/json` request body declares no `schema`",
