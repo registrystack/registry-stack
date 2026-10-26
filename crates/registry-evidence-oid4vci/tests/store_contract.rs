@@ -522,7 +522,7 @@ mod postgres_only {
     };
     use super::store_support::{
         assert_prepared, bounds, generation, prepared, Deployment, Keys, Kind, Logs, Ring,
-        LIFETIME, NOW, SEAL_ONE, SEAL_THREE, SEAL_TWO, TAG_ONE,
+        LIFETIME, NOW, SEAL_ONE, SEAL_THREE, SEAL_TWO, TAG_ONE, TAG_TWO,
     };
 
     const CONTENDERS: usize = 24;
@@ -1711,6 +1711,53 @@ store:
                 "the log names {value}: {rendered}"
             );
         }
+    }
+
+    /// Two ledgers for one code, one under each accepted key, arise only from
+    /// a code drawn twice while a key rotation rolls out. A replica holding
+    /// both keys then reads the one under its current key, whatever order the
+    /// rows lie in, here behind a locked-out ledger under the previous key.
+    #[tokio::test]
+    async fn a_code_held_under_two_keys_is_read_under_the_current_key() {
+        let catalog = generation("catalog-1");
+        let (deployment, previous_only) =
+            Deployment::open(Kind::Postgres, bounds(), Keys::tagged(Ring::of(TAG_ONE))).await;
+        previous_only
+            .remember_offer("drawn-twice", Some("1234"), &catalog, prepared(), NOW)
+            .await
+            .expect("the first draw is remembered");
+        for _ in 0..bounds().maximum_transaction_code_attempts {
+            assert_eq!(
+                previous_only
+                    .redeem_offer("drawn-twice", Some("0000"), &catalog, NOW)
+                    .await
+                    .err(),
+                Some(StoreError::TransactionCodeRefused)
+            );
+        }
+        assert_eq!(
+            previous_only
+                .redeem_offer("drawn-twice", Some("1234"), &catalog, NOW)
+                .await
+                .err(),
+            Some(StoreError::LockedOut)
+        );
+
+        let current_only = deployment.reopen(Keys::tagged(Ring::of(TAG_TWO))).await;
+        current_only
+            .remember_offer("drawn-twice", Some("1234"), &catalog, prepared(), NOW)
+            .await
+            .expect("the second draw is remembered under the other key");
+
+        let rotated = deployment
+            .reopen(Keys::tagged(Ring::rotated(TAG_TWO, TAG_ONE)))
+            .await;
+        assert_prepared(
+            &rotated
+                .redeem_offer("drawn-twice", Some("1234"), &catalog, NOW)
+                .await
+                .expect("the offer under the current key redeems"),
+        );
     }
 
     async fn join<T: Send + 'static>(handles: Vec<tokio::task::JoinHandle<T>>) -> Vec<T> {
