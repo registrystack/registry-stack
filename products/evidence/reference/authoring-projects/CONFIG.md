@@ -321,6 +321,14 @@ Optional `publication`, `responseFormats` and `acquisitionCapabilities` retain
 their compiled governance and runtime ceilings. Governed fields are revalidated during bundle and package compilation.
 Process-local paths and secret readiness are validated by `doctor` or process start.
 
+Optional `signing.maximumAssertionValiditySeconds` is the longest validity, in
+seconds, that any definition on the target may sign an assertion for. It is an
+integer from 1 to 31,536,000 and defaults to 300 when `signing` is omitted. A
+definition whose `validitySeconds` exceeds it is refused at check and build
+time. A longer maximum lets every definition on that target sign for longer,
+and a bearer assertion (one not bound to a holder) stays replayable for its
+whole validity; raise it only for the holder-bound credentials that need it.
+
 The target authority's `project` and `target` must match the selected project
 and target. Each `accessProfiles` entry matches authenticated requester tags,
 an authority kind and optional actor narrowing, then carries one or more
@@ -802,6 +810,8 @@ signer.privateKeyRef
 signer.publicJwkFile
 signer.type
 signer.unixSocketPath
+signing
+signing.maximumAssertionValiditySeconds
 subjectBinding
 subjectBinding.keyVersion
 subjectBinding.secretRef
