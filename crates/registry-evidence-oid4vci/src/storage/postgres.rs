@@ -37,6 +37,11 @@
 //!   deletes what has expired.
 //! - **Every exchange is bound to its catalog generation.** A redemption or
 //!   claim under another generation is refused as unknown and spends nothing.
+//! - **No replica waits on another past its request timeout.** Every
+//!   transaction limits its lock waits to a quarter of the service's request
+//!   timeout and each statement, and each pause between statements, to half
+//!   of it. A replica that hangs while holding a lock is cut off by the
+//!   server, and the requests waiting on it refuse in time, spending nothing.
 //!
 //! Database failures refuse with [`StoreError::Unavailable`] and are logged by
 //! operation and SQLSTATE only, never with a value.
@@ -44,6 +49,11 @@
 //! The caller builds the pool, so the connection's TLS and credentials are the
 //! caller's decision. [`PostgresStore::migrate`] creates the schema and applies
 //! the embedded migrations once, serialized on a transaction advisory lock.
+//! Migration runs before the service answers requests, so it does not take
+//! the request-derived bounds: a replica waits for another's migration to
+//! finish.
+
+use std::time::Duration;
 
 use async_trait::async_trait;
 use deadpool_postgres::{Object, Pool, Transaction};
@@ -93,6 +103,7 @@ pub struct PostgresStore {
     offer_lifetime_seconds: i64,
     access_token_lifetime_seconds: i64,
     maximum_transaction_code_attempts: i32,
+    waits: String,
     tag_keys: KeyRing,
     sealing_keys: KeyRing,
 }
@@ -142,11 +153,17 @@ impl PostgresStore {
     /// A store over `schema`, reached through `pool`, bounded like the memory
     /// backend and tagging and sealing under the supplied keys.
     ///
+    /// `request_timeout` is the timeout of the service the store answers for.
+    /// Every transaction bounds how long it waits for a lock or a statement
+    /// to a fraction of it, so a replica that hangs while holding a lock
+    /// refuses the others' requests rather than outlasting them.
+    ///
     /// Nothing is read or written until [`Self::migrate`] or the first call.
     pub fn new(
         pool: Pool,
         schema: &str,
         bounds: &StoreConfig,
+        request_timeout: Duration,
         tag_keys: KeyRing,
         sealing_keys: KeyRing,
     ) -> Result<Self, PostgresSetupError> {
@@ -165,6 +182,7 @@ impl PostgresStore {
                 bounds.maximum_transaction_code_attempts,
             )
             .unwrap_or(i32::MAX),
+            waits: transaction_waits(request_timeout),
             tag_keys,
             sealing_keys,
         })
@@ -257,16 +275,25 @@ impl PostgresStore {
     /// database default is. A count taken after an advisory lock is granted
     /// must see what the previous holder committed; under REPEATABLE READ or
     /// SERIALIZABLE the snapshot would date from before the lock wait.
+    ///
+    /// The transaction then bounds its own waits below the request timeout. A
+    /// wait that runs out is refused like any other database failure.
     async fn begin<'c>(
+        &self,
         client: &'c mut Object,
         operation: &'static str,
     ) -> Result<Transaction<'c>, StoreError> {
-        client
+        let transaction = client
             .build_transaction()
             .isolation_level(IsolationLevel::ReadCommitted)
             .start()
             .await
-            .map_err(failed(operation))
+            .map_err(failed(operation))?;
+        transaction
+            .batch_execute(&self.waits)
+            .await
+            .map_err(failed(operation))?;
+        Ok(transaction)
     }
 
     /// Serialize every writer of one key-space across replicas until the
@@ -636,11 +663,13 @@ impl PostgresStore {
     }
 
     async fn count(&self, statement: &str) -> Result<i64, StoreError> {
-        let client = self.client().await?;
-        let row = client
+        let mut client = self.client().await?;
+        let transaction = self.begin(&mut client, "begin a count").await?;
+        let row = transaction
             .query_one(statement, &[])
             .await
             .map_err(failed("count held entries"))?;
+        transaction.commit().await.map_err(failed("end a count"))?;
         Ok(row.get(0))
     }
 }
@@ -673,7 +702,9 @@ impl Store for PostgresStore {
         let ledgers = self.table("offer_ledgers");
 
         let mut client = self.client().await?;
-        let transaction = Self::begin(&mut client, "begin remembering an offer").await?;
+        let transaction = self
+            .begin(&mut client, "begin remembering an offer")
+            .await?;
         self.lock_keyspace(&transaction, "offers").await?;
         let row = transaction
             .query_one(
@@ -748,7 +779,7 @@ impl Store for PostgresStore {
         now: i64,
     ) -> Result<PreparedRequest, StoreError> {
         let mut client = self.client().await?;
-        let transaction = Self::begin(&mut client, "begin a redemption").await?;
+        let transaction = self.begin(&mut client, "begin a redemption").await?;
         let outcome = self
             .redeem_in(&transaction, code, transaction_code, generation, now)
             .await;
@@ -764,7 +795,7 @@ impl Store for PostgresStore {
         now: i64,
     ) -> Result<(), StoreError> {
         let mut client = self.client().await?;
-        let transaction = Self::begin(&mut client, "begin a redemption").await?;
+        let transaction = self.begin(&mut client, "begin a redemption").await?;
         // The token key-space is sized before the offer is spent, and stays
         // locked until the token is bound, so a saturated store refuses
         // having changed nothing.
@@ -792,7 +823,9 @@ impl Store for PostgresStore {
         now: i64,
     ) -> Result<(), StoreError> {
         let mut client = self.client().await?;
-        let transaction = Self::begin(&mut client, "begin binding an access token").await?;
+        let transaction = self
+            .begin(&mut client, "begin binding an access token")
+            .await?;
         self.lock_keyspace(&transaction, "access_tokens").await?;
         self.reserve_token_room(&transaction, access_token, now)
             .await?;
@@ -813,7 +846,7 @@ impl Store for PostgresStore {
         let candidates = self.candidate_tags(ACCESS_TOKEN_DOMAIN, access_token);
         let tags: Vec<&str> = candidates.iter().map(|(_, tag)| tag.as_str()).collect();
         let mut client = self.client().await?;
-        let transaction = Self::begin(&mut client, "begin a claim").await?;
+        let transaction = self.begin(&mut client, "begin a claim").await?;
         // Deleting is claiming: of two claims of one token, one deletes the
         // row and the other finds nothing to delete. Claiming under another
         // catalog generation deletes nothing.
@@ -853,12 +886,17 @@ impl Store for PostgresStore {
     }
 
     async fn sweep(&self, now: i64) -> usize {
-        let Ok(client) = self.client().await else {
+        // The purge runs again on its next tick; what it could not delete is
+        // never served meanwhile, because every read filters on expiry.
+        let Ok(mut client) = self.client().await else {
+            return 0;
+        };
+        let Ok(transaction) = self.begin(&mut client, "begin a purge").await else {
             return 0;
         };
         let mut expired: u64 = 0;
         for table in ["offers", "offer_ledgers", "access_tokens"] {
-            match client
+            match transaction
                 .execute(
                     &format!("DELETE FROM {} WHERE expires_at <= $1", self.table(table)),
                     &[&now],
@@ -867,15 +905,18 @@ impl Store for PostgresStore {
             {
                 Ok(deleted) => expired = expired.saturating_add(deleted),
                 Err(error) => {
-                    // The purge runs again on its next tick; what it could not
-                    // delete is never served meanwhile, because every read
-                    // filters on expiry.
                     failed("purge expired entries")(error);
-                    break;
+                    return 0;
                 }
             }
         }
-        usize::try_from(expired).unwrap_or(usize::MAX)
+        match transaction.commit().await {
+            Ok(()) => usize::try_from(expired).unwrap_or(usize::MAX),
+            Err(error) => {
+                failed("commit a purge")(error);
+                0
+            }
+        }
     }
 
     async fn len(&self) -> usize {
@@ -906,6 +947,22 @@ impl Store for PostgresStore {
             .ok()
             .and_then(|held| usize::try_from(held).ok())
     }
+}
+
+/// The waits a transaction allows itself, derived from the service's request
+/// timeout: a lock is waited for a quarter of it, and a statement, or a pause
+/// between statements, may take half. A replica that hangs while it holds a
+/// lock is cut off by the server after that half, which releases the lock.
+fn transaction_waits(request_timeout: Duration) -> String {
+    let share = |divisor: u128| {
+        i32::try_from((request_timeout.as_millis() / divisor).max(1)).unwrap_or(i32::MAX)
+    };
+    let (lock, statement) = (share(4), share(2));
+    format!(
+        "SET LOCAL lock_timeout = '{lock}ms'; \
+         SET LOCAL statement_timeout = '{statement}ms'; \
+         SET LOCAL idle_in_transaction_session_timeout = '{statement}ms';"
+    )
 }
 
 /// A schema name this store can interpolate into SQL without quoting.
@@ -983,6 +1040,25 @@ mod tests {
         ] {
             assert!(!valid_schema_name(refused), "{refused}");
         }
+    }
+
+    #[test]
+    fn transaction_waits_stay_below_the_request_timeout() {
+        assert_eq!(
+            transaction_waits(Duration::from_millis(5_000)),
+            "SET LOCAL lock_timeout = '1250ms'; \
+             SET LOCAL statement_timeout = '2500ms'; \
+             SET LOCAL idle_in_transaction_session_timeout = '2500ms';"
+        );
+        // Zero would mean no bound at all, so the shortest wait is one
+        // millisecond.
+        assert_eq!(
+            transaction_waits(Duration::from_millis(1)),
+            "SET LOCAL lock_timeout = '1ms'; \
+             SET LOCAL statement_timeout = '1ms'; \
+             SET LOCAL idle_in_transaction_session_timeout = '1ms';"
+        );
+        assert!(transaction_waits(Duration::MAX).contains(&format!("'{}ms'", i32::MAX)));
     }
 
     #[test]

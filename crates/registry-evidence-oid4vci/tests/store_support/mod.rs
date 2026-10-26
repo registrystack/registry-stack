@@ -11,7 +11,7 @@
 
 #![allow(dead_code)]
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use registry_evidence_oid4vci::config::StoreConfig;
 use registry_evidence_oid4vci::storage::{CatalogGeneration, KeyRing, Store, VersionedKey};
@@ -134,6 +134,55 @@ pub fn assert_prepared(prepared: &PreparedRequest) {
     assert_eq!(prepared.maximum_holder_keys(), 4);
 }
 
+/// What the store logs while a test runs, rendered as an operator would read
+/// it.
+#[derive(Clone, Default)]
+pub struct Logs(Arc<Mutex<Vec<u8>>>);
+
+impl Logs {
+    /// Capture every event logged on this thread until the guard drops. A
+    /// test that awaits the store on a current-thread runtime sees all of the
+    /// store's events.
+    #[must_use]
+    pub fn capture() -> (Self, tracing::subscriber::DefaultGuard) {
+        let logs = Self::default();
+        let subscriber = tracing_subscriber::fmt()
+            .without_time()
+            .with_ansi(false)
+            .with_writer(logs.clone())
+            .finish();
+        (logs, tracing::subscriber::set_default(subscriber))
+    }
+
+    #[must_use]
+    pub fn rendered(&self) -> String {
+        String::from_utf8(self.0.lock().expect("the log buffer lock").clone())
+            .expect("logs are UTF-8")
+    }
+}
+
+impl std::io::Write for Logs {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0
+            .lock()
+            .expect("the log buffer lock")
+            .extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl<'writer> tracing_subscriber::fmt::MakeWriter<'writer> for Logs {
+    type Writer = Self;
+
+    fn make_writer(&'writer self) -> Self::Writer {
+        self.clone()
+    }
+}
+
 /// One body of store state and the means to open more handles on it.
 pub struct Deployment {
     bounds: StoreConfig,
@@ -206,6 +255,7 @@ pub mod postgres {
     //! sharing a row.
 
     use std::sync::Arc;
+    use std::time::Duration;
 
     use deadpool_postgres::{Manager, ManagerConfig, Pool, RecyclingMethod, Runtime};
     use registry_evidence_oid4vci::config::StoreConfig;
@@ -217,6 +267,14 @@ pub mod postgres {
     use super::Keys;
 
     const URL_VARIABLE: &str = "EVIDENCE_OID4VCI_TEST_DATABASE_URL";
+
+    /// The request timeout a store is built for unless a case needs another:
+    /// the service's default.
+    pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
+
+    /// The first half of every advisory lock the store takes, as the store
+    /// defines it.
+    pub const LOCK_NAMESPACE: i32 = 0x4f49_4434;
 
     fn config() -> tokio_postgres::Config {
         let url = std::env::var(URL_VARIABLE)
@@ -272,16 +330,30 @@ pub mod postgres {
         bounds: &StoreConfig,
         keys: Keys,
     ) -> Arc<dyn Store> {
-        let store = PostgresStore::new(
+        let store = unmigrated(pool, schema, bounds, keys, REQUEST_TIMEOUT);
+        store.migrate().await.expect("the store schema migrates");
+        Arc::new(store)
+    }
+
+    /// A store over `schema` built for a service whose requests time out
+    /// after `request_timeout`. Nothing is migrated.
+    #[must_use]
+    pub fn unmigrated(
+        pool: Pool,
+        schema: &str,
+        bounds: &StoreConfig,
+        keys: Keys,
+        request_timeout: Duration,
+    ) -> PostgresStore {
+        PostgresStore::new(
             pool,
             schema,
             bounds,
+            request_timeout,
             keys.tags.build(),
             keys.sealing.build(),
         )
-        .expect("a valid store schema name");
-        store.migrate().await.expect("the store schema migrates");
-        Arc::new(store)
+        .expect("a valid store schema name")
     }
 
     /// A direct session for reading what the store left at rest.
