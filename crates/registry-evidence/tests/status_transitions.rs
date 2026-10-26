@@ -650,6 +650,35 @@ async fn only_a_hook_or_reconciliation_request_names_a_source_time() {
 }
 
 #[tokio::test]
+async fn operator_principals_are_distinct_even_against_a_direct_insert() {
+    let ledger = ledger().await;
+    let entry = allocate(&ledger, "person-6008", 1).await[0].entry().clone();
+    let client = inspector().await;
+    let insert = format!(
+        "INSERT INTO \"{}\".transitions (transition_id, list_id, idx, from_status, to_status, \
+         cause, reason_category, operator_principals, case_reference, occurred_at) \
+         VALUES ($1, $2, $3, 0, 2, 'operator', 'test-category', $4, 'case-1', now())",
+        ledger.schema
+    );
+    let idx = i32::try_from(entry.idx()).unwrap();
+    let list_id = entry.list_id().as_str();
+
+    let repeated = vec!["operator-a".to_owned(), "operator-a".to_owned()];
+    let error = client
+        .execute(&insert, &[&Uuid::new_v4(), &list_id, &idx, &repeated])
+        .await
+        .unwrap_err();
+    assert_eq!(error.code().map(|code| code.code()), Some("23514"));
+
+    let distinct = vec!["operator-a".to_owned(), "operator-b".to_owned()];
+    client
+        .execute(&insert, &[&Uuid::new_v4(), &list_id, &idx, &distinct])
+        .await
+        .unwrap();
+    assert_eq!(transition_rows(&ledger).await.len(), 1);
+}
+
+#[tokio::test]
 async fn an_unknown_entry_is_reported() {
     let ledger = ledger().await;
     register(&ledger, 1).await;

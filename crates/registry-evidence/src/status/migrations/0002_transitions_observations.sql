@@ -27,6 +27,12 @@ CREATE TRIGGER allocations_invalid_is_terminal
     BEFORE UPDATE OF status ON allocations
     FOR EACH ROW EXECUTE FUNCTION allocations_invalid_is_terminal();
 
+-- Whether no principal appears twice. IMMUTABLE, so a CHECK may call it.
+CREATE FUNCTION principals_are_distinct(principals text[]) RETURNS boolean
+LANGUAGE sql IMMUTABLE STRICT AS $$
+    SELECT cardinality(principals) = (SELECT count(DISTINCT p) FROM unnest(principals) p)
+$$;
+
 -- One row per status change, written in the same transaction as the change.
 -- It is history and provenance, not tamper evidence: it is not chained.
 -- Each cause has a closed provenance shape: a hook names its mapping
@@ -71,6 +77,7 @@ CREATE TABLE transitions (
             operator_principals IS NOT NULL
             AND cardinality(operator_principals) BETWEEN 1 AND 16
             AND array_position(operator_principals, NULL) IS NULL
+            AND principals_are_distinct(operator_principals)
             AND case_reference IS NOT NULL
             AND mapping_version IS NULL AND event_id IS NULL
             AND source_revision IS NULL AND package_revision IS NULL
