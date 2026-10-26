@@ -268,7 +268,10 @@ impl DeliveryService {
 
     /// Mint and verify nonces under keys the caller supplies, so a nonce one
     /// replica minted verifies at another holding the same keys. Like
-    /// [`Self::with_store`], no configuration key reaches this yet.
+    /// [`Self::with_store`], no configuration key reaches this yet. The nonce
+    /// keys must share no key with the store's tagging or sealing keys; the
+    /// caller that holds all three rings checks them with
+    /// [`crate::storage::refuse_shared_keys`].
     #[doc(hidden)]
     #[must_use]
     pub fn with_nonce_keys(mut self, keys: KeyRing) -> Self {

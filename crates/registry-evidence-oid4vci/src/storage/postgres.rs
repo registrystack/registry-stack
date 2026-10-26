@@ -65,7 +65,9 @@ use tokio_postgres::IsolationLevel;
 use zeroize::Zeroizing;
 
 use super::sealing::{self, Binding, Purpose, SealError, Sealed};
-use super::{tag, transaction_code_tag, CatalogGeneration, KeyRing, Store, VersionedKey};
+use super::{
+    refuse_shared_keys, tag, transaction_code_tag, CatalogGeneration, KeyRing, Store, VersionedKey,
+};
 use crate::config::StoreConfig;
 use crate::store::{PreparedRequest, StoreError, ACCESS_TOKEN_DOMAIN, OFFER_DOMAIN};
 
@@ -91,6 +93,8 @@ pub enum PostgresSetupError {
     SchemaVersion(i64),
     #[error("the store schema holds a migration table this store did not make")]
     MigrationTable,
+    #[error("the tagging and sealing key rings must not share a key")]
+    SharedKey,
     #[error("the store database could not be reached")]
     Unreachable,
     #[error("the store database refused the migration (SQLSTATE {0})")]
@@ -160,6 +164,9 @@ impl PostgresStore {
     /// to a fraction of it, so a replica that hangs while holding a lock
     /// refuses the others' requests rather than outlasting them.
     ///
+    /// The tagging and sealing rings must share no key, under any version:
+    /// see [`refuse_shared_keys`].
+    ///
     /// Nothing is read or written until [`Self::migrate`] or the first call.
     pub fn new(
         pool: Pool,
@@ -171,6 +178,9 @@ impl PostgresStore {
     ) -> Result<Self, PostgresSetupError> {
         if !valid_schema_name(schema) {
             return Err(PostgresSetupError::SchemaName);
+        }
+        if refuse_shared_keys(&[&tag_keys, &sealing_keys]).is_err() {
+            return Err(PostgresSetupError::SharedKey);
         }
         Ok(Self {
             pool,
@@ -1115,6 +1125,35 @@ mod tests {
              SET LOCAL idle_in_transaction_session_timeout = '1ms';"
         );
         assert!(transaction_waits(Duration::MAX).contains(&format!("'{}ms'", i32::MAX)));
+    }
+
+    #[test]
+    fn tagging_and_sealing_under_one_key_is_refused() {
+        let open = |tag_byte: u8, sealing_byte: u8| {
+            let pool = Pool::builder(deadpool_postgres::Manager::new(
+                tokio_postgres::Config::new(),
+                tokio_postgres::NoTls,
+            ))
+            .build()
+            .expect("a pool that has not connected");
+            let ring = |version, byte| {
+                KeyRing::single(VersionedKey::new(version, &[byte; 32]).expect("a key"))
+            };
+            PostgresStore::new(
+                pool,
+                DEFAULT_SCHEMA,
+                &StoreConfig::default(),
+                Duration::from_secs(5),
+                ring(1, tag_byte),
+                ring(2, sealing_byte),
+            )
+        };
+        let shared = open(0x11, 0x11);
+        assert!(
+            matches!(shared, Err(PostgresSetupError::SharedKey)),
+            "{shared:?}"
+        );
+        assert!(open(0x11, 0x22).is_ok());
     }
 
     #[test]

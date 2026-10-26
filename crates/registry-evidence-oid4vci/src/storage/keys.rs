@@ -10,8 +10,14 @@
 //! neither is unreachable, which is what retiring a key means.
 //!
 //! Key bytes are wiped on drop and never rendered: `Debug` shows versions only.
+//!
+//! Each purpose takes its own keys. [`refuse_shared_keys`] refuses rings for
+//! different purposes that hold the same bytes. The PostgreSQL store calls it
+//! on its tagging and sealing rings; whatever supplies those together with
+//! the nonce ring must call it on all three.
 
 use registry_platform_crypto::hmac_sha256_base64url_no_pad;
+use subtle::ConstantTimeEq;
 use thiserror::Error;
 use zeroize::Zeroizing;
 
@@ -26,6 +32,8 @@ pub enum KeyError {
     Length,
     #[error("the current and previous keys must carry different versions")]
     RepeatedVersion,
+    #[error("the key rings for tagging, sealing and nonces must not share a key")]
+    SharedKey,
 }
 
 /// One key and the version it is known by.
@@ -159,6 +167,26 @@ impl KeyRing {
     }
 }
 
+/// Refuse rings for different purposes that hold the same key bytes, current
+/// or previous, under any version. A key used both to tag and to seal, or to
+/// tag and to mint nonces, would tie the purposes together: whoever learns it
+/// for one learns it for the other, and retiring it in one ring would leave it
+/// live in the other. The comparison runs in constant time.
+pub fn refuse_shared_keys(rings: &[&KeyRing]) -> Result<(), KeyError> {
+    for (index, ring) in rings.iter().enumerate() {
+        for other in &rings[index + 1..] {
+            for key in ring.accepted() {
+                for other_key in other.accepted() {
+                    if bool::from(key.bytes().ct_eq(other_key.bytes())) {
+                        return Err(KeyError::SharedKey);
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Tag a secret for one key-space under one key. The result identifies an
 /// entry and is useless as the secret it stands for.
 pub(crate) fn tag(key: &VersionedKey, domain: &str, secret: &str) -> Zeroizing<String> {
@@ -256,6 +284,40 @@ mod tests {
         assert_ne!(*under_first, *under_second);
         assert!(!under_first.contains("code-1"));
         assert_ne!(*under_first, *tag(&first, "oid4vci.access-token", "code-1"));
+    }
+
+    #[test]
+    fn rings_for_different_purposes_share_no_key_bytes() {
+        let ring = |current: (u32, u8), previous: Option<(u32, u8)>| {
+            KeyRing::new(
+                VersionedKey::new(current.0, &[current.1; KEY_LENGTH]).expect("a key"),
+                previous.map(|(version, byte)| {
+                    VersionedKey::new(version, &[byte; KEY_LENGTH]).expect("a key")
+                }),
+            )
+            .expect("a ring")
+        };
+        let tags = ring((2, 0x22), Some((1, 0x11)));
+        let sealing = ring((2, 0x44), None);
+        let nonces = ring((1, 0x55), None);
+        // Versions are counted per ring, so two rings may use the same one.
+        assert_eq!(refuse_shared_keys(&[&tags, &sealing, &nonces]), Ok(()));
+        // A key one ring has retired is still accepted there, so another
+        // purpose may not take it up.
+        let reused = ring((1, 0x11), None);
+        assert_eq!(
+            refuse_shared_keys(&[&tags, &sealing, &reused]),
+            Err(KeyError::SharedKey)
+        );
+        assert_eq!(
+            refuse_shared_keys(&[&reused, &tags]),
+            Err(KeyError::SharedKey)
+        );
+        // The same bytes under another version are still the same key.
+        assert_eq!(
+            refuse_shared_keys(&[&sealing, &ring((9, 0x44), None)]),
+            Err(KeyError::SharedKey)
+        );
     }
 
     #[test]
