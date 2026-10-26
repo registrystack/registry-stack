@@ -6,6 +6,9 @@
 //! audit pseudonym frames its fields. It carries no binding mode, audience,
 //! purpose or role, so a request, a hook projection and an extract row for one
 //! subject give one pseudonym.
+//!
+//! The holder key digest is `HMAC-SHA-256(holder digest key, input)`, where
+//! the input is its own domain tag followed by the 32-byte thumbprint.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -28,6 +31,12 @@ use crate::selector::{
 /// starts with `0x00`, and an audit pseudonym input always starts with `0x01`
 /// or `0x02`, so the two inputs never share a first byte.
 const STATUS_PSEUDONYM_DOMAIN: &[u8] = b"registry-evidence/status-pseudonym/v1";
+
+/// Domain tag that opens every holder key digest input. It is fixed length
+/// and the thumbprint after it is exactly 32 bytes, so the input needs no
+/// framing; its first byte is neither a pseudonym input's `0x00` nor an
+/// audit pseudonym input's `0x01` or `0x02`.
+const HOLDER_KEY_DIGEST_DOMAIN: &[u8] = b"registry-evidence/status-holder-key-digest/v1";
 
 const SHA256_THUMBPRINT_BYTES: usize = 32;
 
@@ -364,10 +373,15 @@ impl HolderDigestKeyRing {
     }
 }
 
+/// The domain tag, then the thumbprint.
+fn holder_digest_input(thumbprint: &HolderKeyThumbprint) -> Vec<u8> {
+    [HOLDER_KEY_DIGEST_DOMAIN, thumbprint.0.as_slice()].concat()
+}
+
 fn keyed_digest(key: &StatusKey, thumbprint: &HolderKeyThumbprint) -> HolderKeyDigest {
     HolderKeyDigest {
         key_version: key.version(),
-        digest: hmac_sha256(key.material(), &thumbprint.0),
+        digest: hmac_sha256(key.material(), &holder_digest_input(thumbprint)),
     }
 }
 
@@ -380,7 +394,10 @@ mod tests {
     use serde_json::{json, Map, Value};
     use zeroize::Zeroizing;
 
-    use super::{HolderKeyThumbprint, PseudonymError, StatusSubject, STATUS_PSEUDONYM_DOMAIN};
+    use super::{
+        holder_digest_input, HolderKeyThumbprint, PseudonymError, StatusSubject,
+        HOLDER_KEY_DIGEST_DOMAIN, STATUS_PSEUDONYM_DOMAIN,
+    };
     use crate::config::{ArtifactPath, OrderedMap, SelectorField, SelectorProfile, ValueOrigin};
     use crate::model::SelectorValue;
     use crate::selector::{
@@ -726,9 +743,10 @@ mod tests {
         let thumbprint = HolderKeyThumbprint::from_base64url(&thumbprint_text(7)).unwrap();
         let digest = ring.digest(&thumbprint);
         assert_eq!(digest.key_version().get(), 2);
+        let input = [HOLDER_KEY_DIGEST_DOMAIN, &[7; 32]].concat();
         assert_eq!(
             digest.as_bytes(),
-            &registry_platform_crypto::mac::hmac_sha256(&[0x21; 32], &[7; 32])
+            &registry_platform_crypto::mac::hmac_sha256(&[0x21; 32], &input)
         );
         assert_eq!(digest, ring.digest(&thumbprint));
         let other = HolderKeyThumbprint::from_base64url(&thumbprint_text(8)).unwrap();
@@ -743,7 +761,25 @@ mod tests {
         assert_eq!(lookups[0], digest);
         assert_eq!(
             lookups[1].as_bytes(),
-            &registry_platform_crypto::mac::hmac_sha256(&[0x22; 32], &[7; 32])
+            &registry_platform_crypto::mac::hmac_sha256(&[0x22; 32], &input)
+        );
+    }
+
+    #[test]
+    fn the_holder_digest_input_opens_with_its_domain_tag() {
+        let thumbprint = HolderKeyThumbprint::from_base64url(&thumbprint_text(7)).unwrap();
+        let input = holder_digest_input(&thumbprint);
+        assert_eq!(input.len(), HOLDER_KEY_DIGEST_DOMAIN.len() + 32);
+        assert!(input.starts_with(HOLDER_KEY_DIGEST_DOMAIN));
+        assert!(input.ends_with(&[7; 32]));
+        // A status pseudonym input opens with 0x00, an audit pseudonym input
+        // with 0x01 or 0x02.
+        assert!(!matches!(input[0], 0x00..=0x02));
+
+        let ring = HolderDigestKeyRing::new(KeyRing::new(key(1, 0x21), Vec::new()).unwrap());
+        assert_ne!(
+            ring.digest(&thumbprint).as_bytes(),
+            &registry_platform_crypto::mac::hmac_sha256(&[0x21; 32], &[7; 32])
         );
     }
 
