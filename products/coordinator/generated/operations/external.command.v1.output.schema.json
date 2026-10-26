@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The bounded provider response. The operation's interpret Function receives it with the command and returns the step result, a declared refusal, or an uncertain outcome.",
+  "properties": {
+    "body": {
+      "description": "The parsed JSON response body, or null for an empty body."
+    },
+    "status": {
+      "maximum": 65535,
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "status",
+    "body"
+  ],
+  "title": "external.command/v1 output",
+  "type": "object"
+}

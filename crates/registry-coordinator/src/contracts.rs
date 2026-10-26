@@ -534,7 +534,9 @@ pub fn contract(operation: Operation) -> &'static OperationContract {
                 .map(|(id, (mut input, mut output))| {
                     derived::finish(&mut input, &format!("{id} input"));
                     derived::finish(&mut output, &format!("{id} output"));
-                    let declared_refusal = (id == Operation::InvokeBregAction.as_str())
+                    let declared_refusal = crate::operations::descriptor(id)
+                        .expect("every derived contract names a catalog operation")
+                        .declared_refusal
                         .then(derived::output::<crate::protocol::DeclaredRefusal>);
                     (
                         id.to_owned(),
@@ -637,14 +639,27 @@ pub fn generate() -> Result<BTreeMap<String, String>, serde_json::Error> {
         "casework.submit-review-request.v1.result.completion.schema.json".into(),
         text,
     );
-    let mut refusal = derived::output::<crate::protocol::DeclaredRefusal>();
-    derived::finish(&mut refusal, "invoke-breg-action declared-refusal output");
-    let mut text = serde_json::to_string_pretty(&refusal)?;
-    text.push('\n');
-    files.insert(
-        "breg.invoke-action.v1.declared-refusal.schema.json".into(),
-        text,
-    );
+    for descriptor in crate::operations::descriptors() {
+        if !descriptor.declared_refusal {
+            continue;
+        }
+        let mut refusal = derived::output::<crate::protocol::DeclaredRefusal>();
+        let title = if descriptor.id == Operation::InvokeBregAction.as_str() {
+            "invoke-breg-action declared-refusal output".to_owned()
+        } else {
+            format!("{} declared-refusal output", descriptor.id)
+        };
+        derived::finish(&mut refusal, &title);
+        let mut text = serde_json::to_string_pretty(&refusal)?;
+        text.push('\n');
+        files.insert(
+            format!(
+                "{}.declared-refusal.schema.json",
+                descriptor.id.replace('/', ".")
+            ),
+            text,
+        );
+    }
     let mut catalog = serde_json::Map::new();
     for descriptor in crate::operations::descriptors() {
         let prefix = descriptor.id.replace('/', ".");
@@ -782,6 +797,28 @@ mod derived {
 
     pub(super) fn external_get() -> (Value, Value) {
         (input::<GetRequest>(), output::<ExternalResponse>())
+    }
+
+    /// The command body is a JSON object a pinned pure Function builds; the
+    /// output is the bounded provider response the pinned interpretation
+    /// Function receives, never the step result itself.
+    pub(super) fn external_command() -> (Value, Value) {
+        let mut response = output::<ExternalResponse>();
+        response["description"] = json!(
+            "The bounded provider response. The operation's interpret Function \
+             receives it with the command and returns the step result, a declared \
+             refusal, or an uncertain outcome."
+        );
+        (
+            json!({
+                "$schema":"https://json-schema.org/draft/2020-12/schema",
+                "type":"object",
+                "description":"The command body, sent as the exact JSON object to the \
+                    connection's configured command path.",
+                "additionalProperties":true
+            }),
+            response,
+        )
     }
 
     pub(super) fn evaluate() -> (Value, Value) {
@@ -1407,7 +1444,7 @@ mod tests {
     }
 
     #[test]
-    fn only_the_breg_action_contract_exposes_a_closed_declared_refusal() {
+    fn declared_refusal_operations_expose_a_closed_declared_refusal() {
         for descriptor in crate::operations::descriptors() {
             let operation = Operation::parse(descriptor.id).unwrap();
             let contract = contract(operation);
@@ -1418,21 +1455,29 @@ mod tests {
                 descriptor.id
             );
         }
-        let refusal = contract(Operation::InvokeBregAction)
-            .declared_refusal
-            .as_ref()
-            .unwrap();
-        let validator = crate::definition::compile_schema(refusal)
-            .unwrap_or_else(|error| panic!("declared-refusal contract does not compile: {error}"));
+        assert!(Operation::ExternalCommand.descriptor().declared_refusal);
+        for operation in [Operation::InvokeBregAction, Operation::ExternalCommand] {
+            let refusal = contract(operation).declared_refusal.as_ref().unwrap();
+            let validator = crate::definition::compile_schema(refusal).unwrap_or_else(|error| {
+                panic!("declared-refusal contract does not compile: {error}")
+            });
+            assert_eq!(
+                first_violation(&validator, &json!({"refusalCode":"not-eligible"})),
+                Ok(())
+            );
+            assert!(first_violation(
+                &validator,
+                &json!({"refusalCode":"not-eligible", "detail":"private-canary"})
+            )
+            .is_err());
+        }
+        let command = contract(Operation::ExternalCommand);
+        assert_eq!(command.check_input(&json!({"amount":"25.00"})), Ok(()));
+        assert!(command.check_input(&json!(["not-an-object"])).is_err());
         assert_eq!(
-            first_violation(&validator, &json!({"refusalCode":"not-eligible"})),
+            command.check_output(&json!({"status":201,"body":{"id":"bill-1"}})),
             Ok(())
         );
-        assert!(first_violation(
-            &validator,
-            &json!({"refusalCode":"not-eligible", "detail":"private-canary"})
-        )
-        .is_err());
     }
 
     #[test]

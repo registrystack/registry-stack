@@ -1,0 +1,7 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": true,
+  "description": "The command body, sent as the exact JSON object to the connection's configured command path.",
+  "title": "external.command/v1 input",
+  "type": "object"
+}

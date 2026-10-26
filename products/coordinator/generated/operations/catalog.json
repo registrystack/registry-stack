@@ -1225,6 +1225,92 @@
       "type": "object"
     }
   },
+  "external.command/v1": {
+    "declaredRefusal": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "description": "One package-declared business refusal from a validated product response.\n\nThe code is deliberately absent from `Debug`; callers must opt in to reading\nor serializing it for an authored refusal branch.",
+      "properties": {
+        "refusalCode": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "refusalCode"
+      ],
+      "title": "external.command/v1 declared-refusal output",
+      "type": "object"
+    },
+    "host": {
+      "authority": "current-bound-connection-authority",
+      "completionObservation": null,
+      "connectionInterface": "external-http",
+      "identity": {
+        "effect": "mutation",
+        "id": "external.command/v1",
+        "keyRequirement": "required",
+        "product": "external-http",
+        "readReceipt": false,
+        "recovery": "same-command",
+        "requiresPreparation": false,
+        "version": 1
+      },
+      "limits": {
+        "attemptTimeoutSeconds": 10,
+        "http": {
+          "attemptTimeoutMilliseconds": 2000,
+          "connectionMayLowerLimits": true,
+          "maximumMutationRetries": 0,
+          "maximumRequestBytes": 65536,
+          "maximumResponseBytes": 65536,
+          "redirects": "refused"
+        },
+        "maximumCallAttempts": 10,
+        "maximumCallRetryDelaySeconds": 300,
+        "maximumConcurrentAttemptsPerRun": 1,
+        "maximumPreparationBytes": 65536,
+        "maximumRunDurationSeconds": 31536000,
+        "value": {
+          "maximumArrayItems": 256,
+          "maximumBytes": 131072,
+          "maximumDepth": 32,
+          "maximumNodes": 4096,
+          "maximumObjectMembers": 256,
+          "maximumStringBytes": 16384
+        }
+      }
+    },
+    "input": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": true,
+      "description": "The command body, sent as the exact JSON object to the connection's configured command path.",
+      "title": "external.command/v1 input",
+      "type": "object"
+    },
+    "output": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "The bounded provider response. The operation's interpret Function receives it with the command and returns the step result, a declared refusal, or an uncertain outcome.",
+      "properties": {
+        "body": {
+          "description": "The parsed JSON response body, or null for an empty body."
+        },
+        "status": {
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "status",
+        "body"
+      ],
+      "title": "external.command/v1 output",
+      "type": "object"
+    }
+  },
   "external.get/v1": {
     "host": {
       "authority": "current-bound-connection-authority",
