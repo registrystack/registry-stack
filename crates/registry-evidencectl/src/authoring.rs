@@ -300,6 +300,11 @@ fn compile_local_project_with_target_inputs_resource_and_authority(
     )?);
     plan.bundle["authentication"]["oidc"]["requiredScopes"] =
         serde_json::to_value(&target.authentication.oidc.required_scopes)?;
+    if let Some(signing) = &target.signing {
+        plan.bundle["signing"]["maximumAssertionValiditySeconds"] =
+            json!(signing.maximum_assertion_validity_seconds);
+    }
+    check_target_signing_validity(&plan)?;
     let compilation = write_plan(
         &project_root,
         staging_root,
@@ -2044,6 +2049,56 @@ mod tests {
             fs::read_dir(&outside).unwrap().count(),
             0,
             "local compilation wrote outside the project"
+        );
+        assert_eq!(fs::read_dir(&stage).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn local_compilation_measures_definitions_against_the_target_signing_maximum() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().canonicalize().unwrap();
+        let project = root.join("project");
+        let stage = root.join("stage");
+        for path in [&project, &stage] {
+            fs::create_dir(path).unwrap();
+            fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let example = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../products/evidence/examples/standalone");
+        fs::copy(example.join("evidence.yaml"), project.join("evidence.yaml")).unwrap();
+        fs::copy(
+            example.join("dev-authority.yaml"),
+            project.join("dev-authority.yaml"),
+        )
+        .unwrap();
+        for (relative, bytes) in crate::normalized::read(&example).unwrap().1 {
+            let path = project.join(relative);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, bytes).unwrap();
+        }
+        let mut target = fs::read_to_string(example.join("local-target.yaml")).unwrap();
+        target.push_str("signing:\n  maximumAssertionValiditySeconds: 100\n");
+        let target_path = project.join("local-target.yaml");
+        fs::write(&target_path, target).unwrap();
+        let evidence = root.join("evidence");
+        write_stub_evidence(&evidence, "#!/bin/sh\nexit 1\n");
+
+        let error = compile_normalized_local_project(
+            &project,
+            &stage,
+            &evidence,
+            LocalServicePorts::default(),
+            &target_path,
+            LOCAL_AUDIENCE,
+            &LocalAdmission::default(),
+        )
+        .expect_err("a 300 second definition exceeds the target's 100 second maximum");
+        let diagnostic = error
+            .downcast_ref::<AuthoredDiagnostic>()
+            .expect("the refusal is the authored validity diagnostic");
+        assert_eq!(
+            diagnostic.code,
+            "evidence.definition.validity-exceeds-signing-maximum"
         );
         assert_eq!(fs::read_dir(&stage).unwrap().count(), 0);
     }
