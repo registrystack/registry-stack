@@ -55,7 +55,6 @@ curl --fail --silent --show-error --aws-sigv4 "aws:amz:us-east-1:s3" \
   -X PUT "$BREG_TEST_S3_ENDPOINT/$BREG_TEST_S3_BUCKET" >/dev/null
 
 export CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0
-export RUSTC_WRAPPER="${RUSTC_WRAPPER-}"
 # The real backend case proves storage semantics. The adapter the engine binds
 # lives in registry-platform-objectstore; the engine's own attachment_storage
 # tests pin its namespace over it. Native Proposal transport, quarantine and

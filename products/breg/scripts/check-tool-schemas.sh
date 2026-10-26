@@ -30,7 +30,6 @@ temporary_root=$(mktemp -d "$repository_root/.breg-tool-schemas.XXXXXX")
 export CARGO_INCREMENTAL=0
 export CARGO_PROFILE_DEV_DEBUG=0
 export CARGO_PROFILE_TEST_DEBUG=0
-export RUSTC_WRAPPER="${RUSTC_WRAPPER-}"
 
 candidate="$temporary_root/tools"
 cargo run --manifest-path "$repository_root/Cargo.toml" --locked \

@@ -16,7 +16,6 @@ cd "$repository_root"
 export CARGO_INCREMENTAL=0
 export CARGO_PROFILE_DEV_DEBUG=0
 export CARGO_PROFILE_TEST_DEBUG=0
-export RUSTC_WRAPPER="${RUSTC_WRAPPER-}"
 
 # The canonical facility Action proves transactional rollback, current reference
 # refusals, concurrent replay and recovery after a lost response through the

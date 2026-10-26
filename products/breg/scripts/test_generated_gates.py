@@ -25,6 +25,55 @@ SPEC.loader.exec_module(COMPARATOR)
 
 
 class GeneratedGateTests(unittest.TestCase):
+    def test_ordinary_gates_preserve_compiler_wrapper_choice(self) -> None:
+        # Stop at the first Cargo invocation: these probes need neither a Rust
+        # build nor a database, but exercise the scripts' real environment.
+        gates = (
+            ("check-generated.sh", []),
+            ("check-tool-schemas.sh", []),
+            ("test-postgres.sh", ["--lane", "immediate-actions"]),
+        )
+        for name, arguments in gates:
+            for wrapper in (None, "", "/compiler wrappers/custom-cache"):
+                with self.subTest(gate=name, wrapper=wrapper), tempfile.TemporaryDirectory() as temporary:
+                    root = Path(temporary)
+                    script = root / "products/breg/scripts" / name
+                    script.parent.mkdir(parents=True)
+                    shutil.copy2(SCRIPT_DIR / name, script)
+                    bin_dir = root / "bin"
+                    bin_dir.mkdir()
+                    cargo = bin_dir / "cargo"
+                    cargo.write_text(
+                        "#!/usr/bin/env python3\n"
+                        "import json, os\n"
+                        "from pathlib import Path\n"
+                        "keys = ('RUSTC_WRAPPER', 'CARGO_INCREMENTAL', "
+                        "'CARGO_PROFILE_DEV_DEBUG', 'CARGO_PROFILE_TEST_DEBUG')\n"
+                        "Path(os.environ['CARGO_ENV_PROBE']).write_text(\n"
+                        "    json.dumps({key: os.environ.get(key) for key in keys}))\n"
+                        "raise SystemExit(73)\n",
+                        encoding="utf-8",
+                    )
+                    cargo.chmod(0o755)
+                    probe = root / "cargo-environment.json"
+                    env = dict(os.environ)
+                    env.pop("RUSTC_WRAPPER", None)
+                    if wrapper is not None:
+                        env["RUSTC_WRAPPER"] = wrapper
+                    env["PATH"] = str(bin_dir) + os.pathsep + env["PATH"]
+                    env["CARGO_ENV_PROBE"] = str(probe)
+                    env["BREG_TEST_DATABASE_URL"] = "postgres://unused/unused"
+                    result = subprocess.run(
+                        ["bash", str(script), *arguments],
+                        cwd=root, env=env, capture_output=True, text=True, timeout=10,
+                    )
+                    self.assertEqual(73, result.returncode, result.stdout + result.stderr)
+                    observed = json.loads(probe.read_text(encoding="utf-8"))
+                    # Unset lets Cargo use its configured wrapper; empty is an
+                    # explicit opt-out; a caller's custom wrapper is retained.
+                    self.assertEqual(wrapper, observed.pop("RUSTC_WRAPPER"))
+                    self.assertEqual({key: "0" for key in observed}, observed)
+
     def test_comparator_rejects_a_missing_committed_artifact(self) -> None:
         baseline = SCRIPT_DIR.parent / "generated/minimal"
         with tempfile.TemporaryDirectory() as temporary:
@@ -291,7 +340,6 @@ class GeneratedGateTests(unittest.TestCase):
     def test_adopter_workflow_uses_public_binaries_database_and_recovery(self) -> None:
         adopter_gate = (SCRIPT_DIR / "test-adopter-workflow.sh").read_text(encoding="utf-8")
         self.assertIn("mktemp -d", adopter_gate)
-        self.assertIn('export RUSTC_WRAPPER="${RUSTC_WRAPPER-}"', adopter_gate)
         self.assertIn('bregctl=${BREGCTL_BIN:-"$repository_root/target/debug/bregctl"}', adopter_gate)
         self.assertIn('breg=${BREG_BIN:-"$repository_root/target/debug/breg"}', adopter_gate)
         self.assertIn("registry_cargo_build", adopter_gate)

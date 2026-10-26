@@ -50,7 +50,6 @@ printf '%s\n' 'registry-stack-evidence-loadtest-v1' >"$run_dir/.launcher-owned"
 export CARGO_INCREMENTAL=0
 export CARGO_PROFILE_DEV_DEBUG=0
 export CARGO_PROFILE_TEST_DEBUG=0
-export RUSTC_WRAPPER="${RUSTC_WRAPPER-}"
 
 # shellcheck source-path=SCRIPTDIR source=../../../scripts/cargo-runtime-library-path.sh
 . "$repository_root/scripts/cargo-runtime-library-path.sh"

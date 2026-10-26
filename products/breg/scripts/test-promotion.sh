@@ -103,7 +103,6 @@ temporary_root=$(mktemp -d "$repository_root/.breg-promotion.XXXXXX")
 export CARGO_INCREMENTAL=0
 export CARGO_PROFILE_DEV_DEBUG=0
 export CARGO_PROFILE_TEST_DEBUG=0
-export RUSTC_WRAPPER="${RUSTC_WRAPPER-}"
 
 bregctl=${BREGCTL_BIN:-"$repository_root/target/debug/bregctl"}
 breg=${BREG_BIN:-"$repository_root/target/debug/breg"}

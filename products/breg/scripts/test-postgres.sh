@@ -46,7 +46,6 @@ fi
 export CARGO_INCREMENTAL=0
 export CARGO_PROFILE_DEV_DEBUG=0
 export CARGO_PROFILE_TEST_DEBUG=0
-export RUSTC_WRAPPER="${RUSTC_WRAPPER-}"
 
 # The owned target inventory. validate_product.py compares these lists with
 # POSTGRES_TEST_COMMANDS, so every integration target appears in exactly one

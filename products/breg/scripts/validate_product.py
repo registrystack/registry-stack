@@ -526,7 +526,6 @@ def validate_postgres_entrypoint(errors: list[str]) -> None:
         "export CARGO_INCREMENTAL=0",
         "export CARGO_PROFILE_DEV_DEBUG=0",
         "export CARGO_PROFILE_TEST_DEBUG=0",
-        'export RUSTC_WRAPPER="${RUSTC_WRAPPER-}"',
     )
     for fragment in required_fragments:
         if fragment not in source:
