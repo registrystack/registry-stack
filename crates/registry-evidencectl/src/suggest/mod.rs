@@ -463,17 +463,35 @@ fn plan_request_mappings(
     )
     .map_err(|report| anyhow!("the authoring project cannot supply selector mappings: {report}"))?
     .value;
-    let parameters = spec.operation_parameters(operation)?;
-    let body = spec.request_body_schema(operation)?;
+    let assignments = args
+        .selector_mappings
+        .iter()
+        .map(|raw| {
+            let (selector, target) = raw.split_once('=').ok_or_else(|| {
+                anyhow!("--map-selector must be ROLE.PROFILE.FIELD=path:NAME, query:NAME, or body:/JSON/POINTER")
+            })?;
+            Ok((raw.as_str(), selector, parse_request_target(target)?))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let selected_parameters = assignments
+        .iter()
+        .filter_map(|(_, _, target)| match target {
+            RequestTarget::Path(name) => Some((name.clone(), ParameterLocation::Path)),
+            RequestTarget::Query(name) => Some((name.clone(), ParameterLocation::Query)),
+            RequestTarget::Body(_) => None,
+        })
+        .collect::<BTreeSet<_>>();
+    let body_selected = assignments
+        .iter()
+        .any(|(_, _, target)| matches!(target, RequestTarget::Body(_)));
+    let parameters = spec.operation_parameters_for_targets(operation, &selected_parameters)?;
+    let body = spec.request_body_schema_for_mapping(operation, body_selected)?;
     let mut mappings = Vec::new();
     let mut exact = BTreeSet::new();
     let mut targets = BTreeSet::new();
     let mut role_profiles = BTreeMap::<String, String>::new();
 
-    for raw in &args.selector_mappings {
-        let (selector_raw, target_raw) = raw.split_once('=').ok_or_else(|| {
-            anyhow!("--map-selector must be ROLE.PROFILE.FIELD=path:NAME, query:NAME, or body:/JSON/POINTER")
-        })?;
+    for (raw, selector_raw, target) in assignments {
         let parts = selector_raw.split('.').collect::<Vec<_>>();
         if parts.len() != 3 || parts.iter().any(|part| part.is_empty()) {
             bail!("selector `{selector_raw}` must contain exactly ROLE.PROFILE.FIELD");
@@ -519,7 +537,6 @@ fn plan_request_mappings(
             scalar_type,
             maximum_bytes,
         };
-        let target = parse_request_target(target_raw)?;
         if !exact.insert((selector_raw.to_owned(), target.clone())) {
             bail!("duplicate --map-selector assignment `{raw}`");
         }
@@ -875,6 +892,31 @@ fn validate_selector_domain(
         Field::Integer {
             minimum, maximum, ..
         } => {
+            match schema.get("format") {
+                None => {}
+                Some(serde_json::Value::String(format))
+                    if format == "int32"
+                        && (*minimum < i32::MIN as i64 || *maximum > i32::MAX as i64) =>
+                {
+                    bail!(
+                        "selector `{}.{}.{}` integer range does not fit request target `{}` format `int32`; use a narrower reviewed selector profile",
+                        selector.role,
+                        selector.profile,
+                        selector.field,
+                        display_target(target)
+                    );
+                }
+                Some(serde_json::Value::String(format))
+                    if matches!(format.as_str(), "int32" | "int64") => {}
+                Some(serde_json::Value::String(format)) => bail!(
+                    "request target `{}` declares unsupported integer format `{format}`; supported formats are `int32`, `int64`, or absent",
+                    display_target(target)
+                ),
+                Some(_) => bail!(
+                    "request target `{}` declares an unsupported integer format; supported formats are `int32`, `int64`, or absent",
+                    display_target(target)
+                ),
+            }
             validate_integer_bounds(*minimum, *maximum, schema, selector, target)?;
         }
         Field::Boolean { .. } => {
@@ -1127,7 +1169,12 @@ fn require_closed_object(schema: &serde_json::Value, pointer: &str) -> Result<()
     {
         bail!("body target `{pointer}` requires a simple closed object schema with `additionalProperties: false`; arrays and polymorphism are unsupported");
     }
+    if schema.get("readOnly") == Some(&serde_json::Value::Bool(true)) {
+        bail!("body target `{pointer}` is readOnly and cannot be populated");
+    }
     for keyword in [
+        "enum",
+        "const",
         "minProperties",
         "maxProperties",
         "$dynamicRef",

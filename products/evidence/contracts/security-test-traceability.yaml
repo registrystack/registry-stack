@@ -296,10 +296,13 @@ entries:
   - id: sec-entity-reference-seed-protected
     tests:
       - {file: crates/registry-evidence/src/rhai_runtime.rs, name: protected_seed_has_no_comparison_or_string_conversion_capability}
+      - {file: crates/registry-evidence/src/rhai_runtime.rs, name: to_string_refuses_values_outside_its_integer_and_boolean_overloads}
       - {file: crates/registry-evidence/src/binding.rs, name: entity_reference_is_audience_and_concept_scoped}
   - id: sec-request-preparation-closed
     tests:
       - {file: crates/registry-evidence/src/rhai_runtime.rs, name: preparation_inputs_and_request_parts_are_closed_and_bounded}
+      - {file: crates/registry-evidence/src/rhai_runtime.rs, name: to_string_formats_only_canonical_integer_and_boolean_query_values}
+      - {file: crates/registry-evidence/src/rhai_runtime.rs, name: to_string_refuses_values_outside_its_integer_and_boolean_overloads}
       - {file: crates/registry-evidence/src/source.rs, name: saturated_source_admission_fails_at_the_configured_timeout}
       - {file: crates/registry-evidence/src/source.rs, name: saturated_oauth_single_flight_fails_before_credentials_or_transport}
       - {file: crates/registry-evidence/tests/source_contracts.rs, name: hostile_path_values_and_malformed_preparation_fail_before_transport_and_redact}

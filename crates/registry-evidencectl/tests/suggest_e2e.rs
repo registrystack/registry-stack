@@ -137,6 +137,12 @@ fn explicit_selector_mappings_generate_path_bindings_and_query_preparation() {
         "source suggest failed: {}",
         stderr_of(&output)
     );
+    let stdout = stdout_of(&output);
+    assert!(
+        !stdout.contains("selector bindings, preparation")
+            && !stdout.contains("request limits are intentionally absent"),
+        "the report must not describe generated request machinery as absent: {stdout}"
+    );
 
     let document: Value = serde_norway::from_str(
         &std::fs::read_to_string(project.join("evidence.yaml")).expect("read project"),
@@ -155,6 +161,80 @@ fn explicit_selector_mappings_generate_path_bindings_and_query_preparation() {
         .expect("read prepare Function");
     assert!(prepare.contains(r#"query_pair("reference""#), "{prepare}");
     assert!(!prepare.contains("TODO(evidencectl)"), "{prepare}");
+}
+
+#[test]
+fn mapped_get_and_post_projects_pass_the_offline_compiler() {
+    let post = request_openapi(
+        "POST",
+        "/records/{record_id}",
+        vec![
+            parameter("record_id", "path", true, "string"),
+            parameter("reference", "query", true, "string"),
+        ],
+        Some(json_body(
+            true,
+            serde_json::json!({
+                "type":"object", "additionalProperties":false,
+                "required":["reference"],
+                "properties":{"reference":{"type":"string"}}
+            }),
+        )),
+    );
+    for (method, document, body_requirement) in [
+        ("GET", MAPPED_GET_OPENAPI, "forbidden"),
+        ("POST", post.as_str(), "required"),
+    ] {
+        let workspace = tempfile::tempdir().expect("tempdir");
+        let project = scaffold(workspace.path(), document);
+        let mut mappings = vec![
+            "subject.subject-reference-v1.reference=path:record_id".to_owned(),
+            "subject.subject-reference-v1.reference=query:reference".to_owned(),
+        ];
+        if method == "POST" {
+            mappings.push("subject.subject-reference-v1.reference=body:/reference".to_owned());
+        }
+        let generated = mapped_suggest(&project, &mappings);
+        assert!(
+            generated.status.success(),
+            "{method} generation: {}",
+            stderr_of(&generated)
+        );
+
+        let checked = evidencectl(&[
+            "--format".to_owned(),
+            "json".to_owned(),
+            "check".to_owned(),
+            path_argument(&project),
+        ]);
+        assert!(
+            checked.status.success(),
+            "{method} check: {}{}",
+            stdout_of(&checked),
+            stderr_of(&checked)
+        );
+        assert!(stderr_of(&checked).is_empty());
+        let report: Value = serde_json::from_slice(&checked.stdout).expect("check JSON report");
+        assert_eq!(report["proof"], "authoring");
+        assert_eq!(report["networkAccess"], false);
+        let source = report["sources"]
+            .as_array()
+            .expect("checked Sources")
+            .iter()
+            .find(|source| source["id"] == "mapped")
+            .expect("generated Source was compiled");
+        assert_eq!(source["operation"]["method"], method);
+        assert_eq!(source["operation"]["path"], "/records/{record_id}");
+        assert_eq!(source["resolvedPreparation"]["generated"], false);
+        assert_eq!(
+            source["resolvedPreparation"]["script"],
+            "adapters/functions/mapped-prepare.rhai"
+        );
+        let limits = &source["resolvedPreparation"]["limits"];
+        assert_eq!(limits["query"], "required");
+        assert_eq!(limits["maximumQueryPairs"], 1);
+        assert_eq!(limits["jsonBody"], body_requirement);
+    }
 }
 
 #[test]
@@ -535,6 +615,353 @@ fn optional_non_json_request_body_may_remain_unused_by_query_mapping() {
 }
 
 #[test]
+fn unused_optional_content_parameters_do_not_block_query_mapping() {
+    let document = request_openapi(
+        "GET",
+        "/records",
+        vec![
+            parameter("reference", "query", true, "string"),
+            content_parameter("X-Trace", "header", false),
+            content_parameter("session", "cookie", false),
+        ],
+        None,
+    );
+    let workspace = tempfile::tempdir().expect("tempdir");
+    let project = scaffold(workspace.path(), &document);
+    let output = mapped_suggest(
+        &project,
+        &["subject.subject-reference-v1.reference=query:reference".to_owned()],
+    );
+    assert!(output.status.success(), "{}", stderr_of(&output));
+}
+
+#[test]
+fn unused_optional_external_parameter_does_not_block_query_mapping() {
+    let document = request_openapi(
+        "GET",
+        "/records",
+        vec![
+            parameter("reference", "query", true, "string"),
+            external_schema_parameter("optional_filter", "query", false),
+        ],
+        None,
+    );
+    let workspace = tempfile::tempdir().expect("tempdir");
+    let project = scaffold(workspace.path(), &document);
+    let output = mapped_suggest(
+        &project,
+        &["subject.subject-reference-v1.reference=query:reference".to_owned()],
+    );
+    assert!(output.status.success(), "{}", stderr_of(&output));
+}
+
+#[test]
+fn unused_optional_json_body_with_external_schema_does_not_block_query_mapping() {
+    let document = request_openapi(
+        "POST",
+        "/records",
+        vec![parameter("reference", "query", true, "string")],
+        Some(external_json_body(false)),
+    );
+    let workspace = tempfile::tempdir().expect("tempdir");
+    let project = scaffold(workspace.path(), &document);
+    let output = mapped_suggest(
+        &project,
+        &["subject.subject-reference-v1.reference=query:reference".to_owned()],
+    );
+    assert!(output.status.success(), "{}", stderr_of(&output));
+    let prepare = std::fs::read_to_string(project.join("functions/mapped-prepare.rhai"))
+        .expect("generated prepare Function");
+    assert!(prepare.contains("body: ()"), "{prepare}");
+}
+
+#[test]
+fn required_or_selected_unsupported_inputs_are_refused_without_mutation() {
+    struct Case {
+        name: &'static str,
+        document: String,
+        mappings: Vec<String>,
+        expected: &'static str,
+    }
+
+    let cases = [
+        Case {
+            name: "required content-based header",
+            document: request_openapi(
+                "GET",
+                "/records",
+                vec![
+                    parameter("reference", "query", true, "string"),
+                    content_parameter("X-Required", "header", true),
+                ],
+                None,
+            ),
+            mappings: vec!["subject.subject-reference-v1.reference=query:reference".to_owned()],
+            expected: "content-based parameters are not supported",
+        },
+        Case {
+            name: "required content-based cookie",
+            document: request_openapi(
+                "GET",
+                "/records",
+                vec![
+                    parameter("reference", "query", true, "string"),
+                    content_parameter("session", "cookie", true),
+                ],
+                None,
+            ),
+            mappings: vec!["subject.subject-reference-v1.reference=query:reference".to_owned()],
+            expected: "content-based parameters are not supported",
+        },
+        Case {
+            name: "required external query schema",
+            document: request_openapi(
+                "GET",
+                "/records",
+                vec![external_schema_parameter("reference", "query", true)],
+                None,
+            ),
+            mappings: vec!["subject.subject-reference-v1.reference=query:reference".to_owned()],
+            expected: "external or remote $ref",
+        },
+        Case {
+            name: "selected optional external query schema",
+            document: request_openapi(
+                "GET",
+                "/records",
+                vec![external_schema_parameter("reference", "query", false)],
+                None,
+            ),
+            mappings: vec!["subject.subject-reference-v1.reference=query:reference".to_owned()],
+            expected: "external or remote $ref",
+        },
+        Case {
+            name: "required JSON body with external schema",
+            document: request_openapi(
+                "POST",
+                "/records",
+                vec![parameter("reference", "query", true, "string")],
+                Some(external_json_body(true)),
+            ),
+            mappings: vec!["subject.subject-reference-v1.reference=query:reference".to_owned()],
+            expected: "external or remote $ref",
+        },
+        Case {
+            name: "selected optional JSON body with external schema",
+            document: request_openapi(
+                "POST",
+                "/records",
+                Vec::new(),
+                Some(external_json_body(false)),
+            ),
+            mappings: vec!["subject.subject-reference-v1.reference=body:/reference".to_owned()],
+            expected: "external or remote $ref",
+        },
+    ];
+
+    for case in cases {
+        let workspace = tempfile::tempdir().expect("tempdir");
+        let project = scaffold(workspace.path(), &case.document);
+        assert_mapping_failure_is_atomic(&project, &case.mappings, case.expected, case.name);
+    }
+}
+
+#[test]
+fn operation_override_is_applied_before_unused_input_selection() {
+    let document = request_openapi_with_path_parameters(
+        "GET",
+        "/records",
+        vec![external_schema_parameter("shadowed", "query", true)],
+        vec![
+            parameter("shadowed", "query", false, "string"),
+            parameter("reference", "query", true, "string"),
+        ],
+        None,
+    );
+    let workspace = tempfile::tempdir().expect("tempdir");
+    let project = scaffold(workspace.path(), &document);
+    let output = mapped_suggest(
+        &project,
+        &["subject.subject-reference-v1.reference=query:reference".to_owned()],
+    );
+    assert!(output.status.success(), "{}", stderr_of(&output));
+}
+
+#[test]
+fn unproven_scalar_constraints_are_refused_without_mutation() {
+    for (keyword, constraint) in [
+        ("enum", serde_json::json!(["reviewed-value"])),
+        ("const", serde_json::json!("reviewed-value")),
+        ("readOnly", serde_json::json!(true)),
+        ("format", serde_json::json!("email")),
+    ] {
+        let mut scalar = serde_json::json!({"type": "string"});
+        scalar[keyword] = constraint;
+        let document = request_openapi(
+            "POST",
+            "/records",
+            Vec::new(),
+            Some(json_body(
+                true,
+                serde_json::json!({
+                    "type": "object", "additionalProperties": false,
+                    "required": ["reference"],
+                    "properties": {"reference": scalar}
+                }),
+            )),
+        );
+        let workspace = tempfile::tempdir().expect("tempdir");
+        let project = scaffold(workspace.path(), &document);
+        assert_mapping_failure_is_atomic(
+            &project,
+            &["subject.subject-reference-v1.reference=body:/reference".to_owned()],
+            keyword,
+            &format!("unproven scalar {keyword}"),
+        );
+    }
+}
+
+#[test]
+fn materialized_object_constraints_are_refused_without_mutation() {
+    let constrained_root = |keyword: &str, constraint: Value| {
+        let mut schema = serde_json::json!({
+            "type":"object", "additionalProperties":false,
+            "required":["reference"],
+            "properties":{"reference":{"type":"string"}}
+        });
+        schema[keyword] = constraint;
+        request_openapi(
+            "POST",
+            "/records",
+            Vec::new(),
+            Some(json_body(true, schema)),
+        )
+    };
+    let read_only_ancestor = request_openapi(
+        "POST",
+        "/records",
+        Vec::new(),
+        Some(json_body(
+            true,
+            serde_json::json!({
+                "type":"object", "additionalProperties":false,
+                "properties":{
+                    "criteria":{
+                        "type":"object", "additionalProperties":false, "readOnly":true,
+                        "required":["reference"],
+                        "properties":{"reference":{"type":"string"}}
+                    }
+                }
+            }),
+        )),
+    );
+    let cases = [
+        (
+            "object enum",
+            constrained_root("enum", serde_json::json!([{"reference":"reviewed-value"}])),
+            "body:/reference",
+            "unsupported object constraint `enum`",
+        ),
+        (
+            "object const",
+            constrained_root("const", serde_json::json!({"reference":"reviewed-value"})),
+            "body:/reference",
+            "unsupported object constraint `const`",
+        ),
+        (
+            "read-only object ancestor",
+            read_only_ancestor,
+            "body:/criteria/reference",
+            "readOnly",
+        ),
+    ];
+
+    for (name, document, target, expected) in cases {
+        let workspace = tempfile::tempdir().expect("tempdir");
+        let project = scaffold(workspace.path(), &document);
+        assert_mapping_failure_is_atomic(
+            &project,
+            &[format!("subject.subject-reference-v1.reference={target}")],
+            expected,
+            name,
+        );
+    }
+}
+
+#[test]
+fn incompatible_or_unknown_integer_formats_are_refused_without_mutation() {
+    let cases = [
+        (
+            "int32 selector domain is too wide",
+            serde_json::json!("int32"),
+            0_i64,
+            3_000_000_000_i64,
+            "int32",
+        ),
+        (
+            "unknown integer format",
+            serde_json::json!("uint64"),
+            0,
+            100,
+            "unsupported integer format",
+        ),
+        (
+            "malformed integer format",
+            serde_json::json!(32),
+            0,
+            100,
+            "unsupported integer format",
+        ),
+    ];
+    for (name, format, minimum, maximum, expected) in cases {
+        let mut value = parameter("value", "query", true, "integer");
+        value["schema"]["format"] = format;
+        let document = request_openapi("GET", "/records", vec![value], None);
+        let workspace = tempfile::tempdir().expect("tempdir");
+        let project = scaffold(workspace.path(), &document);
+        set_integer_selector_bounds(&project, minimum, maximum);
+        assert_mapping_failure_is_atomic(
+            &project,
+            &["subject.integer-v1.value=query:value".to_owned()],
+            expected,
+            name,
+        );
+    }
+}
+
+#[test]
+fn supported_integer_formats_accept_the_full_declared_domain() {
+    let cases = [
+        (Some("int32"), i32::MIN as i64, i32::MAX as i64),
+        (
+            Some("int64"),
+            -9_007_199_254_740_991_i64,
+            9_007_199_254_740_991_i64,
+        ),
+        (None, -9_007_199_254_740_991_i64, 9_007_199_254_740_991_i64),
+    ];
+    for (format, minimum, maximum) in cases {
+        let mut value = parameter("value", "query", true, "integer");
+        if let Some(format) = format {
+            value["schema"]["format"] = serde_json::json!(format);
+        }
+        let document = request_openapi("GET", "/records", vec![value], None);
+        let workspace = tempfile::tempdir().expect("tempdir");
+        let project = scaffold(workspace.path(), &document);
+        set_integer_selector_bounds(&project, minimum, maximum);
+        let output = mapped_suggest(
+            &project,
+            &["subject.integer-v1.value=query:value".to_owned()],
+        );
+        assert!(
+            output.status.success(),
+            "format {format:?} with {minimum}..={maximum}: {}",
+            stderr_of(&output)
+        );
+    }
+}
+
+#[test]
 fn required_non_json_request_body_is_refused_without_mutation() {
     let document = request_openapi(
         "POST",
@@ -560,7 +987,7 @@ fn explicit_mapping_to_optional_non_json_body_is_refused_without_mutation() {
     assert_mapping_failure_is_atomic(
         &project,
         &["subject.subject-reference-v1.reference=body:/reference".to_owned()],
-        "declares no application/json request body",
+        "has no `application/json` content",
         "explicit mapping to an optional non-JSON body",
     );
 }
@@ -970,11 +1397,16 @@ fn drafts_into_a_project_and_then_refuses_to_overwrite_the_draft() {
         "the equivalent command must reproduce the selection, quoted: {stdout}"
     );
 
-    // OpenAPI cannot establish governed source policy. The report must make
-    // that boundary visible instead of presenting generated defaults.
+    // OpenAPI cannot establish governed source policy. The report must name
+    // the completion and review still required for the generated artifacts.
     assert!(
-        stdout.contains("source origin, posture, authentication, selector bindings"),
-        "the report must name the omitted decisions: {stdout}"
+        stdout.contains("Set the source origin.")
+            && stdout.contains("Review the generated Source posture and default source limits.")
+            && stdout.contains("Configure target-owned authentication.")
+            && stdout.contains(
+                "Complete selector bindings, the preparation Function, and request limits."
+            ),
+        "the report must name the completion and review work: {stdout}"
     );
 
     // Every adopted default is announced with its provenance, so a flag-driven
@@ -1249,6 +1681,24 @@ fn parameter(name: &str, location: &str, required: bool, scalar_type: &str) -> V
     })
 }
 
+fn content_parameter(name: &str, location: &str, required: bool) -> Value {
+    serde_json::json!({
+        "name": name,
+        "in": location,
+        "required": required,
+        "content": {"application/json": {"schema": {"type": "string"}}}
+    })
+}
+
+fn external_schema_parameter(name: &str, location: &str, required: bool) -> Value {
+    serde_json::json!({
+        "name": name,
+        "in": location,
+        "required": required,
+        "schema": {"$ref": "https://schemas.example.invalid/value.json"}
+    })
+}
+
 fn json_body(required: bool, schema: Value) -> Value {
     serde_json::json!({
         "required": required,
@@ -1267,6 +1717,17 @@ fn form_body(required: bool) -> Value {
                     "required":["reference"],
                     "properties":{"reference":{"type":"string"}}
                 }
+            }
+        }
+    })
+}
+
+fn external_json_body(required: bool) -> Value {
+    serde_json::json!({
+        "required": required,
+        "content": {
+            "application/json": {
+                "schema": {"$ref": "https://schemas.example.invalid/body.json"}
             }
         }
     })
@@ -1309,6 +1770,19 @@ fn request_openapi(
         "paths": paths
     }))
     .expect("OpenAPI renders")
+}
+
+fn request_openapi_with_path_parameters(
+    method: &str,
+    path: &str,
+    path_parameters: Vec<Value>,
+    operation_parameters: Vec<Value>,
+    request_body: Option<Value>,
+) -> String {
+    let document = request_openapi(method, path, operation_parameters, request_body);
+    let mut document: Value = serde_norway::from_str(&document).expect("parse generated OpenAPI");
+    document["paths"][path]["parameters"] = Value::Array(path_parameters);
+    serde_norway::to_string(&document).expect("OpenAPI renders")
 }
 
 fn mapped_suggest(project: &Path, mappings: &[String]) -> Output {
@@ -1412,6 +1886,15 @@ fn set_reference_selector_maximum(project: &Path, maximum_bytes: u64) {
             ["maximumBytes"] = serde_json::json!(maximum_bytes);
         document["selectorProfiles"]["subject-reference-v1"]["maximumAggregateBytes"] =
             serde_json::json!(8192);
+    });
+}
+
+fn set_integer_selector_bounds(project: &Path, minimum: i64, maximum: i64) {
+    edit_project(project, |document| {
+        document["selectorProfiles"]["integer-v1"]["fields"]["value"]["minimum"] =
+            serde_json::json!(minimum);
+        document["selectorProfiles"]["integer-v1"]["fields"]["value"]["maximum"] =
+            serde_json::json!(maximum);
     });
 }
 
