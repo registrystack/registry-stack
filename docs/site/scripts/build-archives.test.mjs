@@ -207,6 +207,7 @@ test('archive generation excludes current-source generators', async () => {
   assert.deepEqual(currentSourceGeneratedArtifacts, [
     'docs/site/public/examples/breg-evidence-starter.tar.gz',
     'docs/site/public/examples/evidence-examples.tar.gz',
+    'docs/site/public/examples/evidence-source-recipes.tar.gz',
     'docs/site/src/content/docs/reference/cli',
     'docs/site/src/data/generated/cli-reference.json',
     'docs/site/src/data/generated/evidence-configuration.json',
@@ -461,9 +462,12 @@ async function buildTimeSourceFixture(t) {
   await writeFile(resolve(siteRoot, 'generate.cjs'), `
     const fs = require('node:fs');
     const output = 'src/data/generated/staged-fixtures';
+    const recipeArchive = 'public/examples/evidence-source-recipes.tar.gz';
     fs.mkdirSync(output, { recursive: true });
+    fs.mkdirSync('public/examples', { recursive: true });
     fs.writeFileSync(output + '/pinned.json', fs.readFileSync('input.txt'));
     fs.writeFileSync(output + '/generated-only.json', 'generated from pinned source');
+    fs.writeFileSync(recipeArchive, 'recipe archive from ' + fs.readFileSync('input.txt'));
   `);
   await execFileAsync('git', ['init', '--quiet'], { cwd: repoRoot });
   await execFileAsync('git', ['config', 'user.name', 'Archive Test'], { cwd: repoRoot });
@@ -480,6 +484,64 @@ async function buildTimeSourceFixture(t) {
   await writeFile(resolve(artifactRoot, 'current-only.json'), 'current-only output');
   return { repoRoot, siteRoot, artifactRoot, sourceRef };
 }
+
+test('default staging uses the pinned recipe archive and restores absent or present renderer bytes', async (t) => {
+  await t.test('restores an absent renderer archive', async (t) => {
+    const { siteRoot, sourceRef } = await buildTimeSourceFixture(t);
+    const recipeArchive = resolve(
+      siteRoot,
+      'public/examples/evidence-source-recipes.tar.gz',
+    );
+    await assert.rejects(readFile(recipeArchive), { code: 'ENOENT' });
+
+    const restore = await stagePinnedGeneratedArtifacts({
+      ...archivedDocset,
+      products: { 'registry-stack': { ref: sourceRef } },
+    }, {
+      docsRoot: siteRoot,
+      runSourceGeneration: async (command, args, env, cwd) => {
+        await execFileAsync(command, args, { cwd, env });
+      },
+    });
+
+    assert.equal(
+      await readFile(recipeArchive, 'utf8'),
+      'recipe archive from pinned release source',
+    );
+    await restore();
+    await assert.rejects(readFile(recipeArchive), { code: 'ENOENT' });
+  });
+
+  await t.test('restores different current renderer bytes', async (t) => {
+    const { siteRoot, sourceRef } = await buildTimeSourceFixture(t);
+    const recipeArchive = resolve(
+      siteRoot,
+      'public/examples/evidence-source-recipes.tar.gz',
+    );
+    await mkdir(dirname(recipeArchive), { recursive: true });
+    await writeFile(recipeArchive, 'current renderer recipe archive');
+
+    const restore = await stagePinnedGeneratedArtifacts({
+      ...archivedDocset,
+      products: { 'registry-stack': { ref: sourceRef } },
+    }, {
+      docsRoot: siteRoot,
+      runSourceGeneration: async (command, args, env, cwd) => {
+        await execFileAsync(command, args, { cwd, env });
+      },
+    });
+
+    assert.equal(
+      await readFile(recipeArchive, 'utf8'),
+      'recipe archive from pinned release source',
+    );
+    await restore();
+    assert.equal(
+      await readFile(recipeArchive, 'utf8'),
+      'current renderer recipe archive',
+    );
+  });
+});
 
 test('build-time archive generation uses the pinned source and restores current outputs', async (t) => {
   const { siteRoot, artifactRoot, sourceRef } = await buildTimeSourceFixture(t);

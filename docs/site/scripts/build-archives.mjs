@@ -77,6 +77,7 @@ const configurationGenerators = new Map([
 export const currentSourceGeneratedArtifacts = Object.freeze([
   'docs/site/public/examples/breg-evidence-starter.tar.gz',
   'docs/site/public/examples/evidence-examples.tar.gz',
+  'docs/site/public/examples/evidence-source-recipes.tar.gz',
   'docs/site/src/content/docs/reference/cli',
   'docs/site/src/data/generated/cli-reference.json',
   ...configurationGenerators.keys(),
