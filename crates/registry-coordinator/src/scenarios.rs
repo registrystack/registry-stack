@@ -100,7 +100,8 @@ impl Identified for AuthoredScenario {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "schema", schemars(!remote, tag = "type"))]
 enum AuthoredReply {
-    /// The call completed and returned `value`.
+    /// The call completed and returned `value`. An `external.command/v1`
+    /// step takes a `response` reply instead.
     Success {
         /// The output the call returns, which must satisfy the operation's
         /// output contract.
@@ -121,7 +122,9 @@ enum AuthoredReply {
     },
     /// The product returned a package-declared, no-effect business refusal.
     /// A supported call takes its `onDeclaredRefusal` edge when it has one;
-    /// otherwise the run stops as refused.
+    /// otherwise the run stops as refused. An `external.command/v1` step
+    /// takes a `response` reply instead, which its interpretation Function
+    /// may turn into a declared refusal.
     DeclaredRefusal {
         /// The validated refusal code the package declares.
         refusal_code: RefusalCode,
@@ -730,6 +733,19 @@ fn execute(definition: &Definition, scenario: &Scenario) -> Result<ScenarioRepor
         // not this run consumes it.
         let operation = call.operation.as_str();
         for (index, reply) in replies.iter().enumerate() {
+            // A command's result and refusal come only from its pinned
+            // interpretation Function, as every provider answer does at run
+            // time, so a scenario cannot supply either directly.
+            if call.operation == crate::protocol::Operation::ExternalCommand
+                && matches!(reply, Reply::Success { .. } | Reply::DeclaredRefusal { .. })
+            {
+                return Err(error(
+                    "scenario.reply",
+                    format!("/replies/{step}/{index}"),
+                    format!("step {step} calls {operation}, whose result and declared refusal come only from its interpret Function"),
+                    "Reply with type: response and a {status, body} value; the pinned interpret Function produces the result.",
+                ));
+            }
             match reply {
                 Reply::Success { success } => {
                     definition.operation_contract(call)?

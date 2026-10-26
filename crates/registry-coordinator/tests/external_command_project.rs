@@ -447,3 +447,78 @@ fn a_provider_response_reply_belongs_only_to_the_command() {
         error.message
     );
 }
+
+#[test]
+fn a_command_reply_reaches_its_result_only_through_the_interpret_function() {
+    // A synthetic result or declared refusal would skip the Function the
+    // worker runs on every provider answer, so a command step refuses both.
+    for (kind, reply) in [
+        (
+            "success",
+            "    - type: success\n      value: {billId: bill-001}\n",
+        ),
+        (
+            "declared-refusal",
+            "    - type: declared-refusal\n      refusalCode: account-closed\n",
+        ),
+    ] {
+        let error = scenario_reports(&replaced(
+            SCENARIOS,
+            &[(
+                "    - type: response\n      value: {status: 201, body: {billId: bill-001}}\n",
+                reply,
+            )],
+        ))
+        .err()
+        .unwrap_or_else(|| panic!("a {kind} reply to a command is refused"));
+        assert_eq!(error.code, "scenario.reply", "{kind}");
+        assert!(
+            error.message.contains("external.command/v1"),
+            "{kind}: {}",
+            error.message
+        );
+        assert!(
+            error
+                .suggested_action
+                .as_deref()
+                .is_some_and(|action| action.contains("type: response")),
+            "{kind}: {:?}",
+            error.suggested_action
+        );
+    }
+    // Replies that model an exchange the Function never sees stay accepted.
+    for (reply, state) in [
+        (
+            "    - type: uncertain\n      code: transport-uncertain\n",
+            "uncertain",
+        ),
+        (
+            "    - type: retryable\n      code: external-unavailable\n",
+            "retryable",
+        ),
+        (
+            "    - type: refused\n      code: external-destination-refused\n",
+            "refused",
+        ),
+    ] {
+        let reports = scenario_reports(&replaced(
+            SCENARIOS,
+            &[
+                (
+                    "    - type: response\n      value: {status: 202, body: {}}\n",
+                    reply,
+                ),
+                (
+                    "    path: [create]\n    state: uncertain\n",
+                    &format!("    path: [create]\n    state: {state}\n"),
+                ),
+            ],
+        ))
+        .unwrap_or_else(|error| panic!("{state}: {}", error.message));
+        let report = reports
+            .iter()
+            .find(|report| report.name == "unrecognised-answer-holds")
+            .unwrap();
+        assert_eq!(report.state, state);
+    }
+}
