@@ -23,13 +23,19 @@
 //!
 //! # State
 //!
-//! Everything the service remembers lives in [`store`], in memory, bounded, and
-//! for minutes. There is no database here and none anywhere beneath this
-//! service. A restart therefore invalidates every offer outstanding in a
-//! minutes-wide window. An independent process fails closed on another
-//! process's exchange because it has different keyed tags and no matching
-//! state. The supported single-replica deployment keeps every exchange routed
-//! to its owning process.
+//! Everything the service remembers between steps is held behind
+//! [`storage::Store`], bounded, and for minutes. The service runs on the
+//! in-memory backend in [`store`], and no configuration selects another. With
+//! it there is no database beneath this service: a restart invalidates every
+//! offer outstanding in a minutes-wide window, and an independent process
+//! fails closed on another process's exchange because it has different keyed
+//! tags and no matching state. The supported single-replica deployment keeps
+//! every exchange routed to its owning process.
+//!
+//! [`storage::postgres`] holds the same state in a PostgreSQL schema, so that
+//! replicas sharing its keys can serve one exchange. It is reachable only from
+//! code until the reviewed `oid4vci-profile/v2` makes it selectable; its module
+//! header states what it keeps and its known limits.
 
 #[cfg(not(unix))]
 compile_error!(

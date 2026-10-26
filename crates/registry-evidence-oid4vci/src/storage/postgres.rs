@@ -54,6 +54,48 @@
 //! Migration runs before the service answers requests, so it does not take
 //! the request-derived bounds: a replica waits for another's migration to
 //! finish.
+//!
+//! # Known limits
+//!
+//! These hold today and are left to the deployment or to later work.
+//!
+//! - **Length.** A sealed prepared request is not padded, so its ciphertext
+//!   length follows the request body's length and can hint at the kind of
+//!   identifier the request selects by.
+//! - **Erasure.** A deleted row survives in the write-ahead log, base backups,
+//!   replicas and dead tuples until vacuum, and stays openable while its
+//!   sealing key is current or previous, so erasing a prepared request means
+//!   retiring its sealing key through two rotations and destroying it, with
+//!   backup retention sized to match.
+//! - **Restore and failover.** Restoring a backup, failing over to a lagging
+//!   asynchronous replica, or running with `synchronous_commit = off` can bring
+//!   back offers and access tokens already spent for the rest of their
+//!   lifetime, so after a restore or failover the deployment must change the
+//!   catalog generation or rotate the tagging key with no previous key, unless
+//!   replication is synchronous.
+//! - **Clocks.** Expiry is judged against each replica's own clock, so replica
+//!   clocks must be kept in step: a slow clock serves entries past their expiry
+//!   by its skew, and a fast one's purge deletes entries the others still
+//!   treat as live.
+//! - **Work on the request path.** Offer creation and token redemption count
+//!   the live key-space under a deployment-wide lock, and each credential
+//!   request purges expired rows and counts every key-space after its claim, so
+//!   near the largest capacity every replica queues behind those counts.
+//! - **Linkable rows.** A database reader can link an offer to the access token
+//!   it was redeemed for, because the ledger update and the token insert
+//!   commit in one transaction and expire together, though neither row carries
+//!   an identifier.
+//! - **Per-statement bounds.** The waits are bounded per statement, not per
+//!   transaction, so a transaction of several slow statements can outlast the
+//!   request, which then times out and is answered as spent once it has asked
+//!   to spend.
+//! - **A lost commit reply.** A commit that lands but whose reply is lost to a
+//!   broken connection is answered as unavailable (503), so the wallet's retry
+//!   meets a spent offer or token and is refused.
+//! - **Not yet selectable.** The current `oid4vci-profile` contract and this
+//!   crate's `AGENTS.md` still forbid a database and more than one replica, so
+//!   selecting this backend needs the reviewed v2 profile and those rules to
+//!   change with it.
 
 use std::time::Duration;
 
