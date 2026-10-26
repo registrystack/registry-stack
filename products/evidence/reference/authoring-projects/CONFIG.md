@@ -169,6 +169,9 @@ inputs are inspected only when you map them. Parameter and request-body
 references must resolve locally so their requiredness is known.
 Every path placeholder must occupy a unique complete segment, have a mapping,
 and use a Registry Stack local identifier (`[a-z][a-z0-9_-]{0,63}`).
+The complete request path, including the server path prefix, must fit the
+runtime's 2–2048-byte absolute ASCII path contract, with no empty or dot segments,
+query, fragment, backslash, or noncanonical or ambiguous percent escapes.
 
 Scalar types must agree, and the selector's admitted domain must fit the
 supported string-length or integer-range constraints. Integer formats `int32`

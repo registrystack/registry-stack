@@ -259,7 +259,11 @@ fn unsupported_path_placeholders_are_refused_without_mutation() {
             &[format!(
                 "subject.subject-reference-v1.reference=path:{name}"
             )],
-            "must be a Registry Stack LocalId",
+            if name.is_ascii() {
+                "must be a Registry Stack LocalId"
+            } else {
+                "absolute ASCII paths"
+            },
             &format!("unsupported path placeholder {name}"),
         );
     }
@@ -287,6 +291,71 @@ fn unsupported_path_placeholders_are_refused_without_mutation() {
         let workspace = tempfile::tempdir().expect("tempdir");
         let project = scaffold(workspace.path(), &document);
         assert_mapping_failure_is_atomic(&project, &[mapping.to_owned()], expected, path);
+    }
+}
+
+#[test]
+fn invalid_rendered_request_paths_are_refused_without_mutation() {
+    for path in [
+        "/records/{record_id}/".to_owned(),
+        "//records/{record_id}".to_owned(),
+        "/records//{record_id}".to_owned(),
+        "/records/./{record_id}".to_owned(),
+        "/records/../{record_id}".to_owned(),
+        "/récords/{record_id}".to_owned(),
+        "/records?fixed=1/{record_id}".to_owned(),
+        "/records#fragment/{record_id}".to_owned(),
+        "/records\\other/{record_id}".to_owned(),
+        "/records/%2e/{record_id}".to_owned(),
+        "/records/%2F/{record_id}".to_owned(),
+        "/records/%41/{record_id}".to_owned(),
+        "/records/%GG/{record_id}".to_owned(),
+        format!("/{}/{{record_id}}", "a".repeat(2048)),
+    ] {
+        let document = request_openapi(
+            "GET",
+            &path,
+            vec![parameter("record_id", "path", true, "string")],
+            None,
+        );
+        let workspace = tempfile::tempdir().expect("tempdir");
+        let project = scaffold(workspace.path(), &document);
+        assert_mapping_failure_is_atomic(
+            &project,
+            &["subject.subject-reference-v1.reference=path:record_id".to_owned()],
+            "generated request path",
+            &path,
+        );
+    }
+}
+
+#[test]
+fn invalid_rendered_server_prefixes_are_refused_without_mutation() {
+    for prefix in [
+        "/api//v1".to_owned(),
+        "/api/./v1".to_owned(),
+        "/api/../v1".to_owned(),
+        "/api/%2F".to_owned(),
+        "/api/%2e".to_owned(),
+        format!("/{}", "a".repeat(2040)),
+    ] {
+        let mut document: Value = serde_norway::from_str(MAPPED_GET_OPENAPI).expect("OpenAPI");
+        document["servers"] =
+            serde_json::json!([{"url":format!("https://records.example.invalid{prefix}")}]);
+        let workspace = tempfile::tempdir().expect("tempdir");
+        let project = scaffold(
+            workspace.path(),
+            &serde_norway::to_string(&document).expect("OpenAPI YAML"),
+        );
+        assert_mapping_failure_is_atomic(
+            &project,
+            &[
+                "subject.subject-reference-v1.reference=path:record_id".to_owned(),
+                "subject.subject-reference-v1.reference=query:reference".to_owned(),
+            ],
+            "generated request path",
+            &prefix,
+        );
     }
 }
 

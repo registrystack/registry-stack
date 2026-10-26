@@ -191,6 +191,94 @@ fn explicit_path_and_query_mappings_generate_an_ordinary_source_request() {
 }
 
 #[test]
+fn mapped_rendered_path_guard_agrees_with_runtime_admission() {
+    use registry_evidence::config::EvidenceConfig;
+    let maximum = format!("/{}", "a".repeat(2047));
+    let overlong = format!("/{}", "a".repeat(2048));
+    let cases = [
+        ("/v1/records", ""),
+        ("/v1/records/{record_id}", "/api"),
+        ("/v1/exact:record/{record_id}", ""),
+        ("/v1/value%20with%20space/{record_id}", ""),
+        (maximum.as_str(), ""),
+        (overlong.as_str(), ""),
+        ("/v1/records/{record_id}/", ""),
+        ("/v1//records/{record_id}", ""),
+        ("/v1/./records/{record_id}", ""),
+        ("/v1/../records/{record_id}", ""),
+        ("/v1/récords/{record_id}", ""),
+        ("/v1/records/{record_id}?fixed=1", ""),
+        ("/v1/records/{record_id}#fragment", ""),
+        ("/v1/records\\other/{record_id}", ""),
+        ("/v1/%2e/{record_id}", ""),
+        ("/v1/%2F/{record_id}", ""),
+        ("/v1/%41/{record_id}", ""),
+        ("/v1/%GG/{record_id}", ""),
+        ("/v1/records/{record_id}", "/api//v2"),
+        ("/v1/records/{record_id}", "/api/%2F"),
+    ];
+    for (case, (path, prefix)) in cases.into_iter().enumerate() {
+        let mut inputs = base_inputs();
+        inputs.operation.path = path.to_owned();
+        inputs.base_url_suggestion =
+            emit::split_server_url(&format!("https://api.example.invalid{prefix}"));
+        let selector = SelectorReference {
+            role: "subject".to_owned(),
+            profile: "person-demographics-v1".to_owned(),
+            field: "given_name".to_owned(),
+            scalar_type: SelectorScalarType::String,
+            maximum_bytes: 200,
+        };
+        inputs.request_mappings = vec![RequestMapping {
+            selector: selector.clone(),
+            target: RequestTarget::Query("reference".to_owned()),
+        }];
+        let mut bindings = serde_json::Map::new();
+        if path.contains("{record_id}") {
+            inputs.request_mappings.push(RequestMapping {
+                selector,
+                target: RequestTarget::Path("record_id".to_owned()),
+            });
+            bindings.insert("record_id".to_owned(), json!({"type":"selector", "role":"subject", "profile":"person-demographics-v1", "field":"given_name"}));
+        }
+        let rendered = format!("{prefix}{path}");
+        let mut bundle: serde_json::Value = serde_norway::from_str(include_str!(
+            "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
+        ))
+        .expect("runtime acceptance bundle");
+        let request = &mut bundle["sources"]["source-a"]["request"];
+        request["path"] = json!(rendered);
+        if !bindings.is_empty() {
+            request["pathBindings"] = json!(bindings);
+        }
+        let runtime =
+            EvidenceConfig::parse_yaml(&serde_json::to_vec(&bundle).expect("runtime bundle"));
+        let draft = emit::draft(&inputs);
+        assert_eq!(
+            draft.is_ok(),
+            runtime.is_ok(),
+            "path case {case} ({} bytes): draft {:?}, runtime {:?}",
+            rendered.len(),
+            draft.as_ref().err(),
+            runtime.as_ref().err()
+        );
+        if let Ok(draft) = draft {
+            let source: serde_json::Value =
+                serde_json::from_str(&draft.authoring_source).expect("Source JSON");
+            assert_eq!(source["request"]["path"], rendered);
+        }
+    }
+}
+
+#[test]
+fn unmapped_incomplete_path_drafts_remain_available() {
+    let mut inputs = base_inputs();
+    inputs.operation.path = "/v1/records/{RecordId}/".to_owned();
+    let draft = emit::draft(&inputs).expect("unmapped authoring draft");
+    assert!(file_contents(&draft, "functions/search-a-prepare.rhai").contains("TODO(evidencectl)"));
+}
+
+#[test]
 fn explicit_post_body_mappings_generate_a_closed_json_object() {
     let mut inputs = base_inputs();
     inputs.operation.method = "POST".to_owned();

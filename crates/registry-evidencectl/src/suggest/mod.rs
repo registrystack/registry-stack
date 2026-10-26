@@ -1026,28 +1026,6 @@ fn validate_required_inputs(
     body: Option<&types::OperationRequestBody>,
     mappings: &[RequestMapping],
 ) -> Result<()> {
-    let mut placeholders = BTreeSet::new();
-    for segment in operation.path.split('/') {
-        if !segment.contains(['{', '}']) {
-            continue;
-        }
-        let name = segment
-            .strip_prefix('{')
-            .and_then(|segment| segment.strip_suffix('}'))
-            .ok_or_else(|| anyhow!("a path placeholder must occupy one complete segment"))?;
-        registry_platform_yaml::LocalId::new(name).with_context(|| {
-            format!("path parameter `{name}` must be a Registry Stack LocalId for a path binding")
-        })?;
-        if !placeholders.insert(name) {
-            bail!("path placeholders must be unique: `{name}` is repeated");
-        }
-        if !mappings
-            .iter()
-            .any(|mapping| mapping.target == RequestTarget::Path(name.to_owned()))
-        {
-            bail!("required request input `path:{name}` has no --map-selector assignment");
-        }
-    }
     for parameter in parameters.iter().filter(|parameter| parameter.required) {
         let target = match parameter.location {
             ParameterLocation::Path => RequestTarget::Path(parameter.name.clone()),
