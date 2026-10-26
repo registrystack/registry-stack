@@ -896,8 +896,9 @@ export declare class BaseRegistryClient {
   openapi(accessProfile?: string | null): Promise<RawOutcome>
   registryMetadata(accessProfile?: string | null): Promise<RawOutcome>
   /**
-   * The first revision of a record as `{recordId, revision, createdAt}` JSON
-   * text, or null when the caller may not read it (403 or 404).
+   * The first revision of a record as
+   * `{recordType, recordId, revision, createdAt}` JSON text, or null when the
+   * caller may not read it (403 or 404).
    */
   occurrenceCreationRevision(entityRoute: string, recordIdentifier: string, accessProfile?: string | null): Promise<string | null>
   statisticsLive(dataset: string, from?: string | null, to?: string | null, accessProfile?: string | null, format?: StatisticsFormat | null): Promise<RawOutcome>

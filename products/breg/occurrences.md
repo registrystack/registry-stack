@@ -250,8 +250,10 @@ Recorded time is when the registry first accepted the record: `createdAt` of
 revision `1` of the record (`mutationKind: create`, no predecessor), read from
 its revision history. A client reading it needs revision access under the
 selected profile; without it, or when history is absent, recorded time is
-unavailable, never guessed from another clock. The registry serves revision
-`createdAt` as RFC 3339 text ending in `Z`.
+unavailable, never guessed from another clock. The client's compact creation
+evidence is `{recordType, recordId, revision, createdAt}`; the type and identifier
+must both match the projected record. The registry serves revision `createdAt`
+as RFC 3339 text ending in `Z`.
 
 Authored `timestamp` values are stored as instants and served in UTC with a
 `+00:00` offset: `2026-10-20T09:30:00+02:00` is read back as

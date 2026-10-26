@@ -512,6 +512,7 @@ fn time_value(time: &TimeDescriptor) -> Value {
 /// states when the registry first recorded it.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BRegCreationRevision {
+    record_type: String,
     record_id: String,
     created_at: String,
 }
@@ -520,6 +521,12 @@ impl BRegCreationRevision {
     /// Read a Registry Record revision envelope (`{"data": {...}, "meta": {...}}`)
     /// and keep only the creation evidence for `record_id`.
     pub fn from_document(record_id: &str, document: &Value) -> Result<Self, BRegOccurrenceError> {
+        let record_type = document
+            .get("meta")
+            .and_then(Value::as_object)
+            .and_then(|meta| meta.get("entityTypeIdentifier"))
+            .and_then(Value::as_str)
+            .ok_or_else(|| wrong_evidence("the revision has no record type"))?;
         let data = document
             .get("data")
             .and_then(Value::as_object)
@@ -545,19 +552,21 @@ impl BRegCreationRevision {
             .get("createdAt")
             .and_then(Value::as_str)
             .ok_or_else(|| wrong_evidence("the revision has no creation time"))?;
-        Self::new(record_id, created_at)
+        Self::new(record_type, record_id, created_at)
     }
 
-    /// Read the compact `{"recordId", "revision", "createdAt"}` form that
-    /// `Serialize` writes.
+    /// Read the compact `{"recordType", "recordId", "revision", "createdAt"}`
+    /// form that `Serialize` writes.
     pub fn from_value(value: &Value) -> Result<Self, BRegOccurrenceError> {
         let object = value
             .as_object()
             .ok_or_else(|| wrong_evidence("the creation revision is not an object"))?;
-        if object
-            .keys()
-            .any(|key| !matches!(key.as_str(), "recordId" | "revision" | "createdAt"))
-        {
+        if object.keys().any(|key| {
+            !matches!(
+                key.as_str(),
+                "recordType" | "recordId" | "revision" | "createdAt"
+            )
+        }) {
             return Err(wrong_evidence(
                 "the creation revision has an unknown member",
             ));
@@ -569,19 +578,33 @@ impl BRegCreationRevision {
                 .ok_or_else(|| wrong_evidence(format!("the creation revision has no {name}")))
         };
         require_creation_revision(member("revision")?)?;
-        Self::new(member("recordId")?, member("createdAt")?)
+        Self::new(
+            member("recordType")?,
+            member("recordId")?,
+            member("createdAt")?,
+        )
     }
 
-    fn new(record_id: &str, created_at: &str) -> Result<Self, BRegOccurrenceError> {
+    fn new(
+        record_type: &str,
+        record_id: &str,
+        created_at: &str,
+    ) -> Result<Self, BRegOccurrenceError> {
         if OffsetDateTime::parse(created_at, &Rfc3339).is_err() {
             return Err(wrong_evidence(
                 "the creation time is not an RFC 3339 timestamp",
             ));
         }
         Ok(Self {
+            record_type: record_type.to_owned(),
             record_id: record_id.to_owned(),
             created_at: created_at.to_owned(),
         })
+    }
+
+    #[must_use]
+    pub fn record_type_identifier(&self) -> &str {
+        &self.record_type
     }
 
     #[must_use]
@@ -620,6 +643,7 @@ fn require_creation_revision(revision: &str) -> Result<(), BRegOccurrenceError> 
 impl Serialize for BRegCreationRevision {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         serde_json::json!({
+            "recordType": self.record_type,
             "recordId": self.record_id,
             "revision": CREATION_REVISION,
             "createdAt": self.created_at,
@@ -961,7 +985,10 @@ fn build_view(
         ));
     }
     let recorded_at = match creation_revision {
-        Some(creation) if creation.record_id != record.record_id => {
+        Some(creation)
+            if creation.record_type != record.record_type
+                || creation.record_id != record.record_id =>
+        {
             return Err(wrong_evidence(
                 "the creation revision belongs to another record",
             ));

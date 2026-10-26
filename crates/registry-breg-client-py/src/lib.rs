@@ -1820,8 +1820,9 @@ impl BaseRegistryClient {
         raw_value(py, &value.value, &value.metadata)
     }
 
-    /// The first revision of one record as `{recordId, revision, createdAt}`,
-    /// or `None` when the caller may not read it.
+    /// The first revision of one record as
+    /// `{recordType, recordId, revision, createdAt}`, or `None` when the caller
+    /// may not read it.
     #[pyo3(signature = (entity_route, record_identifier, *, access_profile=None))]
     fn occurrence_creation_revision<'py>(
         &self,
