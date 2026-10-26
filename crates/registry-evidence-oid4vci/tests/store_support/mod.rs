@@ -303,6 +303,15 @@ pub mod postgres {
         pool_over(config)
     }
 
+    /// A pool of its own that signs in with `password` rather than the test
+    /// server's.
+    #[must_use]
+    pub fn pool_with_password(password: &str) -> Pool {
+        let mut config = config();
+        config.password(password);
+        pool_over(config)
+    }
+
     fn pool_over(config: tokio_postgres::Config) -> Pool {
         let manager = Manager::from_config(
             config,
