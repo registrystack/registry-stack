@@ -32,6 +32,7 @@ export COORDINATOR_SCHEDULINGCTL_BIN="$coordinator_test_target/debug/schedulingc
 cargo test --locked -p registry-coordinator --features postgres-test --lib \
 	--test postgres_state --test recovery_audit --test messaging_integration --test process_restart \
 	--test deployment_postgres --test review_wait_postgres \
-	--test external_wait_postgres --test standalone_review_postgres
+	--test external_wait_postgres --test external_command_postgres \
+	--test standalone_review_postgres
 cargo test --locked -p registry-coordinator --features postgres-test \
 	--test scheduling_event_native -- --ignored --nocapture
