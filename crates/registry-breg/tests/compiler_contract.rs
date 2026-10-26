@@ -582,6 +582,272 @@ fn plural_projection_compiles_resolved_membership_and_manifest_resources() {
         .all(|relationship| relationship.name != "resident"));
 }
 
+fn cross_dataset_reference_project() -> Value {
+    json!({
+      "datasets":[{"id":"sources"},{"id":"targets"}],
+      "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+      "kind":"BRegProject",
+      "project":{
+        "id":"cross-dataset-reference",
+        "version":"1",
+        "defaultLanguage":"en",
+        "canonicalBaseIri":"https://cross-dataset-reference.example.test"
+      },
+      "manifestProjection":{
+        "accessProfile":"reader",
+        "classificationCeiling":"public",
+        "catalog":{
+          "baseUrl":"https://cross-dataset-reference.example.test",
+          "title":"Cross-dataset reference",
+          "publisher":{"id":"publisher","name":"Publisher"}
+        },
+        "publicService":{"id":"registry-service","title":"Registry service"},
+        "datasets":[
+          {"id":"sources","title":"Sources"},
+          {"id":"targets","title":"Targets"}
+        ],
+        "dataServices":[{
+          "id":"registry-api",
+          "title":"Registry API",
+          "endpointUrl":"https://cross-dataset-reference.example.test/v1",
+          "servesDatasets":["sources","targets"]
+        }]
+      },
+      "recordTypes":[
+        {
+          "id":"source",
+          "primaryDataset":"sources",
+          "route":"sources",
+          "mutationMode":"create-only",
+          "classification":"public",
+          "fields":[{
+            "id":"target",
+            "type":"reference",
+            "target":"target",
+            "classification":"public"
+          }]
+        },
+        {
+          "id":"target",
+          "primaryDataset":"targets",
+          "route":"targets",
+          "mutationMode":"create-only",
+          "classification":"public",
+          "fields":[{
+            "id":"label",
+            "type":"string",
+            "maximumLength":64,
+            "classification":"public"
+          }]
+        },
+        {
+          "id":"visible-target-member",
+          "primaryDataset":"targets",
+          "route":"visible-target-members",
+          "mutationMode":"create-only",
+          "classification":"public",
+          "fields":[{
+            "id":"label",
+            "type":"string",
+            "maximumLength":64,
+            "classification":"public"
+          }]
+        }
+      ],
+      "accessProfiles":[{
+        "id":"reader",
+        "principalClaim":"sub",
+        "requiredScopes":["registry.read"],
+        "permissions":{"records":[
+          {
+            "recordType":"source",
+            "operations":["get"],
+            "readableFields":["target"],
+            "rowBoundaries":"unrestricted"
+          },
+          {
+            "recordType":"target",
+            "operations":["get"],
+            "readableFields":["label"],
+            "rowBoundaries":"unrestricted"
+          },
+          {
+            "recordType":"visible-target-member",
+            "operations":["get"],
+            "readableFields":["label"],
+            "rowBoundaries":"unrestricted"
+          }
+        ]}
+      }]
+    })
+}
+
+fn compile_cross_dataset_reference(source: &Value) -> registry_breg::CompiledRegistry {
+    compile_json(&serde_json::to_vec(source).expect("fixture serializes"))
+        .unwrap_or_else(|failure| panic!("fixture compiles: {:?}", failure.diagnostics()))
+}
+
+#[test]
+fn manifest_projection_warns_when_an_admitted_cross_dataset_reference_is_omitted() {
+    let compiled = compile_cross_dataset_reference(&cross_dataset_reference_project());
+    let findings = compiled
+        .findings()
+        .iter()
+        .filter(|finding| {
+            finding.code == "breg.manifest-projection.cross-dataset-reference-omitted"
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(findings.len(), 1, "findings: {:?}", compiled.findings());
+    assert_eq!(findings[0].severity, DiagnosticSeverity::Finding);
+    assert_eq!(findings[0].path, "recordTypes[id=source].fields[id=target]");
+    assert!(findings[0].message.contains("different dataset"));
+    assert!(findings[0].message.contains("same projected dataset"));
+
+    let runtime_field = &compiled.entities()["source"].fields["target"];
+    assert!(matches!(
+        &runtime_field.field_type,
+        FieldTypeSource::Reference { target, .. } if target == "target"
+    ));
+    let artifact = compiled
+        .artifacts()
+        .get("generated/manifest/registry-manifest.json")
+        .expect("Manifest projection is generated");
+    let manifest: MetadataManifest =
+        serde_json::from_slice(&artifact.bytes).expect("Manifest projection parses");
+    let source = manifest
+        .datasets
+        .iter()
+        .find(|dataset| dataset.id == "sources")
+        .and_then(|dataset| {
+            dataset
+                .entities
+                .iter()
+                .find(|entity| entity.name == "source")
+        })
+        .expect("source endpoint is projected");
+    assert!(source.relationships.is_empty());
+}
+
+#[test]
+fn manifest_projection_cross_dataset_warning_never_reveals_concealed_members() {
+    let cases: [(&str, ProjectEdit); 9] = [
+        (
+            "profile",
+            Box::new(|source| {
+                source["manifestProjection"]["datasets"][1]["accessProfile"] =
+                    json!("other-reader");
+                source["accessProfiles"]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(json!({
+                      "id":"other-reader",
+                      "principalClaim":"sub",
+                      "requiredScopes":["other.read"],
+                      "permissions":{"records":[
+                        {
+                          "recordType":"target",
+                          "operations":["get"],
+                          "readableFields":["label"],
+                          "rowBoundaries":"unrestricted"
+                        },
+                        {
+                          "recordType":"visible-target-member",
+                          "operations":["get"],
+                          "readableFields":["label"],
+                          "rowBoundaries":"unrestricted"
+                        }
+                      ]}
+                    }));
+            }),
+        ),
+        (
+            "field classification",
+            Box::new(|source| {
+                source["recordTypes"][0]["fields"][0]["classification"] = json!("internal");
+            }),
+        ),
+        (
+            "field",
+            Box::new(|source| {
+                source["accessProfiles"][0]["permissions"]["records"][0]["readableFields"] =
+                    json!([]);
+            }),
+        ),
+        (
+            "target dataset",
+            Box::new(|source| {
+                source["manifestProjection"]["datasets"][1]["classificationCeiling"] =
+                    json!("internal");
+            }),
+        ),
+        (
+            "target endpoint classification",
+            Box::new(|source| {
+                source["recordTypes"][1]["classification"] = json!("internal");
+                source["recordTypes"][1]["fields"][0]["classification"] = json!("internal");
+            }),
+        ),
+        (
+            "source endpoint classification",
+            Box::new(|source| {
+                source["recordTypes"][0]["classification"] = json!("internal");
+                source["recordTypes"][0]["fields"][0]["classification"] = json!("internal");
+            }),
+        ),
+        (
+            "source dataset",
+            Box::new(|source| {
+                source["manifestProjection"]["datasets"][0]["classificationCeiling"] =
+                    json!("internal");
+            }),
+        ),
+        (
+            "source endpoint operations",
+            Box::new(|source| {
+                source["accessProfiles"][0]["permissions"]["records"][0]["operations"] =
+                    json!(["create"]);
+                source["accessProfiles"][0]["permissions"]["records"][0]["writableFields"] =
+                    json!(["target"]);
+            }),
+        ),
+        (
+            "target endpoint operations",
+            Box::new(|source| {
+                source["accessProfiles"][0]["permissions"]["records"][1]["operations"] =
+                    json!(["create"]);
+                source["accessProfiles"][0]["permissions"]["records"][1]["writableFields"] =
+                    json!(["label"]);
+            }),
+        ),
+    ];
+
+    for (name, edit) in cases {
+        let mut source = cross_dataset_reference_project();
+        edit(&mut source);
+        let compiled = compile_cross_dataset_reference(&source);
+        assert!(
+            compiled.findings().iter().all(|finding| finding.code
+                != "breg.manifest-projection.cross-dataset-reference-omitted"),
+            "{name} concealment produced a finding: {:?}",
+            compiled.findings()
+        );
+    }
+}
+
+#[test]
+fn manifest_projection_warns_across_narrower_datasets_in_one_publication_context() {
+    let mut source = cross_dataset_reference_project();
+    source["manifestProjection"]["classificationCeiling"] = json!("internal");
+    source["manifestProjection"]["datasets"][0]["classificationCeiling"] = json!("public");
+    source["manifestProjection"]["datasets"][1]["classificationCeiling"] = json!("internal");
+
+    let compiled = compile_cross_dataset_reference(&source);
+    assert!(compiled.findings().iter().any(|finding| {
+        finding.code == "breg.manifest-projection.cross-dataset-reference-omitted"
+            && finding.path == "recordTypes[id=source].fields[id=target]"
+    }));
+}
+
 #[test]
 fn manifest_projection_excludes_every_protected_resource_from_public_bytes() {
     let mut project = parse_project_json(
@@ -2743,6 +3009,10 @@ fn manifest_projection_filters_by_selected_profile_and_classification_ceiling() 
     .expect("project parses");
     let compiled =
         compile_project(&project, &[], CompileProfile::Authoring).expect("project compiles");
+    assert!(compiled
+        .findings()
+        .iter()
+        .all(|finding| finding.code != "breg.manifest-projection.cross-dataset-reference-omitted"));
     let artifact = compiled
         .artifacts()
         .get("generated/manifest/registry-manifest.json")

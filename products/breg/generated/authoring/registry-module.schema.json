@@ -2639,247 +2639,6 @@
         }
       ]
     },
-    "FieldTypeSource": {
-      "oneOf": [
-        {
-          "additionalProperties": false,
-          "properties": {
-            "type": {
-              "const": "boolean",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "maximumLength": {
-              "format": "uint32",
-              "maximum": 1000000,
-              "minimum": 1,
-              "type": "integer"
-            },
-            "minimumLength": {
-              "default": 0,
-              "format": "uint32",
-              "maximum": 1000000,
-              "minimum": 0,
-              "type": "integer"
-            },
-            "type": {
-              "const": "string",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type",
-            "maximumLength"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "maximumLength": {
-              "format": "uint32",
-              "maximum": 10000000,
-              "minimum": 1,
-              "type": "integer"
-            },
-            "type": {
-              "const": "text",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type",
-            "maximumLength"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "type": {
-              "const": "int64",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "maximum": {
-              "type": "string"
-            },
-            "minimum": {
-              "type": "string"
-            },
-            "precision": {
-              "format": "uint32",
-              "maximum": 38,
-              "minimum": 1,
-              "type": "integer"
-            },
-            "scale": {
-              "format": "uint32",
-              "maximum": 38,
-              "minimum": 0,
-              "type": "integer"
-            },
-            "type": {
-              "const": "decimal",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type",
-            "precision",
-            "scale"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "type": {
-              "const": "date",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "type": {
-              "const": "timestamp",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "type": {
-              "const": "uuid",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "type": {
-              "const": "vocabulary-code",
-              "type": "string"
-            },
-            "values": {
-              "default": [],
-              "items": {
-                "type": "string"
-              },
-              "type": "array"
-            },
-            "vocabulary": {
-              "type": "string"
-            }
-          },
-          "required": [
-            "type",
-            "vocabulary"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "onDelete": {
-              "$ref": "#/$defs/ReferenceDelete",
-              "default": "restrict"
-            },
-            "target": {
-              "type": "string"
-            },
-            "type": {
-              "const": "reference",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type",
-            "target"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "bbox": {
-              "$ref": "#/$defs/Crs84BboxSource"
-            },
-            "precision": {
-              "format": "uint32",
-              "maximum": 9,
-              "minimum": 0,
-              "type": "integer"
-            },
-            "type": {
-              "const": "crs84-point",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type",
-            "precision"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "maximumBytes": {
-              "format": "uint32",
-              "maximum": 1048576,
-              "minimum": 1,
-              "type": "integer"
-            },
-            "schema": {
-              "x-registry-foreign": "json-schema-2020-12"
-            },
-            "type": {
-              "const": "structured",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type",
-            "maximumBytes",
-            "schema"
-          ],
-          "type": "object"
-        }
-      ]
-    },
     "FunctionLimitsSource": {
       "additionalProperties": false,
       "properties": {
@@ -3832,6 +3591,179 @@
       ],
       "description": "The scopes a token must carry to select a profile: the keyword\n`unrestricted`, or a list of at least one scope."
     },
+    "ReusableValueTypeSource": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "boolean",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "maximumLength": {
+              "format": "uint32",
+              "maximum": 1000000,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "minimumLength": {
+              "default": 0,
+              "format": "uint32",
+              "maximum": 1000000,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": {
+              "const": "string",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "maximumLength"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "maximumLength": {
+              "format": "uint32",
+              "maximum": 10000000,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "type": {
+              "const": "text",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "maximumLength"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "int64",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "maximum": {
+              "type": "string"
+            },
+            "minimum": {
+              "type": "string"
+            },
+            "precision": {
+              "format": "uint32",
+              "maximum": 38,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "scale": {
+              "format": "uint32",
+              "maximum": 38,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": {
+              "const": "decimal",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "precision",
+            "scale"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "date",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "timestamp",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "uuid",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "vocabulary-code",
+              "type": "string"
+            },
+            "values": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "vocabulary": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "vocabulary"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "RowBoundaries": {
       "anyOf": [
         {
@@ -4396,7 +4328,7 @@
     },
     "valueTypes": {
       "additionalProperties": {
-        "$ref": "#/$defs/FieldTypeSource"
+        "$ref": "#/$defs/ReusableValueTypeSource"
       },
       "default": {},
       "propertyNames": {

@@ -111,9 +111,14 @@ every key with its type and bounds.
 
 Each [Record type](../../reference/glossary/#record-type) names its route, its dataset, and its
 fields. Every field declares its type, bounds, requiredness, and classification; `typeRef` reuses
-a type from `valueTypes`, and `apiName` sets the public property name. `mutationPolicy` here means
+scalar constraints from `valueTypes`, and `apiName` sets the public property name. In both projects
+and modules, declare reference, `crs84-point`, and structured types directly on each field or
+Action input instead of through `valueTypes`. `mutationPolicy` here means
 a facility changes only through a [Proposal](../../reference/glossary/#proposal), even for a
 caller whose profile grants `patch`.
+
+{/* Evidence: crates/registry-breg/src/authoring_integrity.rs, add_value_type_diagnostics();
+    crates/registry-breg/tests/value_type_consistency.rs. */}
 
 ## Grant access
 

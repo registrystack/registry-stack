@@ -255,6 +255,13 @@ pub fn compile_project_with_assets(
 
     validate_project_header(project, profile, &mut diagnostics, &mut findings);
     validate_native_definitions(project, &mut diagnostics);
+    for module in modules {
+        validate_local_value_types(
+            &module.value_types,
+            &format!("modules[id={}].valueTypes", module.id),
+            &mut diagnostics,
+        );
+    }
     let module_closure = validate_module_locks(
         project,
         modules,
@@ -454,6 +461,11 @@ pub fn compile_project_with_assets(
     }
     let ddl = generate_ddl_with_actions(&entities, &physical_names, &action_inventory);
     let manifest_projection = compile_manifest_projection(project, &entities);
+    if let Some(projection) = manifest_projection.as_ref() {
+        findings.extend(crate::manifest_adapter::cross_dataset_reference_findings(
+            projection, &entities,
+        ));
+    }
     let access_profile_displays = project
         .access_profiles
         .iter()
@@ -8849,24 +8861,7 @@ fn validate_native_definitions(project: &RegistryProject, errors: &mut Vec<Diagn
         }
     }
     let mut functions = BTreeSet::new();
-    for (id, field_type) in &project.value_types {
-        validate_id(id, "valueTypes", errors);
-        if matches!(
-            field_type,
-            FieldTypeSource::Reference { .. }
-                | FieldTypeSource::Structured { .. }
-                | FieldTypeSource::Crs84Point { .. }
-        ) {
-            errors.push(Diagnostic::error(
-                "breg.value-type.scalar-required",
-                "valueTypes",
-                "local value types declare reusable scalar constraints",
-            ));
-        }
-        if !matches!(field_type, FieldTypeSource::VocabularyCode { .. }) {
-            validate_field_type_bounds(field_type, &format!("valueTypes.{id}"), errors);
-        }
-    }
+    validate_local_value_types(&project.value_types, "valueTypes", errors);
     for function in &project.functions {
         validate_id(&function.id, "functions[].id", errors);
         if !functions.insert(&function.id)
@@ -8904,6 +8899,31 @@ fn validate_native_definitions(project: &RegistryProject, errors: &mut Vec<Diagn
                     "Proposal grants must name a proposal-mode Action",
                 ));
             }
+        }
+    }
+}
+
+fn validate_local_value_types(
+    value_types: &BTreeMap<String, FieldTypeSource>,
+    path: &str,
+    errors: &mut Vec<Diagnostic>,
+) {
+    for (id, field_type) in value_types {
+        validate_id(id, path, errors);
+        if matches!(
+            field_type,
+            FieldTypeSource::Reference { .. }
+                | FieldTypeSource::Structured { .. }
+                | FieldTypeSource::Crs84Point { .. }
+        ) {
+            errors.push(Diagnostic::error(
+                "breg.value-type.scalar-required",
+                format!("{path}.{id}"),
+                "local value types declare reusable scalar constraints",
+            ));
+        }
+        if !matches!(field_type, FieldTypeSource::VocabularyCode { .. }) {
+            validate_field_type_bounds(field_type, &format!("{path}.{id}"), errors);
         }
     }
 }

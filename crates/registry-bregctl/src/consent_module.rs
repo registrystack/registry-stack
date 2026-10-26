@@ -33,7 +33,7 @@ use serde_json::{json, Value};
 use crate::safe_path::{SafeDir, SafePathError};
 use crate::{
     artifact_report, canonicalize_project_path, capture_resolved_project_source,
-    compile_captured_project, compiler_findings, diagnostic, first_diagnostic,
+    compile_captured_project, diagnostic, first_diagnostic, positioned_compiler_findings,
     render_project_module_locks, tool_diagnostic, validate_project_directory,
     write_project_registry, yaml_string, CapturedModuleSource, CapturedProjectSource,
     DiagnosticArtifact, FailureReport, ProfileArg, SuccessReport, SuggestedAction,
@@ -164,7 +164,7 @@ pub(crate) fn add_consent_module(
         revision: compiles.then(|| compiled.revision().to_owned()),
         registry_revision: None,
         package_digest: None,
-        findings: compiler_findings(&compiled),
+        findings: positioned_compiler_findings(&compiled, &candidate),
         artifacts: vec![
             artifact_report(
                 &format!("modules/{}/{MODULE_FILE}", plan.module_id),
