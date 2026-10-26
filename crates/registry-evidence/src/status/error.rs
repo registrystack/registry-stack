@@ -26,7 +26,8 @@ pub enum StatusError {
     /// PostgreSQL refused or failed a statement.
     #[error("the status ledger database failed ({0})")]
     Database(SqlState),
-    /// The issuance transaction's deadline passed; it was rolled back.
+    /// The issuance transaction's deadline passed. It may have committed or
+    /// rolled back; the signed credentials must not be issued either way.
     #[error("the signing transaction deadline passed")]
     DeadlineExceeded,
     /// Repeated random draws found no unallocated index.
