@@ -1069,6 +1069,149 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
                         ],
                     )
 
+    def test_release_pinned_rstack_smoke_reuses_custom_installation_paths(
+        self,
+    ) -> None:
+        _, document = workflow("release-candidate.yml")
+        smoke = step_run(
+            document,
+            "assemble",
+            "Smoke release-pinned rstack installation from verified local assets",
+        )
+        post_install = (
+            'set -euo pipefail\nversion="0.44.0"\n'
+            'destination="${RUNNER_TEMP}/rstack-install-smoke"\n'
+            + 'test -L '
+            + smoke.split("test -L ", 1)[1]
+        )
+
+        with tempfile.TemporaryDirectory(
+            prefix="candidate-rstack-smoke-"
+        ) as temporary_directory:
+            root = Path(temporary_directory)
+            runner_temp = root / "runner temp"
+            destination = runner_temp / "rstack-install-smoke"
+            bin_dir = destination / "bin"
+            install_root = destination / "lib"
+            stub_dir = root / "stub commands"
+            stub = stub_dir / "rstack"
+            invocation_log = root / "rstack arguments"
+            isolated_home = root / "isolated home"
+            bin_dir.mkdir(parents=True)
+            install_root.mkdir(parents=True)
+            stub_dir.mkdir(parents=True)
+            isolated_home.mkdir(parents=True)
+            stub.write_text(
+                "#!/usr/bin/env bash\n"
+                "set -euo pipefail\n"
+                'printf "%s\\037" "$@" >> "${CAPTURE_ARGS:?}"\n'
+                'printf "\\n" >> "${CAPTURE_ARGS:?}"\n'
+                'install_root="${HOME}/.local/lib/registrystack"\n'
+                'bin_dir="${HOME}/.local/bin"\n'
+                'arguments=("$@")\n'
+                "command=()\n"
+                'for ((index = 0; index < ${#arguments[@]}; index++)); do\n'
+                '  case "${arguments[index]}" in\n'
+                "    --install-root)\n"
+                "      ((index += 1))\n"
+                '      install_root="${arguments[index]}"\n'
+                "      ;;\n"
+                "    --bin-dir)\n"
+                "      ((index += 1))\n"
+                '      bin_dir="${arguments[index]}"\n'
+                "      ;;\n"
+                "    --format)\n"
+                "      ((index += 1))\n"
+                "      ;;\n"
+                "    *)\n"
+                '      command+=("${arguments[index]}")\n'
+                "      ;;\n"
+                "  esac\n"
+                "done\n"
+                "selected=false\n"
+                'if [[ "${install_root}" == "${EXPECTED_INSTALL_ROOT:?}" '
+                '&& "${bin_dir}" == "${EXPECTED_BIN_DIR:?}" ]]; then\n'
+                "  selected=true\n"
+                "fi\n"
+                'case "${command[*]}" in\n'
+                '  "--version")\n'
+                "    printf 'rstack 0.44.0\\n'\n"
+                "    ;;\n"
+                '  "components list")\n'
+                '    if [[ "${selected}" == true ]]; then\n'
+                "      printf '%s\\n' "
+                "'{\"schema_version\":\"registry.rstack.components.v1\","
+                "\"components\":[{\"name\":\"breg\",\"installed\":true},"
+                "{\"name\":\"evidence\",\"installed\":true}]}'\n"
+                "    else\n"
+                "      printf '%s\\n' "
+                "'{\"schema_version\":\"registry.rstack.components.v1\","
+                "\"components\":[{\"name\":\"breg\",\"installed\":false},"
+                "{\"name\":\"evidence\",\"installed\":false}]}'\n"
+                "    fi\n"
+                "    ;;\n"
+                '  "breg --version")\n'
+                '    [[ "${selected}" == true ]]\n'
+                "    printf 'bregctl 0.44.0\\n'\n"
+                "    ;;\n"
+                '  "evidence --version")\n'
+                '    [[ "${selected}" == true ]]\n'
+                "    printf 'evidencectl 0.44.0\\n'\n"
+                "    ;;\n"
+                "  *)\n"
+                "    exit 2\n"
+                "    ;;\n"
+                "esac\n",
+                encoding="utf-8",
+            )
+            stub.chmod(0o755)
+            (bin_dir / "rstack").symlink_to(stub)
+            environment = {
+                **os.environ,
+                "CAPTURE_ARGS": str(invocation_log),
+                "EXPECTED_BIN_DIR": str(bin_dir),
+                "EXPECTED_INSTALL_ROOT": str(install_root),
+                "HOME": str(isolated_home),
+                "RUNNER_TEMP": str(runner_temp),
+            }
+            result = subprocess.run(
+                ["/bin/bash", "--noprofile", "--norc"],
+                input=post_install,
+                cwd=root,
+                env=environment,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            invocations = [
+                [argument for argument in line.split("\x1f") if argument]
+                for line in invocation_log.read_text(encoding="utf-8").splitlines()
+            ]
+            command = [
+                "--bin-dir",
+                str(bin_dir),
+                "--install-root",
+                str(install_root),
+            ]
+            self.assertEqual(
+                result.returncode,
+                0,
+                f"stdout={result.stdout!r} stderr={result.stderr!r} "
+                f"invocations={invocations!r}",
+            )
+            self.assertEqual(result.stdout, "")
+            self.assertEqual(result.stderr, "")
+            self.assertEqual(
+                invocations,
+                [
+                    [*command, "--version"],
+                    [*command, "components", "list", "--format", "json"],
+                    [*command, "components", "list", "--format", "json"],
+                    [*command, "breg", "--version"],
+                    [*command, "evidence", "--version"],
+                ],
+            )
+
     def test_release_embeds_evidencectl_tag_and_publishes_latest_alias(self) -> None:
         _, document = workflow("release-candidate.yml")
         assemble = step_run(

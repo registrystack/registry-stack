@@ -2463,15 +2463,18 @@ jobs:
             breg evidence
           test -L "${destination}/bin/rstack"
           test "$(find "${destination}/bin" -mindepth 1 -maxdepth 1 | wc -l)" -eq 1
-          test "$("${destination}/bin/rstack" --version)" = "rstack ${version}"
-          "${destination}/bin/rstack" components list --format json \
+          rstack=("${destination}/bin/rstack"
+            --bin-dir "${destination}/bin"
+            --install-root "${destination}/lib")
+          test "$("${rstack[@]}" --version)" = "rstack ${version}"
+          "${rstack[@]}" components list --format json \
             | jq -e '.components | any(.name == "breg" and .installed == true)' \
             >/dev/null
-          "${destination}/bin/rstack" components list --format json \
+          "${rstack[@]}" components list --format json \
             | jq -e '.components | any(.name == "evidence" and .installed == true)' \
             >/dev/null
-          test "$("${destination}/bin/rstack" breg --version)" = "bregctl ${version}"
-          test "$("${destination}/bin/rstack" evidence --version)" = "evidencectl ${version}"
+          test "$("${rstack[@]}" breg --version)" = "bregctl ${version}"
+          test "$("${rstack[@]}" evidence --version)" = "evidencectl ${version}"
 
       - name: Upload one candidate manifest and bundle
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
