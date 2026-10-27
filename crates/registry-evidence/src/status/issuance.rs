@@ -538,10 +538,22 @@ async fn reserve(
         i32::try_from(count).map_err(|_| StatusError::BatchTooLarge { requested: count })?;
     let maximum_age = i64::try_from(ledger.list_policy.maximum_age().as_millis())
         .map_err(|_| StatusError::Configuration("the status list maximum age is too long"))?;
-    if let Some(reserved) = reserve_open(ledger, client, count, maximum_age).await? {
+    // Its own short transaction, pinned at READ COMMITTED so concurrent
+    // reservations on the shared open list wait for the row lock rather than
+    // fail a snapshot check, and committed before signing so the lock is never
+    // held across it. It commits even when it reserves nothing: a statement
+    // that skipped a row it had waited on still holds that row's lock, which
+    // must not be held while the rotation lock is awaited. A failure discards
+    // the connection, which rolls it back.
+    client
+        .batch_execute("BEGIN ISOLATION LEVEL READ COMMITTED")
+        .await
+        .map_err(failed)?;
+    let open = reserve_open(ledger, client, count, maximum_age).await?;
+    client.batch_execute("COMMIT").await.map_err(failed)?;
+    if let Some(reserved) = open {
         return Ok(reserved);
     }
-    // A failure here discards the connection, which rolls the rotation back.
     client
         .batch_execute("BEGIN ISOLATION LEVEL READ COMMITTED")
         .await

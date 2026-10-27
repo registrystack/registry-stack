@@ -5,6 +5,9 @@
 //! and decides nothing about eligibility or policy. It never logs or returns a
 //! selector value, a record identifier, a raw holder key thumbprint, or an
 //! extract metadata value.
+//!
+//! Every ledger write runs in a transaction pinned at READ COMMITTED, whatever
+//! the server, role or database default isolation level is.
 
 mod apply;
 mod error;

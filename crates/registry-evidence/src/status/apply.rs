@@ -56,14 +56,21 @@ impl StatusLedger {
         pool: &ReservedPool,
         version: MappingVersion,
     ) -> Result<MappingRegistration, StatusError> {
-        let client = pool.client().await?;
-        let row = client
+        let mut client = pool.client().await?;
+        let transaction = client
+            .build_transaction()
+            .isolation_level(IsolationLevel::ReadCommitted)
+            .start()
+            .await
+            .map_err(|error| failed(&error))?;
+        let row = transaction
             .query_one(
                 &self.statements.register_mapping_version,
                 &[&version.column()],
             )
             .await
             .map_err(|error| failed(&error))?;
+        transaction.commit().await.map_err(|error| failed(&error))?;
         let highest = MappingVersion::from_column(row.get(0))?;
         if highest == version {
             Ok(MappingRegistration::Current)
