@@ -206,7 +206,8 @@ profiles. `registry-evidence-oid4vci` delivers Evidence credentials to a
 wallet over OID4VCI 1.0 Final; it never signs, never holds a holder private
 key, and no Evidence crate depends on it at runtime. The optional credential
 status module inside `registry-evidence` (`products/evidence/CONCEPT.md`
-section 15.9, approved and not implemented) follows these rules: it is the only
+section 15.9, approved; its ledger is library code the served runtime does not
+call yet) follows these rules: it is the only
 writer of its PostgreSQL ledger; allocation happens inside the signing
 transaction; nothing outside Evidence reads the ledger; hook intake and the
 operator endpoints are the only mutation surface; with status disabled there is

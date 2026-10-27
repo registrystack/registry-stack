@@ -2424,13 +2424,21 @@ presentation state.
 
 ### 15.9 Credential status
 
-Status: approved profile, not implemented. Nothing in this section is a
-Version 1 feature, and approval does not start implementation. Until the
-version 2 profile contracts it names are published and the runtime, the
-verifier, and every negative test of section 13 that it adds exist, the Version
-1 contracts and every statement this section amends continue to govern the
-shipped runtime. Implementation follows a plan written from this section, as
-section 18 requires.
+Status: approved profile, partly built as library code. Nothing in this
+section is a Version 1 feature. Three building blocks exist: the Token Status
+List codec and pure status check in `registry-evidence-verifier`, the status
+ledger module in `registry-evidence`, and a storage interface in
+`registry-evidence-oid4vci` with a PostgreSQL backend beside the process-local
+one. The served `evidence` runtime calls none of them, and the served
+`evidence-oid4vci` adapter keeps its process-local backend. No version 2
+contract is published, no configuration enables the status module or selects
+the PostgreSQL store, no credential carries `status`, and the deployed
+verifier still rejects `status`. Until the version 2 profile contracts it names
+are published and the runtime, the verifier, and every negative test of section
+13 that it adds exist, the Version 1 contracts and every statement this section
+amends continue to govern the shipped runtime. The plan section 18 requires is
+the credential status plan in `IMPLEMENTATION.md`, which lists what exists and
+what remains.
 
 This profile lets a deployment withdraw an SD-JWT VC credential it has issued.
 It adds an optional status module to the one `evidence` binary, the Token
