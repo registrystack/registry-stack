@@ -129,6 +129,10 @@ MESSAGING_PACKAGES = frozenset(SHARDS["messaging"])
 DOCUMENTS_PACKAGES = frozenset(SHARDS["documents"])
 # The Document Store PostgreSQL journey drives the real registry-render binary.
 DOCUMENTS_POSTGRES_PACKAGES = DOCUMENTS_PACKAGES | {"registry-render"}
+# The credential status ledger and the OID4VCI store run their PostgreSQL
+# suites in one job. A change to any package they depend on reaches them
+# through the affected closure.
+EVIDENCE_POSTGRES_PACKAGES = frozenset({"registry-evidence", "registry-evidence-oid4vci"})
 STACK_CLIENT_PACKAGES = frozenset(SHARDS["stack-client"])
 
 # The runtime configuration conformance gate reads the sources of the runtimes
@@ -1574,6 +1578,7 @@ def classify(
         "breg_contracts": breg_contracts,
         "evidence_contracts": bool(affected & EVIDENCE_PACKAGES),
         "evidence_assurance": evidence_assurance,
+        "evidence_postgres": bool(affected & EVIDENCE_POSTGRES_PACKAGES),
         "scheduling_contracts": bool(affected & SCHEDULING_PACKAGES),
         # The Casework task approval journey drives the stock issuer through
         # Evidence, BReg, and the Scheduling authorization probe, so it runs on

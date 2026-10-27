@@ -1175,6 +1175,33 @@ class GateInventoryTest(unittest.TestCase):
                 text = self.workflow.replace(snippet, "true # disabled", 1)
                 self.assertIn(gate, self.module.missing_gates(text))
 
+    def test_missing_evidence_postgres_workflow_gates_are_reported(self) -> None:
+        for snippet, gate in (
+            (
+                "evidence_postgres: ${{ steps.filter.outputs.evidence_postgres }}",
+                "Evidence PostgreSQL path filter",
+            ),
+            (
+                "evidence-postgres:\n    name: Evidence PostgreSQL status ledger and store",
+                "Evidence PostgreSQL gate",
+            ),
+            (
+                "          POSTGRES_DB: evidence",
+                "Evidence PostgreSQL 17 image pin",
+            ),
+            (
+                "cargo test --locked -p registry-evidence --features postgres-test --test status_ledger --test status_transitions --test status_privacy",
+                "Evidence credential status ledger PostgreSQL suites",
+            ),
+            (
+                "cargo test --locked -p registry-evidence-oid4vci --features postgres-test --test store_contract",
+                "Evidence OID4VCI store PostgreSQL suite",
+            ),
+        ):
+            with self.subTest(gate=gate):
+                text = self.workflow.replace(snippet, "true # disabled", 1)
+                self.assertIn(gate, self.module.missing_gates(text))
+
     def test_missing_documents_workflow_gates_are_reported(self) -> None:
         for snippet, gate in (
             (
