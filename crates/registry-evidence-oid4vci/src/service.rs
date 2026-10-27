@@ -3931,21 +3931,31 @@ mod tests {
             let access_token = access_token(&server).await;
             let before = captured.audit_entries().len();
 
-            let timed_out = server
+            let refused = server
                 .post(CREDENTIAL_PATH)
                 .add_header("authorization", format!("Bearer {access_token}"))
                 .json(&json!({"credential_configuration_id": CONFIGURATION_ID}))
                 .await;
-            assert_eq!(timed_out.status_code(), StatusCode::BAD_REQUEST, "{late:?}");
+            assert_eq!(refused.status_code(), StatusCode::BAD_REQUEST, "{late:?}");
+            assert_eq!(
+                refused.json::<Value>()["error"],
+                json!("invalid_credential_request"),
+                "{late:?}: the request is refused for its proofs, not as a stalled claim"
+            );
             assert!(issuer.requests().is_empty());
 
             let entries = captured.audit_entries();
             let delivery = &entries[before..];
-            assert!(
-                !delivery.is_empty(),
-                "{late:?}: the claimed exchange has no delivery audit record"
+            assert_eq!(
+                delivery.len(),
+                2,
+                "{late:?}: one delivery audit request and its terminal outcome: {delivery:?}"
             );
             assert_eq!(delivery[0]["record"]["outcome"], "attempted", "{late:?}");
+            assert_eq!(
+                delivery[1]["record"]["outcome"], "proof_refused",
+                "{late:?}"
+            );
         }
     }
 
