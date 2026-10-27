@@ -894,12 +894,10 @@ async fn credential(
         Err(error) => return store_response(&service, &error, Outcome::TokenClaimRefused).await,
     };
     service.metrics.record_outcome(Outcome::TokenClaimed);
-    let expired = service.store.sweep(service.now()).await;
-    service.metrics.record_cleanup(expired);
-    service
-        .metrics
-        .record_store_entries(service.store.maximum_keyspace_len().await);
 
+    // The token is spent, so the exchange owes a delivery record before
+    // anything else can outlast the request bound. Store bookkeeping follows
+    // off the request path: the periodic cleanup sweeps expired entries.
     let delivery_audit = match service
         .audit
         .begin_credential_delivery(prepared.exchange_id())
@@ -908,6 +906,7 @@ async fn credential(
         Ok(audit) => audit,
         Err(_) => return credential_audit_unavailable_response(),
     };
+    refresh_store_entries_in_background(&service);
 
     let Ok(body) = std::str::from_utf8(&body) else {
         service.metrics.record_outcome(Outcome::ProofRefused);
@@ -3690,6 +3689,10 @@ mod tests {
         Redemption,
         Claim,
         Count,
+        /// The sweep that used to follow a claim.
+        Sweep,
+        /// The first count taken after a claim has spent a token.
+        CountAfterClaim,
     }
 
     /// A store that does what it is asked and answers late once, at one place,
@@ -3700,6 +3703,7 @@ mod tests {
         inner: Box<dyn Store>,
         late: Late,
         answered_late: std::sync::atomic::AtomicBool,
+        claimed: std::sync::atomic::AtomicBool,
     }
 
     /// Longer than [`LATE_STORE_TIMEOUT`], so the request always times out
@@ -3786,12 +3790,15 @@ mod tests {
                 .inner
                 .claim_access_token(access_token, generation, now)
                 .await;
+            self.claimed.store(true, Ordering::SeqCst);
             self.answer_late(Late::Claim).await;
             claimed
         }
 
         async fn sweep(&self, now: i64) -> usize {
-            self.inner.sweep(now).await
+            let swept = self.inner.sweep(now).await;
+            self.answer_late(Late::Sweep).await;
+            swept
         }
 
         async fn len(&self) -> usize {
@@ -3801,6 +3808,9 @@ mod tests {
         async fn maximum_keyspace_len(&self) -> Option<usize> {
             let held = self.inner.maximum_keyspace_len().await;
             self.answer_late(Late::Count).await;
+            if self.claimed.load(Ordering::SeqCst) {
+                self.answer_late(Late::CountAfterClaim).await;
+            }
             held
         }
     }
@@ -3808,6 +3818,13 @@ mod tests {
     /// A service over a [`LateStore`] whose requests time out well before the
     /// store answers.
     fn late_service(late: Late) -> (TestServer, Arc<DeliveryService>, Arc<RecordingIssuer>) {
+        late_service_with_audit(late, test_audit())
+    }
+
+    fn late_service_with_audit(
+        late: Late,
+        audit: Arc<DeliveryAudit>,
+    ) -> (TestServer, Arc<DeliveryService>, Arc<RecordingIssuer>) {
         let directory = canonical_tempdir();
         let mut config = load_deployment(directory.path());
         config.listener.request_timeout_milliseconds = LATE_STORE_TIMEOUT;
@@ -3815,8 +3832,9 @@ mod tests {
             inner: Box::new(OfferStore::new(&config.store)),
             late,
             answered_late: std::sync::atomic::AtomicBool::new(false),
+            claimed: std::sync::atomic::AtomicBool::new(false),
         });
-        let (service, issuer) = wired_service_over(config);
+        let (service, issuer) = wired_service_over_with_audit(config, audit);
         let service = Arc::new(
             Arc::into_inner(service)
                 .expect("the only handle on the service")
@@ -3898,6 +3916,37 @@ mod tests {
             .await;
         assert_eq!(retried.status_code(), StatusCode::UNAUTHORIZED);
         assert!(issuer.requests().is_empty());
+    }
+
+    /// Store bookkeeping after a claim is not allowed to outlast the request
+    /// bound before the delivery audit has begun: the wallet is told the
+    /// token is spent, so the exchange must have a delivery record, whatever
+    /// the outcome the request then reaches.
+    #[tokio::test]
+    async fn slow_bookkeeping_after_a_claim_still_leaves_a_delivery_audit_record() {
+        for late in [Late::Sweep, Late::CountAfterClaim] {
+            let captured = TestLogBuffer::default();
+            let (server, _service, issuer) =
+                late_service_with_audit(late, test_audit_with(Box::new(captured.clone())));
+            let access_token = access_token(&server).await;
+            let before = captured.audit_entries().len();
+
+            let timed_out = server
+                .post(CREDENTIAL_PATH)
+                .add_header("authorization", format!("Bearer {access_token}"))
+                .json(&json!({"credential_configuration_id": CONFIGURATION_ID}))
+                .await;
+            assert_eq!(timed_out.status_code(), StatusCode::BAD_REQUEST, "{late:?}");
+            assert!(issuer.requests().is_empty());
+
+            let entries = captured.audit_entries();
+            let delivery = &entries[before..];
+            assert!(
+                !delivery.is_empty(),
+                "{late:?}: the claimed exchange has no delivery audit record"
+            );
+            assert_eq!(delivery[0]["record"]["outcome"], "attempted", "{late:?}");
+        }
     }
 
     /// Counting what the store holds is bookkeeping. A slow count must not
