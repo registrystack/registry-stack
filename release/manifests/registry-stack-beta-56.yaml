@@ -1,0 +1,66 @@
+stack:
+  release: beta-56
+  version: 0.44.0
+  source_repo: registrystack/registry-stack
+  source_tag: v0.44.0
+
+artifacts:
+  registry-manifest: 0.44.0
+  evidence: 0.44.0
+  evidencectl: 0.44.0
+  evidence-oid4vci: 0.44.0
+  evidencectl-installer: 0.44.0
+  registry-docs: 0.44.0
+  discovery: 0.44.0
+  discoveryctl: 0.44.0
+  discovery-installer: 0.44.0
+  breg: 0.44.0
+  bregctl: 0.44.0
+  breg-mcp: 0.44.0
+  breg-mcp-installer: 0.44.0
+  breg-review: 0.44.0
+  breg-review-installer: 0.44.0
+  breg-installer: 0.44.0
+  casework: 0.44.0
+  caseworkctl: 0.44.0
+  casework-installer: 0.44.0
+  scheduling: 0.44.0
+  schedulingctl: 0.44.0
+  scheduling-installer: 0.44.0
+  messaging: 0.44.0
+  messagingctl: 0.44.0
+  messaging-installer: 0.44.0
+  registry-render: 0.44.0
+  registry-render-installer: 0.44.0
+  registry-manifest-installer: 0.44.0
+  coordinator: 0.44.0
+  coordinatorctl: 0.44.0
+  coordinator-installer: 0.44.0
+  rstack: 0.44.0
+  rstack-installer: 0.44.0
+  registry-client-node: 0.44.0
+  registry-client-python: 0.44.0
+
+identifier_catalog:
+  path: products/identifiers/generated/catalog.v1.json
+  sha256: 6069692453c446e525e7c680312db1369824bc8ec719b6404305f5b3d0a603fa
+  entry_count: 293
+
+external: {}
+
+warnings:
+  - code: fresh-state-baselines
+    classification: breaking-change
+    detail: BReg refuses the v0.43.0 attachment-verification schema, and Casework and Scheduling refuse ledgers below schema version 200. Retain previous databases for reconciliation and rollback, provision fresh databases, and build and apply matching v0.44.0 packages before cutover. See release/notes/v0.44.0.md.
+  - code: rstack-managed-installation
+    classification: breaking-change
+    detail: Managed local installations expose only rstack on PATH. Replace direct product-tool invocations with the corresponding rstack subcommand and select components during bootstrap or with rstack install. Independently deployed service entrypoints retain their names. See release/notes/v0.44.0.md.
+  - code: oid4vci-durable-audit
+    classification: breaking-change
+    detail: Evidence OID4VCI requires a durable audit destination and audit.hashKeyRef resolving to at least 32 random bytes. Configure the journal and key, back them up together, and check the runtime configuration before cutover. See release/notes/v0.44.0.md.
+  - code: command-and-client-parameters
+    classification: breaking-change
+    detail: Update renamed response-bound, timeout, and retry parameters in clients and use explicit command report formats and artifact destinations. Unknown or ambiguous configuration and singleton arguments are rejected. See release/notes/v0.44.0.md.
+  - code: product-authoring-and-wire-contracts
+    classification: breaking-change
+    detail: Rebuild BReg packages for scalar-only module value types, updated inspection formats, hook configuration and vocabulary, and attachment URL fields; update idempotency and audit consumers. Select Casework report v1alpha2 and Render namespaced problem codes. See release/notes/v0.44.0.md.

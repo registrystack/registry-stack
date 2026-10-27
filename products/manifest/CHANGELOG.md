@@ -7,6 +7,8 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.44.0] - 2026-10-27
+
 - `registry-manifest validate` and `validate-profiles` read an optional
   `check-acceptances.yaml`. An exact, reasoned acceptance keeps its warning
   visible while allowing `--deny-warnings` to pass; errors remain refusals.

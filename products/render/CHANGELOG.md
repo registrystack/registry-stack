@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.44.0 - 2026-10-27
+
 - `registry-render check --bundle` reads an optional
   `check-acceptances.yaml`. An exact, reasoned acceptance keeps its warning
   visible while allowing `--deny-warnings` to pass; errors remain refusals.
