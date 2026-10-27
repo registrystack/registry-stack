@@ -102,7 +102,9 @@ bounded source/extraction/derivation path using supplied synthetic responses.
 `explain` shows each definition's ordered source operations, preparation and
 extraction Functions, private fact names, derivation and output names, with
 connection identifiers and source limits. Sources not referenced by a definition
-are listed separately. The human report contains no source values or credentials.
+are listed separately. The JSON report's `assertionDefinitions` entries also
+carry each definition's `validitySeconds`, so a reader can compare credential
+lifetimes without compiling. The human report contains no source values or credentials.
 
 `evidencectl check --file <file>` checks one tooling file offline, including a
 client profile, local access client registration, reviewed contracts, development state or source-import document.
