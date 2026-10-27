@@ -11,7 +11,7 @@
 use std::str::FromStr;
 use std::time::Duration;
 
-use chrono::{DateTime, TimeDelta, Utc};
+use chrono::{DateTime, SubsecRound, TimeDelta, Utc};
 use deadpool_postgres::{Manager, ManagerConfig, Pool, RecyclingMethod, Runtime};
 use registry_evidence::config::SelectorProfile;
 use registry_evidence::status::{
@@ -304,8 +304,11 @@ pub async fn allocate_under(
     references
 }
 
+/// The current instant in whole microseconds, the precision PostgreSQL stores,
+/// so an instant read back from the ledger equals the one written. Linux clocks
+/// read nanoseconds; macOS clocks read microseconds.
 pub fn now() -> DateTime<Utc> {
-    Utc::now()
+    Utc::now().trunc_subsecs(6)
 }
 
 pub fn days(count: i64) -> TimeDelta {
