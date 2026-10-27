@@ -99,6 +99,8 @@ traceability:
   - {id: BREG-SEC-97, state: enforced, negativeId: BREG-NEG-97, negativeTest: {path: crates/registry-breg/tests/postgres_consent_examples.rs, name: person_registry_consent_journeys_run_through_the_authenticated_postgres_runner}}
   - {id: BREG-SEC-98, state: enforced, negativeId: BREG-NEG-98, negativeTest: {path: crates/registry-breg/tests/consent_access.rs, name: the_recipient_claim_binds_only_the_consent_feed}}
   - {id: BREG-SEC-99, state: enforced, negativeId: BREG-NEG-99, negativeTest: {path: crates/registry-breg/tests/consent_access.rs, name: every_recipient_client_must_be_an_allowed_client}}
+  # Action and Proposal grant proof: crates/registry-breg/tests/http_auth.rs::action_and_proposal_only_clients_are_checked_at_construction
+  # Offline runtime-config proof: crates/registry-bregctl/tests/cli.rs::check_refuses_unlisted_clients_on_action_and_proposal_only_profiles
   - {id: BREG-SEC-100, state: enforced, negativeId: BREG-NEG-100, negativeTest: {path: crates/registry-breg/tests/postgres_consent_access.rs, name: real_postgres_consent_successors_match_fresh_install_when_added_changed_and_removed}}
   - {id: BREG-SEC-101, state: enforced, negativeId: BREG-NEG-101, negativeTest: {path: crates/registry-breg/tests/postgres_consent_examples.rs, name: self_action_answers_an_unknown_subject_like_a_subject_its_link_does_not_cover}}
   - {id: BREG-SEC-102, state: enforced, negativeId: BREG-NEG-102, negativeTest: {path: crates/registry-breg/tests/postgres_ingestion_runs.rs, name: run_creation_opens_no_run_when_the_audit_writer_refuses_its_request_entry}}
