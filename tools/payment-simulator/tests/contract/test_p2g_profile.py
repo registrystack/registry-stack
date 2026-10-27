@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import copy
-from decimal import Decimal
 
 import httpx
 import pytest
@@ -15,7 +14,7 @@ from tests.contract.p2g_support import (
     submit_collection,
     wait_for_collection_payment_status,
 )
-from tests.contract.support import assert_problem, exact_json
+from tests.contract.support import assert_problem, contract_amount, exact_json
 from tests.fixtures import ContractTarget
 from tests.fixtures.lost_response import lost_response_relay
 from tests.fixtures.target import decimal_json
@@ -32,7 +31,7 @@ def test_paid_collection_core_is_portable(target: ContractTarget, ids) -> None:
     request_id = ids.value("pay", limit=12)
     bill_id = ids.value("b1", limit=10)
     rtp_id = _rtp_id(ids)
-    amount = Decimal("10.10")
+    amount = contract_amount(target, 1010)
     request = collection_request(
         target,
         request_id=request_id,
@@ -100,7 +99,7 @@ def test_paid_collection_separates_rtp_completion_from_payment(target: ContractT
     request_id = ids.value("step", limit=12)
     bill_id = ids.value("b2", limit=10)
     rtp_id = _rtp_id(ids, 1)
-    amount = Decimal("11.11")
+    amount = contract_amount(target, 1111)
     request = collection_request(
         target,
         request_id=request_id,
@@ -164,7 +163,7 @@ def test_nonpayment_collection_outcomes(
     request_id = ids.value(outcome[:3], limit=12)
     bill_id = ids.value("bill", limit=10)
     rtp_id = _rtp_id(ids)
-    amount = Decimal("20.25")
+    amount = contract_amount(target, 2025)
     request = collection_request(
         target,
         request_id=request_id,
@@ -217,7 +216,7 @@ def test_collection_replay_and_uniqueness_conflicts(target: ContractTarget, ids)
         request_id=request_id,
         rtp_id=rtp_id,
         bill_id=bill_id,
-        amount=Decimal("30.30"),
+        amount=contract_amount(target, 3030),
     )
 
     with target.client() as client:
@@ -234,7 +233,7 @@ def test_collection_replay_and_uniqueness_conflicts(target: ContractTarget, ids)
         assert replay == accepted
 
         changed = copy.deepcopy(request)
-        changed["billDetails"]["amount"] = Decimal("30.31")
+        changed["billDetails"]["amount"] = contract_amount(target, 3031)
         assert_problem(
             submit_collection(client, target, changed),
             409,
@@ -246,7 +245,7 @@ def test_collection_replay_and_uniqueness_conflicts(target: ContractTarget, ids)
             request_id=ids.value("r2", limit=12),
             rtp_id=rtp_id,
             bill_id=ids.value("b2", limit=10),
-            amount=Decimal("40.40"),
+            amount=contract_amount(target, 4040),
         )
         assert_problem(
             submit_collection(client, target, reused_rtp),
@@ -259,7 +258,7 @@ def test_collection_replay_and_uniqueness_conflicts(target: ContractTarget, ids)
             request_id=ids.value("r3", limit=12),
             rtp_id=_rtp_id(ids, 1),
             bill_id=bill_id,
-            amount=Decimal("50.50"),
+            amount=contract_amount(target, 5050),
         )
         assert_problem(
             submit_collection(client, target, reused_bill),
@@ -277,7 +276,7 @@ def test_collection_read_authentication_scope_and_not_found(target: ContractTarg
         request_id=request_id,
         rtp_id=rtp_id,
         bill_id=ids.value("bill", limit=10),
-        amount=Decimal("60.60"),
+        amount=contract_amount(target, 6060),
     )
 
     with target.client() as client:
@@ -374,7 +373,7 @@ def test_collection_lost_response_restart_replay_and_receipt_witness(
     request_id = ids.value("lost", limit=12)
     bill_id = ids.value("bill", limit=10)
     rtp_id = _rtp_id(ids)
-    amount = Decimal("70.70")
+    amount = contract_amount(target, 7070)
     request = collection_request(
         target,
         request_id=request_id,
@@ -419,7 +418,7 @@ def test_collection_lost_response_restart_replay_and_receipt_witness(
         transfer_request_id = recovered["transferRequestId"]
 
         changed = copy.deepcopy(request)
-        changed["billDetails"]["amount"] = Decimal("70.71")
+        changed["billDetails"]["amount"] = contract_amount(target, 7071)
         assert_problem(
             submit_collection(client, target, changed),
             409,

@@ -12,6 +12,8 @@ from tests.contract.support import (
     assert_problem,
     assert_row_identity,
     batch_page,
+    contract_amount,
+    equivalent_notation,
     exact_json,
     lookup,
     payment_instruction,
@@ -175,8 +177,8 @@ def test_all_success_and_stable_pagination(target: ContractTarget, ids) -> None:
         request_two = ids.value("i2", limit=16)
         correlation_id = ids.value("bat", limit=12)
         instructions = [
-            payment_instruction(request_one, payee_one, Decimal("100.00"), target),
-            payment_instruction(request_two, payee_two, Decimal("150.00"), target),
+            payment_instruction(request_one, payee_one, contract_amount(target, 10000), target),
+            payment_instruction(request_two, payee_two, contract_amount(target, 15000), target),
         ]
         accepted = submit(client, target, correlation_id, instructions)
         assert accepted.status_code == 202, accepted.text
@@ -191,7 +193,7 @@ def test_all_success_and_stable_pagination(target: ContractTarget, ids) -> None:
             by_request[request_one],
             request_id=request_one,
             batch_id=batch_id,
-            amount=Decimal("100.00"),
+            amount=contract_amount(target, 10000),
             address=address_one,
             currency=target.settings.currency,
         )
@@ -199,7 +201,7 @@ def test_all_success_and_stable_pagination(target: ContractTarget, ids) -> None:
             by_request[request_two],
             request_id=request_two,
             batch_id=batch_id,
-            amount=Decimal("150.00"),
+            amount=contract_amount(target, 15000),
             address=address_two,
             currency=target.settings.currency,
         )
@@ -214,7 +216,7 @@ def test_all_success_and_stable_pagination(target: ContractTarget, ids) -> None:
         final = wait_for_terminal_rows(client, target, batch_id, page_size=1)
         assert all(row["status"] == "ACCC" for row in final)
         assert all("completedAt" in row for row in final)
-        assert sum((row["amount"] for row in final), Decimal("0")) == Decimal("250.00")
+        assert sum((row["amount"] for row in final), Decimal("0")) == contract_amount(target, 25000)
         assert {
             row["requestId"]: (row["transactionId"], row["amount"]) for row in final
         } == stable_identity
@@ -233,8 +235,8 @@ def test_partial_outcome_preserves_both_instructions(target: ContractTarget, ids
         payee_one, payee_two, _, _ = _prepare_two_mappings(client, target, ids)
         correlation_id = ids.value("bat", limit=12)
         instructions = [
-            payment_instruction(request_one, payee_one, Decimal("100.00"), target),
-            payment_instruction(request_two, payee_two, Decimal("150.00"), target),
+            payment_instruction(request_one, payee_one, contract_amount(target, 10000), target),
+            payment_instruction(request_two, payee_two, contract_amount(target, 15000), target),
         ]
         accepted = submit(client, target, correlation_id, instructions)
         assert accepted.status_code == 202, accepted.text
@@ -244,9 +246,9 @@ def test_partial_outcome_preserves_both_instructions(target: ContractTarget, ids
         assert {row["requestId"] for row in final} == {request_one, request_two}
         by_request = {row["requestId"]: row for row in final}
         assert by_request[request_one]["status"] == "ACCC"
-        assert by_request[request_one]["amount"] == Decimal("100.00")
+        assert by_request[request_one]["amount"] == contract_amount(target, 10000)
         assert by_request[request_two]["status"] == "RJCT"
-        assert by_request[request_two]["amount"] == Decimal("150.00")
+        assert by_request[request_two]["amount"] == contract_amount(target, 15000)
         assert by_request[request_two]["errorInformation"] == "account-rejected"
         replay = submit(client, target, correlation_id, instructions)
         assert replay.status_code == 202
@@ -267,16 +269,16 @@ def test_exact_decimal_amounts_and_equivalent_replay(target: ContractTarget, ids
         request_two = ids.value("i2", limit=16)
         correlation_id = ids.value("bat", limit=12)
         instructions = [
-            payment_instruction(request_one, payee_one, Decimal("0.10"), target),
-            payment_instruction(request_two, payee_two, Decimal("0.20"), target),
+            payment_instruction(request_one, payee_one, contract_amount(target, 10), target),
+            payment_instruction(request_two, payee_two, contract_amount(target, 20), target),
         ]
         accepted = submit(client, target, correlation_id, instructions)
         assert accepted.status_code == 202, accepted.text
         batch_id = decimal_json(accepted)["batchId"]
 
         equivalent = copy.deepcopy(instructions)
-        equivalent[0]["amount"] = Decimal("0.1")
-        equivalent[1]["amount"] = Decimal("0.2")
+        equivalent[0]["amount"] = equivalent_notation(target, contract_amount(target, 10))
+        equivalent[1]["amount"] = equivalent_notation(target, contract_amount(target, 20))
         replay = submit(client, target, correlation_id, equivalent)
         assert replay.status_code == 202, replay.text
         assert decimal_json(replay)["batchId"] == batch_id
@@ -284,10 +286,10 @@ def test_exact_decimal_amounts_and_equivalent_replay(target: ContractTarget, ids
         target.finish_processing("PAY-09")
         rows = wait_for_terminal_rows(client, target, batch_id, page_size=1)
         assert all(row["status"] == "ACCC" for row in rows)
-        assert sum((row["amount"] for row in rows), Decimal("0")) == Decimal("0.30")
+        assert sum((row["amount"] for row in rows), Decimal("0")) == contract_amount(target, 30)
         assert sorted(row["amount"] for row in rows) == [
-            Decimal("0.10"),
-            Decimal("0.20"),
+            contract_amount(target, 10),
+            contract_amount(target, 20),
         ]
 
 
@@ -317,7 +319,7 @@ def test_destination_is_frozen_at_acceptance(target: ContractTarget, ids) -> Non
             client,
             target,
             ids.value("bat1", limit=12),
-            [payment_instruction(first_request, payee, Decimal("1.00"), target)],
+            [payment_instruction(first_request, payee, contract_amount(target, 100), target)],
         )
         assert first.status_code == 202, first.text
         first_batch = decimal_json(first)["batchId"]
@@ -340,7 +342,7 @@ def test_destination_is_frozen_at_acceptance(target: ContractTarget, ids) -> Non
             client,
             target,
             ids.value("bat2", limit=12),
-            [payment_instruction(second_request, payee, Decimal("2.00"), target)],
+            [payment_instruction(second_request, payee, contract_amount(target, 200), target)],
         )
         assert second.status_code == 202, second.text
         second_batch = decimal_json(second)["batchId"]
@@ -359,7 +361,7 @@ def test_destination_is_frozen_at_acceptance(target: ContractTarget, ids) -> Non
     assert credit["batchId"] == first_batch
     assert credit["requestId"] == first_request
     assert credit["financialAddress"] == old_address
-    assert credit["amount"] == Decimal("1.00")
+    assert credit["amount"] == contract_amount(target, 100)
     assert credit["currency"] == target.settings.currency
 
 
@@ -439,8 +441,8 @@ def test_lost_response_restart_replay_and_effect_witness(target: ContractTarget,
     with target.client() as client:
         payee_one, payee_two, _, _ = _prepare_two_mappings(client, target, ids)
         instructions = [
-            payment_instruction(request_one, payee_one, Decimal("100.00"), target),
-            payment_instruction(request_two, payee_two, Decimal("150.00"), target),
+            payment_instruction(request_one, payee_one, contract_amount(target, 10000), target),
+            payment_instruction(request_two, payee_two, contract_amount(target, 15000), target),
         ]
         with lost_response_relay(target.base_url, "/batchtransactions?type=raw") as (
             relay_url,
@@ -472,7 +474,7 @@ def test_lost_response_restart_replay_and_effect_witness(target: ContractTarget,
         assert recovered_batch == hidden_batch
 
         changed = copy.deepcopy(instructions)
-        changed[0]["amount"] = Decimal("101.00")
+        changed[0]["amount"] = contract_amount(target, 10100)
         assert_problem(
             submit(client, target, correlation_id, changed),
             409,
@@ -483,7 +485,7 @@ def test_lost_response_restart_replay_and_effect_witness(target: ContractTarget,
         final = wait_for_terminal_rows(client, target, recovered_batch)
         assert {row["requestId"] for row in final} == {request_one, request_two}
         assert all(row["status"] == "ACCC" for row in final)
-        assert sum((row["amount"] for row in final), Decimal("0")) == Decimal("250.00")
+        assert sum((row["amount"] for row in final), Decimal("0")) == contract_amount(target, 25000)
 
     witness = target.inspect("REC-01/02", batch_id=recovered_batch)
     assert witness["batchCount"] == 1
