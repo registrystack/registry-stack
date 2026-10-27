@@ -194,14 +194,7 @@ Coordinator integration needs evidence that it:
 6. Replaces only the connection/credential/adapter binding; the workflow
    definition and command/outcome schemas stay unchanged.
 
-The [native Coordinator target](../../products/coordinator/README.md#verify-a-change)
-runs the authored workflows through real HTTP and durable PostgreSQL state. It proves original
-G2P replay after response loss, simulator process restart and Coordinator reconstruction, one
-simulated credit, and refusal of incorrectly correlated P2G paid evidence. Authored scenarios
-cover aggregate outcomes, uncertainty and bounded observation expiry. This native fixture advances
-its own observation clock; real elapsed floors, Coordinator OS-process restart, notification
-wake-ups and a second provider are not established by that target. The simulator adds no
-Coordinator-specific behavior to make it pass.
+The simulator adds no Coordinator-specific behavior to any target.
 
 ## Compatibility report
 

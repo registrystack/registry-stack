@@ -38,8 +38,7 @@ against; production operations and assurance are outside this delivery.
 
 The P2G increment below shares these exclusions unless explicitly stated.
 
-- Coordinator mutation operations or programme integration. Those live separately in the
-  [Coordinator product](../../products/coordinator/README.md#configured-http-operations);
+- Coordinator mutation operations or programme integration. Those live in the Coordinator product;
   they do not add runtime imports or payment-specific behavior to this simulator.
 - Real payment rails or a real-provider compatibility claim.
 - Callback delivery, receiver credentials, and the callback test matrix.
