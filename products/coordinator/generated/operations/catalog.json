@@ -221,7 +221,7 @@
           "properties": {
             "domainData": {
               "additionalProperties": true,
-              "description": "Project-defined record data. The registry project's entity schema owns these members, so check accepts any path beneath domainData and test and the runtime decide.",
+              "description": "Project-defined record data. An imported BReg record schema limits member names to the record type's API names. Fields may be hidden by access policy; value types remain open. Without a record import, any member name is accepted.",
               "type": "object"
             },
             "recordIdentifier": {

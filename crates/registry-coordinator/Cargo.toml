@@ -64,6 +64,11 @@ path = "tests/recovery_audit.rs"
 required-features = ["postgres-test"]
 
 [[test]]
+name = "read_lease_recovery"
+path = "tests/read_lease_recovery.rs"
+required-features = ["postgres-test"]
+
+[[test]]
 name = "process_restart"
 path = "tests/process_restart.rs"
 required-features = ["postgres-test"]

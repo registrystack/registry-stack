@@ -205,6 +205,50 @@ Standalone Casework review is independent of BReg. Its submission includes an ex
 subject, and submission digest. Casework owns reviewer authority and outcomes. Review completion
 creates no registry effect. A later BReg or Messaging call requires its own authority.
 
+## Record and template contracts
+
+Import a BReg record schema when you want scenarios to reject field names the record type
+does not serve. Import Messaging's template export when you want computed message data checked
+against the template before deployment. Generate both from the owning projects, then copy the
+selected artifacts into your Coordinator project:
+
+```sh
+bregctl generate schemas ./source-registry --output ./record-contracts
+messagingctl generate templates --project ./notices --output ./notice-contracts.json
+```
+
+Reference the copied files in `workflow.yaml`:
+
+```yaml
+contracts:
+  application-record:
+    type: breg
+    source: generated/application.schema.json
+  notices:
+    type: messaging
+    source: generated/notice-contracts.json
+operations:
+  read-application:
+    uses: breg.read-record/v1
+    connection: applications
+    record: {contract: application-record}
+  send-notice:
+    uses: messaging.submit-message/v1
+    connection: notices
+    template: {contract: notices, id: application-approved, version: '1'}
+```
+
+The record import limits `domainData` to the schema's API names. It allows omitted fields and
+leaves value types open, because current BReg access policy may hide fields. The template import
+fixes the template ID, version, locales and data schema; that alias accepts template submissions
+only. `coordinatorctl test` rejects misspelled fake record members with `scenario.reply-output`
+and invalid computed template data with `scenario.call-input`. Aliases without `record` or
+`template` retain their general contracts. Regenerate imports when the owning project changes.
+
+These imports grant no access. Messaging still checks the connection's caller, sender profile
+and template at request time. The [earlier appointment alert](examples/earlier-appointment-alerts/README.md)
+shows both imports alongside their owning projects.
+
 ## External commands
 
 `external.command/v1` sends one POST to a provider the operator configured. Workflow data

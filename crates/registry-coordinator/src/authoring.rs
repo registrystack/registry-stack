@@ -109,6 +109,7 @@ struct ImportedContract {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 enum ContractProduct {
     Breg,
+    Messaging,
 }
 
 #[derive(Debug, Deserialize)]
@@ -124,6 +125,26 @@ struct ActionReference {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+struct RecordReference {
+    /// The local generated BReg record schema import.
+    contract: LocalId,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+struct TemplateReference {
+    /// The local generated Messaging template contract import.
+    contract: LocalId,
+    /// The exact template ID in the imported contract.
+    id: LocalId,
+    /// The exact template version label, quoted when numeric.
+    version: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 struct AuthoredOperation {
     /// One exact versioned host catalog contract.
     #[cfg_attr(feature = "schema", schemars(with = "Operation"))]
@@ -133,6 +154,13 @@ struct AuthoredOperation {
     /// An exact BReg Action specialization from one generated contract import.
     #[serde(default)]
     action: Option<ActionReference>,
+    /// Limit BReg read replies to the imported record schema's API field names.
+    /// Fields may be hidden by access policy, and their value types remain open.
+    #[serde(default)]
+    record: Option<RecordReference>,
+    /// Fix a Messaging template version, its locales and its data schema.
+    #[serde(default)]
+    template: Option<TemplateReference>,
     /// An optional typed response specialization for the bounded external GET
     /// or external command Operation.
     #[serde(default)]
@@ -903,7 +931,6 @@ fn compile(project: CoordinatorProject, path: &Path) -> Result<Workflow> {
     let root = path.parent().unwrap_or_else(|| Path::new("."));
     let mut imported = BTreeMap::new();
     for (id, contract) in project.contracts {
-        let _product = contract.product;
         let asset = asset_path(root, &contract.source)
             .map_err(|error| error.at("workflow.yaml", format!("/contracts/{id}/source")))?;
         let bytes = definition::read_bytes(&asset, 1_048_576)
@@ -920,6 +947,21 @@ fn compile(project: CoordinatorProject, path: &Path) -> Result<Workflow> {
                 "the generated contract must be strict JSON",
             )
         })?;
+        let matches_product = match contract.product {
+            ContractProduct::Breg => {
+                crate::contracts::is_breg_record_schema(&value)
+                    || (value.get("apiVersion").and_then(Value::as_str)
+                        == Some("id.registrystack.org/formats/breg/action-contracts/v1")
+                        && value.get("kind").and_then(Value::as_str) == Some("BRegActionContracts"))
+            }
+            ContractProduct::Messaging => crate::contracts::is_messaging_template_export(&value),
+        };
+        if !matches_product {
+            return Err(CoordinatorError::new(
+                "coordinator.operation.contract-invalid",
+                "select a generated contract from the declared product: a BReg Action export or record schema, or a Messaging template export",
+            ).at("workflow.yaml", format!("/contracts/{id}/source")));
+        }
         imported.insert(id.into_string(), value);
     }
     let raw_types = project
@@ -967,15 +1009,62 @@ fn compile(project: CoordinatorProject, path: &Path) -> Result<Workflow> {
                 }
             }
         }
+        for (selected, expected, field) in [
+            (
+                operation.record.as_ref().map(|value| &value.contract),
+                Operation::ReadRecord,
+                "record",
+            ),
+            (
+                operation.template.as_ref().map(|value| &value.contract),
+                Operation::SubmitMessage,
+                "template",
+            ),
+        ] {
+            if let Some(selected) = selected {
+                if uses != expected {
+                    return Err(schema_error(
+                        format!("/operations/{id}/{field}"),
+                        &format!(
+                            "only {} accepts a {field} contract selection",
+                            expected.as_str()
+                        ),
+                    ));
+                }
+                if !imported.contains_key(selected.as_str()) {
+                    return Err(schema_error(
+                        format!("/operations/{id}/{field}/contract"),
+                        "select a declared local contract import",
+                    ));
+                }
+            }
+        }
         let contract_field = operation.action.as_ref().map_or_else(
             || format!("/operations/{id}/action"),
             |action| format!("/contracts/{}/source", action.contract),
         );
+        let contract_field = if operation.record.is_some() {
+            format!("/operations/{id}/record")
+        } else if operation.template.is_some() {
+            format!("/operations/{id}/template")
+        } else {
+            contract_field
+        };
         let action = operation
             .action
             .map(|action| json!({"contract":action.contract.as_str(),"id":action.id.as_str()}));
-        let contract = crate::contracts::resolve_operation(uses, action.as_ref(), &imported)
-            .map_err(|error| error.at("workflow.yaml", contract_field))?;
+        let record = operation
+            .record
+            .map(|record| json!({"contract":record.contract.as_str()}));
+        let template = operation.template.map(|template| json!({"contract":template.contract.as_str(),"id":template.id.as_str(),"version":template.version}));
+        let contract = crate::contracts::resolve_operation(
+            uses,
+            action.as_ref(),
+            record.as_ref(),
+            template.as_ref(),
+            &imported,
+        )
+        .map_err(|error| error.at("workflow.yaml", contract_field))?;
         if operation.response_schema.is_some()
             && !matches!(uses, Operation::ExternalGet | Operation::ExternalCommand)
         {
@@ -1432,7 +1521,12 @@ fn reference_sites(document: &Document) -> BTreeMap<String, definition::SourceRe
                         {
                             Some(format!("/workflow/outcomes/{id}"))
                         }
-                        ("contract", Some(id)) if !schema && path.ends_with("/action") => {
+                        ("contract", Some(id))
+                            if !schema
+                                && ["/action", "/record", "/template"]
+                                    .iter()
+                                    .any(|suffix| path.ends_with(suffix)) =>
+                        {
                             Some(format!("/contracts/{id}"))
                         }
                         ("source", Some(asset))

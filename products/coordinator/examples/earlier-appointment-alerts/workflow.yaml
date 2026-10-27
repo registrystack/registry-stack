@@ -22,6 +22,12 @@ contracts:
   alerts:
     type: breg
     source: generated/alerts.contract.json
+  subscription-record:
+    type: breg
+    source: generated/alert-subscription.schema.json
+  notice-templates:
+    type: messaging
+    source: generated/notices.contract.json
 functions:
   source-route:
     runtime: rhai
@@ -109,6 +115,7 @@ operations:
   alerts-read-record:
     uses: breg.read-record/v1
     connection: alerts
+    record: {contract: subscription-record}
   alerts-claim:
     uses: breg.invoke-action/v1
     connection: alerts
@@ -130,6 +137,7 @@ operations:
   notices-submit-message:
     uses: messaging.submit-message/v1
     connection: notices
+    template: {contract: notice-templates, id: earlier-appointment, version: '1'}
 workflow:
   input: {typeRef: workflow-input}
   deadlineSeconds: 600

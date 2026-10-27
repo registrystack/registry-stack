@@ -1307,7 +1307,7 @@ fn render_human(cli: &Cli, value: &Value) -> String {
     }
 }
 
-/// One line per step in graph order from start, then the execution bounds.
+/// One line per step in graph order, the event triggers, then execution bounds.
 fn render_explain(value: &Value) -> String {
     let listed = |values: &Value| {
         values
@@ -1373,6 +1373,13 @@ fn render_explain(value: &Value) -> String {
             _ => format!("finish {}", text(&step["outcome"])),
         };
         out.push_str(&format!("  {}: {line}\n", text(&step["id"])));
+    }
+    for (id, trigger) in value["eventTriggers"].as_object().into_iter().flatten() {
+        out.push_str(&format!(
+            "Trigger {id}: {} {}\n",
+            text(&trigger["source"]),
+            text(&trigger["eventType"])
+        ));
     }
     let limits = value["limits"]
         .as_object()

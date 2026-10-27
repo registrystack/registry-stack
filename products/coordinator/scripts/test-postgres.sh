@@ -30,7 +30,8 @@ export COORDINATOR_MESSAGINGCTL_BIN="$coordinator_test_target/debug/messagingctl
 export COORDINATOR_SCHEDULING_BIN="$coordinator_test_target/debug/scheduling"
 export COORDINATOR_SCHEDULINGCTL_BIN="$coordinator_test_target/debug/schedulingctl"
 cargo test --locked -p registry-coordinator --features postgres-test --lib \
-	--test postgres_state --test recovery_audit --test messaging_integration --test process_restart \
+	--test postgres_state --test recovery_audit --test read_lease_recovery \
+	--test messaging_integration --test process_restart \
 	--test deployment_postgres --test review_wait_postgres \
 	--test external_wait_postgres --test external_command_postgres \
 	--test standalone_review_postgres
