@@ -268,17 +268,21 @@ def test_exact_decimal_amounts_and_equivalent_replay(target: ContractTarget, ids
         request_one = ids.value("i1", limit=16)
         request_two = ids.value("i2", limit=16)
         correlation_id = ids.value("bat", limit=12)
+        # Sub-unit amounts wherever the scale has a fractional digit: 0.10 and 0.20 at scale 2,
+        # 0.1 and 0.2 at scale 1, 1 and 2 at scale 0.
+        unit = 10 ** max(target.settings.currency_scale - 1, 0)
+        amounts = [contract_amount(target, unit), contract_amount(target, 2 * unit)]
         instructions = [
-            payment_instruction(request_one, payee_one, contract_amount(target, 10), target),
-            payment_instruction(request_two, payee_two, contract_amount(target, 20), target),
+            payment_instruction(request_one, payee_one, amounts[0], target),
+            payment_instruction(request_two, payee_two, amounts[1], target),
         ]
         accepted = submit(client, target, correlation_id, instructions)
         assert accepted.status_code == 202, accepted.text
         batch_id = decimal_json(accepted)["batchId"]
 
         equivalent = copy.deepcopy(instructions)
-        equivalent[0]["amount"] = equivalent_notation(target, contract_amount(target, 10))
-        equivalent[1]["amount"] = equivalent_notation(target, contract_amount(target, 20))
+        equivalent[0]["amount"] = equivalent_notation(amounts[0])
+        equivalent[1]["amount"] = equivalent_notation(amounts[1])
         replay = submit(client, target, correlation_id, equivalent)
         assert replay.status_code == 202, replay.text
         assert decimal_json(replay)["batchId"] == batch_id
@@ -286,10 +290,12 @@ def test_exact_decimal_amounts_and_equivalent_replay(target: ContractTarget, ids
         target.finish_processing("PAY-09")
         rows = wait_for_terminal_rows(client, target, batch_id, page_size=1)
         assert all(row["status"] == "ACCC" for row in rows)
-        assert sum((row["amount"] for row in rows), Decimal("0")) == contract_amount(target, 30)
+        assert sum((row["amount"] for row in rows), Decimal("0")) == contract_amount(
+            target, 3 * unit
+        )
         assert sorted(row["amount"] for row in rows) == [
-            contract_amount(target, 10),
-            contract_amount(target, 20),
+            amounts[0],
+            amounts[1],
         ]
 
 
