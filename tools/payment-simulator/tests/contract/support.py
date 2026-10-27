@@ -241,14 +241,16 @@ def contract_amount(target: ContractTarget, minor_units: int) -> Decimal:
     return Decimal(minor_units).scaleb(-target.settings.currency_scale)
 
 
-def equivalent_notation(target: ContractTarget, amount: Decimal) -> Decimal:
+def equivalent_notation(amount: Decimal) -> Decimal:
     """Write the same value with a different number of fractional digits.
 
-    Drops one trailing zero where the scale has a fractional digit (0.10 becomes 0.1) and adds
-    one at scale 0 (10 becomes 10.0), so the result is never within the target's scale in the
-    same spelling. The amount must end in a zero minor digit so the value is unchanged.
+    Drops a trailing fractional zero when there is one (0.10 becomes 0.1) and otherwise adds one
+    (0.1 becomes 0.10, 10 becomes 10.0), so the replay never repeats the original spelling.
     """
-    scale = target.settings.currency_scale
-    equivalent = amount.quantize(Decimal(1).scaleb(-scale + (1 if scale else -1)))
-    assert equivalent == amount and equivalent.as_tuple() != amount.as_tuple()
+    exponent = amount.as_tuple().exponent
+    assert isinstance(exponent, int)
+    trailing_zero = exponent < 0 and amount.as_tuple().digits[-1] == 0
+    equivalent = amount.quantize(Decimal(1).scaleb(exponent + 1 if trailing_zero else exponent - 1))
+    assert equivalent == amount
+    assert exact_json(equivalent) != exact_json(amount)
     return equivalent

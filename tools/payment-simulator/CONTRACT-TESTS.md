@@ -77,7 +77,7 @@ number formatting, and do not assert informational descriptions verbatim.
 Amounts are built from minor units at the target's `--target-currency-scale`
 (`contract_amount` in `tests/contract/support.py`), so the suite runs against
 scale 0, 1 and 2 targets; the equivalent-notation replay writes the same value
-with one fewer fractional digit (one more at scale 0).
+with one fewer fractional digit, or one more when there is no trailing zero to drop.
 
 ## Fixture capabilities and evidence
 
