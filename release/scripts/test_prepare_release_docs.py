@@ -104,6 +104,20 @@ class PreparationTest(TestCase):
             with self.subTest(line=line):
                 self.assertNotRegex(line, r"\b(rustup|cargo|rustc)\b")
 
+    def test_container_routes_existing_locks_through_guarded_snapshot_write(self):
+        script = CONTAINER_SCRIPT.read_text(encoding="utf-8")
+
+        self.assertIn(
+            'npm run archive:snapshot -- "${DOCS_DOCSET}" '
+            '--output "/output/${DOCS_DOCSET}.tar.gz" --write-lock',
+            script,
+        )
+        self.assertNotIn('lock_mode=', script)
+        self.assertIn(
+            'npm run archive:snapshot -- "${DOCS_DOCSET}" --verify-lock',
+            script,
+        )
+
     def test_apply_preserves_untracked_work_and_rerun_is_noop(self):
         user_file = self.repo / "user-notes.txt"
         user_file.write_text("keep me")

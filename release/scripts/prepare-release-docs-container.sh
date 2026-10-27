@@ -30,12 +30,7 @@ npm run check:draft-links
 npm run check:evidence-anchors
 export DOCS_DOCSET="v${DOCS_VERSION}"
 npm run build:archive
-lock_mode="$(node --input-type=module -e '
-  import fs from "node:fs"; import YAML from "yaml";
-  const lock = YAML.parse(fs.readFileSync("src/data/archive-lock.yaml", "utf8"));
-  console.log(Object.hasOwn(lock.archives, process.env.DOCS_DOCSET) ? "--verify-lock" : "--write-lock");
-')"
-npm run archive:snapshot -- "${DOCS_DOCSET}" --output "/output/${DOCS_DOCSET}.tar.gz" "${lock_mode}"
+npm run archive:snapshot -- "${DOCS_DOCSET}" --output "/output/${DOCS_DOCSET}.tar.gz" --write-lock
 npm run archive:snapshot -- "${DOCS_DOCSET}" --verify-lock
 # These checks require the new lock; never create placeholder digests to run them early.
 unset DOCS_DOCSET
