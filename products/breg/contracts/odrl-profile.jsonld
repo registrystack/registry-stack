@@ -6,7 +6,7 @@
     "skos": "http://www.w3.org/2004/02/skos/core#",
     "dcterms": "http://purl.org/dc/terms/",
     "prof": "http://www.w3.org/ns/dx/prof/",
-    "breg": "https://id.registrystack.org/vocab/breg-odrl#"
+    "breg": "https://id.registrystack.org/vocab/breg-odrl/"
   },
   "@id": "https://id.registrystack.org/profiles/breg-odrl/v1",
   "@type": "prof:Profile",
@@ -14,69 +14,103 @@
   "dcterms:conformsTo": {"@id": "https://www.w3.org/TR/odrl-model/"},
   "dcterms:description": "Experimental, descriptive ODRL 2.2 profile for operator review of configured BReg record-operation grants. This is a partial projection of source configuration, not an access token, an activated-package declaration, a complete authorization policy, or a public catalogue. Missing permissions are not prohibitions. Consumers that do not understand this profile must stop processing its policies. BReg independently authenticates and authorizes every actual request.",
   "skos:scopeNote": "Every permission describes only its named field projection and exact get or list operation. The native Registry Record envelope is outside the field list. Lookup, relationship traversal, history, count requests, data export, mutations, Actions, Proposals and statistical datasets are outside this profile. Request selectors, pagination and query parameters must satisfy BReg's current route contract. All conditions are conjunctive; absent or unverifiable context never satisfies them. Context comes from the current BReg resource server's verified token and selected compiled profile, never from caller assertions or an ODRL document. An export carries source revision information but does not establish that source is active.",
+  "skos:note": "This profile adopts odrl:read from the ODRL Common Vocabulary for its exact BReg projection and operation semantics. It is not an Eclipse EDC PolicyDefinition or a Dataspace Protocol Offer or Agreement, and has not been imported into or evaluated by EDC. EDC's reviewed permission parser drops rule-level targets, losing BReg projection identifiers, Record types and readable fields. Direct wrapping and import are unsafe. An adapter must preserve those targets, normalize list operands, bind the action and every custom constraint in each evaluation scope, and use verified BReg context. No adapter or EDC extension is included.",
   "@graph": [
     {
+      "@id": "https://id.registrystack.org/vocab/breg-odrl/",
+      "@type": "skos:Collection",
+      "rdfs:isDefinedBy": {"@id": "https://id.registrystack.org/profiles/breg-odrl/v1"},
+      "skos:prefLabel": "BReg ODRL profile vocabulary",
+      "skos:member": [
+        {"@id": "odrl:read"},
+        {"@id": "breg:authenticated"},
+        {"@id": "breg:verifiedNonemptyClaims"},
+        {"@id": "breg:accessProfile"},
+        {"@id": "breg:operation"},
+        {"@id": "breg:tokenScopes"},
+        {"@id": "breg:tokenPurpose"},
+        {"@id": "breg:requesterClient"},
+        {"@id": "breg:actorKind"},
+        {"@id": "breg:delegatedActor"},
+        {"@id": "breg:taskGrantPresent"},
+        {"@id": "breg:recordType"},
+        {"@id": "breg:readableFields"},
+        {"@id": "breg:partial"}
+      ]
+    },
+    {
       "@id": "breg:authenticated",
+      "rdfs:isDefinedBy": {"@id": "https://id.registrystack.org/profiles/breg-odrl/v1"},
       "@type": ["odrl:LeftOperand", "skos:Concept"],
       "skos:prefLabel": "Authenticated by BReg",
       "skos:definition": "Boolean true only after the current BReg resource server accepts the caller's token under its configured issuer, audience, validity and cryptographic checks. The exporter emits an odrl:eq comparison to true."
     },
     {
       "@id": "breg:verifiedNonemptyClaims",
+      "rdfs:isDefinedBy": {"@id": "https://id.registrystack.org/profiles/breg-odrl/v1"},
       "@type": ["odrl:LeftOperand", "skos:Concept"],
       "skos:prefLabel": "Verified nonempty principal claims",
       "skos:definition": "A singleton set containing the resource server's configured principal-claim name only when BReg resolved a valid principal from that claim, or the empty set otherwise. Other populated token claims are not members. odrl:hasPart with a singleton literal list requires both the exact configured claim name and a resolved principal. A claim name in the policy is not a principal identity."
     },
     {
       "@id": "breg:accessProfile",
+      "rdfs:isDefinedBy": {"@id": "https://id.registrystack.org/profiles/breg-odrl/v1"},
       "@type": ["odrl:LeftOperand", "skos:Concept"],
       "skos:prefLabel": "Selected access profile",
       "skos:definition": "The exact native access profile selected for this request. odrl:eq compares its local identifier as a string. Permissions from different profiles must not be combined to authorize one request. Selection alone does not establish authentication or satisfy other conditions."
     },
     {
       "@id": "breg:operation",
+      "rdfs:isDefinedBy": {"@id": "https://id.registrystack.org/profiles/breg-odrl/v1"},
       "@type": ["odrl:LeftOperand", "skos:Concept"],
       "skos:prefLabel": "Native read operation",
       "skos:definition": "The current BReg route operation, expressed as the literal get or list. get retrieves one identified record; list enumerates permitted current records subject to the route's query and pagination contract. Neither permits lookup routes, relationship traversal, historical access, optional count requests or data export. odrl:read applies only to the named projection through this exact operation."
     },
     {
       "@id": "breg:tokenScopes",
+      "rdfs:isDefinedBy": {"@id": "https://id.registrystack.org/profiles/breg-odrl/v1"},
       "@type": ["odrl:LeftOperand", "skos:Concept"],
       "skos:prefLabel": "Verified token scopes",
       "skos:definition": "The set of scopes extracted from the accepted token using BReg's current scope contract. odrl:hasPart requires every right-operand list member. Multiple such constraints are conjunctive. Scope strings remain literals, including strings containing colons."
     },
     {
       "@id": "breg:tokenPurpose",
+      "rdfs:isDefinedBy": {"@id": "https://id.registrystack.org/profiles/breg-odrl/v1"},
       "@type": ["odrl:LeftOperand", "skos:Concept"],
       "skos:prefLabel": "Verified token purpose",
       "skos:definition": "The single purpose value from the accepted token under BReg's current purpose-claim contract. odrl:isPartOf requires membership in the allowed literal list. A purpose supplied only in a request body or policy document does not satisfy this condition. Absence of this constraint means the source profile imposes no purpose restriction."
     },
     {
       "@id": "breg:requesterClient",
+      "rdfs:isDefinedBy": {"@id": "https://id.registrystack.org/profiles/breg-odrl/v1"},
       "@type": ["odrl:LeftOperand", "skos:Concept"],
       "skos:prefLabel": "Verified requester client",
       "skos:definition": "The OAuth client identity resolved by BReg from its verified caller context. odrl:isPartOf requires membership in the allowed literal list. Absence of this constraint means the source profile imposes no requester-client restriction."
     },
     {
       "@id": "breg:actorKind",
+      "rdfs:isDefinedBy": {"@id": "https://id.registrystack.org/profiles/breg-odrl/v1"},
       "@type": ["odrl:LeftOperand", "skos:Concept"],
       "skos:prefLabel": "Verified actor kind",
       "skos:definition": "The actor kind resolved by BReg from its verified caller context, compared with odrl:eq to human, agent or service. Absence of this constraint means the source profile imposes no explicit actor-kind restriction; the delegatedActor constraint still applies."
     },
     {
       "@id": "breg:delegatedActor",
+      "rdfs:isDefinedBy": {"@id": "https://id.registrystack.org/profiles/breg-odrl/v1"},
       "@type": ["odrl:LeftOperand", "skos:Concept"],
       "skos:prefLabel": "Trusted delegated actor present",
       "skos:definition": "Boolean indicating whether BReg's verified caller context contains a trusted actor subject. Standing agent profiles require true; every other exported profile requires false, including profiles without an explicit actorKind. A caller-supplied actor-kind label alone does not establish a trusted actor."
     },
     {
       "@id": "breg:taskGrantPresent",
+      "rdfs:isDefinedBy": {"@id": "https://id.registrystack.org/profiles/breg-odrl/v1"},
       "@type": ["odrl:LeftOperand", "skos:Concept"],
       "skos:prefLabel": "Verified task grant present",
       "skos:definition": "Boolean indicating whether BReg's verified caller context carries a task grant. Every exported permission requires false because task-grant profiles are outside this profile, and native BReg refuses grant-bearing tokens against standing profiles."
     },
     {
       "@id": "breg:recordType",
+      "rdfs:isDefinedBy": {"@id": "https://id.registrystack.org/profiles/breg-odrl/v1"},
       "@type": ["rdf:Property", "skos:Concept"],
       "rdfs:domain": {"@id": "odrl:Asset"},
       "rdfs:range": {"@id": "http://www.w3.org/2001/XMLSchema#string"},
@@ -85,6 +119,7 @@
     },
     {
       "@id": "breg:readableFields",
+      "rdfs:isDefinedBy": {"@id": "https://id.registrystack.org/profiles/breg-odrl/v1"},
       "@type": ["rdf:Property", "skos:Concept"],
       "rdfs:domain": {"@id": "odrl:Asset"},
       "rdfs:range": {"@id": "rdf:List"},
@@ -93,6 +128,7 @@
     },
     {
       "@id": "breg:partial",
+      "rdfs:isDefinedBy": {"@id": "https://id.registrystack.org/profiles/breg-odrl/v1"},
       "@type": ["rdf:Property", "skos:Concept"],
       "rdfs:range": {"@id": "http://www.w3.org/2001/XMLSchema#boolean"},
       "skos:prefLabel": "Partial description",

@@ -603,6 +603,30 @@
   ],
   "records": [
     {
+      "uri": "https://id.registrystack.org/profiles/breg-odrl/v1",
+      "kind": "profile",
+      "status": "active",
+      "compatibilityLine": "v1",
+      "owner": "breg",
+      "title": "BReg partial read-policy export profile",
+      "description": "Experimental ODRL profile for operator review of a conservative subset of configured BReg read permissions.",
+      "sourcePath": "products/breg/contracts/odrl-profile.jsonld",
+      "artifactPath": "products/breg/contracts/odrl-profile.jsonld",
+      "mediaType": "application/ld+json"
+    },
+    {
+      "uri": "https://id.registrystack.org/vocab/breg-odrl/",
+      "kind": "vocabulary",
+      "status": "active",
+      "compatibilityLine": "v1",
+      "owner": "breg",
+      "title": "BReg partial read-policy vocabulary",
+      "description": "Experimental BReg ODRL constraint and projection terms, defined by the shipped read-policy export profile.",
+      "sourcePath": "products/breg/contracts/odrl-profile.jsonld",
+      "artifactPath": "products/breg/contracts/odrl-profile.jsonld",
+      "mediaType": "application/ld+json"
+    },
+    {
       "uri": "https://id.registrystack.org/profiles/registry-record/v1",
       "kind": "profile",
       "status": "active",
