@@ -571,7 +571,9 @@ standards and review metadata. A product whose release artifact, named in
 `docs/site/src/data/docset-release-artifacts.yaml`, the manifest does not ship
 keeps the `main source (unreleased)` label at the candidate's ref, so an
 archived docset never presents unreleased documentation as released; promotion
-keeps these labels. It preserves the development and released
+keeps these labels. Document Store documentation stays development-only while
+its artifact is unshipped and is omitted from the candidate docset.
+Preparation preserves the development and released
 selectors and every historical record; the released selector moves only after
 publication, in [Promote the published documentation](#promote-the-published-documentation).
 Conflicting existing candidate metadata

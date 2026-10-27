@@ -5,7 +5,11 @@ import { pathToFileURL } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
 import YAML from 'yaml';
 import { docEntryAppliesToDocset } from './docsets.mjs';
-import { loadReleaseArtifacts, releaseProductVersion } from './docset-release-products.mjs';
+import {
+  loadReleaseArtifacts,
+  releaseProductVersion,
+  UNRELEASED_PRODUCT_VERSION,
+} from './docset-release-products.mjs';
 
 const stableVersionPattern = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 const distributionSchema = 'registry-stack.distribution-selection.v1';
@@ -156,11 +160,12 @@ export async function prepareReleaseDocsMetadata({
   }
   const products = {};
   const sourceRef = manifest.stack.source_ref ?? docsetId;
-  // A product the manifest does not ship keeps the latest docset's
-  // unreleased label, pinned to this docset's ref.
+  // An unshipped product with archived documentation keeps the latest docset's
+  // unreleased label. The held Document Store remains development-only.
   for (const productId of Object.keys(current.products)) {
     if (Object.hasOwn(manifest.external, productId)) continue;
     const productVersion = releaseProductVersion(productId, docsetId, manifest, releaseArtifacts);
+    if (productId === 'registry-documents' && productVersion === UNRELEASED_PRODUCT_VERSION) continue;
     products[productId] = {
       version: productVersion,
       ref: discoveryVersion && productId === 'registry-discovery'

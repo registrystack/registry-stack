@@ -1,10 +1,11 @@
 # The release manifest artifact that ships each docset product. A release
 # ships a product when its manifest's `artifacts` map names that artifact.
 #
-# `registry-release prepare-docs` copies the current docset's products into
-# the candidate docset. It labels a product the selected manifest ships with
+# `registry-release prepare-docs` copies archive-eligible products from the
+# current docset into the candidate. It labels a product the manifest ships with
 # the release version, and a product it does not ship `main source
 # (unreleased)`, as the latest docset does; both sit at the docset's ref.
+# The Document Store stays development-only while its artifact is unshipped.
 # A docset product with no entry here stops preparation.
 #
 # `registry-release validate-docsets` and the docs tests hold every release

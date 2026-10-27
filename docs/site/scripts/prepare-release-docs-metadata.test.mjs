@@ -16,6 +16,7 @@ docsets:
       registry-stack: { version: main source (unreleased), ref: HEAD }
       registry-evidence: { version: main source (unreleased), ref: HEAD }
       registry-coordinator: { version: main source (unreleased), ref: HEAD }
+      registry-documents: { version: main source (unreleased), ref: HEAD }
   # This comment and the historical scalar styles survive preparation.
   - id: v0.26.1
     status: archived
@@ -51,6 +52,7 @@ products:
   registry-stack: registry-docs
   registry-evidence: evidence
   registry-coordinator: coordinator
+  registry-documents: documents
 `;
 
 async function fixture(t, {
@@ -118,6 +120,31 @@ test('labels a product the manifest does not ship as main source at the docset r
     'registry-stack': { version: 'v0.29.0', ref: 'v0.29.0' },
     'registry-evidence': { version: 'v0.29.0', ref: 'v0.29.0' },
     'registry-coordinator': { version: 'main source (unreleased)', ref: 'v0.29.0' },
+  });
+});
+
+test('omits an unshipped Document Store from the candidate without changing other docsets', async (t) => {
+  const { prepare, read } = await fixture(t);
+  await prepare();
+  const docsets = YAML.parse(await read('docsets')).docsets;
+  const latest = docsets.find((entry) => entry.id === 'latest');
+  const historical = docsets.find((entry) => entry.id === 'v0.26.1');
+  const candidate = docsets.find((entry) => entry.id === 'v0.29.0');
+  assert.deepEqual(latest.products['registry-documents'], {
+    version: 'main source (unreleased)', ref: 'HEAD',
+  });
+  assert.equal(historical.products['registry-documents'], undefined);
+  assert.equal(candidate.products['registry-documents'], undefined);
+});
+
+test('includes Document Store release docs when the manifest ships its artifact', async (t) => {
+  const { prepare, read } = await fixture(t, {
+    artifacts: { 'registry-docs': '0.29.0', evidence: '0.29.0', documents: '0.29.0' },
+  });
+  await prepare();
+  const candidate = YAML.parse(await read('docsets')).docsets.find((entry) => entry.id === 'v0.29.0');
+  assert.deepEqual(candidate.products['registry-documents'], {
+    version: 'v0.29.0', ref: 'v0.29.0',
   });
 });
 
