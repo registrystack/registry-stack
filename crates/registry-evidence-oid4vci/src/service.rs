@@ -719,15 +719,13 @@ async fn create_offer(
         if offer_audit.refused().await.is_err() {
             return offer_audit_unavailable_response();
         }
-        return store_response(&service, &error, Outcome::StoreSaturated).await;
+        return store_response(&service, &error, Outcome::StoreSaturated);
     }
     if offer_audit.created().await.is_err() {
         return offer_audit_unavailable_response();
     }
     service.metrics.record_outcome(Outcome::OfferCreated);
-    service
-        .metrics
-        .record_store_entries(service.store.maximum_keyspace_len().await);
+    refresh_store_entries_in_background(&service);
 
     tracing::info!(
         target: "registry_evidence_oid4vci::service",
@@ -799,7 +797,7 @@ async fn token(
         )
         .await
     {
-        return store_response(&service, &error, Outcome::CodeClaimRefused).await;
+        return store_response(&service, &error, Outcome::CodeClaimRefused);
     }
     service.metrics.record_outcome(Outcome::CodeRedeemed);
     // The code is spent and the token bound, so nothing may stand between
@@ -891,7 +889,7 @@ async fn credential(
             service.metrics.record_outcome(Outcome::TokenClaimRefused);
             return unauthorized("the access token cannot be used");
         }
-        Err(error) => return store_response(&service, &error, Outcome::TokenClaimRefused).await,
+        Err(error) => return store_response(&service, &error, Outcome::TokenClaimRefused),
     };
     service.metrics.record_outcome(Outcome::TokenClaimed);
 
@@ -1245,8 +1243,8 @@ fn now() -> i64 {
 /// A wallet is told the same thing whether its code was never issued, was
 /// already redeemed, or was locked out, because the difference between those is
 /// exactly what a caller working through codes would want to learn.
-async fn store_response(
-    service: &DeliveryService,
+fn store_response(
+    service: &Arc<DeliveryService>,
     error: &StoreError,
     refused: Outcome,
 ) -> Response {
@@ -1255,9 +1253,7 @@ async fn store_response(
         StoreError::Poisoned | StoreError::Unavailable => Outcome::StoreFault,
         _ => refused,
     });
-    service
-        .metrics
-        .record_store_entries(service.store.maximum_keyspace_len().await);
+    refresh_store_entries_in_background(service);
     match error {
         StoreError::Unknown
         | StoreError::AlreadyRedeemed
@@ -1286,6 +1282,7 @@ fn unredeemable_code_response() -> Response {
 }
 
 /// Refresh the store-entries gauge without making the request wait for it.
+/// No request handler awaits the count; only the periodic cleanup does.
 fn refresh_store_entries_in_background(service: &Arc<DeliveryService>) {
     let service = Arc::clone(service);
     tokio::spawn(async move {
@@ -3686,6 +3683,8 @@ mod tests {
     /// Where a [`LateStore`] holds its answer back.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     enum Late {
+        /// Creating an offer, which is only ever refused, never held back.
+        Offer,
         Redemption,
         Claim,
         Count,
@@ -3702,6 +3701,9 @@ mod tests {
     struct LateStore {
         inner: Box<dyn Store>,
         late: Late,
+        /// Refuse the call at this place with this fault, without spending
+        /// anything.
+        refuse: Option<(Late, fn() -> StoreError)>,
         answered_late: std::sync::atomic::AtomicBool,
         claimed: std::sync::atomic::AtomicBool,
     }
@@ -3712,6 +3714,12 @@ mod tests {
     const LATE_STORE_TIMEOUT: u64 = 200;
 
     impl LateStore {
+        fn refusal(&self, at: Late) -> Option<StoreError> {
+            self.refuse
+                .filter(|(place, _)| *place == at)
+                .map(|(_, error)| error())
+        }
+
         async fn answer_late(&self, at: Late) {
             if self.late == at && !self.answered_late.swap(true, Ordering::SeqCst) {
                 tokio::time::sleep(LATE_BY).await;
@@ -3729,6 +3737,9 @@ mod tests {
             prepared: PreparedRequest,
             now: i64,
         ) -> Result<(), StoreError> {
+            if let Some(error) = self.refusal(Late::Offer) {
+                return Err(error);
+            }
             self.inner
                 .remember_offer(code, transaction_code, generation, prepared, now)
                 .await
@@ -3754,6 +3765,9 @@ mod tests {
             generation: &CatalogGeneration,
             now: i64,
         ) -> Result<(), StoreError> {
+            if let Some(error) = self.refusal(Late::Redemption) {
+                return Err(error);
+            }
             let redeemed = self
                 .inner
                 .redeem_offer_for_access_token(
@@ -3792,6 +3806,9 @@ mod tests {
                 .await;
             self.claimed.store(true, Ordering::SeqCst);
             self.answer_late(Late::Claim).await;
+            if let Some(error) = self.refusal(Late::Claim) {
+                return Err(error);
+            }
             claimed
         }
 
@@ -3825,12 +3842,22 @@ mod tests {
         late: Late,
         audit: Arc<DeliveryAudit>,
     ) -> (TestServer, Arc<DeliveryService>, Arc<RecordingIssuer>) {
+        late_service_refusing(late, None, audit)
+    }
+
+    /// A [`late_service_with_audit`] whose store also refuses one call.
+    fn late_service_refusing(
+        late: Late,
+        refuse: Option<(Late, fn() -> StoreError)>,
+        audit: Arc<DeliveryAudit>,
+    ) -> (TestServer, Arc<DeliveryService>, Arc<RecordingIssuer>) {
         let directory = canonical_tempdir();
         let mut config = load_deployment(directory.path());
         config.listener.request_timeout_milliseconds = LATE_STORE_TIMEOUT;
         let store = Arc::new(LateStore {
             inner: Box::new(OfferStore::new(&config.store)),
             late,
+            refuse,
             answered_late: std::sync::atomic::AtomicBool::new(false),
             claimed: std::sync::atomic::AtomicBool::new(false),
         });
@@ -3982,6 +4009,100 @@ mod tests {
         })
         .await
         .expect("the store-entries gauge is refreshed after the answer");
+    }
+
+    /// Wait for the store-entries gauge to read `entries`.
+    async fn gauge_lands(service: &DeliveryService, entries: usize) {
+        let line = format!("evidence_oid4vci_store_entries {entries}\n");
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !service.metrics.render().contains(&line) {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("the store-entries gauge is refreshed after the answer");
+    }
+
+    fn assert_temporarily_unavailable(response: &axum_test::TestResponse, context: &str) {
+        assert_eq!(
+            response.status_code(),
+            StatusCode::SERVICE_UNAVAILABLE,
+            "{context}: {}",
+            response.text()
+        );
+        assert_eq!(
+            response.json::<Value>()["error"],
+            json!("temporarily_unavailable"),
+            "{context}"
+        );
+    }
+
+    /// A store that refuses without spending anything is retryable, however
+    /// slow the bookkeeping that follows the refusal is.
+    #[tokio::test]
+    async fn a_retryable_refusal_is_not_held_back_by_a_slow_count() {
+        type Fault = fn() -> StoreError;
+        let faults: [(&str, Fault); 2] = [
+            ("saturated", || StoreError::Saturated),
+            ("unavailable", || StoreError::Unavailable),
+        ];
+        for (name, fault) in faults {
+            // Redemption refused, the count after it stalled.
+            let (server, service, _issuer) =
+                late_service_refusing(Late::Count, Some((Late::Redemption, fault)), test_audit());
+            let code = remembered_code(&service).await;
+            let redeemed = server.post(TOKEN_PATH).form(&token_form(code, None)).await;
+            assert_temporarily_unavailable(&redeemed, &format!("{name} redemption"));
+            gauge_lands(&service, 1).await;
+
+            // Claim refused, the count after it stalled.
+            let (server, service, issuer) = late_service_refusing(
+                Late::CountAfterClaim,
+                Some((Late::Claim, fault)),
+                test_audit(),
+            );
+            let access_token = access_token(&server).await;
+            let claimed = server
+                .post(CREDENTIAL_PATH)
+                .add_header("authorization", format!("Bearer {access_token}"))
+                .json(&json!({"credential_configuration_id": CONFIGURATION_ID}))
+                .await;
+            assert_temporarily_unavailable(&claimed, &format!("{name} claim"));
+            assert!(issuer.requests().is_empty());
+            gauge_lands(&service, 1).await;
+
+            // Offer refused, the count after it stalled.
+            let (server, service, _issuer) =
+                late_service_refusing(Late::Count, Some((Late::Offer, fault)), test_audit());
+            let created = server
+                .post(OFFERS_PATH)
+                .add_header("authorization", format!("Bearer {OFFER_TOKEN}"))
+                .json(&offer_body(false))
+                .await;
+            assert_temporarily_unavailable(&created, &format!("{name} offer"));
+            gauge_lands(&service, 0).await;
+        }
+    }
+
+    /// Creating an offer answers as soon as the offer is remembered and
+    /// audited, not when the count that follows it comes back.
+    #[tokio::test]
+    async fn a_slow_count_after_an_offer_does_not_hold_the_answer_back() {
+        let (server, service, _issuer) = late_service(Late::Count);
+
+        let created = server
+            .post(OFFERS_PATH)
+            .add_header("authorization", format!("Bearer {OFFER_TOKEN}"))
+            .json(&offer_body(false))
+            .await;
+        assert_eq!(
+            created.status_code(),
+            StatusCode::CREATED,
+            "{}",
+            created.text()
+        );
+
+        gauge_lands(&service, 1).await;
     }
 
     /// A request refused after the token was claimed does not give the token

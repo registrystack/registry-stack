@@ -79,9 +79,9 @@
 //!   treat as live.
 //! - **Work on the request path.** Offer creation and token redemption count
 //!   the live key-space under a deployment-wide lock, so near the largest
-//!   capacity every replica queues behind those counts. A credential request
-//!   starts a background key-space count after its claim and does not wait for
-//!   it; expired rows are swept by the periodic cleanup.
+//!   capacity every replica queues behind those counts. No request waits for
+//!   the store-entries count: each starts it in the background, whether it
+//!   succeeds or is refused; expired rows are swept by the periodic cleanup.
 //! - **Linkable rows.** A database reader can link an offer to the access token
 //!   it was redeemed for, because the ledger update and the token insert
 //!   commit in one transaction and expire together, though neither row carries
