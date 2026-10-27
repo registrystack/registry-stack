@@ -274,10 +274,10 @@ page (`breg-mcp` and `breg-review`), Registry Messaging, Registry Render, and
 the separate Evidence OID4VCI adapter image join at `v0.38.0`.
 Registry Relay's final numbered release is `v0.38.0`; releases from `v0.39.0`
 omit it from the image and payload rosters. Registry Coordinator binaries join
-in `v0.44.0`, as set by `COORDINATOR_BINARY_FIRST_RELEASE`. Its image and client
-publication remain held; `COORDINATOR_FIRST_RELEASE` and
-`COORDINATOR_CLIENT_FIRST_RELEASE` remain unset until their separate
-publication prerequisites are ready.
+in `v0.44.0`, as set by `COORDINATOR_BINARY_FIRST_RELEASE`. Its unified Node.js
+and Python client namespace also joins in `v0.44.0`, under
+`COORDINATOR_CLIENT_FIRST_RELEASE`. Its image remains held while
+`COORDINATOR_FIRST_RELEASE` is unset.
 The Registry Document Store is held out of every release while
 `DOCUMENTS_FIRST_RELEASE` is `None`, and no release roster names it.
 `BREG_SERVICES_FIRST_RELEASE`, `MESSAGING_FIRST_RELEASE`,
@@ -367,8 +367,9 @@ private-candidate recovery and evidence-regeneration procedure for a failed gate
 From `v0.38.0` through `v0.43.0`, the checksum-covered Linux amd64 binary
 payload also includes `discoveryctl` and the standalone Scheduling runtime,
 alongside their existing runtime and operator artifacts. The full Stack build
-roster from `v0.44.0` ships all 19 binary names for Linux amd64, Linux arm64,
-and macOS arm64, with all 11 installer pairs. An independent numbered
+roster from `v0.44.0` ships all 20 binary names for Linux amd64, Linux arm64,
+and macOS arm64, with all 12 installer pairs, including the `rstack` launcher
+and its bootstrap installer. An independent numbered
 Discovery release currently ships its two binaries and installer pair for
 Linux amd64 only. A Stack release that selects that release carries its exact
 published platform inventory forward through the distribution lock and does
@@ -376,8 +377,8 @@ not rebuild or relabel Discovery assets for other platforms. The Coordinator
 runtime `coordinator` and
 operator tool `coordinatorctl` join that verified binary payload under
 `COORDINATOR_BINARY_FIRST_RELEASE`; its separately governed image remains held.
-The unified client packages carry no Coordinator client; build the
-`registry-coordinator-client` crate and its bindings from source.
+From `v0.44.0`, the unified Node.js and Python client packages carry the
+`coordinator` namespace under `COORDINATOR_CLIENT_FIRST_RELEASE`.
 No release payload carries the Document Store runtime `documents` or operator tool
 `documentsctl`; build them from the release source.
 
