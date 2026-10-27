@@ -1874,6 +1874,37 @@ formats:
       boolean: none
     securityMembers: []
     restrictingMembers: []
+  - id: messaging/template-contracts
+    product: messaging
+    title: Messaging template contracts
+    files: ['*.contract.json']
+    syntax: json
+    audience: generated
+    stability: unpromised
+    current:
+      apiVersion: id.registrystack.org/formats/messaging/template-contracts/v1
+      kind: MessagingTemplateContracts
+      checkedBy:
+        file: crates/registry-coordinator/src/contracts.rs
+        symbol: is_messaging_template_export
+    target:
+      apiVersion: id.registrystack.org/formats/messaging/template-contracts/v1
+      kind: MessagingTemplateContracts
+    schema: none
+    reader:
+      crate: registry-coordinator
+      file: crates/registry-coordinator/src/authoring.rs
+      function: compile
+      type: untyped
+    check: coordinatorctl check --project {project}
+    example: products/coordinator/examples/earlier-appointment-alerts/generated/notices.contract.json
+    conformance:
+      requiredText: none
+      optionalText: none
+      integer: none
+      boolean: none
+    securityMembers: []
+    restrictingMembers: []
   - id: messaging/ctl-report
     product: messaging
     title: messagingctl --format json report

@@ -49,14 +49,26 @@ bregctl check \
 bregctl generate actions \
   products/coordinator/examples/earlier-appointment-alerts/source-registry \
   --output /new/scratch/path
+bregctl generate schemas \
+  products/coordinator/examples/earlier-appointment-alerts/source-registry \
+  --output /new/record-contracts
+messagingctl generate templates \
+  --project products/coordinator/examples/earlier-appointment-alerts/notices \
+  --output /new/notices.contract.json
 coordinatorctl check \
   --project products/coordinator/examples/earlier-appointment-alerts --explain
 coordinatorctl test \
   --project products/coordinator/examples/earlier-appointment-alerts
 ```
 
-The committed `generated/alerts.contract.json` was generated from the adjacent
-source project. The deterministic scenarios cover an accepted complete-bundle alert,
+The committed `generated/alerts.contract.json` and `generated/alert-subscription.schema.json`
+come from the adjacent source project. The record import checks the fake replies' API field
+names while allowing fields hidden by access policy. `generated/notices.contract.json` comes
+from the adjacent `notices` Messaging project and checks the notice's computed template data
+and locale. Copy regenerated contracts into those paths when you change either owning project.
+Messaging's own access profile still authorizes the live call.
+
+The deterministic scenarios cover an accepted complete-bundle alert,
 withdrawal after claim, a rescheduled appointment, cross-run dispatch
 suppression, and an uncertain Messaging answer recovered with `retry-same`.
 They do not prove live PostgreSQL guards, real signed grant status, Scheduling

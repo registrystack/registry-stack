@@ -5,6 +5,55 @@ material because commit messages do not survive a squash. Each section names
 the threat it answers, the defaults the product ships, where Rust enforces it,
 the tests that pin it, and the residual risk it accepts.
 
+## Lapsed read leases
+
+### Threat
+
+A worker can exit after leasing a read but before recording its result. Holding
+every such job delays a workflow even though repeating the operation is safe.
+Conversely, treating every lapsed lease as retryable could repeat a mutation,
+evaluation or same-command effect whose remote outcome is unknown. A late
+completion from the original worker could also race the replacement attempt.
+
+### Enforcement and defaults
+
+`Store::decode_lapsed` in `crates/registry-coordinator/src/store.rs` opens the
+authenticated definition snapshot for the selected run and resolves the exact
+leased step. Only a call whose catalog recovery is `read-again` receives
+Dispatch's `RetryThenHold` policy. Every mutation, evaluation, same-command
+call, wait and local step retains `Hold`; no database flag, schema change or
+mutable runtime catalog decision is involved.
+
+`RetryThenHold` uses the existing backoff, ten-attempt limit and original run
+deadline. It schedules another read while those bounds allow it, but converts
+the dead-letter or expiry edge to `unknown`, so repeated failure still reaches
+operator review. Dispatch commits the `lease-lapsed` transition audit before
+release and fences completion by generation, attempt and lease token. A stale
+worker cannot commit after the replacement attempt starts.
+
+### Tests
+
+- `crates/registry-coordinator/tests/read_lease_recovery.rs`:
+  `lapsed_read_retries_and_fences_the_old_attempt`,
+  `lapsed_mutation_holds_unknown_for_operator_review`,
+  `lapsed_read_holds_when_attempts_are_spent`, and
+  `lapsed_read_holds_after_its_deadline` exercise the PostgreSQL transition,
+  audit pair, retry count, deadline and stale-worker fence.
+
+These are maintained references, not claims that the tests ran in this note.
+
+### Accepted residuals
+
+- A replacement read can observe newer source state than the interrupted read
+  would have returned. `read-again` promises a safe current observation, not a
+  historical response replay.
+- A source incorrectly configured as a read can still have side effects. The
+  closed operation catalog, fixed HTTP method and reviewed package are the
+  boundary; Coordinator cannot prove a provider's implementation is read-only.
+- A read that repeatedly loses its worker still stops at `attention` when its
+  existing attempt or deadline bound is spent. Recovery does not extend either
+  budget.
+
 ## Scheduling lifecycle recovery
 
 ### Threat

@@ -295,9 +295,17 @@
           "$ref": "#/$defs/LocalId",
           "description": "The typed pure Function that interprets an external command's provider\nresponse into an accepted result, a declared refusal or an uncertain\noutcome. Required on, and accepted only on, `external.command/v1`."
         },
+        "record": {
+          "$ref": "#/$defs/RecordReference",
+          "description": "Limit BReg read replies to the imported record schema's API field names.\nFields may be hidden by access policy, and their value types remain open."
+        },
         "responseSchema": {
           "$ref": "#/$defs/Schema",
           "description": "An optional typed response specialization for the bounded external GET\nor external command Operation."
+        },
+        "template": {
+          "$ref": "#/$defs/TemplateReference",
+          "description": "Fix a Messaging template version, its locales and its data schema."
         },
         "title": {
           "$ref": "#/$defs/DisplayText",
@@ -574,7 +582,8 @@
     },
     "ContractProduct": {
       "enum": [
-        "breg"
+        "breg",
+        "messaging"
       ],
       "type": "string"
     },
@@ -748,6 +757,19 @@
       ],
       "type": "object"
     },
+    "RecordReference": {
+      "additionalProperties": false,
+      "properties": {
+        "contract": {
+          "$ref": "#/$defs/LocalId",
+          "description": "The local generated BReg record schema import."
+        }
+      },
+      "required": [
+        "contract"
+      ],
+      "type": "object"
+    },
     "Reference": {
       "oneOf": [
         {
@@ -815,6 +837,29 @@
     "Schema": {
       "description": "A whole JSON Schema or one compile-time schema reference. Schema keywords\nretain their independently owned JSON Schema spelling.",
       "x-registry-foreign": "json-schema-2020-12"
+    },
+    "TemplateReference": {
+      "additionalProperties": false,
+      "properties": {
+        "contract": {
+          "$ref": "#/$defs/LocalId",
+          "description": "The local generated Messaging template contract import."
+        },
+        "id": {
+          "$ref": "#/$defs/LocalId",
+          "description": "The exact template ID in the imported contract."
+        },
+        "version": {
+          "description": "The exact template version label, quoted when numeric.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "contract",
+        "id",
+        "version"
+      ],
+      "type": "object"
     }
   },
   "$id": "https://id.registrystack.org/schemas/coordinator/project/project.v1alpha1.schema.json",

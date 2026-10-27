@@ -784,7 +784,7 @@ impl Definition {
         Ok(
             serde_json::json!({"workflow":self.workflow.id,"version":self.workflow.version,"workflowRevision":self.digest,
             "start":self.workflow.start,"deadlineSeconds":parse_duration(&self.workflow.deadline)?.num_seconds(),
-            "contracts":contracts,"operations":self.workflow.operations,"operationContracts":operation_contracts,"functions":self.workflow.functions,"types":self.workflow.types,"references":self.workflow.references,"presentation":self.workflow.presentation,"connections":self.workflow.connections,"outcomes":self.workflow.outcomes.keys().collect::<Vec<_>>(),"steps":steps,
+            "contracts":contracts,"operations":self.workflow.operations,"operationContracts":operation_contracts,"eventTriggers":self.workflow.event_triggers,"functions":self.workflow.functions,"types":self.workflow.types,"references":self.workflow.references,"presentation":self.workflow.presentation,"connections":self.workflow.connections,"outcomes":self.workflow.outcomes.keys().collect::<Vec<_>>(),"steps":steps,
             "limits":crate::functions::limits(),"valueLimits":crate::functions::value_limits(),"interpreterAbi":self.frozen.interpreter_abi,"schemaAbi":self.frozen.schema_abi,"adapterAbi":self.frozen.adapter_abi,
 
             "recovery":"A run restores this exact snapshot. retry-same preserves a frozen command and cannot adopt edited mappings or repeat an uncertain hold-after-dispatch evaluation."}),

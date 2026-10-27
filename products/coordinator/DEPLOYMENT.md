@@ -631,8 +631,11 @@ further attempt and finishes the one in flight. Both get 15 seconds, the
 service then logs `stopped` and exits 0. Give the supervisor a stop timeout of
 at least 15 seconds before it sends SIGKILL. An attempt still unfinished when
 the 15 seconds end, or when the process is killed, keeps its lease until the
-lease expires; a worker then holds it for operator review, as it holds the
-attempt of a worker that crashed.
+lease expires. A `read-again` call then resumes on the ordinary retry schedule
+within its original attempt and deadline bounds. Any other step, including a
+mutation, evaluation or same-command call, holds for operator review. Both
+transitions retain the lease-lapse audit record, and a late completion from the
+old worker is fenced out.
 
 Apply serializes activation with database locks, migrates the dedicated schema,
 grants the runtime role, records the verified set of packages in the shared
@@ -879,6 +882,20 @@ would start at or after it is never scheduled, and the run ends `expired` with
 the call's failure code. After the tenth attempt the run reports `failed` with
 that code and waits for the recovery below. Uncertain answers are never
 retried automatically.
+
+A worker lease that lapses has a narrower recovery rule based on the operation
+in the run's protected definition snapshot:
+
+| Lapsed step | Result after the lease expires |
+|---|---|
+| A call whose recovery is `read-again` | The saved read becomes `pending` on the ordinary backoff and runs again without `retry-same`. If its attempt limit is spent or the retry cannot start before the original run deadline, it holds `unknown` instead of becoming dead-lettered or expired. |
+| A mutation, evaluation, same-command call, wait or local step | The job holds `unknown` and the run reports `attention`; inspect it before an operator recovery action. |
+
+The transition is audited whether it reschedules or holds. Dispatch increments
+the attempt and changes the lease token before a replacement read starts, so a
+late result from the old worker cannot commit over it. This lease recovery is
+not a new effect-retry rule: ambiguous mutations, evaluations and frozen
+same-command effects remain held.
 
 An `external.get/v1` reply with status 429, 502, 503 or 504 is a definite
 retryable answer on every attempt but the tenth: 429 retries as

@@ -4147,7 +4147,7 @@ async fn restored_current_job(h: &Harness, run: Uuid) -> Value {
 }
 
 #[tokio::test]
-async fn control_lock_timeout_preserves_the_prepared_read_for_explicit_recovery() {
+async fn control_lock_timeout_reschedules_the_prepared_read_without_losing_its_command() {
     let h = invalid_following_wait("read", "input.at").await;
     let run = h.admit().await;
     // Only the worker connection has this bound. The ordinary control SELECT
@@ -4191,11 +4191,12 @@ async fn control_lock_timeout_preserves_the_prepared_read_for_explicit_recovery(
     assert!(h.store.status(run).await.unwrap().deadline_at > Utc::now());
     let identity = restored_lease_identity(&h, run).await;
 
-    // Dispatch retains the lease on transport error. Its existing Hold policy
-    // reaps the lapse as Unknown, without automatically claiming or sending.
+    // Dispatch retains the lease on transport error. The pinned read-again
+    // operation reaps the lapse to the ordinary retry schedule without
+    // claiming or sending in the recovery tick.
     h.sql("UPDATE {schema}.jobs SET attempt_started_at=clock_timestamp()-interval '60 seconds',lease_expires_at=clock_timestamp()-interval '1 second' WHERE state='leased'").await;
     assert!(!worker.tick().await.unwrap());
-    assert_eq!(restored_current_job(&h, run).await["state"], "unknown");
+    assert_eq!(restored_current_job(&h, run).await["state"], "pending");
     assert_eq!(restored_lease_identity(&h, run).await, identity);
     assert!(fake.requests.lock().unwrap().is_empty());
     let operator = actor("operator", true);
@@ -4211,17 +4212,12 @@ async fn control_lock_timeout_preserves_the_prepared_read_for_explicit_recovery(
         .release_restore_hold(&operator, "complete-history-fenced")
         .await
         .unwrap();
-    assert_eq!(
-        restored_current_job(&h, run).await["state"],
-        "dead-lettered"
-    );
+    let retry = restored_current_job(&h, run).await;
+    assert_eq!(retry["state"], "pending");
+    assert_eq!(retry["command"], job["command"]);
     assert_eq!(restored_lease_identity(&h, run).await, identity);
     assert!(fake.requests.lock().unwrap().is_empty());
-    h.store.retry_same(run, "binding-a").await.unwrap();
-    let replay = restored_current_job(&h, run).await;
-    assert_eq!(replay["state"], "pending");
-    assert_eq!(replay["command"], job["command"]);
-    assert_eq!(replay["uncertain"], false);
+    h.sql("UPDATE {schema}.jobs SET next_attempt_at=clock_timestamp()-interval '1 second' WHERE state='pending'").await;
     assert!(worker.tick().await.unwrap());
     assert_eq!(fake.requests.lock().unwrap().len(), 1);
 }
@@ -4295,7 +4291,7 @@ impl AdapterSet for PausedRecoveryRead {
 }
 
 #[tokio::test]
-async fn restored_expired_read_fences_paused_completion_without_reclaiming_or_reexecuting() {
+async fn restore_hold_blocks_rescheduled_read_until_release_and_fences_paused_completion() {
     for already_reaped in [false, true] {
         let h = invalid_following_wait("read", "input.at").await;
         let run = h.admit().await;
@@ -4311,6 +4307,7 @@ async fn restored_expired_read_fences_paused_completion_without_reclaiming_or_re
         });
         fake.entered.notified().await;
         h.sql("UPDATE {schema}.jobs SET attempt_started_at=clock_timestamp()-interval '60 seconds',lease_expires_at=clock_timestamp()-interval '1 second' WHERE state='leased'").await;
+        let identity = restored_lease_identity(&h, run).await;
         if already_reaped {
             assert!(
                 !worker.tick().await.unwrap(),
@@ -4325,7 +4322,7 @@ async fn restored_expired_read_fences_paused_completion_without_reclaiming_or_re
                     .last()
                     .unwrap()
                     .state,
-                "unknown"
+                "pending"
             );
             assert!(!h.store.status(run).await.unwrap().uncertain);
         }
@@ -4334,18 +4331,23 @@ async fn restored_expired_read_fences_paused_completion_without_reclaiming_or_re
             .set_restore_hold(&operator, "paused-prior-worker")
             .await
             .unwrap();
-        let identity = restored_lease_identity(&h, run).await;
+        for _ in 0..2 {
+            assert!(
+                !worker.tick().await.unwrap(),
+                "restore hold may reap a lapsed read but must not dispatch its retry"
+            );
+            assert_eq!(restored_current_job(&h, run).await["state"], "pending");
+            assert_eq!(restored_lease_identity(&h, run).await, identity);
+            assert_eq!(fake.requests.lock().unwrap().len(), 1);
+        }
         h.store
             .complete_execution_recovery(&operator, "complete-history-fenced", true, true)
             .await
             .unwrap();
-        h.store
-            .release_restore_hold(&operator, "complete-history-fenced")
-            .await
-            .unwrap();
+        assert_eq!(restored_current_job(&h, run).await["state"], "pending");
         assert!(
             !worker.tick().await.unwrap(),
-            "settling a safe lease never enqueues work"
+            "complete recovery preserves the prepared retry without bypassing restore hold"
         );
         fake.release.add_permits(1);
         assert!(
@@ -4356,6 +4358,14 @@ async fn restored_expired_read_fences_paused_completion_without_reclaiming_or_re
         assert_eq!(h.store.status(run).await.unwrap().step, "read");
         assert_eq!(fake.requests.lock().unwrap().len(), 1);
         assert!(h.output_values(run).await.is_empty());
+        h.store
+            .release_restore_hold(&operator, "complete-history-fenced")
+            .await
+            .unwrap();
+        h.sql("UPDATE {schema}.jobs SET next_attempt_at=clock_timestamp()-interval '1 second' WHERE state='pending'").await;
+        fake.release.add_permits(1);
+        assert!(worker.tick().await.unwrap());
+        assert_eq!(fake.requests.lock().unwrap().len(), 2);
     }
 }
 

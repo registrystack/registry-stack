@@ -314,8 +314,22 @@ pub(crate) fn bound_numbers(value: &mut Value) {
 pub fn resolve_operation(
     operation: Operation,
     action: Option<&Value>,
+    record: Option<&Value>,
+    template: Option<&Value>,
     imported: &BTreeMap<String, Value>,
 ) -> crate::Result<OperationContract> {
+    if let Some(record) = record {
+        if operation != Operation::ReadRecord || action.is_some() || template.is_some() {
+            return Err(record_contract_invalid());
+        }
+        return resolve_record(record, imported);
+    }
+    if let Some(template) = template {
+        if operation != Operation::SubmitMessage || action.is_some() {
+            return Err(template_contract_invalid());
+        }
+        return resolve_template(template, imported);
+    }
     let invalid = || {
         crate::CoordinatorError::new(
             "coordinator.operation.contract-invalid",
@@ -415,6 +429,139 @@ pub fn resolve_operation(
             action_revision: revision.to_owned(),
             mode,
         }),
+    )
+}
+
+pub(crate) fn is_breg_record_schema(value: &Value) -> bool {
+    value.get("$id").and_then(Value::as_str).is_some_and(|id| {
+        id.strip_prefix("urn:breg:record-type:")
+            .is_some_and(|id| !id.is_empty())
+    }) && value.get("type").and_then(Value::as_str) == Some("object")
+        && value.get("properties").is_some_and(Value::is_object)
+}
+
+pub(crate) fn is_messaging_template_export(value: &Value) -> bool {
+    value.get("apiVersion").and_then(Value::as_str)
+        == Some("id.registrystack.org/formats/messaging/template-contracts/v1")
+        && value.get("kind").and_then(Value::as_str) == Some("MessagingTemplateContracts")
+}
+
+fn record_contract_invalid() -> crate::CoordinatorError {
+    crate::CoordinatorError::new(
+        "coordinator.operation.contract-invalid",
+        "select a generated BReg record schema for breg.read-record/v1 with record: {contract: <import>}",
+    )
+}
+
+fn resolve_record(
+    reference: &Value,
+    imported: &BTreeMap<String, Value>,
+) -> crate::Result<OperationContract> {
+    let source = reference
+        .get("contract")
+        .and_then(Value::as_str)
+        .ok_or_else(record_contract_invalid)?;
+    let schema = imported
+        .get(source)
+        .filter(|value| is_breg_record_schema(value))
+        .ok_or_else(record_contract_invalid)?;
+    let properties = schema["properties"]
+        .as_object()
+        .ok_or_else(record_contract_invalid)?;
+    let base = contract(Operation::ReadRecord);
+    let mut output = base.output.clone();
+    // Reads retain current disclosure: required fields may be hidden, and
+    // this specialization promises API names rather than value validation.
+    output["$defs"]["RegistryRecord"]["properties"]["domainData"] = json!({
+        "type": "object", "additionalProperties": false,
+        "properties": properties.keys().map(|name| (name.clone(), Value::Bool(true))).collect::<serde_json::Map<_, _>>()
+    });
+    OperationContract::new(
+        base.input.clone(),
+        output,
+        base.declared_refusal.clone(),
+        None,
+    )
+}
+
+fn template_contract_invalid() -> crate::CoordinatorError {
+    crate::CoordinatorError::new(
+        "coordinator.operation.contract-invalid",
+        "select exactly one template ID and version from a generated Messaging template contract export",
+    )
+}
+
+fn resolve_template(
+    reference: &Value,
+    imported: &BTreeMap<String, Value>,
+) -> crate::Result<OperationContract> {
+    let source = reference
+        .get("contract")
+        .and_then(Value::as_str)
+        .ok_or_else(template_contract_invalid)?;
+    let id = reference
+        .get("id")
+        .and_then(Value::as_str)
+        .ok_or_else(template_contract_invalid)?;
+    let version = reference
+        .get("version")
+        .and_then(Value::as_str)
+        .ok_or_else(template_contract_invalid)?;
+    let export = imported
+        .get(source)
+        .filter(|value| is_messaging_template_export(value))
+        .ok_or_else(template_contract_invalid)?;
+    let mut entries = export
+        .get("templates")
+        .and_then(Value::as_array)
+        .ok_or_else(template_contract_invalid)?
+        .iter()
+        .filter(|entry| {
+            entry.get("id").and_then(Value::as_str) == Some(id)
+                && entry.get("version").and_then(Value::as_str) == Some(version)
+        });
+    let entry = entries.next().ok_or_else(template_contract_invalid)?;
+    if entries.next().is_some() {
+        return Err(template_contract_invalid());
+    }
+    let locales = entry
+        .get("locales")
+        .and_then(Value::as_array)
+        .filter(|locales| {
+            !locales.is_empty()
+                && locales
+                    .iter()
+                    .all(|locale| locale.as_str().is_some_and(|locale| !locale.is_empty()))
+        })
+        .ok_or_else(template_contract_invalid)?;
+    let mut data = entry
+        .get("dataSchema")
+        .cloned()
+        .ok_or_else(template_contract_invalid)?;
+    if let Some(object) = data.as_object_mut() {
+        object.remove("$id");
+        object.remove("$schema");
+    }
+    bound_numbers(&mut data);
+    let data = crate::authoring::embed_schema(&data, "/$defs/templateData")?;
+    let base = contract(Operation::SubmitMessage);
+    let mut input = base.input.clone();
+    input
+        .as_object_mut()
+        .expect("operation input is an object")
+        .remove("oneOf");
+    input["$defs"]["templateData"] = data;
+    input["properties"]["template"] = json!({"type": "object", "additionalProperties": false,
+        "required": ["id", "version"], "properties": {"id": {"const": id}, "version": {"const": version}}});
+    input["properties"]["locale"] = json!({"type": "string", "enum": locales});
+    input["properties"]["data"] = json!({"$ref": "#/$defs/templateData", "not": {"type": "null"}});
+    input["properties"]["content"] = json!({"type": "null"});
+    input["required"] = json!(["senderProfile", "to", "template", "locale", "data"]);
+    OperationContract::new(
+        input,
+        base.output.clone(),
+        base.declared_refusal.clone(),
+        None,
     )
 }
 
@@ -638,9 +785,9 @@ pub fn generate() -> Result<BTreeMap<String, String>, serde_json::Error> {
         if descriptor.id == Operation::ReadRecord.as_str() {
             output["$defs"]["RegistryRecord"]["properties"]["domainData"]["description"] =
                 Value::from(
-                    "Project-defined record data. The registry project's entity schema owns \
-                     these members, so check accepts any path beneath domainData and test \
-                     and the runtime decide.",
+                    "Project-defined record data. An imported BReg record schema limits member \
+                     names to the record type's API names. Fields may be hidden by access policy; \
+                     value types remain open. Without a record import, any member name is accepted.",
                 );
         }
         for (role, schema) in [("input", input), ("output", output)] {
@@ -1447,14 +1594,23 @@ mod tests {
         .unwrap();
         let reference = json!({"contract":"applications","id":"request-information"});
         let imported = BTreeMap::from([("applications".to_owned(), export.clone())]);
-        assert!(
-            resolve_operation(Operation::InvokeBregAction, Some(&reference), &imported).is_ok()
-        );
+        assert!(resolve_operation(
+            Operation::InvokeBregAction,
+            Some(&reference),
+            None,
+            None,
+            &imported
+        )
+        .is_ok());
         export["actions"][0]["mode"] = json!("proposal");
         let imported = BTreeMap::from([("applications".to_owned(), export)]);
-        let Err(error) =
-            resolve_operation(Operation::InvokeBregAction, Some(&reference), &imported)
-        else {
+        let Err(error) = resolve_operation(
+            Operation::InvokeBregAction,
+            Some(&reference),
+            None,
+            None,
+            &imported,
+        ) else {
             panic!("a Proposal-mode Action resolved");
         };
         assert_eq!(error.code, "coordinator.operation.proposal-action");

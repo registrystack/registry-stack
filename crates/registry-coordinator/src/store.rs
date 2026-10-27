@@ -2131,7 +2131,7 @@ pub(crate) const RETRY_MAXIMUM_DELAY: Duration =
 /// wait clears the deadline; otherwise the worker holds the step as unknown,
 /// so the same command can still be retried. Pure steps call no product and
 /// carry no deadline of their own.
-fn policy(job: &Job) -> JobPolicy {
+fn policy(job: &Job, on_uncertain: UncertainOutcome) -> JobPolicy {
     // A task-grant read can use four sequential two-second HTTP exchanges.
     // Dispatch owns the additional five-second lease finalization allowance.
     JobPolicy {
@@ -2143,7 +2143,7 @@ fn policy(job: &Job) -> JobPolicy {
             multiplier: 2,
             jitter: Jitter::Equal,
         }),
-        on_uncertain: UncertainOutcome::Hold,
+        on_uncertain,
         expires_at: (!job.pure).then(|| job.deadline_at.into()),
     }
 }
@@ -2217,7 +2217,7 @@ impl DispatchStore for Store {
     ) -> std::result::Result<Decoded<Job>, ClaimRefusal> {
         let job = decode(row, first).map_err(|_| ClaimRefusal::Unavailable)?;
         Ok(Decoded {
-            policy: policy(&job),
+            policy: policy(&job, UncertainOutcome::Hold),
             job,
         })
     }
@@ -2230,8 +2230,24 @@ impl DispatchStore for Store {
         first: usize,
     ) -> std::result::Result<Decoded<Job>, DispatchError> {
         let job = decode(row, first)?;
+        let run: Uuid = row.try_get(0)?;
+        let step: String = row.try_get(1)?;
+        let snapshot: String = self
+            .open_value(run, "snapshot", "", &job.snapshot)
+            .map_err(|_| DispatchError::Unavailable)?;
+        let definition = self
+            .definition(&snapshot)
+            .map_err(|_| DispatchError::Unavailable)?;
+        let on_uncertain = match definition.workflow.steps.get(&step) {
+            Some(Step::Call { call, .. })
+                if call.operation.recovery() == crate::protocol::RecoverySemantics::ReadAgain =>
+            {
+                UncertainOutcome::RetryThenHold
+            }
+            _ => UncertainOutcome::Hold,
+        };
         Ok(Decoded {
-            policy: policy(&job),
+            policy: policy(&job, on_uncertain),
             job,
         })
     }
@@ -2735,14 +2751,14 @@ mod tests {
 
     #[test]
     fn call_retries_back_off_exponentially_inside_the_run_deadline() {
-        let call = policy(&job(false));
+        let call = policy(&job(false), UncertainOutcome::Hold);
         assert_eq!(call.maximum_attempts, 10);
         assert_eq!(
             call.expires_at,
             Some(SystemTime::from(job(false).deadline_at)),
             "no retry may be scheduled at or after the run deadline"
         );
-        assert_eq!(policy(&job(true)).expires_at, None);
+        assert_eq!(policy(&job(true), UncertainOutcome::Hold).expires_at, None);
         // Equal jitter keeps each delay between half its base and the whole
         // base. The sample is the only varying input, so a fixed sample gives
         // a fixed delay.
@@ -2770,7 +2786,7 @@ mod tests {
 
     #[test]
     fn a_retry_after_hint_is_a_floor_bounded_by_the_longest_delay() {
-        let retry = policy(&job(false)).retry;
+        let retry = policy(&job(false), UncertainOutcome::Hold).retry;
         let delay = |hint: u64| {
             retry
                 .delay_after(1, Some(Duration::from_secs(hint)), 0)
