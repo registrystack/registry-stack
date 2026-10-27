@@ -665,7 +665,7 @@ phase must preserve all acceptance definitions introduced in Phase 0.
 ### Phase 0: freeze Version 1 contracts and DoD
 
 - Promote accepted contracts into tracked `products/evidence` material when
-  Jeremi authorizes implementation.
+  the maintainer authorizes implementation.
 - Freeze the CCCEV-to-JSON profile, public request, request-nonce, JWS, and
   unsigned-envelope response schemas,
   governed-bundle and runtime YAML schemas, their ownership split, bundle
