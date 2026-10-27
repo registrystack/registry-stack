@@ -941,7 +941,7 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         self.assertIn("--purpose candidate_input", build)
         self.assertIn('--source-sha "${{ needs.validate.outputs.source_sha }}"', build)
         self.assertIn("component_args+=(--exclude-unit discovery)", build)
-        self.assertIn('"${component_args[@]}"', build)
+        self.assertIn('${component_args[@]+"${component_args[@]}"}', build)
         upload = next(
             step for step in shards["steps"] if "upload-artifact@" in str(step)
         )
@@ -984,6 +984,90 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
             if step.get("name") == "Install pinned candidate inspection tools"
         )
         self.assertLess(merge_index, tools_index)
+
+    def test_native_macos_optional_component_args_execute_under_system_bash(
+        self,
+    ) -> None:
+        _, document = workflow("release-candidate.yml")
+        build = step_run(
+            document, "build-macos-platforms", "Build native macOS release shard"
+        ).split("# These groups contain complete installer toolsets.", 1)[0]
+        source_sha = "a" * 40
+        replacements = {
+            "${{ matrix.group }}": "scheduling",
+            "${{ needs.validate.outputs.source_sha }}": source_sha,
+            "${{ needs.validate.outputs.version }}": "0.44.0",
+        }
+        for expression, value in replacements.items():
+            build = build.replace(expression, value)
+
+        for exclude_discovery, optional_args in (
+            ("false", []),
+            ("true", ["--exclude-unit", "discovery"]),
+        ):
+            with self.subTest(exclude_discovery=exclude_discovery):
+                rendered = build.replace(
+                    "${{ needs.validate.outputs.exclude_discovery }}",
+                    exclude_discovery,
+                )
+                self.assertNotIn("${{", rendered)
+                with tempfile.TemporaryDirectory(
+                    prefix="candidate-macos-component-args-"
+                ) as temporary_directory:
+                    root = Path(temporary_directory)
+                    stub_bin = root / "bin"
+                    build_script = (
+                        root / "release/scripts/build-release-native-platform.sh"
+                    )
+                    stub_bin.mkdir(parents=True)
+                    build_script.parent.mkdir(parents=True)
+                    rustup = stub_bin / "rustup"
+                    rustup.write_text(
+                        "#!/usr/bin/env bash\nset -euo pipefail\n",
+                        encoding="utf-8",
+                    )
+                    build_script.write_text(
+                        "#!/usr/bin/env bash\n"
+                        "set -euo pipefail\n"
+                        'printf "%s\\n" "$@" > "${CAPTURE_ARGS:?}"\n',
+                        encoding="utf-8",
+                    )
+                    rustup.chmod(0o755)
+                    build_script.chmod(0o755)
+                    arguments = root / "arguments.txt"
+                    environment = {
+                        **os.environ,
+                        "CAPTURE_ARGS": str(arguments),
+                        "PATH": f"{stub_bin}{os.pathsep}{os.environ['PATH']}",
+                    }
+                    result = subprocess.run(
+                        ["/bin/bash"],
+                        input=rendered,
+                        cwd=root,
+                        env=environment,
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                    )
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(result.stdout, "")
+                    self.assertEqual(result.stderr, "")
+                    self.assertEqual(
+                        arguments.read_text(encoding="utf-8").splitlines(),
+                        [
+                            "--group",
+                            "scheduling",
+                            "--purpose",
+                            "candidate_input",
+                            "--source-sha",
+                            source_sha,
+                            "--version",
+                            "0.44.0",
+                            "--output",
+                            "candidate-native-shard",
+                            *optional_args,
+                        ],
+                    )
 
     def test_release_embeds_evidencectl_tag_and_publishes_latest_alias(self) -> None:
         _, document = workflow("release-candidate.yml")
