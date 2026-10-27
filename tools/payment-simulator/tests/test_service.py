@@ -305,3 +305,21 @@ def test_generated_openapi_matches_runtime_contract():
     assert (
         schema["components"]["schemas"]["Instruction"]["properties"]["amount"]["type"] == "number"
     )
+
+
+@pytest.mark.parametrize("exponent", ["1e9999999999999999999", "1e-9999999999999999999"])
+def test_unparseable_number_is_a_bounded_problem(service, exponent):
+    client, _, store = service
+    content = dumps([instruction()]).replace("1.00", exponent)
+    assert exponent in content
+    response = client.post(
+        "/batchtransactions?type=raw",
+        headers=headers(**{"Content-Type": "application/json"}),
+        content=content,
+    )
+    assert response.status_code == 400
+    assert response.json()["code"] == "request.invalid"
+    assert response.headers["content-type"] == "application/problem+json"
+    assert exponent not in response.text
+    assert store.inspect()["batchCount"] == 0
+    assert submit(client).status_code == 202

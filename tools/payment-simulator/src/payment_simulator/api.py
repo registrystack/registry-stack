@@ -6,7 +6,7 @@ import json
 import sqlite3
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 from fastapi import FastAPI, Request
@@ -177,7 +177,9 @@ async def body(request, model):
         if isinstance(entries, list) and len(entries) > 100:
             raise ApiError(413, "request.too-large", "Entry count exceeds profile limit")
         return model.model_validate(value)
-    except (ValueError, RecursionError, UnicodeError, ValidationError):
+    except (ValueError, RecursionError, UnicodeError, InvalidOperation, ValidationError):
+        # InvalidOperation (an ArithmeticError, not a ValueError) is what parse_float=Decimal
+        # raises for an out-of-range exponent such as 1e9999999999999999999.
         # Never echo Pydantic input/error contexts: they can contain addresses or credentials.
         raise invalid() from None
 
