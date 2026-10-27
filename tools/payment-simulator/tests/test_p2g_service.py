@@ -226,3 +226,21 @@ def test_v1_additive_upgrade_preserves_g2p_receipts_and_credits(service):
     assert create(client).status_code == 200
     with sqlite3.connect(store.path) as db:
         assert db.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+
+
+@pytest.mark.parametrize("exponent", ["1e9999999999999999999", "1e-9999999999999999999"])
+def test_unparseable_number_is_a_bounded_problem(service, exponent):
+    client, _, store = service
+    content = dumps(intent()).replace("25.50", exponent)
+    assert exponent in content
+    response = client.post(
+        "/rtpRequest",
+        content=content,
+        headers=headers(**{"Content-Type": "application/json"}),
+    )
+    assert response.status_code == 400
+    assert response.json()["code"] == "request.invalid"
+    assert response.headers["content-type"] == "application/problem+json"
+    assert exponent not in response.text
+    assert store.inspect_collections() == {"requestCount": 0, "payments": []}
+    assert create(client).status_code == 200
