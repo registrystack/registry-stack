@@ -5,6 +5,8 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
+
 fn scratch() -> tempfile::TempDir {
     if let Ok(target) = std::env::var("CARGO_TARGET_DIR") {
         tempfile::tempdir_in(target).unwrap()
@@ -17,16 +19,27 @@ fn digest(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
 }
 
-fn write_release_launcher(path: &Path) {
+fn write_release_launcher(path: &Path, version: &str) {
     fs::write(
         path,
-        b"#!/usr/bin/env bash\nset -euo pipefail\n[[ \"${1:-}\" == --version ]]\nprintf 'rstack 0.44.0\\n'\n",
+        format!(
+            "#!/usr/bin/env bash\nset -euo pipefail\n[[ \"${{1:-}}\" == --version ]]\nprintf 'rstack {version}\\n'\n"
+        ),
     )
     .unwrap();
     fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
 }
 
 fn release_fixture(directory: &Path, schema_version: &str) -> (PathBuf, PathBuf, PathBuf) {
+    release_fixture_for_version(directory, schema_version, CURRENT_VERSION)
+}
+
+fn release_fixture_for_version(
+    directory: &Path,
+    schema_version: &str,
+    version: &str,
+) -> (PathBuf, PathBuf, PathBuf) {
+    let release = format!("v{version}");
     let platform = match (std::env::consts::OS, std::env::consts::ARCH) {
         ("linux", "x86_64") => "linux-amd64",
         ("linux", "aarch64") => "linux-arm64",
@@ -35,36 +48,37 @@ fn release_fixture(directory: &Path, schema_version: &str) -> (PathBuf, PathBuf,
     };
     let archive = platform == "macos-arm64";
     let asset_name = format!(
-        "rstack-v0.44.0-{platform}{}",
+        "rstack-{release}-{platform}{}",
         if archive { ".tar.gz" } else { "" }
     );
     let launcher = directory.join(&asset_name);
     if archive {
         let contents = directory.join("archive");
         fs::create_dir(&contents).unwrap();
-        write_release_launcher(&contents.join("rstack-v0.44.0-macos-arm64"));
+        let archived_launcher = format!("rstack-{release}-macos-arm64");
+        write_release_launcher(&contents.join(&archived_launcher), version);
         fs::write(contents.join("THIRD_PARTY_NOTICES"), "test fixture\n").unwrap();
         let result = Command::new("tar")
             .args(["-czf"])
             .arg(&launcher)
             .arg("-C")
             .arg(&contents)
-            .args(["rstack-v0.44.0-macos-arm64", "THIRD_PARTY_NOTICES"])
+            .args([archived_launcher.as_str(), "THIRD_PARTY_NOTICES"])
             .output()
             .unwrap();
         assert!(result.status.success(), "{result:?}");
     } else {
-        write_release_launcher(&launcher);
+        write_release_launcher(&launcher, version);
     }
     let binary = fs::read(&launcher).unwrap();
-    let manifest_name = "registry-stack-v0.44.0-release-manifest.json";
-    let manifest_path = directory.join(manifest_name);
+    let manifest_name = format!("registry-stack-{release}-release-manifest.json");
+    let manifest_path = directory.join(&manifest_name);
     let mut manifest = json!({
         "schema_version": schema_version,
         "repository": "registrystack/registry-stack",
         "release": {
-            "tag": "v0.44.0",
-            "version": "0.44.0",
+            "tag": release.as_str(),
+            "version": version,
             "source_sha": "a".repeat(40),
             "release_id": "test"
         },
@@ -76,7 +90,7 @@ fn release_fixture(directory: &Path, schema_version: &str) -> (PathBuf, PathBuf,
         }],
         "components": {
             "schema_version": "registry-stack.components.v1",
-            "release": "v0.44.0",
+            "release": release.as_str(),
             "launcher": {(platform): {
                 "name": asset_name,
                 "size": binary.len(),
@@ -106,7 +120,7 @@ fn release_fixture(directory: &Path, schema_version: &str) -> (PathBuf, PathBuf,
             "name": "breg",
             "candidate_ref": format!("ghcr.io/registrystack/breg-candidate@sha256:{}", "f".repeat(64)),
             "digest": format!("sha256:{}", "f".repeat(64)),
-            "final_ref": "ghcr.io/registrystack/breg:v0.44.0"
+            "final_ref": format!("ghcr.io/registrystack/breg:{release}")
         }]);
         manifest["docs"] = json!({"name": "docs.tar.gz", "sha256": "b".repeat(64)});
         manifest["sbom"] = json!({"name": "sbom.json", "sha256": "c".repeat(64)});
@@ -187,7 +201,7 @@ fn launcher_only_bootstrap_activates_one_owned_generation() {
         .unwrap();
     assert_eq!(
         String::from_utf8(version.stdout).unwrap(),
-        "rstack 0.44.0\n"
+        format!("rstack {CURRENT_VERSION}\n")
     );
     assert!(install_root.join("current").exists());
 }
@@ -262,7 +276,54 @@ fn relative_installation_paths_create_a_working_public_launcher() {
         .output()
         .unwrap();
     assert!(version.status.success(), "{version:?}");
-    assert_eq!(version.stdout, b"rstack 0.44.0\n");
+    assert_eq!(
+        version.stdout,
+        format!("rstack {CURRENT_VERSION}\n").as_bytes()
+    );
+}
+
+#[test]
+fn bootstrap_refuses_a_manifest_for_another_launcher_version() {
+    let workspace = scratch();
+    let assets = workspace.path().join("assets");
+    fs::create_dir(&assets).unwrap();
+    let mismatched_version = if CURRENT_VERSION == "9.9.9" {
+        "9.9.8"
+    } else {
+        "9.9.9"
+    };
+    let (manifest, checksums, launcher) = release_fixture_for_version(
+        &assets,
+        "registry-stack.release-candidate.v2",
+        mismatched_version,
+    );
+    let install_root = workspace.path().join("lib");
+    let bin_dir = workspace.path().join("bin");
+
+    let result = Command::new(env!("CARGO_BIN_EXE_rstack"))
+        .arg("bootstrap")
+        .arg("--release-manifest")
+        .arg(&manifest)
+        .arg("--checksum-file")
+        .arg(&checksums)
+        .arg("--launcher-asset")
+        .arg(&launcher)
+        .arg("--asset-dir")
+        .arg(&assets)
+        .arg("--install-root")
+        .arg(&install_root)
+        .arg("--bin-dir")
+        .arg(&bin_dir)
+        .output()
+        .unwrap();
+
+    assert_eq!(result.status.code(), Some(3), "{result:?}");
+    assert_eq!(
+        result.stderr,
+        b"rstack: bootstrap launcher version differs from release manifest\n"
+    );
+    assert!(!install_root.join("current").exists());
+    assert!(!bin_dir.join("rstack").exists());
 }
 
 #[test]

@@ -6,6 +6,12 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+fn current_release() -> String {
+    format!("v{CURRENT_VERSION}")
+}
+
 fn digest(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
 }
@@ -22,29 +28,28 @@ fn platform() -> &'static str {
 fn write_release_launcher(path: &Path) {
     let executable = env!("CARGO_BIN_EXE_rstack").replace('\'', "'\"'\"'");
     let script = format!(
-        "#!/usr/bin/env bash\nset -euo pipefail\nif [[ \"${{1:-}}\" == --version ]]; then printf 'rstack 0.44.0\\n'; exit 0; fi\nexec '{executable}' \"$@\"\n"
+        "#!/usr/bin/env bash\nset -euo pipefail\nif [[ \"${{1:-}}\" == --version ]]; then printf 'rstack {CURRENT_VERSION}\\n'; exit 0; fi\nexec '{executable}' \"$@\"\n"
     );
     fs::write(path, script).unwrap();
     fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
 }
 
 fn fixture(directory: &Path) -> (PathBuf, PathBuf, PathBuf) {
+    let release = current_release();
     let platform = platform();
     let archived = platform == "macos-arm64";
     let suffix = if archived { ".tar.gz" } else { "" };
-    let launcher_name = format!("rstack-v0.44.0-{platform}{suffix}");
-    let evidence_name = format!("evidencectl-v0.44.0-{platform}{suffix}");
+    let launcher_name = format!("rstack-{release}-{platform}{suffix}");
+    let evidence_name = format!("evidencectl-{release}-{platform}{suffix}");
     let launcher = directory.join(&launcher_name);
     let evidence = directory.join(&evidence_name);
-    let script = b"#!/usr/bin/env bash\nset -euo pipefail\nif [[ \"${1:-}\" == '--version' ]]; then printf 'evidencectl 0.44.0\\n'; exit 0; fi\nif [[ \"${1:-}\" == 'hold' ]]; then printf 'ready\\n'; sleep 5; exit 0; fi\nprintf 'generation:%s\\n' \"${RSTACK_GENERATION_DIR:-}\"\nprintf 'release:%s\\n' \"${RSTACK_RELEASE_TAG:-}\"\nprintf 'selected-evidencectl:%s\\n' \"${RSTACK_EVIDENCECTL_BIN:-}\"\nprintf 'selected-bregctl:%s\\n' \"${RSTACK_BREGCTL_BIN:-}\"\nprintf 'cwd:%s\\n' \"$PWD\"\nprintf 'arg:%s\\n' \"$@\"\nexit 7\n";
+    let script = format!("#!/usr/bin/env bash\nset -euo pipefail\nif [[ \"${{1:-}}\" == '--version' ]]; then printf 'evidencectl {CURRENT_VERSION}\\n'; exit 0; fi\nif [[ \"${{1:-}}\" == 'hold' ]]; then printf 'ready\\n'; sleep 5; exit 0; fi\nprintf 'generation:%s\\n' \"${{RSTACK_GENERATION_DIR:-}}\"\nprintf 'release:%s\\n' \"${{RSTACK_RELEASE_TAG:-}}\"\nprintf 'selected-evidencectl:%s\\n' \"${{RSTACK_EVIDENCECTL_BIN:-}}\"\nprintf 'selected-bregctl:%s\\n' \"${{RSTACK_BREGCTL_BIN:-}}\"\nprintf 'cwd:%s\\n' \"$PWD\"\nprintf 'arg:%s\\n' \"$@\"\nexit 7\n");
     if archived {
+        let launcher_binary = format!("rstack-{release}-macos-arm64");
+        let evidence_binary = format!("evidencectl-{release}-macos-arm64");
         for (asset, binary, executable) in [
-            (&launcher, "rstack-v0.44.0-macos-arm64", None),
-            (
-                &evidence,
-                "evidencectl-v0.44.0-macos-arm64",
-                Some(script.as_slice()),
-            ),
+            (&launcher, launcher_binary.as_str(), None),
+            (&evidence, evidence_binary.as_str(), Some(script.as_bytes())),
         ] {
             let contents = directory.join(binary);
             fs::create_dir(&contents).unwrap();
@@ -73,24 +78,24 @@ fn fixture(directory: &Path) -> (PathBuf, PathBuf, PathBuf) {
         }
     } else {
         write_release_launcher(&launcher);
-        fs::write(&evidence, script).unwrap();
+        fs::write(&evidence, script.as_bytes()).unwrap();
         fs::set_permissions(&evidence, fs::Permissions::from_mode(0o755)).unwrap();
     }
     let launcher_bytes = fs::read(&launcher).unwrap();
     let evidence_bytes = fs::read(&evidence).unwrap();
-    let manifest_name = "registry-stack-v0.44.0-release-manifest.json";
-    let manifest_path = directory.join(manifest_name);
+    let manifest_name = format!("registry-stack-{release}-release-manifest.json");
+    let manifest_path = directory.join(&manifest_name);
     let manifest = json!({
         "schema_version": "registry-stack.release-candidate.v2",
         "repository": "registrystack/registry-stack",
-        "release": {"tag":"v0.44.0","version":"0.44.0","source_sha":"a".repeat(40),"release_id":"test"},
+        "release": {"tag":release.as_str(),"version":CURRENT_VERSION,"source_sha":"a".repeat(40),"release_id":"test"},
         "payloads": [
             {"name":launcher_name,"kind":"binary","size":launcher_bytes.len(),"sha256":digest(&launcher_bytes)},
             {"name":evidence_name,"kind":"binary","size":evidence_bytes.len(),"sha256":digest(&evidence_bytes)}
         ],
         "components": {
             "schema_version":"registry-stack.components.v1",
-            "release":"v0.44.0",
+            "release":release.as_str(),
             "launcher":{(platform):{"name":launcher_name,"size":launcher_bytes.len(),"sha256":digest(&launcher_bytes)}},
             "components":{"evidence":{
                 "entrypoint":"evidencectl","dependencies":[],
@@ -400,7 +405,7 @@ fn selected_product_preserves_arguments_directory_and_exit_status() {
     assert!(listed.status.success(), "{listed:?}");
     let listing: serde_json::Value = serde_json::from_slice(&listed.stdout).unwrap();
     assert_eq!(listing["schema_version"], "registry.rstack.components.v1");
-    assert_eq!(listing["release"], "v0.44.0");
+    assert_eq!(listing["release"], current_release());
     let components = listing["components"].as_array().unwrap();
     assert_eq!(components.len(), 9);
     let evidence = components
@@ -409,7 +414,7 @@ fn selected_product_preserves_arguments_directory_and_exit_status() {
         .unwrap();
     assert_eq!(evidence["installed"], true);
     assert_eq!(evidence["available"], true);
-    assert_eq!(evidence["version"], "0.44.0");
+    assert_eq!(evidence["version"], CURRENT_VERSION);
     assert!(evidence["path"]
         .as_str()
         .unwrap()
@@ -433,7 +438,9 @@ fn selected_product_preserves_arguments_directory_and_exit_status() {
         .unwrap();
     assert!(human.status.success(), "{human:?}");
     let human = String::from_utf8(human.stdout).unwrap();
-    assert!(human.contains("evidence: installed, version 0.44.0, path "));
+    assert!(human.contains(&format!(
+        "evidence: installed, version {CURRENT_VERSION}, path "
+    )));
     assert!(human.contains("coordinator: unavailable, version unavailable, path none"));
     let output = Command::new(bin.join("rstack"))
         .args([
@@ -455,7 +462,7 @@ fn selected_product_preserves_arguments_directory_and_exit_status() {
     let stdout = String::from_utf8(output.stdout).unwrap();
     let current = root.join("current").canonicalize().unwrap();
     assert!(stdout.contains(&format!("generation:{}\n", current.display())));
-    assert!(stdout.contains("release:v0.44.0\n"));
+    assert!(stdout.contains(&format!("release:{}\n", current_release())));
     assert!(stdout.contains(&format!(
         "selected-evidencectl:{}\n",
         current
