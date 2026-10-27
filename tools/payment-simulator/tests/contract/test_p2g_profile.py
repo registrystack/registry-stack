@@ -383,10 +383,13 @@ def test_collection_lost_response_restart_replay_and_receipt_witness(
         amount=amount,
     )
 
-    with lost_response_relay(target.base_url, expected_status=200) as (relay_url, receipt):
+    with lost_response_relay(target.base_url, "/rtpRequest", expected_status=200) as (
+        relay_url,
+        receipt,
+    ):
         try:
             httpx.post(
-                f"{relay_url}/rtpRequest",
+                relay_url,
                 headers=collection_headers(target, request_id),
                 content=exact_json(request).encode("utf-8"),
                 timeout=2.0,

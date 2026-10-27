@@ -131,6 +131,7 @@ class Store:
                 fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
                 os.close(fd)
             except FileExistsError:
+                # Keep an existing state file; its schema version is checked below.
                 pass
         elif not self.path.is_file():
             raise ValueError("state file does not exist; start the simulator first")

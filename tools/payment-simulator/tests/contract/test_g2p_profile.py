@@ -442,10 +442,13 @@ def test_lost_response_restart_replay_and_effect_witness(target: ContractTarget,
             payment_instruction(request_one, payee_one, Decimal("100.00"), target),
             payment_instruction(request_two, payee_two, Decimal("150.00"), target),
         ]
-        with lost_response_relay(target.base_url) as (relay_url, receipt):
+        with lost_response_relay(target.base_url, "/batchtransactions?type=raw") as (
+            relay_url,
+            receipt,
+        ):
             try:
                 httpx.post(
-                    f"{relay_url}/batchtransactions?type=raw",
+                    relay_url,
                     headers=submission_headers(target, correlation_id),
                     content=exact_json(instructions).encode("utf-8"),
                     timeout=2.0,
