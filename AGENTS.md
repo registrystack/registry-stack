@@ -101,6 +101,7 @@ products of their own.
 | `crates/registry-cli-reference` | Deterministic reference data walked from one Clap command tree, shared by `registry-cli-docs` and each binary's `help --format json` |
 | `products/` | Product-owned specs, examples, fixtures, docs (not crates) |
 | `docs/site/` | Public docs site (Astro). Has its own `AGENTS.md`; read it before touching this subtree |
+| `tools/payment-simulator` | Synthetic payment simulator (Python, SQLite): a test double for G2P and P2G payment APIs that never moves money and refuses non-loopback serving without `--allow-network`; run from its directory with `uv` |
 | `release/` | Release manifests, schemas, notes, validation and conformance tooling, and the release source-model proof |
 | `external/` | Historical external-input records and policy for reviewing any reintroduction |
 
