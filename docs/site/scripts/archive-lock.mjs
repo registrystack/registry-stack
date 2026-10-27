@@ -224,14 +224,8 @@ export async function assertArchiveLockImmutableForRepository(
   return assertArchiveLockImmutable(baseLock, currentLock, { mutableArchiveId });
 }
 
-export function addArchiveLockEntry(lock, docsetId, result) {
-  if (lock?.schema_version !== ARCHIVE_LOCK_SCHEMA || !lock.archives) {
-    throw new Error('archive-lock.yaml must be valid before adding an archive');
-  }
-  if (Object.hasOwn(lock.archives, docsetId)) {
-    throw new Error(`immutable archive lock entry ${docsetId} already exists`);
-  }
-  lock.archives[docsetId] = result.root_tree_sha256
+function archiveLockEntry(result) {
+  return result.root_tree_sha256
     ? {
         bundle_sha256: result.bundle_sha256,
         root_tree_sha256: result.root_tree_sha256,
@@ -241,6 +235,16 @@ export function addArchiveLockEntry(lock, docsetId, result) {
         bundle_sha256: result.bundle_sha256,
         tree_sha256: result.tree_sha256,
       };
+}
+
+export function addArchiveLockEntry(lock, docsetId, result) {
+  if (lock?.schema_version !== ARCHIVE_LOCK_SCHEMA || !lock.archives) {
+    throw new Error('archive-lock.yaml must be valid before adding an archive');
+  }
+  if (Object.hasOwn(lock.archives, docsetId)) {
+    throw new Error(`immutable archive lock entry ${docsetId} already exists`);
+  }
+  lock.archives[docsetId] = archiveLockEntry(result);
   return lock;
 }
 
@@ -292,6 +296,7 @@ export async function snapshotArchive({
   bundlePath = null,
   verifyLock = false,
   writeLock = false,
+  runCommand = run,
 } = {}) {
   if (verifyLock && writeLock) {
     throw new Error('--verify-lock and --write-lock cannot be used together');
@@ -322,8 +327,27 @@ export async function snapshotArchive({
   if (writeLock) {
     const lockPath = resolve(docsRoot, 'src/data/archive-lock.yaml');
     const lock = await loadArchiveLock({ lockPath });
-    addArchiveLockEntry(lock, docset.id, result);
-    await writeFile(lockPath, YAML.stringify(lock), 'utf8');
+    const currentLock = {
+      ...lock,
+      archives: { ...(lock?.archives ?? {}) },
+    };
+    if (Object.hasOwn(currentLock.archives, docset.id)) {
+      currentLock.archives[docset.id] = archiveLockEntry(result);
+    } else {
+      addArchiveLockEntry(currentLock, docset.id, result);
+    }
+    const errors = validateArchiveLock(currentLock, docsets);
+    if (errors.length > 0) throw new Error(errors.join('\n'));
+    if (canonicalJson(lock) !== canonicalJson(currentLock)) {
+      const repoRoot = resolve(docsRoot, '../..');
+      errors.push(...await assertArchiveLockImmutableForRepository(lock, currentLock, {
+        repoRoot,
+        docsets,
+        runCommand,
+      }));
+      if (errors.length > 0) throw new Error(errors.join('\n'));
+      await writeFile(lockPath, YAML.stringify(currentLock), 'utf8');
+    }
   }
   return { docset, result };
 }
