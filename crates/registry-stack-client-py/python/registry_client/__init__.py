@@ -11,4 +11,4 @@ import registry_client.render as render
 import registry_client.coordinator as coordinator
 
 __all__ = ["auth", "breg", "casework", "discovery", "evidence", "messaging", "scheduling", "render", "coordinator"]
-__version__ = "0.44.0"
+__version__ = "0.45.0"
