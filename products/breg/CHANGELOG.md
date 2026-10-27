@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.44.0 - 2026-10-27
+
 - Add an optional `eventRecord` descriptor to record types: subjects, occurred
   and effective time (point, span or unknown-precision `within`), sources,
   correction links and source event identity over stored fields. It adds no

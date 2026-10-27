@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.44.0 - 2026-10-27
+
 - A normalized target document accepts an optional
   `signing.maximumAssertionValiditySeconds` (1 to 31,536,000, default 300) so a
   definition with a longer `validitySeconds`, such as a seven-day holder-bound

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.44.0
+
 - BREAKING: `render` uses `--artifact-format` because its standard output is
   the exact artifact stream. `publish` uses `--output` and supports a separate
   `--format human|json` report. Replace retired `render --format`, `publish

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.44.0 - 2026-10-27
+
 - Summarize current-source inbox refusals once per page in operator logs,
   including list and next-task reads. Expected concealment and source
   authorization filtering use informational logging; explicit provider or

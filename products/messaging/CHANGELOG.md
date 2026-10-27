@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.44.0 - 2026-10-27
+
 - `messagingctl check --project` reads an optional `check-acceptances.yaml`,
   keeps exactly matched warnings visible with their reasons, and excludes only
   those accepted warnings from `--deny-warnings`.

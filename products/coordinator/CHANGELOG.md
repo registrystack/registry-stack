@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.44.0 - 2026-10-27
+
 First release of Registry Coordinator.
 
 - `coordinatorctl check --project` reads an optional
@@ -24,13 +26,15 @@ First release of Registry Coordinator.
 - `external.command/v1` sends one bounded POST to the exact `commandPath` an operator configures
   on an `external-http` connection. The command and its request id are persisted before the first
   send and the id travels as `Idempotency-Key`; a required pure `interpret` Function maps the
-  validated response to an accepted result, a declared refusal, or an uncertain hold. A 429 is
-  retried as not processed; a 503 before the last attempt is retried with the effect held as
-  unknown until a later attempt settles it, and a 503 whose retry could not land before the run
-  deadline holds the run at once. Lost acknowledgements, timeouts, redirects, other server
-  errors, and unusable responses hold the run, and `retry-same` resends the same command with the
-  same id. Scenarios reply to it with `type: response`, never with a synthetic `success` or
-  `declared-refusal`, and only with a status that reaches the interpretation Function; a
+  validated response to an accepted result, a declared refusal, or an uncertain hold. Before
+  any uncertain attempt, a 429 is retried as not processed. Once an attempt has an unknown
+  effect, a later 429 or declared refusal holds the run. A 503 before the last attempt is retried
+  with the effect held as unknown until a later attempt settles it, and a 503 whose retry could
+  not land before the run deadline holds the run at once. Lost acknowledgements, timeouts,
+  redirects, other server errors, and unusable responses hold the run, and `retry-same` resends
+  the same command with the same id. Scenarios reply to it with `type: response`, never with a
+  synthetic `success` or `declared-refusal`, and only with a status that reaches the
+  interpretation Function; a
   redirect, 429 or 5xx takes an `uncertain` or `retryable` reply instead. Providers must
   deduplicate on the request id.
 - Base Registry Engine (BReg) Action aliases import owner-generated exact contracts for immediate

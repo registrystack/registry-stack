@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.44.0 - 2026-10-27
+
 - Upgrade the P-256 dependency stack to use `crypto-bigint` 0.7.6, addressing
   RUSTSEC-2026-0387. Key generation retains operating-system randomness and
   existing SEC1 and JWK formats; signing algorithms and providers are unchanged.

@@ -18,6 +18,75 @@ relevant product pages on this site rather than duplicating release notes.
 
 ## Unreleased
 
+## v0.44.0 beta-56
+
+- Managed local installations expose one `rstack` command and install product
+  components on demand. Registry Coordinator publishes its runtime and operator
+  binaries, installer, and unified Node.js and Python client namespace for the
+  first time. Its image remains held, as do Render client packages. Registry
+  Document Store remains source-only. See
+  [Registry Coordinator](../start/coordinator/) and the
+  [client API](../reference/client-api/).
+
+{/* Evidence: crates/registry-rstack/README.md, "Command mapping";
+    release/scripts/release_roster.py, COORDINATOR_BINARY_FIRST_RELEASE,
+    COORDINATOR_CLIENT_FIRST_RELEASE, COORDINATOR_FIRST_RELEASE,
+    DOCUMENTS_FIRST_RELEASE, and RENDER_CLIENT_FIRST_RELEASE. */}
+
+- BREAKING: Base Registry Engine (BReg), Casework, and Scheduling start fresh
+  pre-1.0 database baselines. BReg refuses the v0.43.0
+  attachment-verification shape; Casework and Scheduling install schema version
+  200 and refuse lower ledgers. Keep each old database for reconciliation,
+  provision a fresh one, and apply the v0.44.0 package. Rebuild the BReg package
+  with the v0.44.0 tooling and apply it with `--initial`. See
+  [upgrade and retire](../operate/advanced/upgrade-and-retire/).
+
+{/* Evidence: products/breg/CHANGELOG.md, "attachment verification shape
+    v0.43.0"; products/casework/CHANGELOG.md and
+    products/scheduling/CHANGELOG.md, "baseline numbered version 200";
+    release/scripts/rehearse-upgrade.py, product omission guidance. */}
+
+- BReg adds configured event-record descriptors, a caller-filtered read-only
+  event-record view in its Rust, Node.js, and Python clients, presentation
+  grouping, and configurable business identifiers. BREAKING: inspection
+  formats advance, sending-side webhook names become hook names,
+  `eventDestinations` becomes `destinations.hooks`, and attachment storage
+  and verification use `url` instead of `endpoint`. See the
+  [BReg configuration reference](../reference/breg-configuration/).
+
+{/* Evidence: products/breg/CHANGELOG.md, v0.44.0 event-record, business
+    identifier, explanation-format, hook-vocabulary, and destination entries;
+    crates/registry-breg-client/src/event_record.rs, BRegEventRecordView. */}
+
+- Scheduling adds composed bookings, named resource reservations, records-managed
+  arrival windows, source busy import, operational appointment reads,
+  source-managed assisted booking, attendance observations, and signed
+  purpose-specific events. Casework adds approval templates and can count
+  negative advice in a non-final stage without settling the review.
+
+{/* Evidence: products/scheduling/CHANGELOG.md, v0.44.0 resource reservation,
+    allocation, source busy, operational read, assisted booking, attendance,
+    and reminder entries; products/casework/CHANGELOG.md, v0.44.0 approval
+    templates and negativeDecisions entries. */}
+
+- Registry Evidence can generate fixed request bindings from selector fields
+  and can set a target signing-validity maximum up to one year. BREAKING: the
+  Evidence OID4VCI runtime requires a durable audit destination and a
+  keyed-pseudonym hash key before startup. See
+  [configure Evidence OID4VCI](../configure/evidence-oid4vci/).
+
+{/* Evidence: products/evidence/CHANGELOG.md, v0.44.0 source suggest, target
+    signing maximum, and OID4VCI audit entries. */}
+
+- BREAKING: command reports use explicit `--format human|json`; Manifest
+  separates artifact selection from report encoding; client response bounds,
+  attempt and connection timeouts, and mutation retry counts use their full
+  parameter names. Update scripts and client construction together.
+
+{/* Evidence: products/manifest/CHANGELOG.md, v0.44.0 render and publish flags;
+    crates/CLIENTS.md, retry contract; release/notes/v0.44.0.md,
+    "Parameter migration". */}
+
 ## v0.43.0 beta-55
 
 - v0.43.0 continues the forward state path from v0.42.0. BREAKING: active
