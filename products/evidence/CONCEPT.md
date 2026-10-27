@@ -2567,8 +2567,8 @@ These sit under the existing product-boundary rules.
 7. It stores no raw selector value or record identifier; selector values become
    a keyed pseudonym before anything is written.
 8. Intake is source-neutral: the shared hook envelope that every Registry Stack
-   product delivers, verified through `registry-platform-hooks`. BReg is the
-   first producer, not a dependency.
+   product delivers, verified through `registry-platform-hooks`. The Base
+   Registry Engine (BReg) is the first producer, not a dependency.
 
 #### Token Status List profile
 
