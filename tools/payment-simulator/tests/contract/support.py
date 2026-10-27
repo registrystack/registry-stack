@@ -230,3 +230,25 @@ def assert_row_identity(
     assert row["payeePartyId"] == address
     assert row["payeePartyIdType"] == "FINANCIAL_ADDRESS"
     assert isinstance(row["startedAt"], str) and row["startedAt"]
+
+
+def contract_amount(target: ContractTarget, minor_units: int) -> Decimal:
+    """Build an amount from minor units at the target's currency scale.
+
+    1010 minor units is 10.10 at scale 2, 101.0 at scale 1 and 1010 at scale 0. Distinct
+    minor units stay distinct amounts at every scale.
+    """
+    return Decimal(minor_units).scaleb(-target.settings.currency_scale)
+
+
+def equivalent_notation(target: ContractTarget, amount: Decimal) -> Decimal:
+    """Write the same value with a different number of fractional digits.
+
+    Drops one trailing zero where the scale has a fractional digit (0.10 becomes 0.1) and adds
+    one at scale 0 (10 becomes 10.0), so the result is never within the target's scale in the
+    same spelling. The amount must end in a zero minor digit so the value is unchanged.
+    """
+    scale = target.settings.currency_scale
+    equivalent = amount.quantize(Decimal(1).scaleb(-scale + (1 if scale else -1)))
+    assert equivalent == amount and equivalent.as_tuple() != amount.as_tuple()
+    return equivalent

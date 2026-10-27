@@ -74,6 +74,10 @@ The request builders use each profile's public operations. Tests parse
 numeric values as exact decimals, validate response shapes and correlations,
 and collect complete paginated results. They compare amount values, not JSON
 number formatting, and do not assert informational descriptions verbatim.
+Amounts are built from minor units at the target's `--target-currency-scale`
+(`contract_amount` in `tests/contract/support.py`), so the suite runs against
+scale 0, 1 and 2 targets; the equivalent-notation replay writes the same value
+with one fewer fractional digit (one more at scale 0).
 
 ## Fixture capabilities and evidence
 
