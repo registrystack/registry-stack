@@ -110,6 +110,11 @@ fn odrl_cli_unknown_profile_and_irrelevant_flags_refuse_before_writing() {
         assert_eq!(report["ok"], false);
         assert_eq!(report["command"], "generate");
         assert_eq!(report["diagnostics"][0]["code"], expected_code);
+        assert_eq!(report["diagnostics"][0]["artifact"], "command-arguments");
+        assert_eq!(
+            report["diagnostics"][0]["suggestedAction"],
+            "correct-command-usage"
+        );
         assert!(result.stderr.is_empty(), "{result:?}");
         assert!(!output.exists());
     }

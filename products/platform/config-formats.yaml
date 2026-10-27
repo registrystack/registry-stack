@@ -1220,6 +1220,52 @@ formats:
     conformance: none
     securityMembers: []
     restrictingMembers: []
+  - id: breg/odrl-policies
+    product: breg
+    title: Partial ODRL policy collection
+    files: []
+    syntax: json
+    audience: generated
+    stability: experimental
+    exceptionClass: external-format
+    current:
+      apiVersion: none
+      kind: none
+      checkedBy: none
+    target: none
+    schema: none
+    reader: none
+    emittedBy:
+      file: crates/registry-breg/src/odrl_export.rs
+      symbol: export_odrl
+    check: none
+    example: products/breg/examples/formats/odrl-policies.jsonld
+    conformance: none
+    securityMembers: []
+    restrictingMembers: []
+  - id: breg/odrl-profile
+    product: breg
+    title: BReg ODRL profile and vocabulary
+    files: []
+    syntax: json
+    audience: generated
+    stability: experimental
+    exceptionClass: external-format
+    current:
+      apiVersion: none
+      kind: none
+      checkedBy: none
+    target: none
+    schema: none
+    reader: none
+    emittedBy:
+      file: crates/registry-breg/src/odrl_export.rs
+      symbol: export_odrl
+    check: none
+    example: products/breg/contracts/odrl-profile.jsonld
+    conformance: none
+    securityMembers: []
+    restrictingMembers: []
   - id: breg/linkml-schema
     product: breg
     title: LinkML schema read by bregctl init --from

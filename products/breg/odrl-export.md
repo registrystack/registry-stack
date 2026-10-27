@@ -52,6 +52,28 @@ must understand its terms, particularly the projected target and exact native
 operation. The shipped `profile.jsonld` defines those terms without requiring a
 network fetch.
 
+## Eclipse EDC compatibility
+
+This export is neither an Eclipse EDC Management API `PolicyDefinition` nor a
+Dataspace Protocol Offer or Agreement. It has not been imported into or evaluated
+by EDC. **Do not import it by wrapping a generated policy in `PolicyDefinition`.**
+The reviewed EDC parser reads permission actions, constraints and duties but
+drops rule-level targets. That loses the BReg projection identifier, Record type
+and readable-field list, which define the permission's scope. A successful
+parse would not establish equivalent behavior.
+
+An EDC adapter would need to preserve every projection and its exact operation,
+normalize JSON-LD list operands, bind `odrl:read` in each applicable evaluation
+scope, and register functions for every BReg constraint. Those functions must
+use BReg's verified caller context and refuse absent, unsupported or unverifiable
+conditions. BReg would still authorize the actual request. The exporter includes
+no such adapter or EDC extension.
+
+These limits were checked against EDC's
+[policy-definition schema](https://github.com/eclipse-edc/Connector/blob/cd7e556d365cd3e7195e5728cb9bf695c483599d/extensions/common/api/management-api-schema-validator/src/main/resources/schema/management/v4/policy-definition-schema.json),
+[permission transformer](https://github.com/eclipse-edc/Connector/blob/cd7e556d365cd3e7195e5728cb9bf695c483599d/core/control-plane/control-plane-transform/src/main/java/org/eclipse/edc/connector/controlplane/transform/odrl/to/JsonObjectToPermissionTransformer.java)
+and [policy-engine contract](https://github.com/eclipse-edc/Connector/blob/cd7e556d365cd3e7195e5728cb9bf695c483599d/spi/control-plane-spi/src/main/java/org/eclipse/edc/policy/engine/spi/PolicyEngine.java).
+
 ## What is omitted
 
 A permission with row boundaries, current-membership requirements, subject
@@ -93,5 +115,6 @@ ODRL serializer belongs to `registry-manifest-core`. The export tests cover
 restriction preservation and omission, while the CLI tests run the native
 command through output publication and refusal paths.
 
-Standards references: [ODRL Information Model 2.2](https://www.w3.org/TR/odrl-model/)
-and [ODRL Vocabulary and Expression 2.2](https://www.w3.org/TR/odrl-vocab/).
+Standards references: [ODRL Information Model 2.2](https://www.w3.org/TR/odrl-model/),
+[ODRL Vocabulary and Expression 2.2](https://www.w3.org/TR/odrl-vocab/), and
+[ODRL Profile Best Practices](https://www.w3.org/community/reports/odrl/CG-FINAL-profile-bp-20240808.html#profile-vocab).

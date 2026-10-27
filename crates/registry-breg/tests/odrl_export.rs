@@ -1,7 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
+use std::collections::BTreeSet;
+
 use registry_breg::compiler::{compile_project, module_digest, CompileProfile};
-use registry_breg::contract::{parse_module_yaml, parse_project_json, parse_project_yaml};
+use registry_breg::contract::{
+    parse_module_json, parse_module_yaml, parse_project_json, parse_project_yaml,
+};
 use registry_breg::odrl_export::{export_odrl, PROFILE_IRI, VOCAB};
 use registry_breg::{CompiledRegistry, GeneratedArtifact};
 use serde_json::{json, Value};
@@ -147,6 +151,21 @@ fn registered_coverage_example_matches_minimal_project() {
 }
 
 #[test]
+fn registered_policy_example_matches_authoring_display_fixture() {
+    let project = parse_project_yaml(include_bytes!(
+        "../../../products/breg/fixtures/authoring-display/registry.yaml"
+    ))
+    .unwrap();
+    let registry = compile_project(&project, &[], CompileProfile::Authoring).unwrap();
+    let export = export_odrl(&registry, None).unwrap();
+    assert_eq!(
+        artifact(&export.artifacts, "generated/odrl/policies.jsonld").bytes,
+        include_bytes!("../../../products/breg/examples/formats/odrl-policies.jsonld")
+    );
+    assert!(export.coverage["totals"]["exported"].as_u64().unwrap() > 0);
+}
+
+#[test]
 fn supported_reads_preserve_profile_conditions_and_projection_fields() {
     let registry = compile_source(&supported_source());
     let source_artifacts = serde_json::to_value(registry.artifacts()).unwrap();
@@ -212,6 +231,7 @@ fn supported_reads_preserve_profile_conditions_and_projection_fields() {
     assert_eq!(policies[format!("{VOCAB}partial")], true);
     assert!(policies["http://purl.org/dc/terms/description"].is_string());
     let policy = &policies["@graph"][0];
+    assert_eq!(policy[format!("{VOCAB}partial")], true);
     assert_eq!(policy["odrl:profile"], json!([{"@id":PROFILE_IRI}]));
     let permissions = policy["odrl:permission"]
         .as_array()
@@ -454,4 +474,135 @@ fn exact_selection_of_known_action_only_profile_is_empty_and_valid() {
             "missing {surface}: {surfaces:?}"
         );
     }
+}
+
+#[test]
+fn exact_selection_accepts_profiles_from_modules_and_extensions() {
+    let project = parse_project_json(
+        &serde_json::to_vec(&json!({
+            "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1",
+            "kind": "BRegProject",
+            "project": {"id":"module-profile", "version":"1", "defaultLanguage":"en",
+                        "canonicalBaseIri":"https://authoring.example.test"},
+            "datasets": [{"id":"records"}],
+            "recordTypes": [{
+                "id":"case-file", "primaryDataset":"records", "route":"case-files",
+                "mutationMode":"mutable",
+                "fields":[{"id":"code", "type":"string", "maximumLength":32,
+                           "classification":"internal"}]
+            }],
+            "modules": [{"id":"core", "version":"1"}]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let profile = |id| {
+        json!({
+            "id":id, "principalClaim":"sub", "operations":["get"],
+            "readableFields":["code"], "requiredScopes":"unrestricted",
+            "rowBoundaries":"unrestricted"
+        })
+    };
+    let module = parse_module_json(
+        &serde_json::to_vec(&json!({
+            "apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1",
+            "kind":"BRegModule", "id":"core", "version":"1",
+            "recordTypes":[{
+                "id":"module-record", "primaryDataset":"records", "route":"module-records",
+                "mutationMode":"mutable",
+                "fields":[{"id":"code", "type":"string", "maximumLength":32,
+                           "classification":"internal"}],
+                "accessProfiles":[profile("module-reader")]
+            }],
+            "extendRecordTypes":[{
+                "recordType":"case-file", "accessProfiles":[profile("extension-reader")]
+            }]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let registry = compile_project(&project, &[module], CompileProfile::Authoring).unwrap();
+    assert!(registry.access_profile_displays().is_empty());
+    for (id, record_type) in [
+        ("module-reader", "module-record"),
+        ("extension-reader", "case-file"),
+    ] {
+        let export = export_odrl(&registry, Some(id)).expect("compiled profile is selectable");
+        assert_eq!(export.coverage["selectedAccessProfile"], id);
+        assert_eq!(
+            export.coverage["totals"],
+            json!({"considered":1,"exported":1,"omitted":0})
+        );
+        assert_eq!(export.coverage["grants"][0]["recordType"], record_type);
+        assert_eq!(export.coverage["grants"][0]["accessProfile"], id);
+    }
+    assert!(export_odrl(&registry, Some("module")).is_err());
+}
+
+#[test]
+fn profile_declares_every_emitted_extension_and_adopts_read() {
+    fn emitted_terms(value: &Value, terms: &mut BTreeSet<String>) {
+        match value {
+            Value::Object(object) => {
+                for (key, value) in object {
+                    if key.starts_with(VOCAB) {
+                        terms.insert(key.clone());
+                    }
+                    emitted_terms(value, terms);
+                }
+            }
+            Value::Array(values) => {
+                for value in values {
+                    emitted_terms(value, terms);
+                }
+            }
+            Value::String(value) if value.starts_with(VOCAB) || value == ODRL_READ => {
+                terms.insert(value.clone());
+            }
+            _ => {}
+        }
+    }
+
+    let registry = compile_source(&supported_source());
+    let export = export_odrl(&registry, None).unwrap();
+    let policies = document(&export, "generated/odrl/policies.jsonld");
+    let profile = document(&export, "generated/odrl/profile.jsonld");
+    let graph = profile["@graph"].as_array().unwrap();
+    let collection = graph
+        .iter()
+        .find(|node| node["@type"] == "skos:Collection")
+        .expect("profile vocabulary is a machine-readable collection");
+    let expand = |value: &Value| {
+        let id = value.as_str().unwrap();
+        id.strip_prefix("breg:").map_or_else(
+            || id.replace("odrl:", "http://www.w3.org/ns/odrl/2/"),
+            |term| format!("{VOCAB}{term}"),
+        )
+    };
+    let members = collection["skos:member"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|member| expand(&member["@id"]))
+        .collect::<BTreeSet<_>>();
+    let mut emitted = BTreeSet::new();
+    emitted_terms(&policies, &mut emitted);
+    assert_eq!(
+        emitted.len(),
+        14,
+        "thirteen BReg terms and odrl:read are exercised"
+    );
+    assert_eq!(members, emitted);
+    for term in graph
+        .iter()
+        .filter(|node| node["@type"] != "skos:Collection")
+    {
+        assert_eq!(term["rdfs:isDefinedBy"]["@id"], PROFILE_IRI);
+        assert!(members.contains(&expand(&term["@id"])));
+    }
+    assert_eq!(
+        graph.len(),
+        14,
+        "one collection and thirteen term definitions"
+    );
 }

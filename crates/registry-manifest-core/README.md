@@ -19,6 +19,9 @@ metadata model.
 - Pure renderers for catalog JSON, DCAT JSON-LD, BRegDCAT-AP JSON-LD, CPSV-AP JSON-LD, SHACL,
   JSON Schema Draft 2020-12, OGC API Records items, policies, and evidence
   offerings.
+- A pure ODRL 2.2 policy-collection renderer with explicit profiles, projected
+  targets and constraints. Consumers own translation and profile semantics;
+  rendering a policy does not enforce it or establish interoperability.
 
 ## Typical Use
 

@@ -8329,12 +8329,18 @@ fn generate_odrl(args: &GenerateArgs) -> Result<SuccessReport, FailureReport> {
     let compiled = compile(&args.project, profile, "generate")?;
     let export = registry_breg::odrl_export::export_odrl(&compiled, args.access_profile.as_deref())
         .map_err(|diagnostic| {
-            source_failure(
-                "generate",
-                diagnostic,
-                DiagnosticArtifact::RegistryProject,
-                SuggestedAction::CorrectAuthoringSource,
-            )
+            let (artifact, action) = if diagnostic.code == "breg.odrl.unknown-access-profile" {
+                (
+                    DiagnosticArtifact::CommandArguments,
+                    SuggestedAction::CorrectCommandUsage,
+                )
+            } else {
+                (
+                    DiagnosticArtifact::RegistryProject,
+                    SuggestedAction::CorrectAuthoringSource,
+                )
+            };
+            source_failure("generate", diagnostic, artifact, action)
         })?;
     write_artifacts(&args.output, &export.artifacts).map_err(|diagnostic| {
         source_failure(

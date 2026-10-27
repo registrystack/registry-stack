@@ -48,7 +48,7 @@
       "description": "JSON-LD namespace for Registry Manifest terms.",
       "source": {
         "path": "crates/registry-manifest-core/src/lib.rs",
-        "sha256": "e1d4b066f89f5df821aa348bc86e62145593798a7433fc3120ce13914900559f"
+        "sha256": "707b3d0306d9eab8e4f8148310482ceff7912368c50b147931dceafe54dadc74"
       }
     },
     {
@@ -4099,6 +4099,24 @@
       }
     },
     {
+      "uri": "https://id.registrystack.org/profiles/breg-odrl/v1",
+      "kind": "profile",
+      "status": "active",
+      "compatibilityLine": "v1",
+      "owner": "breg",
+      "title": "BReg partial read-policy export profile",
+      "description": "Experimental ODRL profile for operator review of a conservative subset of configured BReg read permissions.",
+      "source": {
+        "path": "products/breg/contracts/odrl-profile.jsonld",
+        "sha256": "24d0950eb2c1a76d5005850e1145f675ad65df5231867907b41d11fdd2979cdc"
+      },
+      "artifact": {
+        "path": "products/breg/contracts/odrl-profile.jsonld",
+        "sha256": "24d0950eb2c1a76d5005850e1145f675ad65df5231867907b41d11fdd2979cdc",
+        "mediaType": "application/ld+json"
+      }
+    },
+    {
       "uri": "https://id.registrystack.org/profiles/registry-record/v1",
       "kind": "profile",
       "status": "active",
@@ -5464,6 +5482,24 @@
         "path": "products/scheduling/generated/runtime/runtime.schema.json",
         "sha256": "eaf6f80ebeb9ebb3896982b2b334a1926e30fca4d62615c368d4b69e9c3366af",
         "mediaType": "application/schema+json"
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/vocab/breg-odrl/",
+      "kind": "vocabulary",
+      "status": "active",
+      "compatibilityLine": "v1",
+      "owner": "breg",
+      "title": "BReg partial read-policy vocabulary",
+      "description": "Experimental BReg ODRL constraint and projection terms, defined by the shipped read-policy export profile.",
+      "source": {
+        "path": "products/breg/contracts/odrl-profile.jsonld",
+        "sha256": "24d0950eb2c1a76d5005850e1145f675ad65df5231867907b41d11fdd2979cdc"
+      },
+      "artifact": {
+        "path": "products/breg/contracts/odrl-profile.jsonld",
+        "sha256": "24d0950eb2c1a76d5005850e1145f675ad65df5231867907b41d11fdd2979cdc",
+        "mediaType": "application/ld+json"
       }
     },
     {

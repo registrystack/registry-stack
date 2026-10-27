@@ -20,7 +20,7 @@ use crate::GeneratedArtifact;
 
 pub const COVERAGE_API_VERSION: &str = "id.registrystack.org/formats/breg/odrl-coverage/v1alpha1";
 pub const PROFILE_IRI: &str = "https://id.registrystack.org/profiles/breg-odrl/v1";
-pub const VOCAB: &str = "https://id.registrystack.org/vocab/breg-odrl#";
+pub const VOCAB: &str = "https://id.registrystack.org/vocab/breg-odrl/";
 
 const ODRL_EQ: &str = "http://www.w3.org/ns/odrl/2/eq";
 const ODRL_HAS_PART: &str = "http://www.w3.org/ns/odrl/2/hasPart";
@@ -61,6 +61,10 @@ pub fn export_odrl(
             .access_profile_displays()
             .iter()
             .any(|profile| profile.id == selected)
+            && !registry
+                .entities()
+                .values()
+                .any(|entity| entity.access_profiles.contains_key(selected))
         {
             return Err(refusal(
                 "breg.odrl.unknown-access-profile",
@@ -150,6 +154,19 @@ pub fn export_odrl(
         )
     })?;
     collection.insert(format!("{VOCAB}partial"), Value::Bool(true));
+    let members = collection
+        .get_mut("@graph")
+        .and_then(Value::as_array_mut)
+        .ok_or_else(|| {
+            refusal(
+                "breg.odrl.render-failed",
+                "odrl",
+                "the ODRL renderer returned an invalid policy graph",
+            )
+        })?;
+    for policy in members {
+        policy[format!("{VOCAB}partial")] = Value::Bool(true);
+    }
     collection.insert(
         DCTERMS_DESCRIPTION.to_owned(),
         Value::String(
