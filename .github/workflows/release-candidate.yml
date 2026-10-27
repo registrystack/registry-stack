@@ -903,13 +903,15 @@ jobs:
           if [[ "${{ needs.validate.outputs.exclude_discovery }}" == true ]]; then
             component_args+=(--exclude-unit discovery)
           fi
+          # macOS runs bash 3.2, which rejects an empty "${array[@]}"
+          # under `set -u`; expand the optional array only when set.
           release/scripts/build-release-native-platform.sh \
             --group "${{ matrix.group }}" \
             --purpose candidate_input \
             --source-sha "${{ needs.validate.outputs.source_sha }}" \
             --version "${{ needs.validate.outputs.version }}" \
             --output candidate-native-shard \
-            "${component_args[@]}"
+            ${component_args[@]+"${component_args[@]}"}
           # These groups contain complete installer toolsets. Exercise the
           # relocated release bytes while the Cargo output is unavailable.
           if [[ "${{ matrix.group }}" == core || "${{ matrix.group }}" == casework ||
