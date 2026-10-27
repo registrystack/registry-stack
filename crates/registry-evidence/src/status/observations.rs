@@ -86,8 +86,8 @@ pub struct Observation {
 pub enum ObservationOutcome {
     /// The observation is now the latest for its subject.
     Recorded,
-    /// The store already holds this revision or a newer one for the subject,
-    /// so nothing changed.
+    /// The store already holds a newer revision, or this revision under this
+    /// mapping version or a newer one, so nothing changed.
     Stale,
 }
 
@@ -128,10 +128,11 @@ fn validate_mapping_block(mapping_block: &str) -> Result<(), StatusError> {
 }
 
 impl StatusLedger {
-    /// Record an observation of `subject`'s record for `requirement_id` if
-    /// it is newer than every one the store holds for that requirement and
-    /// subject, under any retained pseudonym key. The mapping version must
-    /// be the highest registered one.
+    /// Record an observation of `subject`'s record for `requirement_id` if its
+    /// source revision is newer than every one the store holds for that
+    /// requirement and subject under any retained pseudonym key, or if it
+    /// remaps the latest revision under a higher mapping version. The mapping
+    /// version must be the highest registered one.
     pub async fn record_observation(
         &self,
         pool: &ReservedPool,
@@ -160,15 +161,19 @@ impl StatusLedger {
             .execute(LOCK_PSEUDONYMS, &[&PSEUDONYM_LOCK_CLASS, &lock_keys])
             .await
             .map_err(|error| failed(&error))?;
-        let latest: Option<i64> = transaction
-            .query_one(
-                &self.statements.latest_observed_revision,
+        let latest: Option<(i64, i32)> = transaction
+            .query_opt(
+                &self.statements.latest_observation_provenance,
                 &[&requirement_id, &lookups],
             )
             .await
             .map_err(|error| failed(&error))?
-            .get(0);
-        if latest.is_some_and(|latest| latest >= observation.revision.get()) {
+            .map(|row| (row.get(0), row.get(1)));
+        let incoming = (
+            observation.revision.get(),
+            observation.mapping_version.column(),
+        );
+        if latest.is_some_and(|latest| latest >= incoming) {
             transaction
                 .rollback()
                 .await

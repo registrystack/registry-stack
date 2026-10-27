@@ -315,7 +315,7 @@ pub(crate) struct Statements {
     pub(crate) highest_mapping_version: String,
     pub(crate) share_highest_mapping_version: String,
     pub(crate) register_mapping_version: String,
-    pub(crate) latest_observed_revision: String,
+    pub(crate) latest_observation_provenance: String,
     pub(crate) latest_observation: String,
     pub(crate) upsert_observation: String,
     pub(crate) purge_observations: String,
@@ -412,15 +412,16 @@ impl Statements {
                  SET highest = GREATEST(registered.highest, EXCLUDED.highest) \
                  RETURNING highest"
             ),
-            latest_observed_revision: format!(
-                "SELECT max(source_revision) FROM {s}.observations \
-                 WHERE requirement_id = $1 AND selector_pseudonym = ANY($2::bytea[])"
+            latest_observation_provenance: format!(
+                "SELECT source_revision, mapping_version FROM {s}.observations \
+                 WHERE requirement_id = $1 AND selector_pseudonym = ANY($2::bytea[]) \
+                 ORDER BY source_revision DESC, mapping_version DESC LIMIT 1"
             ),
             latest_observation: format!(
                 "SELECT status, source_revision, captured_at, mapping_version \
                  FROM {s}.observations \
                  WHERE requirement_id = $1 AND selector_pseudonym = ANY($2::bytea[]) \
-                 ORDER BY source_revision DESC, captured_at DESC LIMIT 1"
+                 ORDER BY source_revision DESC, mapping_version DESC, captured_at DESC LIMIT 1"
             ),
             upsert_observation: format!(
                 "INSERT INTO {s}.observations \
