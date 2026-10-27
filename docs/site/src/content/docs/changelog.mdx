@@ -78,6 +78,28 @@ relevant product pages on this site rather than duplicating release notes.
 {/* Evidence: products/evidence/CHANGELOG.md, v0.44.0 source suggest, target
     signing maximum, and OID4VCI audit entries. */}
 
+- Evidence adds library-only building blocks for Token Status List checking and
+  status-ledger transitions. The running service does not call them, and
+  v0.44.0 does not issue credentials with a `status` claim. The OID4VCI adapter
+  routes exchange state through a store interface, but released configuration
+  still selects the in-memory store and cannot select the PostgreSQL backend.
+
+{/* Evidence: products/evidence/CHANGELOG.md, v0.44.0 "First library building
+    blocks" entry; crates/registry-evidence-verifier/src/status_list.rs,
+    check_status; crates/registry-evidence/src/status/; and
+    crates/registry-evidence-oid4vci/src/service.rs, DeliveryService::with_store. */}
+
+- The source tree includes a synthetic G2P and P2G payment simulator for lab
+  and workflow tests. It binds to loopback by default and requires explicit
+  `--allow-network` to listen on a non-loopback address. The simulator never
+  moves money and is not a released payment rail or runtime artifact.
+
+{/* Evidence: tools/payment-simulator/README.md, "Not for production";
+    tools/payment-simulator/src/payment_simulator/cli.py, serve_settings; and
+    tools/payment-simulator/tests/test_synthetic_guard.py,
+    test_serve_defaults_to_loopback and
+    test_serve_allows_network_host_with_explicit_flag. */}
+
 - BREAKING: command reports use explicit `--format human|json`; Manifest
   separates artifact selection from report encoding; client response bounds,
   attempt and connection timeouts, and mutation retry counts use their full
