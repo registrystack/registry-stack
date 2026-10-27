@@ -15,6 +15,18 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+fn current_release() -> String {
+    format!("v{CURRENT_VERSION}")
+}
+
+fn next_release() -> String {
+    let (major, remainder) = CURRENT_VERSION.split_once('.').unwrap();
+    let (minor, _) = remainder.split_once('.').unwrap();
+    format!("v{major}.{}.0", minor.parse::<u64>().unwrap() + 1)
+}
+
 fn scratch() -> tempfile::TempDir {
     if let Ok(target) = std::env::var("CARGO_TARGET_DIR") {
         tempfile::tempdir_in(target).unwrap()
@@ -39,7 +51,7 @@ fn other_platform() -> &'static str {
 }
 
 fn asset_name(binary: &str, platform: &str) -> String {
-    asset_name_for(binary, "v0.44.0", platform)
+    asset_name_for(binary, &current_release(), platform)
 }
 
 fn asset_name_for(binary: &str, release: &str, platform: &str) -> String {
@@ -70,7 +82,7 @@ fn write_versioned_executable(path: &Path, binary: &str, version: &str) {
 }
 
 fn component_asset(directory: &Path, binary: &str, platform: &str) -> (String, Vec<u8>) {
-    component_asset_for(directory, binary, "v0.44.0", platform)
+    component_asset_for(directory, binary, &current_release(), platform)
 }
 
 fn component_asset_for(
@@ -127,6 +139,7 @@ impl Fixture {
         let workspace = scratch();
         let assets = workspace.path().join("assets");
         fs::create_dir(&assets).unwrap();
+        let release = current_release();
         let platform = target_platform();
         let launcher_name = asset_name("rstack", platform);
         let launcher = assets.join(&launcher_name);
@@ -136,7 +149,7 @@ impl Fixture {
             write_versioned_executable(
                 &contents.join(launcher_name.strip_suffix(".tar.gz").unwrap()),
                 "rstack",
-                "0.44.0",
+                CURRENT_VERSION,
             );
             fs::write(contents.join("THIRD_PARTY_NOTICES"), "test fixture\n").unwrap();
             let result = Command::new("tar")
@@ -152,7 +165,7 @@ impl Fixture {
                 .unwrap();
             assert!(result.status.success(), "{result:?}");
         } else {
-            write_versioned_executable(&launcher, "rstack", "0.44.0");
+            write_versioned_executable(&launcher, "rstack", CURRENT_VERSION);
         }
 
         let mut payloads = Vec::new();
@@ -202,21 +215,21 @@ impl Fixture {
             );
         }
 
-        let manifest_name = "registry-stack-v0.44.0-release-manifest.json";
-        let manifest = assets.join(manifest_name);
+        let manifest_name = format!("registry-stack-{release}-release-manifest.json");
+        let manifest = assets.join(&manifest_name);
         let document = json!({
             "schema_version": "registry-stack.release-candidate.v2",
             "repository": "registrystack/registry-stack",
             "release": {
-                "tag": "v0.44.0",
-                "version": "0.44.0",
+                "tag": release.as_str(),
+                "version": CURRENT_VERSION,
                 "source_sha": "a".repeat(40),
                 "release_id": "test",
             },
             "payloads": payloads,
             "components": {
                 "schema_version": "registry-stack.components.v1",
-                "release": "v0.44.0",
+                "release": release.as_str(),
                 "launcher": {(platform): {
                     "name": launcher_name,
                     "size": launcher_bytes.len(),
@@ -384,9 +397,10 @@ fn bootstrap_and_update_accept_plain_macos_launcher_archives() {
     }
     let fixture = Fixture::new();
     fixture.bootstrap(&[]);
-    fixture.write_release("v0.45.0", false, true);
+    let target_release = next_release();
+    fixture.write_release(&target_release, false, true);
 
-    let report = update(&fixture.manager_options(), "v0.45.0", false).unwrap();
+    let report = update(&fixture.manager_options(), &target_release, false).unwrap();
 
     assert!(report.activated);
     let current = fixture.store().acquire_current().unwrap();
@@ -395,7 +409,10 @@ fn bootstrap_and_update_accept_plain_macos_launcher_archives() {
         .output()
         .unwrap();
     assert!(version.status.success());
-    assert_eq!(version.stdout, b"rstack 0.45.0\n");
+    assert_eq!(
+        version.stdout,
+        format!("rstack {}\n", target_release.trim_start_matches('v')).as_bytes()
+    );
 }
 
 #[test]
@@ -434,9 +451,10 @@ fn install_accepts_plain_macos_discovery_archive() {
 #[test]
 fn update_without_an_active_installation_is_a_domain_refusal() {
     let fixture = Fixture::new();
+    let target_release = next_release();
 
     for preview in [true, false] {
-        let error = update(&fixture.manager_options(), "v0.45.0", preview).unwrap_err();
+        let error = update(&fixture.manager_options(), &target_release, preview).unwrap_err();
         assert_eq!(error.class, ManagerErrorClass::Domain);
         assert!(error.message.contains("no installation is selected"));
     }
@@ -459,7 +477,7 @@ fn install_adds_dependency_closure_and_retains_installed_components() {
     let report = install(fixture.manager_options(), vec!["casework".into()], false).unwrap();
 
     assert_ne!(report.generation, before_name);
-    assert_eq!(report.release, "v0.44.0");
+    assert_eq!(report.release, current_release());
     assert_eq!(report.components, vec!["breg", "casework", "evidence"]);
     let current = fixture.store().acquire_current().unwrap();
     assert_eq!(
@@ -700,12 +718,13 @@ fn update_preview_reports_dependency_changes_without_mutation() {
     let before = fixture.store().acquire_current().unwrap();
     let before_name = before.generation().name().to_owned();
     drop(before);
-    fixture.write_release("v0.45.0", true, true);
+    let target_release = next_release();
+    fixture.write_release(&target_release, true, true);
 
-    let report = update(&fixture.manager_options(), "v0.45.0", true).unwrap();
+    let report = update(&fixture.manager_options(), &target_release, true).unwrap();
 
-    assert_eq!(report.current_release, "v0.44.0");
-    assert_eq!(report.target_release, "v0.45.0");
+    assert_eq!(report.current_release, current_release());
+    assert_eq!(report.target_release, target_release);
     assert_eq!(report.components, vec!["breg", "evidence"]);
     assert_eq!(report.added_components, vec!["breg"]);
     assert!(report.download_bytes > 0);
@@ -737,10 +756,11 @@ fn update_preview_of_the_selected_release_reports_no_download() {
     let before_name = before.generation().name().to_owned();
     drop(before);
 
-    let report = update(&fixture.manager_options(), "v0.44.0", true).unwrap();
+    let current_release = current_release();
+    let report = update(&fixture.manager_options(), &current_release, true).unwrap();
 
-    assert_eq!(report.current_release, "v0.44.0");
-    assert_eq!(report.target_release, "v0.44.0");
+    assert_eq!(report.current_release, current_release);
+    assert_eq!(report.target_release, current_release);
     assert_eq!(report.components, vec!["evidence"]);
     assert!(report.added_components.is_empty());
     assert_eq!(report.download_bytes, 0);
@@ -762,12 +782,13 @@ fn update_preview_of_the_selected_release_reports_no_download() {
 fn update_activates_complete_target_release_with_installed_set_and_new_dependencies() {
     let fixture = Fixture::new();
     fixture.bootstrap(&["evidence"]);
-    fixture.write_release("v0.45.0", true, true);
+    let target_release = next_release();
+    fixture.write_release(&target_release, true, true);
 
-    let report = update(&fixture.manager_options(), "v0.45.0", false).unwrap();
+    let report = update(&fixture.manager_options(), &target_release, false).unwrap();
 
-    assert_eq!(report.current_release, "v0.44.0");
-    assert_eq!(report.target_release, "v0.45.0");
+    assert_eq!(report.current_release, current_release());
+    assert_eq!(report.target_release, target_release);
     assert_eq!(report.components, vec!["breg", "evidence"]);
     assert_eq!(report.added_components, vec!["breg"]);
     assert!(report.activated);
@@ -775,7 +796,7 @@ fn update_activates_complete_target_release_with_installed_set_and_new_dependenc
     let current = fixture.store().acquire_current().unwrap();
     assert_eq!(current.generation().name(), report.generation.unwrap());
     let selection = read_selection(current.path()).unwrap();
-    assert_eq!(selection.release, "v0.45.0");
+    assert_eq!(selection.release, target_release);
     assert_eq!(selection.components, vec!["breg", "evidence"]);
     assert!(current
         .path()
@@ -790,7 +811,10 @@ fn update_activates_complete_target_release_with_installed_set_and_new_dependenc
         .output()
         .unwrap();
     assert!(version.status.success());
-    assert_eq!(version.stdout, b"rstack 0.45.0\n");
+    assert_eq!(
+        version.stdout,
+        format!("rstack {}\n", target_release.trim_start_matches('v')).as_bytes()
+    );
 }
 
 #[test]
@@ -820,9 +844,10 @@ fn update_refuses_downgrade_and_unavailable_installed_component() {
 
     let unavailable = Fixture::new();
     unavailable.bootstrap(&["evidence"]);
-    unavailable.write_release("v0.45.0", false, false);
+    let target_release = next_release();
+    unavailable.write_release(&target_release, false, false);
 
-    let error = update(&unavailable.manager_options(), "v0.45.0", false).unwrap_err();
+    let error = update(&unavailable.manager_options(), &target_release, false).unwrap_err();
 
     assert_eq!(error.class, ManagerErrorClass::Domain);
     assert!(
@@ -833,7 +858,7 @@ fn update_refuses_downgrade_and_unavailable_installed_component() {
         read_selection(unavailable.store().acquire_current().unwrap().path())
             .unwrap()
             .release,
-        "v0.44.0"
+        current_release()
     );
 }
 
@@ -842,8 +867,9 @@ fn bootstrap_refuses_to_replace_a_newer_selected_release() {
     let fixture = Fixture::new();
     fixture.bootstrap(&["evidence"]);
     let original_checksums = fs::read(&fixture.checksums).unwrap();
-    fixture.write_release("v0.45.0", false, true);
-    update(&fixture.manager_options(), "v0.45.0", false).unwrap();
+    let target_release = next_release();
+    fixture.write_release(&target_release, false, true);
+    update(&fixture.manager_options(), &target_release, false).unwrap();
     let before = fixture.store().acquire_current().unwrap();
     let before_name = before.generation().name().to_owned();
     drop(before);
@@ -867,7 +893,10 @@ fn bootstrap_refuses_to_replace_a_newer_selected_release() {
     assert!(error.contains("downgrade"), "unexpected error: {error}");
     let current = fixture.store().acquire_current().unwrap();
     assert_eq!(current.generation().name(), before_name);
-    assert_eq!(read_selection(current.path()).unwrap().release, "v0.45.0");
+    assert_eq!(
+        read_selection(current.path()).unwrap().release,
+        target_release
+    );
     assert_eq!(
         fs::read_dir(fixture.store().generations_dir())
             .unwrap()
@@ -883,16 +912,19 @@ fn corrupt_target_payload_preserves_current_release() {
     let before = fixture.store().acquire_current().unwrap();
     let before_name = before.generation().name().to_owned();
     drop(before);
-    fixture.write_release("v0.45.0", false, true);
+    let target_release = next_release();
+    fixture.write_release(&target_release, false, true);
     fs::write(
-        fixture
-            .assets
-            .join(asset_name_for("evidencectl", "v0.45.0", target_platform())),
+        fixture.assets.join(asset_name_for(
+            "evidencectl",
+            &target_release,
+            target_platform(),
+        )),
         "corrupt",
     )
     .unwrap();
 
-    let error = update(&fixture.manager_options(), "v0.45.0", false).unwrap_err();
+    let error = update(&fixture.manager_options(), &target_release, false).unwrap_err();
 
     assert_eq!(error.class, ManagerErrorClass::Operational);
     assert!(
