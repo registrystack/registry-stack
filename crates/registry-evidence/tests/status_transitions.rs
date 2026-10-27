@@ -707,11 +707,20 @@ fn observation(
     source_revision: i64,
     captured_at: DateTime<Utc>,
 ) -> Observation {
+    observation_with_mapping(status, source_revision, captured_at, 1)
+}
+
+fn observation_with_mapping(
+    status: EntryStatus,
+    source_revision: i64,
+    captured_at: DateTime<Utc>,
+    mapping: u32,
+) -> Observation {
     Observation {
         status,
         revision: revision(source_revision),
         captured_at,
-        mapping_version: mapping_version(1),
+        mapping_version: mapping_version(mapping),
     }
 }
 
@@ -808,6 +817,149 @@ async fn the_observation_store_keeps_the_latest_revision_per_requirement_and_pse
     assert_eq!(row["source_revision"], 4);
     assert_eq!(row["pseudonym_key_version"], 1);
     assert_eq!(row["mapping_version"], 1);
+}
+
+#[tokio::test]
+async fn a_higher_mapping_supersedes_an_equal_source_revision() {
+    let ledger = ledger().await;
+    register(&ledger, 1).await;
+    let at = now();
+    assert_eq!(
+        observe(
+            &ledger,
+            "person-7020",
+            &observation(EntryStatus::Valid, 3, at),
+        )
+        .await,
+        ObservationOutcome::Recorded
+    );
+
+    assert_eq!(register(&ledger, 2).await, MappingRegistration::Current);
+    let remapped = observation_with_mapping(EntryStatus::Invalid, 3, at, 2);
+    assert_eq!(
+        observe(&ledger, "person-7020", &remapped).await,
+        ObservationOutcome::Recorded
+    );
+    assert_eq!(
+        observe(&ledger, "person-7020", &remapped).await,
+        ObservationOutcome::Stale
+    );
+
+    let stored = rows(&inspector().await, &ledger.schema, "observations").await;
+    assert_eq!(stored.len(), 1);
+    assert_eq!(stored[0]["status"], 1);
+    assert_eq!(stored[0]["source_revision"], 3);
+    assert_eq!(stored[0]["mapping_version"], 2);
+}
+
+#[tokio::test]
+async fn a_higher_mapping_does_not_supersede_a_newer_source_revision() {
+    let ledger = ledger().await;
+    register(&ledger, 1).await;
+    let at = now();
+    assert_eq!(
+        observe(
+            &ledger,
+            "person-7030",
+            &observation(EntryStatus::Invalid, 4, at),
+        )
+        .await,
+        ObservationOutcome::Recorded
+    );
+
+    assert_eq!(register(&ledger, 2).await, MappingRegistration::Current);
+    assert_eq!(
+        observe(
+            &ledger,
+            "person-7030",
+            &observation_with_mapping(EntryStatus::Suspended, 3, at, 2),
+        )
+        .await,
+        ObservationOutcome::Stale
+    );
+
+    let stored = rows(&inspector().await, &ledger.schema, "observations").await;
+    assert_eq!(stored.len(), 1);
+    assert_eq!(stored[0]["status"], 1);
+    assert_eq!(stored[0]["source_revision"], 4);
+    assert_eq!(stored[0]["mapping_version"], 1);
+}
+
+#[tokio::test]
+async fn a_promoted_key_inherits_the_higher_mapping_of_an_equal_revision() {
+    let ledger = ledger().await;
+    register(&ledger, 1).await;
+    let person = subject("person-7040");
+    let source_read = now() - TimeDelta::minutes(30);
+    let captured = source_read + TimeDelta::minutes(2);
+    assert_eq!(
+        ledger
+            .ledger
+            .record_observation(
+                &ledger.reserved,
+                REQUIREMENT_ID,
+                &person,
+                &observation(EntryStatus::Valid, 5, captured + TimeDelta::minutes(1)),
+            )
+            .await
+            .unwrap(),
+        ObservationOutcome::Recorded
+    );
+
+    // Complete the stop-and-promote rotation: the replacement process writes
+    // under key 2 and retains key 1 for lookups.
+    let promoted =
+        status_support::ledger_on(&ledger.schema, status_support::promoted_pseudonym_keys());
+    assert_eq!(
+        promoted
+            .register_mapping_version(&ledger.reserved, mapping_version(2))
+            .await
+            .unwrap(),
+        MappingRegistration::Current
+    );
+    assert_eq!(
+        promoted
+            .record_observation(
+                &ledger.reserved,
+                REQUIREMENT_ID,
+                &person,
+                &observation_with_mapping(EntryStatus::Invalid, 5, captured, 2),
+            )
+            .await
+            .unwrap(),
+        ObservationOutcome::Recorded
+    );
+
+    // The retained-key row has the later capture time. Mapping version must
+    // break the equal-revision tie before capture time.
+    assert_eq!(
+        rows(&inspector().await, &ledger.schema, "observations")
+            .await
+            .len(),
+        2
+    );
+    let issued_at = now();
+    let fields = registry_evidence::status::AllocationFields {
+        requirement_id: REQUIREMENT_ID,
+        subject: &person,
+        issued_at,
+        not_after: issued_at + TimeDelta::days(30),
+        source_read: extract_read(source_read, issued_at),
+    };
+    let mut transaction = promoted
+        .begin(&ledger.issuance, Duration::from_secs(20))
+        .await
+        .unwrap();
+    let references = transaction
+        .allocate(&fields, CredentialMembers::Unbound { count: 1 })
+        .await
+        .unwrap();
+    transaction.commit().await.unwrap();
+
+    let row = allocation_row(&ledger, references[0].entry()).await;
+    assert_eq!(row["status"], 1);
+    assert_eq!(row["last_applied_source_revision"], 5);
+    assert_eq!(row["mapping_version"], 2);
 }
 
 #[tokio::test]
