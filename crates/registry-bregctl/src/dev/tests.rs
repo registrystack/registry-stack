@@ -3815,14 +3815,58 @@ fn export_args(state: &State) -> export_client::ExportClientArgs {
 }
 
 /// The rendered machine registration for the fixture's `source` client: the
-/// one agent document under the issuer provisioning tree.
+/// exact source agent document among every rendered client registration.
 fn source_agent_path(state: &State) -> std::path::PathBuf {
     let directory = state.root().join("issuer/registry-schema/agents");
-    let entry = std::fs::read_dir(&directory)
+    let entries = std::fs::read_dir(&directory)
         .expect("the issuer provisioning tree exists")
-        .find_map(|entry| entry.ok())
-        .expect("at least one rendered agent");
-    directory.join(entry.path().file_name().expect("a file name"))
+        .map(|entry| {
+            entry
+                .expect("the issuer provisioning entry is readable")
+                .path()
+        });
+    source_agent_path_from_entries(state, entries)
+}
+
+fn source_agent_path_from_entries(
+    state: &State,
+    entries: impl IntoIterator<Item = std::path::PathBuf>,
+) -> std::path::PathBuf {
+    let expected = format!(
+        "{}.yaml",
+        registry_thunderid_tooling::local::agent_id(&state.instance_id, "source")
+    );
+    entries
+        .into_iter()
+        .find(|entry| {
+            entry
+                .file_name()
+                .and_then(std::ffi::OsStr::to_str)
+                .is_some_and(|name| name == expected.as_str())
+        })
+        .expect("the source agent registration exists")
+}
+
+#[test]
+fn source_agent_path_selects_the_source_registration_among_multiple_agents() {
+    let (_temp, state, _clients, _files) = fixture();
+    let directory = state.root().join("issuer/registry-schema/agents");
+    fs::create_dir_all(&directory).unwrap();
+    let agent_path = |client| {
+        directory.join(format!(
+            "{}.yaml",
+            registry_thunderid_tooling::local::agent_id(&state.instance_id, client)
+        ))
+    };
+    let operator = agent_path("operator");
+    let source = agent_path("source");
+    fs::write(&operator, b"id: operator\n").unwrap();
+    fs::write(&source, b"id: source\n").unwrap();
+
+    assert_eq!(
+        source_agent_path_from_entries(&state, [operator, source.clone()]),
+        source
+    );
 }
 
 #[test]
