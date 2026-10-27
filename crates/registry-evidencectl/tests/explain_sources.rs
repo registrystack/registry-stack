@@ -76,3 +76,39 @@ fn malformed_project_is_refused_without_printing_private_source_values() {
     assert!(!printed.contains(CANARY), "{printed}");
     assert!(!printed.contains("Source coverage-record"), "{printed}");
 }
+
+#[test]
+fn explain_json_reports_each_definitions_validity_seconds() {
+    let temporary = tempfile::tempdir().expect("temporary project");
+    copy_tree(&project("standalone"), temporary.path());
+    let manifest = temporary.path().join("evidence.yaml");
+    let authored = fs::read_to_string(&manifest).expect("read project manifest");
+    let changed = authored.replacen("validitySeconds: 300", "validitySeconds: 900", 1);
+    assert_ne!(changed, authored, "fixture mutation must apply");
+    fs::write(&manifest, changed).expect("write project manifest");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_evidencectl"))
+        .args(["--format", "json", "explain"])
+        .arg(temporary.path())
+        .output()
+        .expect("run evidencectl explain");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{stdout}{stderr}");
+    let report: serde_json::Value = serde_json::from_str(&stdout).expect("explain JSON report");
+    let definitions = report["assertionDefinitions"]
+        .as_array()
+        .unwrap_or_else(|| panic!("assertionDefinitions array in {stdout}"));
+    assert!(definitions.len() >= 2, "{stdout}");
+    let validities: Vec<_> = definitions
+        .iter()
+        .map(|definition| definition["validitySeconds"].as_u64())
+        .collect();
+    assert_eq!(validities[0], Some(900), "{validities:?}");
+    assert!(
+        validities[1..]
+            .iter()
+            .all(|validity| *validity == Some(300)),
+        "{validities:?}"
+    );
+}

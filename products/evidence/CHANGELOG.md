@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- `evidencectl explain` JSON reports each assertion definition's
+  `validitySeconds` beside its `representations` and `subjectBinding`. The
+  field is additive; the report `apiVersion` is unchanged.
+
 ## 0.44.0 - 2026-10-27
 
 - A normalized target document accepts an optional
