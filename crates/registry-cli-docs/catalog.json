@@ -19066,6 +19066,95 @@
           "subcommands": []
         },
         {
+          "name": "generate",
+          "invocation": "messagingctl generate",
+          "about": "Generate bounded contracts for another tool from an editable project",
+          "long_about": null,
+          "usage": "messagingctl generate [OPTIONS] <COMMAND>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--format <FORMAT>",
+              "description": "Emit the selected command's report in this format",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": [
+            {
+              "name": "templates",
+              "invocation": "messagingctl generate templates",
+              "about": "Write every checked template version's locale and data contract",
+              "long_about": null,
+              "usage": "messagingctl generate templates [OPTIONS] --project <DIRECTORY> --output <FILE>",
+              "arguments": [],
+              "options": [
+                {
+                  "display": "--project <DIRECTORY>",
+                  "description": "Editable Messaging project holding messaging.yaml",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--output <FILE>",
+                  "description": "New JSON file to create. Existing files are never overwritten",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Emit the selected command's report in this format",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            }
+          ]
+        },
+        {
           "name": "check",
           "invocation": "messagingctl check",
           "about": "Check an authoring project, installed package, or runtime file",

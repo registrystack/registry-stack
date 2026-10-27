@@ -249,6 +249,8 @@ secret references:
 ```bash
 messagingctl init ./notices
 messagingctl check --project ./notices
+messagingctl generate templates --project ./notices \
+  --output ./notices-template-contracts.json
 messagingctl package ./notices --output ./notices-installed
 messagingctl check --package ./notices-installed
 messagingctl check --runtime-config /abs/path/runtime.yaml
@@ -260,6 +262,14 @@ messagingctl apply --runtime-config /abs/path/runtime.yaml
 messagingctl status --runtime-config /abs/path/runtime.yaml
 messaging --runtime-config /abs/path/runtime.yaml serve
 ```
+
+`messagingctl generate templates --project PROJECT --output FILE` validates the
+editable project, then creates a deterministic `MessagingTemplateContracts`
+JSON document for another tool. It contains one entry per template version,
+with its `id`, string `version`, sorted `locales`, and checked `schema.json`
+value as `dataSchema`. The export is separate from the immutable
+package inputs and never changes the package digest; an existing output file
+is refused rather than overwritten.
 
 `--data` names a JSON file, read relative to the directory the command runs
 in like any other relative path; each template version's `sample.json`

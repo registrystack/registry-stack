@@ -4,6 +4,8 @@
 //! tooling.
 //!
 //! - `init` writes a starter authoring project and runtime example.
+//! - `generate templates` writes the checked template versions, locales, and
+//!   data schemas as one deterministic contract document for another tool.
 //! - `check` loads a package, or a runtime configuration and the package it
 //!   names, exactly as `messaging serve` would, offline: no secret is
 //!   resolved, no database is reached, and no signing key is fetched. It
@@ -80,6 +82,7 @@ mod dev;
 mod report;
 mod selected_binary;
 mod starter;
+mod template_contracts;
 
 use report::{DOMAIN_REFUSAL_EXIT, OPERATIONAL_FAILURE_EXIT, USAGE_EXIT};
 
@@ -106,6 +109,9 @@ enum Command {
     Init(InitArgs),
     /// Build an immutable runtime package from an editable project.
     Package(PackageArgs),
+    /// Generate bounded contracts for another tool from an editable project.
+    #[command(subcommand)]
+    Generate(GenerateCommand),
     /// Check an authoring project, installed package, or runtime file.
     Check(CheckArgs),
     /// Render one template version with the given data, offline.
@@ -140,6 +146,22 @@ enum Command {
         #[command(subcommand)]
         command: registry_cli_api::ConnectionCommand,
     },
+}
+
+#[derive(Debug, Subcommand)]
+enum GenerateCommand {
+    /// Write every checked template version's locale and data contract.
+    Templates(GenerateTemplatesArgs),
+}
+
+#[derive(Debug, Args)]
+struct GenerateTemplatesArgs {
+    /// Editable Messaging project holding messaging.yaml.
+    #[arg(long, value_name = "DIRECTORY")]
+    project: PathBuf,
+    /// New JSON file to create. Existing files are never overwritten.
+    #[arg(long, value_name = "FILE")]
+    output: PathBuf,
 }
 
 #[derive(Debug, Args)]
@@ -424,6 +446,7 @@ struct Outcome {
 enum View {
     Init,
     Package,
+    GenerateTemplates,
     Check,
     /// A refusal whose diagnostics carry their positions, printed as the
     /// shared human report (CFG-DIAG-2).
@@ -530,6 +553,10 @@ fn guidance(code: &str, exit: u8) -> (&'static str, &'static str) {
         "runtime.unavailable" | "output.failed" => (
             "runtime-dependency",
             "Retry the command; if it fails again, report the message.",
+        ),
+        "output.exists" => (
+            "filesystem",
+            "Name a new --output file; an existing file is never overwritten.",
         ),
         "package.outcome-unknown" => (
             "database",
@@ -693,6 +720,7 @@ where
         }
         Command::Init(args) => init(&args.directory),
         Command::Package(args) => package(&args),
+        Command::Generate(GenerateCommand::Templates(args)) => generate_templates(&args),
         Command::Check(args) => check(&args),
         Command::Preview(args) => preview(&args),
         Command::Plan(args) => plan(&args.runtime_config),
@@ -710,6 +738,7 @@ fn command_path(command: &Command) -> &'static str {
         Command::Serve(_) => "serve",
         Command::Init(_) => "init",
         Command::Package(_) => "package",
+        Command::Generate(GenerateCommand::Templates(_)) => "generate templates",
         Command::Check(_) => "check",
         Command::Preview(_) => "preview",
         Command::Plan(_) => "plan",
@@ -904,6 +933,39 @@ fn package(args: &PackageArgs) -> Outcome {
         }),
         View::Package,
     )
+}
+
+fn generate_templates(args: &GenerateTemplatesArgs) -> Outcome {
+    match template_contracts::write(&args.project, &args.output) {
+        Ok(templates) => Outcome::new(
+            json!({
+                "ok": true,
+                "project": args.project,
+                "output": args.output,
+                "templates": templates,
+            }),
+            View::GenerateTemplates,
+        ),
+        Err(template_contracts::ExportError::Package(error)) => {
+            package_refusal(&args.project, &error)
+        }
+        Err(template_contracts::ExportError::Write(error))
+            if error.kind() == io::ErrorKind::AlreadyExists =>
+        {
+            Outcome::refused(
+                DOMAIN_REFUSAL_EXIT,
+                "output.exists",
+                "--output",
+                "the output file already exists; generate never overwrites".to_owned(),
+            )
+        }
+        Err(error) => Outcome::refused(
+            OPERATIONAL_FAILURE_EXIT,
+            "output.failed",
+            "--output",
+            error.to_string(),
+        ),
+    }
 }
 
 fn init(directory: &Path) -> Outcome {
@@ -2009,6 +2071,7 @@ fn render_human(
     match outcome.view {
         View::Init => render_init(report, stdout),
         View::Package => render_package(report, stdout),
+        View::GenerateTemplates => render_generate_templates(report, stdout),
         View::Check | View::Diagnostics => {
             render_check(report, stdout)?;
             if report.get("filesChecked").is_some() && !warned {
@@ -2047,6 +2110,11 @@ fn render_package(report: &Value, stdout: &mut dyn io::Write) -> io::Result<()> 
     writeln!(stdout, "{verb}: {}", text(&report["output"]))?;
     writeln!(stdout, "package digest: {}", text(&report["projectDigest"]))?;
     writeln!(stdout, "package files: {}", report["projectFiles"])
+}
+
+fn render_generate_templates(report: &Value, stdout: &mut dyn io::Write) -> io::Result<()> {
+    writeln!(stdout, "created: {}", text(&report["output"]))?;
+    writeln!(stdout, "template versions: {}", report["templates"])
 }
 
 fn render_dev(report: &Value, stdout: &mut dyn io::Write) -> io::Result<()> {
