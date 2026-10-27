@@ -23,6 +23,7 @@ use std::fmt;
 use std::time::Duration;
 
 use chrono::{DateTime, TimeDelta, Utc};
+use tokio_postgres::IsolationLevel;
 
 use super::apply::status_column;
 use super::error::StatusError;
@@ -147,7 +148,12 @@ impl StatusLedger {
             .map(|pseudonym| pseudonym.as_bytes().as_slice())
             .collect();
         let mut client = pool.client().await?;
-        let transaction = client.transaction().await.map_err(|error| failed(&error))?;
+        let transaction = client
+            .build_transaction()
+            .isolation_level(IsolationLevel::ReadCommitted)
+            .start()
+            .await
+            .map_err(|error| failed(&error))?;
         self.require_current_mapping(&transaction, observation.mapping_version)
             .await?;
         transaction

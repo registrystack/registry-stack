@@ -393,7 +393,13 @@ async fn allocate_rows(
     let count = rows.holder_digests.len();
     let (list_id, entry_count) = reserve(ledger, client, count).await?;
     let failed = |error: tokio_postgres::Error| issuance_failure(&error);
-    client.batch_execute("BEGIN").await.map_err(failed)?;
+    // READ COMMITTED whatever the session default: the commit reads the latest
+    // observation after taking the pseudonym lock, which a snapshot fixed at
+    // the first statement would miss.
+    client
+        .batch_execute("BEGIN ISOLATION LEVEL READ COMMITTED")
+        .await
+        .map_err(failed)?;
     client
         .execute(
             "SELECT set_config('idle_in_transaction_session_timeout', $1, true), \
@@ -536,7 +542,10 @@ async fn reserve(
         return Ok(reserved);
     }
     // A failure here discards the connection, which rolls the rotation back.
-    client.batch_execute("BEGIN").await.map_err(failed)?;
+    client
+        .batch_execute("BEGIN ISOLATION LEVEL READ COMMITTED")
+        .await
+        .map_err(failed)?;
     let (reserved, rotation) = rotate(ledger, client, count, maximum_age).await?;
     client.batch_execute("COMMIT").await.map_err(failed)?;
     if let Some((closed, opened)) = rotation {

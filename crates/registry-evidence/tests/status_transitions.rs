@@ -1142,6 +1142,46 @@ async fn a_withdrawal_observed_while_the_signer_runs_is_inherited_at_commit() {
 }
 
 #[tokio::test]
+async fn a_withdrawal_observed_while_the_signer_runs_is_inherited_under_a_repeatable_read_default()
+{
+    let ledger = status_support::repeatable_read_ledger().await;
+    register(&ledger, 1).await;
+    let person = subject("person-8100");
+    let issued_at = now();
+    let fields = registry_evidence::status::AllocationFields {
+        requirement_id: status_support::REQUIREMENT_ID,
+        subject: &person,
+        issued_at,
+        not_after: issued_at + TimeDelta::days(30),
+        source_read: http_read(issued_at),
+    };
+    let mut transaction = ledger
+        .ledger
+        .begin(&ledger.issuance, Duration::from_secs(20))
+        .await
+        .unwrap();
+    let references = transaction
+        .allocate(&fields, CredentialMembers::Unbound { count: 1 })
+        .await
+        .unwrap();
+    // A hook for this person lands while the credential is being signed.
+    assert_eq!(
+        observe(
+            &ledger,
+            "person-8100",
+            &observation(EntryStatus::Invalid, 2, now())
+        )
+        .await,
+        ObservationOutcome::Recorded
+    );
+    transaction.commit().await.unwrap();
+    assert_eq!(
+        allocation_row(&ledger, references[0].entry()).await["status"],
+        1
+    );
+}
+
+#[tokio::test]
 async fn a_commit_waits_for_an_observation_being_recorded_and_inherits_it() {
     let ledger = ledger().await;
     register(&ledger, 1).await;

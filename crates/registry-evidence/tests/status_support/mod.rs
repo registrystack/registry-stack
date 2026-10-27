@@ -61,9 +61,23 @@ fn database_config() -> tokio_postgres::Config {
 /// A plaintext pool of `size` connections to the test database, optionally
 /// tagged with an application name so a test can find its sessions.
 pub fn pool(size: usize, application_name: Option<&str>) -> Pool {
+    pool_with_options(size, application_name, None)
+}
+
+/// A pool whose sessions start with the given PostgreSQL startup `options`
+/// (for example `-c default_transaction_isolation=repeatable\ read`), so a
+/// test can change session defaults without touching the shared database.
+pub fn pool_with_options(
+    size: usize,
+    application_name: Option<&str>,
+    options: Option<&str>,
+) -> Pool {
     let mut config = database_config();
     if let Some(name) = application_name {
         config.application_name(name);
+    }
+    if let Some(options) = options {
+        config.options(options);
     }
     let manager = Manager::from_config(
         config,
@@ -105,6 +119,18 @@ pub async fn ledger_with(
         reserved,
         schema,
     }
+}
+
+/// A ledger whose issuance and reserved sessions default to REPEATABLE READ,
+/// as an adopter's database-level `default_transaction_isolation` would set.
+pub async fn repeatable_read_ledger() -> TestLedger {
+    let options = Some("-c default_transaction_isolation=repeatable\\ read");
+    let mut ledger = ledger().await;
+    ledger.issuance =
+        IssuancePool::new(pool_with_options(DEFAULT_ISSUANCE_POOL_SIZE, None, options));
+    ledger.reserved =
+        ReservedPool::new(pool_with_options(DEFAULT_RESERVED_POOL_SIZE, None, options));
+    ledger
 }
 
 /// A second ledger over `schema`, as another process sharing the database
