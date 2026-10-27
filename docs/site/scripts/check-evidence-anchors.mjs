@@ -36,6 +36,7 @@ export const REPOSITORY_ROOTS = [
   'external',
   'schemas',
   'scripts',
+  'tools',
   '\\.cargo',
   '\\.github',
 ];
