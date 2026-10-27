@@ -6,6 +6,9 @@
 
 First release of Registry Coordinator.
 
+- v0.44.0 ships the `coordinator` and `coordinatorctl` binaries, their
+  installer, and the Coordinator namespace in the unified Node.js and Python
+  clients. The Coordinator image remains held.
 - `coordinatorctl check --project` reads an optional
   `check-acceptances.yaml`, keeps exactly matched warnings visible with their
   reasons, and excludes only those accepted warnings from `--deny-warnings`.
@@ -19,7 +22,7 @@ First release of Registry Coordinator.
   exact-command replay, original-result lookup, or a non-repeatable uncertainty hold is available.
 - Starts require an expected computed `workflowRevision`. Workflow discovery and generated
   TypeScript/Python wrappers provide revision-pinned typed `start`, `get`, and `cancel` through
-  the source-built Coordinator client bindings. Unknown admission preserves its original revision and key.
+  the Coordinator client bindings. Unknown admission preserves its original revision and key.
 - Named completions share `completion: {step, name}` across Casework results and bounded external
   job observation. Persistent read floors, retry ceilings, and
   observation budgets survive restarts and wake-ups. Blocked or uncertain evidence remains held.
@@ -27,12 +30,13 @@ First release of Registry Coordinator.
   on an `external-http` connection. The command and its request id are persisted before the first
   send and the id travels as `Idempotency-Key`; a required pure `interpret` Function maps the
   validated response to an accepted result, a declared refusal, or an uncertain hold. Before
-  any uncertain attempt, a 429 is retried as not processed. Once an attempt has an unknown
-  effect, a later 429 or declared refusal holds the run. A 503 before the last attempt is retried
-  with the effect held as unknown until a later attempt settles it, and a 503 whose retry could
-  not land before the run deadline holds the run at once. Lost acknowledgements, timeouts,
-  redirects, other server errors, and unusable responses hold the run, and `retry-same` resends
-  the same command with the same id. Scenarios reply to it with `type: response`, never with a
+  any uncertain attempt, a 429 is treated as not processed and retried only when another
+  attempt fits the remaining attempt and deadline budgets; otherwise the run ends without
+  `retry-same`. Once an attempt has an unknown effect, a later 429 or declared refusal holds
+  the run. A 503 is retried with the effect held as unknown only when another attempt fits both
+  budgets; otherwise it holds the run at once. Lost acknowledgements, timeouts, redirects,
+  other server errors, and unusable responses hold the run, and `retry-same` resends the same
+  command with the same id. Scenarios reply to it with `type: response`, never with a
   synthetic `success` or `declared-refusal`, and only with a status that reaches the
   interpretation Function; a
   redirect, 429 or 5xx takes an `uncertain` or `retryable` reply instead. Providers must
