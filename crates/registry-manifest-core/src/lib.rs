@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Portable metadata model and pure renderers for registry catalogs.
 
+pub mod odrl;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 

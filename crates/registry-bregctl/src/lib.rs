@@ -624,7 +624,7 @@ struct GenerateArgs {
     #[arg(long, value_name = "DIRECTORY")]
     output: PathBuf,
 
-    /// Existing registry lookup access profile (evidence-source only).
+    /// Access profile: required for evidence-source; optional exact selection for odrl.
     #[arg(long)]
     access_profile: Option<String>,
     /// Compiled Record type to export (evidence-source only).
@@ -1590,6 +1590,8 @@ enum ArtifactSelector {
     Schemas,
     Actions,
     Manifest,
+    /// Partial ODRL read policies and coverage for operator review.
+    Odrl,
     Metadata,
     Sql,
     EvidenceSource,
@@ -8223,6 +8225,9 @@ fn project_lock(project_path: &Path, check_only: bool) -> Result<SuccessReport, 
 }
 
 fn generate_requested(args: &GenerateArgs) -> Result<SuccessReport, FailureReport> {
+    if args.artifact == ArtifactSelector::Odrl {
+        return generate_odrl(args);
+    }
     let fail = |message: &str| {
         source_failure(
             "generate",
@@ -8240,7 +8245,7 @@ fn generate_requested(args: &GenerateArgs) -> Result<SuccessReport, FailureRepor
             || args.connection.is_some()
         {
             return Err(fail(
-                "source selection flags apply only to generate evidence-source",
+                "source selection flags apply to generate evidence-source; generate odrl accepts --access-profile only",
             ));
         }
         return generate(
@@ -8299,6 +8304,67 @@ fn generate_requested(args: &GenerateArgs) -> Result<SuccessReport, FailureRepor
             json!({"sourceId":options.source_id,"connection":options.connection,"behaviorRevision":export.behavior_revision,"selectorProfiles":export.selector_profiles,"additionalIdentityFields":export.identity_fields}),
         ),
         next_steps: vec![],
+    })
+}
+
+fn generate_odrl(args: &GenerateArgs) -> Result<SuccessReport, FailureReport> {
+    if args.entity.is_some()
+        || !args.selectors.is_empty()
+        || !args.fields.is_empty()
+        || args.source_id.is_some()
+        || args.connection.is_some()
+    {
+        return Err(source_failure(
+            "generate",
+            diagnostic(
+                "odrl.arguments",
+                "arguments",
+                "generate odrl accepts --access-profile; lookup and Evidence source flags apply only to generate evidence-source",
+            ),
+            DiagnosticArtifact::CommandArguments,
+            SuggestedAction::CorrectCommandUsage,
+        ));
+    }
+    let profile = profile(args.production);
+    let compiled = compile(&args.project, profile, "generate")?;
+    let export = registry_breg::odrl_export::export_odrl(&compiled, args.access_profile.as_deref())
+        .map_err(|diagnostic| {
+            source_failure(
+                "generate",
+                diagnostic,
+                DiagnosticArtifact::RegistryProject,
+                SuggestedAction::CorrectAuthoringSource,
+            )
+        })?;
+    write_artifacts(&args.output, &export.artifacts).map_err(|diagnostic| {
+        source_failure(
+            "generate",
+            diagnostic,
+            DiagnosticArtifact::GeneratedArtifacts,
+            SuggestedAction::RetryArtifactGeneration,
+        )
+    })?;
+    let totals = &export.coverage["totals"];
+    let summary = format!(
+        "ODRL coverage: {} of {} record-operation grants exported; {} omitted. Review generated/odrl/coverage.json for reasons.",
+        totals["exported"], totals["considered"], totals["omitted"],
+    );
+    Ok(SuccessReport {
+        ok: true,
+        command: "generate",
+        profile,
+        revision: Some(compiled.revision().to_owned()),
+        registry_revision: None,
+        package_digest: None,
+        findings: compiler_findings(&compiled),
+        artifacts: export.artifacts.iter().map(|artifact| {
+            artifact_report(&artifact.path, &artifact.media_type, &artifact.bytes)
+        }).collect(),
+        explanation: Some(export.coverage),
+        next_steps: vec![
+            summary,
+            "These partial policies contain configuration details for operator review. Review them before sharing; they do not establish runtime access or replace caller-filtered metadata.".to_owned(),
+        ],
     })
 }
 
@@ -9915,7 +9981,7 @@ impl ArtifactSelector {
             ArtifactSelector::Manifest => path.starts_with("generated/manifest/"),
             ArtifactSelector::Metadata => path == "generated/metadata/registry.json",
             ArtifactSelector::Sql => path == "generated/postgres/schema.sql",
-            ArtifactSelector::EvidenceSource => false,
+            ArtifactSelector::EvidenceSource | ArtifactSelector::Odrl => false,
             ArtifactSelector::Sdk => {
                 path.starts_with("generated/sdk/")
                     || path.starts_with("generated/review-context-schemas/")

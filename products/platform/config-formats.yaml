@@ -1194,6 +1194,32 @@ formats:
     conformance: none
     securityMembers: []
     restrictingMembers: []
+  - id: breg/odrl-coverage
+    product: breg
+    title: Partial ODRL export coverage
+    files: []
+    syntax: json
+    audience: generated
+    stability: experimental
+    current:
+      apiVersion: id.registrystack.org/formats/breg/odrl-coverage/v1alpha1
+      kind: BRegOdrlCoverage
+      checkedBy:
+        file: crates/registry-breg/src/odrl_export.rs
+        symbol: COVERAGE_API_VERSION
+    target:
+      apiVersion: id.registrystack.org/formats/breg/odrl-coverage/v1alpha1
+      kind: BRegOdrlCoverage
+    schema: none
+    reader: none
+    emittedBy:
+      file: crates/registry-breg/src/odrl_export.rs
+      symbol: export_odrl
+    check: none
+    example: products/breg/examples/formats/odrl-coverage.json
+    conformance: none
+    securityMembers: []
+    restrictingMembers: []
   - id: breg/linkml-schema
     product: breg
     title: LinkML schema read by bregctl init --from

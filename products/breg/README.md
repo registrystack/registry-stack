@@ -468,6 +468,11 @@ descriptor: subjects, occurred and effective time, sources, correction links
 and source event identity over fields it already stores, plus optional display
 purpose and grouping for Records and Actions. It adds no storage or authority.
 
+For offline inspection, `bregctl generate odrl PROJECT --output DIRECTORY`
+exports a [partial ODRL view of configured read permissions](odrl-export.md)
+and a coverage report. These operator-review artifacts include configuration
+details and do not establish caller authority or public publication safety.
+
 Domain-semantic entries in `manifestProjection` are optional overlays on the
 configured data model. One project declares one publisher authority, one public
 service, one catalogue, one or more datasets, one or more data services, and
