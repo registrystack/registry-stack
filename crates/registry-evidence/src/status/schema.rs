@@ -7,6 +7,8 @@
 
 use std::fmt;
 
+use tokio_postgres::IsolationLevel;
+
 use super::error::StatusError;
 use super::pools::ReservedPool;
 
@@ -82,7 +84,9 @@ impl fmt::Debug for SchemaName {
 pub(crate) async fn migrate(schema: &SchemaName, pool: &ReservedPool) -> Result<(), StatusError> {
     let mut client = pool.client().await?;
     let transaction = client
-        .transaction()
+        .build_transaction()
+        .isolation_level(IsolationLevel::ReadCommitted)
+        .start()
         .await
         .map_err(|error| StatusError::database(&error))?;
     let quoted = schema.quoted();

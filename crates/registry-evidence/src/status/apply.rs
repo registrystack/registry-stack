@@ -9,6 +9,7 @@
 
 use chrono::{DateTime, Utc};
 use deadpool_postgres::Transaction as DatabaseTransaction;
+use tokio_postgres::IsolationLevel;
 use uuid::Uuid;
 
 use super::error::StatusError;
@@ -120,7 +121,12 @@ impl StatusLedger {
         request.validate()?;
         let idx = request.entry.idx_column()?;
         let mut client = pool.client().await?;
-        let transaction = client.transaction().await.map_err(|error| failed(&error))?;
+        let transaction = client
+            .build_transaction()
+            .isolation_level(IsolationLevel::ReadCommitted)
+            .start()
+            .await
+            .map_err(|error| failed(&error))?;
         if let Some(presented) = request.provenance.mapping_version() {
             self.require_current_mapping(&transaction, presented)
                 .await?;
