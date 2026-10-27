@@ -53,7 +53,8 @@ under different claim names, requires a second deployment even when the
 operators trust each other. Evidence Version 1 has no application database, unless
 status is enabled (`CONCEPT.md` section 15.9), and persists no selector, source,
 evidence, or response data; the status ledger holds keyed pseudonyms and
-digests, never raw values. An external durable
+digests, never raw values. No runtime can enable status yet; the
+credential status plan in `IMPLEMENTATION.md` lists what remains. An external durable
 audit service may own its own storage.
 
 A gateway may provide publication, protocol integration, routing, and

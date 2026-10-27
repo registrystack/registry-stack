@@ -18,7 +18,8 @@ Adult status, controlled region, professional licence status, and legal-parent
 relationship are coequal proofs of a generic engine from the first offline
 phase onward. The implementation schedule stops at the Version 1 boundary. It
 does not begin any capability listed under `CONCEPT.md` section 15, Future
-profiles and guarded extensions.
+profiles and guarded extensions. Credential status, section 15.9, was approved
+separately and follows its own plan at the end of this document.
 
 ## Version 1 product shape
 
@@ -1351,3 +1352,64 @@ extension APIs for them:
 - an application database (unless status is enabled, `CONCEPT.md` section
   15.9), message broker, or worker process; the status scheduler runs in
   process and is not a worker.
+
+## Credential status plan
+
+This is the plan `CONCEPT.md` section 18 requires for the credential status
+profile of section 15.9. It adds no scope to that section, and section 15.9's
+list of what it does not approve still bounds it. Until every remaining step
+is done, the Version 1 contracts govern the served runtime and no credential
+carries `status`.
+
+Built as library code that the served runtime does not call:
+
+- `registry-evidence-verifier` `status_list`: the Token Status List codec and
+  the pure `check_status`, with the Status List 8.3 checks, `typ` first, the
+  compressed-size and inflation bounds, and the draft's Appendix C vectors.
+  The credential verification path does not call it and still rejects
+  `status`.
+- `registry-evidence` `status`: the PostgreSQL ledger schema, list policy and
+  random list identifiers, random index allocation inside a caller-held
+  signing transaction with its deadline, the transition table, mapping-version
+  registration, keyed selector pseudonyms and holder-key digests with key rings
+  and key separation, source observations and the staleness clock, the
+  observation retention floor, and the issuance and reserved pools. Its
+  PostgreSQL tests run behind the `postgres-test` feature.
+- `registry-evidence-oid4vci` `storage`: the store interface with the
+  process-local backend and a PostgreSQL backend that keeps single use,
+  lockout, and capacity across replicas, seals prepared requests at rest, and
+  binds each exchange to its catalog generation. The adapter serves through the
+  interface on the process-local backend; no configuration selects PostgreSQL.
+  The shared contract suite runs on both backends, with PostgreSQL-only cases
+  for two replicas.
+
+Remaining, verifier first:
+
+1. Publish the version 2 contracts: `sd-jwt-vc-profile/v2`,
+   `holder-bound-profile/v2`, both verification policy schemas at v2,
+   `oid4vci-profile/v2`, the closed status audit schema, and the bundle and
+   runtime configuration for `credentialStatus`, status enablement, the two
+   status keys, and the policy values with their startup refusals.
+2. Ship the verifier check before any issuer emits `status`: call
+   `check_status` from credential verification under the v2 policies, and add
+   fetching, caching, and the input bounds to the Rust, Node, and Python
+   clients.
+3. Wire issuance: allocation inside the signing transaction for status-required
+   requirements, the `status` claim, and the validity cap without status in the
+   composition checker.
+4. Build, sign, and publish status list tokens with batching and capped `exp`
+   rounding, and serve the public list route with its own rate limit.
+5. Add hook intake, the operator endpoints with approvals and reinstatement,
+   reconciliation with the absence rule and the mass-change guard, the
+   in-process scheduler, staleness reporting in readiness, and the status audit
+   records.
+6. Make the PostgreSQL store selectable under `oid4vci-profile/v2`, with the
+   purge job, the cutover rule, and the offer-authorization, state-machine
+   recovery, and Inji interoperability suites on both backends.
+7. Add every negative test section 15.9 adds to section 13, the operator
+   guidance for the PostgreSQL service, the path-restricted proxy, and key
+   custody, and the product documentation of what status does and does not
+   claim about wallets.
+
+Exit gate: every step above passes on one revision with the Version 1
+acceptance tests still passing, and only then may a deployment enable status.
