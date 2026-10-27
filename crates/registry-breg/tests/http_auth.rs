@@ -2631,3 +2631,98 @@ async fn dataset_only_client_and_standing_actor_mapping_are_checked_at_construct
     authenticator_with_verifier(&registry, &idp, verifier, claims)
         .expect("the dataset-only standing agent has an exact trusted actor mapping");
 }
+
+#[tokio::test]
+async fn action_and_proposal_only_clients_are_checked_at_construction() {
+    let idp = MockIdp::start().await;
+    let mut action_source = action_only_claim_source();
+    action_source["accessProfiles"][0]["actorKind"] = json!("service");
+    action_source["accessProfiles"][0]["requesterClients"] = json!(["workflow-client"]);
+    let action_registry = compile_action_claim_source(&action_source);
+    assert!(action_registry
+        .entities()
+        .values()
+        .all(|entity| entity.access_profiles.is_empty()));
+    assert!(action_registry.actions().actions[0].permissions[0]
+        .requester_clients
+        .contains("workflow-client"));
+
+    let mut verifier = verifier_config(&idp);
+    verifier.allowed_clients = vec!["another-client".into()];
+    assert_eq!(
+        authenticator_with_verifier(&action_registry, &idp, verifier.clone(), authority_claims())
+            .unwrap_err(),
+        AuthenticationConfigError::NamedClientNotListed
+    );
+    verifier.allowed_clients = vec!["workflow-client".into()];
+    authenticator_with_verifier(&action_registry, &idp, verifier.clone(), authority_claims())
+        .expect("the admitted action-only service client is accepted");
+
+    let mut proposal_source = action_source;
+    proposal_source["accessProfiles"][0]["actorKind"] = json!("agent");
+    proposal_source["actions"][0]["execution"] = json!({
+        "mode": "proposal",
+        "proposal": {
+            "review": {"type": "none"},
+            "application": {"mode": "manual"},
+            "retention": {"mode": "retain"}
+        }
+    });
+    let mut starter = proposal_source["accessProfiles"][0].clone();
+    starter["id"] = json!("starter");
+    starter
+        .as_object_mut()
+        .expect("the starter profile is an object")
+        .remove("actorKind");
+    starter
+        .as_object_mut()
+        .expect("the starter profile is an object")
+        .remove("requesterClients");
+    starter["permissions"]["actions"][0]["operations"] = json!(["start"]);
+    proposal_source["accessProfiles"][0]["permissions"] = json!({
+        "proposals": [{
+            "action": "register-child",
+            "operations": ["edit"],
+            "ownership": "caller",
+            "targets": [
+                {"recordType": "parent", "rowBoundaries": "unrestricted"},
+                {"recordType": "child", "rowBoundaries": "unrestricted"}
+            ]
+        }]
+    });
+    proposal_source["accessProfiles"]
+        .as_array_mut()
+        .expect("access profiles are a list")
+        .push(starter);
+    let proposal_registry = compile_action_claim_source(&proposal_source);
+    assert!(proposal_registry.actions().actions[0]
+        .permissions
+        .iter()
+        .all(|profile| profile.profile_id != "registrar"));
+    let proposal = match &proposal_registry.actions().actions[0].execution {
+        registry_breg::model::CompiledActionExecution::Proposal { proposal } => proposal,
+        registry_breg::model::CompiledActionExecution::Immediate => {
+            panic!("the fixture compiles as a Proposal")
+        }
+    };
+    assert!(proposal
+        .permissions
+        .iter()
+        .any(|profile| profile.profile_id == "registrar"
+            && profile.requester_clients.contains("workflow-client")));
+
+    verifier.allowed_clients = vec!["another-client".into()];
+    assert_eq!(
+        authenticator_with_verifier(
+            &proposal_registry,
+            &idp,
+            verifier.clone(),
+            authority_claims()
+        )
+        .unwrap_err(),
+        AuthenticationConfigError::NamedClientNotListed
+    );
+    verifier.allowed_clients = vec!["workflow-client".into()];
+    authenticator_with_verifier(&proposal_registry, &idp, verifier, authority_claims())
+        .expect("an admitted Proposal-only standing agent needs no trusted actor mapping");
+}

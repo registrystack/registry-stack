@@ -2964,22 +2964,29 @@ fn check_refuses_a_runtime_configuration_in_the_reader_words() {
 }
 
 /// The minimal project with its reader profile limited to the client `portal`.
-fn minimal_project_limited_to_portal(scratch: &TestProject) {
+fn minimal_project_limited_to_portal(scratch: &TestProject, include_record_permissions: bool) {
     let example = minimal_example();
-    let registry = fs::read_to_string(example.join("registry.yaml"))
-        .expect("the minimal registry reads")
-        .replace(
-            "    requiredPurposes: [directory-administration]\n",
-            "    requiredPurposes: [directory-administration]\n    actorKind: service\n    requesterClients: [portal]\n",
-        );
-    assert!(registry.contains("requesterClients: [portal]"));
+    let mut registry = registry_platform_yaml::Reader::new("registry.yaml")
+        .scan(&fs::read(example.join("registry.yaml")).expect("the minimal registry reads"))
+        .unwrap()
+        .unwrap()
+        .to_json_value();
+    registry["accessProfiles"][0]["actorKind"] = json!("service");
+    registry["accessProfiles"][0]["requesterClients"] = json!(["portal"]);
+    if !include_record_permissions {
+        registry["accessProfiles"][0]["permissions"]
+            .as_object_mut()
+            .unwrap()
+            .remove("records");
+    }
+    let registry = serde_norway::to_string(&registry).expect("the edited registry encodes");
     fs::write(scratch.path().join("registry.yaml"), registry).expect("the registry writes");
 }
 
 #[test]
 fn check_refuses_a_runtime_that_lists_none_of_the_clients_a_profile_names() {
     let scratch = TestProject::from_registry_source(b"");
-    minimal_project_limited_to_portal(&scratch);
+    minimal_project_limited_to_portal(&scratch, true);
     let runtime = edited_runtime_config(&scratch, |source| {
         source.replace(
             "allowedClients: [directory-client]",
@@ -3021,6 +3028,51 @@ fn check_refuses_a_runtime_that_lists_none_of_the_clients_a_profile_names() {
         "{human:?}"
     );
     assert!(!human_output(&human).contains("portal"), "{human:?}");
+}
+
+#[test]
+fn check_refuses_unlisted_clients_on_action_and_proposal_only_profiles() {
+    let scratch = TestProject::from_registry_source(b"");
+    minimal_project_limited_to_portal(&scratch, false);
+    let refused_runtime = edited_runtime_config(&scratch, |source| {
+        source.replace(
+            "allowedClients: [directory-client]",
+            "allowedClients: unrestricted",
+        )
+    });
+
+    let refused = bregctl(&[
+        "--format",
+        "json",
+        "check",
+        path(scratch.path()),
+        "--runtime-config",
+        path(&refused_runtime),
+    ]);
+    assert_eq!(refused.status.code(), Some(1), "{refused:?}");
+    let report = json_stdout(&refused);
+    let diagnostics = report["diagnostics"].as_array().expect("diagnostics list");
+    assert_eq!(diagnostics.len(), 1, "{report}");
+    assert_eq!(diagnostics[0]["code"], "breg.runtime.clients-unlisted");
+    assert_eq!(
+        diagnostics[0]["path"],
+        "/authentication/oidc/allowedClients"
+    );
+    assert!(!report.to_string().contains("portal"), "{report}");
+
+    let accepted_runtime = edited_runtime_config(&scratch, |source| {
+        source.replace(
+            "allowedClients: [directory-client]",
+            "allowedClients: [portal]",
+        )
+    });
+    let accepted = bregctl(&[
+        "check",
+        path(scratch.path()),
+        "--runtime-config",
+        path(&accepted_runtime),
+    ]);
+    assert_eq!(accepted.status.code(), Some(0), "{accepted:?}");
 }
 
 #[test]
@@ -3158,7 +3210,7 @@ fn check_warns_of_a_wildcard_spelled_allowed_client_and_denies_it_on_request() {
 #[test]
 fn check_accepts_a_runtime_that_lists_the_clients_a_profile_names() {
     let scratch = TestProject::from_registry_source(b"");
-    minimal_project_limited_to_portal(&scratch);
+    minimal_project_limited_to_portal(&scratch, true);
     let runtime = edited_runtime_config(&scratch, |source| {
         source.replace(
             "allowedClients: [directory-client]",

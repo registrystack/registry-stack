@@ -4690,3 +4690,46 @@ backend selection. `native_plan_security` retains the BReg resource,
 deadline, fresh-call recovery, closed-capability, and value-free error checks.
 Existing package and protected CI gates cover the change; no new blocking gate
 is introduced.
+
+## Action and Proposal requester clients match verifier admission
+
+### Threat
+
+An access profile with only Action or Proposal permissions could name a
+`requesterClients` entry absent from `authentication.oidc.allowedClients`.
+Offline checking and startup accepted that configuration, although token
+verification refused every request by the named client before its grant could
+be used.
+
+### Enforcement and defaults
+
+`validate_claim_mapping` in `crates/registry-breg/src/auth.rs` now checks the
+requester clients copied into every compiled Action permission and every
+compiled Proposal permission, alongside the existing Record, statistical
+dataset, trusted-actor, and consent-recipient checks. An absent client returns
+`NamedClientNotListed`, which `bregctl check --runtime-config` reports as
+`breg.runtime.clients-unlisted` without rendering the client identifier.
+
+This change compares only the compiled requester clients with verifier
+admission. It does not copy the Record and statistical-profile trusted-actor
+restriction onto Action or Proposal permissions. A standing agent may still
+start or edit its caller-owned draft under the existing operation ceiling.
+
+### Tests
+
+- `crates/registry-breg/tests/http_auth.rs`:
+  `action_and_proposal_only_clients_are_checked_at_construction` refuses an
+  unlisted Action-only client and an unlisted Proposal-only client, accepts
+  both when listed, and accepts the Proposal-only standing agent without a
+  trusted-actor mapping.
+- `crates/registry-bregctl/tests/cli.rs`:
+  `check_refuses_unlisted_clients_on_action_and_proposal_only_profiles` proves
+  the offline runtime-config refusal and its listed-client control on the
+  maintained minimal project with Record permissions removed.
+- `crates/registry-breg/src/api/tests/immediate_action_tests.rs`:
+  `proposal_task_scopes_are_exact_and_standing_agents_only_start_or_edit_owned_drafts`
+  retains the existing standing-agent operation ceiling.
+
+No request authorization or PostgreSQL path changes. The construction check
+fails earlier on a configuration whose named client could never pass token
+verification.
