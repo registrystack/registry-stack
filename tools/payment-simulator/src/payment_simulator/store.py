@@ -532,7 +532,7 @@ class Store:
             if row["stage"] == 1 and row["outcome"] == "paid":
                 db.execute(
                     "INSERT INTO collection_payments VALUES (?, ?, ?)",
-                    (row["transfer_id"], uuid4().hex[:20], updated),
+                    (row["transfer_id"], "SIM-" + uuid4().hex[:16], updated),
                 )
             db.execute(
                 "UPDATE collection_requests SET stage=stage+1, last_update=? WHERE transfer_id=?",
