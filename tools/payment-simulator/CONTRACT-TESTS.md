@@ -35,6 +35,8 @@ P2G uses the same target URL/credential loader with `--target-biller` and
 `collection-paid`, `collection-failed`, `collection-expired` capabilities.
 The external driver can exercise declared paid destinations; controlled failed
 and expired outcomes require a provider-specific fixture and otherwise skip.
+The failed and expired tests assert the pending state only against the held local simulator;
+an external target is polled, within the poll timeout, until it reports the terminal outcome.
 Select the relevant profile's test file when a target implements only one.
 
 The matrix below is a broader catalogue, not a claim that every row is fully

@@ -179,21 +179,31 @@ def test_nonpayment_collection_outcomes(
             rtp_id=rtp_id,
         )
         transfer_request_id = acknowledgement["transferRequestId"]
-        assert_collection_state(
-            read_collection(client, target, transfer_request_id, ids.value("rd1", limit=20)),
-            transfer_request_id=transfer_request_id,
-            request_id=request_id,
-            rtp_id=rtp_id,
-            bill_id=bill_id,
-            amount=amount,
-            currency=target.settings.currency,
-            request_status="PND",
-            payment_status="PENDING",
-        )
+        if target.is_local_simulator:
+            # A held local simulator is still pending here; an external target may already be
+            # terminal, so it is observed only through bounded polling below.
+            assert_collection_state(
+                read_collection(client, target, transfer_request_id, ids.value("rd1", limit=20)),
+                transfer_request_id=transfer_request_id,
+                request_id=request_id,
+                rtp_id=rtp_id,
+                bill_id=bill_id,
+                amount=amount,
+                currency=target.settings.currency,
+                request_status="PND",
+                payment_status="PENDING",
+            )
+            target.advance(test_id, steps=2)
 
-        target.advance(test_id, steps=2)
+        terminal_response = wait_for_collection_payment_status(
+            client,
+            target,
+            transfer_request_id,
+            ids.value("rd2", limit=20),
+            payment_status,
+        )
         assert_collection_state(
-            read_collection(client, target, transfer_request_id, ids.value("rd2", limit=20)),
+            terminal_response,
             transfer_request_id=transfer_request_id,
             request_id=request_id,
             rtp_id=rtp_id,
