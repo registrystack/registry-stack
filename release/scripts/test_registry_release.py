@@ -2607,6 +2607,7 @@ class RegistryReleaseTest(TestCase):
                 "rust-tests",
                 "discovery-contracts",
                 "evidence-contracts",
+                "evidence-postgres",
                 "identifiers",
                 "breg-contracts",
                 "breg-postgres-18",

@@ -358,6 +358,9 @@ class CiChangesTest(unittest.TestCase):
             "documents-postgres": (
                 "needs.changes.outputs.documents_postgres == 'true'"
             ),
+            "evidence-postgres": (
+                "needs.changes.outputs.evidence_postgres == 'true'"
+            ),
             "messaging-contracts": (
                 "needs.changes.outputs.messaging_contracts == 'true'"
             ),
@@ -483,6 +486,7 @@ class CiChangesTest(unittest.TestCase):
             "rust-quality",
             "rust-tests",
             "evidence-contracts",
+            "evidence-postgres",
             "discovery-contracts",
             "breg-contracts",
             "breg-postgres-18",
@@ -530,6 +534,7 @@ class CiChangesTest(unittest.TestCase):
                 "rust-tests",
                 "discovery-contracts",
                 "evidence-contracts",
+                "evidence-postgres",
                 "breg-contracts",
                 "breg-postgres-18",
                 "breg-wasm",
@@ -559,6 +564,7 @@ class CiChangesTest(unittest.TestCase):
                 "rust-tests",
                 "discovery-contracts",
                 "evidence-contracts",
+                "evidence-postgres",
                 "evidence-fuzz",
                 "breg-contracts",
                 "breg-postgres-18",
@@ -636,7 +642,7 @@ class CiChangesTest(unittest.TestCase):
             final_needs,
             previous_final_needs.difference({"rust-result"}).union(rust_needs),
         )
-        self.assertEqual(40, len(final_needs))
+        self.assertEqual(41, len(final_needs))
         # Platform line coverage publishes from main and the nightly sweep;
         # it does not hold the merge queue.
         self.assertNotIn("platform-coverage", final_needs)
@@ -1213,6 +1219,29 @@ class CiChangesTest(unittest.TestCase):
         unrelated = classify(self.workspace, ("crates/registry-messaging/src/lib.rs",))
         self.assertFalse(unrelated["documents_contracts"])
         self.assertFalse(unrelated["documents_postgres"])
+
+    def test_evidence_status_store_and_dependencies_select_the_postgres_job(
+        self,
+    ) -> None:
+        for path in (
+            "products/evidence/README.md",
+            "crates/registry-evidence/src/status/ledger.rs",
+            "crates/registry-evidence-oid4vci/src/storage/postgres.rs",
+            # Both crates depend on the verifier, so its status codec reaches
+            # the job through the affected closure.
+            "crates/registry-evidence-verifier/src/status_list.rs",
+        ):
+            with self.subTest(path=path):
+                outputs = classify(self.workspace, (path,), pull_request=True)
+                self.assertTrue(outputs["evidence_postgres"])
+                self.assertTrue(outputs["evidence_contracts"])
+                self.assertFalse(outputs["documents_postgres"])
+        for path in (
+            "crates/registry-evidencectl/src/main.rs",
+            "crates/registry-messaging/src/lib.rs",
+        ):
+            with self.subTest(path=path):
+                self.assertFalse(classify(self.workspace, (path,))["evidence_postgres"])
 
     def test_registry_render_selects_the_document_store_postgres_journey(self) -> None:
         """The journey suite drives the real registry-render binary."""
@@ -2193,6 +2222,26 @@ class CiChangesTest(unittest.TestCase):
                     Path("crates/registry-messaging/tests", f"{target}.rs").is_file(),
                     f"messaging-postgres invokes missing test target {target}",
                 )
+
+    def test_evidence_postgres_job_names_existing_integration_test_targets(
+        self,
+    ) -> None:
+        commands = [
+            str(step.get("run", ""))
+            for step in self.workflow_jobs["evidence-postgres"]["steps"]
+            if "--features postgres-test" in str(step.get("run", ""))
+        ]
+        self.assertEqual(2, len(commands))
+        for command in commands:
+            package = re.search(r"-p\s+([a-z0-9-]+)", command).group(1)
+            targets = re.findall(r"--test\s+([a-zA-Z0-9_-]+)", command)
+            self.assertTrue(targets)
+            for target in targets:
+                with self.subTest(package=package, target=target):
+                    self.assertTrue(
+                        Path("crates", package, "tests", f"{target}.rs").is_file(),
+                        f"evidence-postgres invokes missing test target {target}",
+                    )
 
     def test_messaging_checkpoint_is_the_one_schema_drift_step(self) -> None:
         # The checkpoint runs every schema-feature test of the runtime crate,

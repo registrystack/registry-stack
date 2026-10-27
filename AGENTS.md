@@ -309,7 +309,7 @@ Each owning guide lists its own gates. The entry points:
 | Area | Start with | Full list |
 |---|---|---|
 | BReg | `products/breg/scripts/check-contracts.sh`, `products/breg/scripts/test-postgres.sh` | `products/breg/AGENTS.md` |
-| Evidence | `products/evidence/scripts/check-contracts.sh`, `check-source-neutrality.sh`, `check-verifier-portability.sh`, `check-config-key-paths.sh`, `check-authoring-schema.sh`, `check-authoring-no-io.sh` | `products/evidence/AGENTS.md` |
+| Evidence | `products/evidence/scripts/check-contracts.sh`, `check-source-neutrality.sh`, `check-verifier-portability.sh`, `check-config-key-paths.sh`, `check-authoring-schema.sh`, `check-authoring-no-io.sh`, the status ledger and OID4VCI store PostgreSQL suites | `products/evidence/AGENTS.md` |
 | Casework | `products/casework/scripts/check-checkpoint.sh`, then `products/casework/README.md` for PostgreSQL | `products/casework/AGENTS.md` |
 | Scheduling | `products/scheduling/scripts/check-checkpoint.sh`, `check-contracts.sh`, the `postgres_commitments` suite | `products/scheduling/AGENTS.md`, `products/scheduling/README.md` |
 | Messaging | `products/messaging/scripts/check-checkpoint.sh`, `check-contracts.sh`, the `postgres_migrate` suite | `products/messaging/AGENTS.md`, `CONTRIBUTING.md` |
