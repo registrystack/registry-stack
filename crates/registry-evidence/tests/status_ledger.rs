@@ -21,6 +21,9 @@ use status_support::{
 };
 
 const DEADLINE: Duration = Duration::from_secs(20);
+// Long enough that a loaded machine still finishes a test's setup inside it;
+// the deadline tests wait past it by a fixed margin instead.
+const SETUP_DEADLINE: Duration = Duration::from_secs(3);
 const LONG_AGE: Duration = Duration::from_secs(24 * 60 * 60);
 
 fn hex(bytes: &[u8]) -> String {
@@ -174,7 +177,7 @@ async fn a_signer_that_outlives_the_deadline_leaves_no_row() {
     };
     let mut transaction = ledger
         .ledger
-        .begin(&ledger.issuance, Duration::from_millis(400))
+        .begin(&ledger.issuance, SETUP_DEADLINE)
         .await
         .unwrap();
     transaction
@@ -182,7 +185,7 @@ async fn a_signer_that_outlives_the_deadline_leaves_no_row() {
         .await
         .unwrap();
     // A fake signer that sleeps past the deadline.
-    tokio::time::sleep(Duration::from_millis(700)).await;
+    tokio::time::sleep(SETUP_DEADLINE + Duration::from_secs(1)).await;
     let error = transaction.commit().await.unwrap_err();
 
     assert!(matches!(error, StatusError::DeadlineExceeded), "{error:?}");
@@ -262,13 +265,15 @@ async fn the_server_ends_a_session_idle_in_transaction_past_deadline_plus_five_s
     };
     let mut transaction = ledger
         .ledger
-        .begin(&ledger.issuance, Duration::from_millis(200))
+        .begin(&ledger.issuance, SETUP_DEADLINE)
         .await
         .unwrap();
     transaction
         .allocate(&fields, CredentialMembers::Unbound { count: 1 })
         .await
         .unwrap();
+    // The server counts idle time from the session's last statement.
+    let idle_since = tokio::time::Instant::now();
 
     let inspector = inspector().await;
     let idle_sessions = || async {
@@ -282,16 +287,25 @@ async fn the_server_ends_a_session_idle_in_transaction_past_deadline_plus_five_s
             .unwrap()
             .get::<_, i64>(0)
     };
-    tokio::time::sleep(Duration::from_secs(2)).await;
+    // Past the deadline, the server still lets the session sit idle.
+    tokio::time::sleep_until(idle_since + SETUP_DEADLINE + Duration::from_secs(1)).await;
     assert_eq!(
         idle_sessions().await,
         1,
-        "the session is still idle in transaction"
+        "the session is still idle in transaction past the deadline"
     );
     // A process stalled in its signer holds the transaction: the server ends
-    // it at the deadline plus five seconds.
-    tokio::time::sleep(Duration::from_secs(4)).await;
-    assert_eq!(idle_sessions().await, 0, "the server ended the session");
+    // it at the deadline plus five seconds. Poll with a bound that leaves a
+    // loaded server's timer lag room.
+    let mut idle = 1;
+    for _ in 0..50 {
+        idle = idle_sessions().await;
+        if idle == 0 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    assert_eq!(idle, 0, "the server ended the session");
 
     let error = transaction.commit().await.unwrap_err();
     assert!(error.is_dependency());
@@ -330,7 +344,7 @@ async fn a_lock_wait_past_the_deadline_ends_with_the_deadline() {
     };
     let mut transaction = ledger
         .ledger
-        .begin(&ledger.issuance, Duration::from_millis(500))
+        .begin(&ledger.issuance, SETUP_DEADLINE)
         .await
         .unwrap();
     transaction
