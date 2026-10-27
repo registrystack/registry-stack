@@ -166,6 +166,22 @@ class EventRoutingTest(unittest.TestCase):
                     outputs["evidence_assurance"], event_name != "pull_request"
                 )
 
+    def test_evidence_postgres_runs_on_every_event(self) -> None:
+        # The status ledger and OID4VCI store suites are short, so they stay
+        # outside the heavy tier and run on pull requests too.
+        path = "crates/registry-evidence/src/lib.rs"
+        head = self.commit(path)
+        events = {
+            "pull_request": {"pull_request": {"base": {"sha": self.base}, "head": {"sha": head}}},
+            "merge_group": {"merge_group": {"base_sha": self.base, "head_sha": head}},
+            "push": {"before": self.base},
+        }
+        for event_name, event in events.items():
+            with self.subTest(event=event_name):
+                selection = select_event(self.repo, event_name, event, head)
+                outputs = selection_outputs(self.workspace, selection)
+                self.assertTrue(outputs["evidence_postgres"])
+
     def test_nightly_security_edit_selects_evidence_fuzz_in_the_assurance_tier(
         self,
     ) -> None:

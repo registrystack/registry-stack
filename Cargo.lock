@@ -706,6 +706,7 @@ dependencies = [
  "cipher",
  "cpufeatures 0.3.0",
  "rand_core 0.10.1",
+ "zeroize",
 ]
 
 [[package]]
@@ -718,6 +719,7 @@ dependencies = [
  "chacha20",
  "cipher",
  "poly1305",
+ "zeroize",
 ]
 
 [[package]]
@@ -5877,12 +5879,14 @@ dependencies = [
  "chrono-tz",
  "clap",
  "criterion",
+ "deadpool-postgres",
  "ed25519-dalek",
  "fs2",
  "http",
  "jsonschema",
  "jsonwebtoken",
  "p256",
+ "proptest",
  "rand_core 0.6.4",
  "rcgen",
  "registry-discovery-profile",
@@ -5914,6 +5918,7 @@ dependencies = [
  "thiserror 2.0.21",
  "time",
  "tokio",
+ "tokio-postgres",
  "tokio-rustls",
  "tower",
  "tower-http 0.7.1",
@@ -5922,6 +5927,7 @@ dependencies = [
  "ulid",
  "url",
  "utoipa",
+ "uuid",
  "wiremock",
  "zeroize",
 ]
@@ -6029,8 +6035,10 @@ dependencies = [
  "axum",
  "axum-test",
  "base64 0.23.1",
+ "chacha20poly1305",
  "chrono",
  "clap",
+ "deadpool-postgres",
  "ed25519-dalek",
  "getrandom 0.4.3",
  "jsonschema",
@@ -6055,9 +6063,11 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
+ "tokio-postgres",
  "tracing",
  "tracing-subscriber",
  "url",
+ "uuid",
  "zeroize",
 ]
 
@@ -6068,7 +6078,9 @@ dependencies = [
  "base64 0.23.1",
  "chrono",
  "jsonschema",
+ "miniz_oxide",
  "p256",
+ "proptest",
  "registry-platform-crypto",
  "registry-platform-sdjwt",
  "schemars",

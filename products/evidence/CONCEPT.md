@@ -74,7 +74,7 @@ The core product is government-first and sector-neutral.
 
 ### Native government deployment
 
-One binary runs on modest infrastructure, uses locally controlled configuration and audit sinks, and integrates with existing registries. It does not require Kubernetes, a message broker, a database server, OPA, or a service mesh. Reading a mounted SQLite extract needs none of those either: the file is opened read-only in process, Evidence stores nothing in it, and no database credential exists to be held.
+One binary runs on modest infrastructure, uses locally controlled configuration and audit sinks, and integrates with existing registries. It does not require Kubernetes, a message broker, a database server, OPA, or a service mesh. Reading a mounted SQLite extract needs none of those either: the file is opened read-only in process, Evidence stores nothing in it, and no database credential exists to be held. That holds while credential status is disabled; enabling the optional status module of section 15.9 needs PostgreSQL.
 
 ### Enterprise and private-sector deployment
 
@@ -130,7 +130,7 @@ Version one is not:
 - a workflow, orchestration, or case-management engine;
 - a general ETL, mapping, or query platform;
 - a runtime policy engine or general PDP;
-- a credential issuance protocol, OID4VCI, credential-status, or wallet service. The SD-JWT VC *response format* of section 15.6 and the holder-bound subject binding mode of section 15.8 are a serialization and a binding of the same assertion, and neither adds a credential lifecycle, a delivery protocol, or a credential status. Holder proof is verified by the relying party, through the portable verifier and its offline operator command, and never by the serving process, which issues no challenge and holds no presentation state;
+- a credential issuance protocol, OID4VCI, credential-status, or wallet service. The SD-JWT VC *response format* of section 15.6 and the holder-bound subject binding mode of section 15.8 are a serialization and a binding of the same assertion, and neither adds a credential lifecycle, a delivery protocol, or a credential status. Credential status is specified only by the optional module of section 15.9 and exists only where that module is enabled. Holder proof is verified by the relying party, through the portable verifier and its offline operator command, and never by the serving process, which issues no challenge and holds no presentation state;
 - a multi-tenant SaaS control plane;
 - a federation or delegated-evaluation protocol;
 - an AI agent runtime, MCP server, or agent discovery service;
@@ -148,7 +148,7 @@ to invoke. This is the same reasoning that already admits a fixed HTTP request:
 a bundle-fixed instruction to a source that no request input may reshape is not
 a query language, whatever syntax it happens to be written in.
 
-Document evidence, credential status and revocation, transaction-bound replay
+Document evidence, transaction-bound replay
 protection, OOTS execution, citizen-to-agent delegation and federation, a
 public requester-entitlement or definition catalog, searchable, mutable,
 aggregate, or federated catalogs, response-led multi-source fulfillment, and
@@ -935,7 +935,10 @@ Version 1 conformance rule is that they may reach the bounded extraction input
 when selected, but must never reach audit, logs, errors, or operator
 diagnostics. Those channels identify the bundle-governed `extractProfile`,
 which is sufficient to locate the deployment binding without copying a
-publisher-controlled value across the diagnostic boundary.
+publisher-controlled value across the diagnostic boundary. Section 15.9 excepts
+the `publishedAt` observation time that the status ledger stores for
+reconciliation, and the capped status token `exp`, which carries it rounded
+down to the hour; that residual is accepted there.
 
 A bundle declares `maximumExtractAgeSeconds` for each extract source. The
 runtime compares it against `publishedAt` and refuses before any row is read,
@@ -1727,7 +1730,9 @@ Version one must preserve these invariants:
 28. Unsigned output is a separately typed, visibly unprotected envelope that
     cannot enter the signed-verification path or claim later verifiability.
 29. Final immutable response bytes exist before the disclosure-release audit
-    is durably accepted and are the exact bytes released afterward.
+    is durably accepted and are the exact bytes released afterward. For a
+    status-required requirement, section 15.9 places the allocation insert and
+    commit before serialization, so the invariant holds.
 30. Every authorization refusal after successful authentication is durably
     recorded as a standalone minimal native event before the generic `403` is
     returned. Audit failure returns a generic `503`, and the event never records
@@ -1776,6 +1781,89 @@ Version one must preserve these invariants:
     exact bounded envelope is serialized before durable release audit and
     returned byte-for-byte afterward, with no nonce, selector, fact, body, or
     signed material in audit.
+
+The following invariants apply when the status module of section 15.9 is
+implemented. Each needs a named negative test in the security invariant matrix
+before the module ships. Invariant 18 holds unchanged, since status is data.
+
+38. **Allocation.** No credential leaves Evidence unless its allocation row
+    committed in the signing transaction, and no disclosure-release audit entry
+    is written before that commit. Negative tests: a commit failure after
+    signing releases no bytes and writes no disclosure-release audit; a signer
+    stall past the transaction deadline rolls back and returns the dependency
+    category; pool exhaustion fails status-required requirements only, and hook
+    intake, operator routes, and list publication keep working while the
+    issuance pool is exhausted.
+39. **Uniqueness.** No two allocations share `(list_id, idx)` under concurrency.
+40. **Hook intake.** Only a verified delivery from a configured source, mapped
+    type, and current revision changes state; anything else applies nothing.
+    Negative tests: a stale revision, a repeated idempotency key, and an event
+    for a pseudonym with no allocation each change no allocation and return 2xx
+    with an audit category; an unverifiable delivery, an unknown source, and an
+    unmapped type return non-2xx.
+41. **Direction.** No hook or reconciliation moves an entry toward VALID; INVALID
+    never changes.
+42. **Operator.** A transition needs a token from the configured operator
+    issuer, audience, and scope and the policy's count of distinct values of the
+    named principal claim; no requester entitlement satisfies an operator route
+    (a complete requester grant is refused); selector actions return only a
+    uniform outcome and every lookup is audited.
+43. **Scheduler.** A stale, unreadable, miscounted, or guard-tripping input
+    applies nothing; one run at a time; the extract opens read-only and
+    immutable per run.
+44. **Staleness.** No token is signed with `exp` past the staleness deadline.
+45. **Disabled.** With status disabled, no PostgreSQL connection, status route,
+    intake route, or scheduler exists.
+46. **Privacy.** No raw selector or record identifier reaches the ledger, audit,
+    logs, or errors, and no extract `publisher` or `extractId` reaches any of
+    them. The extract's `publishedAt` is the one exception: the ledger stores it
+    as the observation time, and public status tokens carry it only rounded down
+    to the hour. Canary: the exact-second `publishedAt` appears in no log, audit
+    entry, error, or public token.
+47. **Type separation.** Status tokens and credentials are never accepted for
+    each other.
+48. **Issuance race.** A new allocation inherits a non-VALID status only from the
+    latest observation for its pseudonym captured after the evaluation's source
+    read less the skew allowance. Negative tests: withdraw, restore, then issue
+    gives a VALID credential; a withdrawal processed between the source read and
+    the commit gives a withdrawn credential; a withdrawal observed longer ago
+    than the credential validity (and within the extract's maximum age), then an
+    issuance from an extract published before it, gives a withdrawn credential.
+49. **Key separation.** The status pseudonym key and the holder-key digest key
+    differ from each other, from the audit pseudonymization key, and from every
+    subject-binding secret, and Evidence derives neither from them; startup
+    refuses a violation it can see. Deriving a secret outside Evidence is an
+    operator obligation the runbook states.
+50. **Absence policy and guard.** Absence from a complete extract applies the
+    declared absence status (never INVALID unless declared), and a run beyond the
+    floor or ceiling applies nothing.
+51. **Adapter at rest.** The durable adapter store holds no plaintext selector
+    value, and a prepared request is deleted on claim and on expiry (grep test
+    over the adapter database).
+52. **Startup validation.** Evidence refuses approver counts below 1, a
+    reinstatement count below the withdrawal count, a staleness bound not above
+    interval plus extract maximum age plus margin, a re-sign interval above half
+    the status token `exp`, and an observation retention below its floor.
+53. **Enablement and `exp` bound.** A bundle with a status-required requirement
+    is refused at startup on a deployment where status is not enabled, except in
+    local `evidencectl dev`; a configured status token `exp` above
+    `maximumAssertionValiditySeconds` is refused. Negative tests: startup with a
+    status-required bundle and status disabled fails; `evidencectl dev` starts
+    with status disabled, emits no `status` claim, and keeps the cap; an `exp`
+    above the ceiling fails startup.
+54. **Index and list identifier independence.** Indices and list ids come from a
+    CSPRNG and are never a function of selector, record, holder key, tenant,
+    service, requirement, or date. Negative tests: issuing for the same
+    selector, requirement, and holder key twice yields different indices; a
+    code-level test that index and list id selection takes no selector, record,
+    or holder-key input.
+55. **Public status route.** The route writes no per-request audit entry and no
+    client address, user agent, or request header to any log. Negative tests: a
+    fetch carrying a canary address and user agent leaves neither in the logs or
+    the audit stream; requests beyond the route's rate limit are refused.
+56. **Operator lookup budget.** Operator selector lookups spend the
+    failed-selector budget. Negative test: repeated lookups by one principal of
+    selectors with no live credential are refused once the budget is spent.
 
 ## 14. Complementary deployment patterns
 
@@ -1894,7 +1982,9 @@ already-constructed assertion. The delivery protocol requires credential
 offers, pre-authorized codes, issuer-held nonces, deferred issuance, and the
 persistent state to hold them. Version one's stateless single-process property
 is load-bearing for its security argument, so this profile takes the
-serialization and refuses the protocol.
+serialization and refuses the protocol. That property holds for OID4VCI delivery
+state, which the status ledger of section 15.9 does not hold; section 15.9
+restates the security argument for the ledger.
 
 #### What the profile adds
 
@@ -1961,9 +2051,11 @@ holder-bound mode of section 15.8:
 - OID4VCI in any part: credential offers, pre-authorized codes, authorization
   or token endpoints, `c_nonce`, proof-of-possession challenges, credential
   endpoints, or deferred issuance;
-- persistent issuance state, an application database, or any store beyond the
-  existing stateless request-nonce echo;
-- status lists, revocation, suspension, or a credential-status endpoint;
+- unless the status module of section 15.9 is enabled, persistent issuance
+  state, an application database, or any store beyond the existing stateless
+  request-nonce echo;
+- status lists, revocation, suspension, or a credential-status endpoint, other
+  than as section 15.9 specifies;
   freshness remains expiry through `validUntil`;
 - presentation-side verification or key-binding JWT validation. The relying
   party verifier this product already ships is extended to the second format,
@@ -1973,9 +2065,12 @@ holder-bound mode of section 15.8:
   key;
 - wallet onboarding, wallet attestation, or trust-list membership;
 - a second signing key, algorithm, or key ceremony;
-- holder-scoped or otherwise cross-verifier subject identifiers;
+- holder-scoped or otherwise cross-verifier subject identifiers, except that
+  the status reference of section 15.9 is a stable cross-verifier correlator,
+  accepted there;
 - reissuance, refresh, batch issuance, or credential identifiers that persist
-  beyond the response.
+  beyond the response, other than the status reference (`status.uri` plus `idx`)
+  that section 15.9 adds.
 
 #### Claims that remain out of the credential
 
@@ -2288,10 +2383,12 @@ knows that one requester submitted these keys together. Without issuance-time
 proof of possession it does not know that the keys belong to one holder, and
 this profile claims no more than that.
 
-**The honest limitations.** There is no status list, no revocation, no
-suspension, and no expiry beyond `validUntil`. Whoever holds both a credential
+**The honest limitations.** Without credential status (section 15.9), there is
+no status list, no revocation, no suspension, and no expiry beyond `validUntil`. Whoever holds both a credential
 and the matching private key can use it until `validUntil` passes, and the
-service can neither learn that a credential leaked nor withdraw one. Freshness
+service can neither learn that a credential leaked nor withdraw one. Withdrawal
+exists only for a requirement that declares credential status under section
+15.9. Freshness
 is the relying party's own challenge lifecycle, which the relying party owns
 and which comparing a nonce does not perform. Full SD-JWT VC or OID4VCI
 conformance is not claimed, and compatibility with any wallet's parsing,
@@ -2300,19 +2397,23 @@ section 15.6 already sets.
 
 #### Profile non-goals
 
-None of the following is added by this profile, stubbed, flagged, or left as a
-seam:
+Version 2 of the holder-bound profile (section 15.9) replaces the status,
+store, and credential-identifier items below for a requirement that declares
+credential status. None of the following is added by this profile, stubbed,
+flagged, or left as a seam:
 
 - OID4VCI in any part: credential offers, pre-authorized codes, authorization
   or token endpoints, `c_nonce`, proof-of-possession challenges, credential
   endpoints, or deferred issuance;
-- status lists, revocation, suspension, or a credential-status endpoint;
+- status lists, revocation, suspension, or a credential-status endpoint, other
+  than as section 15.9 specifies;
 - server-side challenge, presentation, or replay state, persistent issuance
-  state, an application database, or any store;
+  state, an application database, or any store, except the ledger and the intake
+  idempotency keys of the status module when section 15.9 is enabled;
 - wallet onboarding, wallet attestation, or trust-list membership;
 - holder key generation, holding, escrow, or recovery by the service;
 - reissuance, refresh, or credential identifiers that persist beyond the
-  response;
+  response, other than the status reference that section 15.9 adds;
 - a second subject-binding namespace, an unbound binding mode, or any binding
   mode outside the closed two-value vocabulary of section 8.6.
 
@@ -2320,6 +2421,796 @@ Presentation verification is the relying party's, performed through the
 portable verifier this product already ships and its offline operator command.
 The serving process issues no challenge, consumes no nonce, and holds no
 presentation state.
+
+### 15.9 Credential status
+
+Status: approved profile, partly built as library code. Nothing in this
+section is a Version 1 feature. Three building blocks exist: the Token Status
+List codec and pure status check in `registry-evidence-verifier`, the status
+ledger module in `registry-evidence`, and a storage interface in
+`registry-evidence-oid4vci` with a PostgreSQL backend beside the process-local
+one. The served `evidence` runtime calls none of them, and the served
+`evidence-oid4vci` adapter keeps its process-local backend. No version 2
+contract is published, no configuration enables the status module or selects
+the PostgreSQL store, no credential carries `status`, and the deployed
+verifier still rejects `status`. Until the version 2 profile contracts it names
+are published and the runtime, the verifier, and every negative test of section
+13 that it adds exist, the Version 1 contracts and every statement this section
+amends continue to govern the shipped runtime. The plan section 18 requires is
+the credential status plan in `IMPLEMENTATION.md`, which lists what exists and
+what remains.
+
+This profile lets a deployment withdraw an SD-JWT VC credential it has issued.
+It adds an optional status module to the one `evidence` binary, the Token
+Status List form of `draft-ietf-oauth-status-list-21`, and one optional
+`status` claim in both credential profiles. It is a sibling of sections 15.6 and
+15.8 and does not turn Evidence into a credential product, a wallet service, or
+an issuance protocol. Everything outside the module is unchanged.
+
+Facts about the existing contracts this profile changes: holder-bound
+credentials cannot be withdrawn today (the holder-bound profile says the service
+"cannot learn that a credential leaked and cannot withdraw one"), the SD-JWT VC
+profile prohibits `status` and any credential-status, revocation, or reissuance
+reference, and today's only defence is short validity.
+
+#### Scope
+
+In scope: status for SD-JWT VC credentials above the validity cap without
+status, in both profiles, that is, holder-bound wallet credentials (through
+`evidence-oid4vci`, and direct holder-bound issuance for the same requirement)
+and audience-scoped SD-JWT VC responses of section 15.6, which carry the same
+`status` claim. An audience-scoped credential is a separate issuance for its
+audience with its own index, so no `uri` plus `idx` is shared across audiences
+and the audience-scoped property holds; its allocation row holds no holder-key
+digest. Also in scope: the states VALID, INVALID, and SUSPENDED; transitions
+from signed hooks, operators, and reconciliation; verifier checks in
+`registry-evidence-verifier` and the SDKs; a durable two-replica adapter store;
+and the validity cap rule.
+
+Out of scope: everything in the last subsection, notably short-lived SD-JWT
+responses at or under the cap (the cap is their control) and signed JWS
+answers, which cannot carry `status`. The validity cap applies to a requirement
+that can be issued as an SD-JWT VC and never to a requirement served only as a
+JWS answer, whose control stays the bundle's own validity ceiling. Also out:
+mdoc, VCDM 2.0 and EUDI wallets, and renewal automation.
+
+#### Constraints the profile keeps, and what enabling it changes
+
+- **Stateless unless status is enabled.** Disabled, Evidence needs no database
+  server and holds no database credential. Enabled, the module's ledger is
+  Evidence's only application store. Section 15.6 calls the stateless
+  single-process property load-bearing for its security argument, in the
+  sentence that refuses OID4VCI delivery state. The property carried three
+  things, and enabling status changes two of them:
+  1. No application data at rest to breach. Changed: the ledger is a new breach
+     target holding selector pseudonyms, keyed holder-key digests, and issuance
+     times per requirement. Still holds: the ledger holds no raw selector,
+     record value, or holder key; pseudonyms and digests are keyed under
+     secrets that live outside the database and apart from the audit and
+     binding secrets. Accepted: linkage of one person's allocations across
+     requirements, and a dictionary attack by whoever holds both the database
+     and the keys.
+  2. No state shared between processes. Changed: several Evidence processes may
+     share one ledger. Still holds: only the status module writes it, a unique
+     constraint settles allocation races, and scheduler jobs take an advisory
+     lock. Accepted: a PostgreSQL outage fails status-required requirements
+     closed.
+  3. No database credential to hold. Changed only for a deployment that enables
+     status, and the credential is the status role alone; a deployment that
+     leaves status disabled is unchanged.
+
+  OID4VCI delivery state (offers, codes, nonces) stays outside Evidence, so the
+  refusal of delivery state in section 15.6 holds.
+- **No holder key custody.** The service never holds a holder private key.
+- **One credential key.** There is no second key, algorithm, or key ceremony;
+  status tokens use the credential key.
+- **Source neutrality.** Production code, dependencies, and routes stay
+  source-product neutral.
+
+#### Placement and enablement
+
+The status module is compiled into `registry-evidence`, which stays one crate
+and one `evidence` binary, and is enabled by runtime configuration. There is no
+Cargo feature matrix and no separate service. It owns the **allocation ledger**
+written by the issuance path; **status state** per entry; **status list
+tokens** (build, sign with the Evidence key, publish); **transition intake**
+(signed hooks and operator endpoints); **reconciliation** and staleness, run by
+an in-process scheduler; and the **issued-credential audit**, which is the
+allocation table.
+
+Storage is PostgreSQL, in its own database or schema and role. It is never
+SQLite and there is no SQLite option, in line with the other stateful products.
+The read-only SQLite source boundary is unchanged.
+
+With status enabled and PostgreSQL down, readiness reports it, status-required
+requirements fail closed with a dependency category, and other requirements keep
+serving. Several Evidence processes may share a ledger; scheduler jobs take a
+PostgreSQL advisory lock.
+
+**Enablement.** The bundle declares `credentialStatus: required` per
+requirement and the runtime configuration enables the module; silence enables
+nothing. The bundle declares and the operator separately enables, as for
+restart-time activation of other configuration. A bundle with a status-required
+requirement on a deployment where status is not enabled is refused at startup,
+never at request time. The one exception is local `evidencectl dev`, which runs
+such a requirement with status disabled, emits no `status` claim, keeps the
+validity cap in force, and says so plainly at startup.
+
+**Mapping versions.** Processes sharing a ledger can run different mapping
+versions during a rolling restart. The ledger records the highest mapping
+version any process has registered at startup. A process on a lower version
+applies no hook or reconciliation transition (hook intake answers non-2xx and
+readiness reports the mismatch) until it restarts on the current bundle, so an
+older map never decides a transition. Issuance is unaffected. Because the
+ledger keeps the highest mapping version ever registered, a bundle rollback
+must bump the mapping version; otherwise intake stops on every process. The
+runbook says so.
+
+#### Module boundary rules
+
+These sit under the existing product-boundary rules.
+
+1. The module is the only writer of the ledger (allocations, status,
+   transitions). No other crate, product, or supported operator path writes it.
+2. The issuance path writes the allocation row, through the module, inside the
+   signing transaction.
+3. Nothing outside Evidence reads the ledger. Relying parties see only signed
+   status list tokens: no per-credential lookup, no historical resolution, no
+   export.
+4. Hook intake and the operator endpoints are the only mutation surface.
+   Reconciliation has no endpoint and changes state only through the same
+   transition function.
+5. When status is disabled there is no PostgreSQL requirement: no connection, no
+   status or intake route, no scheduler, and readiness ignores PostgreSQL.
+6. The module never decides eligibility or re-evaluates policy; status reflects
+   only transitions the issuer has applied.
+7. It stores no raw selector value or record identifier; selector values become
+   a keyed pseudonym before anything is written.
+8. Intake is source-neutral: the shared hook envelope that every Registry Stack
+   product delivers, verified through `registry-platform-hooks`. The Base
+   Registry Engine (BReg) is the first producer, not a dependency.
+
+#### Token Status List profile
+
+The choices below are this profile's; the basis column names the draft section.
+
+| Item | Profile choice | Basis |
+|---|---|---|
+| Standard pin | Draft 21; a later draft or the RFC is a reviewed revision. | As the SD-JWT VC profile pins its draft. |
+| Token format | JWT, `typ: statuslist+jwt`, ES256, signed by the Evidence credential key. No CWT. | SD-JWT VC draft 18 section 2.2.2.3 requires JWT; Status List 11.3 allows the same key. |
+| Token claims | `sub` (the list URI), `iat`, `exp`, `ttl`, `status_list: {bits, lst}`. No `aggregation_uri`. | Status List 5.1; aggregation (9) is not offered. |
+| Bits | 2 per entry. | Status List 4.1. |
+| Values | `0x00` VALID; `0x01` INVALID (terminal); `0x02` SUSPENDED (a service's state mapping, the absence policy, or an operator action; operator suspension of a VALID entry is always available); `0x03` never written. Anything but `0x00` is not valid. | Status List 7.1 and 14.5.2. |
+| Default value | Unallocated entries are VALID. | Status List 13.3 hides the issuance count. |
+| List size | 2^20 entries; 256 KiB uncompressed, a few KiB while sparse. A list closes to allocation at 50 percent fill or a configured age. | Status List 13.4; herd privacy (12.1). |
+| Publication URI | `https://<public origin>/status/v1/lists/<list-id>`, `list-id` random, never derived from tenant, service, requirement, or date. | Status List 8.1 and 12.2. |
+| Lists per issuer | One pool per Evidence deployment, shared across requirements. | Bigger herd; `vct` already shows the type. |
+| Fetch | `GET`, `Accept: application/statuslist+jwt`, CORS `*`, no authentication; served by Evidence. Static-host publication is not offered in version one. | Status List 8.1. |
+| Caching and freshness | `ttl`, `exp`, batching, and the staleness bound are policy. HTTP cache headers never exceed `ttl`. | Status List 8.2, 11.5, and 13.7. |
+| Historical resolution | Not supported; `time` is rejected. | Status List 8.4 and 12.7. |
+| Credential claim | `"status": {"status_list": {"idx": <int>, "uri": "<list URI>"}}`, issuer-signed, always disclosed. | Status List 6.2; SD-JWT VC 2.2.2.3. |
+| Token validation | `typ` first; signature under the issuer's pinned Evidence keys; `sub` equals `uri`; `exp`; `ttl`; `bits`; out-of-bounds `idx` rejected. | Status List 8.3. |
+
+**Public route.** The list route is the only Evidence route meant to be public
+and unauthenticated. The maintained Compose guidance binds Evidence privately
+and leaves public TLS and routing to the operator, so the route is exposed
+through a path-restricted proxy that forwards only `GET` on the list path and
+nothing else. The route writes no per-request audit entry and keeps no client
+address, user agent, or other request header in any log, because a fetch log
+that retains client addresses lets the issuer correlate relying parties with
+lists (Status List 12.1). It has its own rate limit, separate from the issuance
+budgets and set per deployment (there is no default number: it depends on the
+proxy and the relying-party volume). Rate limits are tracked per process, so
+behind N processes the effective limit is N times the setting, and the proxy
+holds any shared limit.
+
+**Freshness wording.** For operators and verifiers: VALID means the issuer had
+not applied a withdrawal for this credential when the list was signed, and had
+observed the source within its staleness bound. It is not live proof of the
+registry record. With the defaults below, a withdrawal whose hook is delivered
+reaches a verifier that can reach the status host within about 65 minutes (5
+minutes of batching plus the 1 hour `ttl`); otherwise it reaches verifiers at
+the next complete reconciliation (24 hours, plus the extract's age: about 31
+hours in the worst case with the defaults, counting a 6 hour extract, 5 minutes
+of batching, and the 1 hour `ttl`), or, for a verifier that cannot refresh its
+cached token, when that token's `exp` passes (24 hours by default). If the
+issuer loses sight of the source for longer than the bound (48 hours), it stops
+vouching and verifiers fail closed once the last token expires.
+
+**What the stack does not claim about wallets.** The stack does not promise that
+a holder's wallet shows a withdrawal. The Inji Wallet and Inji Verify revisions
+reviewed for this profile show no sign of checking Token Status List status for
+SD-JWT VC credentials: the wallet documents status checks for the W3C Status
+List and `ldp_vc` only, its iOS path returns a successful verification for
+`vc_sd_jwt` and `dc_sd_jwt` before any status step, and none of the Inji
+repositories read mentions `statuslist+jwt`. A withdrawn credential therefore
+keeps showing as valid in the wallet. Withdrawal is observed by relying parties
+that use a client verifier, not by the holder's wallet. Product documentation
+states this, claims only the client verifier, and says nothing that implies
+revocation of a wallet-held credential or of a credential without status.
+
+#### Allocation in the signing transaction
+
+Each referenced token needs its own index; reissued tokens must get a fresh
+entry, batch members dedicated ones, and unintended double allocation must be
+prevented (Status List 4.1, 13.2, and 13.3).
+
+1. Indices are drawn uniformly at random by a CSPRNG from the open list's
+   unallocated indices; never sequential or derived from record, selector, or
+   holder key.
+2. Every credential gets a fresh index: every batch member, reissue, and
+   renewal offer.
+3. A unique constraint on `(list_id, idx)` enforces no double allocation; a
+   conflict retries with a new random index.
+4. **One transaction, in the frozen release order.** For a status-required
+   requirement the `signing.order` of the SD-JWT VC profile becomes, in the
+   version 2 profiles: core validates the derivation; opens the transaction;
+   inserts one row per credential (per batch member), because `status.idx` is a
+   signed claim and must exist before the payload is built; constructs the
+   payload including `status`; maps it to claims and disclosures; signs;
+   commits; serializes the final bytes; durably accepts the disclosure-release
+   audit; releases the pre-audited bytes. The release audit stays after signing
+   and before release, and the final bytes exist before it (invariant 29); the
+   commit sits between signing and serialization, so a disclosure-release audit
+   entry never exists for a credential whose row did not commit. A failure
+   before the commit releases nothing and leaves no row. A failure after the
+   commit (serialization, the release audit, the response) also releases nothing
+   but leaves the row: an over-count, accepted below. A failed insert,
+   signature, or commit returns a safe dependency category. PostgreSQL's
+   `statement_timeout` limits only a statement the server is executing, not a
+   session idle in transaction while Evidence waits on a signer, so the
+   transaction is bounded four ways (values in the policy table): the
+   client-side signer timeout (a `transit` request is capped at 30 s); a
+   whole-transaction deadline across every member of a batch;
+   `idle_in_transaction_session_timeout` on the status role; and a pool size per
+   process. When the deadline passes, the transaction rolls back and the request
+   returns the dependency category; when the issuance pool is exhausted, only
+   status-required requests fail, because intake, operator routes, publication,
+   and the scheduler draw on the separate reserved pool and a signer stall does
+   not stop them.
+5. The row holds list URI, index, a keyed HMAC-SHA-256 of the holder key
+   thumbprint under the holder-key digest key (holder-bound only; the raw
+   thumbprint is never stored, and a lost-device lookup hashes the presented
+   thumbprint the same way), requirement id, selector pseudonym, issued-at,
+   `notAfter` (the credential's `validUntil`), status, the last applied source
+   revision, and the key version of each keyed value. No `jti`, no raw selector.
+6. **Selector pseudonym and keys.** The pseudonym is `HMAC-SHA-256(status
+   pseudonym key, length-prefixed selector profile id, then each field of the
+   complete canonical role/selector bundle, length-prefixed, in the selector
+   profile's canonical order)`. The canonical bundle is the form the audit
+   pseudonymization already uses, so a request, a hook projection, and an
+   extract row for one person yield one pseudonym; unframed concatenation is not
+   used because it is ambiguous. The checker refuses a mapping whose selector
+   field cannot produce that form or whose record type is not keyed by the
+   complete bundle, and a conformance test reaches one person by all three paths
+   and expects one pseudonym. Two keys are named: the **status pseudonym key**
+   and the **holder-key digest key**, configured separately or derived by HKDF
+   from one status secret with distinct labels. Neither may equal, or be derived
+   from, the audit pseudonymization key or a subject-binding secret, or whoever
+   holds the ledger could join it to audit records and bindings. Startup refuses
+   equal keys and a derivation from either that Evidence performs itself;
+   deriving one outside Evidence is an operator obligation the runbook states.
+   Both live in Evidence's secret configuration and never in the ledger
+   database. Every ledger, observation, and idempotency row carries the key
+   version it was written under.
+   **Rotation.** The pseudonym key rotates in a complete reconciliation run,
+   which sees every selector in the extract: the run re-keys allocations and the
+   observation store; the previous key stays available for lookups (hook intake,
+   operator selectors) until that run commits, and afterwards until every
+   allocation the run could not re-key (a selector absent from its extract, left
+   SUSPENDED by the absence rule, whose raw selector is gone) has passed
+   `notAfter` plus its grace period, as for the digest key; intake idempotency
+   rows age out under their retention instead of being re-keyed. The holder-key
+   digest key cannot be re-keyed, because the raw thumbprint is never stored: a
+   retired digest key is kept verification-only until every allocation written
+   under it has passed `notAfter` plus its grace period, and a lost-device
+   lookup tries each retained key.
+   **Lost-device response.** The default is withdrawal by selector and
+   requirement, followed by reissue: the wallet generates the holder key on the
+   device and the stack keeps no raw thumbprint, so a holder who lost the device
+   usually has no thumbprint to give. The selector action withdraws every live
+   credential for that selector and requirement, so the holder takes a fresh
+   one. The thumbprint path is the narrower option for when the holder or the
+   wallet provider has the value (no existing channel gives an operator the
+   value): the operator submits the holder key thumbprint (an RFC 7638 hash of a
+   public key) in the body of the operator request, never in a path or query;
+   Evidence digests it on entry and writes it to no log, audit entry, or error.
+   The holder or the wallet provider supplies it outside Evidence.
+7. Indices are never reused; a list is deleted only after every allocation on it
+   has passed `notAfter` plus a grace period. Logs carry list ids and counts
+   only.
+
+**What the transaction removes.** Ticket reuse disappears: no signed ticket
+exists to be reused, so two credentials cannot share an index. The audit is not
+misstated: a row exists if and only if a credential was signed and committed
+(the commit precedes serialization and the release audit); the table can
+over-count (a failure after the commit, or a lost response) but never
+under-count.
+
+**What stays visible, and is accepted.**
+
+- An observer polling a list learns how many entries changed per interval (no
+  decoys in version one).
+- `uri` plus `idx` is a stable correlator colluding verifiers can join on
+  (Status List 12.5), of the same class as the accepted holder key reuse; one
+  batch shares a list URI, a weak signal at 2^20 entries; withdrawing every
+  member of a batch at once shows an outsider who diffs successive lists that
+  those indices changed together (Status List 13.2).
+- One selector yields one pseudonym across every requirement in the deployment,
+  so anyone holding the ledger can link a person's allocations across
+  requirements; and a low-entropy selector (a national identifier) is open to a
+  dictionary attack by anyone who obtains the database and the pseudonym key
+  together, which is why the keys are held outside the database.
+- What the stateless property no longer gives: the ledger is a new breach target
+  (pseudonyms, keyed holder-key digests, and issuance times per requirement) and
+  several processes share it. The constraints subsection lists what still
+  holds and what is accepted.
+
+#### Transitions: mechanism
+
+The mechanism is fixed by this profile; policy is set by services and
+deployments.
+
+| From | To | Hook | Reconciliation | Operator |
+|---|---|---|---|---|
+| VALID | SUSPENDED | if mapped | if mapped, and by default for absence from a complete extract | yes, always available |
+| VALID or SUSPENDED | INVALID | yes | yes | yes |
+| SUSPENDED | VALID | never; raises a pending reinstatement | never; raises a pending reinstatement | yes, under the approver policy |
+| INVALID | anything | never | never | never |
+
+- **Direction.** Hooks and reconciliation only move entries away from VALID. The
+  one reversible transition, SUSPENDED to VALID, is operator-only. INVALID is
+  terminal, with SUSPENDED to VALID as the only reversal; a mistaken INVALID is
+  corrected by a new credential. Reinstatement is an explicit governed
+  operation.
+- **Authorization classes.** Signed hook intake (HMAC-signed CloudEvents from a
+  configured source); operator authority, a configured operator issuer,
+  audience, and scope that no requester entitlement can satisfy; reconciliation.
+  Each is a distinct audit cause.
+- **Also fixed.** Two bits with VALID, INVALID, and SUSPENDED; random allocation;
+  idempotency by state, so reapplying the current status or replaying under a
+  fresh idempotency key changes nothing; staleness reporting; the verifier's
+  fail-closed default.
+
+#### Policy, with labelled defaults
+
+| Policy | Default | Set by | Consequence of changing it |
+|---|---|---|---|
+| Source state to status mapping | Withdrawal states and tombstones to INVALID; nothing to SUSPENDED unless declared | Service, in the Evidence bundle | A wrong map writes wrong status; each transition records the mapping version |
+| Live VALID allocation absent from a complete extract | SUSPENDED; INVALID available as a declared service policy | Service | SUSPENDED fails closed and an operator can reverse it. INVALID is terminal, so a publisher fault (a changed filter, a partitioned record type, a selector mismatch, a truncated export) would invalidate every affected holder for good. Explicit tombstones map to INVALID either way |
+| Approvers to withdraw or suspend | 1 operator; startup refuses below 1 | Deployment | More slows the response to a leaked credential |
+| Approvers to reinstate (SUSPENDED to VALID) | 2 distinct operators; startup refuses below 1 or below the withdrawal count | Deployment | One lets a single compromised account un-suspend |
+| Pending approval expiry | Equal to the reconciliation interval (24 h with the default), so a reinstatement raised by reconciliation is re-raised at the next run and the two cannot drift | Deployment | Shorter drops slow approvals; longer lets a request be approved after the facts changed |
+| Reconciliation interval | 24 h, matched to extract publication | Deployment | Shorter needs more frequent publication; longer widens the missed-hook window |
+| Mass-change guard | A run that would move more than the larger of 5 percent of live allocations and 20 allocations, or more than 5000 allocations in absolute terms, applies nothing and waits for an operator to release it | Deployment | The 20-allocation floor keeps one change from tripping a small ledger; the 5000 ceiling stops thousands of withdrawals passing under 5 percent of a large ledger. Higher lets a truncated extract through; lower raises false alarms |
+| Staleness bound | 48 h since the last successful source observation; startup refuses a bound not above interval plus extract maximum age plus margin | Deployment | Shorter fails credentials sooner in an outage; longer lets lists vouch for an unobserved source |
+| Reconciliation extract maximum age | 6 h (`maximumExtractAgeSeconds` 21600) | Service, in the reconciliation extract declaration of the bundle; startup checks it against the deployment's interval, margin, and bound | Longer lets a run act on older facts and shrinks the operator's time before lists stop; shorter fails a run sooner when publication is late |
+| Reconciliation retry | Hourly after a failed or blocked run | Deployment | Shorter retries load the source; longer delays recovery |
+| Staleness margin | 12 h | Deployment | Smaller leaves less time to react to a failed run before lists stop |
+| Status token `ttl` | 3600 s | Deployment | Shorter speeds propagation, at more fetch load and polling signal |
+| Status token `exp` | 24 h, never past the staleness deadline or `maximumAssertionValiditySeconds`; startup refuses a configured value above that ceiling | Deployment | Longer extends how long a stale or stolen-key list stays usable |
+| Capped `exp` rounding | Rounded down to the hour when the staleness deadline caps `exp` | Deployment | Coarser hides the extract's publication time better but shortens the effective bound by up to the rounding; finer discloses it more precisely |
+| Publication batching | 5 min; re-signed at least every 30 min; startup refuses a re-sign interval above half the status token `exp` | Deployment | Shorter speeds propagation at more signing load. The half-`exp` limit keeps a list from being expired for most of each cycle when `exp` is lowered |
+| Signing transaction deadline | 20 s across all members of a batch | Deployment | Longer holds pooled connections and inserted rows through a signer stall; shorter fails slow batches |
+| `idle_in_transaction_session_timeout` on the status role | Deadline plus 5 s | Deployment | A backstop for a process that dies mid-transaction |
+| Status connection pool | 8 per process for status-required issuance, and a separate reserved pool of 4 per process for hook intake, operator routes, the status list publisher, and the scheduler | Deployment | Smaller fails status-required requests sooner under load; larger lets a stall exhaust the database. The reserved pool keeps a signer stall from stopping intake and publication |
+| Observation retention | The largest `maximumExtractAgeSeconds` among the evaluation sources of status-required requirements, plus the clock-skew allowance; for a requirement with only HTTP evaluation sources, the signing transaction deadline plus the clock-skew allowance; startup refuses a configured value below that | Deployment | Shorter lets an old withdrawal be missed by an issuance from an older extract; longer keeps one row per changed mapped record at rest, whether or not it has an allocation, for the whole period |
+| Clock-skew allowance | 10 min | Deployment | Larger starts more allocations withdrawn; smaller can miss a withdrawal captured just before the source read |
+| Validity cap without status | 7 days; up to 30 with `acceptedRisk` | Service; the checker enforces | Longer extends a struck-off holder's working credential |
+| Verifier when status is unavailable | Fail closed after `exp` | Relying party, in verification policy | Fail open lets whoever blocks the status host defeat withdrawal |
+| Verifier input bounds | Compressed token at most 1 MiB (1048576 bytes); inflation stops at the list's profile maximum (2^20 entries at 2 bits, 262144 bytes); `ttl` clamped to 60 s to 86400 s; `exp` honoured no later than `iat` plus 7 days; at most 3 redirects, same origin, https only | Relying party, in verification policy or the SDK configuration | Looser lets a hostile or broken status host spend memory or request volume; tighter fails closed sooner on a legitimate change to the issuer's settings |
+
+The validity cap without status is a policy default the composition checker
+enforces, not a platform rule. Lower is free; up to 30 days needs an
+`acceptedRisk` note; longer is refused. Seven days bounds a struck-off holder's
+window to a week, survives a weekend without a new offer, and does not break
+short examples.
+
+**Startup refusals.** Evidence refuses to start with an approver count below 1,
+a reinstatement count below the withdrawal count, a staleness bound not above
+the reconciliation interval plus the reconciliation extract's maximum age plus
+the margin, a status token `exp` above `maximumAssertionValiditySeconds`, a
+re-sign interval above half the status token `exp`, an observation retention
+below its floor, or a status-required requirement on a deployment where status
+is not enabled.
+
+#### Hook intake
+
+Hooks are the BReg hook form: authored per record type with a trigger, a
+condition, a projection, and a handler; one event has at most one handler;
+events are captured in the mutation transaction and sent as CloudEvents 1.0
+binary mode with `data` of `recordType`, `recordId`, `revision`, `trigger`,
+`packageRevision`, and `values`, HMAC-SHA-256 signed with an `Idempotency-Key`.
+Delivery is at least once with five attempts and dead-lettering; replay gets a
+new idempotency key; no global or per-record delivery order is promised, and the
+record revision lets consumers detect stale or missing transitions.
+`registry-platform-hooks` verifies authenticity only; trust, types,
+deduplication, and meaning stay with the receiver.
+
+1. **Mapping rules** are a closed block in the Evidence bundle, authored next to
+   the requirement they serve: record type, selector field, status field, a
+   closed value map, the absence entry, and a version. The composition binds the
+   block by id and never restates it. Rules activate only at restart, as all
+   configuration does; during a rolling restart the ledger's highest registered
+   mapping version wins.
+2. **Hooks**: one per trigger, projecting only the selector and status fields;
+   the checker flags a second handler.
+3. **Processing.** Verify through `registry-platform-hooks`; reject an unknown
+   source or unmapped type; compute the pseudonym; acknowledge and discard a
+   revision older than the last applied one, or a repeated `Idempotency-Key`,
+   with an audit entry naming the category; apply the mapped status to each live
+   allocation for that pseudonym under the transition table, and for a pseudonym
+   with no allocation update only the observation store. A mapped move toward
+   VALID raises a pending reinstatement. Idempotency keys are kept at least 30
+   days, matching the retention cap on BReg's payloads. They are a replay store
+   and are not request nonces.
+4. **Race with issuance.** A hook processed between Evidence's source read and
+   the allocation commit finds no row. Intake keeps the latest observation of
+   any mapped state per pseudonym (not withdrawals only): the mapped status, the
+   source `revision`, and the CloudEvent `ce-time`, the immutable mutation
+   capture time. A new allocation inherits that status only when it is
+   non-VALID and the observation was captured after the evaluation's source read
+   less the clock-skew allowance; the source read is the earlier of the extract's
+   `publishedAt` and the evaluation instant for extract sources (a future-dated
+   `publishedAt` never counts as later than the instant it is read) and the
+   request time for HTTP sources. The test assumes the requirement's evaluation
+   reads the mapped record type and status field, which the checker enforces.
+   Otherwise the allocation starts VALID, so a record that was suspended and
+   then restored issues a working credential. The store holds only pseudonyms,
+   statuses, revisions, and times, and is re-keyed with the pseudonym key. An
+   observation must outlive every evaluation that read the source before it, and
+   an evaluation from an extract can commit an allocation as late as that
+   extract's `maximumExtractAgeSeconds` after its `publishedAt`, so the
+   observation retention is anchored on that age, not on credential validity.
+   The at-rest cost is one row per changed mapped record for that period,
+   whether or not the record has an allocation. Reconciliation closes the rest.
+5. **Acknowledgement and failure.** Intake separates what no retry can change
+   from what a retry can fix. An authentic stale delivery, a duplicate, and a
+   delivery for a pseudonym with no allocation are normal, because no delivery
+   order is promised: they apply no change, are audited with a category, and are
+   acknowledged with 2xx, since a non-2xx answer would send each of them to the
+   producer's dead-letter queue, where no replay could ever apply them. An
+   unverifiable delivery, an unknown source, an unmapped record type, and a
+   failure a retry can fix (PostgreSQL unavailable) apply nothing, are audited
+   with a reason category, and return non-2xx so the producer retries or
+   dead-letters. A metric counts intake failures by category.
+   **Outages.** BReg's retry window is short: five attempts with 1, 2, 4, then 8
+   s delays and a 5 s attempt timeout, so about 15 to 40 s in total. An Evidence
+   restart (the only way to activate configuration), a deploy, or a PostgreSQL
+   failover longer than that dead-letters every hook in the window. The runbook
+   therefore replays BReg's dead letters after any Evidence restart or intake
+   outage (replay is a BReg operator action and keeps the event id);
+   reconciliation repairs what replay does not.
+
+#### Operator authority, approvals, and reinstatement
+
+Operator authority is its own closed element, separate from requester
+entitlements. A requester entitlement cannot express it: an entitlement is a
+closed object limited to the authority kinds `statutory`, `organizational`,
+`consent`, `delegated`, and `explicit-request`, and Evidence authentication
+admits one authorization server and says nothing about roles. The operator
+routes therefore verify a token against a runtime-configured **operator issuer,
+audience, and scope** and read a **named principal claim** (for example `sub`)
+from it. They never evaluate requester entitlements, and no requester grant,
+however complete, satisfies them. The block belongs in the runtime
+configuration, so it changes only at restart. It authenticates producers
+independently from the representative issuance ceremony.
+
+Operators act by selector (pseudonymised on entry) and requirement, which is the
+default response to a reported lost device, or, as the narrower option, by
+holder key thumbprint when the holder or wallet provider has it, never by raw
+index, with a reason category from a closed list and a case reference. A
+selector action or a thumbprint action returns only a uniform outcome
+(`applied`, `pending`, or `nothing to apply`), with no per-credential detail,
+and every lookup of either kind is audited whether or not it finds anything.
+Selector and thumbprint lookups go through the failed-selector budget: rate
+limits are tracked per process and never shared across replicas, and that
+budget is the selector-enumeration defence, so an operator probing for
+selectors with no live credential spends it like any caller (behind N processes
+the budget is N times its setting, which the deployment's proxy or operator
+limit covers). The outcome still tells a trusted, audited operator whether a
+selector has live credentials; that residual is accepted as the cost of acting
+by selector.
+
+**Approvals.** Approver counts come from policy. Distinct approvers are
+distinct values of the principal claim from the operator issuer; one principal
+approving twice counts once. An action that needs more than one approver is a
+**pending action**: one per entry; it expires after the pending-approval expiry;
+any operator may cancel it; and creation, each approval, expiry, and
+cancellation write distinct audit causes. A pending reinstatement raised by a
+hook or by reconciliation has no creator and needs the full count. **Operator
+suspension** of a VALID entry is always available, independent of the service's
+state mapping, because it is the response to a leaked credential; it takes the
+withdrawal count. An `evidencectl status` command drives the endpoints; it acts
+on status data, never on runtime configuration.
+
+#### Reconciliation and absence
+
+A missed hook is repaired by reconciliation against a **reconciliation
+extract** per mapped record type, declared in the bundle and required for every
+status-enabled requirement whatever its evaluation source. It is the SQLite
+extract contract plus two additions: `record_count` in the reserved metadata and
+a per-record `revision` column. `record_count` is declared by the extract
+publisher that wrote the rows: it catches a torn or truncated file, not a wrong
+filter; the mass-change guard and the absence default bound the harm of a wrong
+filter. Extract metadata keeps its existing rule (`publishedAt`, `publisher`,
+and `extractId` are source data) subject to the exception stated under
+staleness.
+
+1. A new reviewed enumeration statement class, keyset-paged through a reserved
+   Rust-owned cursor, sits outside the 256-row evaluation cap but under its own
+   page bound.
+2. The extract is opened fresh per run with the existing read-only, immutable,
+   checkpoint, and metadata checks; its digest goes in the run audit. Because
+   `immutable=1` skips locking and change detection, the handoff never exposes a
+   file that changes: the extract publisher writes each extract as a new file
+   and renames it atomically into a configured directory; a file is never
+   modified in place; each run selects one file, records its digest, and holds
+   that same file open for the whole run; and the previous file is kept until
+   the next run completes.
+3. A run applies nothing and reports a failure when the extract is past its age
+   bound, dated later than the run instant plus the clock-skew allowance,
+   unreadable, or miscounted against `record_count`, or when the mass-change
+   guard trips.
+4. A complete run recomputes pseudonyms from the rows. A live VALID allocation
+   with no match takes the **absence status** (SUSPENDED by default, INVALID by
+   declared service policy). Absence is not a source state: it can also mean a
+   changed publisher filter, a partitioned record type, a selector mismatch, or
+   a truncated export. A match in a state the mapping sends to INVALID (an
+   explicit tombstone or withdrawal state) gets INVALID; a match in a state
+   mapped to SUSPENDED gets that status; a VALID-mapped match against a
+   SUSPENDED entry raises a pending reinstatement, never a transition.
+5. A row whose revision is newer than the last applied one, with no hook
+   observed, is reported as "source revision advanced while no hook was
+   observed", by category and count only.
+6. Only a complete run advances the staleness clock; a failed, blocked, or
+   guard-tripped run does not, so it starts the countdown to the staleness
+   deadline.
+7. **Alerts.** A failed, stale-extract, miscounted, or guard-tripped run reports
+   a category (never an extract metadata value) through readiness, a metric, and
+   a value-free run audit record. The deployment's monitoring owns paging;
+   Evidence has no notification channel. A guard-tripped run waits for an
+   operator to release it through the operator endpoint, under the withdrawal
+   approver count and against the same extract digest, and it lapses when that
+   extract passes its age bound.
+8. **Publisher.** BReg ships a reconciliation extract writer, a command that
+   writes the reconciliation extract (not the existing source export, which
+   exports source definitions for authoring and carries no data): the SQLite
+   extract contract Evidence already reads, plus `record_count` and the
+   per-record `revision`. Owner BReg. It does not exist yet, and no starter
+   publishes a production extract. A non-BReg HTTP-sourced registry needs an
+   adopter-built publisher, with the BReg reconciliation extract writer as the
+   reference.
+9. **Preview.** Local `evidencectl dev` refuses SQLite extracts, so it runs a
+   status-required requirement with status disabled, emits no `status` claim,
+   keeps the validity cap in force, and says so plainly at startup; it is the
+   only place a status-required requirement runs with status disabled. Hosted
+   previews bind a synthetic reconciliation extract produced by the BReg
+   reconciliation extract writer over preview data.
+
+Reconciliation does not page through BReg: depending on the BReg client would
+breach source neutrality and add pagination traversal that section 15.5 leaves
+to a separate proposal.
+
+#### Staleness and capped `exp` rounding
+
+The last successful source observation is the `publishedAt` of the extract
+behind the last complete reconciliation run, or the run's instant if that is
+earlier; a run refuses an extract dated later than its instant plus the
+clock-skew allowance; hooks cannot prove nothing was missed, so they do not
+advance it. The status list publisher sets `exp = min(iat + exp default,
+observation + bound)` and stops re-signing once `now` passes that deadline
+rounded down to the hour (the capped `exp` of the last token), not the exact
+`observation + bound`, so the last token's `iat` reveals no more than the
+rounded `exp` does; tokens then expire and verifiers fail closed by default.
+Readiness and metrics report `withinBound` or `beyondBound` only, never the
+`publishedAt` value.
+
+**Capped `exp` rounding.** Whenever the second term is the smaller (the end of
+every cycle with any lag, once `iat - publishedAt` exceeds the bound minus the
+exp default, 24 h with the defaults), `exp - bound` equals `publishedAt` to the
+second in a token anyone can fetch, and the extract metadata rule classes
+`publishedAt` as source data that must never reach audit, logs, errors, or
+operator diagnostics. In that case the publisher rounds `exp` down to the hour.
+Rounding down never lengthens a token. The residual, `publishedAt` to within the
+rounding interval and only in capped tokens, is accepted. The ledger also stores
+the observation time. Both are the one exception to the extract metadata rule;
+`publisher` and `extractId` stay under it without exception.
+
+**Validation and the countdown.** Only a complete run advances the clock, and
+the clock is the extract's `publishedAt`, which already lags each run. Evidence
+therefore refuses to start unless the staleness bound exceeds the reconciliation
+interval plus the reconciliation extract's maximum age plus a margin, so one
+failed or blocked run cannot by itself stop the lists. With the defaults (24 h
+interval, 6 h extract age, 12 h margin, 48 h bound) a failed scheduled run
+leaves the operator at least the margin before every list stops being
+re-signed. Readiness reports only `withinBound` or `beyondBound`, never the time
+remaining, because the remaining time reveals `publishedAt`; the runbook gives
+operators the arithmetic instead.
+
+#### Audit
+
+The allocation table is the issued-credential record: ledger state, not
+tamper-evident storage. Transitions go to an unchained transitions table written
+in the same transaction as the state change (history, idempotency, and
+provenance), so state and its record cannot diverge. Evidence's audit entries
+are not chained or signed; tamper evidence depends on shipping the stream to
+append-only storage outside the service's write authority, and a chain inside a
+table the Evidence role can rewrite proves nothing against that role. So each
+transition and each reconciliation run also emits a value-free record through
+the shared platform audit writer under a new closed status audit schema, since
+the existing audit event schema has a closed phase enum with no place for them.
+The pattern is Casework's: a request entry before the operation's transaction
+and a response entry after it commits; a refused response entry leaves the
+committed change in place and is reported. A transition entry records
+transition id, list id and index, from and to status, cause (`hook`, `operator`,
+`reconciliation`), mapping version, reason category, provenance (event id,
+`revision`, `packageRevision`, and source; or operator principals and case
+reference; or run id and extract digest), and time. Operator causes include
+pending-action creation, approval, expiry, and cancellation. It never holds raw
+selector values, record values, credential values, wallet proofs, offer secrets,
+access tokens, or extract metadata values.
+
+#### Signing custody
+
+Evidence has one credential key, published at `/.well-known/evidence/jwks.json`
+and `/.well-known/jwt-vc-issuer`. Its `kid` is the RFC 7638 thumbprint, verifiers
+carry `revokedKeyIds`, and a predecessor stays published for at least the
+maximum validity plus skew. Custody is `local-jwk` or `transit`, without hot
+reload.
+
+1. Status list tokens are signed by the Evidence credential key through the
+   existing signer. `active_keys: 1` stays true; verifiers need no new pin.
+2. **Type separation.** Verifiers check `typ` first; a `statuslist+jwt` token is
+   never accepted as a credential (`dc+sd-jwt`) or a signed JWS answer, nor the
+   reverse, with a negative test per pair.
+3. **Rotation.** The predecessor rule covers status tokens because token `exp`
+   never exceeds the maximum credential validity, `maximumAssertionValiditySeconds`,
+   the ceiling every validity stays within and the base of the window a retired
+   key stays published; startup enforces it and the composition checker repeats
+   it once it has a deployment snapshot.
+4. **Compromise.** `revokedKeyIds` covers both uses, plus re-signing under the
+   new key. This depends on the client denylist work tracked in #2191.
+5. A separate status key is a recorded, reversible alternative. Reversal is a
+   verifier-policy pin plus a profile revision.
+6. Hosted previews use an ephemeral `local-jwk` key and label tokens
+   non-production in the JWKS and preview banner. A hosted preview that serves a
+   status-required requirement binds a synthetic reconciliation extract
+   produced by the BReg reconciliation extract writer over preview data; local
+   `evidencectl dev` runs with status disabled and the validity cap in force.
+
+#### The `evidence-oid4vci` durable store
+
+Today `evidence-oid4vci` is one process and one mutex guarding three in-memory
+key spaces (offers, transaction-code ledgers, and tokens), tags are HMACs under a
+random per-process key, saturation fails closed, and `c_nonce` is minted
+statelessly. Its stated limits are that a restart invalidates offers and that
+exactly one replica is supported; a database, persistence, or second replica is
+prohibited by the OID4VCI profile and may not be stubbed. The delivery audit is
+already durable. A reviewed `oid4vci-profile/v2` replaces those limits with a
+deployment contract:
+
+1. A storage trait with two backends: the existing process-local one (preview,
+   single replica) and PostgreSQL (restart-safe, two or more replicas) in its
+   own schema and role. No SQLite backend.
+2. Single-use redemption and attempt counting become conditional updates;
+   lockout semantics are unchanged. Capacity becomes a deployment-wide count in
+   the same transaction, still failing closed. Expired rows are never served; a
+   purge job deletes them.
+3. The tag and nonce keys become shared configured secrets with
+   current-plus-previous rotation; this removes "restart invalidates offers" but
+   adds custody.
+4. The adapter does nothing for status: Evidence allocates per batch member in
+   its own transaction, so the adapter's prohibition of credential status,
+   revocation, lifecycle, and management operations holds in substance.
+5. The offer-authorization, state-machine recovery, and Inji interoperability
+   suites run on both backends, plus a two-replica test of concurrent redemption
+   and lockout.
+6. **Prepared requests at rest.** The prepared request carries the full Evidence
+   request body, selector values included, and the process-local profile
+   promises it is "zeroized on claim" and that selector values are "held in the
+   deployment's memory". A PostgreSQL backend writes them to tables, WAL,
+   replicas, and backups, where zeroization means nothing. So the backend stores
+   the prepared request only as AEAD ciphertext under a configured key versioned
+   like the tag keys, and deletes the row on claim and on expiry. The ciphertext
+   copies in WAL, replicas, and backups persist for the backup retention period.
+   This is personal data at rest under a key; it is accepted here because the
+   exchange must carry the selectors to Evidence at claim time. A matrix row and
+   a grep test over the adapter database check that no selector canary appears
+   in plaintext.
+7. **Cutover.** The process-local cutover (stop, discard, change, restart)
+   assumes a restart discards outstanding exchanges, which a persistent store no
+   longer does. The PostgreSQL backend binds each exchange to the catalog
+   generation it was created under and refuses a mismatch, so a changed backing
+   bundle cannot serve a stale exchange; an operator may also purge outstanding
+   exchanges.
+
+#### Credential profiles and the verifier check
+
+`sd-jwt-vc-profile/v1` is frozen and prohibits `status`, and the deployed
+verifier's closed claim set detects a prohibited `status`; the holder-bound
+profile changes only through matrix review. So:
+
+1. `sd-jwt-vc-profile/v2` is v1 plus one optional, issuer-owned,
+   always-disclosed `status` claim. `holder-bound-profile/v2` adds the same
+   claim, lets a keyed HMAC of the thumbprint into the allocation row (the raw
+   thumbprint still reaches no store), and replaces the profile's non-goals and
+   consequence about withdrawal.
+2. A credential without `status` is byte-identical under v1 and v2, so code
+   implements v2 only; v1 stays frozen and is marked superseded, and nothing is
+   maintained twice.
+3. Each requirement declares `credentialStatus: required | none`. `required`
+   refuses issuance unless the allocation commits, and refuses to start unless
+   status is enabled; `none` never emits `status` and stays under the cap.
+4. **Verifier first.** Every deployed v1 registry verifier rejects `status`, so
+   verifiers ship before any issuer emits v2. Third-party verifiers should
+   tolerate it (SD-JWT VC 2.4: status "SHOULD be checked").
+5. Negative tests beside the closed-claims test: `status` under v1; malformed
+   `status`; status-required issuance with a failed commit; a status token
+   accepted as a credential, and the reverse.
+
+`registry-evidence-verifier` makes no network call, and its portability gate
+fails the build if its normal dependency tree reaches an HTTP, async, CLI, or
+tracing crate. The Node and Python clients wrap the Rust client, so the three are
+one implementation plus bindings.
+
+1. **Verifier.** A pure `check_status(reference, token_bytes, issuer_keys, now,
+   policy) -> StatusOutcome` (`Valid`, `Invalid`, `Suspended`, `Unknown(reason)`)
+   doing every Status List 8.3 check plus `typ`. No fetch, so the portability
+   gate holds. It caps the compressed token at the configured byte bound and
+   stops inflating `lst` at the list's profile maximum (2^20 entries at 2 bits,
+   262144 bytes), because Status List 8.3 step 5 sets no bound of its own and a
+   hostile or broken status host could otherwise serve an inflation bomb.
+2. **SDKs.** Fetch with the right `Accept`, cache per `ttl` and `exp`, call the
+   pure check. A cached token serves until its `exp` (24 h by default): a
+   verifier that cannot refresh learns of a withdrawal only then, and the SDK
+   documentation says so; after that the outcome is `Unknown`. The SDK clamps
+   `ttl` and `exp` to configured bounds, follows at most three redirects, only
+   to the same origin over https, and still requires `sub` to equal the
+   credential's `uri`. Defaults are in the verifier input bounds row of the
+   policy table.
+3. **Policy.** Both `verification-policy.schema.yaml` and
+   `holder-bound-verification-policy.schema.yaml` become v2, because both
+   profiles carry `status`: `credentialStatus: required | ifPresent | ignore`,
+   default `required` when the credential carries `status`; `statusUnavailable:
+   failClosed | failOpenWithWarning`, default `failClosed`.
+   `failOpenWithWarning` departs from Status List 8.3, which says that when a
+   check fails the token "SHOULD be rejected"; a SHOULD allows the departure, and
+   the SDK documentation and the policy schema state it as a departure. Keys stay
+   the pinned issuer keys.
+4. **Outcome.** Only `Valid` passes when status is required; `Unknown` follows
+   `statusUnavailable`. The verified payload omits the status reference after
+   checking (Status List 13.8).
+5. **Tests.** A vector per Status List 8.3 failure, and the draft's own encoding
+   vectors (Appendix C), which also check bit order; `typ` confusion; inflation,
+   oversize, `ttl`, `exp`, and redirect cases; a separate test of each binding's
+   configuration surface for `Accept`, cache bounds, redirects, and
+   `statusUnavailable`; an integration test where a client verifier observes a
+   hook-driven transition.
+
+#### What this section does not approve
+
+Approval of this section does not approve any of the following:
+
+1. Any implementation before a plan is written from it.
+2. Any Evidence state outside the status module, or any status mutation path
+   other than hook intake, operator endpoints, and reconciliation.
+3. A non-PostgreSQL status store.
+4. Holder key custody, wallet hosting, or wallet-initiated revocation.
+5. mdoc, VCDM 2.0, EUDI wallets, or CWT status lists.
+6. Status list aggregation (Status List 9), historical resolution (8.4), and
+   decoys (12.4).
+7. Per-credential status endpoints or any lookup by `jti`.
+8. Status for signed JWS answers, or for SD-JWT responses at or under the cap.
+9. Renewal or re-offer automation.
+10. A third-party or shared status provider across issuers.
+11. Any change to the BReg webhook contract, including multiple handlers per
+    event.
+12. Relationship-lifecycle transitions until a Relay successor exists.
+13. Any hook-driven or reconciliation-driven move toward VALID, and any move out
+    of INVALID.
+14. Publishing status lists to a static host or CDN, which has no push mechanism
+    in this design.
 
 ## 16. Initial assertion cases
 
@@ -2365,7 +3256,9 @@ derivation, special route, or preferred implementation order.
 Version one is one synchronous assertion service with signed JWS as the
 mandatory default and includes:
 
-- one `registry-evidence` crate, one `evidence` binary, and one serving process,
+- one `registry-evidence` crate, one `evidence` binary, and one serving process
+  per instance (with status enabled, several instances may share one ledger,
+  section 15.9),
   with the portable `registry-evidence-verifier` library the runtime depends on
   for the response formats, the payload contract, and relying-party
   verification;
@@ -2434,11 +3327,13 @@ mandatory default and includes:
 It does not include:
 
 - public, cross-requester, searchable, mutable, or federated catalog endpoints;
-- nonce or replay storage of any kind. A request nonce is echoed and compared
-  statelessly, and a relying party compares a key-binding nonce without
-  consuming it;
+- nonce or replay storage of any kind, except the intake idempotency keys of
+  the status module (a replay store, kept at least 30 days; section 15.9). A
+  request nonce is echoed and compared statelessly, and a relying party compares
+  a key-binding nonce without consuming it;
 - server-issued challenge flows, one-time consumption, or a credential
-  lifecycle. Section 15.8's holder-bound mode binds a presenter through the
+  lifecycle other than the status lifecycle of section 15.9. One-time
+  consumption is unchanged for requests. Section 15.8's holder-bound mode binds a presenter through the
   confirmation key and a key-binding JWT the relying party verifies against its
   own challenge; the serving process issues no challenge, consumes no nonce,
   and holds no presentation state;
@@ -2453,7 +3348,7 @@ It does not include:
 - source-planning scripts;
 - conversion of `.evidence/dev` local state into production inputs;
 - generated production secrets, callers, approval, promotion, deployment, or
-  remote mutation commands;
+  remote mutation commands, except `evidencectl status` (section 15.9);
 - target overlays, inheritance, templating, shared defaults, or secret
   expansion;
 - generated Compose, Kubernetes, Helm, Terraform, cloud-specific, or other
@@ -2461,7 +3356,7 @@ It does not include:
 - application-level or ambient-environment HTTP proxy routing;
 - federation;
 - runtime configuration mutation;
-- an application database; a mounted extract is a read-only source input, never a store
+- an application database, unless status is enabled (section 15.9); a mounted extract is a read-only source input, never a store
   the service owns, writes, or keeps state in.
 
 ## 18. Delivery sequence

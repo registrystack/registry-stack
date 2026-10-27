@@ -29,7 +29,7 @@ use std::{
     future::{Future, IntoFuture},
     io,
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicU8, Ordering},
         Arc,
     },
     time::Duration,
@@ -74,6 +74,7 @@ use crate::{
         credential_offer, credential_offer_uri, generate_secret, generate_transaction_code,
         offered_request, OfferError, OfferedRequest, RequestedSubject,
     },
+    storage::{CatalogGeneration, KeyRing, Store},
     store::{NonceError, NonceMinter, OfferStore, PreparedRequest, StoreError},
 };
 
@@ -166,7 +167,9 @@ pub enum ServiceError {
 /// and no holder key.
 pub struct DeliveryService {
     config: DeliveryConfig,
-    store: OfferStore,
+    store: Arc<dyn Store>,
+    /// The catalog generation every offer and token here is bound to.
+    generation: CatalogGeneration,
     nonces: NonceMinter,
     authorizer: Arc<dyn OfferAuthorizer>,
     issuer: Arc<dyn CredentialIssuer>,
@@ -183,7 +186,7 @@ impl std::fmt::Debug for DeliveryService {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("DeliveryService")
-            .field("offers", &self.store.len())
+            .field("store", &self.store)
             .finish_non_exhaustive()
     }
 }
@@ -217,12 +220,13 @@ impl DeliveryService {
         issuer: Arc<dyn CredentialIssuer>,
         audit: Arc<DeliveryAudit>,
     ) -> Self {
-        let store = OfferStore::new(&config.store);
+        let store = Arc::new(OfferStore::new(&config.store));
         let nonces = NonceMinter::new(config.store.nonce_lifetime_seconds);
         let metrics = Arc::new(Metrics::new(config.store.maximum_offers));
         Self {
             config,
             store,
+            generation: CatalogGeneration::default(),
             nonces,
             authorizer,
             issuer,
@@ -244,6 +248,34 @@ impl DeliveryService {
     #[must_use]
     pub fn with_clock(mut self, clock: impl Fn() -> i64 + Send + Sync + 'static) -> Self {
         self.clock = Arc::new(clock);
+        self
+    }
+
+    /// Hold offer state in `store`, bound to the catalog `generation`.
+    ///
+    /// Replicas that share one store and serve the same generation serve one
+    /// exchange between them; a replica serving another generation refuses it
+    /// as unknown. No configuration key reaches this yet: until the reviewed
+    /// `oid4vci-profile/v2` selects a backend, [`Self::load`] keeps the
+    /// in-memory store of [`Self::with_halves`] and the default generation.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn with_store(mut self, store: Arc<dyn Store>, generation: CatalogGeneration) -> Self {
+        self.store = store;
+        self.generation = generation;
+        self
+    }
+
+    /// Mint and verify nonces under keys the caller supplies, so a nonce one
+    /// replica minted verifies at another holding the same keys. Like
+    /// [`Self::with_store`], no configuration key reaches this yet. The nonce
+    /// keys must share no key with the store's tagging or sealing keys; the
+    /// caller that holds all three rings checks them with
+    /// [`crate::storage::refuse_shared_keys`].
+    #[doc(hidden)]
+    #[must_use]
+    pub fn with_nonce_keys(mut self, keys: KeyRing) -> Self {
+        self.nonces = NonceMinter::with_keys(self.config.store.nonce_lifetime_seconds, keys);
         self
     }
 
@@ -380,21 +412,43 @@ pub fn build_app(service: Arc<DeliveryService>) -> Router {
         .layer(from_fn(add_no_store))
 }
 
-/// Data-free request-local state shared by the credential handler and timeout.
+/// Data-free request-local state shared by the token and credential handlers
+/// and the timeout.
 ///
-/// It carries no token, request identifier, or other caller material. The one
-/// bit distinguishes a retryable timeout from one that occurred after the
-/// request's single-use authorization had already been consumed.
+/// It carries no code, token, request identifier, or other caller material.
+/// It distinguishes a retryable timeout from one that occurred once the
+/// request had begun to spend its single-use authorization. A handler marks
+/// the stage before it asks the store to spend, not after: a shared store can
+/// commit the spend after the request has stopped waiting for the reply, and
+/// a timeout in that window must not invite a retry that can only be refused.
+///
+/// The default, zero, is a request that has spent nothing.
 #[derive(Clone, Default)]
-struct CredentialRequestStage(Arc<AtomicBool>);
+struct RequestStage(Arc<AtomicU8>);
 
-impl CredentialRequestStage {
-    fn mark_claimed(&self) {
-        self.0.store(true, Ordering::SeqCst);
+impl RequestStage {
+    const REDEEMING_CODE: u8 = 1;
+    const CLAIMING_TOKEN: u8 = 2;
+
+    fn mark_redeeming_code(&self) {
+        self.0.store(Self::REDEEMING_CODE, Ordering::SeqCst);
     }
 
-    fn is_claimed(&self) -> bool {
-        self.0.load(Ordering::SeqCst)
+    fn mark_claiming_token(&self) {
+        self.0.store(Self::CLAIMING_TOKEN, Ordering::SeqCst);
+    }
+
+    /// What a request that outlived the timeout is told.
+    fn timeout_response(&self) -> Response {
+        match self.0.load(Ordering::SeqCst) {
+            Self::REDEEMING_CODE => unredeemable_code_response(),
+            Self::CLAIMING_TOKEN => terminal_credential_response(),
+            _ => problem(
+                StatusCode::REQUEST_TIMEOUT,
+                "invalid_request",
+                "the request took longer than this service waits",
+            ),
+        }
     }
 }
 
@@ -488,11 +542,11 @@ async fn cleanup_expired(service: Arc<DeliveryService>, mut stopped: watch::Rece
     loop {
         tokio::select! {
             _ = interval.tick() => {
-                let expired = service.store.sweep(service.now());
+                let expired = service.store.sweep(service.now()).await;
                 service.metrics.record_cleanup(expired);
                 service
                     .metrics
-                    .record_store_entries(service.store.maximum_keyspace_len());
+                    .record_store_entries(service.store.maximum_keyspace_len().await);
             }
             changed = stopped.changed() => {
                 if changed.is_err() || *stopped.borrow() {
@@ -651,12 +705,17 @@ async fn create_offer(
         Ok(audit) => audit,
         Err(_) => return offer_audit_unavailable_response(),
     };
-    if let Err(error) = service.store.remember_offer(
-        &code,
-        transaction_code.as_ref().map(|code| code.as_str()),
-        prepared,
-        service.now(),
-    ) {
+    if let Err(error) = service
+        .store
+        .remember_offer(
+            &code,
+            transaction_code.as_ref().map(|code| code.as_str()),
+            &service.generation,
+            prepared,
+            service.now(),
+        )
+        .await
+    {
         if offer_audit.refused().await.is_err() {
             return offer_audit_unavailable_response();
         }
@@ -666,9 +725,7 @@ async fn create_offer(
         return offer_audit_unavailable_response();
     }
     service.metrics.record_outcome(Outcome::OfferCreated);
-    service
-        .metrics
-        .record_store_entries(service.store.maximum_keyspace_len());
+    refresh_store_entries_in_background(&service);
 
     tracing::info!(
         target: "registry_evidence_oid4vci::service",
@@ -713,6 +770,7 @@ struct TokenRequest {
 /// which is where a nonce this service can recompute comes from.
 async fn token(
     State(service): State<Arc<DeliveryService>>,
+    Extension(stage): Extension<RequestStage>,
     Form(request): Form<TokenRequest>,
 ) -> Response {
     if request.grant_type != crate::PRE_AUTHORIZED_CODE_GRANT_TYPE {
@@ -727,18 +785,24 @@ async fn token(
     let access_token = generate_secret();
     // Redeeming and binding are one step. A refusal between them would spend
     // the offer and leave the wallet a retryable answer it can never act on.
-    if let Err(error) = service.store.redeem_offer_for_access_token(
-        &code,
-        transaction_code.as_ref().map(|code| code.as_str()),
-        &access_token,
-        service.now(),
-    ) {
+    stage.mark_redeeming_code();
+    if let Err(error) = service
+        .store
+        .redeem_offer_for_access_token(
+            &code,
+            transaction_code.as_ref().map(|code| code.as_str()),
+            &access_token,
+            &service.generation,
+            service.now(),
+        )
+        .await
+    {
         return store_response(&service, &error, Outcome::CodeClaimRefused);
     }
     service.metrics.record_outcome(Outcome::CodeRedeemed);
-    service
-        .metrics
-        .record_store_entries(service.store.maximum_keyspace_len());
+    // The code is spent and the token bound, so nothing may stand between
+    // them and the wallet, the bookkeeping least of all.
+    refresh_store_entries_in_background(&service);
     value_response(
         StatusCode::OK,
         &json!({
@@ -806,7 +870,7 @@ struct CredentialProofs {
 /// being a place to try proofs against a live token until one is accepted.
 async fn credential(
     State(service): State<Arc<DeliveryService>>,
-    Extension(stage): Extension<CredentialRequestStage>,
+    Extension(stage): Extension<RequestStage>,
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
@@ -814,9 +878,11 @@ async fn credential(
         return unauthorized("a bearer access token is required");
     };
     let access_token = Zeroizing::new(access_token.to_owned());
+    stage.mark_claiming_token();
     let prepared = match service
         .store
-        .claim_access_token(&access_token, service.now())
+        .claim_access_token(&access_token, &service.generation, service.now())
+        .await
     {
         Ok(prepared) => prepared,
         Err(StoreError::Unknown) => {
@@ -825,14 +891,11 @@ async fn credential(
         }
         Err(error) => return store_response(&service, &error, Outcome::TokenClaimRefused),
     };
-    stage.mark_claimed();
     service.metrics.record_outcome(Outcome::TokenClaimed);
-    let expired = service.store.sweep(service.now());
-    service.metrics.record_cleanup(expired);
-    service
-        .metrics
-        .record_store_entries(service.store.maximum_keyspace_len());
 
+    // The token is spent, so the exchange owes a delivery record before
+    // anything else can outlast the request bound. Store bookkeeping follows
+    // off the request path: the periodic cleanup sweeps expired entries.
     let delivery_audit = match service
         .audit
         .begin_credential_delivery(prepared.exchange_id())
@@ -841,6 +904,7 @@ async fn credential(
         Ok(audit) => audit,
         Err(_) => return credential_audit_unavailable_response(),
     };
+    refresh_store_entries_in_background(&service);
 
     let Ok(body) = std::str::from_utf8(&body) else {
         service.metrics.record_outcome(Outcome::ProofRefused);
@@ -1179,25 +1243,23 @@ fn now() -> i64 {
 /// A wallet is told the same thing whether its code was never issued, was
 /// already redeemed, or was locked out, because the difference between those is
 /// exactly what a caller working through codes would want to learn.
-fn store_response(service: &DeliveryService, error: &StoreError, refused: Outcome) -> Response {
+fn store_response(
+    service: &Arc<DeliveryService>,
+    error: &StoreError,
+    refused: Outcome,
+) -> Response {
     service.metrics.record_outcome(match error {
         StoreError::Saturated => Outcome::StoreSaturated,
-        StoreError::Poisoned => Outcome::StoreFault,
+        StoreError::Poisoned | StoreError::Unavailable => Outcome::StoreFault,
         _ => refused,
     });
-    service
-        .metrics
-        .record_store_entries(service.store.maximum_keyspace_len());
+    refresh_store_entries_in_background(service);
     match error {
         StoreError::Unknown
         | StoreError::AlreadyRedeemed
         | StoreError::TransactionCodeRefused
-        | StoreError::LockedOut => problem(
-            StatusCode::BAD_REQUEST,
-            "invalid_grant",
-            "the pre-authorized code cannot be redeemed",
-        ),
-        StoreError::Saturated | StoreError::Poisoned => {
+        | StoreError::LockedOut => unredeemable_code_response(),
+        StoreError::Saturated | StoreError::Poisoned | StoreError::Unavailable => {
             tracing::warn!(
                 target: "registry_evidence_oid4vci::service",
                 "the offer store cannot take this request"
@@ -1209,6 +1271,25 @@ fn store_response(service: &DeliveryService, error: &StoreError, refused: Outcom
             )
         }
     }
+}
+
+fn unredeemable_code_response() -> Response {
+    problem(
+        StatusCode::BAD_REQUEST,
+        "invalid_grant",
+        "the pre-authorized code cannot be redeemed",
+    )
+}
+
+/// Refresh the store-entries gauge without making the request wait for it.
+/// No request handler awaits the count; only the periodic cleanup does.
+fn refresh_store_entries_in_background(service: &Arc<DeliveryService>) {
+    let service = Arc::clone(service);
+    tokio::spawn(async move {
+        service
+            .metrics
+            .record_store_entries(service.store.maximum_keyspace_len().await);
+    });
 }
 
 fn record_issuance_outcome(service: &DeliveryService, error: &IssuanceError) {
@@ -1347,8 +1428,8 @@ async fn refuse_a_stalled_request(
     mut request: Request<Body>,
     next: Next,
 ) -> Response {
-    let credential_stage = CredentialRequestStage::default();
-    request.extensions_mut().insert(credential_stage.clone());
+    let stage = RequestStage::default();
+    request.extensions_mut().insert(stage.clone());
     match tokio::time::timeout(bound, next.run(request)).await {
         Ok(response) => response,
         Err(_) => {
@@ -1356,15 +1437,7 @@ async fn refuse_a_stalled_request(
                 target: "registry_evidence_oid4vci::service",
                 "a request outlived the configured timeout and was refused"
             );
-            if credential_stage.is_claimed() {
-                terminal_credential_response()
-            } else {
-                problem(
-                    StatusCode::REQUEST_TIMEOUT,
-                    "invalid_request",
-                    "the request took longer than this service waits",
-                )
-            }
+            stage.timeout_response()
         }
     }
 }
@@ -1402,6 +1475,7 @@ mod tests {
         authorizer::AuthorizedOffer,
         config::{tests::canonical_tempdir, OID4VCI_RUNTIME_API_VERSION, OID4VCI_RUNTIME_KIND},
         metadata::CredentialCatalog,
+        storage::{KeyRing, VersionedKey},
         testing::{
             ed25519_private_jwk, private_jwk, proof_jwt, proof_jwt_over_payload_text,
             proof_jwt_with, proof_jwt_with_header, public_jwk, unsigned_proof_jwt,
@@ -1711,7 +1785,7 @@ mod tests {
             .await;
 
         assert_eq!(response.status_code(), StatusCode::SERVICE_UNAVAILABLE);
-        assert_eq!(service.store.len(), 0);
+        assert_eq!(service.store.len().await, 0);
         assert!(issuer.requests().is_empty());
         let body = response.as_bytes();
         assert!(!body
@@ -2534,7 +2608,7 @@ mod tests {
         }
 
         assert_eq!(
-            service.store.len(),
+            service.store.len().await,
             0,
             "no offer secret or state was created"
         );
@@ -3377,6 +3451,660 @@ mod tests {
         assert_eq!(replayed.status_code(), StatusCode::UNAUTHORIZED);
     }
 
+    /// A replica over a store and nonce keys it shares with every other replica
+    /// of the same deployment, serving under `generation`.
+    fn replica_over(
+        directory: &Path,
+        store: &Arc<OfferStore>,
+        generation: &str,
+    ) -> (Arc<DeliveryService>, Arc<RecordingIssuer>) {
+        let issuer = Arc::new(RecordingIssuer::new());
+        let nonce_key = VersionedKey::new(1, &[0x5a; 32]).expect("a 32-byte test key");
+        let service = DeliveryService::with_halves(
+            load_deployment(directory),
+            Arc::new(StubAuthorizer {
+                accepted: OFFER_TOKEN.to_owned(),
+            }),
+            Arc::clone(&issuer) as Arc<dyn CredentialIssuer>,
+            test_audit(),
+        )
+        .with_store(
+            Arc::clone(store) as Arc<dyn Store>,
+            CatalogGeneration::new(generation).expect("a valid catalog generation"),
+        )
+        .with_nonce_keys(KeyRing::single(nonce_key));
+        (Arc::new(service), issuer)
+    }
+
+    fn shared_store(directory: &Path) -> Arc<OfferStore> {
+        let key = VersionedKey::new(1, &[0xa5; 32]).expect("a 32-byte test key");
+        Arc::new(OfferStore::with_keys(
+            &load_deployment(directory).store,
+            KeyRing::single(key),
+        ))
+    }
+
+    /// An offer created on one replica is redeemed on another, a nonce minted
+    /// on the first proves possession on the second, and the token the second
+    /// handed out is spent for both.
+    #[tokio::test]
+    async fn replicas_sharing_a_store_and_nonce_keys_serve_one_exchange() {
+        let directory = canonical_tempdir();
+        let store = shared_store(directory.path());
+        let (first, first_issuer) = replica_over(directory.path(), &store, "catalog-1");
+        let (second, second_issuer) = replica_over(directory.path(), &store, "catalog-1");
+        let first = TestServer::new(build_app(first));
+        let second = TestServer::new(build_app(second));
+
+        let created = first
+            .post(OFFERS_PATH)
+            .add_header("authorization", format!("Bearer {OFFER_TOKEN}"))
+            .json(&offer_body(false))
+            .await;
+        assert_eq!(created.status_code(), StatusCode::CREATED);
+        let code = offered_code(&created.json());
+        let granted = second.post(TOKEN_PATH).form(&token_form(&code, None)).await;
+        assert_eq!(granted.status_code(), StatusCode::OK);
+        let access_token = granted.json::<Value>()["access_token"]
+            .as_str()
+            .expect("the token response carries an access token")
+            .to_owned();
+
+        let nonce = minted_nonce(&first).await;
+        let key = private_jwk("holder");
+        let request = json!({
+            "credential_configuration_id": CONFIGURATION_ID,
+            "proofs": {"jwt": [proof_jwt(&key, "https://wallet.example.org", &nonce, now())]},
+        });
+        let delivered = second
+            .post(CREDENTIAL_PATH)
+            .add_header("authorization", format!("Bearer {access_token}"))
+            .json(&request)
+            .await;
+        assert_eq!(delivered.status_code(), StatusCode::OK);
+        assert_eq!(second_issuer.requests().len(), 1);
+        assert!(first_issuer.requests().is_empty());
+
+        let replayed = first
+            .post(CREDENTIAL_PATH)
+            .add_header("authorization", format!("Bearer {access_token}"))
+            .json(&request)
+            .await;
+        assert_eq!(replayed.status_code(), StatusCode::UNAUTHORIZED);
+        let redeemed_again = first.post(TOKEN_PATH).form(&token_form(&code, None)).await;
+        assert_eq!(redeemed_again.status_code(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            redeemed_again.json::<Value>()["error"],
+            json!("invalid_grant")
+        );
+    }
+
+    /// A replica serving another catalog generation refuses the code as it
+    /// refuses any unknown code, and the offer stays redeemable where it was
+    /// created.
+    #[tokio::test]
+    async fn a_replica_on_another_catalog_generation_cannot_redeem_an_offer() {
+        let directory = canonical_tempdir();
+        let store = shared_store(directory.path());
+        let (current, _) = replica_over(directory.path(), &store, "catalog-1");
+        let (next, _) = replica_over(directory.path(), &store, "catalog-2");
+        let current = TestServer::new(build_app(current));
+        let next = TestServer::new(build_app(next));
+
+        let created = current
+            .post(OFFERS_PATH)
+            .add_header("authorization", format!("Bearer {OFFER_TOKEN}"))
+            .json(&offer_body(false))
+            .await;
+        assert_eq!(created.status_code(), StatusCode::CREATED);
+        let code = offered_code(&created.json());
+
+        let refused = next.post(TOKEN_PATH).form(&token_form(&code, None)).await;
+        assert_eq!(refused.status_code(), StatusCode::BAD_REQUEST);
+        assert_eq!(refused.json::<Value>()["error"], json!("invalid_grant"));
+        let granted = current
+            .post(TOKEN_PATH)
+            .form(&token_form(&code, None))
+            .await;
+        assert_eq!(granted.status_code(), StatusCode::OK);
+    }
+
+    /// A store whose backend cannot be reached.
+    #[derive(Debug)]
+    struct UnreachableStore;
+
+    #[async_trait]
+    impl Store for UnreachableStore {
+        async fn remember_offer(
+            &self,
+            _code: &str,
+            _transaction_code: Option<&str>,
+            _generation: &CatalogGeneration,
+            _prepared: PreparedRequest,
+            _now: i64,
+        ) -> Result<(), StoreError> {
+            Err(StoreError::Unavailable)
+        }
+
+        async fn redeem_offer(
+            &self,
+            _code: &str,
+            _transaction_code: Option<&str>,
+            _generation: &CatalogGeneration,
+            _now: i64,
+        ) -> Result<PreparedRequest, StoreError> {
+            Err(StoreError::Unavailable)
+        }
+
+        async fn redeem_offer_for_access_token(
+            &self,
+            _code: &str,
+            _transaction_code: Option<&str>,
+            _access_token: &str,
+            _generation: &CatalogGeneration,
+            _now: i64,
+        ) -> Result<(), StoreError> {
+            Err(StoreError::Unavailable)
+        }
+
+        async fn bind_access_token(
+            &self,
+            _access_token: &str,
+            _generation: &CatalogGeneration,
+            _prepared: PreparedRequest,
+            _now: i64,
+        ) -> Result<(), StoreError> {
+            Err(StoreError::Unavailable)
+        }
+
+        async fn claim_access_token(
+            &self,
+            _access_token: &str,
+            _generation: &CatalogGeneration,
+            _now: i64,
+        ) -> Result<PreparedRequest, StoreError> {
+            Err(StoreError::Unavailable)
+        }
+
+        async fn sweep(&self, _now: i64) -> usize {
+            0
+        }
+
+        async fn len(&self) -> usize {
+            0
+        }
+
+        async fn maximum_keyspace_len(&self) -> Option<usize> {
+            None
+        }
+    }
+
+    /// An unreachable store answers like a faulted one: retryable, counted as
+    /// a store fault, and with nothing about the exchange in the body.
+    #[tokio::test]
+    async fn an_unreachable_store_is_a_retryable_store_fault() {
+        let directory = canonical_tempdir();
+        let (service, issuer) = wired_service(directory.path());
+        let service = Arc::new(
+            Arc::into_inner(service)
+                .expect("the only handle on the service")
+                .with_store(Arc::new(UnreachableStore), CatalogGeneration::default()),
+        );
+        let server = TestServer::new(build_app(Arc::clone(&service)));
+
+        let created = server
+            .post(OFFERS_PATH)
+            .add_header("authorization", format!("Bearer {OFFER_TOKEN}"))
+            .json(&offer_body(false))
+            .await;
+        assert_eq!(created.status_code(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            created.json::<Value>()["error"],
+            json!("temporarily_unavailable")
+        );
+        let granted = server
+            .post(TOKEN_PATH)
+            .form(&token_form("any-code", None))
+            .await;
+        assert_eq!(granted.status_code(), StatusCode::SERVICE_UNAVAILABLE);
+        let claimed = server
+            .post(CREDENTIAL_PATH)
+            .add_header("authorization", "Bearer any-token")
+            .json(&json!({"credential_configuration_id": CONFIGURATION_ID}))
+            .await;
+        assert_eq!(claimed.status_code(), StatusCode::SERVICE_UNAVAILABLE);
+        assert!(issuer.requests().is_empty());
+        assert!(service
+            .metrics
+            .render()
+            .contains("outcome=\"store-fault\"} 3"));
+    }
+
+    /// Where a [`LateStore`] holds its answer back.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum Late {
+        /// Creating an offer, which is only ever refused, never held back.
+        Offer,
+        Redemption,
+        Claim,
+        Count,
+        /// The sweep that used to follow a claim.
+        Sweep,
+        /// The first count taken after a claim has spent a token.
+        CountAfterClaim,
+    }
+
+    /// A store that does what it is asked and answers late once, at one place,
+    /// as a database does when its commit lands but the reply arrives after
+    /// the request has stopped waiting for it.
+    #[derive(Debug)]
+    struct LateStore {
+        inner: Box<dyn Store>,
+        late: Late,
+        /// Refuse the call at this place with this fault, without spending
+        /// anything.
+        refuse: Option<(Late, fn() -> StoreError)>,
+        answered_late: std::sync::atomic::AtomicBool,
+        claimed: std::sync::atomic::AtomicBool,
+    }
+
+    /// Longer than [`LATE_STORE_TIMEOUT`], so the request always times out
+    /// while the store holds its answer back.
+    const LATE_BY: Duration = Duration::from_millis(800);
+    const LATE_STORE_TIMEOUT: u64 = 200;
+
+    impl LateStore {
+        fn refusal(&self, at: Late) -> Option<StoreError> {
+            self.refuse
+                .filter(|(place, _)| *place == at)
+                .map(|(_, error)| error())
+        }
+
+        async fn answer_late(&self, at: Late) {
+            if self.late == at && !self.answered_late.swap(true, Ordering::SeqCst) {
+                tokio::time::sleep(LATE_BY).await;
+            }
+        }
+    }
+
+    #[async_trait]
+    impl Store for LateStore {
+        async fn remember_offer(
+            &self,
+            code: &str,
+            transaction_code: Option<&str>,
+            generation: &CatalogGeneration,
+            prepared: PreparedRequest,
+            now: i64,
+        ) -> Result<(), StoreError> {
+            if let Some(error) = self.refusal(Late::Offer) {
+                return Err(error);
+            }
+            self.inner
+                .remember_offer(code, transaction_code, generation, prepared, now)
+                .await
+        }
+
+        async fn redeem_offer(
+            &self,
+            code: &str,
+            transaction_code: Option<&str>,
+            generation: &CatalogGeneration,
+            now: i64,
+        ) -> Result<PreparedRequest, StoreError> {
+            self.inner
+                .redeem_offer(code, transaction_code, generation, now)
+                .await
+        }
+
+        async fn redeem_offer_for_access_token(
+            &self,
+            code: &str,
+            transaction_code: Option<&str>,
+            access_token: &str,
+            generation: &CatalogGeneration,
+            now: i64,
+        ) -> Result<(), StoreError> {
+            if let Some(error) = self.refusal(Late::Redemption) {
+                return Err(error);
+            }
+            let redeemed = self
+                .inner
+                .redeem_offer_for_access_token(
+                    code,
+                    transaction_code,
+                    access_token,
+                    generation,
+                    now,
+                )
+                .await;
+            self.answer_late(Late::Redemption).await;
+            redeemed
+        }
+
+        async fn bind_access_token(
+            &self,
+            access_token: &str,
+            generation: &CatalogGeneration,
+            prepared: PreparedRequest,
+            now: i64,
+        ) -> Result<(), StoreError> {
+            self.inner
+                .bind_access_token(access_token, generation, prepared, now)
+                .await
+        }
+
+        async fn claim_access_token(
+            &self,
+            access_token: &str,
+            generation: &CatalogGeneration,
+            now: i64,
+        ) -> Result<PreparedRequest, StoreError> {
+            let claimed = self
+                .inner
+                .claim_access_token(access_token, generation, now)
+                .await;
+            self.claimed.store(true, Ordering::SeqCst);
+            self.answer_late(Late::Claim).await;
+            if let Some(error) = self.refusal(Late::Claim) {
+                return Err(error);
+            }
+            claimed
+        }
+
+        async fn sweep(&self, now: i64) -> usize {
+            let swept = self.inner.sweep(now).await;
+            self.answer_late(Late::Sweep).await;
+            swept
+        }
+
+        async fn len(&self) -> usize {
+            self.inner.len().await
+        }
+
+        async fn maximum_keyspace_len(&self) -> Option<usize> {
+            let held = self.inner.maximum_keyspace_len().await;
+            self.answer_late(Late::Count).await;
+            if self.claimed.load(Ordering::SeqCst) {
+                self.answer_late(Late::CountAfterClaim).await;
+            }
+            held
+        }
+    }
+
+    /// A service over a [`LateStore`] whose requests time out well before the
+    /// store answers.
+    fn late_service(late: Late) -> (TestServer, Arc<DeliveryService>, Arc<RecordingIssuer>) {
+        late_service_with_audit(late, test_audit())
+    }
+
+    fn late_service_with_audit(
+        late: Late,
+        audit: Arc<DeliveryAudit>,
+    ) -> (TestServer, Arc<DeliveryService>, Arc<RecordingIssuer>) {
+        late_service_refusing(late, None, audit)
+    }
+
+    /// A [`late_service_with_audit`] whose store also refuses one call.
+    fn late_service_refusing(
+        late: Late,
+        refuse: Option<(Late, fn() -> StoreError)>,
+        audit: Arc<DeliveryAudit>,
+    ) -> (TestServer, Arc<DeliveryService>, Arc<RecordingIssuer>) {
+        let directory = canonical_tempdir();
+        let mut config = load_deployment(directory.path());
+        config.listener.request_timeout_milliseconds = LATE_STORE_TIMEOUT;
+        let store = Arc::new(LateStore {
+            inner: Box::new(OfferStore::new(&config.store)),
+            late,
+            refuse,
+            answered_late: std::sync::atomic::AtomicBool::new(false),
+            claimed: std::sync::atomic::AtomicBool::new(false),
+        });
+        let (service, issuer) = wired_service_over_with_audit(config, audit);
+        let service = Arc::new(
+            Arc::into_inner(service)
+                .expect("the only handle on the service")
+                .with_store(store, CatalogGeneration::default()),
+        );
+        (
+            TestServer::new(build_app(Arc::clone(&service))),
+            service,
+            issuer,
+        )
+    }
+
+    /// Remember an offer straight in the store, past the offer endpoint.
+    async fn remembered_code(service: &DeliveryService) -> &'static str {
+        const CODE: &str = "remembered-pre-authorized-code";
+        service
+            .store
+            .remember_offer(
+                CODE,
+                None,
+                &service.generation,
+                PreparedRequest::new("exchange-1", CONFIGURATION_ID, "{}", 1),
+                service.now(),
+            )
+            .await
+            .expect("remember an offer");
+        CODE
+    }
+
+    fn assert_unredeemable(response: &axum_test::TestResponse) {
+        assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
+        let body = response.json::<Value>();
+        assert_eq!(body["error"], json!("invalid_grant"), "{body}");
+        assert_eq!(
+            body["error_description"],
+            json!("the pre-authorized code cannot be redeemed"),
+            "{body}"
+        );
+        assert!(body.get("access_token").is_none(), "{body}");
+    }
+
+    /// A redemption whose reply comes back after the request timed out may
+    /// already have spent the code. Answering 408 would invite a retry that
+    /// can only be refused, so the wallet is told what the retry would say.
+    #[tokio::test]
+    async fn a_redemption_answered_after_the_timeout_is_not_retryable() {
+        let (server, service, _issuer) = late_service(Late::Redemption);
+        let code = remembered_code(&service).await;
+
+        let timed_out = server.post(TOKEN_PATH).form(&token_form(code, None)).await;
+        assert_unredeemable(&timed_out);
+        let retried = server.post(TOKEN_PATH).form(&token_form(code, None)).await;
+        assert_unredeemable(&retried);
+    }
+
+    /// A claim whose reply comes back after the request timed out has spent the
+    /// token. The wallet gets the terminal answer, not a 408 that its retry
+    /// would turn into a 401, and nothing reaches the credential source.
+    #[tokio::test]
+    async fn a_claim_answered_after_the_timeout_is_terminal() {
+        let (server, _service, issuer) = late_service(Late::Claim);
+        let access_token = access_token(&server).await;
+        let request = json!({"credential_configuration_id": CONFIGURATION_ID});
+
+        let timed_out = server
+            .post(CREDENTIAL_PATH)
+            .add_header("authorization", format!("Bearer {access_token}"))
+            .json(&request)
+            .await;
+        assert_eq!(timed_out.status_code(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            timed_out.json::<Value>()["error"],
+            json!("credential_request_denied")
+        );
+        let retried = server
+            .post(CREDENTIAL_PATH)
+            .add_header("authorization", format!("Bearer {access_token}"))
+            .json(&request)
+            .await;
+        assert_eq!(retried.status_code(), StatusCode::UNAUTHORIZED);
+        assert!(issuer.requests().is_empty());
+    }
+
+    /// Store bookkeeping after a claim is not allowed to outlast the request
+    /// bound before the delivery audit has begun: the wallet is told the
+    /// token is spent, so the exchange must have a delivery record, whatever
+    /// the outcome the request then reaches.
+    #[tokio::test]
+    async fn slow_bookkeeping_after_a_claim_still_leaves_a_delivery_audit_record() {
+        for late in [Late::Sweep, Late::CountAfterClaim] {
+            let captured = TestLogBuffer::default();
+            let (server, _service, issuer) =
+                late_service_with_audit(late, test_audit_with(Box::new(captured.clone())));
+            let access_token = access_token(&server).await;
+            let before = captured.audit_entries().len();
+
+            let refused = server
+                .post(CREDENTIAL_PATH)
+                .add_header("authorization", format!("Bearer {access_token}"))
+                .json(&json!({"credential_configuration_id": CONFIGURATION_ID}))
+                .await;
+            assert_eq!(refused.status_code(), StatusCode::BAD_REQUEST, "{late:?}");
+            assert_eq!(
+                refused.json::<Value>()["error"],
+                json!("invalid_credential_request"),
+                "{late:?}: the request is refused for its proofs, not as a stalled claim"
+            );
+            assert!(issuer.requests().is_empty());
+
+            let entries = captured.audit_entries();
+            let delivery = &entries[before..];
+            assert_eq!(
+                delivery.len(),
+                2,
+                "{late:?}: one delivery audit request and its terminal outcome: {delivery:?}"
+            );
+            assert_eq!(delivery[0]["record"]["outcome"], "attempted", "{late:?}");
+            assert_eq!(
+                delivery[1]["record"]["outcome"], "proof_refused",
+                "{late:?}"
+            );
+        }
+    }
+
+    /// Counting what the store holds is bookkeeping. A slow count must not
+    /// cost the wallet the access token its redemption already bound.
+    #[tokio::test]
+    async fn a_slow_count_after_a_redemption_does_not_hold_the_token_back() {
+        let (server, service, _issuer) = late_service(Late::Count);
+        let code = remembered_code(&service).await;
+
+        let granted = server.post(TOKEN_PATH).form(&token_form(code, None)).await;
+        assert_eq!(granted.status_code(), StatusCode::OK);
+        assert!(granted.json::<Value>()["access_token"].is_string());
+
+        // The count still lands once the store answers: one ledger, one token.
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !service
+                .metrics
+                .render()
+                .contains("evidence_oid4vci_store_entries 1\n")
+            {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("the store-entries gauge is refreshed after the answer");
+    }
+
+    /// Wait for the store-entries gauge to read `entries`.
+    async fn gauge_lands(service: &DeliveryService, entries: usize) {
+        let line = format!("evidence_oid4vci_store_entries {entries}\n");
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !service.metrics.render().contains(&line) {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("the store-entries gauge is refreshed after the answer");
+    }
+
+    fn assert_temporarily_unavailable(response: &axum_test::TestResponse, context: &str) {
+        assert_eq!(
+            response.status_code(),
+            StatusCode::SERVICE_UNAVAILABLE,
+            "{context}: {}",
+            response.text()
+        );
+        assert_eq!(
+            response.json::<Value>()["error"],
+            json!("temporarily_unavailable"),
+            "{context}"
+        );
+    }
+
+    /// A store that refuses without spending anything is retryable, however
+    /// slow the bookkeeping that follows the refusal is.
+    #[tokio::test]
+    async fn a_retryable_refusal_is_not_held_back_by_a_slow_count() {
+        type Fault = fn() -> StoreError;
+        let faults: [(&str, Fault); 2] = [
+            ("saturated", || StoreError::Saturated),
+            ("unavailable", || StoreError::Unavailable),
+        ];
+        for (name, fault) in faults {
+            // Redemption refused, the count after it stalled.
+            let (server, service, _issuer) =
+                late_service_refusing(Late::Count, Some((Late::Redemption, fault)), test_audit());
+            let code = remembered_code(&service).await;
+            let redeemed = server.post(TOKEN_PATH).form(&token_form(code, None)).await;
+            assert_temporarily_unavailable(&redeemed, &format!("{name} redemption"));
+            gauge_lands(&service, 1).await;
+
+            // Claim refused, the count after it stalled.
+            let (server, service, issuer) = late_service_refusing(
+                Late::CountAfterClaim,
+                Some((Late::Claim, fault)),
+                test_audit(),
+            );
+            let access_token = access_token(&server).await;
+            let claimed = server
+                .post(CREDENTIAL_PATH)
+                .add_header("authorization", format!("Bearer {access_token}"))
+                .json(&json!({"credential_configuration_id": CONFIGURATION_ID}))
+                .await;
+            assert_temporarily_unavailable(&claimed, &format!("{name} claim"));
+            assert!(issuer.requests().is_empty());
+            gauge_lands(&service, 1).await;
+
+            // Offer refused, the count after it stalled.
+            let (server, service, _issuer) =
+                late_service_refusing(Late::Count, Some((Late::Offer, fault)), test_audit());
+            let created = server
+                .post(OFFERS_PATH)
+                .add_header("authorization", format!("Bearer {OFFER_TOKEN}"))
+                .json(&offer_body(false))
+                .await;
+            assert_temporarily_unavailable(&created, &format!("{name} offer"));
+            gauge_lands(&service, 0).await;
+        }
+    }
+
+    /// Creating an offer answers as soon as the offer is remembered and
+    /// audited, not when the count that follows it comes back.
+    #[tokio::test]
+    async fn a_slow_count_after_an_offer_does_not_hold_the_answer_back() {
+        let (server, service, _issuer) = late_service(Late::Count);
+
+        let created = server
+            .post(OFFERS_PATH)
+            .add_header("authorization", format!("Bearer {OFFER_TOKEN}"))
+            .json(&offer_body(false))
+            .await;
+        assert_eq!(
+            created.status_code(),
+            StatusCode::CREATED,
+            "{}",
+            created.text()
+        );
+
+        gauge_lands(&service, 1).await;
+    }
+
     /// A request refused after the token was claimed does not give the token
     /// back.
     ///
@@ -3699,9 +4427,11 @@ mod tests {
             .remember_offer(
                 "expired-before-serving",
                 None,
+                &CatalogGeneration::default(),
                 PreparedRequest::new("exchange-1", "urn:example:kind", "{}", 1),
                 expired_at,
             )
+            .await
             .expect("seed an expired offer");
 
         let (stop, stopped) = tokio::sync::oneshot::channel::<()>();

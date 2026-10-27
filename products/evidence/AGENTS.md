@@ -52,7 +52,8 @@ Signing and required audit failures release nothing. Signed flattened JWS is
 the mandatory default; unsigned and SD-JWT forms require their explicit bundle
 and complete matched-grant permissions and never act as failure fallbacks.
 Request nonces bind audience-scoped requests and responses; they do not create
-a replay store. Holder-bound assertions follow their separate closed profile.
+a replay store. Intake idempotency keys of the status module are not request
+nonces. Holder-bound assertions follow their separate closed profile.
 
 Production behavior stays source-product and domain neutral. Adult status,
 residence, licence, and legal-parent relationship are coequal acceptance cases,
@@ -72,6 +73,7 @@ the gates for the surface changed; CI owns the broader regression matrix.
 | Source or Rhai behavior | [ADAPTER-API.md](reference/request-adapter/ADAPTER-API.md), relevant source/selector/ABI contracts, [SOURCE-TESTING.md](SOURCE-TESTING.md) | Relevant source and lifecycle tests; `products/evidence/scripts/check-source-neutrality.sh` |
 | Deployment and configuration | [OPERATOR-CONTRACT.md](OPERATOR-CONTRACT.md), [deployment CONFIG.md](reference/request-adapter/deployment-projects/CONFIG.md), [FIXTURES.md](reference/request-adapter/deployment-projects/FIXTURES.md) | Focused config/fixture tests and `products/evidence/scripts/check-config-key-paths.sh` |
 | Verifier or client | Verifier/client crate documentation and [client guidance](../../crates/CLIENTS.md) | Changed-crate tests; `products/evidence/scripts/check-verifier-portability.sh`; neutrality gate |
+| Credential status ledger or OID4VCI store | [CONCEPT.md](CONCEPT.md) section 15.9 and the [credential status plan](IMPLEMENTATION.md#credential-status-plan) | Changed-crate tests; with `--features postgres-test` and a disposable PostgreSQL server, `registry-evidence` `--test status_ledger --test status_transitions --test status_privacy` (`EVIDENCE_STATUS_TEST_DATABASE_URL`) and `registry-evidence-oid4vci` `--test store_contract` (`EVIDENCE_OID4VCI_TEST_DATABASE_URL`) |
 | Authoring or editor model | [authoring CONFIG.md](reference/authoring-projects/CONFIG.md) and authoring crate types | Relevant authoring/editor tests; `products/evidence/scripts/check-authoring-schema.sh`, `products/evidence/scripts/check-authoring-no-io.sh`, config-key-path and neutrality gates |
 
 Use `cargo test --locked -p <changed-crate>` with a focused test filter while

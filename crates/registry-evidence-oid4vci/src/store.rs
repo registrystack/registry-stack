@@ -9,9 +9,10 @@
 //! Three properties are load-bearing.
 //!
 //! 1. **Nothing is keyed by the secret it stands for.** Every key is an HMAC tag
-//!    under a random per-process key, so what the store holds identifies an
-//!    entry without being usable as the credential that reaches it. Tags from
-//!    one process mean nothing in another.
+//!    under a random per-process key, unless the caller supplies the keys, so
+//!    what the store holds identifies an entry without being usable as the
+//!    credential that reaches it. Tags from one process mean nothing in another
+//!    that was not given the same key.
 //! 2. **Saturation fails closed.** A full store refuses a new offer rather than
 //!    evicting a live one. Evicting would turn a load spike into a silent denial
 //!    for whoever was already holding an offer, which is the harder failure to
@@ -26,10 +27,18 @@
 //!
 //! The consequences of holding all of this in one process are real and are
 //! accepted rather than engineered around: a restart invalidates every
-//! outstanding offer. An independent process has neither this store's random
-//! tagging key nor its live entries, so it refuses another process's codes and
-//! tokens as unknown. A single replica is the supported deployment because the
-//! process that creates an exchange must receive every later request for it.
+//! outstanding offer. An independent process does not hold this store's live
+//! entries, and unless it was given the same keys it does not hold its random
+//! tagging key either, so it refuses another process's codes and tokens as
+//! unknown. A single replica is the supported deployment because the process
+//! that creates an exchange must receive every later request for it.
+//!
+//! This is the memory backend of [`crate::storage::Store`]. Keys supplied at
+//! construction are versioned: everything new is tagged under the current key
+//! and entries tagged under the previous one are still found, which is what a
+//! key rotation needs. Every exchange also carries the catalog generation it
+//! was prepared under, and a redemption or claim under another generation is
+//! refused as unknown without spending anything.
 
 use std::{
     collections::HashMap,
@@ -37,18 +46,18 @@ use std::{
 };
 
 use registry_evidence_verifier::redacted_debug;
-use registry_platform_crypto::hmac_sha256_base64url_no_pad;
-use subtle::ConstantTimeEq;
+use subtle::{Choice, ConstantTimeEq};
 use thiserror::Error;
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 use crate::config::StoreConfig;
+use crate::storage::{tag, transaction_code_tag, CatalogGeneration, KeyRing, VersionedKey};
 
 /// Domain labels, so a value that is a valid key in one key-space cannot be
 /// replayed as a key in another.
-const OFFER_DOMAIN: &str = "oid4vci.offer";
-const TRANSACTION_CODE_DOMAIN: &str = "oid4vci.transaction-code";
-const ACCESS_TOKEN_DOMAIN: &str = "oid4vci.access-token";
+pub(crate) const OFFER_DOMAIN: &str = "oid4vci.offer";
+pub(crate) const TRANSACTION_CODE_DOMAIN: &str = "oid4vci.transaction-code";
+pub(crate) const ACCESS_TOKEN_DOMAIN: &str = "oid4vci.access-token";
 const NONCE_DOMAIN: &str = "oid4vci.nonce";
 
 #[derive(Debug, Error, Eq, PartialEq)]
@@ -65,6 +74,10 @@ pub enum StoreError {
     TransactionCodeRefused,
     #[error("too many transaction code attempts")]
     LockedOut,
+    /// The backend could not be reached or answered with something it cannot
+    /// vouch for. Like [`Self::Poisoned`], it refuses rather than guesses.
+    #[error("the store backend is unavailable")]
+    Unavailable,
 }
 
 /// The Evidence request an offer was created for.
@@ -133,6 +146,7 @@ struct OfferEntry {
     /// The tag of the transaction code the offer was created with, if any.
     /// The code itself is never held.
     transaction_code_tag: Option<Zeroizing<String>>,
+    generation: CatalogGeneration,
     expires_at: i64,
 }
 
@@ -154,17 +168,42 @@ struct OfferLedger {
 /// What the store keeps between a redeemed offer and the credential request.
 struct TokenEntry {
     prepared: PreparedRequest,
+    generation: CatalogGeneration,
     expires_at: i64,
 }
 
-#[derive(Default)]
 struct StoreState {
+    /// The tagging keys. Held under the same mutex as the entries they tag,
+    /// so a rotation and a lookup never see each other half done.
+    keys: KeyRing,
     offers: HashMap<String, OfferEntry>,
     ledgers: HashMap<String, OfferLedger>,
     tokens: HashMap<String, TokenEntry>,
 }
 
+/// Find the tag `secret` is held under in `held`, trying every accepted key,
+/// current first. Returns the key that made it with the tag.
+fn find_tag<'k, V>(
+    keys: &'k KeyRing,
+    held: &HashMap<String, V>,
+    domain: &str,
+    secret: &str,
+) -> Option<(&'k VersionedKey, Zeroizing<String>)> {
+    keys.accepted()
+        .map(|key| (key, tag(key, domain, secret)))
+        .find(|(_, candidate)| held.contains_key(candidate.as_str()))
+}
+
 impl StoreState {
+    fn new(keys: KeyRing) -> Self {
+        Self {
+            keys,
+            offers: HashMap::new(),
+            ledgers: HashMap::new(),
+            tokens: HashMap::new(),
+        }
+    }
+
     fn prune(&mut self, now: i64) -> usize {
         let before = self.offers.len() + self.ledgers.len() + self.tokens.len();
         self.offers.retain(|_, entry| entry.expires_at > now);
@@ -180,8 +219,8 @@ pub struct OfferStore {
     offer_lifetime_seconds: i64,
     access_token_lifetime_seconds: i64,
     maximum_transaction_code_attempts: u32,
-    /// The per-process tagging key. Random, never persisted, wiped on drop.
-    key: Zeroizing<[u8; 32]>,
+    /// The entries and the tagging keys, which are random per process unless
+    /// supplied, never persisted, and wiped on drop.
     state: Mutex<StoreState>,
 }
 
@@ -207,35 +246,38 @@ impl OfferStore {
     /// refused to start.
     #[must_use]
     pub fn new(config: &StoreConfig) -> Self {
-        let mut key = Zeroizing::new([0u8; 32]);
-        getrandom::fill(key.as_mut_slice()).expect("the OS CSPRNG must be available at startup");
+        Self::with_keys(config, KeyRing::generate())
+    }
+
+    /// Build a store over the configured bounds that tags under `keys`.
+    ///
+    /// Everything new is tagged under the current key; entries tagged under
+    /// the previous key are still found.
+    #[must_use]
+    pub fn with_keys(config: &StoreConfig, keys: KeyRing) -> Self {
         Self {
             capacity: config.maximum_offers,
             offer_lifetime_seconds: config.offer_lifetime_seconds as i64,
             access_token_lifetime_seconds: config.access_token_lifetime_seconds as i64,
             maximum_transaction_code_attempts: config.maximum_transaction_code_attempts,
-            key,
-            state: Mutex::new(StoreState::default()),
+            state: Mutex::new(StoreState::new(keys)),
         }
     }
 
-    /// Tag a secret for one key-space. The result identifies an entry and is
-    /// useless as the secret it stands for.
-    fn tag(&self, domain: &str, secret: &str) -> Zeroizing<String> {
-        let mut input = Zeroizing::new(String::with_capacity(domain.len() + secret.len() + 1));
-        input.push_str(domain);
-        input.push('\u{0}');
-        input.push_str(secret);
-        Zeroizing::new(hmac_sha256_base64url_no_pad(
-            self.key.as_ref(),
-            input.as_bytes(),
-        ))
+    /// Swap the tagging keys a live store holds, as a rotation would.
+    ///
+    /// Entries already held keep the tags they were made under, so only those
+    /// made under a key the new ring still accepts can be found afterwards.
+    /// This exists so the storage contract can rotate keys over one body of
+    /// memory state; no configuration reaches it.
+    #[doc(hidden)]
+    pub fn replace_keys(&self, keys: KeyRing) -> Result<(), StoreError> {
+        self.lock()?.keys = keys;
+        Ok(())
     }
 
-    /// Remember a prepared request against a fresh pre-authorized code.
-    ///
-    /// Both key-spaces are sized before either is written, so a store that
-    /// cannot hold the ledger never holds a half-created offer.
+    /// Remember a prepared request against a fresh pre-authorized code, under
+    /// the default catalog generation.
     pub fn remember_offer(
         &self,
         code: &str,
@@ -243,26 +285,50 @@ impl OfferStore {
         prepared: PreparedRequest,
         now: i64,
     ) -> Result<(), StoreError> {
-        let offer_tag = self.tag(OFFER_DOMAIN, code);
-        let transaction_code_tag =
-            transaction_code.map(|value| self.tag(TRANSACTION_CODE_DOMAIN, value));
+        self.remember_offer_under(
+            code,
+            transaction_code,
+            &CatalogGeneration::default(),
+            prepared,
+            now,
+        )
+    }
+
+    /// Remember a prepared request against a fresh pre-authorized code.
+    ///
+    /// Both key-spaces are sized before either is written, so a store that
+    /// cannot hold the ledger never holds a half-created offer.
+    pub(crate) fn remember_offer_under(
+        &self,
+        code: &str,
+        transaction_code: Option<&str>,
+        generation: &CatalogGeneration,
+        prepared: PreparedRequest,
+        now: i64,
+    ) -> Result<(), StoreError> {
         let expires_at = now.saturating_add(self.offer_lifetime_seconds);
 
         let mut state = self.lock()?;
         state.prune(now);
-        if state.offers.contains_key(offer_tag.as_str())
-            || state.ledgers.contains_key(offer_tag.as_str())
+        let state = &mut *state;
+        if find_tag(&state.keys, &state.offers, OFFER_DOMAIN, code).is_some()
+            || find_tag(&state.keys, &state.ledgers, OFFER_DOMAIN, code).is_some()
         {
             return Err(StoreError::AlreadyRedeemed);
         }
         if state.offers.len() >= self.capacity || state.ledgers.len() >= self.capacity {
             return Err(StoreError::Saturated);
         }
+        let key = state.keys.current();
+        let offer_tag = tag(key, OFFER_DOMAIN, code);
+        let transaction_code_tag =
+            transaction_code.map(|value| transaction_code_tag(key, &offer_tag, value));
         state.offers.insert(
             offer_tag.to_string(),
             OfferEntry {
                 prepared,
                 transaction_code_tag,
+                generation: generation.clone(),
                 expires_at,
             },
         );
@@ -278,6 +344,17 @@ impl OfferStore {
         Ok(())
     }
 
+    /// Redeem a pre-authorized code once, under the default catalog
+    /// generation.
+    pub fn redeem_offer(
+        &self,
+        code: &str,
+        transaction_code: Option<&str>,
+        now: i64,
+    ) -> Result<PreparedRequest, StoreError> {
+        self.redeem_offer_under(code, transaction_code, &CatalogGeneration::default(), now)
+    }
+
     /// Redeem a pre-authorized code once, handing back the request it was
     /// created for.
     ///
@@ -285,14 +362,15 @@ impl OfferStore {
     /// transaction code is counted against the offer's own ceiling; exhausting
     /// it drops the prepared request and leaves the refusal standing for the
     /// rest of the offer's life.
-    pub fn redeem_offer(
+    pub(crate) fn redeem_offer_under(
         &self,
         code: &str,
         transaction_code: Option<&str>,
+        generation: &CatalogGeneration,
         now: i64,
     ) -> Result<PreparedRequest, StoreError> {
         let mut state = self.lock()?;
-        self.redeem_locked(&mut state, code, transaction_code, now)
+        self.redeem_locked(&mut state, code, transaction_code, generation, now)
     }
 
     fn redeem_locked(
@@ -300,10 +378,16 @@ impl OfferStore {
         state: &mut StoreState,
         code: &str,
         transaction_code: Option<&str>,
+        generation: &CatalogGeneration,
         now: i64,
     ) -> Result<PreparedRequest, StoreError> {
-        let offer_tag = self.tag(OFFER_DOMAIN, code);
-        let presented_tag = transaction_code.map(|value| self.tag(TRANSACTION_CODE_DOMAIN, value));
+        let Some((key, offer_tag)) = find_tag(&state.keys, &state.ledgers, OFFER_DOMAIN, code)
+        else {
+            return Err(StoreError::Unknown);
+        };
+        // The transaction code was tagged under the key the offer was.
+        let presented_tag =
+            transaction_code.map(|value| transaction_code_tag(key, &offer_tag, value));
 
         let Some(ledger) = state.ledgers.get(offer_tag.as_str()) else {
             return Err(StoreError::Unknown);
@@ -322,6 +406,11 @@ impl OfferStore {
             return Err(StoreError::Unknown);
         };
         if entry.expires_at <= now {
+            return Err(StoreError::Unknown);
+        }
+        // A request prepared against another catalog is not handed back, and
+        // the refusal neither spends the offer nor counts as an attempt.
+        if entry.generation != *generation {
             return Err(StoreError::Unknown);
         }
 
@@ -370,22 +459,49 @@ impl OfferStore {
         access_token: &str,
         now: i64,
     ) -> Result<(), StoreError> {
+        self.redeem_offer_for_access_token_under(
+            code,
+            transaction_code,
+            access_token,
+            &CatalogGeneration::default(),
+            now,
+        )
+    }
+
+    pub(crate) fn redeem_offer_for_access_token_under(
+        &self,
+        code: &str,
+        transaction_code: Option<&str>,
+        access_token: &str,
+        generation: &CatalogGeneration,
+        now: i64,
+    ) -> Result<(), StoreError> {
         let mut state = self.lock()?;
         self.reserve_token_room(&mut state, access_token, now)?;
-        let prepared = self.redeem_locked(&mut state, code, transaction_code, now)?;
-        self.bind_locked(&mut state, access_token, prepared, now)
+        let prepared = self.redeem_locked(&mut state, code, transaction_code, generation, now)?;
+        self.bind_locked(&mut state, access_token, generation, prepared, now)
     }
 
     /// Carry a redeemed offer's request forward under the access token that was
-    /// issued for it.
+    /// issued for it, under the default catalog generation.
     pub fn bind_access_token(
         &self,
         access_token: &str,
         prepared: PreparedRequest,
         now: i64,
     ) -> Result<(), StoreError> {
+        self.bind_access_token_under(access_token, &CatalogGeneration::default(), prepared, now)
+    }
+
+    pub(crate) fn bind_access_token_under(
+        &self,
+        access_token: &str,
+        generation: &CatalogGeneration,
+        prepared: PreparedRequest,
+        now: i64,
+    ) -> Result<(), StoreError> {
         let mut state = self.lock()?;
-        self.bind_locked(&mut state, access_token, prepared, now)
+        self.bind_locked(&mut state, access_token, generation, prepared, now)
     }
 
     /// Answer whether the token key-space can take this token, without writing
@@ -396,9 +512,15 @@ impl OfferStore {
         access_token: &str,
         now: i64,
     ) -> Result<(), StoreError> {
-        let token_tag = self.tag(ACCESS_TOKEN_DOMAIN, access_token);
         state.prune(now);
-        if state.tokens.contains_key(token_tag.as_str()) {
+        if find_tag(
+            &state.keys,
+            &state.tokens,
+            ACCESS_TOKEN_DOMAIN,
+            access_token,
+        )
+        .is_some()
+        {
             return Err(StoreError::AlreadyRedeemed);
         }
         if state.tokens.len() >= self.capacity {
@@ -411,10 +533,11 @@ impl OfferStore {
         &self,
         state: &mut StoreState,
         access_token: &str,
+        generation: &CatalogGeneration,
         prepared: PreparedRequest,
         now: i64,
     ) -> Result<(), StoreError> {
-        let token_tag = self.tag(ACCESS_TOKEN_DOMAIN, access_token);
+        let token_tag = tag(state.keys.current(), ACCESS_TOKEN_DOMAIN, access_token);
         let expires_at = now.saturating_add(self.access_token_lifetime_seconds);
 
         self.reserve_token_room(state, access_token, now)?;
@@ -422,28 +545,50 @@ impl OfferStore {
             token_tag.to_string(),
             TokenEntry {
                 prepared,
+                generation: generation.clone(),
                 expires_at,
             },
         );
         Ok(())
     }
 
-    /// Claim an access token once, handing back the request it carries.
-    ///
-    /// The store's copy is removed, and zeroized, before this returns, so a
-    /// replayed token finds nothing to claim.
+    /// Claim an access token once, under the default catalog generation.
     pub fn claim_access_token(
         &self,
         access_token: &str,
         now: i64,
     ) -> Result<PreparedRequest, StoreError> {
-        let token_tag = self.tag(ACCESS_TOKEN_DOMAIN, access_token);
+        self.claim_access_token_under(access_token, &CatalogGeneration::default(), now)
+    }
 
+    /// Claim an access token once, handing back the request it carries.
+    ///
+    /// The store's copy is removed, and zeroized, before this returns, so a
+    /// replayed token finds nothing to claim.
+    pub(crate) fn claim_access_token_under(
+        &self,
+        access_token: &str,
+        generation: &CatalogGeneration,
+        now: i64,
+    ) -> Result<PreparedRequest, StoreError> {
         let mut state = self.lock()?;
+        let state = &mut *state;
+        let Some((_, token_tag)) = find_tag(
+            &state.keys,
+            &state.tokens,
+            ACCESS_TOKEN_DOMAIN,
+            access_token,
+        ) else {
+            return Err(StoreError::Unknown);
+        };
         let Some(entry) = state.tokens.get(token_tag.as_str()) else {
             return Err(StoreError::Unknown);
         };
         if entry.expires_at <= now {
+            return Err(StoreError::Unknown);
+        }
+        // Claiming under another catalog generation spends nothing.
+        if entry.generation != *generation {
             return Err(StoreError::Unknown);
         }
         let entry = state
@@ -573,7 +718,7 @@ pub enum NonceError {
 /// the same holder the same credential and reaches nothing else.
 pub struct NonceMinter {
     lifetime_seconds: i64,
-    key: Zeroizing<[u8; 32]>,
+    keys: KeyRing,
 }
 
 impl std::fmt::Debug for NonceMinter {
@@ -592,18 +737,24 @@ impl NonceMinter {
     /// [`OfferStore::new`] does.
     #[must_use]
     pub fn new(lifetime_seconds: u64) -> Self {
-        let mut key = Zeroizing::new([0u8; 32]);
-        getrandom::fill(key.as_mut_slice()).expect("the OS CSPRNG must be available at startup");
+        Self::with_keys(lifetime_seconds, KeyRing::generate())
+    }
+
+    /// A minter that mints under the current key of `keys` and still accepts
+    /// nonces minted under the previous one. Replicas given the same keys
+    /// accept each other's nonces.
+    #[must_use]
+    pub fn with_keys(lifetime_seconds: u64, keys: KeyRing) -> Self {
         Self {
             lifetime_seconds: lifetime_seconds as i64,
-            key,
+            keys,
         }
     }
 
     #[must_use]
     pub fn mint(&self, now: i64) -> String {
         let expires_at = now.saturating_add(self.lifetime_seconds);
-        let tag = self.tag(expires_at);
+        let tag = Self::tag(self.keys.current(), expires_at);
         format!("{expires_at}.{tag}")
     }
 
@@ -618,10 +769,20 @@ impl NonceMinter {
         if expiry != expires_at.to_string() {
             return Err(NonceError::Invalid);
         }
-        let expected = self.tag(expires_at);
         // The MAC is checked before the expiry, so a caller cannot learn
         // anything about a nonce it did not receive by reading the refusal.
-        let matches: bool = expected.as_bytes().ct_eq(presented.as_bytes()).into();
+        // Every accepted key is tried, so the refusal does not say which one
+        // came closest either.
+        let matches: bool = self
+            .keys
+            .accepted()
+            .fold(Choice::from(0), |found, key| {
+                found
+                    | Self::tag(key, expires_at)
+                        .as_bytes()
+                        .ct_eq(presented.as_bytes())
+            })
+            .into();
         if !matches {
             return Err(NonceError::Tampered);
         }
@@ -631,9 +792,8 @@ impl NonceMinter {
         Ok(())
     }
 
-    fn tag(&self, expires_at: i64) -> String {
-        let input = format!("{NONCE_DOMAIN}\u{0}{expires_at}");
-        hmac_sha256_base64url_no_pad(self.key.as_ref(), input.as_bytes())
+    fn tag(key: &VersionedKey, expires_at: i64) -> String {
+        tag(key, NONCE_DOMAIN, &expires_at.to_string()).to_string()
     }
 }
 
