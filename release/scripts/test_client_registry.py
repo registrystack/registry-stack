@@ -215,11 +215,13 @@ class ClientRegistryTest(unittest.TestCase):
             with self.subTest(include_render=include_render):
                 staged = self.directory / f"staged-{include_render}"
                 shutil.copytree(source, staged, ignore=shutil.ignore_patterns("node_modules", "*.node"))
-                self.module.bind_optional_dependencies(staged / "package.json", "0.44.0", "stack", include_render=include_render)
+                package_json = staged / "package.json"
+                version = json.loads(package_json.read_text())["version"]
+                self.module.bind_optional_dependencies(package_json, version, "stack", include_render=include_render)
                 before = {path.relative_to(staged): path.read_bytes() for path in staged.rglob("*") if path.is_file()}
-                self.module.bind_optional_dependencies(staged / "package.json", "0.44.0", "stack", include_render=include_render)
+                self.module.bind_optional_dependencies(package_json, version, "stack", include_render=include_render)
                 self.assertEqual(before, {path.relative_to(staged): path.read_bytes() for path in staged.rglob("*") if path.is_file()})
-                manifest = json.loads((staged / "package.json").read_text())
+                manifest = json.loads(package_json.read_text())
                 self.assertEqual("render" in manifest["files"], include_render)
                 self.assertEqual("./render" in manifest["exports"], include_render)
                 self.assertEqual("exports.render" in (staged / "index.js").read_text(), include_render)
