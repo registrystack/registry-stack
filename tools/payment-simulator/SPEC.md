@@ -555,13 +555,9 @@ deployment security, bulk signatures, or production payment authorization.
 
 ## Coordinator integration boundary
 
-The [Coordinator product contract](../../products/coordinator/PRODUCT-CONTRACT.md#configured-external-requests)
-provides generic `external.command/v1` and `external.read/v1` operations.
-The [beneficiary management](../../products/coordinator/examples/payment-beneficiary-management/README.md),
-[disbursement](../../products/coordinator/examples/payment-disbursement/README.md), and
-[collection](../../products/coordinator/examples/payment-collection/README.md) projects define
-payment schemas, mappings, interpretation, and completion in YAML/Rhai. No payment-specific
-runtime operation or simulator database access is required.
+The Coordinator provides generic `external.command/v1` and `external.read/v1`
+operations. A workflow project defines payment schemas, mappings, interpretation,
+and completion in YAML/Rhai. No payment-specific runtime operation or simulator database access is required.
 
 An integration must save the original command before dispatch, use
 same-command recovery, validate complete per-instruction results, and respect

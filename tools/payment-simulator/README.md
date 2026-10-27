@@ -6,22 +6,29 @@ up beneficiary mappings, submit a payment batch, and read its instruction
 results. Two P2G APIs request a citizen payment and read collection status.
 **It uses synthetic data and never moves money.**
 
+## Not for production
+
+This is a synthetic test double. It never moves money, and nothing it returns,
+including a `PAID` status or a `PaymentReferenceID`, is evidence that a payment
+happened. Every response carries `X-Payment-Simulator: synthetic`, payment
+references start with `SIM-`, and `serve` refuses a non-loopback `--host`
+unless you pass `--allow-network`. SQLite is fine here because this is a test
+double; Registry Stack's production stores are PostgreSQL. Never point a
+programme at it as a real payment service.
+
 FastAPI and Pydantic own the HTTP shapes. SQLite keeps accepted commands,
 destination snapshots, replay responses and simulated credits across restarts.
 Amounts use exact minor units. Everything stays in this directory, with no
 Registry Stack runtime imports or Rust build.
 
-For programme workflows, the Coordinator's maintained
-[beneficiary management](../../products/coordinator/examples/payment-beneficiary-management/README.md),
-[G2P disbursement](../../products/coordinator/examples/payment-disbursement/README.md), and
-[P2G collection](../../products/coordinator/examples/payment-collection/README.md) projects bind
-these seven APIs through generic configured HTTP operations. Payment meanings remain in YAML/Rhai.
-A compatible service can replace this simulator for new work after existing commands have settled.
+The Coordinator can bind these seven APIs through its generic HTTP operations;
+payment meanings stay in the workflow definition. A compatible service can replace this simulator for new work after existing commands have settled.
 
 ## Start locally
 
 Install [uv](https://docs.astral.sh/uv/) and use Python 3.11–3.14. From this
-directory, install the locked dependencies and create a private local token:
+directory (`tools/payment-simulator`; from the repository root, prefix each
+command with `uv --directory tools/payment-simulator`), install the locked dependencies and create a private local token:
 
 ```sh
 uv sync --locked
@@ -155,7 +162,7 @@ least 16 characters. Keep token and SQLite files in ignored `.state/`.
 Callbacks are accepted as configured wire fields but **are not delivered**.
 Use polling. Receipts are retained for the lifetime of this disposable
 database. There is no receipt expiry, reset API, real rail, production identity
-provider, high availability, container publishing or CI integration. An
+provider, high availability or container publishing. An
 unsupported database version is refused; only the additive v1-to-v2 upgrade is
 provided. Programme funding and real citizen checkout are outside this mock.
 Do not use real beneficiary data or expose this development server as a
@@ -197,8 +204,7 @@ those controls before claiming their evidence; declaring a capability alone
 does not implement it. The suite creates synthetic records with unique IDs
 and does not delete remote data.
 
-The [Coordinator payment examples](../../products/coordinator/README.md#configured-http-operations)
-use generic HTTP operations and authored payment contracts. The replacement boundary is this HTTP profile, implemented directly
+The replacement boundary is this HTTP profile, implemented directly
 by a provider or an adapter. Matching wire shapes alone does not establish
 equivalent retry guarantees or prove recipient credit.
 
@@ -209,7 +215,6 @@ equivalent retry guarantees or prove recipient credit.
 | [P2G collection profile](P2G-SPEC.md) | Request to pay, payment evidence and collection scenarios |
 | [API traces](SCENARIOS.md) | Three illustrative request/response journeys |
 | [Contract tests](CONTRACT-TESTS.md) | Executed coverage versus future test catalogue |
-| [Implementation plan](IMPLEMENTATION-PLAN.md) | Implementation structure and follow-ups |
 | [Generated OpenAPI](contracts/openapi.json) | Implemented wire schemas |
 
 These are **Payment Simulator G2P Profile 0.1** and **P2G Collection Profile 0.1**,
