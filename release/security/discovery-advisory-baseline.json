@@ -73,7 +73,7 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Reviewed the v0.44.0 Linux amd64 discovery local reproduction from review-only rehearsal 40504712741 on 2026-10-27. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libc6 2.41-12+deb13u4. Debian's trixie tracker still marks this CVE vulnerable and records <no-dsa> (Minor issue); Grype's wont-fix enum is a scanner representation, not a promise that Debian will never fix it. The carried libc/resolver implementation remains present. The reviewed application executables import and contain none of ns_printrrf, ns_printrr, ns_sprintrrf, ns_sprintrr or fp_nquery, and no reviewed dynamic lookup selects them. The bounded source paths do not enter the affected TSIG diagnostic-printing functions; ordinary resolver initialization does not establish that path. The reviewed reports exposure/discovery.json record no review-required dynamic lookup in /usr/local/bin/discovery; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the approved quarterly review expires on 2027-01-26.",
+      "rationale": "Reviewed the v0.44.0 Linux amd64 discovery local reproduction from review-only rehearsal 40517954609 on 2026-10-27. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libc6 2.41-12+deb13u4. Debian's trixie tracker still marks this CVE vulnerable and records <no-dsa> (Minor issue); Grype's wont-fix enum is a scanner representation, not a promise that Debian will never fix it. The carried libc/resolver implementation remains present. The reviewed application executables import and contain none of ns_printrrf, ns_printrr, ns_sprintrrf, ns_sprintrr or fp_nquery, and no reviewed dynamic lookup selects them. The bounded source paths do not enter the affected TSIG diagnostic-printing functions; ordinary resolver initialization does not establish that path. The reviewed reports exposure/discovery.json record no review-required dynamic lookup in /usr/local/bin/discovery; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the approved quarterly review expires on 2027-01-26.",
       "reviewed_at": "2026-10-27",
       "expires_at": "2027-01-26",
       "invalidation_triggers": [
@@ -95,8 +95,8 @@
       "component_layer_id": "sha256:b590fdc57cf6038e63b5507296a4809e21369381be8929619dfd14d1441edcfd",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:cd7d169302fdaa18d2fe9ea30e838022c91df01a6b6d18d7cb29da3d4952f66f",
-        "reference_source_revision": "e9e5d0f6933899045fbc3de7f72025909c4960f0",
+        "reference_image_digest": "sha256:f4ea54bda67b1d5901384035d8406d398d8f3a59f172f2e60c4e1fd866e2d064",
+        "reference_source_revision": "4c6f484c9b01985afb30422e6b297efc122ae4d4",
         "reference_provenance": "local_reproduction",
         "runtime_definition_digest": "sha256:1105eecb79d0607a2e36d76da8092ffa85a184bb4be95d7203c20c03af2b2854",
         "files": [
@@ -121,7 +121,7 @@
             "sha256": "sha256:b509837f1ce2ac03fcb5dfb3abba148be05376b2d25c9fa6af490f9d498f92f0"
           }
         ],
-        "definition_digest": "sha256:78983ee53b8f53342140849e86da4b28a27e8379cd5f23d49520a3cfc7f73743"
+        "definition_digest": "sha256:e30444a66c84142bbe93cb1d2de806c79b6d1df7da110c4202eeb27f180cbf3e"
       }
     },
     {
@@ -131,7 +131,7 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Reviewed the v0.44.0 Linux amd64 discovery local reproduction from review-only rehearsal 40504712741 on 2026-10-27. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libc6 2.41-12+deb13u4. Debian's trixie tracker still marks this CVE vulnerable and records <no-dsa> (Minor issue); Grype's wont-fix enum is a scanner representation, not a promise that Debian will never fix it. The carried libc exports strfmon, strfmon_l and __strfmon_l. The reviewed application executables neither import nor contain strfmon or strfmon_l, and no reviewed dynamic lookup selects them. The bounded source paths contain no monetary-format call or caller-controlled right-justified monetary-format width path. The reviewed reports exposure/discovery.json record no review-required dynamic lookup in /usr/local/bin/discovery; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the approved quarterly review expires on 2027-01-26.",
+      "rationale": "Reviewed the v0.44.0 Linux amd64 discovery local reproduction from review-only rehearsal 40517954609 on 2026-10-27. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libc6 2.41-12+deb13u4. Debian's trixie tracker still marks this CVE vulnerable and records <no-dsa> (Minor issue); Grype's wont-fix enum is a scanner representation, not a promise that Debian will never fix it. The carried libc exports strfmon, strfmon_l and __strfmon_l. The reviewed application executables neither import nor contain strfmon or strfmon_l, and no reviewed dynamic lookup selects them. The bounded source paths contain no monetary-format call or caller-controlled right-justified monetary-format width path. The reviewed reports exposure/discovery.json record no review-required dynamic lookup in /usr/local/bin/discovery; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the approved quarterly review expires on 2027-01-26.",
       "reviewed_at": "2026-10-27",
       "expires_at": "2027-01-26",
       "invalidation_triggers": [
@@ -153,8 +153,8 @@
       "component_layer_id": "sha256:b590fdc57cf6038e63b5507296a4809e21369381be8929619dfd14d1441edcfd",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:cd7d169302fdaa18d2fe9ea30e838022c91df01a6b6d18d7cb29da3d4952f66f",
-        "reference_source_revision": "e9e5d0f6933899045fbc3de7f72025909c4960f0",
+        "reference_image_digest": "sha256:f4ea54bda67b1d5901384035d8406d398d8f3a59f172f2e60c4e1fd866e2d064",
+        "reference_source_revision": "4c6f484c9b01985afb30422e6b297efc122ae4d4",
         "reference_provenance": "local_reproduction",
         "runtime_definition_digest": "sha256:1105eecb79d0607a2e36d76da8092ffa85a184bb4be95d7203c20c03af2b2854",
         "files": [
@@ -179,7 +179,7 @@
             "sha256": "sha256:b509837f1ce2ac03fcb5dfb3abba148be05376b2d25c9fa6af490f9d498f92f0"
           }
         ],
-        "definition_digest": "sha256:78983ee53b8f53342140849e86da4b28a27e8379cd5f23d49520a3cfc7f73743"
+        "definition_digest": "sha256:e30444a66c84142bbe93cb1d2de806c79b6d1df7da110c4202eeb27f180cbf3e"
       }
     },
     {
@@ -189,7 +189,7 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Reviewed the v0.44.0 Linux amd64 discovery local reproduction from review-only rehearsal 40504712741 on 2026-10-27. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports not-fixed with no fixed version for zlib1g 1:1.3.dfsg+really1.3.1-1+b1. Debian's trixie tracker still marks this CVE vulnerable and does not record a <no-dsa> note. The base carries zlib, including gzwrite, gzfwrite, gzprintf and gzvprintf. The reviewed application executables neither need libz nor contain libz.so, gz_vacate, gzwrite, gzfwrite, gzprintf or gzvprintf. No reviewed dynamic lookup opens that closure, and the bounded source paths expose no stalled gzip-write followed by formatted-output operation. The reviewed reports exposure/discovery.json record no review-required dynamic lookup in /usr/local/bin/discovery; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the approved quarterly review expires on 2027-01-26.",
+      "rationale": "Reviewed the v0.44.0 Linux amd64 discovery local reproduction from review-only rehearsal 40517954609 on 2026-10-27. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports not-fixed with no fixed version for zlib1g 1:1.3.dfsg+really1.3.1-1+b1. Debian's trixie tracker still marks this CVE vulnerable and does not record a <no-dsa> note. The base carries zlib, including gzwrite, gzfwrite, gzprintf and gzvprintf. The reviewed application executables neither need libz nor contain libz.so, gz_vacate, gzwrite, gzfwrite, gzprintf or gzvprintf. No reviewed dynamic lookup opens that closure, and the bounded source paths expose no stalled gzip-write followed by formatted-output operation. The reviewed reports exposure/discovery.json record no review-required dynamic lookup in /usr/local/bin/discovery; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the approved quarterly review expires on 2027-01-26.",
       "reviewed_at": "2026-10-27",
       "expires_at": "2027-01-26",
       "invalidation_triggers": [
@@ -211,8 +211,8 @@
       "component_layer_id": "sha256:e4ba966d7f0527dfe0fcb559e4e18d4da42c4e6beae924719255e0dedb554ed0",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:cd7d169302fdaa18d2fe9ea30e838022c91df01a6b6d18d7cb29da3d4952f66f",
-        "reference_source_revision": "e9e5d0f6933899045fbc3de7f72025909c4960f0",
+        "reference_image_digest": "sha256:f4ea54bda67b1d5901384035d8406d398d8f3a59f172f2e60c4e1fd866e2d064",
+        "reference_source_revision": "4c6f484c9b01985afb30422e6b297efc122ae4d4",
         "reference_provenance": "local_reproduction",
         "runtime_definition_digest": "sha256:1105eecb79d0607a2e36d76da8092ffa85a184bb4be95d7203c20c03af2b2854",
         "files": [
@@ -237,7 +237,7 @@
             "sha256": "sha256:b509837f1ce2ac03fcb5dfb3abba148be05376b2d25c9fa6af490f9d498f92f0"
           }
         ],
-        "definition_digest": "sha256:78983ee53b8f53342140849e86da4b28a27e8379cd5f23d49520a3cfc7f73743"
+        "definition_digest": "sha256:e30444a66c84142bbe93cb1d2de806c79b6d1df7da110c4202eeb27f180cbf3e"
       }
     },
     {
@@ -247,7 +247,7 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Reviewed the v0.44.0 Linux amd64 discovery local reproduction from review-only rehearsal 40504712741 on 2026-10-27. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for gcc-14-base 14.2.0-19. Debian's trixie tracker still marks this CVE vulnerable and records <no-dsa> (Minor issue); Grype's wont-fix enum is a scanner representation, not a promise that Debian will never fix it. The existing exception concerns GCC PR127656 and a C++ __gnu_pbds binary-heap template instantiation. The relevant base libraries and reviewed application executables contain no __gnu_pbds or binary_heap names. The application executables need none of libstdc++, libgcc_s or libgomp, and the bounded source and normal-dependency review found no affected template instantiation. The carried package remains vulnerable according to the scan; this is a non-reachability decision, not a dependency fix. The reviewed reports exposure/discovery.json record no review-required dynamic lookup in /usr/local/bin/discovery; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the approved quarterly review expires on 2027-01-26.",
+      "rationale": "Reviewed the v0.44.0 Linux amd64 discovery local reproduction from review-only rehearsal 40517954609 on 2026-10-27. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for gcc-14-base 14.2.0-19. Debian's trixie tracker still marks this CVE vulnerable and records <no-dsa> (Minor issue); Grype's wont-fix enum is a scanner representation, not a promise that Debian will never fix it. The existing exception concerns GCC PR127656 and a C++ __gnu_pbds binary-heap template instantiation. The relevant base libraries and reviewed application executables contain no __gnu_pbds or binary_heap names. The application executables need none of libstdc++, libgcc_s or libgomp, and the bounded source and normal-dependency review found no affected template instantiation. The carried package remains vulnerable according to the scan; this is a non-reachability decision, not a dependency fix. The reviewed reports exposure/discovery.json record no review-required dynamic lookup in /usr/local/bin/discovery; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the approved quarterly review expires on 2027-01-26.",
       "reviewed_at": "2026-10-27",
       "expires_at": "2027-01-26",
       "invalidation_triggers": [
@@ -269,8 +269,8 @@
       "component_layer_id": "sha256:7db505d90756626f425c6c5468eca565c82f589b144ecaa4f411ad9bbf79e614",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:cd7d169302fdaa18d2fe9ea30e838022c91df01a6b6d18d7cb29da3d4952f66f",
-        "reference_source_revision": "e9e5d0f6933899045fbc3de7f72025909c4960f0",
+        "reference_image_digest": "sha256:f4ea54bda67b1d5901384035d8406d398d8f3a59f172f2e60c4e1fd866e2d064",
+        "reference_source_revision": "4c6f484c9b01985afb30422e6b297efc122ae4d4",
         "reference_provenance": "local_reproduction",
         "runtime_definition_digest": "sha256:1105eecb79d0607a2e36d76da8092ffa85a184bb4be95d7203c20c03af2b2854",
         "files": [
@@ -295,7 +295,7 @@
             "sha256": "sha256:b509837f1ce2ac03fcb5dfb3abba148be05376b2d25c9fa6af490f9d498f92f0"
           }
         ],
-        "definition_digest": "sha256:78983ee53b8f53342140849e86da4b28a27e8379cd5f23d49520a3cfc7f73743"
+        "definition_digest": "sha256:e30444a66c84142bbe93cb1d2de806c79b6d1df7da110c4202eeb27f180cbf3e"
       }
     },
     {
@@ -305,7 +305,7 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Reviewed the v0.44.0 Linux amd64 discovery local reproduction from review-only rehearsal 40504712741 on 2026-10-27. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libgcc-s1 14.2.0-19. Debian's trixie tracker still marks this CVE vulnerable and records <no-dsa> (Minor issue); Grype's wont-fix enum is a scanner representation, not a promise that Debian will never fix it. The existing exception concerns GCC PR127656 and a C++ __gnu_pbds binary-heap template instantiation. The relevant base libraries and reviewed application executables contain no __gnu_pbds or binary_heap names. The application executables need none of libstdc++, libgcc_s or libgomp, and the bounded source and normal-dependency review found no affected template instantiation. The carried package remains vulnerable according to the scan; this is a non-reachability decision, not a dependency fix. The reviewed reports exposure/discovery.json record no review-required dynamic lookup in /usr/local/bin/discovery; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the approved quarterly review expires on 2027-01-26.",
+      "rationale": "Reviewed the v0.44.0 Linux amd64 discovery local reproduction from review-only rehearsal 40517954609 on 2026-10-27. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libgcc-s1 14.2.0-19. Debian's trixie tracker still marks this CVE vulnerable and records <no-dsa> (Minor issue); Grype's wont-fix enum is a scanner representation, not a promise that Debian will never fix it. The existing exception concerns GCC PR127656 and a C++ __gnu_pbds binary-heap template instantiation. The relevant base libraries and reviewed application executables contain no __gnu_pbds or binary_heap names. The application executables need none of libstdc++, libgcc_s or libgomp, and the bounded source and normal-dependency review found no affected template instantiation. The carried package remains vulnerable according to the scan; this is a non-reachability decision, not a dependency fix. The reviewed reports exposure/discovery.json record no review-required dynamic lookup in /usr/local/bin/discovery; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the approved quarterly review expires on 2027-01-26.",
       "reviewed_at": "2026-10-27",
       "expires_at": "2027-01-26",
       "invalidation_triggers": [
@@ -327,8 +327,8 @@
       "component_layer_id": "sha256:c16b2ec4b1493bad1b1de23d659c899e60abb166bda756d02792f0a03ba54a43",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:cd7d169302fdaa18d2fe9ea30e838022c91df01a6b6d18d7cb29da3d4952f66f",
-        "reference_source_revision": "e9e5d0f6933899045fbc3de7f72025909c4960f0",
+        "reference_image_digest": "sha256:f4ea54bda67b1d5901384035d8406d398d8f3a59f172f2e60c4e1fd866e2d064",
+        "reference_source_revision": "4c6f484c9b01985afb30422e6b297efc122ae4d4",
         "reference_provenance": "local_reproduction",
         "runtime_definition_digest": "sha256:1105eecb79d0607a2e36d76da8092ffa85a184bb4be95d7203c20c03af2b2854",
         "files": [
@@ -353,7 +353,7 @@
             "sha256": "sha256:b509837f1ce2ac03fcb5dfb3abba148be05376b2d25c9fa6af490f9d498f92f0"
           }
         ],
-        "definition_digest": "sha256:78983ee53b8f53342140849e86da4b28a27e8379cd5f23d49520a3cfc7f73743"
+        "definition_digest": "sha256:e30444a66c84142bbe93cb1d2de806c79b6d1df7da110c4202eeb27f180cbf3e"
       }
     },
     {
@@ -363,7 +363,7 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Reviewed the v0.44.0 Linux amd64 discovery local reproduction from review-only rehearsal 40504712741 on 2026-10-27. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libgomp1 14.2.0-19. Debian's trixie tracker still marks this CVE vulnerable and records <no-dsa> (Minor issue); Grype's wont-fix enum is a scanner representation, not a promise that Debian will never fix it. The existing exception concerns GCC PR127656 and a C++ __gnu_pbds binary-heap template instantiation. The relevant base libraries and reviewed application executables contain no __gnu_pbds or binary_heap names. The application executables need none of libstdc++, libgcc_s or libgomp, and the bounded source and normal-dependency review found no affected template instantiation. The carried package remains vulnerable according to the scan; this is a non-reachability decision, not a dependency fix. The reviewed reports exposure/discovery.json record no review-required dynamic lookup in /usr/local/bin/discovery; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the approved quarterly review expires on 2027-01-26.",
+      "rationale": "Reviewed the v0.44.0 Linux amd64 discovery local reproduction from review-only rehearsal 40517954609 on 2026-10-27. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libgomp1 14.2.0-19. Debian's trixie tracker still marks this CVE vulnerable and records <no-dsa> (Minor issue); Grype's wont-fix enum is a scanner representation, not a promise that Debian will never fix it. The existing exception concerns GCC PR127656 and a C++ __gnu_pbds binary-heap template instantiation. The relevant base libraries and reviewed application executables contain no __gnu_pbds or binary_heap names. The application executables need none of libstdc++, libgcc_s or libgomp, and the bounded source and normal-dependency review found no affected template instantiation. The carried package remains vulnerable according to the scan; this is a non-reachability decision, not a dependency fix. The reviewed reports exposure/discovery.json record no review-required dynamic lookup in /usr/local/bin/discovery; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the approved quarterly review expires on 2027-01-26.",
       "reviewed_at": "2026-10-27",
       "expires_at": "2027-01-26",
       "invalidation_triggers": [
@@ -385,8 +385,8 @@
       "component_layer_id": "sha256:1f5d28bd51650f429293f7730ede274b81dc0744aa918bc887133c4ad610258c",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:cd7d169302fdaa18d2fe9ea30e838022c91df01a6b6d18d7cb29da3d4952f66f",
-        "reference_source_revision": "e9e5d0f6933899045fbc3de7f72025909c4960f0",
+        "reference_image_digest": "sha256:f4ea54bda67b1d5901384035d8406d398d8f3a59f172f2e60c4e1fd866e2d064",
+        "reference_source_revision": "4c6f484c9b01985afb30422e6b297efc122ae4d4",
         "reference_provenance": "local_reproduction",
         "runtime_definition_digest": "sha256:1105eecb79d0607a2e36d76da8092ffa85a184bb4be95d7203c20c03af2b2854",
         "files": [
@@ -411,7 +411,7 @@
             "sha256": "sha256:b509837f1ce2ac03fcb5dfb3abba148be05376b2d25c9fa6af490f9d498f92f0"
           }
         ],
-        "definition_digest": "sha256:78983ee53b8f53342140849e86da4b28a27e8379cd5f23d49520a3cfc7f73743"
+        "definition_digest": "sha256:e30444a66c84142bbe93cb1d2de806c79b6d1df7da110c4202eeb27f180cbf3e"
       }
     },
     {
@@ -421,7 +421,7 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Reviewed the v0.44.0 Linux amd64 discovery local reproduction from review-only rehearsal 40504712741 on 2026-10-27. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libstdc++6 14.2.0-19. Debian's trixie tracker still marks this CVE vulnerable and records <no-dsa> (Minor issue); Grype's wont-fix enum is a scanner representation, not a promise that Debian will never fix it. The existing exception concerns GCC PR127656 and a C++ __gnu_pbds binary-heap template instantiation. The relevant base libraries and reviewed application executables contain no __gnu_pbds or binary_heap names. The application executables need none of libstdc++, libgcc_s or libgomp, and the bounded source and normal-dependency review found no affected template instantiation. The carried package remains vulnerable according to the scan; this is a non-reachability decision, not a dependency fix. The reviewed reports exposure/discovery.json record no review-required dynamic lookup in /usr/local/bin/discovery; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the approved quarterly review expires on 2027-01-26.",
+      "rationale": "Reviewed the v0.44.0 Linux amd64 discovery local reproduction from review-only rehearsal 40517954609 on 2026-10-27. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libstdc++6 14.2.0-19. Debian's trixie tracker still marks this CVE vulnerable and records <no-dsa> (Minor issue); Grype's wont-fix enum is a scanner representation, not a promise that Debian will never fix it. The existing exception concerns GCC PR127656 and a C++ __gnu_pbds binary-heap template instantiation. The relevant base libraries and reviewed application executables contain no __gnu_pbds or binary_heap names. The application executables need none of libstdc++, libgcc_s or libgomp, and the bounded source and normal-dependency review found no affected template instantiation. The carried package remains vulnerable according to the scan; this is a non-reachability decision, not a dependency fix. The reviewed reports exposure/discovery.json record no review-required dynamic lookup in /usr/local/bin/discovery; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the approved quarterly review expires on 2027-01-26.",
       "reviewed_at": "2026-10-27",
       "expires_at": "2027-01-26",
       "invalidation_triggers": [
@@ -443,8 +443,8 @@
       "component_layer_id": "sha256:6e18ad80f3d64a8cbbcd1ff2e8a0d5ce7282cf664e816b86183a59d30a618e8a",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:cd7d169302fdaa18d2fe9ea30e838022c91df01a6b6d18d7cb29da3d4952f66f",
-        "reference_source_revision": "e9e5d0f6933899045fbc3de7f72025909c4960f0",
+        "reference_image_digest": "sha256:f4ea54bda67b1d5901384035d8406d398d8f3a59f172f2e60c4e1fd866e2d064",
+        "reference_source_revision": "4c6f484c9b01985afb30422e6b297efc122ae4d4",
         "reference_provenance": "local_reproduction",
         "runtime_definition_digest": "sha256:1105eecb79d0607a2e36d76da8092ffa85a184bb4be95d7203c20c03af2b2854",
         "files": [
@@ -469,7 +469,7 @@
             "sha256": "sha256:b509837f1ce2ac03fcb5dfb3abba148be05376b2d25c9fa6af490f9d498f92f0"
           }
         ],
-        "definition_digest": "sha256:78983ee53b8f53342140849e86da4b28a27e8379cd5f23d49520a3cfc7f73743"
+        "definition_digest": "sha256:e30444a66c84142bbe93cb1d2de806c79b6d1df7da110c4202eeb27f180cbf3e"
       }
     },
     {
@@ -479,7 +479,7 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Reviewed the v0.44.0 Linux amd64 discovery local reproduction from review-only rehearsal 40504712741 on 2026-10-27. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for gcc-14-base 14.2.0-19. Debian's trixie tracker still marks this CVE vulnerable and records <no-dsa> (Minor issue); Grype's wont-fix enum is a scanner representation, not a promise that Debian will never fix it. The carried libstdc++ aligned operator-new implementation calls posix_memalign with the unrounded requested size and imports neither aligned_alloc nor memalign. libgcc_s and libgomp define no aligned operator new; libgomp separately imports memalign for its OpenMP allocator. The reviewed application executables need none of libstdc++, libgcc_s or libgomp, import no C++ symbols and contain no aligned operator-new names. The complete representative base-ELF scan found no libstdc++ or libgomp consumer and only libstdc++ itself needing libgcc_s. Relevant base-library bytes match across all ten exports, and every application executable was checked separately. No reviewed application or dynamic lookup reaches that C++ allocation closure. The reviewed reports exposure/discovery.json record no review-required dynamic lookup in /usr/local/bin/discovery; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the approved quarterly review expires on 2027-01-26.",
+      "rationale": "Reviewed the v0.44.0 Linux amd64 discovery local reproduction from review-only rehearsal 40517954609 on 2026-10-27. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for gcc-14-base 14.2.0-19. Debian's trixie tracker still marks this CVE vulnerable and records <no-dsa> (Minor issue); Grype's wont-fix enum is a scanner representation, not a promise that Debian will never fix it. The carried libstdc++ aligned operator-new implementation calls posix_memalign with the unrounded requested size and imports neither aligned_alloc nor memalign. libgcc_s and libgomp define no aligned operator new; libgomp separately imports memalign for its OpenMP allocator. The reviewed application executables need none of libstdc++, libgcc_s or libgomp, import no C++ symbols and contain no aligned operator-new names. The complete representative base-ELF scan found no libstdc++ or libgomp consumer and only libstdc++ itself needing libgcc_s. Relevant base-library bytes match across all ten exports, and every application executable was checked separately. No reviewed application or dynamic lookup reaches that C++ allocation closure. The reviewed reports exposure/discovery.json record no review-required dynamic lookup in /usr/local/bin/discovery; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the approved quarterly review expires on 2027-01-26.",
       "reviewed_at": "2026-10-27",
       "expires_at": "2027-01-26",
       "invalidation_triggers": [
@@ -501,8 +501,8 @@
       "component_layer_id": "sha256:7db505d90756626f425c6c5468eca565c82f589b144ecaa4f411ad9bbf79e614",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:cd7d169302fdaa18d2fe9ea30e838022c91df01a6b6d18d7cb29da3d4952f66f",
-        "reference_source_revision": "e9e5d0f6933899045fbc3de7f72025909c4960f0",
+        "reference_image_digest": "sha256:f4ea54bda67b1d5901384035d8406d398d8f3a59f172f2e60c4e1fd866e2d064",
+        "reference_source_revision": "4c6f484c9b01985afb30422e6b297efc122ae4d4",
         "reference_provenance": "local_reproduction",
         "runtime_definition_digest": "sha256:1105eecb79d0607a2e36d76da8092ffa85a184bb4be95d7203c20c03af2b2854",
         "files": [
@@ -527,7 +527,7 @@
             "sha256": "sha256:b509837f1ce2ac03fcb5dfb3abba148be05376b2d25c9fa6af490f9d498f92f0"
           }
         ],
-        "definition_digest": "sha256:78983ee53b8f53342140849e86da4b28a27e8379cd5f23d49520a3cfc7f73743"
+        "definition_digest": "sha256:e30444a66c84142bbe93cb1d2de806c79b6d1df7da110c4202eeb27f180cbf3e"
       }
     },
     {
@@ -537,7 +537,7 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Reviewed the v0.44.0 Linux amd64 discovery local reproduction from review-only rehearsal 40504712741 on 2026-10-27. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libgcc-s1 14.2.0-19. Debian's trixie tracker still marks this CVE vulnerable and records <no-dsa> (Minor issue); Grype's wont-fix enum is a scanner representation, not a promise that Debian will never fix it. The carried libstdc++ aligned operator-new implementation calls posix_memalign with the unrounded requested size and imports neither aligned_alloc nor memalign. libgcc_s and libgomp define no aligned operator new; libgomp separately imports memalign for its OpenMP allocator. The reviewed application executables need none of libstdc++, libgcc_s or libgomp, import no C++ symbols and contain no aligned operator-new names. The complete representative base-ELF scan found no libstdc++ or libgomp consumer and only libstdc++ itself needing libgcc_s. Relevant base-library bytes match across all ten exports, and every application executable was checked separately. No reviewed application or dynamic lookup reaches that C++ allocation closure. The reviewed reports exposure/discovery.json record no review-required dynamic lookup in /usr/local/bin/discovery; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the approved quarterly review expires on 2027-01-26.",
+      "rationale": "Reviewed the v0.44.0 Linux amd64 discovery local reproduction from review-only rehearsal 40517954609 on 2026-10-27. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libgcc-s1 14.2.0-19. Debian's trixie tracker still marks this CVE vulnerable and records <no-dsa> (Minor issue); Grype's wont-fix enum is a scanner representation, not a promise that Debian will never fix it. The carried libstdc++ aligned operator-new implementation calls posix_memalign with the unrounded requested size and imports neither aligned_alloc nor memalign. libgcc_s and libgomp define no aligned operator new; libgomp separately imports memalign for its OpenMP allocator. The reviewed application executables need none of libstdc++, libgcc_s or libgomp, import no C++ symbols and contain no aligned operator-new names. The complete representative base-ELF scan found no libstdc++ or libgomp consumer and only libstdc++ itself needing libgcc_s. Relevant base-library bytes match across all ten exports, and every application executable was checked separately. No reviewed application or dynamic lookup reaches that C++ allocation closure. The reviewed reports exposure/discovery.json record no review-required dynamic lookup in /usr/local/bin/discovery; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the approved quarterly review expires on 2027-01-26.",
       "reviewed_at": "2026-10-27",
       "expires_at": "2027-01-26",
       "invalidation_triggers": [
@@ -559,8 +559,8 @@
       "component_layer_id": "sha256:c16b2ec4b1493bad1b1de23d659c899e60abb166bda756d02792f0a03ba54a43",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:cd7d169302fdaa18d2fe9ea30e838022c91df01a6b6d18d7cb29da3d4952f66f",
-        "reference_source_revision": "e9e5d0f6933899045fbc3de7f72025909c4960f0",
+        "reference_image_digest": "sha256:f4ea54bda67b1d5901384035d8406d398d8f3a59f172f2e60c4e1fd866e2d064",
+        "reference_source_revision": "4c6f484c9b01985afb30422e6b297efc122ae4d4",
         "reference_provenance": "local_reproduction",
         "runtime_definition_digest": "sha256:1105eecb79d0607a2e36d76da8092ffa85a184bb4be95d7203c20c03af2b2854",
         "files": [
@@ -585,7 +585,7 @@
             "sha256": "sha256:b509837f1ce2ac03fcb5dfb3abba148be05376b2d25c9fa6af490f9d498f92f0"
           }
         ],
-        "definition_digest": "sha256:78983ee53b8f53342140849e86da4b28a27e8379cd5f23d49520a3cfc7f73743"
+        "definition_digest": "sha256:e30444a66c84142bbe93cb1d2de806c79b6d1df7da110c4202eeb27f180cbf3e"
       }
     },
     {
@@ -595,7 +595,7 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Reviewed the v0.44.0 Linux amd64 discovery local reproduction from review-only rehearsal 40504712741 on 2026-10-27. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libgomp1 14.2.0-19. Debian's trixie tracker still marks this CVE vulnerable and records <no-dsa> (Minor issue); Grype's wont-fix enum is a scanner representation, not a promise that Debian will never fix it. The carried libstdc++ aligned operator-new implementation calls posix_memalign with the unrounded requested size and imports neither aligned_alloc nor memalign. libgcc_s and libgomp define no aligned operator new; libgomp separately imports memalign for its OpenMP allocator. The reviewed application executables need none of libstdc++, libgcc_s or libgomp, import no C++ symbols and contain no aligned operator-new names. The complete representative base-ELF scan found no libstdc++ or libgomp consumer and only libstdc++ itself needing libgcc_s. Relevant base-library bytes match across all ten exports, and every application executable was checked separately. No reviewed application or dynamic lookup reaches that C++ allocation closure. The reviewed reports exposure/discovery.json record no review-required dynamic lookup in /usr/local/bin/discovery; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the approved quarterly review expires on 2027-01-26.",
+      "rationale": "Reviewed the v0.44.0 Linux amd64 discovery local reproduction from review-only rehearsal 40517954609 on 2026-10-27. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libgomp1 14.2.0-19. Debian's trixie tracker still marks this CVE vulnerable and records <no-dsa> (Minor issue); Grype's wont-fix enum is a scanner representation, not a promise that Debian will never fix it. The carried libstdc++ aligned operator-new implementation calls posix_memalign with the unrounded requested size and imports neither aligned_alloc nor memalign. libgcc_s and libgomp define no aligned operator new; libgomp separately imports memalign for its OpenMP allocator. The reviewed application executables need none of libstdc++, libgcc_s or libgomp, import no C++ symbols and contain no aligned operator-new names. The complete representative base-ELF scan found no libstdc++ or libgomp consumer and only libstdc++ itself needing libgcc_s. Relevant base-library bytes match across all ten exports, and every application executable was checked separately. No reviewed application or dynamic lookup reaches that C++ allocation closure. The reviewed reports exposure/discovery.json record no review-required dynamic lookup in /usr/local/bin/discovery; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the approved quarterly review expires on 2027-01-26.",
       "reviewed_at": "2026-10-27",
       "expires_at": "2027-01-26",
       "invalidation_triggers": [
@@ -617,8 +617,8 @@
       "component_layer_id": "sha256:1f5d28bd51650f429293f7730ede274b81dc0744aa918bc887133c4ad610258c",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:cd7d169302fdaa18d2fe9ea30e838022c91df01a6b6d18d7cb29da3d4952f66f",
-        "reference_source_revision": "e9e5d0f6933899045fbc3de7f72025909c4960f0",
+        "reference_image_digest": "sha256:f4ea54bda67b1d5901384035d8406d398d8f3a59f172f2e60c4e1fd866e2d064",
+        "reference_source_revision": "4c6f484c9b01985afb30422e6b297efc122ae4d4",
         "reference_provenance": "local_reproduction",
         "runtime_definition_digest": "sha256:1105eecb79d0607a2e36d76da8092ffa85a184bb4be95d7203c20c03af2b2854",
         "files": [
@@ -643,7 +643,7 @@
             "sha256": "sha256:b509837f1ce2ac03fcb5dfb3abba148be05376b2d25c9fa6af490f9d498f92f0"
           }
         ],
-        "definition_digest": "sha256:78983ee53b8f53342140849e86da4b28a27e8379cd5f23d49520a3cfc7f73743"
+        "definition_digest": "sha256:e30444a66c84142bbe93cb1d2de806c79b6d1df7da110c4202eeb27f180cbf3e"
       }
     },
     {
@@ -653,7 +653,7 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Reviewed the v0.44.0 Linux amd64 discovery local reproduction from review-only rehearsal 40504712741 on 2026-10-27. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libstdc++6 14.2.0-19. Debian's trixie tracker still marks this CVE vulnerable and records <no-dsa> (Minor issue); Grype's wont-fix enum is a scanner representation, not a promise that Debian will never fix it. The carried libstdc++ aligned operator-new implementation calls posix_memalign with the unrounded requested size and imports neither aligned_alloc nor memalign. libgcc_s and libgomp define no aligned operator new; libgomp separately imports memalign for its OpenMP allocator. The reviewed application executables need none of libstdc++, libgcc_s or libgomp, import no C++ symbols and contain no aligned operator-new names. The complete representative base-ELF scan found no libstdc++ or libgomp consumer and only libstdc++ itself needing libgcc_s. Relevant base-library bytes match across all ten exports, and every application executable was checked separately. No reviewed application or dynamic lookup reaches that C++ allocation closure. The reviewed reports exposure/discovery.json record no review-required dynamic lookup in /usr/local/bin/discovery; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the approved quarterly review expires on 2027-01-26.",
+      "rationale": "Reviewed the v0.44.0 Linux amd64 discovery local reproduction from review-only rehearsal 40517954609 on 2026-10-27. The pinned distroless cc-debian13 nonroot base, complete ordered DiffIDs, production OCI process contract, native Grype/Syft inventories and assertion file digests were checked against the exact exported rootfs. Grype reports wont-fix with no fixed version for libstdc++6 14.2.0-19. Debian's trixie tracker still marks this CVE vulnerable and records <no-dsa> (Minor issue); Grype's wont-fix enum is a scanner representation, not a promise that Debian will never fix it. The carried libstdc++ aligned operator-new implementation calls posix_memalign with the unrounded requested size and imports neither aligned_alloc nor memalign. libgcc_s and libgomp define no aligned operator new; libgomp separately imports memalign for its OpenMP allocator. The reviewed application executables need none of libstdc++, libgcc_s or libgomp, import no C++ symbols and contain no aligned operator-new names. The complete representative base-ELF scan found no libstdc++ or libgomp consumer and only libstdc++ itself needing libgcc_s. Relevant base-library bytes match across all ten exports, and every application executable was checked separately. No reviewed application or dynamic lookup reaches that C++ allocation closure. The reviewed reports exposure/discovery.json record no review-required dynamic lookup in /usr/local/bin/discovery; their resolved constant lookups select only __pthread_get_minstack, _dl_find_object, none of which selects an affected symbol or library. Candidate acceptance still requires the exact ordered rootfs layers, production OCI process contract and Syft-bound executable, loader, libc, libm and libpthread digests. The owner and invalidation triggers remain unchanged; the approved quarterly review expires on 2027-01-26.",
       "reviewed_at": "2026-10-27",
       "expires_at": "2027-01-26",
       "invalidation_triggers": [
@@ -675,8 +675,8 @@
       "component_layer_id": "sha256:6e18ad80f3d64a8cbbcd1ff2e8a0d5ce7282cf664e816b86183a59d30a618e8a",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:cd7d169302fdaa18d2fe9ea30e838022c91df01a6b6d18d7cb29da3d4952f66f",
-        "reference_source_revision": "e9e5d0f6933899045fbc3de7f72025909c4960f0",
+        "reference_image_digest": "sha256:f4ea54bda67b1d5901384035d8406d398d8f3a59f172f2e60c4e1fd866e2d064",
+        "reference_source_revision": "4c6f484c9b01985afb30422e6b297efc122ae4d4",
         "reference_provenance": "local_reproduction",
         "runtime_definition_digest": "sha256:1105eecb79d0607a2e36d76da8092ffa85a184bb4be95d7203c20c03af2b2854",
         "files": [
@@ -701,7 +701,7 @@
             "sha256": "sha256:b509837f1ce2ac03fcb5dfb3abba148be05376b2d25c9fa6af490f9d498f92f0"
           }
         ],
-        "definition_digest": "sha256:78983ee53b8f53342140849e86da4b28a27e8379cd5f23d49520a3cfc7f73743"
+        "definition_digest": "sha256:e30444a66c84142bbe93cb1d2de806c79b6d1df7da110c4202eeb27f180cbf3e"
       }
     }
   ]
