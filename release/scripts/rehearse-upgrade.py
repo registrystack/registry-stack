@@ -13,12 +13,12 @@ A product the previous release did not ship, or whose contract starts at a
 new baseline, has no supported state to carry forward. Its leg is omitted and
 the report says why. The forward state path started at 0.42.0 with Evidence's
 normalized baseline and the Messaging and Scheduling fresh schema baselines.
-Release 0.43.0 continued that path from 0.42.0. This source reads state from
-0.43.0, its immediate predecessor. Release 0.44.0 starts Casework and
-Scheduling at a fresh version 200 baseline and has BReg refuse the 0.43.0
-attachment verification state, so those legs are omitted; Messaging migrates
-its 0.43.0 ledger forward, and its leg checks the corrected dispatch job shape
-after the upgrade.
+Release 0.43.0 continued that path from 0.42.0. Release 0.44.0 starts Casework
+and Scheduling at a fresh version 200 baseline and has BReg refuse the 0.43.0
+attachment verification state, so those legs remain omitted. This source reads
+retained Evidence and Messaging state from 0.44.0, its immediate predecessor;
+the Messaging leg also checks the corrected dispatch job shape after the
+upgrade.
 
 While no release on the forward state path is published, there is no
 predecessor to download: the rehearsal then runs every leg with this source's
@@ -90,13 +90,13 @@ FIPS_LIBRARY = re.compile(r"^libaws_lc_fips_[A-Za-z0-9_]+\.dylib$")
 # separately activated complete authority replace the split question/source
 # projects and bundled authority, which the current compiler refuses. Messaging
 # and Scheduling each install one schema baseline and refuse a pre-1.0 ledger by
-# name. Release 0.43.0 continued that path from 0.42.0; this source reads state
-# from 0.43.0, its immediate predecessor. Release 0.44.0 starts Casework and
-# Scheduling again at a version 200 baseline that refuses a ledger below 200,
-# and BReg refuses the 0.43.0 attachment verification shape, so all three are
-# RETIRED_PRODUCTS. Messaging keeps its version 100 baseline and migrates
-# forward through version 101.
-FORWARD_PATH_FLOOR = (0, 43, 0)
+# name. Release 0.43.0 continued that path from 0.42.0. Release 0.44.0 starts
+# Casework and Scheduling again at a version 200 baseline that refuses a ledger
+# below 200, and BReg refuses the 0.43.0 attachment verification shape, so all
+# three are RETIRED_PRODUCTS. This source reads retained Evidence and Messaging
+# state from 0.44.0, its immediate predecessor. Messaging keeps its version 100
+# baseline and migrates forward through version 101.
+FORWARD_PATH_FLOOR = (0, 44, 0)
 
 STACK_VERSION = re.compile(r"\Astack:\n(?:  .*\n)*?  version: (\S+)\n")
 STACK_RELEASED = re.compile(r"\Astack:\n(?:  .*\n)*?  status: released\n")

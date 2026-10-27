@@ -18,7 +18,7 @@ extension-module = ["pyo3/extension-module"]
 
 [dependencies]
 pyo3.workspace = true
-render-client-sdk = { package = "registry-render-client", path = "../registry-render-client", version = "0.44.0" }
+render-client-sdk = { package = "registry-render-client", path = "../registry-render-client", version = "0.45.0" }
 registry-platform-canonical-json.workspace = true
 serde_json.workspace = true
 tokio.workspace = true

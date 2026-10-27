@@ -1,5 +1,5 @@
 current: latest
-released: v0.43.0
+released: v0.44.0
 published_archive_limit: 3
 docsets:
   - id: latest
@@ -48,42 +48,42 @@ docsets:
     label: v0.44.0
     path: /v/0.44.0/
     status: archived
-    availability: candidate
+    availability: released
     source: registry-stack-v0.44.0
     repo_docs_source: monorepo
     published_at: 2026-10-27
-    description: Registry Stack v0.44.0 beta-56 candidate documentation set.
+    description: Released Registry Stack v0.44.0 beta-56 documentation set.
     products:
       registry-stack:
         version: v0.44.0
-        ref: v0.44.0
+        ref: bae18995d0f00eba35d7b96629a56e051ac3d0df
       registry-discovery:
         version: v0.44.0
-        ref: v0.44.0
+        ref: bae18995d0f00eba35d7b96629a56e051ac3d0df
       registry-manifest:
         version: v0.44.0
-        ref: v0.44.0
+        ref: bae18995d0f00eba35d7b96629a56e051ac3d0df
       registry-evidence:
         version: v0.44.0
-        ref: v0.44.0
+        ref: bae18995d0f00eba35d7b96629a56e051ac3d0df
       registry-casework:
         version: v0.44.0
-        ref: v0.44.0
+        ref: bae18995d0f00eba35d7b96629a56e051ac3d0df
       registry-scheduling:
         version: v0.44.0
-        ref: v0.44.0
+        ref: bae18995d0f00eba35d7b96629a56e051ac3d0df
       registry-render:
         version: v0.44.0
-        ref: v0.44.0
+        ref: bae18995d0f00eba35d7b96629a56e051ac3d0df
       registry-messaging:
         version: v0.44.0
-        ref: v0.44.0
+        ref: bae18995d0f00eba35d7b96629a56e051ac3d0df
       registry-breg-services:
         version: v0.44.0
-        ref: v0.44.0
+        ref: bae18995d0f00eba35d7b96629a56e051ac3d0df
       registry-coordinator:
         version: v0.44.0
-        ref: v0.44.0
+        ref: bae18995d0f00eba35d7b96629a56e051ac3d0df
   - id: v0.43.0
     label: v0.43.0
     path: /v/0.43.0/
