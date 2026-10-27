@@ -1181,6 +1181,47 @@ async fn a_withdrawal_observed_while_the_signer_runs_is_inherited_under_a_repeat
     );
 }
 
+/// Autocommit writes inherit the session default, and under REPEATABLE READ
+/// two writers of the shared open list row fail a snapshot check (40001). The
+/// ledger pins READ COMMITTED itself, so every reservation succeeds.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_reservations_succeed_under_a_repeatable_read_default() {
+    let ledger = std::sync::Arc::new(status_support::repeatable_read_ledger().await);
+    let mut tasks = Vec::new();
+    for worker in 0..8 {
+        let ledger = std::sync::Arc::clone(&ledger);
+        tasks.push(tokio::spawn(async move {
+            for round in 0..25 {
+                allocate(&ledger, &format!("person-9{worker}{round:02}"), 1).await;
+            }
+        }));
+    }
+    for task in tasks {
+        task.await.expect("every reservation succeeds");
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_mapping_registrations_succeed_under_a_repeatable_read_default() {
+    let ledger = std::sync::Arc::new(status_support::repeatable_read_ledger().await);
+    let mut tasks = Vec::new();
+    for worker in 1..=8_u32 {
+        let ledger = std::sync::Arc::clone(&ledger);
+        tasks.push(tokio::spawn(async move {
+            for round in 0..10_u32 {
+                ledger
+                    .ledger
+                    .register_mapping_version(&ledger.reserved, mapping_version(worker + round))
+                    .await
+                    .expect("every registration succeeds");
+            }
+        }));
+    }
+    for task in tasks {
+        task.await.expect("the registering task joins");
+    }
+}
+
 #[tokio::test]
 async fn a_commit_waits_for_an_observation_being_recorded_and_inherits_it() {
     let ledger = ledger().await;

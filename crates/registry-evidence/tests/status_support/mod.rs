@@ -125,11 +125,22 @@ pub async fn ledger_with(
 /// as an adopter's database-level `default_transaction_isolation` would set.
 pub async fn repeatable_read_ledger() -> TestLedger {
     let options = Some("-c default_transaction_isolation=repeatable\\ read");
+    let issuance = pool_with_options(DEFAULT_ISSUANCE_POOL_SIZE, None, options);
+    let reserved = pool_with_options(DEFAULT_RESERVED_POOL_SIZE, None, options);
+    for pool in [&issuance, &reserved] {
+        let default: String = pool
+            .get()
+            .await
+            .expect("a session under the repeatable read default")
+            .query_one("SHOW default_transaction_isolation", &[])
+            .await
+            .expect("read the session default")
+            .get(0);
+        assert_eq!(default, "repeatable read", "the session default took hold");
+    }
     let mut ledger = ledger().await;
-    ledger.issuance =
-        IssuancePool::new(pool_with_options(DEFAULT_ISSUANCE_POOL_SIZE, None, options));
-    ledger.reserved =
-        ReservedPool::new(pool_with_options(DEFAULT_RESERVED_POOL_SIZE, None, options));
+    ledger.issuance = IssuancePool::new(issuance);
+    ledger.reserved = ReservedPool::new(reserved);
     ledger
 }
 

@@ -208,11 +208,19 @@ impl StatusLedger {
             .ok_or(StatusError::InvalidInput(
                 "the observation retention must be positive and representable",
             ))?;
-        let client = pool.client().await?;
-        client
+        let mut client = pool.client().await?;
+        let transaction = client
+            .build_transaction()
+            .isolation_level(IsolationLevel::ReadCommitted)
+            .start()
+            .await
+            .map_err(|error| failed(&error))?;
+        let purged = transaction
             .execute(&self.statements.purge_observations, &[&retention])
             .await
-            .map_err(|error| failed(&error))
+            .map_err(|error| failed(&error))?;
+        transaction.commit().await.map_err(|error| failed(&error))?;
+        Ok(purged)
     }
 
     /// Set the staleness clock of the reconciliation extract that serves
@@ -239,15 +247,21 @@ impl StatusLedger {
             ));
         }
         let observed = published_at.min(run_instant);
-        let client = pool.client().await?;
-        client
+        let mut client = pool.client().await?;
+        let transaction = client
+            .build_transaction()
+            .isolation_level(IsolationLevel::ReadCommitted)
+            .start()
+            .await
+            .map_err(|error| failed(&error))?;
+        transaction
             .execute(
                 &self.statements.set_staleness_clock,
                 &[&mapping_block, &observed],
             )
             .await
             .map_err(|error| failed(&error))?;
-        Ok(())
+        transaction.commit().await.map_err(|error| failed(&error))
     }
 
     /// The oldest last successful source observation among the
