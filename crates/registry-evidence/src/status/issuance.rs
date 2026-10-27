@@ -391,23 +391,9 @@ async fn allocate_rows(
     rows: &AllocationRows,
 ) -> Result<Allocated, StatusError> {
     let count = rows.holder_digests.len();
-    let (list_id, entry_count) = reserve(ledger, client, count).await?;
+    let (list_id, entry_count) = reserve(ledger, client, deadline, idle_timeout, count).await?;
     let failed = |error: tokio_postgres::Error| issuance_failure(&error);
-    // READ COMMITTED whatever the session default: the commit reads the latest
-    // observation after taking the pseudonym lock, which a snapshot fixed at
-    // the first statement would miss.
-    client
-        .batch_execute("BEGIN ISOLATION LEVEL READ COMMITTED")
-        .await
-        .map_err(failed)?;
-    client
-        .execute(
-            "SELECT set_config('idle_in_transaction_session_timeout', $1, true), \
-             set_config('lock_timeout', $2, true)",
-            &[&idle_timeout, &remaining_lock_timeout(deadline)],
-        )
-        .await
-        .map_err(failed)?;
+    begin_transaction_with_backstops(client, deadline, idle_timeout).await?;
     // Every entry starts VALID; the commit applies the inherited status.
     let status = status_column(EntryStatus::Valid);
     let mut indices = Vec::with_capacity(count);
@@ -458,6 +444,32 @@ async fn allocate_rows(
         indices,
         references,
     })
+}
+
+/// Open one READ COMMITTED issuance transaction with both server backstops
+/// installed before it can take a reservation or allocation lock.
+async fn begin_transaction_with_backstops(
+    client: &Object,
+    deadline: Instant,
+    idle_timeout: &str,
+) -> Result<(), StatusError> {
+    let failed = |error: tokio_postgres::Error| issuance_failure(&error);
+    // READ COMMITTED whatever the session default: the commit reads the latest
+    // observation after taking the pseudonym lock, which a snapshot fixed at
+    // the first statement would miss.
+    client
+        .batch_execute("BEGIN ISOLATION LEVEL READ COMMITTED")
+        .await
+        .map_err(failed)?;
+    client
+        .execute(
+            "SELECT set_config('idle_in_transaction_session_timeout', $1, true), \
+             set_config('lock_timeout', $2, true)",
+            &[&idle_timeout, &remaining_lock_timeout(deadline)],
+        )
+        .await
+        .map_err(failed)?;
+    Ok(())
 }
 
 /// Under the subject's shared pseudonym locks, which an observation being
@@ -531,9 +543,11 @@ async fn inherit_and_commit(
 async fn reserve(
     ledger: &StatusLedger,
     client: &Object,
+    deadline: Instant,
+    idle_timeout: &str,
     count: usize,
 ) -> Result<(StatusListId, u32), StatusError> {
-    let failed = |error: tokio_postgres::Error| StatusError::database(&error);
+    let failed = |error: tokio_postgres::Error| issuance_failure(&error);
     let count =
         i32::try_from(count).map_err(|_| StatusError::BatchTooLarge { requested: count })?;
     let maximum_age = i64::try_from(ledger.list_policy.maximum_age().as_millis())
@@ -545,19 +559,13 @@ async fn reserve(
     // that skipped a row it had waited on still holds that row's lock, which
     // must not be held while the rotation lock is awaited. A failure discards
     // the connection, which rolls it back.
-    client
-        .batch_execute("BEGIN ISOLATION LEVEL READ COMMITTED")
-        .await
-        .map_err(failed)?;
+    begin_transaction_with_backstops(client, deadline, idle_timeout).await?;
     let open = reserve_open(ledger, client, count, maximum_age).await?;
     client.batch_execute("COMMIT").await.map_err(failed)?;
     if let Some(reserved) = open {
         return Ok(reserved);
     }
-    client
-        .batch_execute("BEGIN ISOLATION LEVEL READ COMMITTED")
-        .await
-        .map_err(failed)?;
+    begin_transaction_with_backstops(client, deadline, idle_timeout).await?;
     let (reserved, rotation) = rotate(ledger, client, count, maximum_age).await?;
     client.batch_execute("COMMIT").await.map_err(failed)?;
     if let Some((closed, opened)) = rotation {
@@ -584,7 +592,7 @@ async fn rotate(
     count: i32,
     maximum_age: i64,
 ) -> Result<((StatusListId, u32), Rotation), StatusError> {
-    let failed = |error: tokio_postgres::Error| StatusError::database(&error);
+    let failed = |error: tokio_postgres::Error| issuance_failure(&error);
     client
         .execute(
             "SELECT pg_advisory_xact_lock($1, hashtext($2))",
@@ -629,7 +637,7 @@ async fn reserve_open(
     let Some(row) = client
         .query_opt(&ledger.statements.reserve, &[&count, &maximum_age])
         .await
-        .map_err(|error| StatusError::database(&error))?
+        .map_err(|error| issuance_failure(&error))?
     else {
         return Ok(None);
     };

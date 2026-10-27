@@ -6,6 +6,7 @@
 mod status_support;
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::future::Future;
 use std::time::Duration;
 
 use proptest::prelude::*;
@@ -25,6 +26,7 @@ const DEADLINE: Duration = Duration::from_secs(20);
 // the deadline tests wait past it by a fixed margin instead.
 const SETUP_DEADLINE: Duration = Duration::from_secs(3);
 const LONG_AGE: Duration = Duration::from_secs(24 * 60 * 60);
+const ROTATION_LOCK_CLASS: i32 = 0x6576_7231;
 
 fn hex(bytes: &[u8]) -> String {
     let mut text = String::from("\\x");
@@ -60,6 +62,63 @@ async fn allocation_rows(ledger: &TestLedger) -> Vec<Value> {
 
 async fn list_rows(ledger: &TestLedger) -> Vec<Value> {
     rows(&inspector().await, &ledger.schema, "lists").await
+}
+
+async fn install_reservation_backstop_assertion(ledger: &TestLedger, event: &str) {
+    assert!(matches!(event, "INSERT" | "UPDATE"));
+    inspector()
+        .await
+        .batch_execute(&format!(
+            "CREATE FUNCTION \"{schema}\".assert_reservation_backstops() RETURNS trigger \
+             LANGUAGE plpgsql AS $$ \
+             BEGIN \
+                 IF current_setting('idle_in_transaction_session_timeout')::interval \
+                        <> interval '25 seconds' \
+                    OR current_setting('lock_timeout')::interval <= interval '0 seconds' \
+                    OR current_setting('lock_timeout')::interval > interval '20 seconds' THEN \
+                     RAISE EXCEPTION USING ERRCODE = 'check_violation', \
+                         MESSAGE = 'reservation transaction lacks server backstops'; \
+                 END IF; \
+                 RETURN NEW; \
+             END \
+             $$; \
+             CREATE TRIGGER assert_reservation_backstops \
+             BEFORE {event} ON \"{schema}\".lists \
+             FOR EACH ROW EXECUTE FUNCTION \"{schema}\".assert_reservation_backstops()",
+            schema = ledger.schema
+        ))
+        .await
+        .unwrap();
+}
+
+async fn until_session_waits_on_lock<F>(
+    observer: &tokio_postgres::Client,
+    application_name: &str,
+    pending: &mut std::pin::Pin<&mut F>,
+) where
+    F: Future,
+{
+    for _ in 0..100 {
+        assert!(
+            tokio::time::timeout(Duration::from_millis(25), pending.as_mut())
+                .await
+                .is_err(),
+            "the reservation finished while its lock was held"
+        );
+        let waiting: i64 = observer
+            .query_one(
+                "SELECT count(*) FROM pg_stat_activity \
+                 WHERE application_name = $1 AND wait_event_type = 'Lock'",
+                &[&application_name],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        if waiting > 0 {
+            return;
+        }
+    }
+    panic!("no reservation session waited on the lock");
 }
 
 #[tokio::test]
@@ -376,6 +435,114 @@ async fn a_lock_wait_past_the_deadline_ends_with_the_deadline() {
     assert_eq!(waiting, 0, "a discarded session still waits on the lock");
     held.rollback().await.unwrap();
     assert!(allocation_rows(&ledger).await.is_empty());
+}
+
+#[tokio::test]
+async fn the_open_list_reservation_installs_server_backstops_before_waiting() {
+    let application_name = format!("status-reserve-{}", uuid::Uuid::new_v4().simple());
+    let ledger = ledger_with(
+        registry_evidence::status::ListPolicy::new(LONG_AGE).unwrap(),
+        pseudonym_keys(),
+        holder_digest_keys(),
+        Some(&application_name),
+    )
+    .await;
+    allocate(
+        &ledger,
+        "person-0007",
+        CredentialMembers::Unbound { count: 1 },
+    )
+    .await
+    .unwrap();
+    install_reservation_backstop_assertion(&ledger, "UPDATE").await;
+
+    let mut blocker = inspector().await;
+    let held = blocker.transaction().await.unwrap();
+    held.query_one(
+        &format!(
+            "SELECT list_id FROM \"{}\".lists WHERE closed_at IS NULL FOR UPDATE",
+            ledger.schema
+        ),
+        &[],
+    )
+    .await
+    .unwrap();
+
+    let person = subject("person-0008");
+    let issued_at = now();
+    let fields = AllocationFields {
+        requirement_id: REQUIREMENT_ID,
+        subject: &person,
+        issued_at,
+        not_after: issued_at + days(30),
+        source_read: http_read(issued_at),
+    };
+    let mut transaction = ledger
+        .ledger
+        .begin(&ledger.issuance, DEADLINE)
+        .await
+        .unwrap();
+    let references = {
+        let allocation = transaction.allocate(&fields, CredentialMembers::Unbound { count: 1 });
+        tokio::pin!(allocation);
+        until_session_waits_on_lock(&inspector().await, &application_name, &mut allocation).await;
+        held.rollback().await.unwrap();
+        tokio::time::timeout(Duration::from_secs(5), allocation.as_mut())
+            .await
+            .expect("reservation finishes after its lock is released")
+            .expect("the reservation transaction installed both server backstops")
+    };
+    assert_eq!(references.len(), 1);
+    transaction.commit().await.unwrap();
+}
+
+#[tokio::test]
+async fn list_rotation_installs_server_backstops_before_waiting() {
+    let application_name = format!("status-rotate-{}", uuid::Uuid::new_v4().simple());
+    let ledger = ledger_with(
+        registry_evidence::status::ListPolicy::new(LONG_AGE).unwrap(),
+        pseudonym_keys(),
+        holder_digest_keys(),
+        Some(&application_name),
+    )
+    .await;
+    install_reservation_backstop_assertion(&ledger, "INSERT").await;
+
+    let mut blocker = inspector().await;
+    let held = blocker.transaction().await.unwrap();
+    held.execute(
+        "SELECT pg_advisory_xact_lock($1, hashtext($2))",
+        &[&ROTATION_LOCK_CLASS, &ledger.schema],
+    )
+    .await
+    .unwrap();
+
+    let person = subject("person-0009");
+    let issued_at = now();
+    let fields = AllocationFields {
+        requirement_id: REQUIREMENT_ID,
+        subject: &person,
+        issued_at,
+        not_after: issued_at + days(30),
+        source_read: http_read(issued_at),
+    };
+    let mut transaction = ledger
+        .ledger
+        .begin(&ledger.issuance, DEADLINE)
+        .await
+        .unwrap();
+    let references = {
+        let allocation = transaction.allocate(&fields, CredentialMembers::Unbound { count: 1 });
+        tokio::pin!(allocation);
+        until_session_waits_on_lock(&inspector().await, &application_name, &mut allocation).await;
+        held.rollback().await.unwrap();
+        tokio::time::timeout(Duration::from_secs(5), allocation.as_mut())
+            .await
+            .expect("rotation finishes after its lock is released")
+            .expect("the rotation transaction installed both server backstops")
+    };
+    assert_eq!(references.len(), 1);
+    transaction.commit().await.unwrap();
 }
 
 #[tokio::test]
