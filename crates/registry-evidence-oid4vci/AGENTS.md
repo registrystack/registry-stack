@@ -38,6 +38,9 @@ adapter.
   Backing Evidence bundle changes require the profile's coordinated stop,
   discard, update, and restart cutover so cached catalog generations do not
   silently disagree. Do not add persistence or replicas as a local refactor.
+  The shared PostgreSQL store in `src/storage/postgres.rs` is for a future
+  profile and is not selectable; selecting it needs that reviewed profile
+  change and an update to these rules.
 - Metrics are absent unless configured on a separate private listener with
   only `GET /metrics`. Preserve the closed label vocabulary and value-free
   diagnostics; codes, tokens, nonces, proofs, selectors, keys, credentials, and

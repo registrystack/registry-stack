@@ -16,6 +16,9 @@ path = "src/main.rs"
 workspace = true
 
 [features]
+# Enables the status ledger PostgreSQL suites. They require
+# `EVIDENCE_STATUS_TEST_DATABASE_URL` and fail when it is absent.
+postgres-test = []
 # Generates the code list JSON Schema from the reader types; see
 # `examples/codelist-schema.rs`.
 schema = ["registry-platform-yaml/schema"]
@@ -28,6 +31,7 @@ bytes.workspace = true
 chrono = { workspace = true, features = ["serde"] }
 chrono-tz.workspace = true
 clap.workspace = true
+deadpool-postgres.workspace = true
 ed25519-dalek.workspace = true
 fs2.workspace = true
 http.workspace = true
@@ -62,6 +66,7 @@ sha2.workspace = true
 thiserror.workspace = true
 time.workspace = true
 tokio.workspace = true
+tokio-postgres.workspace = true
 tower.workspace = true
 tower-http.workspace = true
 tracing.workspace = true
@@ -69,18 +74,35 @@ tracing-subscriber.workspace = true
 ulid.workspace = true
 url.workspace = true
 utoipa.workspace = true
+uuid.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
 assert-json-diff.workspace = true
 axum-test.workspace = true
 criterion.workspace = true
+proptest.workspace = true
 rcgen.workspace = true
 registry-evidence-authoring.workspace = true
 serde_norway.workspace = true
 tempfile.workspace = true
 tokio-rustls.workspace = true
 wiremock.workspace = true
+
+[[test]]
+name = "status_ledger"
+path = "tests/status_ledger.rs"
+required-features = ["postgres-test"]
+
+[[test]]
+name = "status_transitions"
+path = "tests/status_transitions.rs"
+required-features = ["postgres-test"]
+
+[[test]]
+name = "status_privacy"
+path = "tests/status_privacy.rs"
+required-features = ["postgres-test"]
 
 [[bench]]
 name = "audit_bench"

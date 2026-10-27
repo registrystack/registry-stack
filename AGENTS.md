@@ -204,7 +204,16 @@ tracked product material; do not call the product implemented on a subset of
 that DoD, and stop before the approved concept's non-goals and future
 profiles. `registry-evidence-oid4vci` delivers Evidence credentials to a
 wallet over OID4VCI 1.0 Final; it never signs, never holds a holder private
-key, and no Evidence crate depends on it at runtime.
+key, and no Evidence crate depends on it at runtime. The optional credential
+status module inside `registry-evidence` (`products/evidence/CONCEPT.md`
+section 15.9, approved; its ledger is library code the served runtime does not
+call yet) follows these rules: it is the only
+writer of its PostgreSQL ledger; allocation happens inside the signing
+transaction; nothing outside Evidence reads the ledger; hook intake and the
+operator endpoints are the only mutation surface; with status disabled there is
+no PostgreSQL requirement; it never decides eligibility; it stores no raw
+selector value or record identifier; and intake is source-neutral, verified
+through `registry-platform-hooks`.
 
 **Registry Casework** (`registry-casework`, `registry-casework-core`,
 `registry-casework-breg`, `registry-caseworkctl`, its clients) coordinates
@@ -300,7 +309,7 @@ Each owning guide lists its own gates. The entry points:
 | Area | Start with | Full list |
 |---|---|---|
 | BReg | `products/breg/scripts/check-contracts.sh`, `products/breg/scripts/test-postgres.sh` | `products/breg/AGENTS.md` |
-| Evidence | `products/evidence/scripts/check-contracts.sh`, `check-source-neutrality.sh`, `check-verifier-portability.sh`, `check-config-key-paths.sh`, `check-authoring-schema.sh`, `check-authoring-no-io.sh` | `products/evidence/AGENTS.md` |
+| Evidence | `products/evidence/scripts/check-contracts.sh`, `check-source-neutrality.sh`, `check-verifier-portability.sh`, `check-config-key-paths.sh`, `check-authoring-schema.sh`, `check-authoring-no-io.sh`, the status ledger and OID4VCI store PostgreSQL suites | `products/evidence/AGENTS.md` |
 | Casework | `products/casework/scripts/check-checkpoint.sh`, then `products/casework/README.md` for PostgreSQL | `products/casework/AGENTS.md` |
 | Scheduling | `products/scheduling/scripts/check-checkpoint.sh`, `check-contracts.sh`, the `postgres_commitments` suite | `products/scheduling/AGENTS.md`, `products/scheduling/README.md` |
 | Messaging | `products/messaging/scripts/check-checkpoint.sh`, `check-contracts.sh`, the `postgres_migrate` suite | `products/messaging/AGENTS.md`, `CONTRIBUTING.md` |

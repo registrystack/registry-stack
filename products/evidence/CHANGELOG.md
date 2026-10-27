@@ -36,6 +36,14 @@
   cannot be written.
 - `evidencectl dev` retains redacted one-shot issuer setup logs in its private
   log directory and includes that directory in failed-start guidance.
+- First library building blocks of the approved credential status profile
+  (`CONCEPT.md` section 15.9): `registry-evidence-verifier` adds a
+  `status_list` module with the Token Status List codec and a pure
+  `check_status`; `registry-evidence` adds the status ledger module; and the
+  OID4VCI adapter serves exchanges through a store interface that gains a
+  PostgreSQL backend. The served runtime does not call the first two, no
+  configuration selects the PostgreSQL store, and no credential carries
+  `status` yet.
 
 ## 0.43.0 - 2026-10-21
 

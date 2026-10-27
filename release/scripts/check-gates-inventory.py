@@ -220,6 +220,28 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
         "Evidence verifier portability",
         "run: products/evidence/scripts/check-verifier-portability.sh",
     ),
+    (
+        "Evidence PostgreSQL path filter",
+        "evidence_postgres: ${{ steps.filter.outputs.evidence_postgres }}",
+    ),
+    (
+        "Evidence PostgreSQL gate",
+        "evidence-postgres:\n    name: Evidence PostgreSQL status ledger and store",
+    ),
+    (
+        "Evidence PostgreSQL 17 image pin",
+        "image: docker.io/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675\n"
+        "        env:\n"
+        "          POSTGRES_DB: evidence",
+    ),
+    (
+        "Evidence credential status ledger PostgreSQL suites",
+        "cargo test --locked -p registry-evidence --features postgres-test --test status_ledger --test status_transitions --test status_privacy",
+    ),
+    (
+        "Evidence OID4VCI store PostgreSQL suite",
+        "cargo test --locked -p registry-evidence-oid4vci --features postgres-test --test store_contract",
+    ),
     ("Base Registry Engine product contract gate", "breg-contracts:"),
     ("Base Registry Engine WASM executor gate", "breg-wasm:"),
     (

@@ -72,6 +72,7 @@ jobs:
       scheduling_postgres: ${{ steps.filter.outputs.scheduling_postgres }}
       evidence_contracts: ${{ steps.filter.outputs.evidence_contracts }}
       evidence_assurance: ${{ steps.filter.outputs.evidence_assurance }}
+      evidence_postgres: ${{ steps.filter.outputs.evidence_postgres }}
       scheduling_contracts: ${{ steps.filter.outputs.scheduling_contracts }}
       messaging_contracts: ${{ steps.filter.outputs.messaging_contracts }}
       messaging_postgres: ${{ steps.filter.outputs.messaging_postgres }}
@@ -722,6 +723,48 @@ jobs:
 
       - name: Enforce Evidence configuration reference parity
         run: uv run --no-project --with PyYAML==6.0.2 products/evidence/scripts/check-config-key-paths.sh
+
+  evidence-postgres:
+    name: Evidence PostgreSQL status ledger and store
+    needs: [changes, rust-policy]
+    if: ${{ !cancelled() && needs.changes.result == 'success' && needs.changes.outputs.evidence_postgres == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: docker.io/library/postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675
+        env:
+          POSTGRES_DB: evidence
+          POSTGRES_USER: evidence
+          POSTGRES_PASSWORD: evidence_test
+        options: >-
+          --health-cmd "pg_isready -U evidence -d evidence"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432/tcp
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          submodules: false
+      - name: Rust cache
+        uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
+        with:
+          shared-key: workspace-registry
+          cache-targets: false
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Verify the credential status ledger against PostgreSQL
+        env:
+          EVIDENCE_STATUS_TEST_DATABASE_URL: postgresql://evidence:evidence_test@localhost:${{ job.services.postgres.ports['5432'] }}/evidence
+        run: cargo test --locked -p registry-evidence --features postgres-test --test status_ledger --test status_transitions --test status_privacy
+      - name: Verify the OID4VCI store contract on both backends
+        env:
+          EVIDENCE_OID4VCI_TEST_DATABASE_URL: postgresql://evidence:evidence_test@localhost:${{ job.services.postgres.ports['5432'] }}/evidence
+        run: cargo test --locked -p registry-evidence-oid4vci --features postgres-test --test store_contract
 
   discovery-contracts:
     name: Registry Discovery product contracts
@@ -1819,6 +1862,7 @@ jobs:
       - rust-tests
       - discovery-contracts
       - evidence-contracts
+      - evidence-postgres
       - breg-contracts
       - breg-postgres-18
       - breg-wasm
@@ -3228,6 +3272,7 @@ jobs:
       - rust-tests
       - discovery-contracts
       - evidence-contracts
+      - evidence-postgres
       - evidence-fuzz
       - breg-contracts
       - breg-postgres-18
