@@ -1997,6 +1997,7 @@
                 "schemas",
                 "actions",
                 "manifest",
+                "odrl",
                 "metadata",
                 "sql",
                 "evidence-source",
@@ -2035,7 +2036,7 @@
             },
             {
               "display": "--access-profile <ACCESS_PROFILE>",
-              "description": "Existing registry lookup access profile (evidence-source only)",
+              "description": "Access profile: required for evidence-source; optional exact selection for odrl",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -2103,7 +2104,7 @@
             },
             {
               "display": "-h, --help",
-              "description": "Print help",
+              "description": "Print help (see a summary with '-h')",
               "always_required": false,
               "repeatable": false,
               "default_values": [],

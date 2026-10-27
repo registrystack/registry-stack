@@ -412,6 +412,7 @@ mod tests {
                     "schemas",
                     "actions",
                     "manifest",
+                    "odrl",
                     "metadata",
                     "sql",
                     "evidence-source",

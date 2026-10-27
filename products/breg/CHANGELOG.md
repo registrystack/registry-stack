@@ -18,6 +18,12 @@
   with the current tooling. The successor installs the shared engine store;
   there is no separate timer schema command.
 
+- Add `bregctl generate odrl` for an experimental, partial ODRL description of
+  configured `get` and `list` permissions. Preserve token requirements and field
+  projections; omit permissions with unsupported row, membership, consent or
+  task-grant restrictions and report coverage. The output is for operator review
+  and does not change runtime authorization or public Manifest publication.
+
 ## 0.44.0 - 2026-10-27
 
 - Add an optional `eventRecord` descriptor to record types: subjects, occurred

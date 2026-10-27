@@ -124,6 +124,7 @@ pub mod migration_reconcile;
 pub mod model;
 #[cfg(feature = "runtime")]
 pub mod mutation;
+pub mod odrl_export;
 #[cfg(feature = "runtime")]
 pub mod outbox;
 #[cfg(feature = "runtime")]
