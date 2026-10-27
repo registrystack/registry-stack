@@ -1,6 +1,7 @@
 """Run the local simulator and control synthetic outcomes without an admin API."""
 
 import argparse
+import ipaddress
 import json
 import re
 import sqlite3
@@ -21,6 +22,11 @@ def parser():
     serve.add_argument("--token-file", type=Path, required=True)
     serve.add_argument("--host", default="127.0.0.1")
     serve.add_argument("--port", type=int, default=8008)
+    serve.add_argument(
+        "--allow-network",
+        action="store_true",
+        help="listen on a non-loopback --host (the simulator is a synthetic test double)",
+    )
     serve.add_argument("--manual", action="store_true", help="advance only through the local CLI")
     serve.add_argument("--producer", default="registry")
     serve.add_argument("--source-id", default="registry")
@@ -70,7 +76,21 @@ def parser():
     return root
 
 
+def is_loopback(host):
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
 def serve_settings(args):
+    if not args.allow_network and not is_loopback(args.host):
+        raise ValueError(
+            "refusing to listen on a non-loopback --host; the payment simulator is a "
+            "synthetic test double, pass --allow-network only if you accept that"
+        )
     defaults = Settings()
     currencies = {}
     for currency in args.currency or ["USD:2"]:

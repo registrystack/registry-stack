@@ -238,6 +238,13 @@ def create_app(settings=None, store=None):
         redirect_slashes=False,
         lifespan=lifespan,
     )
+
+    @app.middleware("http")
+    async def mark_synthetic(request, call_next):
+        response = await call_next(request)
+        response.headers["X-Payment-Simulator"] = "synthetic"
+        return response
+
     problems = {
         status: {
             "model": Problem,
