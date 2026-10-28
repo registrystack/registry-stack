@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
+use chrono::Timelike as _;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn technical_block_can_be_rescheduled_atomically() {
@@ -682,7 +683,10 @@ async fn technical_exhaustion_survives_invalid_and_corrected_successors() {
         0xba,
     )
     .await;
-    let due_at = Utc::now() - chrono::Duration::seconds(1);
+    // Force sub-microsecond input so the assertion exercises PostgreSQL timestamp precision.
+    let due_at = (Utc::now() - chrono::Duration::seconds(1))
+        .with_nanosecond(986_916_444)
+        .expect("the fixed fractional second is valid");
     let created = create_outcome_service(
         &harness,
         "technical-block-successor-anchor",
@@ -694,6 +698,10 @@ async fn technical_exhaustion_survives_invalid_and_corrected_successors() {
     .await;
     let record_id = response_id(&created);
     let occurrence_id = timer_occurrence(&harness.database, &record_id).await;
+    let (persisted_due_at, initial_not_after) =
+        timer_window_snapshot(&harness.database, occurrence_id).await;
+    assert!(initial_not_after.is_none());
+    let persisted_source_not_after = Some(persisted_due_at - chrono::Duration::minutes(1));
     let faulting = harness
         .worker(Duration::from_secs(2))
         .with_fault_for_test(MutationFaultPoint::BeforeCommit);
@@ -743,8 +751,8 @@ async fn technical_exhaustion_survives_invalid_and_corrected_successors() {
         &record_id,
         occurrence_id,
         &invalid_identity.activation_id,
-        due_at,
-        Some(due_at - chrono::Duration::minutes(1)),
+        persisted_due_at,
+        persisted_source_not_after,
     )
     .await;
 
@@ -770,7 +778,7 @@ async fn technical_exhaustion_survives_invalid_and_corrected_successors() {
         &record_id,
         occurrence_id,
         &corrected_activation_id,
-        due_at,
+        persisted_due_at,
         None,
     )
     .await;
@@ -823,6 +831,23 @@ async fn current_timer_snapshot(database: &TestDatabase, record_id: &str) -> Cur
         executed_attempt_count: row.get(4),
         retry_allowance: row.get(5),
     }
+}
+
+async fn timer_window_snapshot(
+    database: &TestDatabase,
+    occurrence_id: uuid::Uuid,
+) -> (chrono::DateTime<Utc>, Option<chrono::DateTime<Utc>>) {
+    let row = database
+        .admin
+        .query_one(
+            "SELECT due_at,not_after
+               FROM registry_internal.registry_record_timer_generations
+              WHERE occurrence_id=$1",
+            &[&occurrence_id],
+        )
+        .await
+        .expect("the baseline persisted timer window is queryable");
+    (row.get(0), row.get(1))
 }
 
 async fn assert_technical_exhaustion_preserved(

@@ -3048,7 +3048,7 @@ impl NativeTimerHarness {
     pub async fn fixture_only_seed_timer_metrics(
         &self,
         include_truncation_sentinel: bool,
-    ) -> Result<(), String> {
+    ) -> Result<chrono::DateTime<Utc>, String> {
         self.database()
             .admin
             .batch_execute(
@@ -3167,6 +3167,31 @@ impl NativeTimerHarness {
             .await
             .map_err(|_| "timer metrics fixture could not insert its operational sample".to_owned())?;
 
+        let oldest_due_at = self
+            .database()
+            .admin
+            .query_one(
+                "SELECT generation.due_at
+                   FROM registry_internal.registry_record_timer_generations AS generation
+                   JOIN registry_internal.registry_record_timer_current AS current
+                     ON current.occurrence_id=generation.occurrence_id
+                    AND current.record_type=generation.record_type
+                    AND current.record_id=generation.record_id
+                    AND current.timer_id=generation.timer_id
+                    AND current.binding_incarnation=generation.binding_incarnation
+                    AND current.material_signature=generation.material_signature
+                  WHERE generation.record_type='service'
+                    AND generation.timer_id='activate'
+                    AND generation.state='leased'
+                    AND generation.executed_attempt_count=1",
+                &[],
+            )
+            .await
+            .map_err(|_| {
+                "timer metrics fixture could not read its known oldest due row".to_owned()
+            })?
+            .get(0);
+
         if include_truncation_sentinel {
             self.database()
                 .admin
@@ -3208,7 +3233,7 @@ impl NativeTimerHarness {
                     "timer metrics fixture could not insert its truncation sentinel".to_owned()
                 })?;
         }
-        Ok(())
+        Ok(oldest_due_at)
     }
 
     /// Populate older terminal markers before saturated pending and technical
