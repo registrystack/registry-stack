@@ -1,0 +1,8 @@
+[project]
+name = "reviewed-evidence-journey"
+version = "0.1.0"
+requires-python = ">=3.13"
+dependencies = ["PyYAML==6.0.2"]
+
+[tool.ruff]
+line-length = 110

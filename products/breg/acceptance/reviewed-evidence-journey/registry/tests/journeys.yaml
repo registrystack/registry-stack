@@ -1,0 +1,86 @@
+apiVersion: id.registrystack.org/formats/breg/journeys/v1
+kind: BRegJourneys
+# Journeys rehearse the native request schema, so every field appears under the
+# identifier registry.yaml declares. `registration-number` also declares
+# `apiName: registrationNumber`, the property name the HTTP API uses and the one
+# the live runner's seed record carries.
+journeys:
+- id: source-lookup-boundary
+  steps:
+  - id: operator-creates-record
+    recordType: record
+    accessProfile: operator
+    claims:
+      principal: generic-registry-operator
+      purpose: registry-operations
+      scopes:
+      - registry:generic:operate
+    request:
+      type: create
+      data:
+        code: SYNTHETIC-JOURNEY
+        registration-number: SYNTHETIC-JOURNEY-REG
+        status: active
+        label: SYNTHETIC-PRIVATE-LABEL
+    expect:
+      outcome: success
+      status: 201
+      fields:
+        code: SYNTHETIC-JOURNEY
+        status: active
+    capture: record
+  - id: source-looks-up-by-code
+    recordType: record
+    accessProfile: evidence-source
+    claims:
+      principal: evidence-source
+      purpose: evidence-source-read
+      scopes:
+      - registry:evidence:lookup
+    request:
+      type: lookup
+      selector: by-code
+      values:
+        code: SYNTHETIC-JOURNEY
+    expect:
+      outcome: success
+      status: 200
+      fields:
+        code: SYNTHETIC-JOURNEY
+        status: active
+  - id: source-looks-up-by-registration-number
+    recordType: record
+    accessProfile: evidence-source
+    claims:
+      principal: evidence-source
+      purpose: evidence-source-read
+      scopes:
+      - registry:evidence:lookup
+    request:
+      type: lookup
+      selector: by-registration-number
+      values:
+        registration-number: SYNTHETIC-JOURNEY-REG
+    expect:
+      outcome: success
+      status: 200
+      fields:
+        registration-number: SYNTHETIC-JOURNEY-REG
+        status: active
+  - id: source-unresolved-is-not-a-negative-status
+    recordType: record
+    accessProfile: evidence-source
+    claims:
+      principal: evidence-source
+      purpose: evidence-source-read
+      scopes:
+      - registry:evidence:lookup
+    request:
+      type: lookup
+      selector: by-code
+      values:
+        code: SYNTHETIC-NOT-REGISTERED
+    expect:
+      outcome: refusal
+      status: 404
+      problemCode: lookup.unresolved

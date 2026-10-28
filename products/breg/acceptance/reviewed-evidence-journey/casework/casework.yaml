@@ -1,0 +1,84 @@
+apiVersion: id.registrystack.org/formats/casework/project/v1alpha1
+kind: CaseworkProject
+project:
+  id: reviewed-evidence
+  version: '1'
+accessProfiles:
+  staff:
+    principalClaim: sub
+    requiredScopes:
+    - casework:staff
+    role: staff
+  administrator:
+    principalClaim: sub
+    requiredScopes:
+    - casework:admin
+    role: administrator
+  requester:
+    principalClaim: sub
+    requiredScopes:
+    - casework:request
+    role: requester
+  supervisor:
+    principalClaim: sub
+    requiredScopes:
+    - casework:supervisor
+    role: supervisor
+queues:
+  reviews:
+    label: Synthetic status corrections
+contextProviders:
+  registry:
+    capabilities:
+    - human-display
+    - service-status
+    sourceNamespace: registry
+    deploymentRef: registry
+    serviceProfiles:
+      service-status: review-status
+reviewPolicies:
+  status-review:
+    version: '1'
+    purpose: approval
+    context:
+      mode: current-source
+      provider: registry
+      contract:
+        id: urn:registry:breg:review-context:registry:correct-status:status-context
+        revision: sha256:b63634d7ff822c9787ce7d944811221f10f315d0a812eec1f6279a16c0c3ec11
+        schemaDigest: sha256:4a6615fc6c5c4f6bd8f2a212c8228fb8dee2120f80aad7b59f6cda9d0ff3656c
+    stages:
+    - id: review
+      queue: reviews
+      decidingProfiles:
+      - staff
+      requiredApprovals: 1
+      excludeInitiator: true
+    retention:
+      terminalRetentionDays: 30
+      accountabilityRetentionDays: 90
+    displaySchema:
+      $ref: schemas/status.schema.json
+    outcomes:
+      approved:
+        label: Approve correction
+        settlement: approved
+        reasonRequired: false
+        publicReason: optional
+      rejected:
+        label: Return correction
+        settlement: rejected
+        reasonRequired: true
+        publicReason: required
+trustedProducers:
+  registry:
+    profile: requester
+    issuer: https://issuer.example.test
+    subject: producer
+    trustedInitiatorIssuer: https://issuer.example.test
+    sourceNamespaces:
+    - registry
+    reviewPolicies:
+    - status-review
+    retention:
+      receiptRetentionDays: 7

@@ -24,7 +24,8 @@ optional authenticated dependency; its absence disables dependent operations.
 The broader projects in `acceptance/` cover business and establishment records,
 facilities, inspections, asset placements, spatial service sites, historical
 queries, Registry Record envelopes, Rhai registration, conditional Evidence,
-and issuer portability. The narrower `fixtures/` projects isolate compiler,
+a Casework-reviewed source correction observed through Evidence, and issuer
+portability. The narrower `fixtures/` projects isolate compiler,
 permission, Action, and query behavior. Consult the owning test and
 `contracts/security-test-traceability.yaml` for the exact enforcement claim.
 
