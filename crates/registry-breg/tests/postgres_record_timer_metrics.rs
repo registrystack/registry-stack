@@ -72,7 +72,9 @@ async fn bounded_current_metrics(harness: &mut NativeTimerHarness) -> Result<(),
     harness
         .fixture_only_set_timer_control("paused", 1, 0)
         .await?;
-    harness.fixture_only_seed_timer_metrics(true).await?;
+    let oldest_due_at = harness.fixture_only_seed_timer_metrics(true).await?;
+    // Separate fixture setup from the scrape interval to exercise persisted due-time currentness.
+    tokio::time::sleep(Duration::from_secs(6)).await;
 
     let before = harness.database_now().await?;
     let body = harness.scrape_metrics(0).await?;
@@ -101,13 +103,18 @@ async fn bounded_current_metrics(harness: &mut NativeTimerHarness) -> Result<(),
     )?;
 
     let lag = metric_value(&body, "breg_record_timer_oldest_due_lag_seconds")?;
-    let elapsed = (after - before)
+    let minimum_lag = (before - oldest_due_at)
+        .to_std()
+        .map_err(|_| "known oldest timer was not due before the metrics scrape".to_owned())?
+        .as_secs_f64();
+    let maximum_lag = (after - oldest_due_at)
         .to_std()
         .map_err(|_| "database clock moved backward during live metrics scrape".to_owned())?
         .as_secs_f64();
-    if !(16.0..=21.0 + elapsed).contains(&lag) {
+    if !(minimum_lag..=maximum_lag).contains(&lag) {
         return Err(format!(
-            "timer due lag did not follow the live PostgreSQL clock: lag={lag}, elapsed={elapsed}"
+            "timer due lag did not follow the live PostgreSQL clock and persisted fixture: \
+             lag={lag}, expected={minimum_lag}..={maximum_lag}"
         ));
     }
     let help = "observed current live lease owners, not a census of running replicas";
