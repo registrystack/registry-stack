@@ -1676,6 +1676,7 @@ async fn removed_binding_projection(harness: &mut NativeTimerHarness) -> Result<
         .await
         .map_err(|error| format!("timer operator service construction failed: {error}"))?;
 
+    harness.crash_all_replicas()?;
     harness
         .fixture_only_block_timer_and_remove_binding(&record_id)
         .await?;
