@@ -2531,6 +2531,11 @@ impl DispatchStore for Store {
             || audit.record.cancel_requested && !uncertain
         {
             "cancelled"
+        } else if matches!(
+            audit.transition,
+            Transition::LeaseLapsed(Disposition::RetryPending)
+        ) {
+            "running"
         } else if !uncertain && matches!(audit.transition, Transition::Expired { .. }) {
             "expired"
         } else {

@@ -858,9 +858,11 @@ async fn human_identity_is_the_principal_claim_and_a_human_token_without_it_is_r
     let registry = compiled();
     let idp = MockIdp::start().await;
     let audience = "urn:example:breg";
+    let mut verifier = oidc_verifier_config(idp.issuer(), vec![audience.to_owned()]);
+    verifier.allowed_clients = vec!["agent-client".to_owned()];
     let auth = RegistryAuthenticator::new(
         &registry,
-        oidc_verifier_config(idp.issuer(), vec![audience.to_owned()]),
+        verifier,
         Arc::new(JwksFetcher::new_with_fetch_url_policy(
             idp.jwks_uri(),
             JwksFetcherConfig::defaults(),
@@ -871,6 +873,7 @@ async fn human_identity_is_the_principal_claim_and_a_human_token_without_it_is_r
     .expect("human verifier config is valid");
     let claims = json!({
         "aud": audience,
+        "azp": "agent-client",
         "registry_principal": "reviewer-principal",
         "registry_actor_kind": "human",
         "registry_purpose": "case-management",

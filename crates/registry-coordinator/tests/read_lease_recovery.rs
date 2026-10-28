@@ -388,6 +388,9 @@ async fn lapsed_read_retries_and_fences_the_old_attempt() {
     let worker = Worker::new(harness.store.clone(), replacement.clone());
     worker.tick().await.expect("recover lapsed read");
     assert_eq!(harness.job(run, "read").await.0, "pending");
+    let retrying = harness.store.status(run).await.expect("retrying status");
+    assert_eq!(retrying.state, "running");
+    assert!(retrying.next_due_at.is_some());
     harness.assert_lapse_audit();
 
     harness.make_retry_due(run).await;

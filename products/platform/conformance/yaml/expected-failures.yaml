@@ -55,6 +55,8 @@ unreachedFormats:
   reason: syntax json; the corpus mutates YAML text
 - format: messaging/dev-state
   reason: syntax json; the corpus mutates YAML text
+- format: messaging/template-contracts
+  reason: syntax json; the corpus mutates YAML text
 - format: platform/thunderid-session
   reason: syntax json; the corpus mutates YAML text
 inapplicableCases: []
