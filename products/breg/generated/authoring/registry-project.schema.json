@@ -2386,6 +2386,12 @@
         "temporal": {
           "$ref": "#/$defs/TemporalSource"
         },
+        "timers": {
+          "items": {
+            "$ref": "#/$defs/TimerSource"
+          },
+          "type": "array"
+        },
         "tombstone": {
           "default": false,
           "type": "boolean"
@@ -5240,6 +5246,113 @@
       ],
       "type": "object"
     },
+    "TimerGrantSource": {
+      "additionalProperties": false,
+      "description": "Root-owned autonomous authority for one exact Record timer.",
+      "properties": {
+        "recordType": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "timer": {
+          "$ref": "#/$defs/LocalId"
+        }
+      },
+      "required": [
+        "recordType",
+        "timer"
+      ],
+      "type": "object"
+    },
+    "TimerInputSource": {
+      "additionalProperties": false,
+      "description": "One complete mapping into one ordinary Action input. Exactly one member is\nselected by compilation; the flat shape preserves authored source positions.",
+      "properties": {
+        "fromField": {
+          "type": "string"
+        },
+        "fromRecordId": {
+          "const": true,
+          "type": "boolean"
+        },
+        "fromTimer": {
+          "$ref": "#/$defs/TimerValueSource"
+        },
+        "value": true
+      },
+      "type": "object"
+    },
+    "TimerPredicateSource": {
+      "additionalProperties": false,
+      "description": "A bounded conjunction of equality checks over current stored fields.",
+      "properties": {
+        "equals": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ScalarLiteral"
+          },
+          "propertyNames": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "type": "object"
+        },
+        "type": {
+          "const": "fields",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "equals"
+      ],
+      "type": "object"
+    },
+    "TimerSource": {
+      "additionalProperties": false,
+      "description": "One timer attached to a governed Record type.",
+      "properties": {
+        "at": {
+          "type": "string"
+        },
+        "id": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "input": {
+          "additionalProperties": {
+            "$ref": "#/$defs/TimerInputSource"
+          },
+          "propertyNames": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "type": "object"
+        },
+        "invoke": {
+          "type": "string"
+        },
+        "notAfter": {
+          "type": "string"
+        },
+        "rearmOn": {
+          "type": "string"
+        },
+        "when": {
+          "$ref": "#/$defs/TimerPredicateSource"
+        }
+      },
+      "required": [
+        "id",
+        "at",
+        "invoke",
+        "input"
+      ],
+      "type": "object"
+    },
+    "TimerValueSource": {
+      "description": "Runtime-owned timer facts that may be mapped into Action inputs.",
+      "enum": [
+        "occurrence-id",
+        "due-at"
+      ],
+      "type": "string"
+    },
     "TimestampFieldSourceSchema": {
       "additionalProperties": false,
       "properties": {
@@ -5553,6 +5666,13 @@
       "description": "Declared count tables computed from governed Registry records.",
       "items": {
         "$ref": "#/$defs/StatisticalDatasetSource"
+      },
+      "type": "array"
+    },
+    "timerGrants": {
+      "description": "Root-owned enablement of autonomous Record timers. Modules may declare\ntimers, but cannot contribute this authority.",
+      "items": {
+        "$ref": "#/$defs/TimerGrantSource"
       },
       "type": "array"
     },

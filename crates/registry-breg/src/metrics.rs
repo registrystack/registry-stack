@@ -19,13 +19,14 @@
 //!
 //! The worker and queue gauges carry one fixed label each, from
 //! [`ProgressWorker`] and [`PendingQueue`]. A worker's age is read from the
-//! handle its loop notes successes on. The queue ages are read from the
-//! database once per scrape, through at most one pool connection in a
-//! read-only transaction under a short statement timeout; when that read
-//! fails the scrape publishes no queue age and emits a closed operational
-//! event. The package info series carries the single `sha256:` digest of the
-//! package this process verified at startup, so it adds one series per
-//! process.
+//! handle its loop notes successes on. Queue ages and Record-timer state are
+//! read independently on each scrape, through at most one pool connection at
+//! a time and separate read-only transactions under short statement
+//! timeouts. A failed sample is omitted rather than rendered as an empty
+//! queue, and emits a closed operational event without erasing an independent
+//! successful sample. The package info series carries the single `sha256:`
+//! digest of the package this process verified at startup, so it adds one
+//! series per process.
 
 use std::{
     collections::BTreeMap,
@@ -56,6 +57,34 @@ const QUEUE_SAMPLE_STATEMENT_TIMEOUT: &str = "5s";
 pub(crate) struct QueueSample {
     ages: Vec<(PendingQueue, f64)>,
     blocked_application_jobs: i64,
+    timer: Option<TimerSample>,
+}
+
+const TIMER_STATUS_SCAN_MAXIMUM: i64 = 10_000;
+const TIMER_STATUS_SCAN_SENTINEL: i64 = TIMER_STATUS_SCAN_MAXIMUM + 1;
+const TIMER_STATES: [&str; 8] = [
+    "pending",
+    "leased",
+    "completed",
+    "refused",
+    "blocked",
+    "cancelled",
+    "superseded",
+    "missed",
+];
+const TIMER_BLOCK_KINDS: [&str; 2] = ["technical", "configuration"];
+
+struct TimerSample {
+    observed_live_lease_owners: i64,
+    oldest_due_lag_seconds: Option<f64>,
+    occurrence_counts: [i64; 8],
+    block_counts: [i64; 2],
+    current_executed_attempts: i64,
+    retained_attempts: i64,
+    stale_current_occurrences: i64,
+    control_state: &'static str,
+    control_compatible: bool,
+    counts_truncated: bool,
 }
 
 /// Upper bounds, in seconds, of the request duration histogram.
@@ -76,9 +105,9 @@ pub struct Metrics {
     /// The background workers this process runs, each with the handle its
     /// loop notes a completed iteration on.
     workers: Vec<(ProgressWorker, Arc<LastSuccess>)>,
-    /// Held while one scrape samples the queue ages, so concurrent scrapes
-    /// wait for each other and the metrics listener never holds more than
-    /// one pool connection.
+    /// Held while one scrape samples operational state, so concurrent scrapes
+    /// wait for each other and the metrics listener never holds more than one
+    /// pool connection at a time.
     queue_sample: tokio::sync::Mutex<()>,
     /// The digest of the package this process verified at startup, published
     /// as `breg_active_package_info`.
@@ -92,14 +121,16 @@ pub struct Metrics {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, PartialOrd, Ord)]
 pub enum ProgressWorker {
     Hook,
+    RecordTimer,
     AttachmentVerification,
     Review,
     SubjectAccessLogRetention,
 }
 
 impl ProgressWorker {
-    pub const ALL: [Self; 4] = [
+    pub const ALL: [Self; 5] = [
         Self::Hook,
+        Self::RecordTimer,
         Self::AttachmentVerification,
         Self::Review,
         Self::SubjectAccessLogRetention,
@@ -109,6 +140,7 @@ impl ProgressWorker {
     pub const fn label(self) -> &'static str {
         match self {
             Self::Hook => "hook",
+            Self::RecordTimer => "record-timer",
             Self::AttachmentVerification => "attachment-verification",
             Self::Review => "review",
             Self::SubjectAccessLogRetention => "subject-access-log-retention",
@@ -363,6 +395,85 @@ impl Metrics {
             ));
         }
         body.push_str(
+            "# HELP breg_record_timer_observed_live_lease_owners Distinct observed current live lease owners, not a census of running replicas.\n",
+        );
+        body.push_str("# TYPE breg_record_timer_observed_live_lease_owners gauge\n");
+        body.push_str(
+            "# HELP breg_record_timer_oldest_due_lag_seconds Seconds since the oldest sampled current due timer became due according to PostgreSQL; absent when none is due.\n",
+        );
+        body.push_str("# TYPE breg_record_timer_oldest_due_lag_seconds gauge\n");
+        body.push_str(
+            "# HELP breg_record_timer_current_occurrences Current timer occurrences in the bounded sample by closed state and block kind.\n",
+        );
+        body.push_str("# TYPE breg_record_timer_current_occurrences gauge\n");
+        body.push_str(
+            "# HELP breg_record_timer_current_executed_attempts Cumulative executed attempts recorded on the bounded current-occurrence sample; a gauge, not a monotonic retry counter.\n",
+        );
+        body.push_str("# TYPE breg_record_timer_current_executed_attempts gauge\n");
+        body.push_str(
+            "# HELP breg_record_timer_retained_attempts Retained value-free attempt details for the bounded current-occurrence sample.\n",
+        );
+        body.push_str("# TYPE breg_record_timer_retained_attempts gauge\n");
+        body.push_str(
+            "# HELP breg_record_timer_stale_current_occurrences Current unfinished occurrences whose cached policy revision differs from the open binding.\n",
+        );
+        body.push_str("# TYPE breg_record_timer_stale_current_occurrences gauge\n");
+        body.push_str(
+            "# HELP breg_record_timer_control_compatible Whether the durable timer protocol, bound instance epoch, and active package match this process.\n",
+        );
+        body.push_str("# TYPE breg_record_timer_control_compatible gauge\n");
+        body.push_str(
+            "# HELP breg_record_timer_counts_truncated Whether current occurrence, attempt, or lease-owner counts reached the bounded sample ceiling.\n",
+        );
+        body.push_str("# TYPE breg_record_timer_counts_truncated gauge\n");
+        if let Some(timer) = queue_sample.and_then(|sample| sample.timer.as_ref()) {
+            body.push_str(&format!(
+                "breg_record_timer_observed_live_lease_owners {}\n",
+                timer.observed_live_lease_owners
+            ));
+            if let Some(seconds) = timer.oldest_due_lag_seconds {
+                body.push_str(&format!(
+                    "breg_record_timer_oldest_due_lag_seconds {seconds}\n"
+                ));
+            }
+            for (state, count) in TIMER_STATES.into_iter().zip(timer.occurrence_counts) {
+                if state == "blocked" {
+                    for (block_kind, blocked) in
+                        TIMER_BLOCK_KINDS.into_iter().zip(timer.block_counts)
+                    {
+                        body.push_str(&format!(
+                            "breg_record_timer_current_occurrences{{state=\"{state}\",block_kind=\"{block_kind}\"}} {blocked}\n"
+                        ));
+                    }
+                } else {
+                    body.push_str(&format!(
+                        "breg_record_timer_current_occurrences{{state=\"{state}\",block_kind=\"none\"}} {count}\n"
+                    ));
+                }
+            }
+            body.push_str(&format!(
+                "breg_record_timer_current_executed_attempts {}\n",
+                timer.current_executed_attempts
+            ));
+            body.push_str(&format!(
+                "breg_record_timer_retained_attempts {}\n",
+                timer.retained_attempts
+            ));
+            body.push_str(&format!(
+                "breg_record_timer_stale_current_occurrences {}\n",
+                timer.stale_current_occurrences
+            ));
+            body.push_str(&format!(
+                "breg_record_timer_control_compatible{{state=\"{}\"}} {}\n",
+                timer.control_state,
+                u8::from(timer.control_compatible)
+            ));
+            body.push_str(&format!(
+                "breg_record_timer_counts_truncated {}\n",
+                u8::from(timer.counts_truncated)
+            ));
+        }
+        body.push_str(
             "# HELP breg_active_package_info The package this process verified at startup, by digest.\n",
         );
         body.push_str("# TYPE breg_active_package_info gauge\n");
@@ -383,7 +494,19 @@ impl Metrics {
         let pool = self.pool.as_ref()?;
         let _sampling = self.queue_sample.lock().await;
         match read_queues(pool).await {
-            Ok(ages) => Some(ages),
+            Ok(mut sample) => {
+                sample.timer =
+                    match read_timer_sample_from_pool(pool, self.active_package_digest.as_deref())
+                        .await
+                    {
+                        Ok(timer) => Some(timer),
+                        Err(()) => {
+                            crate::startup::OperationalEvent::MetricsTimerSampleFailed.emit();
+                            None
+                        }
+                    };
+                Some(sample)
+            }
             Err(()) => {
                 crate::startup::OperationalEvent::MetricsQueueSampleFailed.emit();
                 None
@@ -464,6 +587,285 @@ async fn read_queues(pool: &RuntimePool) -> Result<QueueSample, ()> {
     Ok(QueueSample {
         ages,
         blocked_application_jobs,
+        timer: None,
+    })
+}
+
+/// Read the timer sample independently from the existing queues. Each scrape
+/// holds at most one pool connection at a time: the queue transaction commits
+/// before this bounded five-second read-only transaction starts. A timer
+/// failure can therefore omit only timer series without erasing healthy queue
+/// observations; the total database statement budget per scrape is ten
+/// seconds, with no public configuration knob.
+async fn read_timer_sample_from_pool(
+    pool: &RuntimePool,
+    process_package_digest: Option<&str>,
+) -> Result<TimerSample, ()> {
+    let mut client = pool.get().await.map_err(|_| ())?;
+    let transaction = client
+        .build_transaction()
+        .read_only(true)
+        .start()
+        .await
+        .map_err(|_| ())?;
+    transaction
+        .execute(
+            "SELECT set_config('statement_timeout', $1, true)",
+            &[&QUEUE_SAMPLE_STATEMENT_TIMEOUT],
+        )
+        .await
+        .map_err(|_| ())?;
+    let sample = read_timer_sample(&*transaction, process_package_digest).await?;
+    transaction.commit().await.map_err(|_| ())?;
+    Ok(sample)
+}
+
+async fn read_timer_sample(
+    client: &impl tokio_postgres::GenericClient,
+    process_package_digest: Option<&str>,
+) -> Result<TimerSample, ()> {
+    let row = client
+        .query_one(
+            "WITH requested_state(value) AS (
+                 VALUES ('pending'),('leased'),('completed'),('refused'),
+                        ('blocked'),('cancelled'),('superseded'),('missed')
+             ), state_sample AS MATERIALIZED (
+                 SELECT requested.value,count(sample.present)::bigint AS sampled_count
+                   FROM requested_state AS requested
+                   LEFT JOIN LATERAL (
+                       SELECT 1 AS present
+                         FROM registry_internal.registry_record_timer_generations AS generation
+                         JOIN registry_internal.registry_record_timer_current AS current
+                           ON current.occurrence_id=generation.occurrence_id
+                          AND current.record_type=generation.record_type
+                          AND current.record_id=generation.record_id
+                          AND current.timer_id=generation.timer_id
+                          AND current.binding_incarnation=generation.binding_incarnation
+                          AND current.material_signature=generation.material_signature
+                        WHERE generation.state=requested.value
+                        LIMIT $1
+                   ) AS sample ON true
+                  GROUP BY requested.value
+             ), requested_block(value) AS (
+                 VALUES ('technical'),('configuration')
+             ), block_sample AS MATERIALIZED (
+                 SELECT requested.value,count(sample.present)::bigint AS sampled_count
+                   FROM requested_block AS requested
+                   LEFT JOIN LATERAL (
+                       SELECT 1 AS present
+                         FROM registry_internal.registry_record_timer_generations AS generation
+                         JOIN registry_internal.registry_record_timer_current AS current
+                           ON current.occurrence_id=generation.occurrence_id
+                          AND current.record_type=generation.record_type
+                          AND current.record_id=generation.record_id
+                          AND current.timer_id=generation.timer_id
+                          AND current.binding_incarnation=generation.binding_incarnation
+                          AND current.material_signature=generation.material_signature
+                        WHERE generation.state='blocked'
+                          AND generation.block_kind=requested.value
+                        LIMIT $1
+                   ) AS sample ON true
+                  GROUP BY requested.value
+             ), sampled AS MATERIALIZED (
+                 SELECT generation.occurrence_id,generation.state,generation.block_kind,
+                        generation.executed_attempt_count,
+                        generation.state IN ('pending','leased','blocked') AND (
+                            binding.definition_revision IS NULL
+                            OR binding.incarnation<>generation.binding_incarnation
+                            OR binding.definition_revision<>generation.definition_revision
+                            OR binding.action_revision<>generation.action_revision
+                            OR binding.system_grant_revision<>generation.system_grant_revision
+                        ) AS stale_revision
+                   FROM registry_internal.registry_record_timer_current AS current
+                   JOIN registry_internal.registry_record_timer_generations AS generation
+                     ON generation.occurrence_id=current.occurrence_id
+                    AND generation.record_type=current.record_type
+                    AND generation.record_id=current.record_id
+                    AND generation.timer_id=current.timer_id
+                    AND generation.binding_incarnation=current.binding_incarnation
+                    AND generation.material_signature=current.material_signature
+                   LEFT JOIN registry_internal.registry_record_timer_bindings AS binding
+                     ON binding.record_type=generation.record_type
+                    AND binding.timer_id=generation.timer_id
+                    AND binding.removed_activation_id IS NULL
+                  ORDER BY generation.created_at ASC,generation.occurrence_id ASC
+                  LIMIT $1
+             ), bounded AS MATERIALIZED (
+                 SELECT * FROM sampled LIMIT $2
+             ), retained_attempts AS MATERIALIZED (
+                 SELECT attempt.occurrence_id
+                   FROM registry_internal.registry_record_timer_attempts AS attempt
+                   JOIN bounded USING (occurrence_id)
+                  ORDER BY attempt.occurrence_id,attempt.attempt_number
+                  LIMIT $1
+             ), status_aggregate AS (
+                 SELECT
+                     (SELECT count(*)::bigint FROM sampled) AS sampled_count,
+                     count(*) FILTER (WHERE state='pending')::bigint AS pending,
+                     count(*) FILTER (WHERE state='leased')::bigint AS leased,
+                     count(*) FILTER (WHERE state='completed')::bigint AS completed,
+                     count(*) FILTER (WHERE state='refused')::bigint AS refused,
+                     count(*) FILTER (WHERE state='blocked')::bigint AS blocked,
+                     count(*) FILTER (WHERE state='cancelled')::bigint AS cancelled,
+                     count(*) FILTER (WHERE state='superseded')::bigint AS superseded,
+                     count(*) FILTER (WHERE state='missed')::bigint AS missed,
+                     count(*) FILTER (WHERE block_kind='technical')::bigint AS technical,
+                     count(*) FILTER (WHERE block_kind='configuration')::bigint AS configuration,
+                     COALESCE(sum(executed_attempt_count),0)::bigint AS executed_attempts,
+                     count(*) FILTER (WHERE stale_revision)::bigint AS stale_current,
+                     (SELECT count(*)::bigint FROM retained_attempts) AS retained_attempts
+                   FROM bounded
+             ), sampled_leases AS MATERIALIZED (
+                 SELECT generation.claim_owner_id
+                   FROM registry_internal.registry_record_timer_generations AS generation
+                   JOIN registry_internal.registry_record_timer_current AS current
+                     ON current.occurrence_id=generation.occurrence_id
+                    AND current.record_type=generation.record_type
+                    AND current.record_id=generation.record_id
+                    AND current.timer_id=generation.timer_id
+                    AND current.binding_incarnation=generation.binding_incarnation
+                    AND current.material_signature=generation.material_signature
+                  WHERE generation.state='leased'
+                    AND generation.claim_until>clock_timestamp()
+                  ORDER BY generation.claim_until ASC,generation.claim_owner_id ASC,
+                           generation.occurrence_id ASC
+                  LIMIT $1
+             ), lease_aggregate AS (
+                 SELECT count(*)::bigint AS sampled_lease_count,
+                        count(DISTINCT claim_owner_id)::bigint AS owner_count
+                   FROM sampled_leases
+             ), due AS (
+                 SELECT greatest(
+                            0,
+                            extract(epoch FROM (clock_timestamp()-generation.due_at))::float8
+                        ) AS lag_seconds
+                   FROM registry_internal.registry_record_timer_generations AS generation
+                   JOIN registry_internal.registry_record_timer_current AS current
+                     ON current.occurrence_id=generation.occurrence_id
+                    AND current.record_type=generation.record_type
+                    AND current.record_id=generation.record_id
+                    AND current.timer_id=generation.timer_id
+                    AND current.binding_incarnation=generation.binding_incarnation
+                    AND current.material_signature=generation.material_signature
+                  WHERE generation.state IN ('pending','leased')
+                    AND generation.gate_open
+                    AND generation.due_at<=clock_timestamp()
+                    AND (generation.retry_at IS NULL OR generation.retry_at<=clock_timestamp())
+                    AND (generation.not_after IS NULL OR clock_timestamp()<generation.not_after)
+                  ORDER BY generation.due_at ASC,generation.occurrence_id ASC
+                  LIMIT 1
+             ), control AS (
+                 SELECT timer.protocol_version,timer.control_state,
+                        timer.bound_instance_epoch=registry.epoch AS instance_matches,
+                        COALESCE(registry.active_package_digest=$3,false) AS package_matches
+                   FROM registry_internal.registry_record_timer_control AS timer
+                   JOIN registry_internal.registry_state AS registry ON registry.singleton
+                  WHERE timer.singleton
+             )
+             SELECT
+                 status_aggregate.*,lease_aggregate.sampled_lease_count,
+                 lease_aggregate.owner_count,
+                 (SELECT lag_seconds FROM due) AS lag_seconds,
+                 control.protocol_version,control.control_state,control.instance_matches,
+                 control.package_matches,
+                 (SELECT sampled_count FROM state_sample WHERE value='pending') AS category_pending,
+                 (SELECT sampled_count FROM state_sample WHERE value='leased') AS category_leased,
+                 (SELECT sampled_count FROM state_sample WHERE value='completed') AS category_completed,
+                 (SELECT sampled_count FROM state_sample WHERE value='refused') AS category_refused,
+                 (SELECT sampled_count FROM state_sample WHERE value='blocked') AS category_blocked,
+                 (SELECT sampled_count FROM state_sample WHERE value='cancelled') AS category_cancelled,
+                 (SELECT sampled_count FROM state_sample WHERE value='superseded') AS category_superseded,
+                 (SELECT sampled_count FROM state_sample WHERE value='missed') AS category_missed,
+                 (SELECT sampled_count FROM block_sample WHERE value='technical') AS category_technical,
+                 (SELECT sampled_count FROM block_sample WHERE value='configuration') AS category_configuration,
+                 (SELECT bool_or(sampled_count>$2) FROM state_sample)
+                    OR (SELECT bool_or(sampled_count>$2) FROM block_sample)
+                    AS category_counts_truncated
+               FROM status_aggregate CROSS JOIN lease_aggregate CROSS JOIN control",
+            &[
+                &TIMER_STATUS_SCAN_SENTINEL,
+                &TIMER_STATUS_SCAN_MAXIMUM,
+                &process_package_digest,
+            ],
+        )
+        .await
+        .map_err(|_| ())?;
+    let sampled_count = row.try_get::<_, i64>("sampled_count").map_err(|_| ())?;
+    let retained_attempts = row.try_get::<_, i64>("retained_attempts").map_err(|_| ())?;
+    let occurrence_counts = [
+        row.try_get::<_, i64>("category_pending")
+            .map_err(|_| ())?
+            .min(TIMER_STATUS_SCAN_MAXIMUM),
+        row.try_get::<_, i64>("category_leased")
+            .map_err(|_| ())?
+            .min(TIMER_STATUS_SCAN_MAXIMUM),
+        row.try_get::<_, i64>("category_completed")
+            .map_err(|_| ())?
+            .min(TIMER_STATUS_SCAN_MAXIMUM),
+        row.try_get::<_, i64>("category_refused")
+            .map_err(|_| ())?
+            .min(TIMER_STATUS_SCAN_MAXIMUM),
+        row.try_get::<_, i64>("category_blocked")
+            .map_err(|_| ())?
+            .min(TIMER_STATUS_SCAN_MAXIMUM),
+        row.try_get::<_, i64>("category_cancelled")
+            .map_err(|_| ())?
+            .min(TIMER_STATUS_SCAN_MAXIMUM),
+        row.try_get::<_, i64>("category_superseded")
+            .map_err(|_| ())?
+            .min(TIMER_STATUS_SCAN_MAXIMUM),
+        row.try_get::<_, i64>("category_missed")
+            .map_err(|_| ())?
+            .min(TIMER_STATUS_SCAN_MAXIMUM),
+    ];
+    let block_counts = [
+        row.try_get::<_, i64>("category_technical")
+            .map_err(|_| ())?
+            .min(TIMER_STATUS_SCAN_MAXIMUM),
+        row.try_get::<_, i64>("category_configuration")
+            .map_err(|_| ())?
+            .min(TIMER_STATUS_SCAN_MAXIMUM),
+    ];
+    let category_counts_truncated = row
+        .try_get::<_, bool>("category_counts_truncated")
+        .map_err(|_| ())?;
+    let sampled_lease_count = row
+        .try_get::<_, i64>("sampled_lease_count")
+        .map_err(|_| ())?;
+    let observed_live_lease_owners = row.try_get::<_, i64>("owner_count").map_err(|_| ())?;
+    let oldest_due_lag_seconds = row
+        .try_get::<_, Option<f64>>("lag_seconds")
+        .map_err(|_| ())?;
+    let protocol_version = row.try_get::<_, i32>("protocol_version").map_err(|_| ())?;
+    let control_state = match row
+        .try_get::<_, String>("control_state")
+        .map_err(|_| ())?
+        .as_str()
+    {
+        "running" => "running",
+        "paused" => "paused",
+        "adoption-hold" => "adoption-hold",
+        _ => return Err(()),
+    };
+    let instance_matches = row.try_get::<_, bool>("instance_matches").map_err(|_| ())?;
+    let package_matches = row.try_get::<_, bool>("package_matches").map_err(|_| ())?;
+
+    Ok(TimerSample {
+        observed_live_lease_owners: observed_live_lease_owners.min(TIMER_STATUS_SCAN_MAXIMUM),
+        oldest_due_lag_seconds,
+        occurrence_counts,
+        block_counts,
+        current_executed_attempts: row.try_get("executed_attempts").map_err(|_| ())?,
+        retained_attempts: retained_attempts.min(TIMER_STATUS_SCAN_MAXIMUM),
+        stale_current_occurrences: row.try_get("stale_current").map_err(|_| ())?,
+        control_state,
+        control_compatible: protocol_version == crate::postgres::SUPPORTED_TIMER_PROTOCOL_VERSION
+            && instance_matches
+            && package_matches,
+        counts_truncated: category_counts_truncated
+            || sampled_count > TIMER_STATUS_SCAN_MAXIMUM
+            || retained_attempts > TIMER_STATUS_SCAN_MAXIMUM
+            || sampled_lease_count > TIMER_STATUS_SCAN_MAXIMUM,
     })
 }
 
@@ -650,6 +1052,7 @@ mod tests {
                 (PendingQueue::ReviewApplication, 0.0),
             ],
             blocked_application_jobs: 2,
+            timer: None,
         }));
         assert!(sampled.contains("breg_proposal_application_blocked_jobs 2\n"));
         for expected in [
@@ -658,6 +1061,47 @@ mod tests {
             "breg_queue_oldest_pending_age_seconds{queue=\"review-application\"} 0\n",
         ] {
             assert!(sampled.contains(expected), "{expected} in:\n{sampled}");
+        }
+    }
+
+    #[test]
+    fn timer_metrics_use_closed_labels_and_distinguish_observation_from_census() {
+        let metrics = Metrics::default();
+        let rendered = metrics.render(Some(&QueueSample {
+            ages: Vec::new(),
+            blocked_application_jobs: 0,
+            timer: Some(TimerSample {
+                observed_live_lease_owners: 2,
+                oldest_due_lag_seconds: Some(12.5),
+                occurrence_counts: [1, 2, 3, 4, 2, 5, 6, 7],
+                block_counts: [1, 1],
+                current_executed_attempts: 8,
+                retained_attempts: 7,
+                stale_current_occurrences: 1,
+                control_state: "paused",
+                control_compatible: true,
+                counts_truncated: false,
+            }),
+        }));
+        for expected in [
+            "# HELP breg_record_timer_observed_live_lease_owners Distinct observed current live lease owners, not a census of running replicas.\n",
+            "breg_record_timer_observed_live_lease_owners 2\n",
+            "breg_record_timer_oldest_due_lag_seconds 12.5\n",
+            "breg_record_timer_current_occurrences{state=\"blocked\",block_kind=\"technical\"} 1\n",
+            "breg_record_timer_current_occurrences{state=\"blocked\",block_kind=\"configuration\"} 1\n",
+            "breg_record_timer_current_executed_attempts 8\n",
+            "breg_record_timer_retained_attempts 7\n",
+            "breg_record_timer_stale_current_occurrences 1\n",
+            "breg_record_timer_control_compatible{state=\"paused\"} 1\n",
+            "breg_record_timer_counts_truncated 0\n",
+        ] {
+            assert!(rendered.contains(expected), "{expected} in:\n{rendered}");
+        }
+        for forbidden in ["claim_owner", "occurrence_id", "active_replicas"] {
+            assert!(
+                !rendered.contains(forbidden),
+                "timer metric contract disclosed or mislabeled {forbidden}:\n{rendered}"
+            );
         }
     }
 

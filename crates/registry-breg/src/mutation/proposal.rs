@@ -1079,6 +1079,35 @@ impl MutationTransaction {
             .await
             .map_err(|_| MutationError::Unavailable)?;
         let tx = guarded.transaction();
+        // An Apply derives its complete possible Record-type set from the
+        // compiled Action before any Proposal document, job, attachment, or
+        // target parent is locked. The staging wrapper filters timer-free
+        // entities, so non-Apply operations and genuinely timer-free Actions
+        // do no timer-control work. Actual staged rows are checked against
+        // this admitted set again after the frozen targets are applied.
+        let timer_staging =
+            if input.operation == ProposalAuthorityOperation::Lifecycle(ProposalOperation::Apply) {
+                let entities = action
+                    .effects
+                    .iter()
+                    .map(|effect| {
+                        registry
+                            .entities()
+                            .get(&effect.target.entity_id)
+                            .ok_or(MutationError::PreconditionFailed)
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                begin_record_timer_staging(
+                    tx,
+                    entities,
+                    &self.expected.activation_id,
+                    self.idempotency.receipt_retention_days(),
+                    TimerMutationOrigin::ordinary(),
+                )
+                .await?
+            } else {
+                None
+            };
         let existing = if let Some(id) = input.proposal_id {
             let document =
                 proposal_store::load_document(tx, id, proposal_store::DocumentLock::Update).await?;
@@ -1696,6 +1725,7 @@ impl MutationTransaction {
                                 &targets,
                                 &binding,
                                 application_id,
+                                timer_staging.as_ref(),
                             )
                             .await;
                         match application {
@@ -1957,6 +1987,12 @@ impl MutationTransaction {
                 .ok_or(MutationError::Unavailable)?
                 .verify_current()?;
         }
+        if input.operation == ProposalAuthorityOperation::Lifecycle(ProposalOperation::Apply) {
+            self.observe_native_mutation_checkpoint(NativeMutationOperation::Proposal)
+                .await?;
+        }
+        self.proposal_fault_for_test()
+            .fail_at(MutationFaultPoint::BeforeCommit)?;
         guarded
             .commit()
             .await
@@ -2412,11 +2448,13 @@ impl MutationTransaction {
         targets: &[ProposalTargetSnapshot],
         binding: &crate::idempotency::ResolvedIdempotencyBinding,
         application_id: Uuid,
+        timer_staging: Option<&RecordTimerStaging>,
     ) -> Result<(Vec<ObservedTarget>, Vec<ApplicationResultLink>), MutationError> {
         let action = proposal_action(registry, &document.action_id)?;
         let mut observed = Vec::new();
         let mut links = Vec::new();
         let mut rows = Vec::new();
+        let mut timer_rows = Vec::new();
         let mut groups = Vec::<Vec<&crate::proposal_workflow::PreparedEffect>>::new();
         let mut positions = BTreeMap::<(String, Uuid), usize>::new();
         for effect in frozen.effects() {
@@ -2638,7 +2676,17 @@ impl MutationTransaction {
                 current.record_uuid,
                 current.record_revision,
             ));
+            timer_rows.push((entity, current));
         }
+        stage_record_timer_rows(
+            tx,
+            timer_staging,
+            timer_rows
+                .iter()
+                .map(|(entity, current)| RecordTimerStage::new(entity, current)),
+            self.field_encryption.as_deref(),
+        )
+        .await?;
         let members = rows
             .iter()
             .map(|(entity, id, revision)| RevisionCommitMember {

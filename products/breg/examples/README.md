@@ -9,8 +9,13 @@ can inspect the current and proposed name; direct Patch is unavailable.
 `facility/registry.yaml` adds reusable value types, one named Rhai function,
 an immediate multi-record Action, and durable Proposals. Action execution mode
 is governed configuration. Proposal lifecycle operations use promoted links.
+`future-activation/registry.yaml` adds one root-granted Record timer and a
+timer-only immediate Action. Its [walkthrough](future-activation/README.md)
+separates compiler inspection from the opt-in real-PostgreSQL native-process
+journey.
 
-Both shipped starters include their own local clients and authored journeys.
+The `minimal/` and `facility/` shipped starters include their own local clients
+and authored journeys.
 The facility starter's `bregctl examples` scenarios cover registration,
 no-review draft editing, ownership refusal, submission, manual application,
 cancellation, and an independently reviewed correction. Their retained attempts
@@ -23,6 +28,7 @@ From the repository root:
 cargo run --locked -p registry-bregctl -- check products/breg/examples/minimal
 cargo run --locked -p registry-bregctl -- check products/breg/examples/reviewed-change
 cargo run --locked -p registry-bregctl -- check products/breg/examples/facility
+cargo run --locked -p registry-bregctl -- check products/breg/examples/future-activation --production
 cargo run --locked -p registry-bregctl -- --format json explain actions products/breg/examples/facility
 cargo run --locked -p registry-bregctl -- --format json explain proposals products/breg/examples/facility
 ```

@@ -2869,15 +2869,15 @@ fn parse_breg_problem(body: &[u8]) -> Result<(ProblemDocument, BRegProblemExtens
     let serde_json::Value::Object(mut object) = crate::strict_json::from_slice(body)? else {
         return Err(());
     };
-    let known_code = object
+    let problem_code = object
         .get("code")
         .and_then(serde_json::Value::as_str)
-        .is_some_and(|code| {
+        .and_then(|code| {
             BRegProblemCode::ALL
                 .into_iter()
-                .any(|candidate| code == candidate.code())
+                .find(|candidate| code == candidate.code())
         });
-    if !known_code {
+    if problem_code.is_none() {
         object.retain(|key, _| {
             matches!(
                 key.as_str(),
@@ -2889,14 +2889,22 @@ fn parse_breg_problem(body: &[u8]) -> Result<(ProblemDocument, BRegProblemExtens
     let declared_field = match (object.remove("recordType"), object.remove("fieldId")) {
         (None, None) => false,
         (Some(serde_json::Value::String(entity)), Some(serde_json::Value::String(field)))
-            if [&entity, &field].into_iter().all(|id| {
-                !id.is_empty() && id.chars().count() <= 128 && !id.chars().any(char::is_control)
-            }) =>
+            if [&entity, &field]
+                .into_iter()
+                .all(|id| valid_problem_identifier(id)) =>
         {
             true
         }
         _ => return Err(()),
     };
+    match (object.remove("atField"), object.remove("notAfterField")) {
+        (None, None) => {}
+        (Some(Value::String(at_field)), Some(Value::String(not_after_field)))
+            if problem_code == Some(BRegProblemCode::RequestInvalid)
+                && valid_problem_identifier(&at_field)
+                && valid_problem_identifier(&not_after_field) => {}
+        _ => return Err(()),
+    }
     let refusal_code = match object.remove("refusalCode") {
         None => None,
         Some(serde_json::Value::String(code)) => Some(BRegRefusalCode::parse(&code).ok_or(())?),
@@ -2941,6 +2949,10 @@ fn parse_breg_problem(body: &[u8]) -> Result<(ProblemDocument, BRegProblemExtens
             guard_reason,
         },
     ))
+}
+
+fn valid_problem_identifier(value: &str) -> bool {
+    !value.is_empty() && value.chars().count() <= 128 && !value.chars().any(char::is_control)
 }
 
 fn parse_constraint_violation(

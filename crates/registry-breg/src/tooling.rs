@@ -158,7 +158,10 @@ fn classify_change(
         | Code::RecipientGroupChanged
         | Code::ActionAdded
         | Code::ActionRemoved
-        | Code::ActionChanged => DiffClassification::AccessChange,
+        | Code::ActionChanged
+        | Code::TimerAdded
+        | Code::TimerRemoved
+        | Code::TimerChanged => DiffClassification::AccessChange,
         _ => match change.class {
             BaseClass::CompatibleAdditive => DiffClassification::CompatibleAdditive,
             BaseClass::DataBackfillRequired => DiffClassification::DataBackfillRequired,

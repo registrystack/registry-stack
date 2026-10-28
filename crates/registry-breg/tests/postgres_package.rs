@@ -1425,6 +1425,101 @@ async fn reviewed_metadata_only_query_access_change_applies_without_dummy_sql() 
     database.cleanup().await;
 }
 
+#[cfg(feature = "tooling")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn reviewed_timer_successor_plan_reports_bounded_activation_preview() {
+    let database = TestDatabase::create(1).await;
+    let initial_root = publish_timer_preview_package(
+        None,
+        fingerprint(1),
+        timer_preview_project_bytes("activates-at"),
+        PackageMigrationPlanInput::InitialCompiledDdl,
+    );
+    let provisional = load_package(initial_root.path(), &local_context())
+        .expect("initial timer package verifies before fingerprinting");
+    let initial_fingerprint =
+        measure_fresh_compiled_schema(&database, provisional.registry()).await;
+    rewrite_unsigned(initial_root.path(), |manifest| {
+        manifest.schema_fingerprint.clone_from(&initial_fingerprint);
+    });
+    let initial = load_package(initial_root.path(), &local_context())
+        .expect("initial timer package reloads with its exact catalog");
+    let active = apply_package(
+        &database,
+        &initial,
+        ApplyPrecondition::InitialActivation,
+        Duration::from_secs(1),
+        Duration::from_secs(5),
+    )
+    .await
+    .expect("initial timer package applies");
+
+    let successor_project_bytes = timer_preview_project_bytes("alternate-activates-at");
+    let successor_project =
+        parse_project_yaml(&successor_project_bytes).expect("successor timer project parses");
+    let successor_registry = compile_project(&successor_project, &[], CompileProfile::Production)
+        .expect("successor timer project compiles");
+    let change_set = compiled_registry_change_set(
+        initial.registry(),
+        &successor_registry,
+        &active.package_digest,
+    );
+    assert!(change_set.changes.iter().any(|change| {
+        change.code == CompiledRegistryChangeCode::TimerChanged
+            && change.class == CompiledRegistryChangeClass::AccessOrDisclosureChange
+    }));
+    let review = metadata_only_review_source(
+        &change_set.changes,
+        &active.package_digest,
+        &active.schema_fingerprint,
+        &active.schema_fingerprint,
+    );
+    let successor_root = publish_timer_preview_package(
+        Some(&active.package_digest),
+        active.schema_fingerprint.clone(),
+        successor_project_bytes,
+        PackageMigrationPlanInput::ReviewedSuccessor {
+            prior_registry: Box::new(initial.registry().clone()),
+            prior_schema_fingerprint: active.schema_fingerprint.clone(),
+            migrations: vec![review],
+        },
+    );
+    let successor = load_package(successor_root.path(), &local_context())
+        .expect("reviewed timer successor verifies");
+    let audit_before = database.activation_audit_entries().len();
+    let planned = plan_verified_package(ApplyVerifiedPackageRequest::plan(
+        &database.migration_config,
+        &successor,
+        ActivationDeployment::new("local", INSTANCE, DATABASE),
+        ApplyPrecondition::Successor { current: &active },
+        ApplyRoles::new(&database.migration_role, &database.runtime_role),
+        ApplyTimeouts::new(Duration::from_secs(1), Duration::from_secs(5))
+            .expect("preview timeouts are bounded"),
+    ))
+    .await
+    .expect("reviewed timer successor plans");
+    assert_eq!(planned.activation, PlannedActivation::Successor);
+    assert_eq!(planned.timer_previews.len(), 1);
+    let preview = &planned.timer_previews[0];
+    assert_eq!(preview.definition.record_type, "contact");
+    assert_eq!(preview.definition.timer, "activate");
+    assert_eq!(
+        preview.definition.change,
+        registry_breg::timer_activation_preview::TimerActivationChange::Changed
+    );
+    assert_eq!(
+        preview.cached_predecessor.basis,
+        registry_breg::timer_activation_preview::TimerCachedPredecessorBasis::CurrentMarkerActiveBindingCache
+    );
+    assert_eq!(preview.cached_predecessor.observed_unfinished_count, 0);
+    assert_eq!(preview.cached_predecessor.earliest_due_at, None);
+    assert!(!preview.cached_predecessor.has_stale_revisions);
+    assert!(!preview.cached_predecessor.truncated);
+    assert_eq!(database.activation_audit_entries().len(), audit_before);
+
+    database.cleanup().await;
+}
+
 fn assert_policy_only_snapshot_grant_delta_prepares_and_loads(
     baseline_snapshot: bool,
     successor_snapshot: bool,
@@ -3438,6 +3533,80 @@ fn metadata_only_review_source(
 
 fn temporal_policy_module_bytes(snapshot: bool) -> Vec<u8> {
     temporal_policy_module_bytes_with(snapshot, "", "")
+}
+
+fn timer_preview_project_bytes(at_field: &str) -> Vec<u8> {
+    serde_json::to_vec(&json!({
+        "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+        "kind":"BRegProject",
+        "project":{
+            "id":"timer-preview", "version":"1", "defaultLanguage":"en",
+            "canonicalBaseIri":"https://timer-preview.example.test"
+        },
+        "package":{"sourceRevision":SOURCE_REVISION},
+        "datasets":[{"id":"timer-preview"}],
+        "recordTypes":[{
+            "id":"contact", "primaryDataset":"timer-preview", "route":"contacts",
+            "mutationMode":"mutable",
+            "fields":[
+                {"id":"active","type":"boolean","classification":"internal"},
+                {"id":"processed","type":"boolean","classification":"internal"},
+                {"id":"activates-at","type":"timestamp","classification":"internal"},
+                {"id":"alternate-activates-at","type":"timestamp","classification":"internal"},
+                {"id":"window-end","type":"timestamp","classification":"internal"},
+                {"id":"activation-revision","type":"uuid","classification":"internal"}
+            ],
+            "timers":[{
+                "id":"activate", "at":at_field, "notAfter":"window-end",
+                "rearmOn":"activation-revision",
+                "when":{"type":"fields","equals":{"active":false}},
+                "invoke":"activate-contact",
+                "input":{"contact":{"fromRecordId":true}}
+            }]
+        }],
+        "timerGrants":[{"recordType":"contact","timer":"activate"}],
+        "actions":[{
+            "id":"activate-contact", "execution":{"mode":"immediate"},
+            "inputs":[{
+                "id":"contact", "type":"reference", "target":"contact",
+                "required":true, "classification":"internal"
+            }],
+            "plan":{"type":"fixed","effects":[{
+                "id":"mark-processed", "target":{"fromInput":"contact"},
+                "operation":"patch", "set":{"processed":{"value":true}}
+            }]}
+        }]
+    }))
+    .expect("timer preview source serializes")
+}
+
+fn publish_timer_preview_package(
+    prior_revision: Option<&str>,
+    schema_fingerprint: String,
+    project_bytes: Vec<u8>,
+    migration_plan: PackageMigrationPlanInput,
+) -> TempRoot {
+    let root = TempRoot::create();
+    let prepared = prepare_package(PackageBuildRequest {
+        from_package_digest: prior_revision.map(str::to_owned),
+        compiler_source_revision: SOURCE_REVISION.to_owned(),
+        schema_fingerprint,
+        project: PackageSourceFile {
+            path: "source/registry.yaml".to_owned(),
+            bytes: project_bytes,
+        },
+        modules: Vec::new(),
+        fixture_journeys: PackageSourceFile {
+            path: "tests/journeys.yaml".to_owned(),
+            bytes: FIXTURE_JOURNEYS.to_vec(),
+        },
+        migration_plan,
+    })
+    .expect("timer preview package prepares");
+    prepared
+        .publish_to_directory(root.path())
+        .expect("timer preview package publishes");
+    root
 }
 
 fn temporal_policy_module_bytes_with(

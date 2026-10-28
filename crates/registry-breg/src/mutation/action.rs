@@ -66,12 +66,381 @@ struct ActionEffectResult {
     operation: Operation,
 }
 
+enum ImmediateActionExecutionOutcome {
+    Applied(MutationOutcome),
+    TimerHeld,
+    TimerMissed,
+    TimerInputRefused,
+}
+
+impl ImmediateActionExecutionOutcome {
+    fn into_applied(self) -> Result<MutationOutcome, MutationError> {
+        match self {
+            Self::Applied(outcome) => Ok(outcome),
+            Self::TimerHeld | Self::TimerMissed | Self::TimerInputRefused => {
+                Err(MutationError::Unavailable)
+            }
+        }
+    }
+}
+
+struct LockedActionTargets {
+    guard_failure: Option<String>,
+    rows: BTreeMap<(String, Uuid), CurrentRow>,
+    missing_timer_link: bool,
+}
+
+enum TimerActionPreflight {
+    Proceed(Map<String, Value>),
+    Held,
+    Missed,
+}
+
 struct HookChangeReceipt {
     answer_digest: Option<[u8; 32]>,
     resulting_revision: i64,
 }
 
 impl MutationTransaction {
+    pub(crate) fn timer_detail_retention_days(&self) -> u16 {
+        self.idempotency.receipt_retention_days()
+    }
+
+    pub(crate) async fn execute_timer_action(
+        &self,
+        client: &mut Client,
+        registry: &CompiledRegistry,
+        execution: TimerActionExecution<'_>,
+        fault: FaultControl,
+        deadline: tokio::time::Instant,
+    ) -> Result<TimerActionDisposition, MutationError> {
+        if !profile_is_keyed(self.audit.profile()) {
+            return Err(MutationError::Unavailable);
+        }
+        let authority = execution.authority;
+        let action = authority.action(registry)?;
+        let claims = authority.claims();
+        let route_id = format!(
+            "timers.{}.{}.invoke",
+            authority.timer.record_type, authority.timer.id
+        );
+        let _attempt = self
+            .begin_action_boundary_audit(claims, &route_id, execution.correlation)
+            .await?;
+        let application_id = authority.occurrence_id;
+        let preflight = self
+            .preflight_timer_action(client, registry, action, claims, authority, application_id)
+            .await;
+        let input = match preflight {
+            Ok(TimerActionPreflight::Proceed(input)) => input,
+            Ok(TimerActionPreflight::Held) => {
+                self.record_action_boundary_audit(
+                    claims,
+                    &route_id,
+                    execution.correlation,
+                    PreIoAuditKind::Refusal,
+                )
+                .await?;
+                return Ok(TimerActionDisposition::Held);
+            }
+            Ok(TimerActionPreflight::Missed) => {
+                self.record_action_boundary_audit(
+                    claims,
+                    &route_id,
+                    execution.correlation,
+                    PreIoAuditKind::Refusal,
+                )
+                .await?;
+                return Ok(TimerActionDisposition::Missed);
+            }
+            Err(error) => {
+                self.record_action_boundary_audit(
+                    claims,
+                    &route_id,
+                    execution.correlation,
+                    PreIoAuditKind::Refusal,
+                )
+                .await?;
+                return Err(error);
+            }
+        };
+        #[cfg(feature = "postgres-test")]
+        authority.wait_after_preflight().await?;
+        let normalized_input = match validate_action_input(action, input) {
+            Ok(input) => input,
+            Err(_) => {
+                self.record_action_boundary_audit(
+                    claims,
+                    &route_id,
+                    execution.correlation,
+                    PreIoAuditKind::Refusal,
+                )
+                .await?;
+                return Ok(TimerActionDisposition::Refused(
+                    TimerRefusalOutcome::InputRefused,
+                ));
+            }
+        };
+        let request_digest =
+            match canonical_action_request_digest(action, &normalized_input, &BTreeMap::new()) {
+                Ok(digest) => digest,
+                Err(error) => {
+                    self.record_action_boundary_audit(
+                        claims,
+                        &route_id,
+                        execution.correlation,
+                        PreIoAuditKind::Refusal,
+                    )
+                    .await?;
+                    return Err(error);
+                }
+            };
+        let target_authority = authority.target_authority();
+        let binding = match resolve_action_binding(
+            self.audit.profile(),
+            &self.idempotency,
+            &ActionIdempotencyBinding {
+                key: &authority.occurrence_id.to_string(),
+                context: claims,
+                method: HttpMethod::Post,
+                route: &action.route,
+                package_revision: &self.expected.activation_id,
+                action_contract_fingerprint: &action.definition_revision,
+                target_authority: &target_authority,
+                result_effects: claims.result_effects(),
+                answer_digest: None,
+                canonical_request_digest: request_digest,
+            },
+        ) {
+            Ok(binding) => binding,
+            Err(error) => {
+                self.record_action_boundary_audit(
+                    claims,
+                    &route_id,
+                    execution.correlation,
+                    PreIoAuditKind::Refusal,
+                )
+                .await?;
+                return Err(error.into());
+            }
+        };
+        let reserved_creates =
+            match reserve_timer_action_create_ids(action, authority.occurrence_id) {
+                Ok(reserved) => reserved,
+                Err(error) => {
+                    self.record_action_boundary_audit(
+                        claims,
+                        &route_id,
+                        execution.correlation,
+                        PreIoAuditKind::Refusal,
+                    )
+                    .await?;
+                    return Err(error);
+                }
+            };
+        let mut candidate = None;
+        let result = self
+            .execute_immediate_action_after_attempt(
+                client,
+                registry,
+                action,
+                claims,
+                &target_authority,
+                &normalized_input,
+                &BTreeMap::new(),
+                &binding,
+                &reserved_creates,
+                application_id,
+                &route_id,
+                execution.correlation,
+                fault,
+                deadline,
+                &mut candidate,
+                None,
+                None,
+                None,
+                Some(authority),
+            )
+            .await;
+        let definite_refusal = failure_is_refusal(&result) && !fault.is_enabled();
+        match result {
+            Ok(ImmediateActionExecutionOutcome::Applied(_)) => Ok(TimerActionDisposition::Applied),
+            Ok(ImmediateActionExecutionOutcome::TimerHeld) => {
+                self.record_action_boundary_audit(
+                    claims,
+                    &route_id,
+                    execution.correlation,
+                    PreIoAuditKind::Refusal,
+                )
+                .await?;
+                Ok(TimerActionDisposition::Held)
+            }
+            Ok(ImmediateActionExecutionOutcome::TimerMissed) => {
+                self.record_action_boundary_audit(
+                    claims,
+                    &route_id,
+                    execution.correlation,
+                    PreIoAuditKind::Refusal,
+                )
+                .await?;
+                Ok(TimerActionDisposition::Missed)
+            }
+            Ok(ImmediateActionExecutionOutcome::TimerInputRefused) => {
+                self.record_action_boundary_audit(
+                    claims,
+                    &route_id,
+                    execution.correlation,
+                    PreIoAuditKind::Refusal,
+                )
+                .await?;
+                Ok(TimerActionDisposition::Refused(
+                    TimerRefusalOutcome::InputRefused,
+                ))
+            }
+            Err(error) => {
+                if definite_refusal {
+                    self.record_action_boundary_audit(
+                        claims,
+                        &route_id,
+                        execution.correlation,
+                        PreIoAuditKind::Refusal,
+                    )
+                    .await?;
+                }
+                match error {
+                    MutationError::FieldGuardFailed { .. }
+                    | MutationError::ActionRefusal(_)
+                    | MutationError::InvalidTimerWindow { .. }
+                    | MutationError::FieldPatternViolation { .. }
+                    | MutationError::RowLocalConstraintViolation(_)
+                    | MutationError::TimerGenerationUnsupported => Ok(
+                        TimerActionDisposition::Refused(TimerRefusalOutcome::DeclaredRefusal),
+                    ),
+                    MutationError::Conflict => Ok(TimerActionDisposition::Refused(
+                        TimerRefusalOutcome::EffectConflict,
+                    )),
+                    other => Err(other),
+                }
+            }
+        }
+    }
+
+    async fn preflight_timer_action(
+        &self,
+        client: &mut Client,
+        registry: &CompiledRegistry,
+        action: &CompiledAction,
+        claims: &ActionClaimContext,
+        authority: &TimerActionAuthority,
+        application_id: Uuid,
+    ) -> Result<TimerActionPreflight, MutationError> {
+        let transaction = begin_timer_action_transaction(
+            client,
+            self.lock_key,
+            self.lock_timeout,
+            &self.expected,
+            claims,
+        )
+        .await
+        .map_err(|_| MutationError::Unavailable)?;
+        lock_timer_control(transaction.transaction()).await?;
+        if let Some(not_after) = authority.not_after {
+            if not_after > authority.due_at {
+                let now_sql = authority.database_clock_sql("SELECT clock_timestamp()");
+                let now: chrono::DateTime<chrono::Utc> = transaction
+                    .transaction()
+                    .query_one(now_sql.as_ref(), &[])
+                    .await
+                    .map_err(|_| MutationError::Unavailable)?
+                    .get(0);
+                if now >= not_after {
+                    authority.settle_missed(transaction.transaction()).await?;
+                    transaction
+                        .commit()
+                        .await
+                        .map_err(|_| MutationError::CommitUnresolved)?;
+                    return Ok(TimerActionPreflight::Missed);
+                }
+            }
+        }
+        let entity = registry
+            .entities()
+            .get(&authority.timer.record_type)
+            .ok_or(MutationError::Unavailable)?;
+        let context = ImmediateActionTargetContext::for_timer_read(
+            registry,
+            &authority.timer,
+            None,
+            authority.occurrence_id,
+            authority.record_id,
+            authority.claim_token,
+            authority.claim_owner_id,
+            authority.claim_epoch,
+            authority.control_epoch,
+            authority.instance_epoch,
+            authority.activation_id,
+            ImmediateActionTargetBinding {
+                action_id: action.id.clone(),
+                contract_fingerprint: action.definition_revision.clone(),
+                active_package_revision: self.expected.activation_id.clone(),
+                effect_ids: BTreeSet::new(),
+                target_entity_id: entity.id.clone(),
+                target_record_id: authority.record_id,
+                operation: Operation::Get,
+                fields: authority.anchor_read_fields()?,
+                expected_revision: None,
+                lock_only: true,
+                application_id: Some(application_id),
+            },
+        )
+        .map_err(|_| MutationError::PreconditionFailed)?;
+        transaction
+            .transaction()
+            .execute(
+                "SELECT set_config('registry.immediate_action_target_context', $1, true)",
+                &[&context.canonical_context()],
+            )
+            .await
+            .map_err(map_database_error)?;
+        let mut anchor = load_action_row(
+            transaction.transaction(),
+            entity,
+            &authority.record_id.to_string(),
+            true,
+        )
+        .await?;
+        authority.materialize_anchor_fields(
+            entity,
+            &mut anchor,
+            self.field_encryption.as_deref(),
+        )?;
+        let input = authority.input_values(&anchor)?;
+        let admission = authority
+            .admit_locked_anchor_and_clock(transaction.transaction(), &anchor, &input)
+            .await?;
+        let outcome = match admission {
+            TimerAdmission::Proceed => {
+                authority
+                    .refresh_target_binding_digests(transaction.transaction(), &anchor)
+                    .await?;
+                TimerActionPreflight::Proceed(input)
+            }
+            TimerAdmission::Hold => {
+                authority.settle_hold(transaction.transaction()).await?;
+                TimerActionPreflight::Held
+            }
+            TimerAdmission::Missed => {
+                authority.settle_missed(transaction.transaction()).await?;
+                TimerActionPreflight::Missed
+            }
+        };
+        transaction
+            .commit()
+            .await
+            .map_err(|_| MutationError::CommitUnresolved)?;
+        Ok(outcome)
+    }
+
     /// Acquire the session lock that serializes every classification for one
     /// hook delivery. The immediate-action transaction takes the same lock at
     /// transaction scope, so a recovery cannot observe the receipt until an
@@ -240,6 +609,7 @@ impl MutationTransaction {
                     None,
                     None,
                     None,
+                    None,
                 )
                 .await;
             if matches!(attempt, Err(MutationError::RetryableConflict))
@@ -260,12 +630,14 @@ impl MutationTransaction {
             )
             .await?;
         }
-        result.map_err(|error| match error {
-            MutationError::RetryableConflict | MutationError::CommitUnresolved => {
-                MutationError::Unavailable
-            }
-            other => other,
-        })
+        result
+            .and_then(ImmediateActionExecutionOutcome::into_applied)
+            .map_err(|error| match error {
+                MutationError::RetryableConflict | MutationError::CommitUnresolved => {
+                    MutationError::Unavailable
+                }
+                other => other,
+            })
     }
 
     /// Apply one settled hook proposal through the immediate-action path.
@@ -814,6 +1186,7 @@ impl MutationTransaction {
                     None,
                     None,
                     Some(&causation),
+                    None,
                 )
                 .await;
             if matches!(attempt, Err(MutationError::RetryableConflict))
@@ -1010,19 +1383,55 @@ impl MutationTransaction {
         frozen: Option<&FrozenEvidenceEvaluation>,
         commit_requests: Option<&[(CompiledEvidenceCapability, EvidenceSubjects)]>,
         causation: Option<&Causation>,
-    ) -> Result<MutationOutcome, MutationError> {
+        timer_authority: Option<&TimerActionAuthority>,
+    ) -> Result<ImmediateActionExecutionOutcome, MutationError> {
         if tokio::time::Instant::now() >= deadline {
             return Err(MutationError::Unavailable);
         }
-        let transaction = begin_action_transaction(
-            client,
-            self.lock_key,
-            self.lock_timeout,
-            &self.expected,
-            claims,
-        )
-        .await
+        let transaction = if timer_authority.is_some() {
+            begin_timer_action_transaction(
+                client,
+                self.lock_key,
+                self.lock_timeout,
+                &self.expected,
+                claims,
+            )
+            .await
+        } else {
+            begin_action_transaction(
+                client,
+                self.lock_key,
+                self.lock_timeout,
+                &self.expected,
+                claims,
+            )
+            .await
+        }
         .map_err(|_| MutationError::Unavailable)?;
+
+        let mut timer_entities = action
+            .effects
+            .iter()
+            .filter_map(|effect| registry.entities().get(&effect.target.entity_id))
+            .collect::<Vec<_>>();
+        if let Some(timer) = timer_authority {
+            timer_entities.push(
+                registry
+                    .entities()
+                    .get(&timer.timer.record_type)
+                    .ok_or(MutationError::Unavailable)?,
+            );
+        }
+        let timer_origin =
+            timer_authority.map_or_else(TimerMutationOrigin::ordinary, TimerMutationOrigin::firing);
+        let timer_staging = begin_record_timer_staging(
+            transaction.transaction(),
+            timer_entities,
+            &self.expected.activation_id,
+            self.idempotency.receipt_retention_days(),
+            timer_origin,
+        )
+        .await?;
 
         transaction
             .set_statement_budget(deadline.saturating_duration_since(tokio::time::Instant::now()))
@@ -1041,6 +1450,9 @@ impl MutationTransaction {
             )
             .await?
         {
+            if timer_authority.is_some() {
+                return Err(MutationError::Unavailable);
+            }
             check_current_action_grant(claims)?;
             transaction
                 .commit()
@@ -1051,8 +1463,68 @@ impl MutationTransaction {
                 .await
                 .map_err(|_| MutationError::CommitUnresolved)?;
             check_current_action_grant(claims)?;
-            return Ok(outcome);
+            return Ok(ImmediateActionExecutionOutcome::Applied(outcome));
         }
+        let mut locked_timer_targets = if let Some(timer) = timer_authority {
+            let mut locked = self
+                .lock_existing_action_targets(
+                    transaction.transaction(),
+                    registry,
+                    action,
+                    claims,
+                    target_authority,
+                    input_values,
+                    application_id,
+                    preconditions,
+                    timer_authority,
+                )
+                .await?;
+            let entity = registry
+                .entities()
+                .get(&timer.timer.record_type)
+                .ok_or(MutationError::Unavailable)?;
+            let anchor = locked
+                .rows
+                .get_mut(&(timer.timer.record_type.clone(), timer.record_id))
+                .ok_or(MutationError::PreconditionFailed)?;
+            timer.materialize_anchor_fields(entity, anchor, self.field_encryption.as_deref())?;
+            match timer
+                .admit_locked_anchor_and_clock(transaction.transaction(), anchor, input_values)
+                .await?
+            {
+                TimerAdmission::Proceed => {}
+                TimerAdmission::Hold => {
+                    timer.settle_hold(transaction.transaction()).await?;
+                    transaction
+                        .commit()
+                        .await
+                        .map_err(|_| MutationError::CommitUnresolved)?;
+                    return Ok(ImmediateActionExecutionOutcome::TimerHeld);
+                }
+                TimerAdmission::Missed => {
+                    timer.settle_missed(transaction.transaction()).await?;
+                    transaction
+                        .commit()
+                        .await
+                        .map_err(|_| MutationError::CommitUnresolved)?;
+                    return Ok(ImmediateActionExecutionOutcome::TimerMissed);
+                }
+            }
+            if locked.missing_timer_link {
+                return Ok(ImmediateActionExecutionOutcome::TimerInputRefused);
+            }
+            Some(locked)
+        } else {
+            None
+        };
+        let locked_timer_anchor = timer_authority.and_then(|timer| {
+            locked_timer_targets.as_ref().and_then(|locked| {
+                locked
+                    .rows
+                    .get(&(timer.timer.record_type.clone(), timer.record_id))
+                    .cloned()
+            })
+        });
         if let Some(frozen) = frozen {
             validate_frozen_evidence(frozen)?;
             match &frozen.outcome {
@@ -1125,18 +1597,24 @@ impl MutationTransaction {
             application_id,
         )?;
 
-        let guard_failure = self
-            .lock_existing_action_targets(
-                transaction.transaction(),
-                registry,
-                action,
-                claims,
-                target_authority,
-                input_values,
-                application_id,
-                preconditions,
-            )
-            .await?;
+        let guard_failure = match locked_timer_targets.take() {
+            Some(locked) => locked.guard_failure,
+            None => {
+                self.lock_existing_action_targets(
+                    transaction.transaction(),
+                    registry,
+                    action,
+                    claims,
+                    target_authority,
+                    input_values,
+                    application_id,
+                    preconditions,
+                    timer_authority,
+                )
+                .await?
+                .guard_failure
+            }
+        };
 
         if !action.commit_evidence.is_empty() {
             let frozen = frozen.ok_or(MutationError::PreconditionFailed)?;
@@ -1157,15 +1635,17 @@ impl MutationTransaction {
             verify_action_commit_evidence(action, input_values, frozen)?;
         }
 
-        self.verify_action_link_references(
-            transaction.transaction(),
-            registry,
-            action,
-            claims,
-            target_authority,
-            input_values,
-        )
-        .await?;
+        if timer_authority.is_none() {
+            self.verify_action_link_references(
+                transaction.transaction(),
+                registry,
+                action,
+                claims,
+                target_authority,
+                input_values,
+            )
+            .await?;
+        }
 
         let patch_bases = self
             .lock_action_patch_targets(
@@ -1177,8 +1657,40 @@ impl MutationTransaction {
                 input_values,
                 preconditions,
                 application_id,
+                timer_authority,
             )
             .await?;
+        if let Some(timer) = timer_authority {
+            let anchor = locked_timer_anchor
+                .as_ref()
+                .ok_or(MutationError::PreconditionFailed)?;
+            match timer
+                .admit_locked_anchor_and_clock(transaction.transaction(), anchor, input_values)
+                .await?
+            {
+                TimerAdmission::Proceed => {}
+                TimerAdmission::Hold => {
+                    timer.settle_hold(transaction.transaction()).await?;
+                    transaction
+                        .commit()
+                        .await
+                        .map_err(|_| MutationError::CommitUnresolved)?;
+                    return Ok(ImmediateActionExecutionOutcome::TimerHeld);
+                }
+                TimerAdmission::Missed => {
+                    timer.settle_missed(transaction.transaction()).await?;
+                    transaction
+                        .commit()
+                        .await
+                        .map_err(|_| MutationError::CommitUnresolved)?;
+                    return Ok(ImmediateActionExecutionOutcome::TimerMissed);
+                }
+            }
+        }
+        let timer_attempt_number = match timer_authority {
+            Some(timer) => Some(timer.start_attempt(transaction.transaction()).await?),
+            None => None,
+        };
         // Before surfacing a failed guard, finish every current-target and
         // admission precheck above and recheck the grant. Effect application and
         // proposed-value authorization below run only after guards pass.
@@ -1189,6 +1701,7 @@ impl MutationTransaction {
         let ordered = ordered_action_effects(effects)?;
         let groups = ordered_action_effect_groups(&ordered, &patch_bases, reserved_creates)?;
         let mut rows = BTreeMap::<String, CurrentRow>::new();
+        let mut timer_rows = BTreeMap::<(String, Uuid), CurrentRow>::new();
         let mut results = Vec::<ActionEffectResult>::new();
         for effects in groups {
             fault.fail_at(MutationFaultPoint::BeforeCurrentRow)?;
@@ -1205,6 +1718,7 @@ impl MutationTransaction {
                     reserved_creates,
                     &rows,
                     application_id,
+                    timer_authority,
                 )
                 .await?;
             let effect = effects[0];
@@ -1294,7 +1808,33 @@ impl MutationTransaction {
                 });
                 rows.insert(effect.id.clone(), current.clone());
             }
+            let timer_key = (entity.id.clone(), current.record_uuid);
+            if let Some(previous) = timer_rows.insert(timer_key, current.clone()) {
+                if previous.record_revision != current.record_revision
+                    || previous.predecessor_revision != current.predecessor_revision
+                    || previous.record_lifecycle != current.record_lifecycle
+                    || previous.before_data != current.before_data
+                    || previous.data != current.data
+                {
+                    return Err(MutationError::Unavailable);
+                }
+            }
         }
+        let mut timer_stages = Vec::with_capacity(timer_rows.len());
+        for ((entity_id, _), current) in &timer_rows {
+            let entity = registry
+                .entities()
+                .get(entity_id)
+                .ok_or(MutationError::Unavailable)?;
+            timer_stages.push(RecordTimerStage::new(entity, current));
+        }
+        stage_record_timer_rows(
+            transaction.transaction(),
+            timer_staging.as_ref(),
+            timer_stages,
+            self.field_encryption.as_deref(),
+        )
+        .await?;
 
         // Several effects may share one final record revision. Index each
         // distinct revision once, under the action transaction's one commit,
@@ -1386,6 +1926,27 @@ impl MutationTransaction {
         if let Some(frozen) = frozen {
             insert_action_evidence(transaction.transaction(), application_id, frozen).await?;
         }
+        if let Some(timer) = timer_authority {
+            timer
+                .settle_completed(
+                    transaction.transaction(),
+                    timer_attempt_number.ok_or(MutationError::Unavailable)?,
+                    correlation.request_id(),
+                )
+                .await?;
+        }
+        if timer_authority.is_none() {
+            self.observe_native_mutation_checkpoint(NativeMutationOperation::Action)
+                .await?;
+        }
+        #[cfg(feature = "postgres-test")]
+        if let Some(timer) = timer_authority {
+            timer
+                .wait_at_native_checkpoint(
+                    crate::mutation::NativeTimerCheckpointPhase::BeforeCommit,
+                )
+                .await?;
+        }
         fault.fail_at(MutationFaultPoint::BeforeCommit)?;
         if tokio::time::Instant::now() >= deadline {
             return Err(MutationError::Unavailable);
@@ -1404,12 +1965,20 @@ impl MutationTransaction {
             .append(entry)
             .await
             .map_err(|_| MutationError::CommitUnresolved)?;
-        check_current_action_grant(claims)?;
+        #[cfg(feature = "postgres-test")]
+        if let Some(timer) = timer_authority {
+            timer
+                .wait_at_native_checkpoint(
+                    crate::mutation::NativeTimerCheckpointPhase::AfterCommitBeforeResponseRelease,
+                )
+                .await?;
+        }
         fault.fail_at(MutationFaultPoint::AfterCommitBeforeResponseRelease)?;
-        Ok(MutationOutcome {
+        check_current_action_grant(claims)?;
+        Ok(ImmediateActionExecutionOutcome::Applied(MutationOutcome {
             response: held,
             replayed: false,
-        })
+        }))
     }
 
     /// Recover a stored action answer. The caller commits the transaction,
@@ -1492,6 +2061,7 @@ impl MutationTransaction {
         reserved_creates: &BTreeMap<String, Uuid>,
         prior_results: &BTreeMap<String, CurrentRow>,
         application_id: Uuid,
+        timer_authority: Option<&TimerActionAuthority>,
     ) -> Result<CurrentRow, MutationError> {
         let effect = *effects.first().ok_or(MutationError::InvalidRequest)?;
         let entity = registry
@@ -1537,6 +2107,7 @@ impl MutationTransaction {
             false,
             Some(application_id),
             &self.expected.activation_id,
+            timer_authority,
         )?;
         transaction
             .execute(
@@ -1614,9 +2185,12 @@ impl MutationTransaction {
         input_values: &ActionInputs,
         application_id: Uuid,
         preconditions: &BTreeMap<String, String>,
-    ) -> Result<Option<String>, MutationError> {
+        timer_authority: Option<&TimerActionAuthority>,
+    ) -> Result<LockedActionTargets, MutationError> {
+        #[derive(Clone, Copy)]
         enum Role<'a> {
             Patch(&'a CompiledPlanEffect),
+            TimerAnchor,
             Link(&'a str),
         }
 
@@ -1625,6 +2199,8 @@ impl MutationTransaction {
         // sorting each phase independently permits opposite-role deadlocks.
         let mut targets = BTreeMap::new();
         let mut guard_failure = None;
+        let mut rows = BTreeMap::new();
+        let mut missing_timer_link = false;
         for effect in &action.effects {
             if let CompiledPlanTargetBinding::Existing { input } = &effect.target.binding {
                 let record_id = Uuid::parse_str(&input_record_id(input_values, input)?)
@@ -1633,6 +2209,11 @@ impl MutationTransaction {
                     .entry((effect.target.entity_id.as_str(), record_id))
                     .or_insert(Role::Patch(effect));
             }
+        }
+        if let Some(timer) = timer_authority {
+            targets
+                .entry((timer.timer.record_type.as_str(), timer.record_id))
+                .or_insert(Role::TimerAnchor);
         }
         for target in &action.target_uses {
             if !(target.operation == Operation::Get
@@ -1669,26 +2250,92 @@ impl MutationTransaction {
                         true,
                         Some(application_id),
                         &self.expected.activation_id,
+                        timer_authority,
                     )?
                     .canonical_context()
                     .to_owned(),
                     String::new(),
                 ),
-                Role::Link(input) => (
-                    String::new(),
-                    action_link_context(
+                Role::TimerAnchor => {
+                    let timer = timer_authority.ok_or(MutationError::Unavailable)?;
+                    let context = ImmediateActionTargetContext::for_timer_read(
                         registry,
-                        action,
-                        input,
-                        entity_id,
-                        claims,
-                        target_authority,
-                        record_id,
-                        &self.expected.activation_id,
-                    )?
-                    .canonical_context()
-                    .to_owned(),
-                ),
+                        &timer.timer,
+                        None,
+                        timer.occurrence_id,
+                        timer.record_id,
+                        timer.claim_token,
+                        timer.claim_owner_id,
+                        timer.claim_epoch,
+                        timer.control_epoch,
+                        timer.instance_epoch,
+                        timer.activation_id,
+                        ImmediateActionTargetBinding {
+                            action_id: action.id.clone(),
+                            contract_fingerprint: action.definition_revision.clone(),
+                            active_package_revision: self.expected.activation_id.clone(),
+                            effect_ids: BTreeSet::new(),
+                            target_entity_id: entity_id.to_owned(),
+                            target_record_id: record_id,
+                            operation: Operation::Get,
+                            fields: timer.anchor_read_fields()?,
+                            expected_revision: None,
+                            lock_only: true,
+                            application_id: Some(application_id),
+                        },
+                    )
+                    .map_err(|_| MutationError::PreconditionFailed)?;
+                    (context.canonical_context().to_owned(), String::new())
+                }
+                Role::Link(input) => {
+                    if let Some(timer) = timer_authority {
+                        let fields = timer.read_fields_for_input(action, input, entity_id)?;
+                        let context = ImmediateActionTargetContext::for_timer_read(
+                            registry,
+                            &timer.timer,
+                            Some(input),
+                            timer.occurrence_id,
+                            timer.record_id,
+                            timer.claim_token,
+                            timer.claim_owner_id,
+                            timer.claim_epoch,
+                            timer.control_epoch,
+                            timer.instance_epoch,
+                            timer.activation_id,
+                            ImmediateActionTargetBinding {
+                                action_id: action.id.clone(),
+                                contract_fingerprint: action.definition_revision.clone(),
+                                active_package_revision: self.expected.activation_id.clone(),
+                                effect_ids: BTreeSet::new(),
+                                target_entity_id: entity_id.to_owned(),
+                                target_record_id: record_id,
+                                operation: Operation::Get,
+                                fields,
+                                expected_revision: None,
+                                lock_only: true,
+                                application_id: Some(application_id),
+                            },
+                        )
+                        .map_err(|_| MutationError::PreconditionFailed)?;
+                        (context.canonical_context().to_owned(), String::new())
+                    } else {
+                        (
+                            String::new(),
+                            action_link_context(
+                                registry,
+                                action,
+                                input,
+                                entity_id,
+                                claims,
+                                target_authority,
+                                record_id,
+                                &self.expected.activation_id,
+                            )?
+                            .canonical_context()
+                            .to_owned(),
+                        )
+                    }
+                }
             };
             transaction
                 .execute(
@@ -1698,8 +2345,26 @@ impl MutationTransaction {
                 )
                 .await
                 .map_err(map_database_error)?;
-            let current =
-                load_action_row(transaction, entity, &record_id.to_string(), true).await?;
+            let mut current =
+                match load_action_row(transaction, entity, &record_id.to_string(), true).await {
+                    Ok(current) => current,
+                    Err(MutationError::PreconditionFailed)
+                        if timer_authority.is_some() && matches!(role, Role::Link(_)) =>
+                    {
+                        missing_timer_link = true;
+                        continue;
+                    }
+                    Err(error) => return Err(error),
+                };
+            if let (Role::Link(input), Some(timer)) = (role, timer_authority) {
+                let fields = timer.read_fields_for_input(action, input, entity_id)?;
+                timer.materialize_read_fields(
+                    entity,
+                    &mut current,
+                    &fields,
+                    self.field_encryption.as_deref(),
+                )?;
+            }
             verify_action_requirements(
                 entity,
                 action,
@@ -1711,6 +2376,7 @@ impl MutationTransaction {
                 preconditions,
                 &mut guard_failure,
             )?;
+            rows.insert((entity_id.to_owned(), record_id), current);
         }
         transaction
             .execute(
@@ -1720,7 +2386,11 @@ impl MutationTransaction {
             )
             .await
             .map_err(map_database_error)?;
-        Ok(guard_failure)
+        Ok(LockedActionTargets {
+            guard_failure,
+            rows,
+            missing_timer_link,
+        })
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1734,6 +2404,7 @@ impl MutationTransaction {
         input_values: &ActionInputs,
         preconditions: &BTreeMap<String, String>,
         application_id: Uuid,
+        timer_authority: Option<&TimerActionAuthority>,
     ) -> Result<BTreeMap<String, CurrentRow>, MutationError> {
         let mut patch_targets =
             BTreeMap::<(String, Uuid), Vec<(&str, &CompiledPlanEffect, String)>>::new();
@@ -1771,6 +2442,7 @@ impl MutationTransaction {
                 true,
                 Some(application_id),
                 &self.expected.activation_id,
+                timer_authority,
             )?;
             transaction
                 .execute(
@@ -1780,21 +2452,23 @@ impl MutationTransaction {
                 .await
                 .map_err(map_database_error)?;
             let current = load_action_row(transaction, entity, &target_effects[0].2, true).await?;
-            for (input_id, effect, _) in &target_effects {
-                let token = action_condition_token(
-                    self.audit.profile(),
-                    registry.registry_id(),
-                    &action.id,
-                    input_id,
-                    &effect.target.entity_id,
-                    &current.record_id,
-                    current.record_revision,
-                )?;
-                let provided = preconditions
-                    .get(*input_id)
-                    .ok_or(MutationError::InvalidRequest)?;
-                if provided.as_bytes().ct_eq(token.as_bytes()).unwrap_u8() != 1 {
-                    return Err(MutationError::PreconditionFailed);
+            if timer_authority.is_none() {
+                for (input_id, effect, _) in &target_effects {
+                    let token = action_condition_token(
+                        self.audit.profile(),
+                        registry.registry_id(),
+                        &action.id,
+                        input_id,
+                        &effect.target.entity_id,
+                        &current.record_id,
+                        current.record_revision,
+                    )?;
+                    let provided = preconditions
+                        .get(*input_id)
+                        .ok_or(MutationError::InvalidRequest)?;
+                    if provided.as_bytes().ct_eq(token.as_bytes()).unwrap_u8() != 1 {
+                        return Err(MutationError::PreconditionFailed);
+                    }
                 }
             }
             let target_context = action_target_group_context(
@@ -1806,8 +2480,9 @@ impl MutationTransaction {
                 current.record_uuid,
                 Some(current.record_revision),
                 false,
-                None,
+                timer_authority.map(|_| application_id),
                 &self.expected.activation_id,
+                timer_authority,
             )?;
             target_context
                 .authorize_rows(
@@ -1883,6 +2558,7 @@ impl MutationTransaction {
                     false,
                     None,
                     &self.expected.activation_id,
+                    None,
                 )?;
                 transaction
                     .install_immediate_action_target_context(&target_context)
@@ -2088,6 +2764,7 @@ impl MutationTransaction {
                 false,
                 None,
                 &self.expected.activation_id,
+                None,
             )?;
             transaction
                 .execute(
@@ -2110,6 +2787,7 @@ impl MutationTransaction {
                     false,
                     None,
                     &self.expected.activation_id,
+                    None,
                 )?;
                 target_context
                     .authorize_rows(
@@ -2398,6 +3076,7 @@ fn action_target_context(
     lock_only: bool,
     application_id: Option<Uuid>,
     package_revision: &str,
+    timer_authority: Option<&TimerActionAuthority>,
 ) -> Result<ImmediateActionTargetContext, MutationError> {
     action_target_group_context(
         registry,
@@ -2410,6 +3089,7 @@ fn action_target_context(
         lock_only,
         application_id,
         package_revision,
+        timer_authority,
     )
 }
 
@@ -2425,6 +3105,7 @@ fn action_target_group_context(
     lock_only: bool,
     application_id: Option<Uuid>,
     package_revision: &str,
+    timer_authority: Option<&TimerActionAuthority>,
 ) -> Result<ImmediateActionTargetContext, MutationError> {
     let effect = effects
         .first()
@@ -2482,28 +3163,49 @@ fn action_target_group_context(
             .ok_or(MutationError::InvalidRequest)?;
         fields.extend(entity.generated_fields().map(|field| field.id.clone()));
     }
-    ImmediateActionTargetContext::for_effect(
-        registry,
-        claims,
-        target_authority
-            .get(&effect.target.entity_id)
-            .cloned()
-            .ok_or(MutationError::InvalidRequest)?,
-        ImmediateActionTargetBinding {
-            action_id: action.id.clone(),
-            contract_fingerprint: action.definition_revision.clone(),
-            active_package_revision: package_revision.to_owned(),
-            effect_ids,
-            target_entity_id: effect.target.entity_id.clone(),
-            target_record_id: record_id,
-            operation: effect.operation,
-            fields,
-            expected_revision,
-            lock_only,
-            application_id,
-        },
-    )
-    .map_err(|_| MutationError::InvalidRequest)
+    let binding = ImmediateActionTargetBinding {
+        action_id: action.id.clone(),
+        contract_fingerprint: action.definition_revision.clone(),
+        active_package_revision: package_revision.to_owned(),
+        effect_ids,
+        target_entity_id: effect.target.entity_id.clone(),
+        target_record_id: record_id,
+        operation: effect.operation,
+        fields,
+        expected_revision,
+        lock_only,
+        application_id,
+    };
+    if let Some(timer) = timer_authority {
+        if !timer.validates_effects(action, effects, record_id) {
+            return Err(MutationError::PreconditionFailed);
+        }
+        ImmediateActionTargetContext::for_timer_effect(
+            registry,
+            &timer.timer,
+            timer.occurrence_id,
+            timer.record_id,
+            timer.claim_token,
+            timer.claim_owner_id,
+            timer.claim_epoch,
+            timer.control_epoch,
+            timer.instance_epoch,
+            timer.activation_id,
+            binding,
+        )
+        .map_err(|_| MutationError::PreconditionFailed)
+    } else {
+        ImmediateActionTargetContext::for_effect(
+            registry,
+            claims,
+            target_authority
+                .get(&effect.target.entity_id)
+                .cloned()
+                .ok_or(MutationError::InvalidRequest)?,
+            binding,
+        )
+        .map_err(|_| MutationError::InvalidRequest)
+    }
 }
 
 fn reserve_action_create_ids(
@@ -2513,6 +3215,27 @@ fn reserve_action_create_ids(
     for effect in &action.effects {
         if matches!(effect.target.binding, CompiledPlanTargetBinding::Create) {
             reserved.insert(effect.id.clone(), Uuid::new_v4());
+        }
+    }
+    Ok(reserved)
+}
+
+fn reserve_timer_action_create_ids(
+    action: &CompiledAction,
+    occurrence_id: Uuid,
+) -> Result<BTreeMap<String, Uuid>, MutationError> {
+    let mut reserved = BTreeMap::new();
+    for effect in &action.effects {
+        if matches!(effect.target.binding, CompiledPlanTargetBinding::Create) {
+            reserved.insert(
+                effect.id.clone(),
+                crate::mutation::timer_create_target_id(
+                    occurrence_id,
+                    &action.definition_revision,
+                    &effect.id,
+                    &effect.target.entity_id,
+                ),
+            );
         }
     }
     Ok(reserved)
@@ -3139,8 +3862,10 @@ impl MutationTransaction {
                 &normalized,
                 application_id,
                 &input.preconditions,
+                None,
             )
-            .await?;
+            .await?
+            .guard_failure;
         self.verify_action_link_references(
             transaction.transaction(),
             registry,
@@ -3159,6 +3884,7 @@ impl MutationTransaction {
             &normalized,
             &input.preconditions,
             application_id,
+            None,
         )
         .await?;
         let commit_requests = self
@@ -3232,6 +3958,7 @@ impl MutationTransaction {
                     Some(frozen),
                     Some(&prepared.commit_requests),
                     None,
+                    None,
                 )
                 .await;
             if matches!(result, Err(MutationError::RetryableConflict))
@@ -3255,12 +3982,14 @@ impl MutationTransaction {
             )
             .await?;
         }
-        result.map_err(|error| match error {
-            MutationError::RetryableConflict | MutationError::CommitUnresolved => {
-                MutationError::Unavailable
-            }
-            other => other,
-        })
+        result
+            .and_then(ImmediateActionExecutionOutcome::into_applied)
+            .map_err(|error| match error {
+                MutationError::RetryableConflict | MutationError::CommitUnresolved => {
+                    MutationError::Unavailable
+                }
+                other => other,
+            })
     }
 }
 

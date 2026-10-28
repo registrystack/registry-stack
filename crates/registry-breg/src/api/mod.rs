@@ -1845,7 +1845,7 @@ async fn create_dispatch(
             context: &surface.context,
             entity_id: &route.entity_id,
             data,
-            response_fields: surface.readable_fields,
+            response_fields: surface.readable_fields.clone(),
             representation: negotiated_record_representation(&headers),
             correlation: &correlation,
         })
@@ -1857,7 +1857,7 @@ async fn create_dispatch(
             public_deployment_prefix(&service),
             service.field_encryption.as_deref(),
         ),
-        Err(error) => mutation_problem(error),
+        Err(error) => mutation_problem_for_fields(error, &surface.readable_fields),
     }
 }
 
@@ -2003,7 +2003,7 @@ async fn patch_dispatch(
                 context: &surface.context,
                 entity_id: &route.entity_id,
                 record_id,
-                response_fields: surface.readable_fields,
+                response_fields: surface.readable_fields.clone(),
                 representation: negotiated_record_representation(&headers),
                 correlation: &correlation,
             },
@@ -2017,7 +2017,7 @@ async fn patch_dispatch(
             public_deployment_prefix(&service),
             service.field_encryption.as_deref(),
         ),
-        Err(error) => mutation_problem(error),
+        Err(error) => mutation_problem_for_fields(error, &surface.readable_fields),
     }
 }
 
@@ -2139,7 +2139,7 @@ async fn batch_dispatch(
             entity_id: &route.entity_id,
             items: parsed.items,
             change_context: parsed.change_context,
-            response_fields: surface.readable_fields,
+            response_fields: surface.readable_fields.clone(),
             body_bytes: body.len(),
             correlation: &correlation,
         })
@@ -2151,7 +2151,7 @@ async fn batch_dispatch(
             public_deployment_prefix(&service),
             service.field_encryption.as_deref(),
         ),
-        Err(error) => mutation_problem(error),
+        Err(error) => mutation_problem_for_fields(error, &surface.readable_fields),
     }
 }
 
@@ -2271,7 +2271,7 @@ async fn tombstone_dispatch(
             context: &surface.context,
             entity_id: &route.entity_id,
             record_id,
-            response_fields: surface.readable_fields,
+            response_fields: surface.readable_fields.clone(),
             representation: negotiated_record_representation(&headers),
             correlation: &correlation,
         })
@@ -2283,7 +2283,7 @@ async fn tombstone_dispatch(
             public_deployment_prefix(&service),
             service.field_encryption.as_deref(),
         ),
-        Err(error) => mutation_problem(error),
+        Err(error) => mutation_problem_for_fields(error, &surface.readable_fields),
     }
 }
 
@@ -5266,11 +5266,14 @@ fn precondition_failed() -> Response {
 
 fn mutation_problem(error: MutationError) -> Response {
     match error {
-        MutationError::InvalidRequest => invalid_request(),
+        MutationError::InvalidRequest | MutationError::InvalidTimerWindow { .. } => {
+            invalid_request()
+        }
         MutationError::InvalidRequestAt(location) => invalid_request_at(&location),
         MutationError::AuthorizationRefused
         | MutationError::PreconditionFailed
-        | MutationError::FieldGuardFailed { .. } => precondition_failed(),
+        | MutationError::FieldGuardFailed { .. }
+        | MutationError::TimerGenerationUnsupported => precondition_failed(),
         MutationError::Conflict | MutationError::ProposalUniqueConflict => {
             fixed_problem(ProblemCode::MutationConflict)
         }
@@ -5315,6 +5318,21 @@ fn mutation_problem(error: MutationError) -> Response {
         MutationError::FieldEncryptionUnavailable => {
             fixed_problem(ProblemCode::RuntimeFieldEncryptionUnavailable)
         }
+    }
+}
+
+fn mutation_problem_for_fields(
+    error: MutationError,
+    readable_fields: &BTreeSet<String>,
+) -> Response {
+    match error {
+        MutationError::InvalidTimerWindow {
+            at_field,
+            not_after_field,
+        } if readable_fields.contains(&at_field) && readable_fields.contains(&not_after_field) => {
+            crate::correlation::timer_window_response(at_field, not_after_field)
+        }
+        error => mutation_problem(error),
     }
 }
 

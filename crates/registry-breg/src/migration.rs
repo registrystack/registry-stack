@@ -24,16 +24,19 @@ use crate::migration_plan::{
     ValidatedReviewedMigrationPlan,
 };
 use crate::package::{
-    CompiledRegistryChangeClass, CompiledRegistryMigrationBaseline, PackageFileRole,
-    VerifiedPackage,
+    CompiledRegistryChangeClass, CompiledRegistryChangeCode, CompiledRegistryMigrationBaseline,
+    PackageFileRole, VerifiedPackage,
 };
 use crate::postgres::{
-    statement_checksum, ActivationPlanKind, BackupReference, ConnectionConfig,
-    ExpectedManagedCatalog, ExpectedRegistryIdentity, MaintenanceTransition,
+    read_timer_activation_previews, statement_checksum, ActivationPlanKind, BackupReference,
+    ConnectionConfig, ExpectedManagedCatalog, ExpectedRegistryIdentity, MaintenanceTransition,
     MigrationArtifactBinding, MigrationKind, MigrationLedgerEntry, MigrationLedgerStep,
     MigrationLedgerStepKind, PackageDdlStatement, PostgresFailure, RegistryLockKey,
     ReviewedExecutionOutcome, ReviewedFieldEncryptionContext, ReviewedPackageExecutionRequest,
     RoleMode, SqlIdentifier, VerifiedPackageApplyConnection,
+};
+use crate::timer_activation_preview::{
+    timer_activation_preview_definitions, TimerActivationPreview,
 };
 
 const MAX_LOCK_TIMEOUT: Duration = Duration::from_secs(300);
@@ -234,6 +237,7 @@ pub fn successor_plan_is_empty(package: &VerifiedPackage) -> bool {
     plan.statements.is_empty()
         && package.reviewed_migration_plan().is_none()
         && !verified_metadata_only_plan(package)
+        && !installs_record_timer_store(package)
 }
 
 fn verified_metadata_only_plan(package: &VerifiedPackage) -> bool {
@@ -254,6 +258,15 @@ fn verified_metadata_only_plan(package: &VerifiedPackage) -> bool {
             .changes
             .iter()
             .all(|change| change.class == CompiledRegistryChangeClass::AccessOrDisclosureChange)
+}
+
+fn installs_record_timer_store(package: &VerifiedPackage) -> bool {
+    package
+        .manifest()
+        .migration_plan
+        .changes
+        .iter()
+        .any(|change| change.code == CompiledRegistryChangeCode::RecordTimerStoreAdded)
 }
 
 /// Where one package activates: the runtime identity's environment,
@@ -415,7 +428,14 @@ pub(crate) fn package_ledger_entry(
         } else {
             ActivationPlanKind::Initial
         },
-        migration_kind: if current.is_some() && verified_metadata_only_plan(package) {
+        // Engine-feature installation carries no package-authored statement
+        // checksum. The exact feature change and target catalog stay package
+        // and fingerprint bound while the platform-owned catalog installer
+        // runs under the same metadata-only ledger shape as ACL reconciliation.
+        migration_kind: if current.is_some()
+            && (verified_metadata_only_plan(package)
+                || (installs_record_timer_store(package) && compiler_checksums.is_empty()))
+        {
             MigrationKind::MetadataOnly
         } else {
             MigrationKind::CompiledAdditive
@@ -1011,6 +1031,7 @@ pub async fn plan_verified_package(
             role_mode: role_mode.as_str(),
             resumes_activation_id: None,
             required_backups: Vec::new(),
+            timer_previews: Vec::new(),
             checks: PlannedActivation::AlreadyActive.checks(),
         }),
         Err(error) => Err(error),
@@ -1041,6 +1062,10 @@ pub struct ActivationPlan {
     /// The reviewed migrations' backup binding paths, in plan order, that
     /// apply requires `--backup` for and the plan did not verify.
     pub required_backups: Vec<String>,
+    /// Bounded current-marker observations for timer definitions changed by
+    /// this successor. These are cached predecessor facts, not a projection
+    /// of historical Records or a promise that successor work is runnable.
+    pub timer_previews: Vec<TimerActivationPreview>,
     /// The database checks that passed, in the order they ran.
     pub checks: &'static [&'static str],
 }
@@ -1106,6 +1131,7 @@ impl PlannedActivation {
 
 async fn activate(request: ApplyVerifiedPackageRequest<'_>, mode: ApplyMode) -> Result<Activated> {
     let manifest = request.package.manifest();
+    let installs_record_timer_store = installs_record_timer_store(request.package);
     let role_change = matches!(request.precondition, ApplyPrecondition::RoleChange { .. });
     let current = match request.precondition {
         ApplyPrecondition::InitialActivation => None,
@@ -1464,8 +1490,34 @@ async fn activate(request: ApplyVerifiedPackageRequest<'_>, mode: ApplyMode) -> 
     }
     if mode == ApplyMode::Plan {
         let rehearsed = rehearse_begin(&mut connection, &request, current, &target, &ledger).await;
-        let released = connection.release().await;
         rehearsed?;
+        let timer_previews = if let Some(predecessor) = request
+            .package
+            .manifest()
+            .migration_plan
+            .prior_baseline
+            .as_ref()
+        {
+            let reviewed_fields = reviewed_plan
+                .map(ValidatedReviewedMigrationPlan::reviewed_field_ids)
+                .unwrap_or_default();
+            let definitions = timer_activation_preview_definitions(
+                predecessor,
+                request.package.registry(),
+                &request.package.manifest().migration_plan.changes,
+                &reviewed_fields,
+            )
+            .map_err(|_| MigrationError::PackageBinding)?;
+            read_timer_activation_previews(
+                connection.client_for_proposal_retention_guard(),
+                definitions,
+            )
+            .await
+            .map_err(|error| named_refusal(error).unwrap_or(MigrationError::ApplyFailed))?
+        } else {
+            Vec::new()
+        };
+        let released = connection.release().await;
         released.map_err(|_| MigrationError::ApplyFailed)?;
         let activation = match current {
             None => PlannedActivation::Initial,
@@ -1477,6 +1529,7 @@ async fn activate(request: ApplyVerifiedPackageRequest<'_>, mode: ApplyMode) -> 
             role_mode: ledger.role_mode.as_str(),
             resumes_activation_id,
             required_backups,
+            timer_previews,
             checks: activation.checks(),
         }));
     }
@@ -1702,10 +1755,26 @@ async fn activate(request: ApplyVerifiedPackageRequest<'_>, mode: ApplyMode) -> 
                     .await;
             }
         }
-        if let Err(error) = connection
-            .reconcile_runtime_acl(request.package.registry(), request.roles.runtime)
-            .await
-        {
+        let engine_features = if installs_record_timer_store {
+            connection
+                .install_successor_engine_features(
+                    request.package.registry(),
+                    &target,
+                    MaintenanceTransition {
+                        ledger: &ledger,
+                        expected_catalog: &expected_catalog,
+                        migration_role: request.roles.migration,
+                        runtime_role: request.roles.runtime,
+                    },
+                    request.timeouts.statement,
+                )
+                .await
+        } else {
+            connection
+                .reconcile_runtime_acl(request.package.registry(), request.roles.runtime)
+                .await
+        };
+        if let Err(error) = engine_features {
             return fail_with_error_and_release(connection, attempt, &target, &ledger, error).await;
         }
         let activation_result = connection
@@ -1734,10 +1803,11 @@ async fn activate(request: ApplyVerifiedPackageRequest<'_>, mode: ApplyMode) -> 
             .map(Activated::Applied);
     }
 
-    if connection
-        .reconcile_runtime_acl(request.package.registry(), request.roles.runtime)
-        .await
-        .is_ok()
+    if !installs_record_timer_store
+        && connection
+            .reconcile_runtime_acl(request.package.registry(), request.roles.runtime)
+            .await
+            .is_ok()
     {
         if let Ok(superseded) = connection
             .activate_verified_package(
@@ -1760,7 +1830,21 @@ async fn activate(request: ApplyVerifiedPackageRequest<'_>, mode: ApplyMode) -> 
         }
     }
 
-    let ddl_result = if current.is_some() {
+    let ddl_result = if current.is_some() && installs_record_timer_store && statements.is_empty() {
+        connection
+            .install_successor_engine_features(
+                request.package.registry(),
+                &target,
+                MaintenanceTransition {
+                    ledger: &ledger,
+                    expected_catalog: &expected_catalog,
+                    migration_role: request.roles.migration,
+                    runtime_role: request.roles.runtime,
+                },
+                request.timeouts.statement,
+            )
+            .await
+    } else if current.is_some() {
         connection
             .execute_successor_package_ddl(
                 request.package.registry(),
@@ -2510,6 +2594,7 @@ mod tests {
     fn baseline(package_digest: &str, registry_id: &str) -> CompiledRegistryMigrationBaseline {
         CompiledRegistryMigrationBaseline {
             package_digest: package_digest.to_owned(),
+            engine_features: crate::package::current_engine_features(),
             registry_id: registry_id.to_owned(),
             registry_version: "1".to_owned(),
             registry_revision: "ignored-descriptor-revision".to_owned(),

@@ -27,6 +27,7 @@ use registry_breg::package::{
 };
 use registry_breg::postgres::{BaselineFingerprintDrift, MigrationRehearsalError};
 use registry_breg::runtime_config::RuntimeConfigError;
+use registry_breg::timer_activation_preview::TimerActivationPreview;
 use registry_breg::tooling::{classify_registry_diff, CompiledRegistryDiff, DiffClassification};
 use registry_breg::{
     compile_project_with_assets, parse_module_yaml, parse_project_yaml, CompileFailure,
@@ -70,6 +71,7 @@ mod selected_binary;
 mod starters;
 mod statistics_lifecycle;
 mod test_lifecycle;
+mod timer_operator_lifecycle;
 #[cfg(feature = "schema")]
 pub mod tool_schema;
 
@@ -246,6 +248,8 @@ enum Command {
     /// Status reads as the migration role in one read-only transaction and takes no apply lock,
     /// so it answers while an apply runs.
     Status(StatusArgs),
+    /// Inspect and operate native Record timers through bounded audited commands.
+    Timer(timer_operator_lifecycle::TimerArgs),
     /// Verify configured startup dependencies without binding a listener.
     Doctor(DoctorArgs),
     /// Verify one configured package without opening runtime dependencies.
@@ -1931,6 +1935,7 @@ enum DiagnosticArtifact {
     HistoryRebaseline,
     FieldEncryption,
     ActionTest,
+    TimerOperator,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -1989,6 +1994,7 @@ enum SuggestedAction {
     PrepareFieldEncryptionEraseRequest,
     CorrectActionTestInput,
     CorrectActionHandler,
+    VerifyTimerOperator,
 }
 
 #[derive(Serialize)]
@@ -2162,6 +2168,7 @@ struct PlanSuccessReport {
     required_backups: Vec<String>,
     checks: &'static [&'static str],
     migration: MigrationInspectionSummary,
+    timer_previews: Vec<TimerActivationPreview>,
 }
 
 /// The activation `bregctl apply` would report, or `none` when the package is
@@ -2883,6 +2890,9 @@ where
                 Ok(report) => write_status_success(&report, format, stdout, stderr),
                 Err(failure) => write_failure(&failure, format, stdout, stderr),
             };
+        }
+        Command::Timer(args) => {
+            return timer_operator_lifecycle::run(args, format, stdout, stderr);
         }
         Command::Doctor(args) => {
             return match doctor::run(&args.runtime_config) {
@@ -5935,31 +5945,48 @@ fn capture_candidate(
             // The generic code is the fallback for a structural precondition
             // (predecessor digest, baseline binding) that never reaches
             // `ReviewedMigrationError`; a reviewed plan refusal names its kind.
-            let code = match error {
+            let (code, timer_field) = match error {
                 PackageError::ReviewedMigration(ReviewedMigrationError::Descriptor) => {
-                    "migration.review.descriptor-refused"
+                    ("migration.review.descriptor-refused", None)
                 }
                 PackageError::ReviewedMigration(ReviewedMigrationError::Coverage) => {
-                    "migration.review.coverage-refused"
+                    ("migration.review.coverage-refused", None)
                 }
                 PackageError::ReviewedMigration(ReviewedMigrationError::Sql) => {
-                    "migration.review.sql-refused"
+                    ("migration.review.sql-refused", None)
                 }
                 PackageError::ReviewedMigration(ReviewedMigrationError::Evidence) => {
-                    "migration.review.evidence-refused"
+                    ("migration.review.evidence-refused", None)
                 }
                 PackageError::ReviewedMigration(ReviewedMigrationError::Closure) => {
-                    "migration.review.closure-refused"
+                    ("migration.review.closure-refused", None)
                 }
-                _ => "migration.review.refused",
+                PackageError::ReviewedMigration(ReviewedMigrationError::TimerFieldUpdate {
+                    entity_id,
+                    field_id,
+                }) => (
+                    "migration.review.timer-field-update-refused",
+                    Some((entity_id, field_id)),
+                ),
+                _ => ("migration.review.refused", None),
             };
+            let message = timer_field.map_or_else(
+                || {
+                    format!(
+                        "the reviewed plan was refused; it has to cover exactly these changes: {reviewed_changes}. Check change coverage, artifact digests, prior package and schema bindings, and target fingerprint. Use the same reviewed directory for test and package"
+                    )
+                },
+                |(record_type, field)| {
+                    format!(
+                        "the reviewed plan updates timer control or predicate field `{field}` on Record type `{record_type}`. Milestone 1 does not migrate those fields with authored SQL. Remove that update and change the field through an ordinary authorised Record write after activation"
+                    )
+                },
+            );
             candidate_failure(
                 command,
                 code,
                 "reviewedMigrations",
-                &format!(
-                    "the reviewed plan was refused; it has to cover exactly these changes: {reviewed_changes}. Check change coverage, artifact digests, prior package and schema bindings, and target fingerprint. Use the same reviewed directory for test and package"
-                ),
+                &message,
                 DiagnosticArtifact::DatabaseMigration,
                 SuggestedAction::CorrectPackageBuild,
             )
@@ -6018,6 +6045,7 @@ fn plan(args: &PlanArgs) -> Result<PlanSuccessReport, Refusal> {
         required_backups: outcome.plan.required_backups,
         checks: outcome.plan.checks,
         migration: outcome.migration,
+        timer_previews: outcome.plan.timer_previews,
     })
 }
 
@@ -6625,6 +6653,13 @@ fn lifecycle_failure(command: &'static str, error: ApplyLifecycleError) -> Failu
             "apply.package.build-mismatch",
             "package",
             PACKAGE_BUILD_MISMATCH,
+            DiagnosticArtifact::VerifiedPackage,
+            SuggestedAction::CorrectPackageBuild,
+        ),
+        ApplyLifecycleError::TargetPackage(PackageError::EngineFeatureUpgradeRequired) => (
+            "apply.package.engine-upgrade-required",
+            "package",
+            PACKAGE_ENGINE_UPGRADE_REQUIRED,
             DiagnosticArtifact::VerifiedPackage,
             SuggestedAction::CorrectPackageBuild,
         ),
@@ -7502,11 +7537,13 @@ fn inspection_failure(
 
 const PACKAGE_BUILD_MISMATCH: &str = "the package cannot be reproduced by this compiler: a different compiler build or changed packaged content can cause this mismatch. Nothing was changed. Verify the reviewed sources, then rebuild with matching bregctl and breg executables: run `bregctl test`, then `bregctl package`; keep the exact pinned package for any activation already in maintenance";
 
+const PACKAGE_ENGINE_UPGRADE_REQUIRED: &str = "the package predates the engine-owned Record timer store. Nothing was changed. Keep this exact package as the active baseline, build a successor with this release using `bregctl test --baseline-package <active package directory>` and `bregctl package --baseline-package <active package directory>`, then run `bregctl plan --package <successor>` and `bregctl apply --package <successor>` before restarting the runtime";
+
 fn package_refusal_message(error: &PackageError, fallback: &'static str) -> &'static str {
-    if matches!(error, PackageError::Derivation) {
-        PACKAGE_BUILD_MISMATCH
-    } else {
-        fallback
+    match error {
+        PackageError::Derivation => PACKAGE_BUILD_MISMATCH,
+        PackageError::EngineFeatureUpgradeRequired => PACKAGE_ENGINE_UPGRADE_REQUIRED,
+        _ => fallback,
     }
 }
 
@@ -7537,6 +7574,10 @@ fn package_refusal(error: &PackageError) -> (&'static str, SuggestedAction) {
             ("package-refused", SuggestedAction::VerifyPackageIntegrity)
         }
         PackageError::Derivation => ("build-mismatch", SuggestedAction::CorrectPackageBuild),
+        PackageError::EngineFeatureUpgradeRequired => (
+            "engine-upgrade-required",
+            SuggestedAction::CorrectPackageBuild,
+        ),
         PackageError::RetiredApiVersion => {
             ("retired-api-version", SuggestedAction::CorrectPackageBuild)
         }
@@ -8360,7 +8401,7 @@ const MODEL_EXPLANATION: ExplainFormat = ExplainFormat {
     kind: "BRegModelExplanation",
 };
 const ACCESS_EXPLANATION: ExplainFormat = ExplainFormat {
-    api_version: "id.registrystack.org/formats/breg/access-explanation/v1alpha7",
+    api_version: "id.registrystack.org/formats/breg/access-explanation/v1alpha8",
     kind: "BRegAccessExplanation",
 };
 const ACCESS_PREVIEW: ExplainFormat = ExplainFormat {
@@ -11471,11 +11512,116 @@ fn push_access_explanation(explanation: &Value, lines: &mut report::Lines) {
         }
     }
     explain_report::actions(&explanation["actions"]["actions"], lines);
+    push_timer_access_explanation(&explanation["timers"], lines);
     push_row_reach(&explanation["rowReach"], lines);
     explain_report::datasets(&explanation["statisticalDatasets"], lines);
     if explanation["consent"].is_object() {
         lines.blank();
         push_consent_explanation(&explanation["consent"], lines);
+    }
+}
+
+fn push_timer_access_explanation(timers: &Value, lines: &mut report::Lines) {
+    let Some(timers) = timers.as_array().filter(|timers| !timers.is_empty()) else {
+        return;
+    };
+    lines.heading("Record timers:");
+    for timer in timers {
+        lines.item_at(
+            1,
+            &format!(
+                "timer {}/{}",
+                timer["recordType"].as_str().unwrap_or(""),
+                timer["timer"].as_str().unwrap_or("")
+            ),
+        );
+        let effect = &timer["futureEffect"];
+        let grant = &effect["systemGrant"];
+        lines.pairs_at(
+            2,
+            &[
+                (
+                    "source module",
+                    timer["sourceModule"]
+                        .as_str()
+                        .unwrap_or("project root")
+                        .to_owned(),
+                ),
+                ("invokes", timer["invoke"].as_str().unwrap_or("").to_owned()),
+                ("control fields", joined_or(&timer["controlFields"], "none")),
+                (
+                    "predicate fields",
+                    joined_or(&timer["predicateFields"], "none"),
+                ),
+                (
+                    "effect-shaping input fields",
+                    joined_or(&timer["effectInputFields"], "none"),
+                ),
+                (
+                    "autonomous authority",
+                    effect["authority"].as_str().unwrap_or("").to_owned(),
+                ),
+                (
+                    "direct Record grant relationship",
+                    effect["recordGrantRelationship"]
+                        .as_str()
+                        .unwrap_or("")
+                        .to_owned(),
+                ),
+                (
+                    "system grant revision",
+                    grant["revision"].as_str().unwrap_or("").to_owned(),
+                ),
+            ],
+        );
+        for (member, label) in [
+            ("controlWriters", "control writer"),
+            ("predicateWriters", "predicate writer"),
+            ("effectInputWriters", "effect-input writer"),
+        ] {
+            for writer in timer[member].as_array().into_iter().flatten() {
+                lines.listed(
+                    2,
+                    &format!(
+                        "{label} {} ({})",
+                        writer["id"].as_str().unwrap_or(""),
+                        writer["surface"].as_str().unwrap_or("")
+                    ),
+                );
+                lines.pairs_at(
+                    3,
+                    &[
+                        ("operations", joined_or(&writer["operations"], "none")),
+                        ("fields", joined_or(&writer["fields"], "none")),
+                        (
+                            "access profiles",
+                            joined_or(&writer["accessProfiles"], "none"),
+                        ),
+                        (
+                            "configuration path",
+                            writer["sourcePath"].as_str().unwrap_or("").to_owned(),
+                        ),
+                    ],
+                );
+            }
+        }
+        for target in grant["targets"].as_array().into_iter().flatten() {
+            lines.listed(
+                2,
+                &format!(
+                    "future effect {} {}",
+                    target["operation"].as_str().unwrap_or(""),
+                    target["recordType"].as_str().unwrap_or("")
+                ),
+            );
+            lines.pairs_at(
+                3,
+                &[
+                    ("fields", joined_or(&target["fields"], "none")),
+                    ("read fields", joined_or(&target["readFields"], "none")),
+                ],
+            );
+        }
     }
 }
 
@@ -12681,6 +12827,7 @@ fn write_plan_success(
         ));
         pairs.push(("checks passed", report.checks.join(", ")));
         lines.pairs(&pairs);
+        push_timer_activation_previews(&report.timer_previews, &mut lines);
         if !report.required_backups.is_empty() {
             lines.blank();
             lines.item("apply requires --backup for");
@@ -12691,6 +12838,84 @@ fn write_plan_success(
         stdout.write_all(lines.finish().as_bytes())
     };
     write_result(result, stderr)
+}
+
+fn push_timer_activation_previews(previews: &[TimerActivationPreview], lines: &mut report::Lines) {
+    if previews.is_empty() {
+        return;
+    }
+    lines.blank();
+    lines.item("record timer preview");
+    for preview in previews {
+        let definition = &preview.definition;
+        let cached = &preview.cached_predecessor;
+        lines.item_at(
+            1,
+            &format!(
+                "{}.{} ({})",
+                definition.record_type,
+                definition.timer,
+                definition.change.as_str(),
+            ),
+        );
+        let mut fields = vec![
+            (
+                "predecessor definition revision",
+                definition
+                    .predecessor_revisions
+                    .as_ref()
+                    .map_or_else(|| "none".to_owned(), |value| value.definition.clone()),
+            ),
+            (
+                "successor definition revision",
+                definition
+                    .successor_revisions
+                    .as_ref()
+                    .map_or_else(|| "none".to_owned(), |value| value.definition.clone()),
+            ),
+            ("cached basis", cached.basis.as_str().to_owned()),
+            (
+                "observed unfinished",
+                cached.observed_unfinished_count.to_string(),
+            ),
+            (
+                "earliest cached due",
+                cached
+                    .earliest_due_at
+                    .map_or_else(|| "none".to_owned(), |value| value.to_rfc3339()),
+            ),
+            (
+                "observed stale revisions",
+                cached.has_stale_revisions.to_string(),
+            ),
+            ("cached count truncated", cached.truncated.to_string()),
+            (
+                "successor evaluation",
+                definition.successor_evaluation.as_str().to_owned(),
+            ),
+            (
+                "historical records",
+                definition.historical_records.as_str().to_owned(),
+            ),
+            ("backfill", definition.backfill.as_str().to_owned()),
+            (
+                "removal fence",
+                definition.removal_fence.as_str().to_owned(),
+            ),
+        ];
+        if !definition.effect_shaping_migration_fields.is_empty() {
+            fields.push((
+                "effect-shaping migration fields",
+                definition
+                    .effect_shaping_migration_fields
+                    .iter()
+                    .map(|field| format!("{}.{}", field.record_type, field.field))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            ));
+        }
+        lines.pairs_at(2, &fields);
+    }
 }
 
 fn write_status_success(
@@ -15333,6 +15558,7 @@ mod tests {
                 "apply",
                 "plan",
                 "status",
+                "timer",
                 "doctor",
                 "verify",
                 "migration",
@@ -17068,6 +17294,38 @@ fn package_derivation_refuses_with_build_guidance_and_preserves_integrity_refusa
         package_refusal(&PackageError::Integrity),
         ("integrity-refused", SuggestedAction::VerifyPackageIntegrity)
     );
+    assert_eq!(
+        package_refusal(&PackageError::EngineFeatureUpgradeRequired),
+        (
+            "engine-upgrade-required",
+            SuggestedAction::CorrectPackageBuild
+        )
+    );
+    let upgrade = lifecycle_failure(
+        "apply",
+        ApplyLifecycleError::TargetPackage(PackageError::EngineFeatureUpgradeRequired),
+    );
+    let diagnostic = &upgrade.diagnostics[0];
+    assert_eq!(diagnostic.code, "apply.package.engine-upgrade-required");
+    assert_eq!(diagnostic.path, "package");
+    assert_eq!(
+        diagnostic.suggested_action,
+        SuggestedAction::CorrectPackageBuild
+    );
+    for fragment in [
+        "active baseline",
+        "bregctl test --baseline-package",
+        "bregctl package --baseline-package",
+        "bregctl plan --package",
+        "bregctl apply --package",
+        "before restarting",
+    ] {
+        assert!(
+            diagnostic.message.contains(fragment),
+            "{fragment}: {}",
+            diagnostic.message
+        );
+    }
     for command in ["apply", "plan"] {
         for (error, path) in [
             (
@@ -18092,4 +18350,123 @@ fn retained_hook_refusal_reports_incomplete_terminal_audit_without_activation() 
     assert!(!diagnostic
         .message
         .contains("request entry, so the activation did not start"));
+}
+
+#[cfg(test)]
+#[test]
+fn plan_timer_preview_is_value_free_in_text_and_json() {
+    use registry_breg::timer_activation_preview::{
+        TimerActivationChange, TimerActivationPreviewDefinition, TimerBackfill,
+        TimerCachedPredecessor, TimerCachedPredecessorBasis, TimerHistoricalRecords,
+        TimerMigrationField, TimerPolicyRevisions, TimerRemovalFence, TimerSuccessorEvaluation,
+    };
+
+    let mut previews = vec![TimerActivationPreview {
+        definition: TimerActivationPreviewDefinition {
+            record_type: "contact".to_owned(),
+            timer: "activate".to_owned(),
+            change: TimerActivationChange::EffectInputMigration,
+            predecessor_revisions: Some(TimerPolicyRevisions {
+                definition: "sha256:predecessor-definition".to_owned(),
+                action: "sha256:predecessor-action".to_owned(),
+                system_grant: "sha256:predecessor-grant".to_owned(),
+            }),
+            successor_revisions: Some(TimerPolicyRevisions {
+                definition: "sha256:successor-definition".to_owned(),
+                action: "sha256:successor-action".to_owned(),
+                system_grant: "sha256:successor-grant".to_owned(),
+            }),
+            successor_evaluation: TimerSuccessorEvaluation::UnknownUntilRefresh,
+            historical_records: TimerHistoricalRecords::Unarmed,
+            backfill: TimerBackfill::Unavailable,
+            effect_shaping_migration_fields: vec![TimerMigrationField {
+                record_type: "approval".to_owned(),
+                field: "status".to_owned(),
+            }],
+            removal_fence: TimerRemovalFence::NotApplicable,
+        },
+        cached_predecessor: TimerCachedPredecessor {
+            basis: TimerCachedPredecessorBasis::CurrentMarkerActiveBindingCache,
+            observed_unfinished_count: 10_000,
+            earliest_due_at: Some(
+                chrono::DateTime::parse_from_rfc3339("2026-10-28T00:00:00Z")
+                    .unwrap()
+                    .to_utc(),
+            ),
+            has_stale_revisions: true,
+            truncated: true,
+        },
+    }];
+    previews.push(TimerActivationPreview {
+        definition: TimerActivationPreviewDefinition {
+            record_type: "contact".to_owned(),
+            timer: "obsolete".to_owned(),
+            change: TimerActivationChange::Removed,
+            predecessor_revisions: Some(TimerPolicyRevisions {
+                definition: "sha256:removed-definition".to_owned(),
+                action: "sha256:removed-action".to_owned(),
+                system_grant: "sha256:removed-grant".to_owned(),
+            }),
+            successor_revisions: None,
+            successor_evaluation: TimerSuccessorEvaluation::RemovedNoExecutionFenced,
+            historical_records: TimerHistoricalRecords::Unarmed,
+            backfill: TimerBackfill::Unavailable,
+            effect_shaping_migration_fields: Vec::new(),
+            removal_fence: TimerRemovalFence::Retained,
+        },
+        cached_predecessor: TimerCachedPredecessor {
+            basis: TimerCachedPredecessorBasis::CurrentMarkerActiveBindingCache,
+            observed_unfinished_count: 0,
+            earliest_due_at: None,
+            has_stale_revisions: false,
+            truncated: false,
+        },
+    });
+    let mut lines = report::Lines::new();
+    push_timer_activation_previews(&previews, &mut lines);
+    let text = lines.finish();
+    for expected in [
+        "contact.activate (effect-input-migration)",
+        "current-marker-active-binding-cache",
+        "observed unfinished",
+        "10000",
+        "observed stale revisions",
+        "cached count truncated",
+        "unknown-until-refresh",
+        "historical records",
+        "unarmed",
+        "backfill",
+        "unavailable",
+        "approval.status",
+        "contact.obsolete (removed)",
+        "removed-no-execution-fenced",
+        "retained",
+    ] {
+        assert!(text.contains(expected), "missing {expected:?} from {text}");
+    }
+    for forbidden in ["UPDATE ", "preview-secret-value", "registry_internal"] {
+        assert!(!text.contains(forbidden), "{text}");
+    }
+
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct PreviewReport<'a> {
+        timer_previews: &'a [TimerActivationPreview],
+    }
+    let json = serde_json::to_value(PreviewReport {
+        timer_previews: &previews,
+    })
+    .unwrap();
+    assert_eq!(
+        json.pointer("/timerPreviews/0/change"),
+        Some(&Value::String("effect-input-migration".to_owned()))
+    );
+    assert_eq!(
+        json.pointer("/timerPreviews/0/effectShapingMigrationFields/0/recordType"),
+        Some(&Value::String("approval".to_owned()))
+    );
+    let serialized = json.to_string();
+    for forbidden in ["UPDATE ", "preview-secret-value", "registry_internal"] {
+        assert!(!serialized.contains(forbidden), "{serialized}");
+    }
 }

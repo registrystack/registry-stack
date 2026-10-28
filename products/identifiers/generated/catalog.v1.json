@@ -4117,20 +4117,20 @@
       }
     },
     {
-      "uri": "https://id.registrystack.org/schemas/breg/access-explanation/access-explanation.v1alpha7.schema.json",
+      "uri": "https://id.registrystack.org/schemas/breg/access-explanation/access-explanation.v1alpha8.schema.json",
       "kind": "schema",
       "status": "active",
-      "compatibilityLine": "v1alpha7",
+      "compatibilityLine": "v1alpha8",
       "owner": "breg",
       "title": "AccessExplanation",
       "description": "Base Registry Engine bregctl explain output JSON Schemas, written by hand and held to bregctl's output by its contract test.",
       "source": {
         "path": "products/breg/contracts/explain/AccessExplanation.schema.json",
-        "sha256": "868846b864b32a31087c4c2fc8b99ef232151641a7fd848f3bca3d516f284544"
+        "sha256": "e9bae5707ef92498b162083958fc0af4c1c043e74eec71252259e70bab88b73d"
       },
       "artifact": {
         "path": "products/breg/contracts/explain/AccessExplanation.schema.json",
-        "sha256": "868846b864b32a31087c4c2fc8b99ef232151641a7fd848f3bca3d516f284544",
+        "sha256": "e9bae5707ef92498b162083958fc0af4c1c043e74eec71252259e70bab88b73d",
         "mediaType": "application/schema+json"
       }
     },
@@ -4162,7 +4162,7 @@
       "description": "Base Registry Engine portable Action contract export schema, reproduced from the canonical compiled project.",
       "source": {
         "path": "crates/registry-breg/src/artifacts.rs",
-        "sha256": "560911be004e83d591163ea1c4a25f577546decd01b3f3d49fbbe92354c380b3"
+        "sha256": "9c8acc09382db4302ebfe0bdf17e326cb8b53963c0f735f72b7c0c5aaf95d454"
       },
       "artifact": {
         "path": "products/breg/generated/facility/generated/action-contracts.schema.json",
@@ -4346,7 +4346,7 @@
       },
       "artifact": {
         "path": "products/breg/generated/tools/migration-descriptor.v1alpha1.schema.json",
-        "sha256": "100315e48b363b9f32004f472633a0710816abb6dce52129f2f98513dfd0d8ab",
+        "sha256": "a106462844444c8b76d8da42bf9e7b6a8400d46d472f715e77f7c46ea7e18e57",
         "mediaType": "application/schema+json"
       }
     },
@@ -4400,7 +4400,7 @@
       },
       "artifact": {
         "path": "products/breg/generated/authoring/registry-module.schema.json",
-        "sha256": "9eff8e027f5900d3fd4a1c88b6cae2c9657fcd9e09e3e07706e6bd1a7823e0e3",
+        "sha256": "c45bd53efa7ce3e859a78ecef0266534cbbb666bf8ef1d18b0626ac2df449e87",
         "mediaType": "application/schema+json"
       }
     },
@@ -4418,7 +4418,7 @@
       },
       "artifact": {
         "path": "products/breg/generated/authoring/registry-project.schema.json",
-        "sha256": "a9770dec360be9b6ef23c57f12b53cbf24a25b82a318f7f142ead530b65e35f7",
+        "sha256": "6d5de717bd1327226e892595ee62c9df49b6dd33f449d05ccd5089deade5a0ff",
         "mediaType": "application/schema+json"
       }
     },

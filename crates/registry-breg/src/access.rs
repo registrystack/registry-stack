@@ -597,6 +597,9 @@ pub struct AccessExplanation {
     #[serde(rename = "recordTypes")]
     pub entities: Vec<EntityAccessExplanation>,
     pub actions: serde_json::Value,
+    /// Autonomous policy, the existing writers that can shape it, and the
+    /// exact product-owned Action ceiling it may exercise in the future.
+    pub timers: Vec<TimerAccessExplanation>,
     pub row_reach: Vec<RowReachExplanation>,
     pub claim_contract: Option<crate::authority::AuthorityInventory>,
     pub claim_contract_error: Option<crate::authority::AuthorityInventoryError>,
@@ -606,6 +609,43 @@ pub struct AccessExplanation {
     /// Who may do what with each statistical dataset; empty when the project
     /// declares none.
     pub statistical_datasets: Vec<StatisticalDatasetAccessExplanation>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TimerAccessExplanation {
+    #[serde(rename = "recordType")]
+    pub entity: String,
+    pub timer: String,
+    pub source_module: Option<String>,
+    pub invoke: String,
+    pub control_fields: BTreeSet<String>,
+    pub predicate_fields: BTreeSet<String>,
+    pub effect_input_fields: BTreeSet<String>,
+    pub control_writers: Vec<TimerWriterExplanation>,
+    pub predicate_writers: Vec<TimerWriterExplanation>,
+    pub effect_input_writers: Vec<TimerWriterExplanation>,
+    pub future_effect: TimerFutureEffectExplanation,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TimerWriterExplanation {
+    pub surface: &'static str,
+    pub id: String,
+    pub source_path: String,
+    pub operations: BTreeSet<Operation>,
+    pub fields: BTreeSet<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub access_profiles: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TimerFutureEffectExplanation {
+    pub authority: &'static str,
+    pub record_grant_relationship: &'static str,
+    pub system_grant: crate::model::CompiledSystemApplyGrant,
 }
 
 /// The access profiles that hold each operation on one statistical dataset.
@@ -923,6 +963,170 @@ fn row_reach(
     reach
 }
 
+fn timer_writer_explanations(
+    entity: &CompiledEntity,
+    actions: &CompiledActionInventory,
+    fields: &BTreeSet<String>,
+    include_tombstone: bool,
+) -> Vec<TimerWriterExplanation> {
+    let write_operations = [
+        Operation::Create,
+        Operation::Patch,
+        Operation::Tombstone,
+        Operation::Batch,
+        Operation::Import,
+    ];
+    let mut writers = entity
+        .access_profiles
+        .values()
+        .filter_map(|profile| {
+            let affected_fields = profile
+                .writable_fields
+                .intersection(fields)
+                .cloned()
+                .collect::<BTreeSet<_>>();
+            let operations = write_operations
+                .iter()
+                .copied()
+                .filter(|operation| {
+                    profile.operations.contains(operation)
+                        && match operation {
+                            Operation::Tombstone => include_tombstone,
+                            _ => !affected_fields.is_empty(),
+                        }
+                })
+                .collect::<BTreeSet<_>>();
+            if operations.is_empty() {
+                return None;
+            }
+            Some(TimerWriterExplanation {
+                surface: "record-permission",
+                id: profile.id.clone(),
+                source_path: profile_path(&entity.id, &profile.id),
+                operations,
+                fields: affected_fields,
+                access_profiles: vec![profile.id.clone()],
+            })
+        })
+        .collect::<Vec<_>>();
+
+    for action in &actions.actions {
+        let uses = action
+            .target_uses
+            .iter()
+            .filter(|target| {
+                if target.entity_id != entity.id {
+                    return false;
+                }
+                match target.operation {
+                    Operation::Create | Operation::Patch => !target.fields.is_disjoint(fields),
+                    Operation::Tombstone => include_tombstone,
+                    _ => false,
+                }
+            })
+            .collect::<Vec<_>>();
+        if uses.is_empty() {
+            continue;
+        }
+        let operations = uses
+            .iter()
+            .map(|target| target.operation)
+            .collect::<BTreeSet<_>>();
+        let affected_fields = uses
+            .iter()
+            .flat_map(|target| target.fields.intersection(fields).cloned())
+            .collect::<BTreeSet<_>>();
+        let mut access_profiles = action
+            .permissions
+            .iter()
+            .filter(|permission| {
+                permission.targets.iter().any(|target| {
+                    uses.iter().any(|use_| {
+                        target.entity_id == use_.entity_id
+                            && target.operation == use_.operation
+                            && target.source == use_.source
+                    })
+                })
+            })
+            .map(|permission| permission.profile_id.clone())
+            .collect::<BTreeSet<_>>();
+        if let crate::model::CompiledActionExecution::Proposal { proposal } = &action.execution {
+            access_profiles.extend(
+                proposal
+                    .permissions
+                    .iter()
+                    .filter(|permission| {
+                        permission.operations.iter().any(|operation| {
+                            matches!(
+                                operation,
+                                crate::contract::ProposalOperation::Edit
+                                    | crate::contract::ProposalOperation::Submit
+                                    | crate::contract::ProposalOperation::Revise
+                                    | crate::contract::ProposalOperation::Apply
+                                    | crate::contract::ProposalOperation::Rebase
+                                    | crate::contract::ProposalOperation::Retry
+                            )
+                        }) && permission
+                            .targets
+                            .iter()
+                            .any(|target| target.entity_id == entity.id)
+                    })
+                    .map(|permission| permission.profile_id.clone()),
+            );
+        }
+        writers.push(TimerWriterExplanation {
+            surface: "action",
+            id: action.id.clone(),
+            source_path: format!("actions[id={}]", action.id),
+            operations,
+            fields: affected_fields,
+            access_profiles: access_profiles.into_iter().collect(),
+        });
+    }
+    writers
+}
+
+fn explain_timers(registry: &CompiledRegistry) -> Vec<TimerAccessExplanation> {
+    registry
+        .entities()
+        .values()
+        .flat_map(|entity| {
+            entity.timers.values().map(|timer| TimerAccessExplanation {
+                entity: entity.id.clone(),
+                timer: timer.id.clone(),
+                source_module: timer.source_module.clone(),
+                invoke: timer.invoke.clone(),
+                control_fields: timer.control_fields.clone(),
+                predicate_fields: timer.predicate_fields.clone(),
+                effect_input_fields: timer.effect_input_fields.clone(),
+                control_writers: timer_writer_explanations(
+                    entity,
+                    registry.actions(),
+                    &timer.control_fields,
+                    true,
+                ),
+                predicate_writers: timer_writer_explanations(
+                    entity,
+                    registry.actions(),
+                    &timer.predicate_fields,
+                    false,
+                ),
+                effect_input_writers: timer_writer_explanations(
+                    entity,
+                    registry.actions(),
+                    &timer.effect_input_fields,
+                    false,
+                ),
+                future_effect: TimerFutureEffectExplanation {
+                    authority: "product-owned",
+                    record_grant_relationship: "none",
+                    system_grant: timer.system_grant.clone(),
+                },
+            })
+        })
+        .collect()
+}
+
 /// Explain compiled authority without verifying credentials or evaluating records.
 pub fn explain_access(registry: &CompiledRegistry) -> AccessExplanation {
     let (claim_contract, claim_contract_error) =
@@ -960,6 +1164,7 @@ pub fn explain_access(registry: &CompiledRegistry) -> AccessExplanation {
             "routes": registry.actions().routes,
             "access": registry.actions().access,
         }),
+        timers: explain_timers(registry),
         row_reach: row_reach(registry.entities(), registry.actions()),
         claim_contract,
         claim_contract_error,

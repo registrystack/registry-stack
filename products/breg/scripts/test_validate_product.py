@@ -71,7 +71,7 @@ class BRegProductCatalogTests(unittest.TestCase):
         )
         extension_rows = matrix["invariants"][24:]
         self.assertEqual(
-            [f"BREG-NEG-{index:02d}" for index in range(25, 195) if index not in {61, 62}],
+            [f"BREG-NEG-{index:02d}" for index in range(25, 203) if index not in {61, 62}],
             [invariant["negativeId"] for invariant in extension_rows],
         )
         for invariant in extension_rows:
@@ -218,6 +218,31 @@ class BRegProductCatalogTests(unittest.TestCase):
         errors: list[str] = []
         VALIDATOR.validate_postgres_entrypoint(errors)
         self.assertEqual([], errors)
+
+    def test_record_timer_targets_and_operator_binary_are_owned_by_gate(self) -> None:
+        commands = set(VALIDATOR.POSTGRES_TEST_COMMANDS)
+        prefix = (
+            "cargo test --locked -p registry-breg "
+            "--features postgres-test,tooling,schema --test "
+        )
+        for target in (
+            "postgres_record_timers",
+            "postgres_record_timer_native",
+            "postgres_record_timer_operator",
+            "postgres_record_timer_metrics",
+            "postgres_record_timer_retention",
+            "postgres_record_timer_clock",
+        ):
+            self.assertIn(prefix + target, commands)
+
+        runner = VALIDATOR.POSTGRES_ENTRYPOINT.read_text(encoding="utf-8")
+        self.assertIn(
+            "cargo build --locked -p registry-bregctl --bin bregctl "
+            "--features registry-breg/postgres-test",
+            runner,
+        )
+        self.assertIn('export BREG_TEST_BREGCTL_BINARY="$bregctl_binary"', runner)
+        self.assertIn("--test postgres_record_timer_operator", runner)
 
     def test_native_proposal_targets_replace_retired_request_targets(self) -> None:
         commands = list(VALIDATOR.POSTGRES_TEST_COMMANDS)

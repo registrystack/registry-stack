@@ -19,6 +19,12 @@ mod revision_read;
 mod roles;
 mod schema;
 mod statistics;
+mod timer;
+mod timer_activation_preview;
+mod timer_operator_read;
+mod timer_operator_store;
+mod timer_operator_transition;
+mod timer_retention;
 
 pub use baseline::{
     advise, inspect_baseline, AdvisorySeverity, BaselineAdvisory, BaselineSettings,
@@ -43,9 +49,9 @@ pub use config::{
     TlsPolicy,
 };
 pub(crate) use context::{
-    begin_action_transaction, snapshot_matches_boundaries, ActionClaimContext,
-    ImmediateActionLinkBinding, ImmediateActionLinkContext, ImmediateActionTargetBinding,
-    ImmediateActionTargetContext,
+    begin_action_transaction, begin_timer_action_transaction, snapshot_matches_boundaries,
+    ActionClaimContext, ImmediateActionLinkBinding, ImmediateActionLinkContext,
+    ImmediateActionTargetBinding, ImmediateActionTargetContext,
 };
 pub(crate) use context::{
     begin_proposal_transaction, ProposalAuthority, ProposalAuthorityOperation, ProposalTargetPhase,
@@ -55,8 +61,8 @@ pub use context::{
     RowBoundaryOperator,
 };
 pub(crate) use context::{
-    begin_registry_transaction, begin_registry_transaction_with_reason, RegistryLockFailure,
-    RegistryTransactionError,
+    begin_registry_read_transaction_with_reason, begin_registry_transaction,
+    begin_registry_transaction_with_reason, RegistryLockFailure, RegistryTransactionError,
 };
 pub(crate) use context::{install_spatial_bbox_context, validate_field_value, SpatialBboxContext};
 pub use failure::PostgresFailure;
@@ -66,6 +72,14 @@ pub use history_read::SnapshotReadFaultPoint;
 pub(crate) use interlock::retained_local_hook_deliveries;
 #[cfg(feature = "postgres-test")]
 pub use interlock::DedicatedApplyConnection;
+#[cfg(feature = "postgres-test")]
+pub async fn set_force_row_security_for_test(
+    client: &impl tokio_postgres::GenericClient,
+    tables: &[String],
+    forced: bool,
+) -> Result<()> {
+    interlock::set_force_row_security(client, tables, forced).await
+}
 pub(crate) use interlock::{
     covered_field_encryption_fields, field_plaintext_string, lock_wait_ended,
     prepare_unique_blind_index_preflight, prior_plaintext_projection, read_activation_status,
@@ -86,6 +100,21 @@ pub use mutation::{
     IngestionChunkSubmitInput, IngestionRunCreateInput, IngestionRunListQuery,
     IngestionServiceError, PostgresRecordMutationService,
 };
+#[cfg(feature = "postgres-test")]
+#[doc(hidden)]
+pub fn timer_create_target_id_for_test(
+    occurrence_id: uuid::Uuid,
+    action_revision: &str,
+    effect_id: &str,
+    target_entity_id: &str,
+) -> uuid::Uuid {
+    crate::mutation::timer_create_target_id(
+        occurrence_id,
+        action_revision,
+        effect_id,
+        target_entity_id,
+    )
+}
 pub(crate) use read::compiled_api_name;
 pub use read::PostgresRecordReadService;
 #[cfg(feature = "postgres-test")]
@@ -104,6 +133,7 @@ pub(crate) use roles::find_runtime_write_authority;
 pub use roles::find_runtime_write_authority as find_runtime_write_authority_for_test;
 #[doc(hidden)]
 pub use roles::RuntimeRevoke;
+pub(crate) use timer_activation_preview::read_timer_activation_previews;
 
 #[cfg(feature = "postgres-test")]
 #[doc(hidden)]
@@ -148,6 +178,46 @@ pub async fn index_revisions_for_test(
     .map_err(|_| PostgresKernelError::RegistryUnavailable)
 }
 
+#[cfg(feature = "postgres-test")]
+#[doc(hidden)]
+pub async fn prune_record_timer_retention_batch_for_test(
+    pool: &RuntimePool,
+    expected: &ExpectedRegistryIdentity,
+    lock_key: RegistryLockKey,
+    lock_timeout: std::time::Duration,
+    limit: u32,
+) -> Result<(u64, u64)> {
+    let mut client = pool.get().await.map_err(|_| PostgresKernelError::Pool)?;
+    let transaction =
+        begin_registry_transaction(&mut client, lock_key, lock_timeout, expected).await?;
+    transaction
+        .set_statement_budget(std::time::Duration::from_secs(10))
+        .await?;
+    let removed = timer_retention::prune_timer_retention_batch(&transaction, limit).await?;
+    transaction.commit().await?;
+    Ok((removed.attempts_pruned, removed.generations_pruned))
+}
+
+#[cfg(feature = "postgres-test")]
+#[doc(hidden)]
+pub fn strong_record_etag_for_test(
+    profile: &registry_platform_audit::AuditProfile,
+    claims: &crate::postgres::ClaimContext,
+    package_revision: &str,
+    record_id: &str,
+    record_revision: i64,
+    response_fields: &std::collections::BTreeSet<String>,
+) -> std::result::Result<String, crate::mutation::MutationError> {
+    crate::mutation::strong_record_etag(
+        profile,
+        claims,
+        package_revision,
+        record_id,
+        record_revision,
+        response_fields,
+    )
+}
+
 pub use roles::{
     provision_managed_schemas, provision_postgis_prerequisites, provision_spatial_bbox_role,
     spatial_bbox_role, verify_btree_gist, verify_migration_role, verify_postgis,
@@ -178,6 +248,57 @@ pub use statistics::{
 #[cfg(feature = "postgres-test")]
 #[doc(hidden)]
 pub use statistics::{StatisticsPublishPause, StatisticsWithdrawalPause};
+#[cfg(not(feature = "postgres-test"))]
+pub(crate) use timer::RecordTimerWorker;
+#[cfg(feature = "postgres-test")]
+#[doc(hidden)]
+pub use timer::{
+    install_record_timer_clock_fixture_for_test, reconcile_record_timer_runtime_acl_for_test,
+    set_record_timer_clock_for_test, RecordTimerWorker,
+};
+pub(crate) use timer::{
+    production_timer_limits, read_timer_protocol, retained_record_timer_state_exists,
+    SUPPORTED_TIMER_PROTOCOL_VERSION,
+};
+#[cfg(feature = "postgres-test")]
+#[doc(hidden)]
+pub async fn retained_record_timer_state_exists_for_test(
+    pool: &RuntimePool,
+    expected: &ExpectedRegistryIdentity,
+    lock_key: RegistryLockKey,
+    lock_timeout: std::time::Duration,
+) -> Result<bool> {
+    timer::retained_record_timer_state_exists(pool, expected, lock_key, lock_timeout).await
+}
+
+#[cfg(feature = "postgres-test")]
+#[doc(hidden)]
+pub async fn record_timer_operator_detail_for_test(
+    pool: &RuntimePool,
+    expected: &ExpectedRegistryIdentity,
+    lock_key: RegistryLockKey,
+    lock_timeout: std::time::Duration,
+    occurrence_id: uuid::Uuid,
+    audit: &registry_platform_audit::AuditProfile,
+) -> std::result::Result<
+    crate::timer_operator::TimerOccurrenceDetail,
+    crate::timer_operator::TimerOperatorError,
+> {
+    let store = TimerOperatorStore::new(
+        pool.clone(),
+        expected.clone(),
+        lock_key,
+        lock_timeout,
+        operator_read_statement_budget(),
+        production_timer_limits(),
+    )?;
+    store
+        .show(occurrence_id)
+        .await?
+        .ok_or(crate::timer_operator::TimerOperatorError::OccurrenceNotFound)?
+        .project(audit, &expected.activation_id)
+}
+pub(crate) use timer_operator_store::{operator_read_statement_budget, TimerOperatorStore};
 
 use thiserror::Error;
 

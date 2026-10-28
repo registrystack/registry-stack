@@ -851,6 +851,7 @@ mod tests {
                 stored_fields: vec![],
             },
             selector_profiles: BTreeMap::new(),
+            timers: BTreeMap::new(),
             read_paths: BTreeMap::new(),
             fields: compiled_fields,
             constraints: BTreeMap::new(),

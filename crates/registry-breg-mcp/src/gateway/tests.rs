@@ -17,7 +17,9 @@ use crate::{
     config::tests::outbound_sections,
     contract::tests::spec,
     inbound::VerifiedCaller,
-    mock_registry::{draft_request, MockRegistry, Seen},
+    mock_registry::{
+        draft_request, grant_exchange_with_probe, GrantExchangeProbe, MockRegistry, Seen,
+    },
 };
 
 const AUDIENCE: &str = "urn:breg:citizen-address-correction";
@@ -38,6 +40,7 @@ struct Fixture {
     registry: MockRegistry,
     gateway: Gateway,
     directory: TempDir,
+    exchange_probe: GrantExchangeProbe,
 }
 
 impl Fixture {
@@ -64,9 +67,8 @@ impl Fixture {
         let registry = MockRegistry::start().await;
         registry.add_address(CITIZEN_A, ADDRESS_A, "1 Harbour Road");
         registry.add_address(CITIZEN_B, ADDRESS_B, "4 Mill Street");
-        let token_endpoint =
-            crate::mock_registry::grant_exchange(server.token_endpoint(), registry.grant_issuer())
-                .await;
+        let (token_endpoint, exchange_probe) =
+            grant_exchange_with_probe(server.token_endpoint(), registry.grant_issuer()).await;
         let (registry_config, mut exchange) =
             outbound_sections(&registry.base_url, &token_endpoint);
         exchange.assertion_audience =
@@ -100,6 +102,7 @@ impl Fixture {
             registry,
             gateway,
             directory,
+            exchange_probe,
         }
     }
 
@@ -697,8 +700,52 @@ async fn concurrent_retries_of_one_start_attempt_create_one_proposal() {
     let fixture = Fixture::start().await;
     let caller = fixture.caller(CITIZEN_A);
     let (first, retry) = tokio::join!(
-        fixture.call(&caller, START_APPLICATION, start_arguments()),
-        fixture.call(&caller, START_APPLICATION, start_arguments()),
+        async {
+            let started = std::time::Instant::now();
+            (
+                fixture
+                    .call(&caller, START_APPLICATION, start_arguments())
+                    .await,
+                started.elapsed(),
+            )
+        },
+        async {
+            let started = std::time::Instant::now();
+            (
+                fixture
+                    .call(&caller, START_APPLICATION, start_arguments())
+                    .await,
+                started.elapsed(),
+            )
+        },
+    );
+    let (first, first_elapsed) = first;
+    let (retry, retry_elapsed) = retry;
+    let request_sequence = || {
+        fixture
+            .registry
+            .seen()
+            .into_iter()
+            .map(|seen| format!("{} {}", seen.method, seen.path))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        first["isError"],
+        false,
+        "first closed error code {:?}; elapsed {:?}; token exchanges {:?}; request sequence {:?}",
+        first.pointer("/error/code").and_then(Value::as_str),
+        first_elapsed,
+        fixture.exchange_probe.observations(),
+        request_sequence()
+    );
+    assert_eq!(
+        retry["isError"],
+        false,
+        "retry closed error code {:?}; elapsed {:?}; token exchanges {:?}; request sequence {:?}",
+        retry.pointer("/error/code").and_then(Value::as_str),
+        retry_elapsed,
+        fixture.exchange_probe.observations(),
+        request_sequence()
     );
     assert_eq!(started_identifier(&first), started_identifier(&retry));
     assert_eq!(fixture.registry.applications().len(), 1);

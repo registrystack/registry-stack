@@ -506,7 +506,7 @@ async fn request_operational_log_has_only_closed_value_free_fields() {
 /// A description the audit writer gives for a torn audit file.
 const AUDIT_DESTINATION_REASON: &str = "the audit file could not be opened: audit file has an incomplete final entry; archive it and restart with a fresh path";
 
-fn startup_errors() -> [StartupError; 37] {
+fn startup_errors() -> [StartupError; 38] {
     [
         // The wrapped cause never changes the rendered operational message: it
         // only lets `bregctl doctor` name it. Any `RuntimeConfigError` variant
@@ -572,6 +572,7 @@ fn startup_errors() -> [StartupError; 37] {
         StartupError::Shutdown,
         StartupError::BackgroundTaskStopped,
         StartupError::Logging,
+        StartupError::TimerTestControl,
     ]
 }
 
@@ -626,6 +627,13 @@ fn expected_operational_event(
             None,
             Some("hook.worker.iteration_failed"),
         ),
+        OperationalEvent::RecordTimerIterationFailed => (
+            OperationalLogLevel::Warn,
+            "registry_breg::record_timer",
+            "record timer worker iteration failed",
+            None,
+            Some("record_timer.worker.iteration_failed"),
+        ),
         OperationalEvent::AttachmentVerificationIterationFailed => (
             OperationalLogLevel::Warn,
             "registry_breg::attachment_verification",
@@ -660,6 +668,13 @@ fn expected_operational_event(
             "queue ages could not be sampled for this metrics scrape",
             None,
             Some("metrics.queue_sample.failed"),
+        ),
+        OperationalEvent::MetricsTimerSampleFailed => (
+            OperationalLogLevel::Warn,
+            "registry_breg::metrics",
+            "record timer state could not be sampled for this metrics scrape",
+            None,
+            Some("metrics.timer_sample.failed"),
         ),
         OperationalEvent::HookStateTransitionFailed(code) => (
             OperationalLogLevel::Warn,
@@ -816,6 +831,7 @@ fn expected_startup_error(error: StartupError) -> &'static str {
             "a Registry background task stopped before shutdown was requested"
         }
         StartupError::Logging => "the Registry operational log level was refused",
+        StartupError::TimerTestControl => "the record-timer native test control was refused",
     }
 }
 
@@ -838,6 +854,12 @@ fn expected_background_task_stop_code(
     match (task, stop) {
         (BackgroundTask::HookWorker, BackgroundTaskStop::Panicked) => "hook.worker.panicked",
         (BackgroundTask::HookWorker, BackgroundTaskStop::Returned) => "hook.worker.returned",
+        (BackgroundTask::RecordTimerWorker, BackgroundTaskStop::Panicked) => {
+            "record_timer.worker.panicked"
+        }
+        (BackgroundTask::RecordTimerWorker, BackgroundTaskStop::Returned) => {
+            "record_timer.worker.returned"
+        }
         (BackgroundTask::AttachmentVerificationWorker, BackgroundTaskStop::Panicked) => {
             "attachment_verification.worker.panicked"
         }
@@ -892,6 +914,7 @@ async fn every_operational_event_renders_exact_closed_value_free_json_fields() {
     events.push(OperationalEvent::RoleMode(RoleMode::Split));
     events.push(OperationalEvent::ClientsUnrestricted);
     events.push(OperationalEvent::HookWorkerIterationFailed);
+    events.push(OperationalEvent::RecordTimerIterationFailed);
     events.push(OperationalEvent::AttachmentVerificationIterationFailed);
     events.push(OperationalEvent::AttachmentVerificationRetryPending);
     events.push(OperationalEvent::ReviewWorkerIterationFailed);
@@ -1010,6 +1033,7 @@ async fn every_operational_event_renders_exact_closed_value_free_json_fields() {
                 | "registry_breg::attachment_verification"
                 | "registry_breg::review"
                 | "registry_breg::metrics"
+                | "registry_breg::record_timer"
                 | "registry_breg::postgres"
         ));
     }

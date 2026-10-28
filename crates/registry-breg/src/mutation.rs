@@ -10,6 +10,19 @@ mod proposal;
 pub(crate) use proposal::{
     proposal_operation_name, CheckedProposalTaskAuthority, ProposalApplyPreflight,
 };
+mod timer;
+pub(crate) use timer::{
+    begin_record_timer_staging, lock_timer_control, refreshed_timer_metadata,
+    stage_record_timer_rows, timer_create_target_id, timer_create_target_prefix,
+    timer_target_binding_prefix, RecordTimerStage, RecordTimerStaging, RefreshedTimerMetadata,
+    TimerActionAuthority, TimerActionDisposition, TimerActionExecution, TimerAdmission,
+    TimerMutationOrigin, TimerRefusalOutcome, MAX_AUTOMATIC_TIMER_ATTEMPTS, TIMER_ACCESS_PROFILE,
+    TIMER_PRINCIPAL,
+};
+#[cfg(feature = "postgres-test")]
+pub(crate) use timer::{
+    wait_at_timer_test_barrier, NativeTimerCheckpoint, NativeTimerCheckpointPhase,
+};
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -73,10 +86,10 @@ use crate::outbox::{
     event_data_schemas, insert_configured_events, EnvelopeBinding, OutboxError, OutboxMutation,
 };
 use crate::postgres::{
-    begin_action_transaction, begin_record_transaction, ActionClaimContext, ClaimContext,
-    ExpectedRegistryIdentity, ImmediateActionLinkBinding, ImmediateActionLinkContext,
-    ImmediateActionTargetBinding, ImmediateActionTargetContext, RegistryLockKey,
-    RowBoundaryContext, SqlIdentifier,
+    begin_action_transaction, begin_record_transaction, begin_timer_action_transaction,
+    ActionClaimContext, ClaimContext, ExpectedRegistryIdentity, ImmediateActionLinkBinding,
+    ImmediateActionLinkContext, ImmediateActionTargetBinding, ImmediateActionTargetContext,
+    RegistryLockKey, RowBoundaryContext, SqlIdentifier,
 };
 use crate::problem_location::{BatchItemMember, PatchMember, RequestLocation};
 use crate::record_profile::{self, RecordRepresentation};
@@ -711,6 +724,10 @@ pub struct MutationTransaction {
     field_encryption: Option<Arc<FieldEncryptionService>>,
     review_authorities: Option<Arc<crate::review_store::ReviewAuthorityRegistry>>,
     idempotency: IdempotencyPolicy,
+    #[cfg(feature = "postgres-test")]
+    native_mutation_checkpoint: Option<Arc<NativeMutationCheckpoint>>,
+    #[cfg(feature = "postgres-test")]
+    fault_for_test: FaultControl,
 }
 
 impl MutationTransaction {
@@ -762,6 +779,53 @@ impl MutationTransaction {
             field_encryption: None,
             review_authorities: None,
             idempotency: IdempotencyPolicy::default(),
+            #[cfg(feature = "postgres-test")]
+            native_mutation_checkpoint: None,
+            #[cfg(feature = "postgres-test")]
+            fault_for_test: FaultControl::Disabled,
+        }
+    }
+
+    #[cfg(feature = "postgres-test")]
+    #[doc(hidden)]
+    #[must_use]
+    pub fn with_native_mutation_checkpoint(
+        mut self,
+        checkpoint: Option<NativeMutationCheckpoint>,
+    ) -> Self {
+        self.native_mutation_checkpoint = checkpoint.map(Arc::new);
+        self
+    }
+
+    #[cfg(feature = "postgres-test")]
+    #[doc(hidden)]
+    #[must_use]
+    pub fn with_fault_for_test(mut self, fault: MutationFaultPoint) -> Self {
+        self.fault_for_test = FaultControl::At(fault);
+        self
+    }
+
+    async fn observe_native_mutation_checkpoint(
+        &self,
+        operation: NativeMutationOperation,
+    ) -> Result<(), MutationError> {
+        #[cfg(feature = "postgres-test")]
+        if let Some(checkpoint) = &self.native_mutation_checkpoint {
+            checkpoint.observe_and_wait(operation).await?;
+        }
+        #[cfg(not(feature = "postgres-test"))]
+        let _ = operation;
+        Ok(())
+    }
+
+    fn proposal_fault_for_test(&self) -> FaultControl {
+        #[cfg(feature = "postgres-test")]
+        {
+            self.fault_for_test
+        }
+        #[cfg(not(feature = "postgres-test"))]
+        {
+            FaultControl::Disabled
         }
     }
 
@@ -802,6 +866,14 @@ impl MutationTransaction {
     pub fn with_field_encryption(mut self, service: Arc<FieldEncryptionService>) -> Self {
         self.field_encryption = Some(service);
         self
+    }
+
+    pub(crate) fn field_encryption(&self) -> Option<&FieldEncryptionService> {
+        self.field_encryption.as_deref()
+    }
+
+    pub(crate) fn registry_audit(&self) -> &RegistryAudit {
+        &self.audit
     }
 
     pub(crate) async fn check_task_authority(
@@ -1121,6 +1193,14 @@ impl MutationTransaction {
         )
         .await
         .map_err(|_| MutationError::Unavailable)?;
+        let timer_staging = begin_record_timer_staging(
+            transaction.transaction(),
+            std::iter::once(&request.plan.entity),
+            &self.expected.activation_id,
+            self.idempotency.receipt_retention_days(),
+            TimerMutationOrigin::ordinary(),
+        )
+        .await?;
         let stored = lock_and_load(transaction.transaction(), &binding).await?;
         if let Some(stored) = stored {
             if !matches!(&stored.metadata, StoredResultMetadata::Record { .. }) {
@@ -1187,6 +1267,13 @@ impl MutationTransaction {
             request,
             self.audit.profile(),
             &self.expected.activation_id,
+            self.field_encryption.as_deref(),
+        )
+        .await?;
+        stage_record_timer_rows(
+            transaction.transaction(),
+            timer_staging.as_ref(),
+            std::iter::once(RecordTimerStage::new(&request.plan.entity, &current)),
             self.field_encryption.as_deref(),
         )
         .await?;
@@ -1310,6 +1397,13 @@ impl MutationTransaction {
             &held,
         )
         .await?;
+        self.observe_native_mutation_checkpoint(match request.plan.route.operation {
+            Operation::Create => NativeMutationOperation::Create,
+            Operation::Patch => NativeMutationOperation::Patch,
+            Operation::Tombstone => NativeMutationOperation::Tombstone,
+            _ => return Err(MutationError::Unavailable),
+        })
+        .await?;
         fault.fail_at(MutationFaultPoint::BeforeCommit)?;
         transaction
             .commit()
@@ -1421,7 +1515,19 @@ impl MutationTransaction {
         )
         .await
         .map_err(|_| MutationError::Unavailable)?;
-
+        // Participating writers acquire timer control immediately after the
+        // registry activation lock, before ingestion-run/import parents or
+        // any Record row. Exact receipt/idempotency replay still takes this
+        // cheap shared lock but returns without staging; timer-free entities
+        // return `None` and do no timer-control work.
+        let timer_staging = begin_record_timer_staging(
+            transaction.transaction(),
+            std::iter::once(&request.plan.entity),
+            &self.expected.activation_id,
+            self.idempotency.receipt_retention_days(),
+            TimerMutationOrigin::ordinary(),
+        )
+        .await?;
         // A durable ingestion-run chunk executes under the run row lock this
         // transaction already holds: the checkpoint decides replay, the bound
         // digest refuses divergent bytes, and a changed active package blocks
@@ -1738,6 +1844,8 @@ impl MutationTransaction {
             });
         }
 
+        prelock_batch_current_rows(transaction.transaction(), request).await?;
+
         set_temporal_exclusion_constraints(
             transaction.transaction(),
             &request.plan.entity,
@@ -1747,6 +1855,7 @@ impl MutationTransaction {
         .await?;
         let mut held_items = Vec::with_capacity(request.items.len());
         let mut commit_members = Vec::with_capacity(request.items.len());
+        let mut timer_rows = Vec::with_capacity(request.items.len());
         for (item_index, item) in request.items.iter().enumerate() {
             let item_plan = request
                 .plan
@@ -1843,6 +1952,7 @@ impl MutationTransaction {
                 record_id: current.record_uuid,
                 record_revision: current.record_revision,
             });
+            timer_rows.push(current);
             #[cfg(feature = "postgres-test")]
             if item_index == 0 {
                 fault.fail_at(MutationFaultPoint::AfterFirstBatchItem)?;
@@ -1857,7 +1967,15 @@ impl MutationTransaction {
             ConstraintTiming::Immediate,
         )
         .await?;
-
+        stage_record_timer_rows(
+            transaction.transaction(),
+            timer_staging.as_ref(),
+            timer_rows
+                .iter()
+                .map(|current| RecordTimerStage::new(&request.plan.entity, current)),
+            self.field_encryption.as_deref(),
+        )
+        .await?;
         let result_count =
             u16::try_from(held_items.len()).map_err(|_| MutationError::Unavailable)?;
         let committed = allocate_revision_commit(
@@ -1961,6 +2079,12 @@ impl MutationTransaction {
                 Some(&request.correlation.request_id().to_string()),
             ));
         }
+        self.observe_native_mutation_checkpoint(if request.ingestion.is_some() {
+            NativeMutationOperation::Ingestion
+        } else {
+            NativeMutationOperation::Batch
+        })
+        .await?;
         fault.fail_at(MutationFaultPoint::BeforeCommit)?;
         transaction
             .commit()
@@ -2181,6 +2305,13 @@ pub enum MutationError {
     /// fixed envelope member or one admitted field of the write body.
     #[error("mutation request is invalid")]
     InvalidRequestAt(crate::problem_location::RequestLocation),
+    /// The current authored timer controls describe an empty execution
+    /// window. Carries only compiled logical field identifiers, never values.
+    #[error("mutation request is invalid")]
+    InvalidTimerWindow {
+        at_field: String,
+        not_after_field: String,
+    },
     #[error("mutation is outside the caller's authorized record boundary")]
     AuthorizationRefused,
     #[error("mutation precondition failed")]
@@ -2223,6 +2354,11 @@ pub enum MutationError {
     ActionEvidenceFailure { capability: Option<String> },
     #[error("action was refused by its declared handler")]
     ActionRefusal(crate::action_handler::ActionHandlerRefusal),
+    /// M1 does not allow one timer Action to arm a successor generation. The
+    /// timer boundary settles this value-free, fact-dependent condition as a
+    /// terminal business refusal.
+    #[error("the timer Action would arm another generation")]
+    TimerGenerationUnsupported,
     #[error("field does not conform to its declared storage pattern")]
     FieldPatternViolation { entity_id: String, field_id: String },
     #[error("mutation violates a declared row-local constraint")]
@@ -2316,9 +2452,128 @@ pub enum RowLocalConstraintViolation {
     },
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum NativeMutationOperation {
+    Create,
+    Patch,
+    Tombstone,
+    Action,
+    Proposal,
+    Batch,
+    Ingestion,
+}
+
+#[cfg(feature = "postgres-test")]
+impl NativeMutationOperation {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Create => "create",
+            Self::Patch => "patch",
+            Self::Tombstone => "tombstone",
+            Self::Action => "action",
+            Self::Proposal => "proposal",
+            Self::Batch => "batch",
+            Self::Ingestion => "ingestion",
+        }
+    }
+}
+
+#[cfg(feature = "postgres-test")]
+#[derive(Clone, Debug)]
+pub struct NativeMutationCheckpoint {
+    instance_id: String,
+    observed_path: std::path::PathBuf,
+    release_path: std::path::PathBuf,
+}
+
+#[cfg(feature = "postgres-test")]
+impl NativeMutationCheckpoint {
+    pub fn new(
+        instance_id: &str,
+        observed_path: std::path::PathBuf,
+        release_path: std::path::PathBuf,
+    ) -> Result<Self, &'static str> {
+        const MAX_PATH_BYTES: usize = 4096;
+        if instance_id.is_empty()
+            || instance_id.len() > 128
+            || instance_id.chars().any(char::is_control)
+            || !observed_path.is_absolute()
+            || !release_path.is_absolute()
+            || observed_path == release_path
+            || observed_path.as_os_str().to_str().is_none_or(|path| {
+                path.is_empty() || path.len() > MAX_PATH_BYTES || path.chars().any(char::is_control)
+            })
+            || release_path.as_os_str().to_str().is_none_or(|path| {
+                path.is_empty() || path.len() > MAX_PATH_BYTES || path.chars().any(char::is_control)
+            })
+        {
+            return Err("invalid native mutation checkpoint binding");
+        }
+        Ok(Self {
+            instance_id: instance_id.to_owned(),
+            observed_path,
+            release_path,
+        })
+    }
+
+    async fn observe_and_wait(
+        &self,
+        operation: NativeMutationOperation,
+    ) -> Result<(), MutationError> {
+        let marker = canonicalize_json(&json!({
+            "instanceId": self.instance_id,
+            "operation": operation.as_str(),
+            "processId": std::process::id(),
+        }))
+        .map_err(|_| MutationError::Unavailable)?;
+        let parent = self
+            .observed_path
+            .parent()
+            .ok_or(MutationError::Unavailable)?;
+        let name = self
+            .observed_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or(MutationError::Unavailable)?;
+        let temporary = parent.join(format!(".{name}.{}.tmp", std::process::id()));
+        let mut options = std::fs::OpenOptions::new();
+        options.create_new(true).write(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt as _;
+            options.mode(0o600);
+        }
+        let mut file = options
+            .open(&temporary)
+            .map_err(|_| MutationError::Unavailable)?;
+        {
+            use std::io::Write as _;
+            file.write_all(&marker)
+                .map_err(|_| MutationError::Unavailable)?;
+        }
+        file.sync_all().map_err(|_| MutationError::Unavailable)?;
+        std::fs::rename(&temporary, &self.observed_path).map_err(|_| MutationError::Unavailable)?;
+        tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                match std::fs::symlink_metadata(&self.release_path) {
+                    Ok(metadata) if metadata.file_type().is_file() => return Ok(()),
+                    Ok(_) => return Err(MutationError::Unavailable),
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                        tokio::time::sleep(Duration::from_millis(20)).await;
+                    }
+                    Err(_) => return Err(MutationError::Unavailable),
+                }
+            }
+        })
+        .await
+        .map_err(|_| MutationError::Unavailable)?
+    }
+}
+
 #[cfg(feature = "postgres-test")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MutationFaultPoint {
+    AfterClaim,
     BeforeCurrentRow,
     BeforeRevision,
     BeforeOutbox,
@@ -2376,6 +2631,46 @@ pub(crate) struct CurrentRow {
     record_lifecycle: String,
     before_data: Option<Map<String, Value>>,
     data: Map<String, Value>,
+}
+
+/// Acquire every existing batch target in canonical UUID order before the
+/// first row is changed. Timer staging takes its shared control lock first,
+/// so ordinary writers and workers cannot invert control, Record, and
+/// generation locks when callers submit the same targets in different order.
+async fn prelock_batch_current_rows(
+    transaction: &Transaction<'_>,
+    request: &BatchMutationRequest<'_>,
+) -> Result<(), MutationError> {
+    let mut record_ids = BTreeSet::new();
+    for item in &request.items {
+        if item.operation() != Operation::Patch {
+            continue;
+        }
+        let (record_id, _, _) = item.request_parts();
+        let record_id = record_id.ok_or(MutationError::InvalidRequest)?;
+        if !valid_uuid(record_id) {
+            return Err(MutationError::InvalidRequest);
+        }
+        record_ids.insert(Uuid::parse_str(record_id).map_err(|_| MutationError::InvalidRequest)?);
+    }
+    if record_ids.is_empty() {
+        return Ok(());
+    }
+    let table = quote_identifier(&request.plan.entity.physical_table);
+    let sql = format!(
+        "SELECT record_id
+           FROM registry_data.{table}
+          WHERE record_id = ANY($1::uuid[])
+            AND record_lifecycle = 'active'
+          ORDER BY record_id
+          FOR UPDATE"
+    );
+    let record_ids = record_ids.into_iter().collect::<Vec<_>>();
+    transaction
+        .query(&sql, &[&record_ids])
+        .await
+        .map_err(map_database_error)?;
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -3280,12 +3575,13 @@ fn returning_projection(entity: &CompiledEntity) -> String {
     expressions.join(", ")
 }
 
-fn field_json_projection(field: &crate::model::CompiledField) -> String {
+pub(crate) fn field_json_projection(field: &crate::model::CompiledField) -> String {
     let column = quote_identifier(&field.physical_name);
     if field.encryption.is_some() {
-        // The envelope is projected as base64 text; row decode turns it into
-        // the tagged JSON member. No plaintext cast exists for this column.
-        return format!("to_jsonb(encode({column}, 'base64'))");
+        // PostgreSQL wraps long base64 output at 76 characters. Strip those
+        // transport newlines before row decode turns the envelope into its
+        // tagged JSON member. No plaintext cast exists for this column.
+        return format!("to_jsonb(replace(encode({column}, 'base64'), E'\\n', ''))");
     }
     match field.field_type {
         FieldTypeSource::Decimal { .. } => format!("to_jsonb({column}::text)"),

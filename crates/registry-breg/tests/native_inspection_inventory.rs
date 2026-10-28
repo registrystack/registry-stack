@@ -74,7 +74,7 @@ fn validates(subject: &str, mut value: Value) {
         "access" => (
             include_str!("../../../products/breg/contracts/explain/AccessExplanation.schema.json"),
             "BRegAccessExplanation",
-            "v1alpha7",
+            "v1alpha8",
         ),
         "events" => (
             include_str!("../../../products/breg/contracts/explain/EventsExplanation.schema.json"),

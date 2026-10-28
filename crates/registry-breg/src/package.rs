@@ -4,6 +4,9 @@
 #[cfg(test)]
 #[path = "package/tests/immediate_actions.rs"]
 mod immediate_action_tests;
+#[cfg(test)]
+#[path = "package/tests/record_timers.rs"]
+mod record_timer_tests;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
@@ -110,9 +113,20 @@ pub enum PackageEngineFeature {
     /// Spent idempotency keys are found by the verified caller, the key scope,
     /// and the key, and held responses carry a receipt horizon.
     CallerScopedIdempotency,
+    /// The engine-owned durable Record timer control, binding, occurrence,
+    /// current-marker, and attempt store is part of the managed catalog.
+    RecordTimerStore,
 }
 
-fn current_engine_features() -> BTreeSet<PackageEngineFeature> {
+pub(crate) fn current_engine_features() -> BTreeSet<PackageEngineFeature> {
+    BTreeSet::from([
+        PackageEngineFeature::StatisticalReleaseStore,
+        PackageEngineFeature::CallerScopedIdempotency,
+        PackageEngineFeature::RecordTimerStore,
+    ])
+}
+
+fn legacy_engine_features() -> BTreeSet<PackageEngineFeature> {
     BTreeSet::from([
         PackageEngineFeature::StatisticalReleaseStore,
         PackageEngineFeature::CallerScopedIdempotency,
@@ -120,10 +134,23 @@ fn current_engine_features() -> BTreeSet<PackageEngineFeature> {
 }
 
 fn validate_engine_features(manifest: &PackageManifest) -> Result<()> {
-    if manifest.engine_features != current_engine_features() {
-        return Err(PackageError::Derivation);
+    if manifest.engine_features == current_engine_features() {
+        return Ok(());
     }
-    Ok(())
+    if manifest.engine_features == legacy_engine_features() {
+        return Err(PackageError::EngineFeatureUpgradeRequired);
+    }
+    Err(PackageError::Derivation)
+}
+
+fn validate_predecessor_engine_features(manifest: &PackageManifest) -> Result<()> {
+    if manifest.engine_features == current_engine_features()
+        || manifest.engine_features == legacy_engine_features()
+    {
+        Ok(())
+    } else {
+        Err(PackageError::Derivation)
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -224,6 +251,10 @@ pub struct MigrationPlan {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct CompiledRegistryMigrationBaseline {
     pub package_digest: String,
+    /// Hash-covered engine-owned catalog capabilities installed by the
+    /// predecessor package's compiler.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub engine_features: BTreeSet<PackageEngineFeature>,
     pub registry_id: String,
     pub registry_version: String,
     pub registry_revision: String,
@@ -253,6 +284,7 @@ impl CompiledRegistryMigrationBaseline {
     pub fn from_compiled(package_digest: &str, compiled: &CompiledRegistry) -> Self {
         Self {
             package_digest: package_digest.to_owned(),
+            engine_features: current_engine_features(),
             registry_id: compiled.registry_id().to_owned(),
             registry_version: compiled.version().to_owned(),
             registry_revision: compiled.revision().to_owned(),
@@ -303,6 +335,7 @@ pub enum CompiledRegistryChangeClass {
 pub enum CompiledRegistryChangeCode {
     RegistryIdentityChanged,
     RegistryVersionChanged,
+    RecordTimerStoreAdded,
     EntityAdded,
     EntityRemoved,
     EntityPhysicalNameChanged,
@@ -349,6 +382,9 @@ pub enum CompiledRegistryChangeCode {
     EventAdded,
     EventRemoved,
     EventChanged,
+    TimerAdded,
+    TimerRemoved,
+    TimerChanged,
     ActionAdded,
     ActionRemoved,
     ActionChanged,
@@ -389,6 +425,7 @@ pub enum CompiledRegistryChangeTargetKind {
     Route,
     QueryInventory,
     Event,
+    Timer,
     Action,
     Recipient,
     StatisticalDataset,
@@ -730,6 +767,10 @@ pub enum PackageError {
     Binding,
     #[error("the package compiler derivation failed")]
     Derivation,
+    #[error(
+        "the package predates the required Record timer store; build and apply a successor with this release"
+    )]
+    EngineFeatureUpgradeRequired,
     #[error("the package carries a local-only deployment identity")]
     DeploymentIdentity,
     #[error("the package migration plan is invalid")]
@@ -959,6 +1000,7 @@ pub fn compiled_registry_change_set_from_baseline(
 ) -> CompiledRegistryChangeSet {
     let candidate_baseline = CompiledRegistryMigrationBaseline::from_compiled("", candidate);
     let mut changes = Vec::new();
+    compare_engine_features(previous, &candidate_baseline, &mut changes);
     compare_registry_identity(previous, &candidate_baseline, &mut changes);
     compare_entities(previous, &candidate_baseline, &mut changes);
     compare_statistical_datasets(previous, &candidate_baseline, &mut changes);
@@ -985,6 +1027,28 @@ pub fn compiled_registry_change_set_from_baseline(
     change_set
 }
 
+fn compare_engine_features(
+    previous: &CompiledRegistryMigrationBaseline,
+    candidate: &CompiledRegistryMigrationBaseline,
+    changes: &mut Vec<CompiledRegistryChange>,
+) {
+    if previous.engine_features == candidate.engine_features {
+        return;
+    }
+    push_change(
+        changes,
+        if previous.engine_features == legacy_engine_features()
+            && candidate.engine_features == current_engine_features()
+        {
+            CompiledRegistryChangeClass::CompatibleAdditive
+        } else {
+            CompiledRegistryChangeClass::Unsupported
+        },
+        CompiledRegistryChangeCode::RecordTimerStoreAdded,
+        target(CompiledRegistryChangeTargetKind::Registry, None, None),
+    );
+}
+
 /// Convert a value-free change set into an applicable migration plan only when
 /// the compiler can apply it without reviewed SQL.
 pub fn change_set_to_applicable_migration_plan(
@@ -1009,7 +1073,10 @@ fn compiler_applicable_without_review(
             automatic_query_inventory_change(previous, candidate, change)
         }
         CompiledRegistryChangeClass::AccessOrDisclosureChange
-            if change.target.kind == CompiledRegistryChangeTargetKind::Action =>
+            if matches!(
+                change.target.kind,
+                CompiledRegistryChangeTargetKind::Action | CompiledRegistryChangeTargetKind::Timer
+            ) =>
         {
             false
         }
@@ -1381,6 +1448,19 @@ fn compare_entities(
             CompiledRegistryChangeCode::EventAdded,
             CompiledRegistryChangeCode::EventRemoved,
             CompiledRegistryChangeCode::EventChanged,
+            CompiledRegistryChangeClass::AccessOrDisclosureChange,
+            CompiledRegistryChangeClass::AccessOrDisclosureChange,
+            CompiledRegistryChangeClass::AccessOrDisclosureChange,
+            changes,
+        );
+        compare_map(
+            entity_id,
+            &previous_entity.timers,
+            &candidate_entity.timers,
+            CompiledRegistryChangeTargetKind::Timer,
+            CompiledRegistryChangeCode::TimerAdded,
+            CompiledRegistryChangeCode::TimerRemoved,
+            CompiledRegistryChangeCode::TimerChanged,
             CompiledRegistryChangeClass::AccessOrDisclosureChange,
             CompiledRegistryChangeClass::AccessOrDisclosureChange,
             CompiledRegistryChangeClass::AccessOrDisclosureChange,
@@ -4104,7 +4184,7 @@ fn load_predecessor_closure(
 ) -> Result<(VerifiedPredecessorPackage, BTreeMap<String, Vec<u8>>)> {
     let production = context.database_initialization_environment != "local";
     let (manifest, loaded) = load_verified_closure(root, shared, production)?;
-    validate_engine_features(&manifest)?;
+    validate_predecessor_engine_features(&manifest)?;
     validate_source_inventory(&manifest)?;
     let governed = package_predecessor_governed_model(&manifest, &loaded)?;
     validate_predecessor_registry_bindings(&manifest, &governed)?;
@@ -4117,7 +4197,11 @@ fn load_predecessor_closure(
         .iter()
         .find(|entry| entry.role == PackageFileRole::GeneratedDdl)
         .map(|entry| entry.sha256.clone());
-    let migration_baseline = governed.migration_baseline(&package_digest, generated_ddl_sha256);
+    let migration_baseline = governed.migration_baseline(
+        &package_digest,
+        manifest.engine_features.clone(),
+        generated_ddl_sha256,
+    );
     validate_migration_baseline(&migration_baseline)?;
     let history_schema_descriptor = governed.history_schema_descriptor(&package_digest)?;
 
@@ -4299,10 +4383,12 @@ impl PredecessorGovernedModel {
     fn migration_baseline(
         &self,
         package_digest: &str,
+        engine_features: BTreeSet<PackageEngineFeature>,
         generated_ddl_sha256: Option<String>,
     ) -> CompiledRegistryMigrationBaseline {
         CompiledRegistryMigrationBaseline {
             package_digest: package_digest.to_owned(),
+            engine_features,
             registry_id: self.registry_id.clone(),
             registry_version: self.version.clone(),
             registry_revision: self.model_revision.clone(),
@@ -5078,10 +5164,12 @@ fn expected_migration_plan(
 }
 
 fn validate_migration_baseline(baseline: &CompiledRegistryMigrationBaseline) -> Result<()> {
-    if baseline
-        .generated_ddl_sha256
-        .as_deref()
-        .is_some_and(|stated| !valid_digest(stated))
+    if (baseline.engine_features != current_engine_features()
+        && baseline.engine_features != legacy_engine_features())
+        || baseline
+            .generated_ddl_sha256
+            .as_deref()
+            .is_some_and(|stated| !valid_digest(stated))
     {
         return Err(PackageError::MigrationPlan);
     }

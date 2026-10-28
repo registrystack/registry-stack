@@ -11,6 +11,7 @@ mod postgres_harness;
 use registry_breg::api::{VerifiedClaimValue, VerifiedRequestClaims};
 use registry_breg::compiler::{compile_project, compile_project_with_assets, CompileProfile};
 use registry_breg::contract::{parse_project_json, ModuleAssetSource};
+use registry_breg::mutation::MutationFaultPoint;
 use registry_breg_client::{
     BRegActionInvocationRequest, BRegCreateRequest, BRegDirectWrite, BRegIdempotencyKey,
     BRegProblemCode, BRegProposalDecisionStatus, BRegProposalQuery, BRegProposalState,
@@ -2376,6 +2377,382 @@ async fn attachment_binding_integrity_and_detail_erasure_preserve_record_history
     assert_eq!(row.get::<_, i64>(1), 0);
     assert_eq!(row.get::<_, i64>(2), 0);
     fixture.finish().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn proposal_apply_stages_timer_rows_atomically_and_replays_without_rearming() {
+    let fixture = client_http::ClientFixture::start(
+        timer_proposal_registry(),
+        claims("timer-proposal-author", "zone-a"),
+    )
+    .await;
+    let client = &fixture.http.client;
+
+    let draft = start(&fixture, "Timer-backed proposal", "timer-proposal-start").await;
+    let submit = client
+        .prepare_proposal(&draft, "submit", json!({}), &key("timer-proposal-submit"))
+        .unwrap();
+    let submitted = client.execute_proposal(&submit).await.unwrap().value;
+    let apply = client
+        .prepare_proposal(
+            &submitted,
+            "apply",
+            json!({
+                "submissionVersion":submitted.submission_version(),
+                "effectDigest":submitted.effect_digest().unwrap(),
+                "reason":"timer-proposal-apply"
+            }),
+            &key("timer-proposal-apply"),
+        )
+        .unwrap();
+    let before = proposal_timer_counts(&fixture).await;
+    let applied = client.execute_proposal(&apply).await.unwrap();
+    assert_eq!(applied.value.state(), BRegProposalState::Applied);
+    let after = proposal_timer_counts(&fixture).await;
+    assert_eq!(after.records, before.records);
+    assert_eq!(after.revisions, before.revisions + 1);
+    assert_eq!(after.applications, before.applications + 1);
+    assert_eq!(after.generations, before.generations + 1);
+    assert_eq!(after.current_markers, before.current_markers + 1);
+
+    let replay = client.execute_proposal(&apply).await.unwrap();
+    assert_eq!(
+        serde_json::to_value(&replay.value).unwrap(),
+        serde_json::to_value(&applied.value).unwrap()
+    );
+    assert_eq!(proposal_timer_counts(&fixture).await, after);
+
+    let fault_draft = start(&fixture, "Rollback proposal", "timer-proposal-fault-start").await;
+    let fault_submit = client
+        .prepare_proposal(
+            &fault_draft,
+            "submit",
+            json!({}),
+            &key("timer-proposal-fault-submit"),
+        )
+        .unwrap();
+    let fault_submitted = client.execute_proposal(&fault_submit).await.unwrap().value;
+    let before_fault = proposal_timer_counts(&fixture).await;
+    let fault_client = fixture
+        .client_with_mutations(
+            claims("timer-proposal-author", "zone-a"),
+            (*fixture.mutations)
+                .clone()
+                .with_fault_for_test(MutationFaultPoint::BeforeCommit),
+        )
+        .await;
+    let fault_contract = fault_client
+        .client
+        .registry_contract(Some("clerk"))
+        .await
+        .unwrap()
+        .value;
+    let fault_get = fault_contract.select_proposal_get("clerk").unwrap();
+    let fault_current = fault_client
+        .client
+        .get_proposal(&fault_get, fault_submitted.id())
+        .await
+        .unwrap()
+        .value;
+    let fault_apply = fault_client
+        .client
+        .prepare_proposal(
+            &fault_current,
+            "apply",
+            json!({
+                "submissionVersion":fault_current.submission_version(),
+                "effectDigest":fault_current.effect_digest().unwrap(),
+                "reason":"timer-proposal-fault"
+            }),
+            &key("timer-proposal-fault-apply"),
+        )
+        .unwrap();
+    let refusal = fault_client
+        .client
+        .execute_proposal(&fault_apply)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        refusal.status(),
+        Some(axum::http::StatusCode::SERVICE_UNAVAILABLE.as_u16()),
+        "{refusal:?}"
+    );
+    assert_eq!(
+        refusal.problem_code(),
+        Some(BRegProblemCode::ServiceUnavailable)
+    );
+    assert_eq!(
+        proposal_timer_counts(&fixture).await,
+        before_fault,
+        "BeforeCommit follows Proposal Record and timer staging and rolls every durable row back"
+    );
+    let recovered_current = client.read_proposal(&fault_submitted).await.unwrap().value;
+    assert_eq!(recovered_current.state(), BRegProposalState::Submitted);
+    let recovered_apply = client
+        .prepare_proposal(
+            &recovered_current,
+            "apply",
+            json!({
+                "submissionVersion":recovered_current.submission_version(),
+                "effectDigest":recovered_current.effect_digest().unwrap(),
+                "reason":"timer-proposal-fault"
+            }),
+            &key("timer-proposal-fault-apply"),
+        )
+        .unwrap();
+    let recovered = client
+        .execute_proposal(&recovered_apply)
+        .await
+        .unwrap()
+        .value;
+    assert_eq!(recovered.state(), BRegProposalState::Applied);
+    let recovered_counts = proposal_timer_counts(&fixture).await;
+    assert_eq!(recovered_counts.generations, before_fault.generations + 1);
+    assert_eq!(
+        recovered_counts.current_markers,
+        before_fault.current_markers + 1
+    );
+    fixture.finish().await;
+}
+
+/// Structural lock-order proof: a timer-bearing Apply waits at control before
+/// it can own the Proposal parent. QO7 separately proves the audited pause
+/// service owns and releases this same advisory lock.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn timer_proposal_apply_takes_control_before_the_proposal_parent_lock() {
+    let fixture = client_http::ClientFixture::start(
+        timer_proposal_registry(),
+        claims("timer-proposal-lock-author", "zone-a"),
+    )
+    .await;
+    let draft = start(
+        &fixture,
+        "Timer lock-order proposal",
+        "timer-proposal-lock-start",
+    )
+    .await;
+    let submit = fixture
+        .http
+        .client
+        .prepare_proposal(
+            &draft,
+            "submit",
+            json!({}),
+            &key("timer-proposal-lock-submit"),
+        )
+        .unwrap();
+    let submitted = fixture
+        .http
+        .client
+        .execute_proposal(&submit)
+        .await
+        .unwrap()
+        .value;
+    let proposal_id = uuid::Uuid::parse_str(submitted.id()).unwrap();
+    let before = proposal_timer_counts(&fixture).await;
+    let worker = fixture
+        .client_for(claims("timer-proposal-lock-author", "zone-a"))
+        .await;
+    let worker_contract = worker
+        .client
+        .registry_contract(Some("clerk"))
+        .await
+        .unwrap()
+        .value;
+    let worker_get = worker_contract.select_proposal_get("clerk").unwrap();
+    let worker_proposal = worker
+        .client
+        .get_proposal(&worker_get, submitted.id())
+        .await
+        .unwrap()
+        .value;
+    let worker_apply = worker
+        .client
+        .prepare_proposal(
+            &worker_proposal,
+            "apply",
+            json!({
+                "submissionVersion":worker_proposal.submission_version(),
+                "effectDigest":worker_proposal.effect_digest().unwrap(),
+                "reason":"timer-proposal-lock-order"
+            }),
+            &key("timer-proposal-lock-apply"),
+        )
+        .unwrap();
+
+    let (mut blocker, blocker_task) = fixture.database.connect_migration().await;
+    let blocker = blocker.transaction().await.unwrap();
+    blocker
+        .execute(
+            "SELECT pg_advisory_xact_lock(
+                 pg_catalog.hashtextextended('breg/record-timer-control/v1', 0)
+             )",
+            &[],
+        )
+        .await
+        .unwrap();
+    let blocker_pid: i32 = blocker
+        .query_one("SELECT pg_backend_pid()", &[])
+        .await
+        .unwrap()
+        .get(0);
+    let application = tokio::spawn(async move {
+        let result = worker.client.execute_proposal(&worker_apply).await;
+        drop(worker);
+        result
+    });
+    let waiter_pid = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        loop {
+            let waiting = blocker
+                .query_opt(
+                    "SELECT waiter.pid
+                       FROM pg_catalog.pg_locks AS waiter
+                       JOIN pg_catalog.pg_locks AS holder
+                         ON holder.locktype=waiter.locktype
+                        AND holder.database IS NOT DISTINCT FROM waiter.database
+                        AND holder.classid IS NOT DISTINCT FROM waiter.classid
+                        AND holder.objid IS NOT DISTINCT FROM waiter.objid
+                        AND holder.objsubid IS NOT DISTINCT FROM waiter.objsubid
+                      WHERE holder.pid=$1
+                        AND holder.granted
+                        AND waiter.locktype='advisory'
+                        AND NOT waiter.granted
+                        AND waiter.pid<>holder.pid
+                      LIMIT 1",
+                    &[&blocker_pid],
+                )
+                .await
+                .unwrap();
+            if let Some(waiting) = waiting {
+                break waiting.get::<_, i32>(0);
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("Proposal Apply waits on exact timer control");
+    assert_ne!(waiter_pid, blocker_pid);
+
+    let (mut probe, probe_task) = fixture.database.connect_migration().await;
+    let probe = probe.transaction().await.unwrap();
+    let locked_proposal: uuid::Uuid = probe
+        .query_one(
+            "SELECT proposal_id
+               FROM registry_internal.registry_proposal_state
+              WHERE proposal_id=$1
+              FOR UPDATE NOWAIT",
+            &[&proposal_id],
+        )
+        .await
+        .expect("Apply has not locked its Proposal parent before timer control")
+        .get(0);
+    assert_eq!(locked_proposal, proposal_id);
+    probe.rollback().await.unwrap();
+    probe_task.abort();
+    blocker.rollback().await.unwrap();
+    blocker_task.abort();
+
+    let applied = tokio::time::timeout(std::time::Duration::from_secs(3), application)
+        .await
+        .expect("Apply continues after timer control releases")
+        .expect("Apply task joins")
+        .expect("Apply commits")
+        .value;
+    assert_eq!(applied.state(), BRegProposalState::Applied);
+    let after = proposal_timer_counts(&fixture).await;
+    assert_eq!(after.records, before.records);
+    assert_eq!(after.revisions, before.revisions + 1);
+    assert_eq!(after.applications, before.applications + 1);
+    assert_eq!(after.generations, before.generations + 1);
+    assert_eq!(after.current_markers, before.current_markers + 1);
+    fixture.finish().await;
+}
+
+fn timer_proposal_registry() -> registry_breg::CompiledRegistry {
+    let mut source = registry_source(false);
+    source["recordTypes"][0]["fields"]
+        .as_array_mut()
+        .unwrap()
+        .extend([
+            json!({"id":"activates-at","type":"timestamp","classification":"internal"}),
+            json!({"id":"activation-not-after","type":"timestamp","classification":"internal"}),
+            json!({"id":"activation-revision","type":"uuid","classification":"internal"}),
+        ]);
+    source["recordTypes"][0]["timers"] = json!([{
+        "id":"activate","at":"activates-at","notAfter":"activation-not-after",
+        "rearmOn":"activation-revision","invoke":"activate-target",
+        "input":{"target":{"fromRecordId":true}}
+    }]);
+    source["recordTypes"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("mutationPolicy");
+    source["timerGrants"] = json!([{"recordType":"target","timer":"activate"}]);
+    source["actions"][0]["plan"]["effects"][0]["set"] = json!({
+        "name":{"fromInput":"value"},
+        "activates-at":{"value":"2100-06-01T00:00:00Z"},
+        "activation-not-after":{"value":"2100-06-02T00:00:00Z"},
+        "activation-revision":{"value":"00000000-0000-4000-8000-000000000001"}
+    });
+    source["actions"].as_array_mut().unwrap().push(json!({
+        "id":"activate-target","execution":{"mode":"immediate"},
+        "inputs":[{"id":"target","type":"reference","target":"target","required":true,"classification":"internal"}],
+        "plan":{"type":"fixed","effects":[{
+            "id":"activated","target":{"fromInput":"target"},"operation":"patch",
+            "set":{"name":{"value":"Activated"}}
+        }]}
+    }));
+    for field in [
+        "activates-at",
+        "activation-not-after",
+        "activation-revision",
+    ] {
+        source["accessProfiles"][0]["permissions"]["records"][0]["readableFields"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!(field));
+        source["accessProfiles"][0]["permissions"]["records"][0]["writableFields"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!(field));
+    }
+    compile(source)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ProposalTimerCounts {
+    records: i64,
+    revisions: i64,
+    applications: i64,
+    generations: i64,
+    current_markers: i64,
+}
+
+async fn proposal_timer_counts(fixture: &client_http::ClientFixture) -> ProposalTimerCounts {
+    let table = &fixture.registry.entities()["target"].physical_table;
+    let row = fixture
+        .database
+        .admin
+        .query_one(
+            &format!(
+                "SELECT
+                   (SELECT count(*) FROM registry_data.\"{table}\"),
+                   (SELECT count(*) FROM registry_internal.registry_revisions),
+                   (SELECT count(*) FROM registry_internal.registry_proposal_applications),
+                   (SELECT count(*) FROM registry_internal.registry_record_timer_generations),
+                   (SELECT count(*) FROM registry_internal.registry_record_timer_current)"
+            ),
+            &[],
+        )
+        .await
+        .expect("administrator inspects Proposal Record and timer state");
+    ProposalTimerCounts {
+        records: row.get(0),
+        revisions: row.get(1),
+        applications: row.get(2),
+        generations: row.get(3),
+        current_markers: row.get(4),
+    }
 }
 
 /// Cancel closes the queued automatic application job in its own

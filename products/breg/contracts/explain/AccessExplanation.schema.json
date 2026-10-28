@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://id.registrystack.org/schemas/breg/access-explanation/access-explanation.v1alpha7.schema.json",
+  "$id": "https://id.registrystack.org/schemas/breg/access-explanation/access-explanation.v1alpha8.schema.json",
   "title": "AccessExplanation",
-  "description": "Wire shape of `explanation` for `bregctl explain access` without `--scenario`. Evaluation-rule strings are pinned. Record grants retain compiled authority with inspection-only explicit row boundaries and allowCount. Routes, actions and rowReach follow the compiled model, except pinned routes.entries[].recordType. claimContract remains opaque except principalClaims and its success/error relationship with claimContractError. Consent and statisticalDatasets are pinned in full.",
+  "description": "Wire shape of `explanation` for `bregctl explain access` without `--scenario`. Evaluation-rule strings are pinned. Record grants retain compiled authority with inspection-only explicit row boundaries and allowCount. Routes, actions and rowReach follow the compiled model, except pinned routes.entries[].recordType. timers pins autonomous policy writers and the exact product-owned future-effect ceiling without inventing a public profile. claimContract remains opaque except principalClaims and its success/error relationship with claimContractError. Consent and statisticalDatasets are pinned in full.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -18,6 +18,7 @@
     "routes",
     "recordTypes",
     "actions",
+    "timers",
     "rowReach",
     "claimContract",
     "claimContractError",
@@ -27,7 +28,7 @@
   ],
   "properties": {
     "apiVersion": {
-      "const": "id.registrystack.org/formats/breg/access-explanation/v1alpha7"
+      "const": "id.registrystack.org/formats/breg/access-explanation/v1alpha8"
     },
     "kind": {
       "const": "BRegAccessExplanation"
@@ -179,6 +180,95 @@
       "type": "object",
       "description": "Action inventory with canonical author inspection definitions, routes and access entries.",
       "x-registry-passthrough": "Actions use the same author inspector as ActionsExplanation, with exact fixed plans or function ceilings; routes and access follow the compiler."
+    },
+    "timers": {
+      "type": "array",
+      "description": "Root-enabled autonomous Record timers, the existing surfaces that can shape their policy, and their exact product-owned future-effect ceiling. Empty when the compiled project has no enabled timer.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "recordType",
+          "timer",
+          "sourceModule",
+          "invoke",
+          "controlFields",
+          "predicateFields",
+          "effectInputFields",
+          "controlWriters",
+          "predicateWriters",
+          "effectInputWriters",
+          "futureEffect"
+        ],
+        "properties": {
+          "recordType": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "timer": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "sourceModule": {
+            "oneOf": [
+              {
+                "$ref": "#/$defs/LocalId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "invoke": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "controlFields": {
+            "$ref": "#/$defs/TimerFields"
+          },
+          "predicateFields": {
+            "$ref": "#/$defs/TimerFields"
+          },
+          "effectInputFields": {
+            "$ref": "#/$defs/TimerFields"
+          },
+          "controlWriters": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/TimerWriter"
+            }
+          },
+          "predicateWriters": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/TimerWriter"
+            }
+          },
+          "effectInputWriters": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/TimerWriter"
+            }
+          },
+          "futureEffect": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "authority",
+              "recordGrantRelationship",
+              "systemGrant"
+            ],
+            "properties": {
+              "authority": {
+                "const": "product-owned"
+              },
+              "recordGrantRelationship": {
+                "const": "none"
+              },
+              "systemGrant": {
+                "$ref": "#/$defs/TimerSystemGrant"
+              }
+            }
+          }
+        }
+      }
     },
     "rowReach": {
       "type": "array",
@@ -643,6 +733,119 @@
       "description": "A local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`.",
       "pattern": "^[a-z][a-z0-9_-]{0,63}$",
       "type": "string"
+    },
+    "TimerFields": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/LocalId"
+      }
+    },
+    "TimerWriter": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "surface",
+        "id",
+        "sourcePath",
+        "operations",
+        "fields"
+      ],
+      "properties": {
+        "surface": {
+          "enum": [
+            "record-permission",
+            "action"
+          ]
+        },
+        "id": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "sourcePath": {
+          "type": "string",
+          "minLength": 1
+        },
+        "operations": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "create",
+              "patch",
+              "tombstone",
+              "batch",
+              "import"
+            ]
+          }
+        },
+        "fields": {
+          "$ref": "#/$defs/TimerFields"
+        },
+        "accessProfiles": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/LocalId"
+          }
+        }
+      }
+    },
+    "TimerSystemGrant": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "revision",
+        "actionId",
+        "actionRevision",
+        "targets"
+      ],
+      "properties": {
+        "revision": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "actionId": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "actionRevision": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "targets": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "recordType",
+              "operation",
+              "fields",
+              "readFields"
+            ],
+            "properties": {
+              "recordType": {
+                "$ref": "#/$defs/LocalId"
+              },
+              "operation": {
+                "enum": [
+                  "create",
+                  "get",
+                  "patch",
+                  "tombstone"
+                ]
+              },
+              "fields": {
+                "$ref": "#/$defs/TimerFields"
+              },
+              "readFields": {
+                "$ref": "#/$defs/TimerFields"
+              }
+            }
+          }
+        }
+      }
     },
     "consentIssuer": {
       "type": "object",

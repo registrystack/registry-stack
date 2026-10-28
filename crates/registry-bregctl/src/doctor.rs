@@ -228,6 +228,11 @@ fn startup_diagnostic(error: StartupError) -> Diagnostic {
         StartupError::SchemaTestSetupRefused(_) => {
             unreachable!("only schema-test preparation raises it")
         }
+        StartupError::TimerTestControl => (
+            "startup.timer-test-control.refused",
+            "timerTestControl",
+            "the record-timer native test control was refused",
+        ),
         StartupError::DatabaseCatalogDrift { .. } => unreachable!("handled above"),
         StartupError::DatabaseUninitialized => (
             "startup.database.uninitialized",
@@ -613,6 +618,11 @@ mod tests {
                 "database",
             ),
             (
+                StartupError::TimerTestControl,
+                "startup.timer-test-control.refused",
+                "timerTestControl",
+            ),
+            (
                 StartupError::DatabaseCatalogDrift {
                     objects: vec!["registry_data.example_idx".to_owned()],
                 },
@@ -710,11 +720,22 @@ mod tests {
         ];
 
         for (error, expected_code, expected_path) in cases {
+            // TimerTestControl is already one closed, value-free error with no
+            // wrapped dependency cause. Its diagnostic may reuse that exact
+            // safe text; every other class must replace its rendered cause.
+            let has_no_dependency_cause = matches!(error, StartupError::TimerTestControl);
             let rendered_dependency_error = error.to_string();
             let diagnostic = startup_diagnostic(error);
             assert_eq!(diagnostic.code, expected_code);
             assert_eq!(diagnostic.path, expected_path);
-            assert!(!diagnostic.message.contains(&rendered_dependency_error));
+            if has_no_dependency_cause {
+                assert_eq!(
+                    diagnostic.message,
+                    "the record-timer native test control was refused"
+                );
+            } else {
+                assert!(!diagnostic.message.contains(&rendered_dependency_error));
+            }
         }
 
         let capacity = startup_diagnostic(StartupError::DatabaseConnection(

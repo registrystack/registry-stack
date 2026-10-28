@@ -95,6 +95,8 @@ pub async fn install_compiled_schema(
         .await?;
     }
 
+    super::timer::install_record_timer_schema(migration, registry, runtime_role).await?;
+
     reconcile_compiled_runtime_acl(migration, registry, runtime_role).await
 }
 

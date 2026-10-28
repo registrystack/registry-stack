@@ -3970,6 +3970,447 @@ async fn refusal_audit_records_only_compiled_access_profiles() {
     database.cleanup().await;
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn direct_timer_staging_rearms_cancels_replays_and_rolls_back_after_staging() {
+    let database = TestDatabase::create(8).await;
+    let (compiled, identity, pool, audit, lock_key) =
+        prepared_timer_write_registry(&database).await;
+    let app = mutation_router(
+        pool.clone(),
+        compiled.clone(),
+        identity.clone(),
+        lock_key,
+        audit.clone(),
+        None,
+    );
+    let claims = timer_write_claims();
+    let valid = timer_create_body(
+        "2100-01-01T00:00:00Z",
+        "2100-01-02T00:00:00Z",
+        "00000000-0000-4000-8000-000000000001",
+    );
+    let headers = [
+        ("content-type", "application/json"),
+        ("idempotency-key", "direct-timer-create"),
+    ];
+    let created = response_parts(
+        send(
+            &app,
+            Method::POST,
+            "/v1/records/services",
+            Some(claims.clone()),
+            &headers,
+            serde_json::to_vec(&valid).unwrap(),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(created.status, StatusCode::CREATED);
+    let record_id = created.body["data"]["recordIdentifier"]
+        .as_str()
+        .expect("created Record has an identifier")
+        .to_owned();
+    assert_eq!(
+        timer_states(&database, &record_id).await,
+        vec![("pending".to_owned(), None)]
+    );
+    let after_create = timer_write_counts(&database, &compiled).await;
+
+    let replay = response_parts(
+        send(
+            &app,
+            Method::POST,
+            "/v1/records/services",
+            Some(claims.clone()),
+            &headers,
+            serde_json::to_vec(&valid).unwrap(),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(replay.status, created.status);
+    assert_eq!(replay.body_bytes, created.body_bytes);
+    assert_eq!(timer_write_counts(&database, &compiled).await, after_create);
+
+    let patch_headers = [
+        ("content-type", "application/json-patch+json"),
+        ("idempotency-key", "direct-timer-rearm"),
+        ("if-match", created.etag.as_str()),
+    ];
+    let rearmed = response_parts(
+        send(
+            &app,
+            Method::PATCH,
+            &format!("/v1/records/services/{record_id}"),
+            Some(claims.clone()),
+            &patch_headers,
+            serde_json::to_vec(&json!([{
+                "op":"replace",
+                "path":"/data/activationRevision",
+                "value":"00000000-0000-4000-8000-000000000002"
+            }]))
+            .unwrap(),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(rearmed.status, StatusCode::OK);
+    assert_eq!(
+        timer_states(&database, &record_id).await,
+        vec![
+            ("superseded".to_owned(), Some("superseded".to_owned())),
+            ("pending".to_owned(), None),
+        ]
+    );
+    let after_rearm = timer_write_counts(&database, &compiled).await;
+
+    let patch_replay = response_parts(
+        send(
+            &app,
+            Method::PATCH,
+            &format!("/v1/records/services/{record_id}"),
+            Some(claims.clone()),
+            &patch_headers,
+            serde_json::to_vec(&json!([{
+                "op":"replace",
+                "path":"/data/activationRevision",
+                "value":"00000000-0000-4000-8000-000000000002"
+            }]))
+            .unwrap(),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(patch_replay.body_bytes, rearmed.body_bytes);
+    assert_eq!(timer_write_counts(&database, &compiled).await, after_rearm);
+
+    let cancelled = response_parts(
+        send(
+            &app,
+            Method::PATCH,
+            &format!("/v1/records/services/{record_id}"),
+            Some(claims.clone()),
+            &[
+                ("content-type", "application/json-patch+json"),
+                ("idempotency-key", "direct-timer-cancel"),
+                ("if-match", rearmed.etag.as_str()),
+            ],
+            serde_json::to_vec(&json!([{
+                "op":"remove",
+                "path":"/data/activatesAt"
+            }]))
+            .unwrap(),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(cancelled.status, StatusCode::OK);
+    assert_eq!(
+        timer_states(&database, &record_id).await,
+        vec![
+            ("superseded".to_owned(), Some("superseded".to_owned())),
+            ("cancelled".to_owned(), Some("control-cleared".to_owned())),
+        ]
+    );
+
+    let before_fault = timer_write_counts(&database, &compiled).await;
+    let faulting = mutation_router(
+        pool,
+        compiled.clone(),
+        identity,
+        lock_key,
+        audit,
+        Some(MutationFaultPoint::BeforeCommit),
+    );
+    let faulted = send(
+        &faulting,
+        Method::POST,
+        "/v1/records/services",
+        Some(claims),
+        &[
+            ("content-type", "application/json"),
+            ("idempotency-key", "direct-timer-before-commit"),
+        ],
+        serde_json::to_vec(&timer_create_body(
+            "2100-02-01T00:00:00Z",
+            "2100-02-02T00:00:00Z",
+            "00000000-0000-4000-8000-000000000003",
+        ))
+        .unwrap(),
+    )
+    .await;
+    assert_eq!(faulted.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(
+        timer_write_counts(&database, &compiled).await,
+        before_fault,
+        "BeforeCommit follows Record and timer staging, so every durable row rolls back"
+    );
+    database.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn invalid_timer_window_discloses_only_a_complete_readable_field_pair() {
+    let database = TestDatabase::create(8).await;
+    let (compiled, identity, pool, audit, lock_key) =
+        prepared_timer_write_registry(&database).await;
+    let app = mutation_router(pool, compiled.clone(), identity, lock_key, audit, None);
+    let claims = timer_write_claims();
+    let invalid = timer_create_body(
+        "2100-03-01T00:00:00Z",
+        "2100-03-01T00:00:00Z",
+        "00000000-0000-4000-8000-000000000004",
+    );
+    let before = timer_write_counts(&database, &compiled).await;
+    let visible = body_json(
+        send(
+            &app,
+            Method::POST,
+            "/v1/records/services",
+            Some(claims.clone()),
+            &[
+                ("content-type", "application/json"),
+                ("idempotency-key", "invalid-visible-window"),
+            ],
+            serde_json::to_vec(&invalid).unwrap(),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(visible["code"], "request.invalid");
+    assert_eq!(visible["atField"], "activates-at");
+    assert_eq!(visible["notAfterField"], "activation-not-after");
+    let visible_text = visible.to_string();
+    assert!(!visible_text.contains("2100-03-01"));
+    assert!(!visible_text.contains("00000000-0000-4000-8000-000000000004"));
+    assert_eq!(timer_write_counts(&database, &compiled).await, before);
+
+    let hidden = body_json(
+        send(
+            &app,
+            Method::POST,
+            "/v1/records/services?accessProfile=blind-editor",
+            Some(claims),
+            &[
+                ("content-type", "application/json"),
+                ("idempotency-key", "invalid-hidden-window"),
+            ],
+            serde_json::to_vec(&invalid).unwrap(),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(hidden["code"], "request.invalid");
+    assert!(hidden.get("atField").is_none());
+    assert!(hidden.get("notAfterField").is_none());
+    assert!(!hidden.to_string().contains("activates-at"));
+    assert!(!hidden.to_string().contains("activation-not-after"));
+    assert_eq!(timer_write_counts(&database, &compiled).await, before);
+    database.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn timer_free_entity_write_does_not_take_timer_control_lock() {
+    let database = TestDatabase::create(8).await;
+    let (compiled, identity, pool, audit, lock_key) =
+        prepared_timer_write_registry(&database).await;
+    let app = mutation_router(pool, compiled, identity, lock_key, audit, None);
+    let (mut blocker, blocker_task) = database.connect_migration().await;
+    let blocker = blocker.transaction().await.expect("control blocker begins");
+    blocker
+        .execute(
+            "SELECT pg_advisory_xact_lock(
+                 pg_catalog.hashtextextended('breg/record-timer-control/v1', 0)
+             )",
+            &[],
+        )
+        .await
+        .expect("test exclusively holds timer control lock");
+
+    let response = tokio::time::timeout(
+        Duration::from_secs(2),
+        send(
+            &app,
+            Method::POST,
+            "/v1/records/notes",
+            Some(timer_write_claims()),
+            &[
+                ("content-type", "application/json"),
+                ("idempotency-key", "timer-free-write-under-control-lock"),
+            ],
+            serde_json::to_vec(&json!({"data":{
+                "message":"Timer-free writes do not join timer control.",
+                "jurisdiction":"zone-a"
+            }}))
+            .unwrap(),
+        ),
+    )
+    .await
+    .expect("timer-free write does not wait for timer control");
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    blocker
+        .rollback()
+        .await
+        .expect("control blocker rolls back");
+    blocker_task.abort();
+    database.cleanup().await;
+}
+
+async fn prepared_timer_write_registry(
+    database: &TestDatabase,
+) -> (
+    Arc<registry_breg::CompiledRegistry>,
+    registry_breg::postgres::ExpectedRegistryIdentity,
+    registry_breg::postgres::RuntimePool,
+    RegistryAudit,
+    RegistryLockKey,
+) {
+    let compiled = Arc::new(timer_write_registry());
+    let (migration, migration_task) = database.connect_migration().await;
+    install_compiled_schema(&migration, &compiled, &database.runtime_role)
+        .await
+        .expect("migration installs timer-bearing schema");
+    let identity = initialize_compiled_registry_state_for_test(
+        &migration,
+        &database.runtime_role,
+        &compiled,
+        RegistryStateTestIdentity {
+            package_id: "record-timer-native",
+            database_id: DATABASE_ID,
+            label: "package-direct-timer-write-1",
+        },
+    )
+    .await
+    .expect("migration initializes timer bindings and active package");
+    migration_task.abort();
+    let pool = database.runtime_config.build_pool().expect("pool builds");
+    let audit = database.audit(
+        AuditProfile::production_from_secret_bytes(vec![0x6d; 32].into())
+            .expect("test owns keyed audit"),
+    );
+    let lock_key = RegistryLockKey::derive("record-timer-native").expect("lock id is bounded");
+    (compiled, identity, pool, audit, lock_key)
+}
+
+fn timer_write_registry() -> registry_breg::CompiledRegistry {
+    let mut source: Value = registry_platform_yaml::Reader::new("registry.yaml")
+        .scan(include_bytes!(
+            "../../../products/breg/examples/future-activation/registry.yaml"
+        ))
+        .expect("public timer example is valid YAML")
+        .expect("public timer example is nonempty")
+        .to_json_value();
+    source["recordTypes"].as_array_mut().unwrap().push(json!({
+        "id":"note",
+        "route":"notes",
+        "primaryDataset":"services",
+        "mutationMode":"mutable",
+        "fields":[
+            {"id":"message","type":"string","required":true,"minimumLength":1,"maximumLength":200,"classification":"internal"},
+            {"id":"jurisdiction","type":"string","required":true,"minimumLength":1,"maximumLength":40,"classification":"internal"}
+        ]
+    }));
+    source["accessProfiles"][0]["permissions"]["records"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "recordType":"note",
+            "operations":["create","get","list","patch"],
+            "readableFields":["message","jurisdiction"],
+            "writableFields":["message","jurisdiction"],
+            "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
+        }));
+    let mut blind = source["accessProfiles"][0].clone();
+    blind["id"] = json!("blind-editor");
+    blind.as_object_mut().unwrap().remove("default");
+    blind["permissions"]["records"][0]["readableFields"] =
+        json!(["status", "paused", "description", "jurisdiction"]);
+    source["accessProfiles"].as_array_mut().unwrap().push(blind);
+    let bytes = serde_json::to_vec(&source).expect("timer fixture serializes");
+    let project = parse_project_json(&bytes).expect("timer fixture parses");
+    compile_project(&project, &[], CompileProfile::Authoring)
+        .expect("timer fixture compiles with readable and write-only control profiles")
+}
+
+fn timer_write_claims() -> VerifiedRequestClaims {
+    api_claims_with_principal_and_scopes(
+        PRINCIPAL_CANARY,
+        "service-administration",
+        Some("zone-a"),
+        BTreeSet::from(["registry:services:write".to_owned()]),
+    )
+}
+
+fn timer_create_body(at: &str, not_after: &str, rearm: &str) -> Value {
+    json!({"data":{
+        "status":"scheduled",
+        "activatesAt":at,
+        "activationNotAfter":not_after,
+        "activationRevision":rearm,
+        "paused":false,
+        "description":"Scheduled direct-write fixture",
+        "jurisdiction":"zone-a"
+    }})
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct TimerWriteCounts {
+    records: i64,
+    revisions: i64,
+    outbox: i64,
+    idempotency: i64,
+    generations: i64,
+    current_markers: i64,
+}
+
+async fn timer_write_counts(
+    database: &TestDatabase,
+    compiled: &registry_breg::CompiledRegistry,
+) -> TimerWriteCounts {
+    let table = &compiled.entities()["service"].physical_table;
+    let row = database
+        .admin
+        .query_one(
+            &format!(
+                "SELECT
+                   (SELECT count(*) FROM registry_data.\"{table}\"),
+                   (SELECT count(*) FROM registry_internal.registry_revisions),
+                   (SELECT count(*) FROM registry_internal.registry_outbox),
+                   (SELECT count(*) FROM registry_internal.registry_idempotency),
+                   (SELECT count(*) FROM registry_internal.registry_record_timer_generations),
+                   (SELECT count(*) FROM registry_internal.registry_record_timer_current)"
+            ),
+            &[],
+        )
+        .await
+        .expect("administrator can inspect atomic Record and timer state");
+    TimerWriteCounts {
+        records: row.get(0),
+        revisions: row.get(1),
+        outbox: row.get(2),
+        idempotency: row.get(3),
+        generations: row.get(4),
+        current_markers: row.get(5),
+    }
+}
+
+async fn timer_states(database: &TestDatabase, record_id: &str) -> Vec<(String, Option<String>)> {
+    database
+        .admin
+        .query(
+            "SELECT state,outcome_code
+               FROM registry_internal.registry_record_timer_generations
+              WHERE record_type='service' AND record_id=$1::text::uuid
+              ORDER BY created_at,occurrence_id",
+            &[&record_id],
+        )
+        .await
+        .expect("administrator can inspect retained timer generations")
+        .into_iter()
+        .map(|row| (row.get(0), row.get(1)))
+        .collect()
+}
+
 fn mutation_refusal_audit_fault_router(
     pool: registry_breg::postgres::RuntimePool,
     registry: Arc<registry_breg::CompiledRegistry>,

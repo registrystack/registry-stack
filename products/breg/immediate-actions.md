@@ -5,6 +5,11 @@ Generated CRUD serves ordinary record maintenance; an Action groups configured
 writes without adding domain-specific server code. A Proposal Action uses the
 same plan model when application must happen later.
 
+A [Record timer](record-timers.md) may invoke a deliberately non-public
+immediate Action from governed Record fields. That timer-only Action remains in
+compiled inspection but has no caller route, access-profile selection, public
+metadata entry, portable Action contract, or generated client method.
+
 The [facility project](examples/facility/README.md) is the complete
 multi-record example. `register-facility` creates a facility and its initial
 assignment in one transaction. Its `operator` reference is checked for current

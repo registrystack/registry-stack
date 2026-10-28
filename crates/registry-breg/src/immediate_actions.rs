@@ -40,6 +40,9 @@ pub(crate) struct CollectedFunctionSource {
     pub source_module: Option<String>,
 }
 
+// The compiler inputs stay explicit because each collection has a distinct
+// validation boundary and lifetime.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn compile_immediate_actions(
     actions: &BTreeMap<String, CollectedActionSource>,
     entities: &BTreeMap<String, CompiledEntity>,
@@ -48,6 +51,7 @@ pub(crate) fn compile_immediate_actions(
     functions: &BTreeMap<String, CollectedFunctionSource>,
     review_authorities: &[crate::contract::ReviewAuthoritySource],
     project: &crate::contract::RegistryProject,
+    timer_actions: &BTreeSet<String>,
 ) -> Result<CompiledActionInventory, Vec<Diagnostic>> {
     let mut errors = Vec::new();
     validate_action_permission_sources(actions, profiles, &mut errors);
@@ -65,6 +69,7 @@ pub(crate) fn compile_immediate_actions(
             functions,
             review_authorities,
             project,
+            timer_actions,
             &mut wasm_module_count,
             &mut errors,
         ) {
@@ -116,6 +121,7 @@ fn compile_action(
     functions: &BTreeMap<String, CollectedFunctionSource>,
     review_authorities: &[crate::contract::ReviewAuthoritySource],
     project: &crate::contract::RegistryProject,
+    timer_actions: &BTreeSet<String>,
     wasm_module_count: &mut usize,
     errors: &mut Vec<Diagnostic>,
 ) -> Option<CompiledAction> {
@@ -327,7 +333,7 @@ fn compile_action(
         &result_effects,
         errors,
     );
-    if permissions.is_empty() {
+    if permissions.is_empty() && !timer_actions.contains(&action.id) {
         errors.push(Diagnostic::error(
             "breg.action.permission-missing",
             "project.accessProfiles[].permissions.actions",
@@ -1842,18 +1848,7 @@ fn validate_plan_bounds(
     target_uses: &[CompiledActionTargetUse],
     errors: &mut Vec<Diagnostic>,
 ) {
-    let target_count = target_uses
-        .iter()
-        .map(|use_| match &use_.source {
-            CompiledActionTargetUseSource::Effect { effect } => {
-                format!("effect:{}:{}", use_.entity_id, effect)
-            }
-            CompiledActionTargetUseSource::Input { input } => {
-                format!("input:{}:{}", use_.entity_id, input)
-            }
-        })
-        .collect::<BTreeSet<_>>()
-        .len();
+    let target_count = plan_target_count(target_uses);
     if target_count > usize::from(MAX_PLAN_TARGETS) {
         errors.push(Diagnostic::error(
             "breg.action.bounds-targets",
@@ -1895,6 +1890,21 @@ fn validate_plan_bounds(
             "an Action plan contains a field whose snapshot size cannot be bounded",
         )),
     }
+}
+
+fn plan_target_count(target_uses: &[CompiledActionTargetUse]) -> usize {
+    target_uses
+        .iter()
+        .map(|use_| match &use_.source {
+            CompiledActionTargetUseSource::Effect { effect } => {
+                format!("effect:{}:{}", use_.entity_id, effect)
+            }
+            CompiledActionTargetUseSource::Input { input } => {
+                format!("input:{}:{}", use_.entity_id, input)
+            }
+        })
+        .collect::<BTreeSet<_>>()
+        .len()
 }
 
 fn maximum_snapshot_bytes(
@@ -2436,7 +2446,7 @@ fn maximum_field_json_bytes(field_type: &FieldTypeSource) -> Option<u64> {
     }
 }
 
-fn compatible_field_types(source: &FieldTypeSource, target: &FieldTypeSource) -> bool {
+pub(crate) fn compatible_field_types(source: &FieldTypeSource, target: &FieldTypeSource) -> bool {
     if source == target {
         return true;
     }
@@ -2968,71 +2978,217 @@ pub(crate) fn finalize_action_revisions(
 ) {
     for action in &mut inventory.actions {
         action.definition_revision = definition_revision(action, entities);
-        let mut targets =
-            BTreeMap::<(String, Operation), crate::model::CompiledSystemApplyTarget>::new();
-        for use_ in &action.target_uses {
-            let operation = if use_.operation == Operation::Invoke {
-                Operation::Get
-            } else {
-                use_.operation
-            };
-            let target = targets
-                .entry((use_.entity_id.clone(), operation))
-                .or_insert_with(|| crate::model::CompiledSystemApplyTarget {
-                    entity_id: use_.entity_id.clone(),
-                    operation,
-                    fields: BTreeSet::new(),
-                    read_fields: BTreeSet::new(),
-                });
-            if matches!(operation, Operation::Create | Operation::Patch) {
-                target.fields.extend(use_.fields.iter().cloned());
-            }
-            target.read_fields.extend(use_.fields.iter().cloned());
-        }
-        for guard in &action.requires {
-            let target = targets
-                .entry((guard.entity_id.clone(), Operation::Get))
-                .or_insert_with(|| crate::model::CompiledSystemApplyTarget {
-                    entity_id: guard.entity_id.clone(),
-                    operation: Operation::Get,
-                    fields: BTreeSet::new(),
-                    read_fields: BTreeSet::new(),
-                });
-            if !guard.field.is_empty() {
-                target.read_fields.insert(guard.field.clone());
-            }
-        }
-        for ((entity_id, operation), target) in &mut targets {
-            if *operation == Operation::Create {
-                if let Some(entity) = entities.get(entity_id) {
-                    target
-                        .fields
-                        .extend(entity.generated_fields().map(|field| field.id.clone()));
-                }
-            }
-        }
-        let targets = targets.into_values().collect::<Vec<_>>();
-        let payload = json!({"actionId":action.id,"actionRevision":action.definition_revision,"targets":targets});
-        let revision = format!(
-            "sha256:{}",
-            hex_lower(&Sha256::digest(
-                canonicalize_json(&payload).expect("normalized system grant canonicalizes")
-            ))
-        );
+        let grant = system_grant_for_action(action, entities);
         if let crate::model::CompiledActionExecution::Proposal { proposal } = &mut action.execution
         {
             if matches!(
                 proposal.application,
                 crate::model::CompiledProposalApplication::Automatic { .. }
             ) {
-                proposal.system_apply_grant = Some(crate::model::CompiledSystemApplyGrant {
-                    revision,
-                    action_id: action.id.clone(),
-                    action_revision: action.definition_revision.clone(),
-                    targets,
-                });
+                proposal.system_apply_grant = Some(grant);
             }
         }
+    }
+}
+
+/// Derive the exact product-owned authority ceiling for a compiled Action.
+/// The result is inert until a trusted executor binds it to one execution.
+pub(crate) fn system_grant_for_action(
+    action: &CompiledAction,
+    entities: &BTreeMap<String, CompiledEntity>,
+) -> crate::model::CompiledSystemApplyGrant {
+    let mut targets =
+        BTreeMap::<(String, Operation), crate::model::CompiledSystemApplyTarget>::new();
+    for use_ in &action.target_uses {
+        let operation = if use_.operation == Operation::Invoke {
+            Operation::Get
+        } else {
+            use_.operation
+        };
+        let target = targets
+            .entry((use_.entity_id.clone(), operation))
+            .or_insert_with(|| crate::model::CompiledSystemApplyTarget {
+                entity_id: use_.entity_id.clone(),
+                operation,
+                fields: BTreeSet::new(),
+                read_fields: BTreeSet::new(),
+            });
+        if matches!(operation, Operation::Create | Operation::Patch) {
+            target.fields.extend(use_.fields.iter().cloned());
+        }
+        target.read_fields.extend(use_.fields.iter().cloned());
+    }
+    for guard in &action.requires {
+        let target = targets
+            .entry((guard.entity_id.clone(), Operation::Get))
+            .or_insert_with(|| crate::model::CompiledSystemApplyTarget {
+                entity_id: guard.entity_id.clone(),
+                operation: Operation::Get,
+                fields: BTreeSet::new(),
+                read_fields: BTreeSet::new(),
+            });
+        if !guard.field.is_empty() {
+            target.read_fields.insert(guard.field.clone());
+        }
+    }
+    for ((entity_id, operation), target) in &mut targets {
+        if *operation == Operation::Create {
+            if let Some(entity) = entities.get(entity_id) {
+                target
+                    .fields
+                    .extend(entity.generated_fields().map(|field| field.id.clone()));
+            }
+        }
+    }
+    let targets = targets.into_values().collect::<Vec<_>>();
+    compiled_system_grant(action, targets)
+}
+
+/// Add the exact anchor facts the timer executor must read under lock even
+/// when the invoked Action only creates records.
+pub(crate) fn system_grant_for_timer_action(
+    action: &CompiledAction,
+    entities: &BTreeMap<String, CompiledEntity>,
+    anchor: &str,
+    anchor_read_fields: &BTreeSet<String>,
+) -> crate::model::CompiledSystemApplyGrant {
+    let mut grant = system_grant_for_action(action, entities);
+    if let Some(target) = grant
+        .targets
+        .iter_mut()
+        .find(|target| target.entity_id == anchor && target.operation == Operation::Get)
+    {
+        target
+            .read_fields
+            .extend(anchor_read_fields.iter().cloned());
+    } else {
+        grant.targets.push(crate::model::CompiledSystemApplyTarget {
+            entity_id: anchor.to_owned(),
+            operation: Operation::Get,
+            fields: BTreeSet::new(),
+            read_fields: anchor_read_fields.clone(),
+        });
+    }
+    grant.targets.sort_by(|left, right| {
+        (&left.entity_id, left.operation).cmp(&(&right.entity_id, right.operation))
+    });
+    compiled_system_grant(action, grant.targets)
+}
+
+/// Apply the ordinary Action ceilings to the exact timer anchor work added
+/// after Action compilation. Existing input/effect bindings retain their
+/// ordinary multiplicity; one exact anchor and each locked field count once.
+pub(crate) fn validate_timer_plan_bounds(
+    path: &str,
+    action: &CompiledAction,
+    entities: &BTreeMap<String, CompiledEntity>,
+    anchor: &str,
+    anchor_inputs: &BTreeSet<String>,
+    anchor_read_fields: &BTreeSet<String>,
+    errors: &mut Vec<Diagnostic>,
+) {
+    let anchor_already_targeted = action.target_uses.iter().any(|use_| {
+        use_.entity_id == anchor
+            && matches!(
+                &use_.source,
+                CompiledActionTargetUseSource::Input { input }
+                    if anchor_inputs.contains(input)
+            )
+    });
+    let target_count = plan_target_count(&action.target_uses)
+        .saturating_add(usize::from(!anchor_already_targeted));
+    if target_count > usize::from(MAX_PLAN_TARGETS) {
+        errors.push(Diagnostic::error(
+            "breg.timer.bounds-targets",
+            path,
+            "the Action targets plus the exact timer anchor exceed the supported target-record ceiling",
+        ));
+    }
+
+    let Some(mut snapshot_bytes) =
+        maximum_snapshot_bytes(&action.inputs, entities, &action.effects)
+    else {
+        errors.push(Diagnostic::error(
+            "breg.timer.bounds-snapshot-unknown",
+            path,
+            "the timer anchor contains a field whose locked snapshot size cannot be bounded",
+        ));
+        return;
+    };
+    let already_budgeted_before = action
+        .effects
+        .iter()
+        .filter(|effect| {
+            effect.target.entity_id == anchor
+                && effect.operation == Operation::Patch
+                && matches!(
+                    &effect.target.binding,
+                    CompiledPlanTargetBinding::Existing { input }
+                        if anchor_inputs.contains(input)
+                )
+        })
+        .flat_map(|effect| {
+            effect.mutations.iter().map(|mutation| match mutation {
+                CompiledPlanMutation::Set { field, .. } | CompiledPlanMutation::Clear { field } => {
+                    field.clone()
+                }
+            })
+        })
+        .collect::<BTreeSet<_>>();
+    let Some(anchor_entity) = entities.get(anchor) else {
+        return;
+    };
+    for field in anchor_read_fields.difference(&already_budgeted_before) {
+        let Some(compiled_field) = anchor_entity.fields.get(field) else {
+            continue;
+        };
+        let Some(maximum) = maximum_field_json_bytes(&compiled_field.field_type) else {
+            errors.push(Diagnostic::error(
+                "breg.timer.bounds-snapshot-unknown",
+                path,
+                "the timer anchor contains a field whose locked snapshot size cannot be bounded",
+            ));
+            return;
+        };
+        let Some(next) = snapshot_bytes
+            .checked_add(field.len() as u64 + 8)
+            .and_then(|bytes| bytes.checked_add(maximum.max(4)))
+        else {
+            errors.push(Diagnostic::error(
+                "breg.timer.bounds-snapshot-bytes",
+                path,
+                "the Action snapshot plus exact timer anchor reads exceed the supported snapshot-size ceiling",
+            ));
+            return;
+        };
+        snapshot_bytes = next;
+    }
+    if snapshot_bytes > u64::from(MAX_PLAN_SNAPSHOT_BYTES) {
+        errors.push(Diagnostic::error(
+            "breg.timer.bounds-snapshot-bytes",
+            path,
+            "the Action snapshot plus exact timer anchor reads exceed the supported snapshot-size ceiling",
+        ));
+    }
+}
+
+fn compiled_system_grant(
+    action: &CompiledAction,
+    targets: Vec<crate::model::CompiledSystemApplyTarget>,
+) -> crate::model::CompiledSystemApplyGrant {
+    let payload =
+        json!({"actionId":action.id,"actionRevision":action.definition_revision,"targets":targets});
+    let revision = format!(
+        "sha256:{}",
+        hex_lower(&Sha256::digest(
+            canonicalize_json(&payload).expect("normalized system grant canonicalizes")
+        ))
+    );
+    crate::model::CompiledSystemApplyGrant {
+        revision,
+        action_id: action.id.clone(),
+        action_revision: action.definition_revision.clone(),
+        targets,
     }
 }
 

@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- Add root-granted Record timers that invoke bounded timer-only immediate
+  Actions from current governed Record controls and facts. The operator surface
+  provides status, list, show, pause, resume, and exact-occurrence retry. See
+  [Record timers](record-timers.md).
+- BREAKING: `bregctl explain access` emits `v1alpha8` instead of `v1alpha7`.
+  The new required `timers` inventory reports each timer's control,
+  predicate, effect-shaping input, writer, and system-grant authority. Strict
+  readers must add `v1alpha8`; see the [explanation contract version
+  policy](contracts/explain/README.md).
+- BREAKING: every package built by this release declares the
+  `record_timer_store` engine feature, including projects that define no
+  timers. Packages built by an earlier release are predecessor-only. Before
+  starting this runtime, test, build, plan, and apply one governed successor
+  with the current tooling. The successor installs the shared engine store;
+  there is no separate timer schema command.
+
 ## 0.44.0 - 2026-10-27
 
 - Add an optional `eventRecord` descriptor to record types: subjects, occurred

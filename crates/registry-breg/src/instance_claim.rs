@@ -22,8 +22,9 @@
 //! readiness probe, and refuses by name when they differ.
 //! An operator makes a copy the Registry's database with an explicit adoption,
 //! which moves the claim, raises its epoch, supersedes every open import
-//! authority, and, once that commits, appends one audit entry naming the claim
-//! it replaced.
+//! authority, and moves native Record timers into adoption hold in one
+//! transaction. Once that commits, the operator audit names the claim it
+//! replaced. Timer work remains held until an audited timer-operator resume.
 //!
 //! The system identifier comes from `pg_control_system()`, which PostgreSQL
 //! grants to every role by default but a managed service may withhold. When
@@ -204,6 +205,7 @@ mod operator {
     use crate::postgres::{
         verify_catalog_identity_for_catalog, verify_migration_role, ConnectionConfig,
         ExpectedManagedCatalog, ExpectedRegistryIdentity, RegistryLockKey, SqlIdentifier,
+        SUPPORTED_TIMER_PROTOCOL_VERSION,
     };
 
     const AUDIT_SCHEMA: &str = "breg-instance-claim-audit/v1";
@@ -402,9 +404,11 @@ mod operator {
         /// A request entry is accepted before any database work, so an audit
         /// outage moves nothing. Under the Registry lock, the claim then names
         /// this database and its epoch rises by one, and every open import
-        /// authority is superseded, in one transaction. Once it commits, each
+        /// authority is superseded and Record timers are rebound to the new
+        /// epoch in adoption hold, in one transaction. Once it commits, each
         /// supersession's transition record and the response naming the claim
-        /// replaced and the authorities superseded are appended. An adoption
+        /// replaced and the authorities superseded are appended. Timer work
+        /// remains held until an audited timer-operator resume. An adoption
         /// that ends without a response, as after a commit error, writes the
         /// unfinished outcome.
         ///
@@ -596,10 +600,10 @@ mod operator {
     }
 
     /// Move the claim to the connected database inside the caller's
-    /// transaction, which already holds the Registry lock, and supersede
-    /// every open import authority, collecting each transition record into
-    /// `pending`. Returns the response record to append once the transaction
-    /// commits.
+    /// transaction, which already holds the Registry lock, rebind Record
+    /// timers to its new epoch in adoption hold, and supersede every open
+    /// import authority, collecting each transition record into `pending`.
+    /// Returns the response record to append once the transaction commits.
     pub(crate) async fn adopt_in(
         transaction: &Transaction<'_>,
         pending: &mut Vec<Value>,
@@ -627,6 +631,21 @@ mod operator {
             .await
             .map_err(|_| InstanceClaimError::Unavailable)?;
         let current = claim_from(&row)?;
+        let rebound = transaction
+            .execute(
+                "UPDATE registry_internal.registry_record_timer_control
+                    SET bound_instance_epoch=$1,
+                        control_epoch=control_epoch+1,
+                        control_state='adoption-hold',
+                        updated_at=clock_timestamp()
+                  WHERE singleton AND protocol_version=$2",
+                &[&current.epoch, &SUPPORTED_TIMER_PROTOCOL_VERSION],
+            )
+            .await
+            .map_err(|_| InstanceClaimError::Unavailable)?;
+        if rebound != 1 {
+            return Err(InstanceClaimError::Unavailable);
+        }
         let superseded_import_authorities = crate::import_authority::supersede_every_open(
             transaction,
             pending,

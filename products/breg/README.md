@@ -120,6 +120,11 @@ permissions; `check --deny-warnings` makes its access warnings blocking for auto
 Record type `accessRequirements` are mandatory compiler checks, not additional grants.
 
 For configured atomic writes across records, see [Immediate actions](immediate-actions.md).
+[Record timers](record-timers.md) describe root-granted, Record-controlled
+future execution of one bounded immediate Action and the milestone's explicit
+operational limits. The maintained
+[future-activation example](examples/future-activation/README.md) separates
+compiler inspection from its opt-in native PostgreSQL journey.
 
 The [facility registration and transfer example](registry-extensibility.md)
 combines those actions with a related-record acceptance condition, current

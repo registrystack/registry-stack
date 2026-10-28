@@ -1175,6 +1175,10 @@ pub mod test_support {
         /// The envelope schema and record phase of the first entry refused
         /// regardless of `remaining`.
         refuse: Option<(String, String)>,
+        /// Number of configured schema/phase refusals actually reached. Tests
+        /// use this to prove a protected operation attempted its audit gate
+        /// before a deliberately denied database read.
+        matched_refusals: usize,
         /// Every writer recording here, so a read can wait for the entries
         /// they write when a request handle is dropped.
         writers: Vec<AuditWriter>,
@@ -1198,6 +1202,7 @@ pub mod test_support {
                 if refused {
                     state.refuse = None;
                     state.remaining = Some(0);
+                    state.matched_refusals += 1;
                     return Err(io::Error::other("audit capture refuses this entry"));
                 }
             }
@@ -1259,6 +1264,12 @@ pub mod test_support {
         pub fn fail_on(&self, schema: &str, phase: &str) {
             self.0.lock().expect("audit capture lock").refuse =
                 Some((schema.to_owned(), phase.to_owned()));
+        }
+
+        /// Configured schema/phase refusals the capture actually reached.
+        #[must_use]
+        pub fn matched_refusal_count(&self) -> usize {
+            self.0.lock().expect("audit capture lock").matched_refusals
         }
 
         /// Another [`RegistryAudit`] recording into this capture, as a second

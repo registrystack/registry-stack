@@ -77,6 +77,7 @@ pub(crate) struct PublicProblem {
     guard_reason: Option<String>,
     declared_field: Option<(String, String)>,
     declared_constraint: Option<Box<crate::mutation::RowLocalConstraintViolation>>,
+    timer_window_fields: Option<(String, String)>,
     statistical_detail: Option<(&'static str, &'static str)>,
 }
 
@@ -103,6 +104,7 @@ pub(crate) fn problem_response(
         guard_reason: None,
         declared_field: None,
         declared_constraint: None,
+        timer_window_fields: None,
         statistical_detail: None,
     };
     let mut response = Problem::new(&type_uri, title, status)
@@ -137,6 +139,7 @@ pub(crate) fn problem_response_with_field_path(
         guard_reason: None,
         declared_field: None,
         declared_constraint: None,
+        timer_window_fields: None,
         statistical_detail: None,
     };
     let mut response = Problem::new(&type_uri, title, status)
@@ -254,6 +257,24 @@ pub(crate) fn row_local_constraint_response(
     response
 }
 
+/// Name both authored timer controls only after the owning API surface has
+/// established read authority for both fields. A partial pair would reveal
+/// one masked field and is therefore never rendered.
+pub(crate) fn timer_window_response(at_field: String, not_after_field: String) -> Response {
+    let mut response = problem_response(
+        StatusCode::BAD_REQUEST,
+        "Bad Request",
+        "The request is invalid.",
+        "request.invalid",
+    );
+    response
+        .extensions_mut()
+        .get_mut::<PublicProblem>()
+        .expect("problem response carries public metadata")
+        .timer_window_fields = Some((at_field, not_after_field));
+    response
+}
+
 /// Observe a router that is not already owned by an outer correlation layer.
 /// Nested use is deliberately idempotent so the production timeout wrapper
 /// and focused test routers share one request ID and emit one log record.
@@ -356,6 +377,13 @@ pub(crate) fn finish_response(
                     object.insert("field".to_owned(), Value::String(field.clone()));
                 }
             }
+        }
+        if let Some((at_field, not_after_field)) = &problem.timer_window_fields {
+            object.insert("atField".to_owned(), Value::String(at_field.clone()));
+            object.insert(
+                "notAfterField".to_owned(),
+                Value::String(not_after_field.clone()),
+            );
         }
         let body = serde_json::to_vec(&value).expect("ProblemBody serialization is infallible");
         parts.headers.remove(CONTENT_LENGTH);

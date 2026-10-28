@@ -44,7 +44,16 @@ class PostgresRunnerTests(unittest.TestCase):
             cargo.write_text(cargo.read_text().replace(
                 "sys.exit(17 if", "if sys.argv[1] == 'build':\n"
                 "    if os.environ.get('BREG_RUNNER_TEST_FAIL_BUILD') == '1': sys.exit(19)\n"
-                "    print(json.dumps({'reason': 'compiler-artifact', 'target': {'name': 'evidence'}, 'executable': os.environ['BREG_RUNNER_TEST_BINARY']}))\n"
+                "    package = sys.argv[sys.argv.index('-p') + 1]\n"
+                "    if package == 'registry-bregctl':\n"
+                "        target = 'bregctl'\n"
+                "        executable = os.environ['BREG_RUNNER_TEST_BREGCTL_BINARY']\n"
+                "    else:\n"
+                "        target = 'evidence'\n"
+                "        executable = os.environ['BREG_RUNNER_TEST_BINARY']\n"
+                "    print(json.dumps({'reason': 'compiler-artifact', 'target': {'name': target}, 'executable': executable}))\n"
+                "if '--test' in sys.argv and 'postgres_record_timer_operator' in sys.argv:\n"
+                "    assert os.environ.get('BREG_TEST_BREGCTL_BINARY') == os.environ['BREG_RUNNER_TEST_BREGCTL_BINARY']\n"
                 "if '--test' in sys.argv and 'postgres_action_evidence' in sys.argv:\n"
                 "    assert os.environ.get('BREG_TEST_EVIDENCE_BINARY') == os.environ['BREG_RUNNER_TEST_BINARY']\n"
                 "    assert os.environ.get('BREG_RUNNER_TEST_PYYAML') == '1'\n"
@@ -55,6 +64,9 @@ class PostgresRunnerTests(unittest.TestCase):
             evidence.parent.mkdir(parents=True)
             evidence.write_text("#!/bin/sh\nexit 0\n")
             evidence.chmod(0o755)
+            bregctl = root / "configured target with spaces" / "debug" / "bregctl"
+            bregctl.write_text("#!/bin/sh\nexit 0\n")
+            bregctl.chmod(0o755)
             uv = root / "uv"
             uv.write_text(
                 "#!/usr/bin/env python3\n"
@@ -69,6 +81,7 @@ class PostgresRunnerTests(unittest.TestCase):
                 PATH=f"{root}{os.pathsep}{environment['PATH']}",
                 BREG_RUNNER_TEST_LOG=str(log),
                 BREG_RUNNER_TEST_BINARY=str(evidence),
+                BREG_RUNNER_TEST_BREGCTL_BINARY=str(bregctl),
                 BREG_RUNNER_TEST_FAIL="1" if fail else "0",
                 BREG_RUNNER_TEST_FAIL_BUILD="1" if fail_build else "0",
             )
@@ -96,17 +109,35 @@ class PostgresRunnerTests(unittest.TestCase):
         commands = []
         for call in calls:
             if call[0] == "build":
-                self.assertEqual(["build", "--locked", "-p", "registry-evidence", "--bin", "evidence", "--message-format=json"], call)
+                self.assertIn(call, (
+                    ["build", "--locked", "-p", "registry-bregctl", "--bin", "bregctl", "--features", "registry-breg/postgres-test", "--message-format=json"],
+                    ["build", "--locked", "-p", "registry-evidence", "--bin", "evidence", "--message-format=json"],
+                ))
                 continue
             self.assertEqual(["test", "--locked", "-p"], call[:3])
             self.assertIn(call[3], VALIDATOR.POSTGRES_TEST_PACKAGES)
             self.assertEqual("--features", call[4])
             targets = call[6:]
+            if targets[-2:] == ["--", "--test-threads=1"]:
+                targets = targets[:-2]
             self.assertTrue(targets)
             self.assertEqual(0, len(targets) % 2)
             self.assertTrue(all(flag == "--test" for flag in targets[::2]))
             commands.extend(" ".join(["cargo", *call[:6], "--test", target]) for target in targets[1::2])
         return Counter(commands)
+
+    def test_record_timer_storage_target_runs_serially(self):
+        result, calls = self.run_lane("--lane", "postgres")
+        self.assertEqual(0, result.returncode, result.stderr)
+        timer_calls = [
+            call for call in calls
+            if call[0] == "test" and "postgres_record_timers" in call
+        ]
+        self.assertEqual(1, len(timer_calls))
+        self.assertEqual(
+            ["--test", "postgres_record_timers", "--", "--test-threads=1"],
+            timer_calls[0][6:],
+        )
 
     def test_default_and_partition_preserve_every_owned_target_and_feature_set(self):
         default_result, default = self.run_lane()
@@ -120,19 +151,22 @@ class PostgresRunnerTests(unittest.TestCase):
         self.assertEqual(default, explicit)
         self.assertEqual(expected, self.inventory(ordinary) + self.inventory(actions))
         self.assertFalse(self.inventory(ordinary) & self.inventory(actions))
-        self.assertEqual(4, len(ordinary))
-        self.assertEqual(5, len(default))
+        self.assertEqual(7, len(ordinary))
+        self.assertEqual(8, len(default))
         self.assertEqual([shlex.split(
             "test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_immediate_actions"
         )], actions)
 
-    def test_real_evidence_build_precedes_proof_and_is_absent_from_action_lane(self):
+    def test_real_operator_and_evidence_builds_precede_proofs_and_are_absent_from_action_lane(self):
         result, calls = self.run_lane("--lane", "postgres")
         self.assertEqual(0, result.returncode, result.stderr)
         builds = [index for index, call in enumerate(calls) if call[0] == "build"]
-        self.assertEqual(1, len(builds))
+        self.assertEqual(2, len(builds))
+        operator = next(index for index, call in enumerate(calls) if "postgres_record_timer_operator" in call)
         proof = next(index for index, call in enumerate(calls) if "postgres_action_evidence" in call)
+        self.assertLess(builds[0], operator)
         self.assertLess(builds[0], proof)
+        self.assertLess(builds[1], proof)
         self.assertIn("postgres_action_evidence_targets", calls[proof])
         self.assertIn("postgres_action_evidence_retention", calls[proof])
         result, calls = self.run_lane("--lane", "immediate-actions")
@@ -157,15 +191,17 @@ class PostgresRunnerTests(unittest.TestCase):
             self.assertTrue(inventory)
             inventories.append(inventory)
             union += inventory
-            # The real Evidence build and its three-target proof stay on the
-            # first shard; the others neither build nor run it.
+            # The real bregctl and Evidence builds, operator journey, and
+            # three-target Evidence proof stay on the first shard; the others
+            # neither build nor run them.
             builds = [call for call in calls if call[0] == "build"]
             evidence = Counter(
                 command for command in inventory if "postgres_action_evidence" in command
             )
             if lane == shard_lanes[0]:
-                self.assertEqual(1, len(builds))
+                self.assertEqual(2, len(builds))
                 self.assertEqual(3, sum(evidence.values()))
+                self.assertTrue(any("postgres_record_timer_operator" in command for command in inventory))
             else:
                 self.assertEqual([], builds)
                 self.assertFalse(evidence)

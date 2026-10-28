@@ -613,6 +613,18 @@ on.
 {/* Evidence: crates/registry-breg/src/api/mod.rs, the /health, /healthz, and /ready routes;
     crates/registry-breg/src/startup.rs, ActivePackageMismatch, SupervisedTask, finish_prepared_server(). */}
 
+## Operate Record timers
+
+Projects that grant Record timers add an operator surface for inspecting, pausing, resuming, and
+retrying timer work. It uses the runtime configuration and its companion audit journal, not the
+migration credential used for package activation. Read the canonical [Record timers
+guide](https://github.com/registrystack/registry-stack/blob/main/products/breg/record-timers.md)
+before upgrading an active Registry or changing timer state. It covers the package compatibility
+step, live status and pagination limits, audit recovery, replicas, and restores.
+
+{/* Evidence: products/breg/record-timers.md;
+    crates/registry-breg/src/timer_operator.rs, TimerOperatorService::from_runtime_config(). */}
+
 ## Serve the container image
 
 The image runs `breg --runtime-config /etc/breg/runtime.yaml` as the non-root user UID 65532,
@@ -702,6 +714,8 @@ file and secret files; inject secrets through `secret:env/<NAME>` instead.
 - [Change an active registry](../breg-changes/) for successor packages, blocked Proposals, and
   turning on field encryption over existing data.
 - [Retain, erase, and audit](../breg-retention/) for history erasure and the audit journal.
+- [Operate Record timers](https://github.com/registrystack/registry-stack/blob/main/products/breg/record-timers.md)
+  when a project grants autonomous Record-controlled Actions.
 - [Publish a statistical series](../../configure/breg-statistics/) when the project declares
   datasets.
 - [Harden a production deployment](../../security/hardening-checklist/) for the controls around

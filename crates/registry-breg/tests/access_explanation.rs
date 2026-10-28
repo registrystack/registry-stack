@@ -162,6 +162,64 @@ fn membership_source() -> Value {
     source
 }
 
+fn timer_source() -> Value {
+    let mut candidate = source();
+    let record = &mut candidate["recordTypes"][0];
+    record["fields"].as_array_mut().unwrap().extend([
+        json!({"id":"active", "type":"boolean", "classification":"internal"}),
+        json!({"id":"activates-at", "type":"timestamp", "classification":"internal"}),
+        json!({"id":"note", "type":"string", "maximumLength":64, "classification":"internal"}),
+    ]);
+    record["timers"] = json!([{
+        "id":"activate",
+        "at":"activates-at",
+        "when":{"type":"fields", "equals":{"active":false}},
+        "invoke":"activate-entry",
+        "input":{
+            "entry":{"fromRecordId":true},
+            "note":{"fromField":"note"}
+        }
+    }]);
+    candidate["timerGrants"] = json!([{"recordType":"entry", "timer":"activate"}]);
+    candidate["actions"] = json!([
+        {
+            "id":"activate-entry",
+            "execution":{"mode":"immediate"},
+            "inputs":[
+                {"id":"entry", "type":"reference", "target":"entry", "required":true, "classification":"internal"},
+                {"id":"note", "type":"string", "maximumLength":64, "required":true, "classification":"internal"}
+            ],
+            "plan":{"type":"fixed", "effects":[{
+                "id":"activated", "target":{"fromInput":"entry"}, "operation":"patch",
+                "set":{"active":{"value":true}}
+            }]}
+        },
+        {
+            "id":"schedule-entry",
+            "execution":{"mode":"immediate"},
+            "inputs":[
+                {"id":"entry", "type":"reference", "target":"entry", "required":true, "classification":"internal"},
+                {"id":"at", "type":"timestamp", "required":true, "classification":"internal"},
+                {"id":"note", "type":"string", "maximumLength":64, "required":true, "classification":"internal"}
+            ],
+            "plan":{"type":"fixed", "effects":[{
+                "id":"scheduled", "target":{"fromInput":"entry"}, "operation":"patch",
+                "set":{"activates-at":{"fromInput":"at"}, "note":{"fromInput":"note"}}
+            }]}
+        }
+    ]);
+    let record_permission = &mut candidate["accessProfiles"][0]["permissions"]["records"][0];
+    record_permission["writableFields"] = json!(["district", "active", "activates-at", "note"]);
+    candidate["accessProfiles"][0]["permissions"]["actions"] = json!([{
+        "action":"schedule-entry", "operations":["invoke"],
+        "targets":[{"recordType":"entry", "rowBoundaries":[{
+            "field":"district", "claim":"districts", "operator":"in"
+        }]}],
+        "results":["scheduled"]
+    }]);
+    candidate
+}
+
 #[test]
 fn access_explanation_connects_row_reach_to_typed_claim_requirements() {
     let registry = compile(&source());
@@ -219,6 +277,70 @@ fn access_explanation_connects_row_reach_to_typed_claim_requirements() {
     assert_eq!(
         explanation["recordTypes"][0]["profiles"][0]["operations"],
         json!(["get", "patch"])
+    );
+}
+
+#[test]
+fn access_explanation_names_timer_policy_writers_and_exact_future_authority() {
+    let registry = compile(&timer_source());
+    let explanation = registry_breg::access::explain_access(&registry);
+    assert_eq!(explanation.timers.len(), 1);
+    let timer = &explanation.timers[0];
+    assert_eq!(timer.entity, "entry");
+    assert_eq!(timer.timer, "activate");
+    assert_eq!(timer.source_module, None);
+    assert_eq!(timer.invoke, "activate-entry");
+    assert_eq!(timer.control_fields, ["activates-at".to_owned()].into());
+    assert_eq!(timer.predicate_fields, ["active".to_owned()].into());
+    assert_eq!(timer.effect_input_fields, ["note".to_owned()].into());
+
+    let direct_control = timer
+        .control_writers
+        .iter()
+        .find(|writer| writer.surface == "record-permission" && writer.id == "clerk")
+        .expect("direct Record permission can change the timer control");
+    assert_eq!(direct_control.operations, [Operation::Patch].into());
+    assert_eq!(direct_control.fields, ["activates-at".to_owned()].into());
+    assert_eq!(direct_control.access_profiles, ["clerk".to_owned()]);
+    assert!(timer.control_writers.iter().any(|writer| {
+        writer.surface == "action"
+            && writer.id == "schedule-entry"
+            && writer.fields.contains("activates-at")
+            && writer.access_profiles == ["clerk".to_owned()]
+    }));
+    assert!(timer.predicate_writers.iter().any(|writer| {
+        writer.surface == "action"
+            && writer.id == "activate-entry"
+            && writer.fields.contains("active")
+            && writer.access_profiles.is_empty()
+    }));
+    assert!(timer.effect_input_writers.iter().any(|writer| {
+        writer.surface == "action"
+            && writer.id == "schedule-entry"
+            && writer.fields.contains("note")
+    }));
+
+    assert_eq!(timer.future_effect.authority, "product-owned");
+    assert_eq!(timer.future_effect.record_grant_relationship, "none");
+    assert_eq!(
+        timer.future_effect.system_grant,
+        registry.entities()["entry"].timers["activate"].system_grant
+    );
+    let anchor_read = timer
+        .future_effect
+        .system_grant
+        .targets
+        .iter()
+        .find(|target| target.entity_id == "entry" && target.operation == Operation::Get)
+        .expect("future effect exposes the exact anchor read ceiling");
+    assert_eq!(
+        anchor_read.read_fields,
+        [
+            "active".to_owned(),
+            "activates-at".to_owned(),
+            "note".to_owned()
+        ]
+        .into()
     );
 }
 

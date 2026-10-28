@@ -14,6 +14,7 @@ use registry_platform_yaml::{
 pub use registry_platform_yaml::{Decoded, Report};
 use serde::{de::DeserializeOwned, Deserialize, Deserializer, Serialize};
 use serde_json::Value;
+use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 
 use crate::diagnostics::{CompileFailure, Diagnostic};
 pub use crate::unique_set::UniqueSet;
@@ -96,6 +97,10 @@ pub struct RegistryProject {
     pub functions: Vec<FunctionSource>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub actions: Vec<ActionSource>,
+    /// Root-owned enablement of autonomous Record timers. Modules may declare
+    /// timers, but cannot contribute this authority.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub timer_grants: Vec<TimerGrantSource>,
     #[serde(default)]
     pub access_profiles: Vec<ProjectAccessProfileSource>,
     #[serde(default)]
@@ -1403,6 +1408,12 @@ pub struct EntitySource {
     pub derived: Vec<DerivedSource>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub selector_profiles: Vec<SelectorProfileSource>,
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "unique_ids"
+    )]
+    pub timers: Vec<TimerSource>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub read_paths: Vec<ReadPathSource>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1834,6 +1845,14 @@ pub struct EntityExtensionSource {
     pub hooks: Vec<HookSource>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub selector_profiles: Vec<SelectorProfileSource>,
+    /// Additive timer definitions. Only a root-project `timerGrants` entry can
+    /// enable a contributed timer.
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "unique_ids"
+    )]
+    pub timers: Vec<TimerSource>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub read_paths: Vec<ReadPathSource>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1845,6 +1864,101 @@ pub struct EntityExtensionSource {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct GeoJsonSource {
     pub geometry_field: String,
+}
+
+/// Root-owned autonomous authority for one exact Record timer.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct TimerGrantSource {
+    #[serde(rename = "recordType", deserialize_with = "local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "LocalId"))]
+    pub entity: String,
+    #[serde(deserialize_with = "local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "LocalId"))]
+    pub timer: String,
+}
+
+/// One timer attached to a governed Record type.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct TimerSource {
+    #[serde(deserialize_with = "local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "LocalId"))]
+    pub id: String,
+    pub at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub not_after: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rearm_on: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub when: Option<TimerPredicateSource>,
+    pub invoke: String,
+    #[serde(deserialize_with = "local_id_map")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(schema_with = "local_id_map_schema::<TimerInputSource>")
+    )]
+    pub input: BTreeMap<String, TimerInputSource>,
+}
+
+impl registry_platform_yaml::Identified for TimerSource {
+    fn id(&self) -> &str {
+        &self.id
+    }
+}
+
+/// A bounded conjunction of equality checks over current stored fields.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(remote = "Self", deny_unknown_fields, rename_all = "kebab-case")]
+#[cfg_attr(feature = "schema", schemars(!remote, tag = "type"))]
+pub enum TimerPredicateSource {
+    Fields {
+        #[serde(deserialize_with = "local_id_map")]
+        #[cfg_attr(
+            feature = "schema",
+            schemars(schema_with = "local_id_map_schema::<EventScalarValue>")
+        )]
+        equals: BTreeMap<String, EventScalarValue>,
+    },
+}
+registry_platform_yaml::tagged_union!(TimerPredicateSource);
+serialize_tagged_union!(TimerPredicateSource, tag = "type");
+
+/// One complete mapping into one ordinary Action input. Exactly one member is
+/// selected by compilation; the flat shape preserves authored source positions.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct TimerInputSource {
+    #[serde(
+        default,
+        deserialize_with = "only_true",
+        skip_serializing_if = "std::ops::Not::not"
+    )]
+    #[cfg_attr(feature = "schema", schemars(schema_with = "only_true_schema"))]
+    pub from_record_id: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_field: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_timer: Option<TimerValueSource>,
+    #[serde(
+        default,
+        deserialize_with = "present_json_value",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub value: Option<Value>,
+}
+
+/// Runtime-owned timer facts that may be mapped into Action inputs.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum TimerValueSource {
+    OccurrenceId,
+    DueAt,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -3738,6 +3852,29 @@ pub(crate) fn valid_decimal_value(
         }
     }
     true
+}
+
+/// The instant PostgreSQL's `timestamptz` input assigns to an RFC 3339 value,
+/// in microseconds since the Unix epoch. PostgreSQL keeps microseconds and
+/// rounds a longer fraction as `rint(strtod(fraction) * 1e6)`, which is
+/// mirrored here. It reads second 60 as the start of the next minute, where
+/// `time` reads it as the last nanosecond of second 59.
+pub(crate) fn postgres_timestamp_micros(value: &str) -> Option<i128> {
+    let parsed = OffsetDateTime::parse(value, &Rfc3339).ok()?;
+    // RFC 3339 fixes the date and time digits, so the seconds are bytes 17
+    // and 18 and any fraction starts at byte 19.
+    let leap_second = value.get(17..19) == Some("60");
+    let micros = match value.get(19..)?.strip_prefix('.') {
+        Some(rest) => {
+            let digits = rest
+                .find(|character: char| !character.is_ascii_digit())
+                .map_or(rest, |end| &rest[..end]);
+            let fraction = format!("0.{digits}").parse::<f64>().ok()?;
+            (fraction * 1_000_000.0).round_ties_even() as i128
+        }
+        None => 0,
+    };
+    Some((i128::from(parsed.unix_timestamp()) + i128::from(leap_second)) * 1_000_000 + micros)
 }
 
 #[cfg_attr(not(feature = "runtime"), allow(dead_code))]
