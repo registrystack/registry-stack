@@ -681,6 +681,186 @@ async fn real_postgres_batch_is_bounded_authorized_atomic_and_exactly_replayable
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn timer_batch_stages_once_in_canonical_order_and_rolls_back_after_staging() {
+    let database = TestDatabase::create(8).await;
+    let (migration, migration_task) = database.connect_migration().await;
+    let registry = Arc::new(compiled_timer_batch_registry());
+    install_compiled_schema(&migration, &registry, &database.runtime_role)
+        .await
+        .expect("migration installs the timer-bearing batch schema");
+    let identity = initialize_compiled_registry_state_for_test(
+        &migration,
+        &database.runtime_role,
+        &registry,
+        RegistryStateTestIdentity {
+            package_id: "record-timer-native",
+            database_id: "batch-timer-database",
+            label: "package-batch-timer-1",
+        },
+    )
+    .await
+    .expect("active package and timer bindings initialize");
+    migration_task.abort();
+    let pool = database.runtime_config.build_pool().expect("pool builds");
+    let lock_key = RegistryLockKey::derive("record-timer-native").expect("lock key is valid");
+    let audit = database.audit(
+        AuditProfile::production_from_secret_bytes(vec![0x6e; 32].into())
+            .expect("test audit profile is keyed"),
+    );
+    let app = mutation_router(
+        pool.clone(),
+        registry.clone(),
+        identity.clone(),
+        lock_key,
+        audit.clone(),
+        None,
+    );
+    let claims = claims(PRINCIPAL, "service-administration", "zone-a");
+    let first = seed_timer_service(&app, claims.clone(), "batch-timer-seed-1", 1).await;
+    let second = seed_timer_service(&app, claims.clone(), "batch-timer-seed-2", 2).await;
+    let mut records = [first, second];
+    records.sort_by(|left, right| right.0.cmp(&left.0));
+
+    let rearm = json!({"items":records.iter().enumerate().map(|(index,(record_id,etag))| json!({
+        "operation":"patch",
+        "recordId":record_id,
+        "ifMatch":etag,
+        "patch":[{"op":"replace","path":"/data/activationRevision",
+            "value":format!("00000000-0000-4000-8000-{:012}", index + 11)}]
+    })).collect::<Vec<_>>()});
+    let before = timer_batch_counts(&database, &registry).await;
+    let first_rearm = send_json(
+        &app,
+        "/v1/records/services:batch",
+        Some(claims.clone()),
+        "batch-timer-rearm",
+        rearm.clone(),
+    )
+    .await;
+    assert_eq!(first_rearm.status(), StatusCode::OK);
+    let first_bytes = response_bytes(first_rearm).await;
+    let after = timer_batch_counts(&database, &registry).await;
+    assert_eq!(after.records, before.records);
+    assert_eq!(after.generations, before.generations + 2);
+    assert_eq!(after.current_markers, 2);
+    assert_eq!(after.revisions, before.revisions + 2);
+    assert_eq!(after.commit_members, before.commit_members + 2);
+
+    let replay = send_json(
+        &app,
+        "/v1/records/services:batch",
+        Some(claims.clone()),
+        "batch-timer-rearm",
+        rearm,
+    )
+    .await;
+    assert_eq!(replay.status(), StatusCode::OK);
+    assert_eq!(response_bytes(replay).await, first_bytes);
+    assert_eq!(timer_batch_counts(&database, &registry).await, after);
+
+    let mut current = Vec::new();
+    for (record_id, _) in &records {
+        let response = send(
+            &app,
+            Method::GET,
+            &format!("/v1/records/services/{record_id}"),
+            Some(claims.clone()),
+            &[],
+            Vec::new(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        current.push((record_id.clone(), header(&response, "etag")));
+    }
+    let batch_for = |ordered: Vec<(String, String)>, description: &str| {
+        json!({"items":ordered.into_iter().map(|(record_id,etag)| json!({
+            "operation":"patch","recordId":record_id,"ifMatch":etag,
+            "patch":[{"op":"replace","path":"/data/description","value":description}]
+        })).collect::<Vec<_>>()})
+    };
+    let left = send_json(
+        &app,
+        "/v1/records/services:batch",
+        Some(claims.clone()),
+        "batch-timer-order-left",
+        batch_for(current.clone(), "left canonical-order contender"),
+    );
+    let mut reversed = current;
+    reversed.reverse();
+    let right = send_json(
+        &app,
+        "/v1/records/services:batch",
+        Some(claims.clone()),
+        "batch-timer-order-right",
+        batch_for(reversed, "right canonical-order contender"),
+    );
+    let (left, right) =
+        tokio::time::timeout(Duration::from_secs(5), async { tokio::join!(left, right) })
+            .await
+            .expect("opposite caller orders cannot invert Record and timer locks");
+    let mut statuses = [left.status(), right.status()];
+    statuses.sort();
+    assert_eq!(statuses, [StatusCode::OK, StatusCode::PRECONDITION_FAILED]);
+    assert_eq!(
+        timer_batch_counts(&database, &registry)
+            .await
+            .current_markers,
+        2
+    );
+
+    let faulting = mutation_router(
+        pool,
+        registry.clone(),
+        identity,
+        lock_key,
+        audit,
+        Some(MutationFaultPoint::BeforeCommit),
+    );
+    let before_fault = timer_batch_counts(&database, &registry).await;
+    let faulted = send_json(
+        &faulting,
+        "/v1/records/services:batch",
+        Some(claims.clone()),
+        "batch-timer-before-commit",
+        json!({"items":[
+            {"operation":"create","data":timer_service_data(21)},
+            {"operation":"create","data":timer_service_data(22)}
+        ]}),
+    )
+    .await;
+    assert_eq!(faulted.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(
+        timer_batch_counts(&database, &registry).await,
+        before_fault,
+        "BeforeCommit follows final sorted timer staging and rolls back the complete batch packet"
+    );
+
+    let invalid = body_json(
+        send_json(
+            &app,
+            "/v1/records/services:batch",
+            Some(claims),
+            "batch-timer-invalid-window",
+            json!({"items":[{"operation":"create","data":{
+                "status":"scheduled",
+                "activatesAt":"2100-04-01T00:00:00Z",
+                "activationNotAfter":"2100-04-01T00:00:00Z",
+                "activationRevision":"00000000-0000-4000-8000-000000000099",
+                "paused":false,"description":"invalid batch timer","jurisdiction":"zone-a"
+            }}]}),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(invalid["code"], "request.invalid");
+    assert_eq!(invalid["atField"], "activates-at");
+    assert_eq!(invalid["notAfterField"], "activation-not-after");
+    assert!(!invalid.to_string().contains("2100-04-01"));
+    assert_eq!(timer_batch_counts(&database, &registry).await, before_fault);
+    database.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_batch_grant_cannot_bypass_proposal_required_create_policy() {
     let database = TestDatabase::create(4).await;
     let (migration, migration_task) = database.connect_migration().await;
@@ -737,6 +917,108 @@ async fn a_batch_grant_cannot_bypass_proposal_required_create_policy() {
 
 fn compiled_registry() -> registry_breg::CompiledRegistry {
     compiled_registry_with_create_policy(false)
+}
+
+fn compiled_timer_batch_registry() -> registry_breg::CompiledRegistry {
+    let mut source: Value = registry_platform_yaml::Reader::new("registry.yaml")
+        .scan(include_bytes!(
+            "../../../products/breg/examples/future-activation/registry.yaml"
+        ))
+        .expect("public timer example is valid YAML")
+        .expect("public timer example is nonempty")
+        .to_json_value();
+    source["recordTypes"][0]["batch"] = json!({"maximumItems":3,"maximumBytes":8192});
+    source["accessProfiles"][0]["requiredScopes"] = json!("unrestricted");
+    source["accessProfiles"][0]["permissions"]["records"][0]["operations"] =
+        json!(["create", "get", "list", "patch", "tombstone", "batch"]);
+    let bytes = serde_json::to_vec(&source).expect("timer batch fixture serializes");
+    let project = parse_project_json(&bytes).expect("timer batch fixture parses");
+    compile_project(&project, &[], CompileProfile::Authoring).expect("timer batch fixture compiles")
+}
+
+async fn seed_timer_service(
+    app: &axum::Router,
+    claims: VerifiedRequestClaims,
+    key: &str,
+    suffix: u32,
+) -> (String, String) {
+    let response = send_json(
+        app,
+        "/v1/records/services",
+        Some(claims),
+        key,
+        json!({"data":timer_service_data(suffix)}),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let etag = header(&response, "etag");
+    let body = body_json(response).await;
+    (
+        body["data"]["recordIdentifier"]
+            .as_str()
+            .expect("seed Record identifier")
+            .to_owned(),
+        etag,
+    )
+}
+
+fn timer_service_data(suffix: u32) -> Value {
+    json!({
+        "status":"scheduled",
+        "activatesAt":"2100-01-01T00:00:00Z",
+        "activationNotAfter":"2100-01-02T00:00:00Z",
+        "activationRevision":format!("00000000-0000-4000-8000-{suffix:012}"),
+        "paused":false,
+        "description":format!("Scheduled batch fixture {suffix}"),
+        "jurisdiction":"zone-a"
+    })
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct TimerBatchCounts {
+    records: i64,
+    revisions: i64,
+    outbox: i64,
+    idempotency: i64,
+    commits: i64,
+    commit_members: i64,
+    generations: i64,
+    current_markers: i64,
+}
+
+async fn timer_batch_counts(
+    database: &TestDatabase,
+    registry: &registry_breg::CompiledRegistry,
+) -> TimerBatchCounts {
+    let table = &registry.entities()["service"].physical_table;
+    let row = database
+        .admin
+        .query_one(
+            &format!(
+                "SELECT
+                   (SELECT count(*) FROM registry_data.\"{table}\"),
+                   (SELECT count(*) FROM registry_internal.registry_revisions),
+                   (SELECT count(*) FROM registry_internal.registry_outbox),
+                   (SELECT count(*) FROM registry_internal.registry_idempotency),
+                   (SELECT count(*) FROM registry_internal.registry_revision_commits),
+                   (SELECT count(*) FROM registry_internal.registry_revision_commit_members),
+                   (SELECT count(*) FROM registry_internal.registry_record_timer_generations),
+                   (SELECT count(*) FROM registry_internal.registry_record_timer_current)"
+            ),
+            &[],
+        )
+        .await
+        .expect("administrator inspects Batch Record and timer state");
+    TimerBatchCounts {
+        records: row.get(0),
+        revisions: row.get(1),
+        outbox: row.get(2),
+        idempotency: row.get(3),
+        commits: row.get(4),
+        commit_members: row.get(5),
+        generations: row.get(6),
+        current_markers: row.get(7),
+    }
 }
 
 fn compiled_registry_with_create_policy(

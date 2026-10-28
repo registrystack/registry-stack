@@ -28,11 +28,13 @@ const ENVIRONMENT: &str = "production";
 const INSTANCE: &str = "rehearsal-instance";
 const DATABASE: &str = "rehearsal-database";
 const SOURCE_REVISION: &str = "rehearsal-source-revision";
-// Includes the runtime Evidence expiry function, both expires_at indexes, and
-// the Proposal blocked-reason constraint that admits a durable Apply refusal.
+// Includes the runtime Evidence expiry function, both expires_at indexes, the
+// Proposal blocked-reason constraint that admits a durable Apply refusal, and
+// the always-present Record timer ledger, retention function, bounded state/block
+// observation index, and partial activation-preview index.
 // The migration ledger bounds statement checksums at 4,096 entries.
 const PORTABLE_SCHEMA_FINGERPRINT: &str =
-    "sha256:260e0df5e8f922f9c263a57cb2c7220339e63dae1ca685f2fa2d546f8046b322";
+    "sha256:59d5317f03be8b6e39006bd3ebc8fcb0bfc9f1673f75c4a3bd9d60b505878bd7";
 const FIXTURE_JOURNEYS: &[u8] = br#"apiVersion: id.registrystack.org/formats/breg/journeys/v1
 kind: BRegJourneys
 journeys: []

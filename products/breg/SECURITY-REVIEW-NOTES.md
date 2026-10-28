@@ -4691,6 +4691,135 @@ deadline, fresh-call recovery, closed-capability, and value-free error checks.
 Existing package and protected CI gates cover the change; no new blocking gate
 is introduced.
 
+## Native Record timer compiler authority
+
+Record timers add autonomous mutation authority only when the root project
+grants the exact Record type and timer pair. A module may contribute a timer
+definition, but cannot contribute `timerGrants` or make that definition
+runnable by itself. Compilation refuses missing, dangling, duplicate, or
+module-contributed grants. BREG-SEC-195 records this root-authority boundary.
+
+The invoked Action is deliberately not a second public caller route and cannot
+enter the Proposal lifecycle. Compilation also excludes remote Function,
+Evidence, commit-Evidence, and consent-issuance capabilities. BREG-SEC-196
+through BREG-SEC-198 separate those authority boundaries so each one names its
+actual resolving refusal test.
+
+The compiled system grant may Patch only the exact locked anchor and may Create
+the Action's bounded new Records. Its read ceiling covers the anchor's control,
+predicate, and mapped current-value fields plus each declared secondary Get's
+exact Record type and read fields, including existence-only reads. Those Gets
+do not grant mutation authority over another existing Record. The timer-specific
+anchor Get counts once against the ordinary Action target ceiling, and its
+newly materialized fields count once against the ordinary snapshot ceiling.
+Ordinary Action admission refuses a Proposal-required mutation target before
+the timer-specific defense-in-depth branch is reachable. Timer compilation
+also refuses another existing-Record mutation target, an extra target past the
+ceiling, and an oversized anchor read. BREG-SEC-199 records these combined
+grant and bound checks. The maintained test observes
+`breg.action.effect-controlled-target` for the Proposal-policy case; it does
+not claim direct execution of the shadowed
+`breg.timer.action-proposal-policy-bypass` diagnostic.
+
+The resolving compiler tests are maintained in
+`crates/registry-breg/tests/timer_authoring.rs`:
+
+- `timer_authoring_is_closed_and_root_grants_are_root_only` covers the
+  root-only `timerGrants` source boundary for BREG-SEC-195.
+- `timer_requires_exact_root_grant_and_complete_mapping` covers missing and
+  dangling exact root grants for BREG-SEC-195.
+- `module_timer_definition_requires_and_uses_root_enablement` covers a
+  contributed timer's required root grant, duplicate grant authority, and
+  duplicate module contributions for BREG-SEC-195.
+- `timer_refuses_public_invoke_and_non_immediate_actions` covers BREG-SEC-196.
+- `timer_refuses_remote_function_and_evidence_capabilities`
+- `timer_refuses_consent_issuance_capability`
+- `timer_system_authority_is_anchor_and_create_bounded`
+
+The direct positioned identifier-collision proof is
+`timer_ids_share_positioned_record_type_namespaces_within_each_authored_file`
+in `crates/registry-breg/tests/native_source_conventions.rs`. It covers both a
+project Record type and a module Record-plus-extension namespace.
+
+`timer_system_authority_is_anchor_and_create_bounded` includes the
+Proposal-required target refusal, distinct-binding target ceiling, same-anchor
+deduplication, and anchor snapshot-byte ceiling. These are maintained test
+references, not a claim that this note executed them. No new gate mechanism is
+introduced.
+
+## Native Record timer runtime boundaries
+
+### Transactional staging
+
+Record timer staging is part of the ordinary mutation transaction, after the
+complete Record effects are known and while the canonical Record-before-ledger
+lock order is still held. Direct writes, Batch, ingestion, and Proposal Apply
+therefore commit their Record revision, receipt, outbox work, timer generation,
+and current marker together. A failure after staging rolls the complete write
+back, and an exact replay returns the retained result without creating another
+generation. BREG-SEC-200 records this boundary.
+
+The primary negative proof is
+`direct_timer_staging_rearms_cancels_replays_and_rolls_back_after_staging` in
+`crates/registry-breg/tests/postgres_mutation.rs`. The bulk proofs are
+`timer_batch_stages_once_in_canonical_order_and_rolls_back_after_staging` in
+`crates/registry-breg/tests/postgres_batch.rs` and
+`timer_ingestion_stages_checkpoint_receipt_and_generations_atomically` in
+`crates/registry-breg/tests/postgres_ingestion_runs.rs`. Proposal Apply is
+covered by `proposal_apply_stages_timer_rows_atomically_and_replays_without_rearming`
+in `crates/registry-breg/tests/postgres_proposal.rs`.
+
+### Stale-owner settlement
+
+Timer completion, business refusal, technical settlement, retry transition,
+and release retain the complete current marker, binding incarnation and
+semantic revisions, package and activation, control and instance epochs, and
+claim owner, epoch, token, and lease as database compare-and-set fences. A
+resumed stale owner cannot append an attempt, consume an allowance, overwrite a
+peer outcome, or change Record, history, receipt, or outbox state.
+BREG-SEC-201 records this boundary.
+
+`native_stale_outcome_technical_failure_cannot_overwrite_peer` and
+`native_stale_outcome_business_refusal_cannot_overwrite_peer` in
+`crates/registry-breg/tests/postgres_record_timer_native.rs` stop the old owner
+after the real Action transaction has rolled back, let a higher-epoch peer
+settle, then prove the stale settlement changes zero rows.
+
+### Operator disclosure and audit
+
+Timer operator status, list, and show use read-only admitted transactions and a
+closed metadata-only projection. They expose occurrence identity, state,
+bounded attempt summaries, value-free outcome codes, and retention status, but
+not Record fields, mapped inputs, raw failure details, or claim tokens. Pause,
+resume, and technical retry remain separate mutations with paired value-free
+audit records and exact current control, occurrence, attempt, binding, window,
+and state fences. BREG-SEC-202 records these disclosure and accountability
+boundaries.
+
+An operator request audit failure precedes the store mutation and refuses it.
+If commit acknowledgement or the response audit is uncertain after the store
+call, the service withholds a successful response and records the outcome as
+unresolved or unfinished. It does not claim that a transition which may have
+committed was reversed; status and show provide the recovery observation.
+
+`operator_reads_pending_and_completed_occurrences_without_record_values` and
+`operator_retry_grants_one_technical_allowance_and_refuses_other_states` in
+`crates/registry-breg/tests/postgres_record_timer_operator.rs` prove the closed
+projection, bounded history, keyed audit correlation, and refusal of stale or
+ineligible transitions.
+
+`encrypted_predicate_write_opens_the_same_occurrence_and_maps_current_plaintext`
+in `crates/registry-breg/tests/postgres_record_timers.rs` adds a positive
+encrypted-value proof for one successful worker path. The opened plaintext is
+observed in the authorized Action effect, while a canary is absent from JSON
+rendered from every timer table, the real admitted operator projection,
+captured audit entries, and scoped worker tracing with an observed positive
+capture control. It does not cover actual `bregctl` process logging or every
+failure path.
+
+These are maintained test references, not claims that this note ran the tests.
+They add no operator authority, public data field, or new gate.
+
 ## Action and Proposal requester clients match verifier admission
 
 ### Threat

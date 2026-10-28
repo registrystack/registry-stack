@@ -138,11 +138,23 @@ delivery.
 {/* Evidence: crates/registry-breg/src/contract.rs (RegistryProject, PermissionsSource);
     products/breg/generated/authoring/registry-project.schema.json. */}
 
+## Schedule a Record-controlled Action
+
+A Record timer schedules one bounded immediate Action from control fields on the Record. The
+Record type declares the timer, while the root project grants the exact Record type and timer
+pair. Read the canonical [Record timers
+guide](https://github.com/registrystack/registry-stack/blob/main/products/breg/record-timers.md)
+for the authoring contract, inspection commands, and milestone boundaries.
+
+{/* Evidence: products/breg/record-timers.md;
+    crates/registry-breg/src/contract.rs, RegistryProject and EntitySource. */}
+
 ## Next
 
 - [Modeling patterns](../../explanation/registry-modeling-patterns/)
 - [Control access and reads](../breg-access/)
 - [Actions and Proposals](../breg-actions/)
+- [Record timers](https://github.com/registrystack/registry-stack/blob/main/products/breg/record-timers.md)
 - [Encrypt a field](../breg-field-encryption/)
 - [Publish statistics](../breg-statistics/)
 - [Test with journeys](../breg-journeys/)

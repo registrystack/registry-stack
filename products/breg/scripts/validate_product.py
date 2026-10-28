@@ -30,7 +30,7 @@ PLACEHOLDER = re.compile(r"\b(?:TODO|TBD|FIXME|placeholder)\b", re.IGNORECASE)
 CONTRACT_STATES = {"enforced", "partial", "planned"}
 V1_REQUIREMENT_IDS = tuple(f"BREG-V1-{index:02d}" for index in range(1, 45))
 ACCEPTANCE_JOURNEY_IDS = tuple(f"BREG-J{index:02d}" for index in range(1, 25))
-SECURITY_INVARIANT_IDS = tuple(f"BREG-SEC-{index:02d}" for index in range(1, 195) if index not in {61, 62})
+SECURITY_INVARIANT_IDS = tuple(f"BREG-SEC-{index:02d}" for index in range(1, 203) if index not in {61, 62})
 ACCEPTANCE_FIXTURES = {
     "BREG-J01": ("asset-site-placement", "acceptance/asset-site-placement"),
     "BREG-J02": ("asset-site-placement", "acceptance/asset-site-placement"),
@@ -119,6 +119,12 @@ POSTGRES_TEST_COMMANDS = (
     "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_webhook_outbox",
     "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_webhook_delivery",
     "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_hook_changes",
+    "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_record_timers",
+    "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_record_timer_native",
+    "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_record_timer_metrics",
+    "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_record_timer_retention",
+    "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_record_timer_clock",
+    "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_record_timer_operator",
     "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_immediate_action_requirements",
     "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_multi_reference_action_authority",
     "cargo test --locked -p registry-breg --features postgres-test,tooling,schema --test postgres_immediate_action_generated_identifiers",
@@ -541,10 +547,24 @@ def validate_postgres_entrypoint(errors: list[str]) -> None:
         "immediate_action_targets": "cargo test --locked -p registry-breg --features postgres-test,tooling,schema",
     }
     shared_invocation = 'cargo test --locked -p registry-breg --features "$features" "${flags[@]}"'
+    serial_record_timers_arguments = [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "registry-breg",
+        "--features",
+        "$features",
+        "--test",
+        "postgres_record_timers",
+        "--",
+        "--test-threads=1",
+    ]
     literal_prefix = "uv run --no-project --with PyYAML==6.0.2 "
     cargo_commands: list[str] = []
     seen_lists: set[str] = set()
     sharded_calls: list[str] = []
+    serial_record_timers_invocations = 0
     lines = source.replace("\\\n", " ").splitlines()
     index = 0
     while index < len(lines):
@@ -563,6 +583,9 @@ def validate_postgres_entrypoint(errors: list[str]) -> None:
                 arguments = shlex.split(line)
             except ValueError:
                 errors.append("PostgreSQL entrypoint: invalid Cargo command quoting")
+                continue
+            if arguments == serial_record_timers_arguments:
+                serial_record_timers_invocations += 1
                 continue
             if (
                 len(arguments) < 9
@@ -607,6 +630,10 @@ def validate_postgres_entrypoint(errors: list[str]) -> None:
         errors.append(
             "PostgreSQL entrypoint: each owned list must run once through "
             "run_sharded_targets with its feature set"
+        )
+    if serial_record_timers_invocations != 1:
+        errors.append(
+            "PostgreSQL entrypoint: postgres_record_timers must run once with one test thread"
         )
     if Counter(cargo_commands) != Counter(POSTGRES_TEST_COMMANDS):
         errors.append(

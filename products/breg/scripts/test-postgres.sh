@@ -20,7 +20,7 @@ fi
 shard_index=1
 shard_count=1
 case "$lane" in
-  all|postgres|immediate-actions) ;;
+  all | postgres | immediate-actions) ;;
   postgres:*)
     shard_spec=${lane#postgres:}
     if [[ ! "$shard_spec" =~ ^([1-9][0-9]*)/([2-9][0-9]*)$ ]]; then
@@ -29,13 +29,16 @@ case "$lane" in
     fi
     shard_index=${BASH_REMATCH[1]}
     shard_count=${BASH_REMATCH[2]}
-    if (( shard_index > shard_count )); then
+    if ((shard_index > shard_count)); then
       usage
       exit 2
     fi
     lane=postgres
     ;;
-  *) usage; exit 2 ;;
+  *)
+    usage
+    exit 2
+    ;;
 esac
 
 if [[ -z "${BREG_TEST_DATABASE_URL:-}" ]]; then
@@ -92,6 +95,11 @@ postgres_targets=(
   postgres_webhook_outbox
   postgres_webhook_delivery
   postgres_hook_changes
+  postgres_record_timers
+  postgres_record_timer_native
+  postgres_record_timer_metrics
+  postgres_record_timer_retention
+  postgres_record_timer_clock
   postgres_temporal_corrections
   postgres_batch
   postgres_data_facility
@@ -153,31 +161,35 @@ immediate_action_targets=(
 # Round-robin over each list's order, so related groups (history, statistics,
 # proposals) spread across shards instead of pooling on one of them. Every
 # target of a sharded lane still runs exactly once across the shard set.
-sharded_test_flags() {
-  local position=0 target
-  for target in "$@"; do
-    if (( position % shard_count + 1 == shard_index )); then
-      printf '%s\n' "--test" "$target"
-    fi
-    position=$((position + 1))
-  done
-}
-
 run_sharded_targets() {
   # $1: the feature set; remaining arguments: the owned target list.
   local features=$1
   shift
-  local flags=() flag
-  # Read line by line: the bash 3.2 macOS ships has no builtin that loads
-  # lines into an array.
-  while IFS= read -r flag; do
-    flags+=("$flag")
-  done < <(sharded_test_flags "$@")
-  if (( ${#flags[@]} == 0 )); then
+  local flags=() position=0 selected=0 serial_record_timers=0 target
+  for target in "$@"; do
+    if ((position % shard_count + 1 == shard_index)); then
+      selected=1
+      if [[ "$target" == postgres_record_timers ]]; then
+        serial_record_timers=1
+      else
+        flags+=("--test" "$target")
+      fi
+    fi
+    position=$((position + 1))
+  done
+  if ((selected == 0)); then
     printf '%s\n' "Shard ${shard_index}/${shard_count} has no targets in this list; skipping." >&2
     return 0
   fi
-  cargo test --locked -p registry-breg --features "$features" "${flags[@]}"
+  if ((${#flags[@]} != 0)); then
+    cargo test --locked -p registry-breg --features "$features" "${flags[@]}"
+  fi
+  if ((serial_record_timers == 1)); then
+    # These clock- and lease-sensitive storage journeys share one disposable
+    # database. Native replica contention remains in its separate target.
+    cargo test --locked -p registry-breg --features "$features" \
+      --test postgres_record_timers -- --test-threads=1
+  fi
 }
 
 # Every registry-breg target here builds against one of two feature sets, so
@@ -192,7 +204,26 @@ if [[ "$lane" == all || "$lane" == postgres ]]; then
   # The Evidence proof builds the real service once and runs from the first
   # shard only, so parallel shards do not each rebuild the Evidence tree.
   # This proof must start the real Evidence service, never silently skip it.
-  if (( shard_index == 1 )); then
+  if ((shard_index == 1)); then
+    # The operator proof drives the actual bregctl binary. Build it once and
+    # pass Cargo's reported executable explicitly; the test must never find a
+    # different development binary on PATH or silently skip the CLI journey.
+    bregctl_binary=$(cargo build --locked -p registry-bregctl --bin bregctl --features registry-breg/postgres-test --message-format=json | python3 -c '
+import json, sys
+artifacts = [json.loads(line) for line in sys.stdin]
+binaries = [item["executable"] for item in artifacts if item.get("reason") == "compiler-artifact" and item.get("target", {}).get("name") == "bregctl" and item.get("executable")]
+if len(binaries) != 1:
+    raise SystemExit("expected exactly one built bregctl executable")
+print(binaries[0])
+')
+    [[ -x "$bregctl_binary" ]] || {
+      printf '%s\n' 'Built bregctl executable is unavailable.' >&2
+      exit 2
+    }
+    export BREG_TEST_BREGCTL_BINARY="$bregctl_binary"
+    cargo test --locked -p registry-breg --features postgres-test,tooling,schema \
+      --test postgres_record_timer_operator
+
     # Use Cargo's reported executable so configured target directories work too.
     evidence_binary=$(cargo build --locked -p registry-evidence --bin evidence --message-format=json | python3 -c '
 import json, sys
@@ -202,7 +233,10 @@ if len(binaries) != 1:
     raise SystemExit("expected exactly one built Evidence executable")
 print(binaries[0])
 ')
-    [[ -x "$evidence_binary" ]] || { printf '%s\n' 'Built Evidence executable is unavailable.' >&2; exit 2; }
+    [[ -x "$evidence_binary" ]] || {
+      printf '%s\n' 'Built Evidence executable is unavailable.' >&2
+      exit 2
+    }
     export BREG_TEST_EVIDENCE_BINARY="$evidence_binary"
     # The trio runs as one unit on its owning shard, never split further.
     uv run --no-project --with PyYAML==6.0.2 cargo test --locked -p registry-breg --features postgres-test,tooling,schema \

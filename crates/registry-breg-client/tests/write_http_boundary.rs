@@ -1616,6 +1616,98 @@ async fn action_request_paths_are_closed_bounded_and_discarded() {
 }
 
 #[tokio::test]
+async fn timer_window_problem_fields_are_paired_bounded_and_discarded() {
+    let request_invalid = problem_response(BRegProblemCode::RequestInvalid);
+    let document: Value = serde_json::from_slice(&request_invalid.body).unwrap();
+    let response_for = |base: &MockResponse, value: Value| MockResponse {
+        body: serde_json::to_vec(&value).unwrap(),
+        ..base.clone()
+    };
+    let mut paired = document.clone();
+    paired["atField"] = json!("activate-at");
+    paired["notAfterField"] = json!("expires-at");
+
+    let mut additive = paired.clone();
+    additive["futureMember"] = json!({"private": "future-canary"});
+    let mut future = paired.clone();
+    future["type"] =
+        json!("https://id.registrystack.org/problems/registry-breg/request/future_invalid");
+    future["code"] = json!("request.future_invalid");
+    future["atField"] = json!({"private": "future-at-canary"});
+    future["notAfterField"] = Value::Null;
+    let future_response = response_for(&request_invalid, future);
+    let accepted = [
+        response_for(&request_invalid, paired.clone()),
+        response_for(&request_invalid, additive),
+        future_response,
+    ];
+
+    let mut refused = Vec::new();
+    for member in ["atField", "notAfterField"] {
+        let mut partial = paired.clone();
+        partial.as_object_mut().unwrap().remove(member);
+        refused.push(response_for(&request_invalid, partial));
+    }
+    for (member, value) in [
+        ("atField", Value::Null),
+        ("atField", json!(12)),
+        ("notAfterField", json!({})),
+        ("notAfterField", json!("field\nprivate-canary")),
+        ("atField", json!("")),
+        ("notAfterField", json!("x".repeat(129))),
+    ] {
+        let mut malformed = paired.clone();
+        malformed[member] = value;
+        refused.push(response_for(&request_invalid, malformed));
+    }
+    let query_invalid = problem_response(BRegProblemCode::QueryInvalid);
+    let mut misplaced: Value = serde_json::from_slice(&query_invalid.body).unwrap();
+    misplaced["atField"] = json!("activate-at");
+    misplaced["notAfterField"] = json!("expires-at");
+    refused.push(response_for(&query_invalid, misplaced));
+    for member in ["atField", "notAfterField"] {
+        let mut duplicate = request_invalid.clone();
+        duplicate.body = format!(
+            "{{\"{member}\":\"duplicate-private-canary\",{}",
+            &paired.to_string()[1..]
+        )
+        .into_bytes();
+        refused.push(duplicate);
+    }
+
+    let accepted_count = accepted.len();
+    let total = accepted_count + refused.len();
+    let fixture = single_attempt_client(accepted.into_iter().chain(refused).collect()).await;
+    for index in 0..total {
+        let error = fixture
+            .client
+            .get_record("companies", RECORD_ID, &Default::default())
+            .await
+            .expect_err("problem or malformed problem is returned");
+        if index < accepted_count {
+            if index < 2 {
+                assert_eq!(error.problem_code(), Some(BRegProblemCode::RequestInvalid));
+            } else {
+                assert_eq!(error.problem_code(), None);
+            }
+        } else {
+            assert!(matches!(
+                error,
+                BaseRegistryClientError::Protocol {
+                    failure: BRegProtocolFailure::Problem,
+                    ..
+                }
+            ));
+        }
+        let rendered = format!("{error:?}: {error}");
+        assert!(!rendered.contains("activate-at"));
+        assert!(!rendered.contains("expires-at"));
+        assert!(!rendered.contains("private-canary"));
+    }
+    assert_eq!(fixture.requests.lock().unwrap().len(), total);
+}
+
+#[tokio::test]
 async fn record_and_query_problem_paths_are_closed_bounded_and_retained_without_rendering() {
     let request_invalid = problem_response(BRegProblemCode::RequestInvalid);
     let request_document: Value = serde_json::from_slice(&request_invalid.body).unwrap();

@@ -1158,7 +1158,7 @@
       }
     ]
   },
-  "apiVersion": "id.registrystack.org/formats/breg/access-explanation/v1alpha7",
+  "apiVersion": "id.registrystack.org/formats/breg/access-explanation/v1alpha8",
   "claimContract": {
     "directClaims": {
       "jurisdiction": {
@@ -2023,5 +2023,6 @@
     }
   ],
   "scopeMatching": "all required scopes must be present",
-  "statisticalDatasets": []
+  "statisticalDatasets": [],
+  "timers": []
 }

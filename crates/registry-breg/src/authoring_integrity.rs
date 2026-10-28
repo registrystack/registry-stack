@@ -340,6 +340,10 @@ fn entity_integrity(
             ),
         ),
         (
+            "breg.timer.id-collision",
+            indexed_ids(&format!("{base}/timers"), &entity.timers, |item| &item.id),
+        ),
+        (
             "breg.read-path.id-collision",
             indexed_ids(&format!("{base}/readPaths"), &entity.read_paths, |item| {
                 &item.id
@@ -365,6 +369,7 @@ fn extension_integrity(
         indexes: Vec<LocatedId>,
         profiles: Vec<LocatedId>,
         selectors: Vec<LocatedId>,
+        timers: Vec<LocatedId>,
         read_paths: Vec<LocatedId>,
     }
 
@@ -406,6 +411,11 @@ fn extension_integrity(
         target.selectors.extend(indexed_ids(
             &format!("{base}/selectorProfiles"),
             &entity.selector_profiles,
+            |item| &item.id,
+        ));
+        target.timers.extend(indexed_ids(
+            &format!("{base}/timers"),
+            &entity.timers,
             |item| &item.id,
         ));
         target.read_paths.extend(indexed_ids(
@@ -453,6 +463,11 @@ fn extension_integrity(
             &extension.selector_profiles,
             |item| &item.id,
         ));
+        target.timers.extend(indexed_ids(
+            &format!("{base}/timers"),
+            &extension.timers,
+            |item| &item.id,
+        ));
         target.read_paths.extend(indexed_ids(
             &format!("{base}/readPaths"),
             &extension.read_paths,
@@ -467,6 +482,7 @@ fn extension_integrity(
             ("breg.index.id-collision", &target.indexes),
             ("breg.access-profile.id-collision", &target.profiles),
             ("breg.selector-profile.id-collision", &target.selectors),
+            ("breg.timer.id-collision", &target.timers),
             ("breg.read-path.id-collision", &target.read_paths),
         ] {
             add_collisions(document, errors, code, values);

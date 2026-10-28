@@ -1344,6 +1344,126 @@ fn access_review_example_explains_simulates_and_refuses_footguns_without_live_da
         .status
         .success());
 }
+
+#[test]
+fn access_explanation_renders_timer_writers_and_product_owned_future_effect() {
+    let project = TestProject::from_registry_source(
+        br#"apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project:
+  id: timer-explanation
+  version: "1"
+  defaultLanguage: en
+  canonicalBaseIri: https://timer-explanation.example.test
+datasets:
+  - id: records
+recordTypes:
+  - id: entry
+    primaryDataset: records
+    route: entries
+    mutationMode: mutable
+    classification: internal
+    fields:
+      - {id: active, type: boolean, classification: internal}
+      - {id: activates-at, type: timestamp, classification: internal}
+      - {id: note, type: string, maximumLength: 64, classification: internal}
+    timers:
+      - id: activate
+        at: activates-at
+        when: {type: fields, equals: {active: false}}
+        invoke: activate-entry
+        input:
+          entry: {fromRecordId: true}
+          note: {fromField: note}
+timerGrants:
+  - {recordType: entry, timer: activate}
+actions:
+  - id: activate-entry
+    execution: {mode: immediate}
+    inputs:
+      - {id: entry, type: reference, target: entry, required: true, classification: internal}
+      - {id: note, type: string, maximumLength: 64, required: true, classification: internal}
+    plan:
+      type: fixed
+      effects:
+        - id: activated
+          target: {fromInput: entry}
+          operation: patch
+          set: {active: {value: true}}
+  - id: schedule-entry
+    execution: {mode: immediate}
+    inputs:
+      - {id: entry, type: reference, target: entry, required: true, classification: internal}
+      - {id: at, type: timestamp, required: true, classification: internal}
+      - {id: note, type: string, maximumLength: 64, required: true, classification: internal}
+    plan:
+      type: fixed
+      effects:
+        - id: scheduled
+          target: {fromInput: entry}
+          operation: patch
+          set: {activates-at: {fromInput: at}, note: {fromInput: note}}
+accessProfiles:
+  - id: clerk
+    default: true
+    principalClaim: registry_principal
+    requiredScopes: unrestricted
+    permissions:
+      records:
+        - recordType: entry
+          operations: [get, patch]
+          readableFields: [active, activates-at, note]
+          writableFields: [active, activates-at, note]
+          rowBoundaries: unrestricted
+      actions:
+        - action: schedule-entry
+          operations: [invoke]
+          targets:
+            - {recordType: entry, rowBoundaries: unrestricted}
+          results: [scheduled]
+"#,
+    );
+    let project_path = path(project.path());
+
+    let json_output = bregctl(&["--format", "json", "explain", "access", project_path]);
+    assert!(json_output.status.success(), "{json_output:?}");
+    let report = json_stdout(&json_output);
+    let explanation = &report["explanation"];
+    assert_eq!(
+        explanation["apiVersion"],
+        "id.registrystack.org/formats/breg/access-explanation/v1alpha8"
+    );
+    let timer = &explanation["timers"][0];
+    assert_eq!(timer["recordType"], "entry");
+    assert_eq!(timer["timer"], "activate");
+    assert_eq!(timer["futureEffect"]["authority"], "product-owned");
+    assert_eq!(timer["futureEffect"]["recordGrantRelationship"], "none");
+    assert!(timer["controlWriters"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|writer| {
+            writer["surface"] == "action"
+                && writer["id"] == "schedule-entry"
+                && writer["accessProfiles"] == json!(["clerk"])
+        }));
+
+    let human_output = bregctl(&["explain", "access", project_path]);
+    assert!(human_output.status.success(), "{human_output:?}");
+    let human = String::from_utf8(human_output.stdout).unwrap();
+    for expected in [
+        "Record timers:",
+        "timer entry/activate",
+        "autonomous authority",
+        "product-owned",
+        "direct Record grant relationship",
+        "control writer schedule-entry (action)",
+        "future effect patch entry",
+        "future effect get entry",
+    ] {
+        assert!(human.contains(expected), "{expected:?} in {human}");
+    }
+}
 const PACKAGE_INSTANCE: &str = "verify-instance";
 const PACKAGE_DATABASE: &str = "verify-database";
 const PACKAGE_SOURCE_REVISION: &str = "verify-compiler-source";

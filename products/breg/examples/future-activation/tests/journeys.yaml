@@ -1,0 +1,52 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/breg/journeys/journeys.v1.schema.json
+apiVersion: id.registrystack.org/formats/breg/journeys/v1
+kind: BRegJourneys
+journeys:
+  - id: future-activation-authoring
+    steps:
+      - id: create-scheduled-service
+        recordType: service
+        accessProfile: service-editor
+        claims:
+          principal: synthetic-service-editor
+          scopes: [registry:services:write]
+          purpose: service-administration
+          directClaims: {jurisdiction: zone-a}
+        request:
+          type: create
+          data:
+            status: scheduled
+            activatesAt: "2100-01-01T00:00:00Z"
+            activationNotAfter: "2100-01-02T00:00:00Z"
+            activationRevision: 00000000-0000-4000-8000-000000000001
+            paused: false
+            description: Scheduled fixture service
+            jurisdiction: zone-a
+        expect:
+          outcome: success
+          status: 201
+          fields:
+            status: scheduled
+            activatesAt: "2100-01-01T00:00:00Z"
+            paused: false
+            description: Scheduled fixture service
+            jurisdiction: zone-a
+        capture: scheduled-service
+      - id: read-scheduled-service
+        recordType: service
+        accessProfile: service-editor
+        claims:
+          principal: synthetic-service-editor
+          scopes: [registry:services:write]
+          purpose: service-administration
+          directClaims: {jurisdiction: zone-a}
+        request: {type: get, recordCapture: scheduled-service}
+        expect:
+          outcome: success
+          status: 200
+          fields:
+            status: scheduled
+            activatesAt: "2100-01-01T00:00:00Z"
+            paused: false
+            description: Scheduled fixture service
+            jurisdiction: zone-a

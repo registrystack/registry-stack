@@ -31,7 +31,7 @@ fn envelope(contract: &str) -> (&'static str, &'static str) {
             "BRegModelExplanation",
         ),
         "AccessExplanation" => (
-            "id.registrystack.org/formats/breg/access-explanation/v1alpha7",
+            "id.registrystack.org/formats/breg/access-explanation/v1alpha8",
             "BRegAccessExplanation",
         ),
         "AccessPreview" => (
@@ -528,7 +528,58 @@ fn explain_access_matches_contract() {
     for (name, relative) in FIXTURES {
         let explanation = explain("access", &fixture_path(relative));
         assert_matches_contract(name, "AccessExplanation", &explanation);
+        assert_eq!(explanation["timers"], json!([]), "{name}");
     }
+}
+
+#[test]
+fn access_contract_refuses_the_previous_version_and_a_missing_timer_inventory() {
+    let fixture = fixture_path("products/breg/examples/minimal");
+    let explanation = explain("access", &fixture);
+    let schema = load_schema("AccessExplanation");
+    assert_matches_contract("minimal", "AccessExplanation", &explanation);
+
+    let mut previous = explanation.clone();
+    previous["apiVersion"] = json!("id.registrystack.org/formats/breg/access-explanation/v1alpha7");
+    assert!(
+        !schema.is_valid(&previous),
+        "AccessExplanation accepts the previous strict report version"
+    );
+
+    let mut missing = explanation;
+    missing.as_object_mut().unwrap().remove("timers");
+    assert!(
+        !schema.is_valid(&missing),
+        "AccessExplanation accepts a report without its timer inventory"
+    );
+}
+
+#[test]
+fn access_contract_pins_timer_authority_and_refuses_unknown_timer_members() {
+    let fixture = fixture_path("products/breg/examples/future-activation");
+    let explanation = explain("access", &fixture);
+    let schema = load_schema("AccessExplanation");
+    assert_matches_contract("record timer", "AccessExplanation", &explanation);
+    assert_eq!(explanation["timers"].as_array().unwrap().len(), 1);
+    assert_eq!(explanation["timers"][0]["recordType"], "service");
+    assert_eq!(
+        explanation["timers"][0]["futureEffect"]["authority"],
+        "product-owned"
+    );
+
+    let mut unknown_timer_member = explanation.clone();
+    unknown_timer_member["timers"][0]["futurePolicy"] = json!("implicit");
+    assert!(
+        !schema.is_valid(&unknown_timer_member),
+        "AccessExplanation accepts an unknown timer member"
+    );
+
+    let mut unknown_future_effect_member = explanation;
+    unknown_future_effect_member["timers"][0]["futureEffect"]["profile"] = json!("system");
+    assert!(
+        !schema.is_valid(&unknown_future_effect_member),
+        "AccessExplanation accepts a synthetic timer profile"
+    );
 }
 
 #[test]

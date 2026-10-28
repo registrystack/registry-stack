@@ -9,7 +9,7 @@ own `breg/ctl-report/v1alpha1` version.
 | Subject | Format | Current version | Schema |
 |---|---|---|---|
 | `model` | `BRegModelExplanation` | `v1alpha7` | `ModelExplanation.schema.json` |
-| `access` | `BRegAccessExplanation` | `v1alpha7` | `AccessExplanation.schema.json` |
+| `access` | `BRegAccessExplanation` | `v1alpha8` | `AccessExplanation.schema.json` |
 | `access --scenario` | `BRegAccessPreview` | `v1alpha4` | `AccessPreview.schema.json` |
 | `actions` | `BRegActionsExplanation` | `v1alpha7` | `ActionsExplanation.schema.json` |
 | `proposals` | `BRegProposalsExplanation` | `v1alpha3` | `ProposalsExplanation.schema.json` |
@@ -30,6 +30,12 @@ execution. The removed `change-requests` subject has no current example or
 schema.
 
 ## Version changes
+
+Access `v1alpha8` adds the required `timers` inventory. It names each
+root-enabled autonomous timer, the Record and Action surfaces that can shape
+its control, predicate, and mapped-input fields, and the exact product-owned
+system grant that bounds its future effect. The report does not turn that
+authority into a selectable access profile or imply a direct Record grant.
 
 Actions `v1alpha7` and Proposals `v1alpha3` add
 `migrationReviewRevision`, the digest of the Action behavior contract used to

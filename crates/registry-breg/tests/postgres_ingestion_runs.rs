@@ -28,9 +28,13 @@ use registry_breg::compiler::{compile_project, CompileProfile};
 use registry_breg::contract::parse_project_json;
 use registry_breg::cursor::CursorCodec;
 use registry_breg::field_encryption::{FieldEncryptionProvider, FieldEncryptionService};
+use registry_breg::import_authority::{
+    ImportAuthority, ImportAuthorityOpenRequest, ImportAuthorityOperatorService,
+    ImportAuthorityStatus, DEFAULT_IMPORT_AUTHORITY_WINDOW,
+};
 use registry_breg::mutation::MutationFaultPoint;
 use registry_breg::postgres::{
-    initialize_compiled_registry_state_for_test, install_compiled_schema,
+    initialize_compiled_registry_state_for_test, install_compiled_schema, ExpectedManagedCatalog,
     PostgresRecordMutationService, PostgresRecordReadService, RegistryLockKey,
     RegistryStateTestIdentity,
 };
@@ -2558,6 +2562,440 @@ async fn run_creation_and_cancellation_correlate_a_request_and_a_response_entry(
     }
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn timer_ingestion_stages_checkpoint_receipt_and_generations_atomically() {
+    let harness = IngestionHarness::from_registry(Arc::new(timer_ingestion_registry())).await;
+    let claims = operator_claims(PRINCIPAL, "zone-a");
+    let plan = plan_chunks(&timer_ingestion_items("timer-ingestion", 2), 2);
+    let created = harness
+        .post_json(
+            "/v1/records/services/ingestion-runs",
+            &claims,
+            harness.run_body("create", &plan),
+        )
+        .await;
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let run_id = body_json(created).await["run"]["runId"]
+        .as_str()
+        .expect("timer ingestion run id")
+        .to_owned();
+    let before = timer_ingestion_counts(&harness).await;
+    let first = harness
+        .post_json(
+            &format!("/v1/records/services/ingestion-runs/{run_id}/chunks"),
+            &claims,
+            chunk_body(&plan, 0),
+        )
+        .await;
+    assert_eq!(first.status(), StatusCode::OK);
+    let first = body_json(first).await;
+    let first_batch = first["receipt"]["batch"].clone();
+    assert_eq!(first["receipt"]["replayed"], false);
+    let after = timer_ingestion_counts(&harness).await;
+    assert_eq!(after.records, before.records + 2);
+    assert_eq!(after.revisions, before.revisions + 2);
+    assert_eq!(after.outbox, before.outbox + 2);
+    assert_eq!(after.chunk_receipts, before.chunk_receipts + 1);
+    assert_eq!(after.generations, before.generations + 2);
+    assert_eq!(after.current_markers, before.current_markers + 2);
+    let run = harness.read_run_for(&claims, "services", &run_id).await;
+    assert_eq!(run["committedItems"], 2);
+    assert_eq!(run["nextChunkIndex"], 1);
+
+    let replay = harness
+        .post_json(
+            &format!("/v1/records/services/ingestion-runs/{run_id}/chunks"),
+            &claims,
+            chunk_body(&plan, 0),
+        )
+        .await;
+    assert_eq!(replay.status(), StatusCode::OK);
+    let replay = body_json(replay).await;
+    assert_eq!(replay["receipt"]["batch"], first_batch);
+    assert_eq!(replay["receipt"]["replayed"], true);
+    assert_eq!(timer_ingestion_counts(&harness).await, after);
+
+    let fault_plan = plan_chunks(&timer_ingestion_items("timer-ingestion-fault", 2), 2);
+    let fault_run = harness
+        .post_json(
+            "/v1/records/services/ingestion-runs",
+            &claims,
+            harness.run_body("create", &fault_plan),
+        )
+        .await;
+    assert_eq!(fault_run.status(), StatusCode::CREATED);
+    let fault_run = body_json(fault_run).await["run"]["runId"]
+        .as_str()
+        .expect("fault run id")
+        .to_owned();
+    let before_fault = timer_ingestion_counts(&harness).await;
+    let faulted = harness
+        .restart(Some(MutationFaultPoint::BeforeCommit))
+        .await;
+    let refused = faulted
+        .post_json(
+            &format!("/v1/records/services/ingestion-runs/{fault_run}/chunks"),
+            &claims,
+            chunk_body(&fault_plan, 0),
+        )
+        .await;
+    assert_eq!(refused.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(timer_ingestion_counts(&harness).await, before_fault);
+    let fault_run_state = harness.read_run_for(&claims, "services", &fault_run).await;
+    assert_eq!(fault_run_state["committedItems"], 0);
+    assert_eq!(fault_run_state["nextChunkIndex"], 0);
+
+    let invalid_plan = plan_chunks(
+        &[json!({"operation":"create","data":{
+            "status":"scheduled",
+            "activatesAt":"2100-05-01T00:00:00Z",
+            "activationNotAfter":"2100-05-01T00:00:00Z",
+            "activationRevision":"00000000-0000-4000-8000-000000000099",
+            "paused":false,"description":"invalid ingestion timer","jurisdiction":"zone-a"
+        }})],
+        1,
+    );
+    let invalid_run = harness
+        .post_json(
+            "/v1/records/services/ingestion-runs",
+            &claims,
+            harness.run_body("create", &invalid_plan),
+        )
+        .await;
+    assert_eq!(invalid_run.status(), StatusCode::CREATED);
+    let invalid_run = body_json(invalid_run).await["run"]["runId"]
+        .as_str()
+        .expect("invalid run id")
+        .to_owned();
+    let before_invalid = timer_ingestion_counts(&harness).await;
+    let invalid = harness
+        .post_json(
+            &format!("/v1/records/services/ingestion-runs/{invalid_run}/chunks"),
+            &claims,
+            chunk_body(&invalid_plan, 0),
+        )
+        .await;
+    assert_eq!(invalid.status(), StatusCode::BAD_REQUEST);
+    let invalid = body_json(invalid).await;
+    assert_eq!(invalid["code"], "request.invalid");
+    assert_eq!(invalid["atField"], "activates-at");
+    assert_eq!(invalid["notAfterField"], "activation-not-after");
+    assert!(!invalid.to_string().contains("2100-05-01"));
+    assert_eq!(timer_ingestion_counts(&harness).await, before_invalid);
+    harness.database.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn timer_import_rolls_back_authority_consumption_and_replay_consumes_once() {
+    let harness =
+        IngestionHarness::from_registry(Arc::new(timer_import_ingestion_registry())).await;
+    let claims = operator_claims(PRINCIPAL, "zone-a");
+    let plan = plan_chunks(&timer_ingestion_items("timer-import-authority", 2), 2);
+    let authority = harness
+        .import_operator()
+        .open(ImportAuthorityOpenRequest {
+            entity_id: "service",
+            profile_id: "operator",
+            max_items: 2,
+            expires_in: DEFAULT_IMPORT_AUTHORITY_WINDOW,
+            input_digests: std::slice::from_ref(&plan.input_digest),
+            operator_reference: "timer-import-proof",
+            reason: "prove atomic timer import consumption",
+        })
+        .await
+        .expect("operator opens the exact timer import authority");
+    assert_eq!(authority.status, ImportAuthorityStatus::Open);
+    assert_eq!(authority.committed_items, 0);
+
+    let created = harness
+        .post_json(
+            "/v1/records/services/ingestion-runs",
+            &claims,
+            harness.run_body("create", &plan),
+        )
+        .await;
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let run_id = body_json(created).await["run"]["runId"]
+        .as_str()
+        .expect("timer import run id")
+        .to_owned();
+    let before_fault = timer_ingestion_counts(&harness).await;
+    let faulted = harness
+        .restart(Some(MutationFaultPoint::BeforeCommit))
+        .await;
+    let refused = faulted
+        .post_json(
+            &format!("/v1/records/services/ingestion-runs/{run_id}/chunks"),
+            &claims,
+            chunk_body(&plan, 0),
+        )
+        .await;
+    assert_eq!(refused.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(timer_ingestion_counts(&harness).await, before_fault);
+    let rolled_back = harness.import_authority(authority.authority_id).await;
+    assert_eq!(rolled_back.status, ImportAuthorityStatus::Open);
+    assert_eq!(rolled_back.committed_items, 0);
+    let rolled_back_run = harness.read_run_for(&claims, "services", &run_id).await;
+    assert_eq!(rolled_back_run["committedItems"], 0);
+    assert_eq!(rolled_back_run["nextChunkIndex"], 0);
+
+    let first = harness
+        .post_json(
+            &format!("/v1/records/services/ingestion-runs/{run_id}/chunks"),
+            &claims,
+            chunk_body(&plan, 0),
+        )
+        .await;
+    assert_eq!(first.status(), StatusCode::OK);
+    let first = body_json(first).await;
+    assert_eq!(first["receipt"]["replayed"], false);
+    let first_batch = first["receipt"]["batch"].clone();
+    let after = timer_ingestion_counts(&harness).await;
+    assert_eq!(after.records, before_fault.records + 2);
+    assert_eq!(after.revisions, before_fault.revisions + 2);
+    assert_eq!(after.outbox, before_fault.outbox + 2);
+    assert_eq!(after.chunk_receipts, before_fault.chunk_receipts + 1);
+    assert_eq!(after.generations, before_fault.generations + 2);
+    assert_eq!(after.current_markers, before_fault.current_markers + 2);
+    let consumed = harness.import_authority(authority.authority_id).await;
+    assert_eq!(consumed.status, ImportAuthorityStatus::Exhausted);
+    assert_eq!(consumed.committed_items, 2);
+
+    let replay = harness
+        .post_json(
+            &format!("/v1/records/services/ingestion-runs/{run_id}/chunks"),
+            &claims,
+            chunk_body(&plan, 0),
+        )
+        .await;
+    assert_eq!(replay.status(), StatusCode::OK);
+    let replay = body_json(replay).await;
+    assert_eq!(replay["receipt"]["batch"], first_batch);
+    assert_eq!(replay["receipt"]["replayed"], true);
+    assert_eq!(timer_ingestion_counts(&harness).await, after);
+    let replayed = harness.import_authority(authority.authority_id).await;
+    assert_eq!(replayed.status, ImportAuthorityStatus::Exhausted);
+    assert_eq!(replayed.committed_items, 2);
+    harness.database.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn timer_ingestion_takes_control_before_the_run_parent_lock() {
+    let harness = IngestionHarness::from_registry(Arc::new(timer_ingestion_registry())).await;
+    let claims = operator_claims(PRINCIPAL, "zone-a");
+    let plan = plan_chunks(&timer_ingestion_items("timer-ingestion-lock-order", 1), 1);
+    let created = harness
+        .post_json(
+            "/v1/records/services/ingestion-runs",
+            &claims,
+            harness.run_body("create", &plan),
+        )
+        .await;
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let run_id = Uuid::parse_str(
+        body_json(created).await["run"]["runId"]
+            .as_str()
+            .expect("timer ingestion run id"),
+    )
+    .expect("run id is canonical");
+    let before = timer_ingestion_counts(&harness).await;
+
+    let (mut blocker, blocker_task) = harness.database.connect_migration().await;
+    let blocker = blocker.transaction().await.expect("pause blocker begins");
+    blocker
+        .execute(
+            "SELECT pg_advisory_xact_lock(
+                 pg_catalog.hashtextextended('breg/record-timer-control/v1', 0)
+             )",
+            &[],
+        )
+        .await
+        .expect("test exclusively holds timer control lock");
+    let blocker_pid: i32 = blocker
+        .query_one("SELECT pg_backend_pid()", &[])
+        .await
+        .expect("control holder has a backend")
+        .get(0);
+
+    let app = harness.app.clone();
+    let request_claims = claims.clone();
+    let uri = format!("/v1/records/services/ingestion-runs/{run_id}/chunks");
+    let body = chunk_body(&plan, 0);
+    let submission =
+        tokio::spawn(async move { post_json(&app, &uri, &request_claims, body).await });
+    let waiter_pid = tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            let waiting = blocker
+                .query_opt(
+                    "SELECT waiter.pid
+                       FROM pg_catalog.pg_locks AS waiter
+                       JOIN pg_catalog.pg_locks AS holder
+                         ON holder.locktype=waiter.locktype
+                        AND holder.database IS NOT DISTINCT FROM waiter.database
+                        AND holder.classid IS NOT DISTINCT FROM waiter.classid
+                        AND holder.objid IS NOT DISTINCT FROM waiter.objid
+                        AND holder.objsubid IS NOT DISTINCT FROM waiter.objsubid
+                      WHERE holder.pid=$1
+                        AND holder.granted
+                        AND waiter.locktype='advisory'
+                        AND NOT waiter.granted
+                        AND waiter.pid<>holder.pid
+                      LIMIT 1",
+                    &[&blocker_pid],
+                )
+                .await
+                .expect("test observes exact advisory wait");
+            if let Some(waiting) = waiting {
+                break waiting.get::<_, i32>(0);
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("ingestion writer waits on timer control");
+    assert_ne!(waiter_pid, blocker_pid);
+    let locked_run: Uuid = blocker
+        .query_one(
+            "SELECT run_id
+               FROM registry_internal.registry_ingestion_runs
+              WHERE run_id=$1
+              FOR UPDATE NOWAIT",
+            &[&run_id],
+        )
+        .await
+        .expect("writer has not locked its ingestion parent before timer control")
+        .get(0);
+    assert_eq!(locked_run, run_id, "the exact run parent remained lockable");
+    blocker
+        .rollback()
+        .await
+        .expect("pause blocker releases control and parent");
+    blocker_task.abort();
+
+    let response = tokio::time::timeout(Duration::from_secs(3), submission)
+        .await
+        .expect("ingestion continues after pause releases")
+        .expect("ingestion task joins");
+    assert_eq!(response.status(), StatusCode::OK);
+    let after = timer_ingestion_counts(&harness).await;
+    assert_eq!(after.records, before.records + 1);
+    assert_eq!(after.revisions, before.revisions + 1);
+    assert_eq!(after.outbox, before.outbox + 1);
+    assert_eq!(after.chunk_receipts, before.chunk_receipts + 1);
+    assert_eq!(after.committed_items, before.committed_items + 1);
+    assert_eq!(after.generations, before.generations + 1);
+    assert_eq!(after.current_markers, before.current_markers + 1);
+    let run = harness
+        .read_run_for(&claims, "services", &run_id.to_string())
+        .await;
+    assert_eq!(run["committedItems"], 1);
+    assert_eq!(run["nextChunkIndex"], 1);
+    harness.database.cleanup().await;
+}
+
+fn timer_ingestion_registry() -> registry_breg::CompiledRegistry {
+    timer_ingestion_registry_with_operations(&[
+        "create",
+        "get",
+        "list",
+        "patch",
+        "tombstone",
+        "batch",
+    ])
+}
+
+fn timer_import_ingestion_registry() -> registry_breg::CompiledRegistry {
+    timer_ingestion_registry_with_operations(&["import"])
+}
+
+fn timer_ingestion_registry_with_operations(
+    operations: &[&str],
+) -> registry_breg::CompiledRegistry {
+    let mut source: Value = registry_platform_yaml::Reader::new("registry.yaml")
+        .scan(include_bytes!(
+            "../../../products/breg/examples/future-activation/registry.yaml"
+        ))
+        .expect("public timer example is valid YAML")
+        .expect("public timer example is nonempty")
+        .to_json_value();
+    source["recordTypes"][0]["batch"] = json!({"maximumItems":3,"maximumBytes":8192});
+    source["recordTypes"][0]["hooks"]
+        .as_array_mut()
+        .expect("timer fixture hooks are an array")
+        .push(json!({
+            "id":"service-created-v1",
+            "phase":"after",
+            "trigger":"created",
+            "projection":["status","activates-at"]
+        }));
+    source["accessProfiles"][0]["id"] = json!("operator");
+    source["accessProfiles"][0]["requiredScopes"] = json!("unrestricted");
+    source["accessProfiles"][0]["requiredPurposes"] = json!(["case-management"]);
+    source["accessProfiles"][0]["permissions"]["records"][0]["operations"] = json!(operations);
+    let bytes = serde_json::to_vec(&source).expect("timer ingestion fixture serializes");
+    let project = parse_project_json(&bytes).expect("timer ingestion fixture parses");
+    compile_project(&project, &[], CompileProfile::Authoring)
+        .expect("timer ingestion fixture compiles")
+}
+
+fn timer_ingestion_items(prefix: &str, count: usize) -> Vec<Value> {
+    (0..count)
+        .map(|index| {
+            json!({"operation":"create","data":{
+                "status":"scheduled",
+                "activatesAt":"2100-01-01T00:00:00Z",
+                "activationNotAfter":"2100-01-02T00:00:00Z",
+                "activationRevision":format!("00000000-0000-4000-8000-{:012}", index + 1),
+                "paused":false,
+                "description":format!("{prefix}-{index}"),
+                "jurisdiction":"zone-a"
+            }})
+        })
+        .collect()
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct TimerIngestionCounts {
+    records: i64,
+    revisions: i64,
+    outbox: i64,
+    chunk_receipts: i64,
+    committed_items: i64,
+    generations: i64,
+    current_markers: i64,
+}
+
+async fn timer_ingestion_counts(harness: &IngestionHarness) -> TimerIngestionCounts {
+    let table = &harness.registry.entities()["service"].physical_table;
+    let row = harness
+        .database
+        .admin
+        .query_one(
+            &format!(
+                "SELECT
+                   (SELECT count(*) FROM registry_data.\"{table}\"),
+                   (SELECT count(*) FROM registry_internal.registry_revisions),
+                   (SELECT count(*) FROM registry_internal.registry_outbox),
+                   (SELECT count(*) FROM registry_internal.registry_ingestion_run_chunks),
+                   (SELECT coalesce(sum(committed_items),0)::bigint FROM registry_internal.registry_ingestion_runs),
+                   (SELECT count(*) FROM registry_internal.registry_record_timer_generations),
+                   (SELECT count(*) FROM registry_internal.registry_record_timer_current)"
+            ),
+            &[],
+        )
+        .await
+        .expect("administrator inspects ingestion Record and timer state");
+    TimerIngestionCounts {
+        records: row.get(0),
+        revisions: row.get(1),
+        outbox: row.get(2),
+        chunk_receipts: row.get(3),
+        committed_items: row.get(4),
+        generations: row.get(5),
+        current_markers: row.get(6),
+    }
+}
+
 /// A cancellation the service refuses after its request entry was accepted
 /// still closes that request with a response entry under the same
 /// correlation.
@@ -4308,6 +4746,29 @@ impl IngestionHarness {
         .await
     }
 
+    fn import_operator(&self) -> ImportAuthorityOperatorService {
+        ImportAuthorityOperatorService::new_for_test(
+            self.identity.clone(),
+            ExpectedManagedCatalog::compiled(&self.registry),
+            self.lock_key,
+            self.database.migration_config.clone(),
+            self.database.migration_role.clone(),
+            self.database.runtime_role.clone(),
+            self.database.audit(self.audit_profile.clone()),
+            self.registry.clone(),
+        )
+    }
+
+    async fn import_authority(&self, authority_id: Uuid) -> ImportAuthority {
+        self.import_operator()
+            .list()
+            .await
+            .expect("operator lists timer import authorities")
+            .into_iter()
+            .find(|authority| authority.authority_id == authority_id)
+            .expect("the timer import authority remains observable")
+    }
+
     /// Rebuild the HTTP surface from the same database under another audit
     /// hash key, as a restarted process after an `audit.hashKeyRef` rotation
     /// would.
@@ -4461,9 +4922,18 @@ impl IngestionHarness {
     }
 
     async fn read_run(&self, claims: &VerifiedRequestClaims, run_id: &str) -> Value {
+        self.read_run_for(claims, "widgets", run_id).await
+    }
+
+    async fn read_run_for(
+        &self,
+        claims: &VerifiedRequestClaims,
+        route: &str,
+        run_id: &str,
+    ) -> Value {
         let response = self
             .get_json(
-                &format!("/v1/records/widgets/ingestion-runs/{}", run_id),
+                &format!("/v1/records/{route}/ingestion-runs/{run_id}"),
                 claims,
             )
             .await;

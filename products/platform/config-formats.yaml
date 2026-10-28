@@ -906,17 +906,17 @@ formats:
     audience: generated
     stability: promised
     current:
-      apiVersion: id.registrystack.org/formats/breg/access-explanation/v1alpha7
+      apiVersion: id.registrystack.org/formats/breg/access-explanation/v1alpha8
       kind: BRegAccessExplanation
       checkedBy:
         file: crates/registry-bregctl/src/lib.rs
         symbol: ACCESS_EXPLANATION
     target:
-      apiVersion: id.registrystack.org/formats/breg/access-explanation/v1alpha7
+      apiVersion: id.registrystack.org/formats/breg/access-explanation/v1alpha8
       kind: BRegAccessExplanation
     schema:
       path: products/breg/contracts/explain/AccessExplanation.schema.json
-      id: https://id.registrystack.org/schemas/breg/access-explanation/access-explanation.v1alpha7.schema.json
+      id: https://id.registrystack.org/schemas/breg/access-explanation/access-explanation.v1alpha8.schema.json
       origin: hand-written
       differentialTest: crates/registry-bregctl/tests/explain_contract.rs
     reader: none

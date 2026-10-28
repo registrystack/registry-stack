@@ -238,7 +238,7 @@ pub struct CompiledStatisticalReleases {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct CompiledSourceRelation {
-    #[serde(rename = "recordType")]
+    #[serde(rename = "recordType", alias = "entityId")]
     pub entity_id: String,
     pub sql_name: String,
     pub stored_fields: Vec<String>,
@@ -358,6 +358,21 @@ pub struct CompiledActionInventory {
 impl CompiledActionInventory {
     pub fn is_empty(&self) -> bool {
         self.actions.is_empty() && self.routes.is_empty() && self.access.is_empty()
+    }
+
+    /// Actions with a compiled public route and matching access entry.
+    /// Governed internal Actions remain in `actions` for inspection and
+    /// trusted execution, but are not callable client contracts.
+    pub fn public_actions(&self) -> impl Iterator<Item = &CompiledAction> {
+        self.actions.iter().filter(|action| {
+            self.routes.iter().any(|route| {
+                route.action_id == action.id
+                    && self
+                        .access
+                        .iter()
+                        .any(|access| access.route_id == route.id && access.action_id == action.id)
+            })
+        })
     }
 }
 
@@ -946,6 +961,9 @@ pub struct CompiledEntity {
     pub derived_relations: BTreeMap<String, CompiledDerivedRelation>,
     pub source_relation: CompiledSourceRelation,
     pub selector_profiles: BTreeMap<String, CompiledSelectorProfile>,
+    /// Root-enabled autonomous timers keyed by their stable identifier.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub timers: BTreeMap<String, CompiledTimer>,
     pub read_paths: BTreeMap<String, CompiledReadPath>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub relationships: BTreeMap<String, CompiledRelationship>,
@@ -1187,6 +1205,8 @@ pub struct CompiledEntityModuleOrigins {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub selector_profiles: BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub timers: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub read_paths: BTreeMap<String, String>,
 }
 
@@ -1199,8 +1219,100 @@ impl CompiledEntityModuleOrigins {
             && self.indexes.is_empty()
             && self.access_profiles.is_empty()
             && self.selector_profiles.is_empty()
+            && self.timers.is_empty()
             && self.read_paths.is_empty()
     }
+}
+
+/// One root-enabled Record timer with its complete current-policy authority.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CompiledTimer {
+    #[serde(rename = "recordType")]
+    pub record_type: String,
+    pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_module: Option<String>,
+    pub at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub not_after: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rearm_on: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub when: Option<CompiledTimerPredicate>,
+    pub invoke: String,
+    pub input: BTreeMap<String, CompiledTimerInput>,
+    /// Fields whose material tuple creates, supersedes, or cancels a generation.
+    pub control_fields: BTreeSet<String>,
+    /// Current fields that hold or release an unfinished generation without
+    /// changing its business identity.
+    pub predicate_fields: BTreeSet<String>,
+    /// Current stored facts whose values shape a pending execution without rearming it.
+    pub effect_input_fields: BTreeSet<String>,
+    pub action_revision: String,
+    pub system_grant: CompiledSystemApplyGrant,
+    /// Compiled delivery identifiers whose definitions are covered by this
+    /// timer revision because the invoked Action may produce their trigger.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub event_deliveries: Vec<String>,
+    pub definition_revision: String,
+}
+
+/// Typed conjunction over the locked current anchor image.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CompiledTimerPredicate {
+    pub equals: BTreeMap<String, serde_json::Value>,
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub timestamp_fields: BTreeSet<String>,
+}
+
+impl CompiledTimerPredicate {
+    /// A missing or unequal current field holds the same pending generation.
+    #[must_use]
+    pub fn matches(&self, record: &serde_json::Map<String, serde_json::Value>) -> bool {
+        self.equals.iter().all(|(field, expected)| {
+            let Some(actual) = record.get(field) else {
+                return false;
+            };
+            if !self.timestamp_fields.contains(field) {
+                return actual == expected;
+            }
+            let (Some(actual), Some(expected)) = (actual.as_str(), expected.as_str()) else {
+                return false;
+            };
+            match (
+                crate::contract::postgres_timestamp_micros(actual),
+                crate::contract::postgres_timestamp_micros(expected),
+            ) {
+                (Some(actual), Some(expected)) => actual == expected,
+                _ => false,
+            }
+        })
+    }
+}
+
+/// One complete value mapping into an ordinary Action input.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+pub enum CompiledTimerInput {
+    RecordId,
+    Field { field: String },
+    Timer { value: CompiledTimerValue },
+    Literal { value: serde_json::Value },
+}
+
+/// Runtime-owned facts supplied by the timer executor.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CompiledTimerValue {
+    OccurrenceId,
+    DueAt,
 }
 
 /// Governed catalogue projection with every resource reference resolved once.
@@ -1304,7 +1416,7 @@ pub enum HttpMethod {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct CompiledRoute {
     pub id: String,
-    #[serde(rename = "recordType")]
+    #[serde(rename = "recordType", alias = "entityId")]
     pub entity_id: String,
     pub method: HttpMethod,
     pub path: String,
@@ -1499,7 +1611,7 @@ pub enum CompiledRevisionKind {
 pub struct CompiledAccessEntry {
     #[serde(default)]
     pub route_id: String,
-    #[serde(rename = "recordType")]
+    #[serde(rename = "recordType", alias = "entityId")]
     pub entity_id: String,
     pub operation: Operation,
     pub profile_ids: BTreeSet<String>,
@@ -1611,7 +1723,7 @@ pub enum CompiledQueryTemporalSemantics {
 pub struct CompiledQueryOperation {
     pub id: String,
     pub route_id: String,
-    #[serde(rename = "recordType")]
+    #[serde(rename = "recordType", alias = "entityId")]
     pub entity_id: String,
     pub profile_id: String,
     pub kind: CompiledQueryKind,
@@ -1849,6 +1961,16 @@ impl CompiledRegistry {
 
     pub fn entities(&self) -> &BTreeMap<String, CompiledEntity> {
         &self.entities
+    }
+
+    /// Every enabled timer in stable Record-type and timer-id order.
+    pub fn timers(&self) -> impl Iterator<Item = (&str, &CompiledTimer)> {
+        self.entities.iter().flat_map(|(record_type, entity)| {
+            entity
+                .timers
+                .values()
+                .map(move |timer| (record_type.as_str(), timer))
+        })
     }
 
     pub fn statistical_datasets(&self) -> &BTreeMap<String, CompiledStatisticalDataset> {

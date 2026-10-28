@@ -604,7 +604,7 @@ impl ImmediateActionTargetBinding {
         validate_required_context_value(&self.action_id)?;
         validate_sha256_fingerprint(&self.contract_fingerprint)?;
         validate_required_context_value(&self.active_package_revision)?;
-        if self.effect_ids.is_empty()
+        if (self.effect_ids.is_empty() && self.operation != Operation::Get)
             || self.effect_ids.len() > MAX_TARGET_FIELDS
             || self
                 .effect_ids
@@ -618,7 +618,7 @@ impl ImmediateActionTargetBinding {
             return Err(invalid_context());
         }
         if self.expected_revision.is_some_and(|revision| revision <= 0)
-            || self.fields.is_empty()
+            || (self.fields.is_empty() && !(self.operation == Operation::Get && self.lock_only))
             || self.fields.len() > MAX_TARGET_FIELDS
             || self
                 .fields
@@ -648,7 +648,23 @@ pub(crate) struct ImmediateActionTargetContext {
     lock_only: bool,
     application_id: Option<Uuid>,
     target_row_boundaries: Vec<RowBoundaryContext>,
+    timer: Option<TimerActionTargetAuthority>,
     canonical_context: String,
+}
+
+#[derive(Clone, Eq, PartialEq)]
+struct TimerActionTargetAuthority {
+    timer_id: String,
+    target_input_id: Option<String>,
+    occurrence_id: Uuid,
+    anchor_record_id: Uuid,
+    claim_token: Uuid,
+    claim_owner_id: Uuid,
+    claim_epoch: i64,
+    control_epoch: i64,
+    instance_epoch: i64,
+    activation_id: Uuid,
+    system_grant_revision: String,
 }
 
 impl ImmediateActionTargetContext {
@@ -722,6 +738,243 @@ impl ImmediateActionTargetContext {
             lock_only: binding.lock_only,
             application_id: binding.application_id,
             target_row_boundaries: target_boundaries,
+            timer: None,
+            canonical_context: String::new(),
+        };
+        context.canonical_context = Self::canonicalize(&context)?;
+        context.validate()?;
+        Ok(context)
+    }
+
+    // Timer authority is an exact conjunction of claim and registry fences;
+    // keep those inputs explicit at construction.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn for_timer_effect(
+        registry: &CompiledRegistry,
+        timer: &crate::model::CompiledTimer,
+        occurrence_id: Uuid,
+        anchor_record_id: Uuid,
+        claim_token: Uuid,
+        claim_owner_id: Uuid,
+        claim_epoch: i64,
+        control_epoch: i64,
+        instance_epoch: i64,
+        activation_id: Uuid,
+        binding: ImmediateActionTargetBinding,
+    ) -> Result<Self> {
+        binding.validate_basic()?;
+        if occurrence_id.is_nil()
+            || anchor_record_id.is_nil()
+            || claim_token.is_nil()
+            || claim_owner_id.is_nil()
+            || claim_epoch < 1
+            || activation_id.is_nil()
+            || control_epoch < 1
+            || instance_epoch < 1
+            || timer.id.is_empty()
+            || timer.invoke != binding.action_id
+            || timer.action_revision != binding.contract_fingerprint
+            || timer.system_grant.action_id != binding.action_id
+            || timer.system_grant.action_revision != binding.contract_fingerprint
+        {
+            return Err(invalid_context());
+        }
+        let action = registry
+            .actions()
+            .actions
+            .iter()
+            .find(|action| {
+                action.id == binding.action_id
+                    && action.definition_revision == binding.contract_fingerprint
+            })
+            .ok_or_else(invalid_context)?;
+        let mut effects = Vec::with_capacity(binding.effect_ids.len());
+        for effect_id in &binding.effect_ids {
+            effects.push(
+                action
+                    .effects
+                    .iter()
+                    .find(|effect| effect.id == *effect_id)
+                    .ok_or_else(invalid_context)?,
+            );
+        }
+        validate_action_effect_binding(registry, &effects, &binding)?;
+        if binding.application_id != Some(occurrence_id) {
+            return Err(invalid_context());
+        }
+        match binding.operation {
+            Operation::Patch
+                if binding.target_entity_id != timer.record_type
+                    || binding.target_record_id != anchor_record_id =>
+            {
+                return Err(invalid_context());
+            }
+            Operation::Create
+                if effects.len() != 1
+                    || binding.target_record_id
+                        != crate::mutation::timer_create_target_id(
+                            occurrence_id,
+                            &action.definition_revision,
+                            &effects[0].id,
+                            &effects[0].target.entity_id,
+                        ) =>
+            {
+                return Err(invalid_context());
+            }
+            _ => {}
+        }
+        if !timer.system_grant.targets.iter().any(|target| {
+            target.entity_id == binding.target_entity_id
+                && target.operation == binding.operation
+                && binding.fields.is_subset(&target.fields)
+        }) {
+            return Err(invalid_context());
+        }
+        let mut context = Self {
+            action_id: binding.action_id,
+            contract_fingerprint: binding.contract_fingerprint,
+            active_package_revision: binding.active_package_revision,
+            selected_profile: crate::mutation::TIMER_ACCESS_PROFILE.to_owned(),
+            principal: crate::mutation::TIMER_PRINCIPAL.to_owned(),
+            purpose: None,
+            effect_ids: binding.effect_ids,
+            target_entity_id: binding.target_entity_id,
+            target_record_id: binding.target_record_id,
+            operation: binding.operation,
+            fields: binding.fields,
+            expected_revision: binding.expected_revision,
+            lock_only: binding.lock_only,
+            application_id: binding.application_id,
+            target_row_boundaries: Vec::new(),
+            timer: Some(TimerActionTargetAuthority {
+                timer_id: timer.id.clone(),
+                target_input_id: None,
+                occurrence_id,
+                anchor_record_id,
+                claim_token,
+                claim_owner_id,
+                claim_epoch,
+                control_epoch,
+                instance_epoch,
+                activation_id,
+                system_grant_revision: timer.system_grant.revision.clone(),
+            }),
+            canonical_context: String::new(),
+        };
+        context.canonical_context = Self::canonicalize(&context)?;
+        context.validate()?;
+        Ok(context)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn for_timer_read(
+        registry: &CompiledRegistry,
+        timer: &crate::model::CompiledTimer,
+        target_input_id: Option<&str>,
+        occurrence_id: Uuid,
+        anchor_record_id: Uuid,
+        claim_token: Uuid,
+        claim_owner_id: Uuid,
+        claim_epoch: i64,
+        control_epoch: i64,
+        instance_epoch: i64,
+        activation_id: Uuid,
+        binding: ImmediateActionTargetBinding,
+    ) -> Result<Self> {
+        binding.validate_basic()?;
+        let is_anchor = target_input_id.is_none()
+            && binding.target_entity_id == timer.record_type
+            && binding.target_record_id == anchor_record_id;
+        if binding.operation != Operation::Get
+            || !binding.effect_ids.is_empty()
+            || (!is_anchor && target_input_id.is_none())
+            || !binding.lock_only
+            || binding.expected_revision.is_some()
+            || occurrence_id.is_nil()
+            || anchor_record_id.is_nil()
+            || claim_token.is_nil()
+            || claim_owner_id.is_nil()
+            || claim_epoch < 1
+            || activation_id.is_nil()
+            || control_epoch < 1
+            || instance_epoch < 1
+            || timer.invoke != binding.action_id
+            || timer.action_revision != binding.contract_fingerprint
+        {
+            return Err(invalid_context());
+        }
+        let action = registry
+            .actions()
+            .actions
+            .iter()
+            .find(|action| {
+                action.id == binding.action_id
+                    && action.definition_revision == binding.contract_fingerprint
+            })
+            .ok_or_else(invalid_context)?;
+        let expected_fields = if let Some(input_id) = target_input_id {
+            validate_required_context_value(input_id)?;
+            if !timer.input.contains_key(input_id) {
+                return Err(invalid_context());
+            }
+            action
+                .target_uses
+                .iter()
+                .find(|target| {
+                    target.entity_id == binding.target_entity_id
+                        && target.operation == Operation::Get
+                        && matches!(
+                            &target.source,
+                            CompiledActionTargetUseSource::Input { input } if input == input_id
+                        )
+                })
+                .map(|target| target.fields.clone())
+                .ok_or_else(invalid_context)?
+        } else {
+            let mut fields = timer.control_fields.clone();
+            fields.extend(timer.predicate_fields.iter().cloned());
+            fields.extend(timer.effect_input_fields.iter().cloned());
+            fields
+        };
+        if action.id != timer.system_grant.action_id
+            || !timer.system_grant.targets.iter().any(|target| {
+                target.entity_id == binding.target_entity_id
+                    && target.operation == Operation::Get
+                    && binding.fields == expected_fields
+                    && binding.fields.is_subset(&target.read_fields)
+            })
+        {
+            return Err(invalid_context());
+        }
+        let mut context = Self {
+            action_id: binding.action_id,
+            contract_fingerprint: binding.contract_fingerprint,
+            active_package_revision: binding.active_package_revision,
+            selected_profile: crate::mutation::TIMER_ACCESS_PROFILE.to_owned(),
+            principal: crate::mutation::TIMER_PRINCIPAL.to_owned(),
+            purpose: None,
+            effect_ids: binding.effect_ids,
+            target_entity_id: binding.target_entity_id,
+            target_record_id: binding.target_record_id,
+            operation: binding.operation,
+            fields: binding.fields,
+            expected_revision: binding.expected_revision,
+            lock_only: binding.lock_only,
+            application_id: binding.application_id,
+            target_row_boundaries: Vec::new(),
+            timer: Some(TimerActionTargetAuthority {
+                timer_id: timer.id.clone(),
+                target_input_id: target_input_id.map(str::to_owned),
+                occurrence_id,
+                anchor_record_id,
+                claim_token,
+                claim_owner_id,
+                claim_epoch,
+                control_epoch,
+                instance_epoch,
+                activation_id,
+                system_grant_revision: timer.system_grant.revision.clone(),
+            }),
             canonical_context: String::new(),
         };
         context.canonical_context = Self::canonicalize(&context)?;
@@ -773,7 +1026,7 @@ impl ImmediateActionTargetContext {
             .as_deref()
             .map(validate_required_context_value)
             .transpose()?;
-        if self.effect_ids.is_empty()
+        if (self.effect_ids.is_empty() && self.operation != Operation::Get)
             || self.effect_ids.len() > MAX_TARGET_FIELDS
             || self
                 .effect_ids
@@ -787,7 +1040,7 @@ impl ImmediateActionTargetContext {
             return Err(invalid_context());
         }
         if self.expected_revision.is_some_and(|revision| revision <= 0)
-            || self.fields.is_empty()
+            || (self.fields.is_empty() && !(self.operation == Operation::Get && self.lock_only))
             || self.fields.len() > MAX_TARGET_FIELDS
             || self
                 .fields
@@ -798,6 +1051,30 @@ impl ImmediateActionTargetContext {
         }
         for boundary in &self.target_row_boundaries {
             validate_boundary(boundary)?;
+        }
+        if let Some(timer) = &self.timer {
+            validate_required_context_value(&timer.timer_id)?;
+            timer
+                .target_input_id
+                .as_deref()
+                .map(validate_required_context_value)
+                .transpose()?;
+            validate_sha256_fingerprint(&timer.system_grant_revision)?;
+            if timer.occurrence_id.is_nil()
+                || timer.anchor_record_id.is_nil()
+                || timer.claim_token.is_nil()
+                || timer.claim_owner_id.is_nil()
+                || timer.claim_epoch < 1
+                || timer.activation_id.is_nil()
+                || timer.control_epoch < 1
+                || timer.instance_epoch < 1
+                || self.selected_profile != crate::mutation::TIMER_ACCESS_PROFILE
+                || self.principal != crate::mutation::TIMER_PRINCIPAL
+                || self.purpose.is_some()
+                || !self.target_row_boundaries.is_empty()
+            {
+                return Err(invalid_context());
+            }
         }
         if Self::canonicalize(self)? != self.canonical_context {
             return Err(invalid_context());
@@ -820,7 +1097,7 @@ impl ImmediateActionTargetContext {
                 .collect(),
         );
         let application_id = context.application_id.map(|id| id.to_string());
-        let payload = json!({
+        let mut payload = json!({
             "version": 1,
             "actionId": context.action_id,
             "contractFingerprint": context.contract_fingerprint,
@@ -838,6 +1115,58 @@ impl ImmediateActionTargetContext {
             "lockOnly": context.lock_only,
             "targetRowBoundaries": target_boundaries,
         });
+        if let Some(timer) = &context.timer {
+            let object = payload.as_object_mut().ok_or_else(invalid_context)?;
+            object.insert("actorKind".to_owned(), Value::String("system".to_owned()));
+            object.insert(
+                "systemActor".to_owned(),
+                Value::String("record-timer".to_owned()),
+            );
+            object.insert("timerId".to_owned(), Value::String(timer.timer_id.clone()));
+            object.insert(
+                "targetInputId".to_owned(),
+                timer
+                    .target_input_id
+                    .as_ref()
+                    .map_or(Value::Null, |input| Value::String(input.clone())),
+            );
+            object.insert(
+                "occurrenceId".to_owned(),
+                Value::String(timer.occurrence_id.to_string()),
+            );
+            object.insert(
+                "anchorRecordId".to_owned(),
+                Value::String(timer.anchor_record_id.to_string()),
+            );
+            object.insert(
+                "claimToken".to_owned(),
+                Value::String(timer.claim_token.to_string()),
+            );
+            object.insert(
+                "claimOwnerId".to_owned(),
+                Value::String(timer.claim_owner_id.to_string()),
+            );
+            object.insert(
+                "claimEpoch".to_owned(),
+                Value::Number(timer.claim_epoch.into()),
+            );
+            object.insert(
+                "controlEpoch".to_owned(),
+                Value::Number(timer.control_epoch.into()),
+            );
+            object.insert(
+                "instanceEpoch".to_owned(),
+                Value::Number(timer.instance_epoch.into()),
+            );
+            object.insert(
+                "activationId".to_owned(),
+                Value::String(timer.activation_id.to_string()),
+            );
+            object.insert(
+                "systemGrantRevision".to_owned(),
+                Value::String(timer.system_grant_revision.clone()),
+            );
+        }
         let bytes = canonicalize_json(&payload).map_err(|_| invalid_context())?;
         if bytes.len() > MAX_BOUNDARY_CONTEXT_BYTES {
             return Err(invalid_context());
@@ -1528,6 +1857,7 @@ pub(crate) enum RegistryLockFailure {
 pub(crate) enum RegistryTransactionError {
     Kernel(PostgresKernelError),
     Lock(RegistryLockFailure),
+    TimerProtocolUnsupported,
 }
 
 impl From<PostgresKernelError> for RegistryTransactionError {
@@ -1553,7 +1883,10 @@ pub(crate) async fn begin_registry_transaction<'a>(
         .map_err(|error| match error {
             RegistryTransactionError::Kernel(error) => error,
             // Preserve the original refusal for every existing caller.
-            RegistryTransactionError::Lock(_) => PostgresKernelError::RegistryUnavailable,
+            RegistryTransactionError::Lock(_)
+            | RegistryTransactionError::TimerProtocolUnsupported => {
+                PostgresKernelError::RegistryUnavailable
+            }
         })
 }
 
@@ -1566,6 +1899,25 @@ pub(crate) async fn begin_registry_transaction_with_reason<'a>(
     lock_timeout: Duration,
     expected: &ExpectedRegistryIdentity,
 ) -> std::result::Result<GuardedTransaction<'a>, RegistryTransactionError> {
+    begin_registry_transaction_inner(client, lock_key, lock_timeout, expected, false).await
+}
+
+pub(crate) async fn begin_registry_read_transaction_with_reason<'a>(
+    client: &'a mut Client,
+    lock_key: RegistryLockKey,
+    lock_timeout: Duration,
+    expected: &ExpectedRegistryIdentity,
+) -> std::result::Result<GuardedTransaction<'a>, RegistryTransactionError> {
+    begin_registry_transaction_inner(client, lock_key, lock_timeout, expected, true).await
+}
+
+async fn begin_registry_transaction_inner<'a>(
+    client: &'a mut Client,
+    lock_key: RegistryLockKey,
+    lock_timeout: Duration,
+    expected: &ExpectedRegistryIdentity,
+    read_only: bool,
+) -> std::result::Result<GuardedTransaction<'a>, RegistryTransactionError> {
     expected.validate()?;
     if lock_timeout.is_zero() || lock_timeout > Duration::from_secs(30) {
         return Err(PostgresKernelError::Configuration(
@@ -1574,6 +1926,11 @@ pub(crate) async fn begin_registry_transaction_with_reason<'a>(
         .into());
     }
     let transaction = client.transaction().await?;
+    if read_only {
+        transaction
+            .batch_execute("SET TRANSACTION READ ONLY")
+            .await?;
+    }
     let timeout_millis = i32::try_from(lock_timeout.as_millis()).map_err(|_| {
         PostgresKernelError::Configuration("record lock timeout is outside PostgreSQL bounds")
     })?;
@@ -1623,6 +1980,10 @@ pub(crate) async fn begin_registry_transaction_with_reason<'a>(
         && state.get::<_, String>(4) == expected.schema_fingerprint;
     if !ready {
         return Err(PostgresKernelError::RegistryUnavailable.into());
+    }
+    let timer_protocol = super::timer::read_timer_protocol(&*transaction).await?;
+    if timer_protocol.protocol_version != super::timer::SUPPORTED_TIMER_PROTOCOL_VERSION {
+        return Err(RegistryTransactionError::TimerProtocolUnsupported);
     }
     Ok(GuardedTransaction { transaction })
 }
@@ -1692,6 +2053,44 @@ pub async fn begin_action_transaction<'a>(
                 // Gated profiles cannot invoke actions, so no action path
                 // evaluates a consent probe.
                 &"[]",
+            ],
+        )
+        .await?;
+    Ok(guarded)
+}
+
+/// Starts one internally claimed record-timer Action. The reserved system
+/// discriminator is package-owned and cannot be selected by an authored
+/// access profile.
+pub(crate) async fn begin_timer_action_transaction<'a>(
+    client: &'a mut Client,
+    lock_key: RegistryLockKey,
+    lock_timeout: Duration,
+    expected: &ExpectedRegistryIdentity,
+    claims: &ActionClaimContext,
+) -> Result<GuardedTransaction<'a>> {
+    claims.validate()?;
+    if claims.principal() != crate::mutation::TIMER_PRINCIPAL
+        || claims.access_profile() != crate::mutation::TIMER_ACCESS_PROFILE
+        || claims.purpose().is_some()
+        || claims.task_grant().is_some()
+    {
+        return Err(invalid_context());
+    }
+    let guarded = begin_registry_transaction(client, lock_key, lock_timeout, expected).await?;
+    guarded
+        .transaction()
+        .execute(
+            "SELECT set_config('registry.principal', $1, true),
+                    set_config('registry.access_profile', $2, true),
+                    set_config('registry.purpose', '', true),
+                    set_config('registry.row_boundaries', '[]', true),
+                    set_config('registry.active_package_revision', $3, true),
+                    set_config('registry.recipients', '[]', true)",
+            &[
+                &crate::mutation::TIMER_PRINCIPAL,
+                &crate::mutation::TIMER_ACCESS_PROFILE,
+                &expected.activation_id,
             ],
         )
         .await?;
@@ -2248,6 +2647,116 @@ mod tests {
         .is_err());
     }
 
+    #[test]
+    fn timer_patch_context_refuses_a_non_anchor_target() {
+        let registry = compiled_timer_context_registry();
+        let timer = &registry.entities()["service"].timers["activate"];
+        let anchor = Uuid::parse_str("00000000-0000-4000-8000-000000000101").unwrap();
+        let victim = Uuid::parse_str("00000000-0000-4000-8000-000000000102").unwrap();
+        let occurrence = Uuid::new_v4();
+        let binding = ImmediateActionTargetBinding {
+            action_id: timer.invoke.clone(),
+            contract_fingerprint: timer.action_revision.clone(),
+            active_package_revision: "00000000-0000-4000-8000-000000000201".to_owned(),
+            effect_ids: BTreeSet::from(["activated".to_owned()]),
+            target_entity_id: "service".to_owned(),
+            target_record_id: victim,
+            operation: Operation::Patch,
+            fields: BTreeSet::from(["status".to_owned()]),
+            expected_revision: Some(1),
+            lock_only: false,
+            application_id: Some(Uuid::new_v4()),
+        };
+        let mut allowed = binding.clone();
+        allowed.target_record_id = anchor;
+        allowed.application_id = Some(occurrence);
+        assert!(ImmediateActionTargetContext::for_timer_effect(
+            &registry,
+            timer,
+            occurrence,
+            anchor,
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            1,
+            1,
+            1,
+            Uuid::parse_str("00000000-0000-4000-8000-000000000201").unwrap(),
+            allowed,
+        )
+        .is_ok());
+        assert!(ImmediateActionTargetContext::for_timer_effect(
+            &registry,
+            timer,
+            occurrence,
+            anchor,
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            1,
+            1,
+            1,
+            Uuid::parse_str("00000000-0000-4000-8000-000000000201").unwrap(),
+            binding,
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn timer_create_context_accepts_only_the_occurrence_derived_target() {
+        let registry = compiled_timer_create_context_registry();
+        let timer = &registry.entities()["service"].timers["activate"];
+        let occurrence = Uuid::new_v4();
+        let anchor = Uuid::new_v4();
+        let expected = crate::mutation::timer_create_target_id(
+            occurrence,
+            &timer.action_revision,
+            "activation-log",
+            "activation-log",
+        );
+        let binding = ImmediateActionTargetBinding {
+            action_id: timer.invoke.clone(),
+            contract_fingerprint: timer.action_revision.clone(),
+            active_package_revision: "00000000-0000-4000-8000-000000000201".to_owned(),
+            effect_ids: BTreeSet::from(["activation-log".to_owned()]),
+            target_entity_id: "activation-log".to_owned(),
+            target_record_id: expected,
+            operation: Operation::Create,
+            fields: BTreeSet::from(["operation-id".to_owned()]),
+            expected_revision: None,
+            lock_only: false,
+            application_id: Some(occurrence),
+        };
+        assert!(ImmediateActionTargetContext::for_timer_effect(
+            &registry,
+            timer,
+            occurrence,
+            anchor,
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            1,
+            1,
+            1,
+            Uuid::parse_str("00000000-0000-4000-8000-000000000201").unwrap(),
+            binding.clone(),
+        )
+        .is_ok());
+        let mut arbitrary = binding;
+        arbitrary.target_record_id = Uuid::new_v4();
+        assert!(ImmediateActionTargetContext::for_timer_effect(
+            &registry,
+            timer,
+            occurrence,
+            anchor,
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            1,
+            1,
+            1,
+            Uuid::parse_str("00000000-0000-4000-8000-000000000201").unwrap(),
+            arbitrary,
+        )
+        .is_err());
+    }
+
     fn equals(field: &str, value: &str) -> RowBoundaryContext {
         RowBoundaryContext::Equals {
             field: field.to_owned(),
@@ -2412,5 +2921,63 @@ mod tests {
         .expect("action context project parses");
         compile_project(&project, &[], CompileProfile::Authoring)
             .expect("action context project compiles")
+    }
+
+    fn compiled_timer_context_registry() -> CompiledRegistry {
+        let project = parse_project_json(
+            br#"{
+              "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+              "kind":"BRegProject",
+              "project":{"id":"timer-context","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://timers.example.test"},
+              "datasets":[{"id":"services"}],
+              "recordTypes":[{
+                "id":"service","primaryDataset":"services","route":"services","mutationMode":"mutable",
+                "fields":[
+                  {"id":"status","type":"string","required":true,"maximumLength":32,"classification":"internal"},
+                  {"id":"activates-at","type":"timestamp","required":true,"classification":"internal"}
+                ],
+                "timers":[{"id":"activate","at":"activates-at","invoke":"activate-service",
+                  "input":{"service":{"fromRecordId":true}}}]
+              }],
+              "timerGrants":[{"recordType":"service","timer":"activate"}],
+              "actions":[{
+                "id":"activate-service","execution":{"mode":"immediate"},
+                "inputs":[{"id":"service","type":"reference","target":"service","required":true,"classification":"internal"}],
+                "plan":{"type":"fixed","effects":[{"id":"activated","target":{"fromInput":"service"},
+                  "operation":"patch","set":{"status":{"value":"active"}}}]}
+              }]
+            }"#,
+        )
+        .expect("timer context project parses");
+        compile_project(&project, &[], CompileProfile::Authoring)
+            .expect("timer context project compiles")
+    }
+
+    fn compiled_timer_create_context_registry() -> CompiledRegistry {
+        let project = parse_project_json(
+            br#"{
+              "apiVersion":"id.registrystack.org/formats/breg/project/v1alpha1",
+              "kind":"BRegProject",
+              "project":{"id":"timer-create-context","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://timers.example.test"},
+              "datasets":[{"id":"services"},{"id":"logs"}],
+              "recordTypes":[
+                {"id":"service","primaryDataset":"services","route":"services","mutationMode":"mutable",
+                  "fields":[{"id":"activates-at","type":"timestamp","required":true,"classification":"internal"}],
+                  "timers":[{"id":"activate","at":"activates-at","invoke":"create-activation-log",
+                    "input":{"operation-id":{"fromTimer":"occurrence-id"}}}]},
+                {"id":"activation-log","primaryDataset":"logs","route":"activation-logs","mutationMode":"mutable",
+                  "fields":[{"id":"operation-id","type":"uuid","required":true,"classification":"internal"}]}
+              ],
+              "timerGrants":[{"recordType":"service","timer":"activate"}],
+              "actions":[{"id":"create-activation-log","execution":{"mode":"immediate"},
+                "inputs":[{"id":"operation-id","type":"uuid","required":true,"classification":"internal"}],
+                "plan":{"type":"fixed","effects":[{"id":"activation-log","target":{"recordType":"activation-log"},
+                  "operation":"create","set":{"operation-id":{"fromInput":"operation-id"}}}]}}
+              ]
+            }"#,
+        )
+        .expect("timer Create context project parses");
+        compile_project(&project, &[], CompileProfile::Authoring)
+            .expect("timer Create context project compiles")
     }
 }

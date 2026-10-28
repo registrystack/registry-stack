@@ -3510,6 +3510,459 @@
           "subcommands": []
         },
         {
+          "name": "timer",
+          "invocation": "bregctl timer",
+          "about": "Inspect and operate native Record timers through bounded audited commands",
+          "long_about": null,
+          "usage": "bregctl timer [OPTIONS] <COMMAND>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--format <FORMAT>",
+              "description": "Emit the selected command's report in this format",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": [
+            {
+              "name": "status",
+              "invocation": "bregctl timer status",
+              "about": "Report bounded scheduler health and retained occurrence counts",
+              "long_about": null,
+              "usage": "bregctl timer status [OPTIONS] --runtime-config <ABSOLUTE_FILE>",
+              "arguments": [],
+              "options": [
+                {
+                  "display": "--runtime-config <ABSOLUTE_FILE>",
+                  "description": "Runtime configuration file. A symbolic link at any component of this path is refused.",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Emit the selected command's report in this format",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            },
+            {
+              "name": "list",
+              "invocation": "bregctl timer list",
+              "about": "List a bounded page of value-free retained occurrences",
+              "long_about": null,
+              "usage": "bregctl timer list [OPTIONS] --runtime-config <ABSOLUTE_FILE>",
+              "arguments": [],
+              "options": [
+                {
+                  "display": "--runtime-config <ABSOLUTE_FILE>",
+                  "description": "Runtime configuration file. A symbolic link at any component of this path is refused.",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--state <STATE>",
+                  "description": "Retained occurrence state",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [
+                    "pending",
+                    "leased",
+                    "completed",
+                    "refused",
+                    "blocked",
+                    "cancelled",
+                    "superseded",
+                    "missed"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "--record-type <ID>",
+                  "description": "Compiled Record type identifier",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--timer <ID>",
+                  "description": "Compiled timer identifier",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--after-cursor <CURSOR>",
+                  "description": "Opaque cursor returned by the previous page",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--limit <COUNT>",
+                  "description": "Page size, at most the runtime's fixed operator limit",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Emit the selected command's report in this format",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            },
+            {
+              "name": "show",
+              "invocation": "bregctl timer show",
+              "about": "Show one retained occurrence and its bounded attempt history",
+              "long_about": null,
+              "usage": "bregctl timer show [OPTIONS] --runtime-config <ABSOLUTE_FILE> --occurrence-id <UUID>",
+              "arguments": [],
+              "options": [
+                {
+                  "display": "--runtime-config <ABSOLUTE_FILE>",
+                  "description": "Runtime configuration file. A symbolic link at any component of this path is refused.",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--occurrence-id <UUID>",
+                  "description": "Exact retained occurrence identifier",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Emit the selected command's report in this format",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            },
+            {
+              "name": "retry",
+              "invocation": "bregctl timer retry",
+              "about": "Grant one exact technically blocked occurrence one additional attempt",
+              "long_about": null,
+              "usage": "bregctl timer retry [OPTIONS] --runtime-config <ABSOLUTE_FILE> --occurrence-id <UUID> --expected-attempt-count <COUNT> --operator-reference <REFERENCE> --reason <TEXT>",
+              "arguments": [],
+              "options": [
+                {
+                  "display": "--runtime-config <ABSOLUTE_FILE>",
+                  "description": "Runtime configuration file. A symbolic link at any component of this path is refused.",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--occurrence-id <UUID>",
+                  "description": "Exact retained occurrence identifier",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--expected-attempt-count <COUNT>",
+                  "description": "Cumulative executed-attempt count observed by the operator",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--operator-reference <REFERENCE>",
+                  "description": "Bounded operator change reference, retained only as a keyed hash",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--reason <TEXT>",
+                  "description": "Bounded reason, retained only as a keyed hash",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Emit the selected command's report in this format",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            },
+            {
+              "name": "pause",
+              "invocation": "bregctl timer pause",
+              "about": "Pause new timer claims under an exact control epoch",
+              "long_about": null,
+              "usage": "bregctl timer pause [OPTIONS] --runtime-config <ABSOLUTE_FILE> --expected-control-epoch <EPOCH> --operator-reference <REFERENCE> --reason <TEXT>",
+              "arguments": [],
+              "options": [
+                {
+                  "display": "--runtime-config <ABSOLUTE_FILE>",
+                  "description": "Runtime configuration file. A symbolic link at any component of this path is refused.",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--expected-control-epoch <EPOCH>",
+                  "description": "Durable control epoch observed by the operator",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--operator-reference <REFERENCE>",
+                  "description": "Bounded operator change reference, retained only as a keyed hash",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--reason <TEXT>",
+                  "description": "Bounded reason, retained only as a keyed hash",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Emit the selected command's report in this format",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            },
+            {
+              "name": "resume",
+              "invocation": "bregctl timer resume",
+              "about": "Resume timer claims, including release from adoption hold",
+              "long_about": null,
+              "usage": "bregctl timer resume [OPTIONS] --runtime-config <ABSOLUTE_FILE> --expected-control-epoch <EPOCH> --operator-reference <REFERENCE> --reason <TEXT>",
+              "arguments": [],
+              "options": [
+                {
+                  "display": "--runtime-config <ABSOLUTE_FILE>",
+                  "description": "Runtime configuration file. A symbolic link at any component of this path is refused.",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--expected-control-epoch <EPOCH>",
+                  "description": "Durable control epoch observed by the operator",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--operator-reference <REFERENCE>",
+                  "description": "Bounded operator change reference, retained only as a keyed hash",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--reason <TEXT>",
+                  "description": "Bounded reason, retained only as a keyed hash",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Emit the selected command's report in this format",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            }
+          ]
+        },
+        {
           "name": "doctor",
           "invocation": "bregctl doctor",
           "about": "Verify configured startup dependencies without binding a listener",

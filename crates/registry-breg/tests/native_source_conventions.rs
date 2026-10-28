@@ -491,6 +491,64 @@ fn hook_ids_share_one_namespace_within_each_authored_file() {
 }
 
 #[test]
+fn timer_ids_share_positioned_record_type_namespaces_within_each_authored_file() {
+    let timer = |id: &str| {
+        json!({
+            "id":id,
+            "at":"created-at",
+            "invoke":"activate-entry",
+            "input":{}
+        })
+    };
+
+    let mut project = facility();
+    project["recordTypes"][0]["timers"] = json!([timer("activate-entry"), timer("activate_entry")]);
+    let report = read_project_yaml("registry.yaml", &bytes(&project)).unwrap_err();
+    let diagnostic = report
+        .diagnostics()
+        .iter()
+        .find(|diagnostic| diagnostic.code == "breg.timer.id-collision")
+        .expect("project timers share one positioned Record type namespace");
+    assert_eq!(diagnostic.path, "/recordTypes/0/timers/1/id");
+    assert_eq!(diagnostic.related[0].path, "/recordTypes/0/timers/0/id");
+    assert_eq!(diagnostic.source.as_ref().unwrap().file, "registry.yaml");
+    assert!(diagnostic.source.as_ref().unwrap().line.is_some());
+    assert_eq!(diagnostic.related[0].file, "registry.yaml");
+    assert!(diagnostic.related[0].line.is_some());
+
+    let module = json!({
+        "apiVersion":"id.registrystack.org/formats/breg/module/v1alpha1",
+        "kind":"BRegModule",
+        "id":"local-module",
+        "version":"0.1.0",
+        "recordTypes":[{
+            "id":"entry",
+            "route":"entries",
+            "primaryDataset":"directory",
+            "mutationMode":"mutable",
+            "fields":[],
+            "timers":[timer("activate-entry")]
+        }],
+        "extendRecordTypes":[{
+            "recordType":"entry",
+            "timers":[timer("activate_entry")]
+        }]
+    });
+    let report = read_module_yaml("module.yaml", &bytes(&module)).unwrap_err();
+    let diagnostic = report
+        .diagnostics()
+        .iter()
+        .find(|diagnostic| diagnostic.code == "breg.timer.id-collision")
+        .expect("module Record and extension timers share one positioned namespace");
+    assert_eq!(diagnostic.path, "/extendRecordTypes/0/timers/0/id");
+    assert_eq!(diagnostic.related[0].path, "/recordTypes/0/timers/0/id");
+    assert_eq!(diagnostic.source.as_ref().unwrap().file, "module.yaml");
+    assert!(diagnostic.source.as_ref().unwrap().line.is_some());
+    assert_eq!(diagnostic.related[0].file, "module.yaml");
+    assert!(diagnostic.related[0].line.is_some());
+}
+
+#[test]
 fn duplicate_authored_labels_warn_with_normalized_comparison_and_locations() {
     let mut source = facility();
     source["recordTypes"][0]["display"]["label"] = json!("Café");

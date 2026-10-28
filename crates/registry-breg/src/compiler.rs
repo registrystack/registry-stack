@@ -20,13 +20,14 @@ use crate::contract::{
     GeoJsonSource, HookAuthenticationProfile, HookDeadLetterMode, HookHandlerSource, HookPhase,
     LookupValueOrigin, ManifestProjectionTextSource, ModelDisplaySource, ModuleAssetSource,
     MutationMode, Operation, PresentationSource, ReadPathPermissionSource, RegistryModule,
-    RegistryProject, SpatialBboxPermissionSource, SpatialQueryPermissionSource,
-    UniqueWhenPredicate, ValidTimeRole, DECIMAL_BOUNDS_REQUIREMENTS, MAX_ACCESS_LOG_EXEMPTIONS,
-    MAX_ACCESS_LOG_EXEMPTION_REASON_BYTES, MAX_ACCESS_LOG_RETENTION_DAYS,
-    MAX_ACCESS_LOG_SUBJECT_CHARACTERS, MAX_ACCESS_LOG_TRUSTED_INTERMEDIARIES,
-    MAX_ENCRYPTED_FIELD_PLAINTEXT_BYTES, MAX_ENCRYPTED_FIELD_STRING_CHARACTERS,
-    MAX_FIELD_LOOKUP_NORMALIZATION_STEPS, MAX_GENERATED_IDENTIFIER_COMPONENT_LENGTH,
-    MAX_GENERATED_IDENTIFIER_SCOPE_FIELDS, MAX_STRUCTURED_VALUE_BYTES,
+    RegistryProject, SpatialBboxPermissionSource, SpatialQueryPermissionSource, TimerInputSource,
+    TimerPredicateSource, TimerSource, TimerValueSource, UniqueWhenPredicate, ValidTimeRole,
+    DECIMAL_BOUNDS_REQUIREMENTS, MAX_ACCESS_LOG_EXEMPTIONS, MAX_ACCESS_LOG_EXEMPTION_REASON_BYTES,
+    MAX_ACCESS_LOG_RETENTION_DAYS, MAX_ACCESS_LOG_SUBJECT_CHARACTERS,
+    MAX_ACCESS_LOG_TRUSTED_INTERMEDIARIES, MAX_ENCRYPTED_FIELD_PLAINTEXT_BYTES,
+    MAX_ENCRYPTED_FIELD_STRING_CHARACTERS, MAX_FIELD_LOOKUP_NORMALIZATION_STEPS,
+    MAX_GENERATED_IDENTIFIER_COMPONENT_LENGTH, MAX_GENERATED_IDENTIFIER_SCOPE_FIELDS,
+    MAX_STRUCTURED_VALUE_BYTES,
 };
 use crate::derived_sql::{derived_sql_dependencies, validate_derived_sql};
 use crate::diagnostics::{CompileFailure, Diagnostic};
@@ -55,7 +56,8 @@ use crate::model::{
     CompiledQuerySortField, CompiledQueryTemporalBinding, CompiledQueryTemporalSemantics,
     CompiledReadPath, CompiledRegistry, CompiledRevisionKind, CompiledRoute,
     CompiledRouteInventory, CompiledSelectorProfile, CompiledSourceRelation,
-    CompiledSpatialQueryCapability, CompiledStoredField, CompiledTemporal, HttpMethod,
+    CompiledSpatialQueryCapability, CompiledStoredField, CompiledTemporal, CompiledTimer,
+    CompiledTimerInput, CompiledTimerPredicate, CompiledTimerValue, HttpMethod,
     MAX_REVISION_HISTORY_RECORDS,
 };
 use crate::physical_names::{
@@ -371,6 +373,10 @@ pub fn compile_project_with_assets(
     crate::membership::compile(&mut entities);
     let recipients = crate::consent::compile(project, &sources, &mut entities);
     crate::event_record::compile(&sources, &mut entities);
+    let timer_actions = sources
+        .values()
+        .flat_map(|entity| entity.timers.iter().map(|timer| timer.invoke.clone()))
+        .collect::<BTreeSet<_>>();
     let mut action_inventory = compile_immediate_actions(
         &action_sources,
         &entities,
@@ -379,6 +385,7 @@ pub fn compile_project_with_assets(
         &functions,
         &project.review_authorities,
         project,
+        &timer_actions,
     )
     .map_err(|errors| {
         stopped_compile_failure(
@@ -451,6 +458,15 @@ pub fn compile_project_with_assets(
     event_delivery_inventory
         .deliveries
         .sort_by(|left, right| left.id.cmp(&right.id));
+    compile_timers(
+        project,
+        &sources,
+        &origins.timers,
+        &mut entities,
+        &action_inventory,
+        &event_delivery_inventory,
+        &mut diagnostics,
+    );
     validate_manifest_projection(project, &entities, &mut diagnostics);
     if !diagnostics.is_empty() {
         findings.push(stopped_stage_finding(
@@ -535,6 +551,512 @@ pub fn compile_project_with_assets(
         findings,
         revision,
     ))
+}
+
+const MAX_TIMER_PREDICATE_FIELDS: usize = 16;
+
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+fn compile_timers(
+    project: &RegistryProject,
+    sources: &BTreeMap<String, EntitySource>,
+    origins: &EntityMemberOriginMap,
+    entities: &mut BTreeMap<String, CompiledEntity>,
+    actions: &crate::model::CompiledActionInventory,
+    event_deliveries: &CompiledEventDeliveryInventory,
+    errors: &mut Vec<Diagnostic>,
+) {
+    let mut grants = BTreeSet::new();
+    for grant in &project.timer_grants {
+        if !grants.insert((grant.entity.as_str(), grant.timer.as_str())) {
+            errors.push(Diagnostic::error(
+                "breg.timer.grant-duplicate",
+                "timerGrants[]",
+                "a root project cannot grant the same Record timer more than once",
+            ));
+        }
+        if !sources
+            .get(&grant.entity)
+            .is_some_and(|entity| entity.timers.iter().any(|timer| timer.id == grant.timer))
+        {
+            errors.push(Diagnostic::error(
+                "breg.timer.grant-unknown",
+                "timerGrants[]",
+                "a timer grant must name one declared Record timer",
+            ));
+        }
+    }
+
+    let mut compiled = Vec::new();
+    for source_entity in sources.values() {
+        let Some(entity) = entities.get(&source_entity.id) else {
+            continue;
+        };
+        for timer in &source_entity.timers {
+            let path = format!(
+                "recordTypes[id={}].timers[id={}]",
+                source_entity.id, timer.id
+            );
+            if !grants.contains(&(source_entity.id.as_str(), timer.id.as_str())) {
+                errors.push(Diagnostic::error(
+                    "breg.timer.grant-missing",
+                    &path,
+                    "a declared timer requires an exact root timerGrants entry",
+                ));
+                continue;
+            }
+            let Some(action) = actions
+                .actions
+                .iter()
+                .find(|action| action.id == timer.invoke)
+            else {
+                errors.push(Diagnostic::error(
+                    "breg.timer.action-unknown",
+                    format!("{path}.invoke"),
+                    "a timer must invoke one declared Action",
+                ));
+                continue;
+            };
+            if action.execution.is_proposal() {
+                errors.push(Diagnostic::error(
+                    "breg.timer.action-not-immediate",
+                    format!("{path}.invoke"),
+                    "a timer must invoke an immediate Action",
+                ));
+            }
+            if !action.permissions.is_empty() {
+                errors.push(Diagnostic::error(
+                    "breg.timer.action-public-invoke",
+                    format!("{path}.invoke"),
+                    "a timer Action cannot have a public Invoke grant",
+                ));
+            }
+            if action
+                .requires
+                .iter()
+                .any(|requirement| requirement.revision_unchanged)
+            {
+                errors.push(Diagnostic::error(
+                    "breg.timer.action-revision-guard-forbidden",
+                    format!("{path}.invoke"),
+                    "a timer Action cannot require revision: unchanged because timer execution has no caller condition token",
+                ));
+            }
+            if !action.evidence.is_empty()
+                || !action.commit_evidence.is_empty()
+                || action.consent_issuer.is_some()
+                || action
+                    .handler
+                    .as_ref()
+                    .is_some_and(|handler| !handler.capabilities.is_empty())
+            {
+                errors.push(Diagnostic::error(
+                    "breg.timer.action-capability-forbidden",
+                    format!("{path}.invoke"),
+                    "a timer Action must be local and cannot depend on Evidence, consent issuance, or remote capabilities",
+                ));
+            }
+
+            let fields = &entity.fields;
+            let Some(at) = fields.get(&timer.at) else {
+                errors.push(Diagnostic::error(
+                    "breg.timer.control-field-unknown",
+                    format!("{path}.at"),
+                    "at must name a stored timestamp field on the timer Record type",
+                ));
+                continue;
+            };
+            if at.field_type != FieldTypeSource::Timestamp {
+                errors.push(Diagnostic::error(
+                    "breg.timer.control-field-type",
+                    format!("{path}.at"),
+                    "at must name a stored timestamp field",
+                ));
+            }
+            if let Some(not_after) = &timer.not_after {
+                if not_after == &timer.at
+                    || fields
+                        .get(not_after)
+                        .is_none_or(|field| field.field_type != FieldTypeSource::Timestamp)
+                {
+                    errors.push(Diagnostic::error(
+                        "breg.timer.control-field-type",
+                        format!("{path}.notAfter"),
+                        "notAfter must name a distinct stored timestamp field",
+                    ));
+                }
+            }
+            if let Some(rearm_on) = &timer.rearm_on {
+                if fields.get(rearm_on).is_none_or(|field| {
+                    !matches!(
+                        field.field_type,
+                        FieldTypeSource::Uuid | FieldTypeSource::Int64
+                    )
+                }) {
+                    errors.push(Diagnostic::error(
+                        "breg.timer.control-field-type",
+                        format!("{path}.rearmOn"),
+                        "rearmOn must name a stored UUID or integer field",
+                    ));
+                }
+            }
+
+            let (when, predicate_fields) = compile_timer_predicate(timer, fields, &path, errors);
+            let control_fields = [
+                Some(timer.at.clone()),
+                timer.not_after.clone(),
+                timer.rearm_on.clone(),
+            ]
+            .into_iter()
+            .flatten()
+            .collect::<BTreeSet<_>>();
+            let action_inputs = action
+                .inputs
+                .iter()
+                .map(|input| (input.id.as_str(), input))
+                .collect::<BTreeMap<_, _>>();
+            let mapped_ids = timer
+                .input
+                .keys()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>();
+            let expected_ids = action_inputs.keys().copied().collect::<BTreeSet<_>>();
+            if mapped_ids != expected_ids {
+                errors.push(Diagnostic::error(
+                    "breg.timer.input-incomplete",
+                    format!("{path}.input"),
+                    "timer input must map every Action input exactly once and no others",
+                ));
+            }
+            let mut input = BTreeMap::new();
+            let mut effect_input_fields = BTreeSet::new();
+            for (id, mapping) in &timer.input {
+                let Some(action_input) = action_inputs.get(id.as_str()) else {
+                    continue;
+                };
+                if let Some(compiled_input) = compile_timer_input(
+                    mapping,
+                    action_input,
+                    entity,
+                    &mut effect_input_fields,
+                    &format!("{path}.input.{id}"),
+                    errors,
+                ) {
+                    input.insert(id.clone(), compiled_input);
+                }
+            }
+
+            for effect in &action.effects {
+                if matches!(effect.operation, Operation::Patch | Operation::Tombstone) {
+                    let crate::model::CompiledPlanTargetBinding::Existing { input: target } =
+                        &effect.target.binding
+                    else {
+                        errors.push(Diagnostic::error(
+                            "breg.timer.action-existing-target-forbidden",
+                            format!("{path}.invoke"),
+                            "a timer Action may mutate only its anchor or create bounded records",
+                        ));
+                        continue;
+                    };
+                    if effect.target.entity_id != source_entity.id
+                        || !matches!(input.get(target), Some(CompiledTimerInput::RecordId))
+                    {
+                        errors.push(Diagnostic::error(
+                            "breg.timer.action-existing-target-forbidden",
+                            format!("{path}.invoke"),
+                            "a timer Action may mutate only its anchor or create bounded records",
+                        ));
+                    }
+                }
+            }
+
+            let anchor_read_fields = control_fields
+                .iter()
+                .chain(&predicate_fields)
+                .chain(&effect_input_fields)
+                .cloned()
+                .collect();
+            let system_grant = crate::immediate_actions::system_grant_for_timer_action(
+                action,
+                entities,
+                &source_entity.id,
+                &anchor_read_fields,
+            );
+            let anchor_inputs = input
+                .iter()
+                .filter_map(|(id, mapping)| {
+                    matches!(mapping, CompiledTimerInput::RecordId).then_some(id.clone())
+                })
+                .collect::<BTreeSet<_>>();
+            crate::immediate_actions::validate_timer_plan_bounds(
+                &format!("{path}.invoke"),
+                action,
+                entities,
+                &source_entity.id,
+                &anchor_inputs,
+                &anchor_read_fields,
+                errors,
+            );
+            for target in &system_grant.targets {
+                if matches!(
+                    target.operation,
+                    Operation::Create | Operation::Patch | Operation::Tombstone
+                ) && entities
+                    .get(&target.entity_id)
+                    .is_some_and(|target_entity| {
+                        target_entity
+                            .change_control
+                            .as_ref()
+                            .is_some_and(|control| control.required_for.contains(&target.operation))
+                    })
+                {
+                    errors.push(Diagnostic::error(
+                        "breg.timer.action-proposal-policy-bypass",
+                        format!("{path}.invoke"),
+                        "a timer Action cannot mutate a target whose current policy requires a Proposal",
+                    ));
+                }
+            }
+
+            let relevant_deliveries = event_deliveries
+                .deliveries
+                .iter()
+                .filter(|delivery| {
+                    let crate::model::CompiledEventOwner::RecordType {
+                        record_type,
+                        trigger,
+                    } = &delivery.owner
+                    else {
+                        return false;
+                    };
+                    action.effects.iter().any(|effect| {
+                        effect.target.entity_id == *record_type
+                            && matches!(
+                                (effect.operation, trigger),
+                                (Operation::Create, crate::contract::EventTrigger::Created)
+                                    | (Operation::Patch, crate::contract::EventTrigger::Patched)
+                                    | (
+                                        Operation::Tombstone,
+                                        crate::contract::EventTrigger::Tombstoned
+                                    )
+                            )
+                    })
+                })
+                .collect::<Vec<_>>();
+            let event_delivery_ids = relevant_deliveries
+                .iter()
+                .map(|delivery| delivery.id.clone())
+                .collect::<Vec<_>>();
+            let revision_payload = serde_json::json!({
+                "recordType":source_entity.id,
+                "id":timer.id,
+                "at":timer.at,
+                "notAfter":timer.not_after,
+                "rearmOn":timer.rearm_on,
+                "when":when,
+                "input":input,
+                "invoke":action.id,
+                "actionRevision":action.definition_revision,
+                "systemGrant":system_grant,
+                "eventDeliveries":relevant_deliveries,
+            });
+            let definition_revision = format!(
+                "sha256:{}",
+                crate::immediate_actions::hex_lower(&Sha256::digest(
+                    canonicalize_json(&revision_payload)
+                        .expect("compiled timer revision payload canonicalizes")
+                ))
+            );
+            compiled.push((
+                source_entity.id.clone(),
+                CompiledTimer {
+                    record_type: source_entity.id.clone(),
+                    id: timer.id.clone(),
+                    source_module: origins
+                        .get(&(source_entity.id.clone(), timer.id.clone()))
+                        .cloned()
+                        .flatten(),
+                    at: timer.at.clone(),
+                    not_after: timer.not_after.clone(),
+                    rearm_on: timer.rearm_on.clone(),
+                    when,
+                    invoke: action.id.clone(),
+                    input,
+                    control_fields,
+                    predicate_fields,
+                    effect_input_fields,
+                    action_revision: action.definition_revision.clone(),
+                    system_grant,
+                    event_deliveries: event_delivery_ids,
+                    definition_revision,
+                },
+            ));
+        }
+    }
+    if errors.is_empty() {
+        for (record_type, timer) in compiled {
+            entities
+                .get_mut(&record_type)
+                .expect("compiled timer Record type exists")
+                .timers
+                .insert(timer.id.clone(), timer);
+        }
+    }
+}
+
+fn compile_timer_predicate(
+    timer: &TimerSource,
+    fields: &BTreeMap<String, CompiledField>,
+    path: &str,
+    errors: &mut Vec<Diagnostic>,
+) -> (Option<CompiledTimerPredicate>, BTreeSet<String>) {
+    let Some(TimerPredicateSource::Fields { equals }) = &timer.when else {
+        return (None, BTreeSet::new());
+    };
+    if equals.is_empty() || equals.len() > MAX_TIMER_PREDICATE_FIELDS {
+        errors.push(Diagnostic::error(
+            "breg.timer.predicate-bounds",
+            format!("{path}.when.equals"),
+            "a timer field predicate requires one through sixteen equality checks",
+        ));
+    }
+    let mut literals_are_valid = true;
+    for (field, value) in equals {
+        let value = serde_json::to_value(value).expect("timer scalar value serializes");
+        if fields
+            .get(field)
+            .is_none_or(|source| canonical_field_literal(&value, &source.field_type).is_none())
+            || canonicalize_json(&value).is_err()
+        {
+            literals_are_valid = false;
+            errors.push(Diagnostic::error(
+                "breg.timer.predicate-invalid",
+                format!("{path}.when.equals.{field}"),
+                "a timer predicate literal must match a supported stored scalar field and its canonical JSON representation",
+            ));
+        }
+    }
+    let predicate = literals_are_valid.then(|| CompiledTimerPredicate {
+        equals: equals
+            .iter()
+            .map(|(field, value)| {
+                (
+                    field.clone(),
+                    serde_json::to_value(value).expect("timer scalar value serializes"),
+                )
+            })
+            .collect(),
+        timestamp_fields: equals
+            .keys()
+            .filter(|field| {
+                fields
+                    .get(*field)
+                    .is_some_and(|field| field.field_type == FieldTypeSource::Timestamp)
+            })
+            .cloned()
+            .collect(),
+    });
+    (predicate, equals.keys().cloned().collect())
+}
+
+fn compile_timer_input(
+    mapping: &TimerInputSource,
+    action_input: &crate::model::CompiledActionInput,
+    entity: &CompiledEntity,
+    effect_input_fields: &mut BTreeSet<String>,
+    path: &str,
+    errors: &mut Vec<Diagnostic>,
+) -> Option<CompiledTimerInput> {
+    let selected = usize::from(mapping.from_record_id)
+        + usize::from(mapping.from_field.is_some())
+        + usize::from(mapping.from_timer.is_some())
+        + usize::from(mapping.value.is_some());
+    if selected != 1 {
+        errors.push(Diagnostic::error(
+            "breg.timer.input-source-invalid",
+            path,
+            "a timer input mapping must select exactly one value source",
+        ));
+        return None;
+    }
+    if mapping.from_record_id {
+        if !matches!(&action_input.field_type, FieldTypeSource::Reference { target, .. } if target == &entity.id)
+        {
+            errors.push(Diagnostic::error(
+                "breg.timer.input-type-mismatch",
+                path,
+                "fromRecordId requires a reference input targeting the timer Record type",
+            ));
+            return None;
+        }
+        return Some(CompiledTimerInput::RecordId);
+    }
+    if let Some(field) = &mapping.from_field {
+        let Some(source) = entity.fields.get(field) else {
+            errors.push(Diagnostic::error(
+                "breg.timer.input-field-unknown",
+                path,
+                "fromField must name one stored field on the timer Record type",
+            ));
+            return None;
+        };
+        if !crate::immediate_actions::compatible_field_types(
+            &source.field_type,
+            &action_input.field_type,
+        ) {
+            errors.push(Diagnostic::error(
+                "breg.timer.input-type-mismatch",
+                path,
+                "fromField must match the Action input type",
+            ));
+            return None;
+        }
+        effect_input_fields.insert(field.clone());
+        return Some(CompiledTimerInput::Field {
+            field: field.clone(),
+        });
+    }
+    if let Some(value) = mapping.from_timer {
+        let valid = matches!(
+            (value, &action_input.field_type),
+            (TimerValueSource::OccurrenceId, FieldTypeSource::Uuid)
+                | (TimerValueSource::DueAt, FieldTypeSource::Timestamp)
+        );
+        if !valid {
+            errors.push(Diagnostic::error(
+                "breg.timer.input-type-mismatch",
+                path,
+                "fromTimer occurrence-id requires UUID and due-at requires timestamp",
+            ));
+            return None;
+        }
+        return Some(CompiledTimerInput::Timer {
+            value: match value {
+                TimerValueSource::OccurrenceId => CompiledTimerValue::OccurrenceId,
+                TimerValueSource::DueAt => CompiledTimerValue::DueAt,
+            },
+        });
+    }
+    let value = mapping
+        .value
+        .as_ref()
+        .expect("one timer mapping source exists");
+    if value.is_null()
+        || !crate::data::validate_field_value(
+            crate::data::FieldValue::Json(value),
+            &action_input.field_type,
+        )
+        || canonicalize_json(value).is_err()
+    {
+        errors.push(Diagnostic::error(
+            "breg.timer.input-type-mismatch",
+            path,
+            "a timer literal must match the Action input type and its canonical JSON representation",
+        ));
+        return None;
+    }
+    Some(CompiledTimerInput::Literal {
+        value: value.clone(),
+    })
 }
 
 struct SourcedLocalId<'a> {
@@ -817,6 +1339,7 @@ struct MergedLocalIdNamespaces<'a> {
     indexes: Vec<SourcedLocalId<'a>>,
     profiles: Vec<SourcedLocalId<'a>>,
     selectors: Vec<SourcedLocalId<'a>>,
+    timers: Vec<SourcedLocalId<'a>>,
     read_paths: Vec<SourcedLocalId<'a>>,
 }
 
@@ -892,6 +1415,13 @@ fn collect_entity_local_ids<'a>(
                 source,
             }),
     );
+    namespaces
+        .timers
+        .extend(entity.timers.iter().map(|timer| SourcedLocalId {
+            id: timer.id.clone(),
+            path: format!("{path}.timers[id={}].id", timer.id),
+            source,
+        }));
     namespaces
         .read_paths
         .extend(entity.read_paths.iter().map(|read_path| SourcedLocalId {
@@ -987,6 +1517,13 @@ fn collect_extension_local_ids<'a>(
                     source: Some(source),
                 }),
         );
+    namespaces
+        .timers
+        .extend(extension.timers.iter().map(|timer| SourcedLocalId {
+            id: timer.id.clone(),
+            path: format!("{path}.timers[id={}].id", timer.id),
+            source: Some(source),
+        }));
     namespaces
         .read_paths
         .extend(extension.read_paths.iter().map(|read_path| SourcedLocalId {
@@ -1133,6 +1670,7 @@ fn validate_cross_file_local_id_collisions(
             ("breg.index.id-collision", &namespaces.indexes),
             ("breg.access-profile.id-collision", &namespaces.profiles),
             ("breg.selector-profile.id-collision", &namespaces.selectors),
+            ("breg.timer.id-collision", &namespaces.timers),
             ("breg.read-path.id-collision", &namespaces.read_paths),
         ] {
             add_cross_file_collisions(code, values, errors);
@@ -2736,6 +3274,7 @@ struct CollectedOrigins {
     indexes: EntityMemberOriginMap,
     access_profiles: EntityMemberOriginMap,
     selector_profiles: EntityMemberOriginMap,
+    timers: EntityMemberOriginMap,
     read_paths: EntityMemberOriginMap,
     hooks: HookOriginMap,
     hook_paths: HookPathMap,
@@ -2836,6 +3375,11 @@ fn insert_entity(
         origins
             .selector_profiles
             .insert((entity.id.clone(), selector.id.clone()), module.clone());
+    }
+    for timer in &entity.timers {
+        origins
+            .timers
+            .insert((entity.id.clone(), timer.id.clone()), module.clone());
     }
     for read_path in &entity.read_paths {
         origins
@@ -3092,6 +3636,21 @@ fn merge_extension(
         origins
             .selector_profiles
             .insert((entity.id.clone(), selector.id.clone()), module.clone());
+    }
+    let existing_timers = entity.timers.len();
+    merge_by_id(
+        &mut entity.timers,
+        &extension.timers,
+        |value| value.id.as_str(),
+        "breg.extension.timer-duplicate",
+        "modules[].extendRecordTypes[].timers[].id",
+        "a timer identifier is contributed more than once",
+        errors,
+    );
+    for timer in entity.timers.iter().skip(existing_timers) {
+        origins
+            .timers
+            .insert((entity.id.clone(), timer.id.clone()), module.clone());
     }
     let existing_read_paths = entity.read_paths.len();
     merge_by_id(
@@ -7174,6 +7733,7 @@ fn compile_entities(
             indexes: member_origins_for_entity(&origins.indexes, &source.id),
             access_profiles: member_origins_for_entity(&origins.access_profiles, &source.id),
             selector_profiles: member_origins_for_entity(&origins.selector_profiles, &source.id),
+            timers: member_origins_for_entity(&origins.timers, &source.id),
             read_paths: member_origins_for_entity(&origins.read_paths, &source.id),
         };
         entities.insert(
@@ -7211,6 +7771,7 @@ fn compile_entities(
                 derived_relations,
                 source_relation,
                 selector_profiles,
+                timers: BTreeMap::new(),
                 read_paths,
                 change_control: source.mutation_policy.clone().map(|change_control| {
                     CompiledChangeControl {

@@ -1,0 +1,106 @@
+# Deployment supplies PostgreSQL and authentication through the native test fixture.
+apiVersion: id.registrystack.org/formats/breg/project/v1alpha1
+kind: BRegProject
+project:
+  id: record-timer-native
+  canonicalBaseIri: https://record-timer.example.test
+  version: 0.1.0
+  defaultLanguage: en
+  display:
+    label: Record timer native fixture
+    description: A generic future activation exercised by independent BReg processes.
+
+package:
+  sourceRevision: record-timer-native-0.1.0
+
+datasets:
+  - id: services
+    display: {label: Services, description: Synthetic future-effective service records.}
+
+vocabularies:
+  - id: service-status
+    values: [scheduled, active, cancelled]
+
+recordTypes:
+  - id: service
+    route: services
+    primaryDataset: services
+    mutationMode: mutable
+    tombstone: true
+    display: {label: Service, description: A synthetic service with a future activation instant.}
+    fields:
+      - {id: status, type: vocabulary-code, vocabulary: service-status, required: true, classification: internal}
+      - {id: activates-at, type: timestamp, required: false, classification: internal}
+      - {id: activation-not-after, type: timestamp, required: false, classification: internal}
+      - {id: activation-revision, type: uuid, required: false, classification: internal}
+      - {id: paused, type: boolean, required: true, classification: internal}
+      - {id: description, type: string, required: true, minimumLength: 1, maximumLength: 200, classification: internal}
+      - {id: jurisdiction, type: string, required: true, minimumLength: 1, maximumLength: 40, classification: internal}
+    timers:
+      - id: activate
+        at: activates-at
+        notAfter: activation-not-after
+        rearmOn: activation-revision
+        when:
+          type: fields
+          equals: {status: scheduled, paused: false}
+        invoke: activate-service
+        input:
+          service: {fromRecordId: true}
+          intended-at: {fromField: activates-at}
+          operation-id: {fromTimer: occurrence-id}
+    hooks:
+      - id: service-activated-v1
+        phase: after
+        trigger: patched
+        projection: [status, activates-at]
+        when: {type: fields, changed: [status]}
+        handler: {type: url, destinationId: service-events}
+
+timerGrants:
+  - {recordType: service, timer: activate}
+
+actions:
+  - id: activate-service
+    display: {label: Activate service, description: Materialize a previously authorized future activation.}
+    execution: {mode: immediate}
+    inputs:
+      - {id: service, type: reference, target: service, required: true, classification: internal}
+      - {id: intended-at, type: timestamp, required: true, classification: internal}
+      - {id: operation-id, type: uuid, required: true, classification: internal}
+    plan:
+      type: fixed
+      effects:
+        - id: activated-service
+          target: {fromInput: service}
+          operation: patch
+          set: {status: {value: active}}
+
+accessProfiles:
+  - id: service-editor
+    default: true
+    principalClaim: registry_principal
+    requiredScopes: [registry:services:write]
+    requiredPurposes: [service-administration]
+    permissions:
+      records:
+        - recordType: service
+          operations: [create, get, list, patch, tombstone]
+          readableFields:
+            - status
+            - activates-at
+            - activation-not-after
+            - activation-revision
+            - paused
+            - description
+            - jurisdiction
+          writableFields:
+            - status
+            - activates-at
+            - activation-not-after
+            - activation-revision
+            - paused
+            - description
+            - jurisdiction
+          rowBoundaries:
+            - {field: jurisdiction, claim: jurisdiction, operator: equals}

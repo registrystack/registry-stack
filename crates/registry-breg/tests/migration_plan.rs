@@ -9,11 +9,12 @@ use registry_breg::contract::{parse_module_yaml, parse_project_yaml};
 use registry_breg::generated_ddl::DdlStatementKind;
 use registry_breg::migration_plan::{
     read_backup_binding_document, read_migration_descriptor, read_rehearsal_receipt,
-    ArtifactDigestBinding, ChunkCursorProtocol, ExternalBackupBinding, MigrationRehearsalReceipt,
-    RehearsalFixture, RehearsalRowAssertion, ReviewedChangeCover, ReviewedFieldEncryptionHistory,
-    ReviewedMigrationAssertionDescriptor, ReviewedMigrationDescriptor, ReviewedMigrationError,
-    ReviewedMigrationFile, ReviewedMigrationObject, ReviewedMigrationObjectKind,
-    ReviewedMigrationRecovery, ReviewedMigrationSource, ReviewedMigrationStepDescriptor,
+    AffectedRowBounds, ArtifactDigestBinding, ChunkCursorProtocol, ExternalBackupBinding,
+    MigrationRehearsalReceipt, RehearsalFixture, RehearsalRowAssertion, ReviewedChangeCover,
+    ReviewedFieldEncryptionHistory, ReviewedMigrationAssertionDescriptor,
+    ReviewedMigrationDescriptor, ReviewedMigrationError, ReviewedMigrationFile,
+    ReviewedMigrationObject, ReviewedMigrationObjectKind, ReviewedMigrationRecovery,
+    ReviewedMigrationSource, ReviewedMigrationStepDescriptor,
 };
 use registry_breg::package::{
     compiled_registry_change_set, inspect_package_integrity, prepare_package,
@@ -1057,6 +1058,171 @@ fn reviewed_encryption_flip_refuses_plaintext_drop_before_backfill() {
     );
 }
 
+#[test]
+fn reviewed_sql_updates_refuse_predecessor_or_successor_timer_fields_without_values() {
+    for field in [
+        "activates-at",
+        "activation-window-end",
+        "activation-revision",
+        "eligible",
+    ] {
+        for timer_side in [TimerSide::Predecessor, TimerSide::Successor] {
+            for step_kind in [
+                TimerUpdateStepKind::Transactional,
+                TimerUpdateStepKind::Chunked,
+            ] {
+                let previous_source =
+                    timer_migration_source(timer_side.predecessor_fields(), None, false);
+                let candidate_source =
+                    timer_migration_source(timer_side.successor_fields(), Some(field), false);
+                let previous = compile_source(&previous_source);
+                let candidate = compile_source(&candidate_source);
+                let artifacts = timer_field_update_artifacts(
+                    &format!("timer-{field}-{}-{}", timer_side.id(), step_kind.id()),
+                    &previous,
+                    &candidate,
+                    field,
+                    step_kind,
+                );
+                let error = prepare_reviewed_package_from_source(
+                    candidate_source,
+                    previous,
+                    vec![artifacts.source()],
+                )
+                .expect_err("reviewed SQL cannot update a timer control or predicate field");
+                let expected = ReviewedMigrationError::TimerFieldUpdate {
+                    entity_id: "asset".to_owned(),
+                    field_id: field.to_owned(),
+                };
+                assert_eq!(error, PackageError::ReviewedMigration(expected.clone()));
+                let diagnostic = expected.to_string();
+                assert!(diagnostic.contains("asset"), "{diagnostic}");
+                assert!(diagnostic.contains(field), "{diagnostic}");
+                assert!(
+                    !diagnostic.contains("migration-value-canary"),
+                    "{diagnostic}"
+                );
+                assert!(!diagnostic.contains("UPDATE"), "{diagnostic}");
+            }
+        }
+    }
+}
+
+#[test]
+fn reviewed_sql_update_preserves_unrelated_fields_and_logical_encryption() {
+    for step_kind in [
+        TimerUpdateStepKind::Transactional,
+        TimerUpdateStepKind::Chunked,
+    ] {
+        let previous_source = timer_migration_source(TimerFieldSet::Primary, None, false);
+        let candidate_source = timer_migration_source(TimerFieldSet::Primary, Some("code"), false);
+        let previous = compile_source(&previous_source);
+        let candidate = compile_source(&candidate_source);
+        let artifacts = timer_field_update_artifacts(
+            &format!("unrelated-code-{}", step_kind.id()),
+            &previous,
+            &candidate,
+            "code",
+            step_kind,
+        );
+        let sources = reviewed_timer_sources(
+            artifacts.source(),
+            timer_metadata_review_source(
+                &format!("zz-timer-code-{}", step_kind.id()),
+                &previous,
+                &candidate,
+            ),
+        );
+        prepare_reviewed_package_from_source(candidate_source, previous, sources)
+            .expect("reviewed SQL may update a field unrelated to timer control or predicates");
+    }
+
+    let previous_source = timer_migration_source(TimerFieldSet::Primary, None, false);
+    let candidate_source = timer_migration_source(TimerFieldSet::Primary, None, true);
+    let previous = compile_source(&previous_source);
+    let candidate = compile_source(&candidate_source);
+    let artifacts = encryption_flip_artifacts("timer-predicate-encryption", &previous, &candidate);
+    let sources = reviewed_timer_sources(
+        artifacts.source(),
+        timer_metadata_review_source("zz-timer-predicate-encryption", &previous, &candidate),
+    );
+    prepare_reviewed_package_from_source(candidate_source, previous, sources)
+        .expect("engine-owned logical encryption may seal a timer predicate field");
+}
+
+#[test]
+fn reviewed_alter_type_refuses_timer_fields_but_preserves_unrelated_and_non_data_ddl() {
+    let previous_source = timer_migration_source(TimerFieldSet::Primary, None, false);
+    let candidate_source = timer_migration_source(TimerFieldSet::Primary, Some("eligible"), false);
+    let previous = compile_source(&previous_source);
+    let candidate = compile_source(&candidate_source);
+    let artifacts = timer_alter_table_artifacts(
+        "timer-alter-type",
+        &previous,
+        &candidate,
+        "eligible",
+        &[TimerAlterCommand::Type("eligible")],
+    );
+    let error =
+        prepare_reviewed_package_from_source(candidate_source, previous, vec![artifacts.source()])
+            .expect_err("ALTER COLUMN TYPE cannot rewrite a timer predicate field");
+    let expected = ReviewedMigrationError::TimerFieldUpdate {
+        entity_id: "asset".to_owned(),
+        field_id: "eligible".to_owned(),
+    };
+    assert_eq!(error, PackageError::ReviewedMigration(expected.clone()));
+    let diagnostic = expected.to_string();
+    assert!(diagnostic.contains("asset"), "{diagnostic}");
+    assert!(diagnostic.contains("eligible"), "{diagnostic}");
+    assert!(
+        !diagnostic.contains("migration-value-canary"),
+        "{diagnostic}"
+    );
+
+    let previous_source = timer_migration_source(TimerFieldSet::Primary, None, false);
+    let candidate_source = timer_migration_source(TimerFieldSet::Primary, Some("code"), false);
+    let previous = compile_source(&previous_source);
+    let candidate = compile_source(&candidate_source);
+    let artifacts = timer_alter_table_artifacts(
+        "unrelated-alter-type",
+        &previous,
+        &candidate,
+        "code",
+        &[TimerAlterCommand::Type("code")],
+    );
+    let sources = reviewed_timer_sources(
+        artifacts.source(),
+        timer_metadata_review_source("zz-unrelated-alter-type", &previous, &candidate),
+    );
+    prepare_reviewed_package_from_source(candidate_source, previous, sources)
+        .expect("ALTER COLUMN TYPE may rewrite a field unrelated to timer policy");
+
+    let previous_source = timer_migration_source(TimerFieldSet::Primary, None, false);
+    let candidate_source = timer_migration_source_with_required_fields(
+        TimerFieldSet::Primary,
+        &["code", "eligible"],
+        false,
+    );
+    let previous = compile_source(&previous_source);
+    let candidate = compile_source(&candidate_source);
+    let artifacts = timer_alter_table_artifacts(
+        "mixed-alter-table",
+        &previous,
+        &candidate,
+        "eligible",
+        &[
+            TimerAlterCommand::SetNotNull("eligible"),
+            TimerAlterCommand::Type("code"),
+        ],
+    );
+    let sources = reviewed_timer_sources(
+        artifacts.source(),
+        timer_metadata_review_source("zz-mixed-alter-table", &previous, &candidate),
+    );
+    prepare_reviewed_package_from_source(candidate_source, previous, sources)
+        .expect("an unrelated type rewrite does not turn timer-field non-data DDL into a rewrite");
+}
+
 fn statement<'a>(
     statements: &'a [registry_breg::generated_ddl::DdlStatement],
     id: &str,
@@ -1187,6 +1353,247 @@ impl StepPath for ReviewedMigrationStepDescriptor {
             | Self::FieldEncryptionBackfill { objects, .. } => objects,
         }
     }
+}
+
+fn timer_field_update_artifacts(
+    id: &str,
+    previous: &CompiledRegistry,
+    candidate: &CompiledRegistry,
+    field_id: &str,
+    step_kind: TimerUpdateStepKind,
+) -> ReviewedArtifacts {
+    let change_set = compiled_registry_change_set(previous, candidate, PRIOR_REVISION);
+    let change = change_set
+        .changes
+        .iter()
+        .find(|change| {
+            change.code == CompiledRegistryChangeCode::FieldRequirednessChanged
+                && change.target.entity_id.as_deref() == Some("asset")
+                && change.target.member_id.as_deref() == Some(field_id)
+        })
+        .unwrap_or_else(|| panic!("requiredness change for asset.{field_id} is classified"));
+    let entity = &candidate.entities()["asset"];
+    let field = &entity.fields[field_id];
+    let base = format!("modules/core/migrations/{id}");
+    let step_path = format!("{base}/steps/update.sql");
+    let pre_path = format!("{base}/assertions/pre.sql");
+    let post_path = format!("{base}/assertions/post.sql");
+    let object = ReviewedMigrationObject {
+        schema: "registry_data".to_owned(),
+        table: entity.physical_table.clone(),
+        entity_id: "asset".to_owned(),
+        kind: ReviewedMigrationObjectKind::Field,
+        member_id: Some(field_id.to_owned()),
+        physical_name: field.physical_name.clone(),
+    };
+    let step = match step_kind {
+        TimerUpdateStepKind::Transactional => ReviewedMigrationStepDescriptor::TransactionalSql {
+            id: "update".to_owned(),
+            sql_path: step_path,
+            objects: vec![object],
+            affected_rows: Some(AffectedRowBounds { min: 0, max: 1_000 }),
+        },
+        TimerUpdateStepKind::Chunked => ReviewedMigrationStepDescriptor::ChunkedBackfill {
+            id: "update".to_owned(),
+            entity_id: "asset".to_owned(),
+            sql_path: step_path,
+            objects: vec![object],
+            cursor: ChunkCursorProtocol::RecordIdUuidArray,
+            chunk_size: 100,
+            max_total_rows: 1_000,
+            lock_timeout_ms: 1_000,
+            statement_timeout_ms: 10_000,
+            exact_affected_rows: true,
+        },
+    };
+    let assertion_sql = format!(
+        "SELECT pg_catalog.count(*) >= 0 FROM registry_data.{}",
+        entity.physical_table
+    )
+    .into_bytes();
+    let descriptor = ReviewedMigrationDescriptor {
+        id: id.to_owned(),
+        change_class: change.class,
+        covers: vec![ReviewedChangeCover::from(change)],
+        recovery: ReviewedMigrationRecovery::ExactTargetResume,
+        lock_timeout_ms: 10_000,
+        statement_timeout_ms: 60_000,
+        steps: vec![step],
+        pre_assertions: vec![ReviewedMigrationAssertionDescriptor {
+            id: "pre".to_owned(),
+            sql_path: pre_path,
+        }],
+        post_assertions: vec![ReviewedMigrationAssertionDescriptor {
+            id: "post".to_owned(),
+            sql_path: post_path,
+        }],
+        rehearsal_receipt_path: format!("{base}/rehearsal.json"),
+        backup_binding_path: None,
+        history: None,
+    };
+    let mut artifacts = ReviewedArtifacts {
+        descriptor,
+        receipt: receipt(vec![RehearsalRowAssertion {
+            step_id: "update".to_owned(),
+            affected_rows: 10,
+        }]),
+        step_sql: format!(
+            "UPDATE registry_data.{} SET {} = 'migration-value-canary' WHERE record_id = ANY($1::pg_catalog.uuid[])",
+            entity.physical_table, field.physical_name
+        )
+        .into_bytes(),
+        pre_sql: assertion_sql.clone(),
+        post_sql: assertion_sql,
+        fixture_bytes: b"{\"fixture\":\"representative\"}\n".to_vec(),
+    };
+    artifacts.rebind();
+    artifacts
+}
+
+#[derive(Clone, Copy)]
+enum TimerAlterCommand<'a> {
+    Type(&'a str),
+    SetNotNull(&'a str),
+}
+
+fn timer_alter_table_artifacts(
+    id: &str,
+    previous: &CompiledRegistry,
+    candidate: &CompiledRegistry,
+    covered_field: &str,
+    commands: &[TimerAlterCommand<'_>],
+) -> ReviewedArtifacts {
+    let mut artifacts = timer_field_update_artifacts(
+        id,
+        previous,
+        candidate,
+        covered_field,
+        TimerUpdateStepKind::Transactional,
+    );
+    let changes = compiled_registry_change_set(previous, candidate, PRIOR_REVISION);
+    for field_id in commands.iter().map(|command| match command {
+        TimerAlterCommand::Type(field_id) | TimerAlterCommand::SetNotNull(field_id) => *field_id,
+    }) {
+        if let Some(change) = changes.changes.iter().find(|change| {
+            change.code == CompiledRegistryChangeCode::FieldRequirednessChanged
+                && change.target.entity_id.as_deref() == Some("asset")
+                && change.target.member_id.as_deref() == Some(field_id)
+        }) {
+            let cover = ReviewedChangeCover::from(change);
+            if !artifacts.descriptor.covers.contains(&cover) {
+                artifacts.descriptor.covers.push(cover);
+            }
+        }
+    }
+    artifacts.descriptor.covers.sort();
+    let entity = &candidate.entities()["asset"];
+    let mut objects = commands
+        .iter()
+        .map(|command| {
+            let field_id = match command {
+                TimerAlterCommand::Type(field_id) | TimerAlterCommand::SetNotNull(field_id) => {
+                    *field_id
+                }
+            };
+            let field = &entity.fields[field_id];
+            ReviewedMigrationObject {
+                schema: "registry_data".to_owned(),
+                table: entity.physical_table.clone(),
+                entity_id: "asset".to_owned(),
+                kind: ReviewedMigrationObjectKind::Field,
+                member_id: Some(field_id.to_owned()),
+                physical_name: field.physical_name.clone(),
+            }
+        })
+        .collect::<Vec<_>>();
+    objects.sort();
+    objects.dedup();
+    let ReviewedMigrationStepDescriptor::TransactionalSql {
+        objects: step_objects,
+        affected_rows,
+        ..
+    } = &mut artifacts.descriptor.steps[0]
+    else {
+        panic!("the ALTER TABLE fixture starts as a transactional step");
+    };
+    *step_objects = objects;
+    *affected_rows = None;
+
+    let clauses = commands
+        .iter()
+        .map(|command| match command {
+            TimerAlterCommand::Type(field_id) => format!(
+                "ALTER COLUMN {} TYPE text USING 'migration-value-canary'::text",
+                entity.fields[*field_id].physical_name
+            ),
+            TimerAlterCommand::SetNotNull(field_id) => format!(
+                "ALTER COLUMN {} SET NOT NULL",
+                entity.fields[*field_id].physical_name
+            ),
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    artifacts.step_sql = format!(
+        "ALTER TABLE registry_data.{} {clauses}",
+        entity.physical_table
+    )
+    .into_bytes();
+    artifacts.receipt.row_assertions.clear();
+    artifacts.rebind();
+    artifacts
+}
+
+fn timer_metadata_review_source(
+    id: &str,
+    previous: &CompiledRegistry,
+    candidate: &CompiledRegistry,
+) -> ReviewedMigrationSource {
+    let change_set = compiled_registry_change_set(previous, candidate, PRIOR_REVISION);
+    let change = change_set
+        .changes
+        .iter()
+        .find(|change| change.code == CompiledRegistryChangeCode::TimerChanged)
+        .expect("the module revision change is an explicit timer policy change");
+    let base = format!("modules/core/migrations/{id}");
+    let descriptor = ReviewedMigrationDescriptor {
+        id: id.to_owned(),
+        change_class: CompiledRegistryChangeClass::AccessOrDisclosureChange,
+        covers: vec![ReviewedChangeCover::from(change)],
+        recovery: ReviewedMigrationRecovery::ExactTargetResume,
+        lock_timeout_ms: 10_000,
+        statement_timeout_ms: 60_000,
+        steps: Vec::new(),
+        pre_assertions: Vec::new(),
+        post_assertions: Vec::new(),
+        rehearsal_receipt_path: format!("{base}/rehearsal.json"),
+        backup_binding_path: None,
+        history: None,
+    };
+    let descriptor_bytes = canonical(&descriptor);
+    let mut rehearsal = receipt(Vec::new());
+    rehearsal.plan_sha256 = digest(&descriptor_bytes);
+    rehearsal.fixture_inventory.clear();
+    let receipt_path = descriptor.rehearsal_receipt_path.clone();
+    ReviewedMigrationSource {
+        module_id: "core".to_owned(),
+        descriptor: ReviewedMigrationFile {
+            path: format!("{base}/descriptor.json"),
+            bytes: descriptor_bytes,
+        },
+        files: vec![ReviewedMigrationFile {
+            path: receipt_path,
+            bytes: canonical(&rehearsal),
+        }],
+    }
+}
+
+fn reviewed_timer_sources(
+    migration: ReviewedMigrationSource,
+    timer_review: ReviewedMigrationSource,
+) -> Vec<ReviewedMigrationSource> {
+    let mut sources = vec![migration, timer_review];
+    sources.sort_by(|left, right| left.descriptor.path.cmp(&right.descriptor.path));
+    sources
 }
 
 fn backfill_artifacts(
@@ -1475,6 +1882,14 @@ fn prepare_reviewed_package(
     migrations: Vec<ReviewedMigrationSource>,
 ) -> registry_breg::package::Result<registry_breg::package::PreparedPackage> {
     let source = source_for_variant(candidate_variant);
+    prepare_reviewed_package_from_source(source, previous, migrations)
+}
+
+fn prepare_reviewed_package_from_source(
+    source: SourceFixture,
+    previous: CompiledRegistry,
+    migrations: Vec<ReviewedMigrationSource>,
+) -> registry_breg::package::Result<registry_breg::package::PreparedPackage> {
     prepare_package(PackageBuildRequest {
         from_package_digest: Some(PRIOR_REVISION.to_owned()),
         compiler_source_revision: SOURCE_REVISION.to_owned(),
@@ -1516,12 +1931,199 @@ struct SourceFixture {
     module_bytes: Vec<u8>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TimerSide {
+    Predecessor,
+    Successor,
+}
+
+impl TimerSide {
+    fn id(self) -> &'static str {
+        match self {
+            Self::Predecessor => "predecessor",
+            Self::Successor => "successor",
+        }
+    }
+
+    fn predecessor_fields(self) -> TimerFieldSet {
+        match self {
+            Self::Predecessor => TimerFieldSet::Primary,
+            Self::Successor => TimerFieldSet::Alternate,
+        }
+    }
+
+    fn successor_fields(self) -> TimerFieldSet {
+        match self {
+            Self::Predecessor => TimerFieldSet::Alternate,
+            Self::Successor => TimerFieldSet::Primary,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum TimerFieldSet {
+    Primary,
+    Alternate,
+}
+
+impl TimerFieldSet {
+    fn fields(self) -> (&'static str, &'static str, &'static str, &'static str) {
+        match self {
+            Self::Primary => (
+                "activates-at",
+                "activation-window-end",
+                "activation-revision",
+                "eligible",
+            ),
+            Self::Alternate => (
+                "alternate-activates-at",
+                "alternate-window-end",
+                "alternate-revision",
+                "alternate-eligible",
+            ),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum TimerUpdateStepKind {
+    Transactional,
+    Chunked,
+}
+
+impl TimerUpdateStepKind {
+    fn id(self) -> &'static str {
+        match self {
+            Self::Transactional => "transactional",
+            Self::Chunked => "chunked",
+        }
+    }
+}
+
 fn compile_variant(variant: Variant) -> CompiledRegistry {
     let source = source_for_variant(variant);
+    compile_source(&source)
+}
+
+fn compile_source(source: &SourceFixture) -> CompiledRegistry {
     let module = parse_module_yaml(&source.module_bytes).expect("fixture module parses");
     let project = parse_project_yaml(&source.project_bytes).expect("fixture project parses");
     compile_project(&project, &[module], CompileProfile::Production)
         .expect("fixture compiles in production")
+}
+
+fn timer_migration_source(
+    timer_fields: TimerFieldSet,
+    required_field: Option<&str>,
+    encrypt_predicate: bool,
+) -> SourceFixture {
+    timer_migration_source_with_required_fields(
+        timer_fields,
+        &required_field.into_iter().collect::<Vec<_>>(),
+        encrypt_predicate,
+    )
+}
+
+fn timer_migration_source_with_required_fields(
+    timer_fields: TimerFieldSet,
+    required_fields: &[&str],
+    encrypt_predicate: bool,
+) -> SourceFixture {
+    let base = source_for_variant(Variant::Base);
+    let mut module: serde_json::Value =
+        serde_json::from_slice(&base.module_bytes).expect("base module is JSON");
+    let asset = &mut module["recordTypes"][0];
+    asset["mutationMode"] = serde_json::json!("mutable");
+    let fields = asset["fields"]
+        .as_array_mut()
+        .expect("base Record fields are a list");
+    fields.extend([
+        serde_json::json!({"id":"activates-at","type":"timestamp","classification":"internal"}),
+        serde_json::json!({"id":"activation-window-end","type":"timestamp","classification":"internal"}),
+        serde_json::json!({"id":"activation-revision","type":"uuid","classification":"internal"}),
+        serde_json::json!({"id":"eligible","type":"boolean","classification":"internal"}),
+        serde_json::json!({"id":"alternate-activates-at","type":"timestamp","classification":"internal"}),
+        serde_json::json!({"id":"alternate-window-end","type":"timestamp","classification":"internal"}),
+        serde_json::json!({"id":"alternate-revision","type":"uuid","classification":"internal"}),
+        serde_json::json!({"id":"alternate-eligible","type":"boolean","classification":"internal"}),
+        serde_json::json!({"id":"processed","type":"boolean","classification":"internal"}),
+        if encrypt_predicate {
+            serde_json::json!({
+                "id":"secret", "type":"string", "maximumLength":256,
+                "classification":"restricted", "encrypted":true,
+                "lookup":{"normalization":["uppercase"],"unique":true}
+            })
+        } else {
+            serde_json::json!({
+                "id":"secret", "type":"string", "maximumLength":256,
+                "classification":"restricted"
+            })
+        },
+    ]);
+    for required_field in required_fields {
+        fields
+            .iter_mut()
+            .find(|field| field["id"] == *required_field)
+            .unwrap_or_else(|| panic!("timer migration field {required_field} exists"))
+            ["required"] = serde_json::json!(true);
+    }
+    asset["accessProfiles"][0]["operations"] =
+        serde_json::json!(["create", "get", "list", "patch"]);
+    asset["accessProfiles"][0]["readableFields"] = serde_json::json!([
+        "code",
+        "rank",
+        "activates-at",
+        "activation-window-end",
+        "activation-revision",
+        "eligible",
+        "alternate-activates-at",
+        "alternate-window-end",
+        "alternate-revision",
+        "alternate-eligible",
+        "processed",
+        "secret"
+    ]);
+    asset["accessProfiles"][0]["writableFields"] =
+        asset["accessProfiles"][0]["readableFields"].clone();
+    let (at, not_after, rearm_on, predicate) = timer_fields.fields();
+    let mut equals = serde_json::Map::new();
+    equals.insert(predicate.to_owned(), serde_json::json!(false));
+    equals.insert("secret".to_owned(), serde_json::json!("ready"));
+    asset["timers"] = serde_json::json!([{
+        "id":"activate",
+        "at":at,
+        "notAfter":not_after,
+        "rearmOn":rearm_on,
+        "when":{"type":"fields","equals":equals},
+        "invoke":"activate-asset",
+        "input":{"asset":{"fromRecordId":true}}
+    }]);
+    module["actions"] = serde_json::json!([{
+        "id":"activate-asset",
+        "execution":{"mode":"immediate"},
+        "inputs":[{
+            "id":"asset", "type":"reference", "target":"asset",
+            "required":true, "classification":"internal"
+        }],
+        "plan":{"type":"fixed","effects":[{
+            "id":"mark-processed",
+            "target":{"fromInput":"asset"},
+            "operation":"patch",
+            "set":{"processed":{"value":true}}
+        }]}
+    }]);
+    let module_bytes = serde_json::to_vec(&module).expect("timer module serializes");
+    let parsed_module = parse_module_yaml(&module_bytes).expect("timer module parses");
+    let digest = module_digest(&parsed_module);
+
+    let mut project: serde_json::Value =
+        serde_json::from_slice(&base.project_bytes).expect("base project is JSON");
+    project["modules"][0]["digest"] = serde_json::json!(digest);
+    project["timerGrants"] = serde_json::json!([{"recordType":"asset","timer":"activate"}]);
+    SourceFixture {
+        project_bytes: serde_json::to_vec(&project).expect("timer project serializes"),
+        module_bytes,
+    }
 }
 
 fn source_for_variant(variant: Variant) -> SourceFixture {

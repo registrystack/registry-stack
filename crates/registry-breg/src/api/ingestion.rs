@@ -547,14 +547,16 @@ async fn submit_chunk(
         // A refusal after the ingestion request entry is already answered in
         // the ingestion schema; any other refusal owes the journal its
         // single refusal entry here, so an audit outage gates it.
-        Err(refusal) if refusal.answered => ingestion_problem(refusal.error),
+        Err(refusal) if refusal.answered => {
+            ingestion_problem_for_fields(refusal.error, &surface.readable_fields)
+        }
         Err(refusal) => {
             audited_mutation_refusal(
                 mutations,
                 &binding.base,
                 &surface.context,
                 None,
-                ingestion_problem(refusal.error),
+                ingestion_problem_for_fields(refusal.error, &surface.readable_fields),
                 &correlation,
             )
             .await
@@ -666,7 +668,8 @@ fn ingestion_response(status: StatusCode, body: Value) -> Response {
 /// nothing request-derived travels in a problem.
 fn ingestion_problem(error: IngestionServiceError) -> Response {
     match error {
-        IngestionServiceError::RequestInvalid => invalid_request(),
+        IngestionServiceError::RequestInvalid
+        | IngestionServiceError::InvalidTimerWindow { .. } => invalid_request(),
         IngestionServiceError::PreconditionFailed => precondition_failed(),
         IngestionServiceError::NotFound => concealed(),
         IngestionServiceError::ProfileMismatch => {
@@ -677,6 +680,21 @@ fn ingestion_problem(error: IngestionServiceError) -> Response {
         IngestionServiceError::ChunkMismatch => fixed_problem(ProblemCode::IngestionChunkMismatch),
         IngestionServiceError::ReceiptErased => fixed_problem(ProblemCode::IngestionReceiptErased),
         IngestionServiceError::Unavailable => fixed_problem(ProblemCode::ServiceUnavailable),
+    }
+}
+
+fn ingestion_problem_for_fields(
+    error: IngestionServiceError,
+    readable_fields: &BTreeSet<String>,
+) -> Response {
+    match error {
+        IngestionServiceError::InvalidTimerWindow {
+            at_field,
+            not_after_field,
+        } if readable_fields.contains(&at_field) && readable_fields.contains(&not_after_field) => {
+            crate::correlation::timer_window_response(at_field, not_after_field)
+        }
+        error => ingestion_problem(error),
     }
 }
 

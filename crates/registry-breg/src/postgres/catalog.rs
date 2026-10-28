@@ -144,6 +144,14 @@ const MANAGED_INTERNAL_INDEXES: &[&str] = &[
     "registry_internal.registry_proposal_queue",
     "registry_internal.registry_proposal_review_completion_reconcile",
     "registry_internal.registry_proposal_review_submission_jobs",
+    super::timer::TIMER_BINDINGS_OPEN_INDEX,
+    super::timer::TIMER_DUE_INDEX,
+    super::timer::TIMER_HISTORY_INDEX,
+    super::timer::TIMER_LIVE_LEASE_INDEX,
+    super::timer::TIMER_STATE_BLOCK_INDEX,
+    super::timer::TIMER_ACTIVATION_PREVIEW_INDEX,
+    super::timer_retention::TIMER_ATTEMPT_RETENTION_INDEX,
+    super::timer_retention::TIMER_TERMINAL_RETENTION_INDEX,
     "registry_internal.registry_revision_commit_members_lookup_idx",
     "registry_internal.registry_revision_commit_members_position_idx",
     "registry_internal.registry_subject_access_log_expiry",
@@ -379,6 +387,11 @@ impl ExpectedManagedCatalog {
             Some("EXECUTE"),
             None,
         );
+        catalog.function(
+            super::timer_retention::TIMER_RETENTION_FUNCTION,
+            Some("EXECUTE"),
+            None,
+        );
         if registry.ddl().requires_postgis {
             catalog.grant_schema_spatial_bbox("registry_data");
             catalog.grant_schema_spatial_bbox("registry_context");
@@ -423,6 +436,53 @@ impl ExpectedManagedCatalog {
                 std::iter::empty::<&str>(),
                 Some((false, false)),
             );
+        }
+        catalog.table(
+            super::timer::TIMER_CONTROL_TABLE,
+            ["SELECT"],
+            std::iter::empty::<&str>(),
+            Some((false, false)),
+        );
+        for column in ["control_state", "control_epoch", "updated_at"] {
+            catalog.column_privilege(
+                super::timer::TIMER_CONTROL_TABLE,
+                column,
+                "runtime",
+                "UPDATE",
+            );
+        }
+        catalog.table(
+            super::timer::TIMER_BINDINGS_TABLE,
+            ["SELECT"],
+            std::iter::empty::<&str>(),
+            Some((false, false)),
+        );
+        catalog.table(
+            super::timer::TIMER_GENERATIONS_TABLE,
+            ["INSERT", "SELECT", "UPDATE"],
+            std::iter::empty::<&str>(),
+            Some((false, false)),
+        );
+        for table in [
+            super::timer::TIMER_CURRENT_TABLE,
+            super::timer::TIMER_ATTEMPTS_TABLE,
+        ] {
+            catalog.table(
+                table,
+                ["INSERT", "SELECT", "UPDATE"],
+                std::iter::empty::<&str>(),
+                Some((false, false)),
+            );
+        }
+        for policy in super::timer::timer_policy_descriptors(registry) {
+            catalog.policies.insert(ManagedPolicy {
+                table: policy.table,
+                name: policy.name,
+                command: policy.command.to_owned(),
+                role: ManagedPolicyRole::Runtime,
+                has_using: policy.has_using,
+                has_check: policy.has_check,
+            });
         }
         catalog.table(
             "registry_internal.registry_commit_head",
@@ -1266,6 +1326,8 @@ pub async fn initialize_compiled_registry_state_for_test(
         &expected.activation_id,
     )
     .await?;
+    super::timer::initialize_record_timer_bindings(migration, registry, &expected.activation_id)
+        .await?;
     Ok(expected)
 }
 
@@ -1398,6 +1460,14 @@ async fn verify_closed_ambient_catalog(client: &impl GenericClient) -> Result<()
                                AND NOT p.proretset AND p.prosecdef
                                AND p.provolatile = 'v'
                                AND p.prolang = (SELECT oid FROM pg_catalog.pg_language WHERE lanname = 'sql')
+                               AND p.proconfig = ARRAY['search_path=pg_catalog, registry_internal'])
+                           OR (n.nspname = 'registry_internal'
+                               AND p.proname = 'prune_record_timer_retention'
+                               AND pg_catalog.pg_get_function_identity_arguments(p.oid) = 'integer'
+                               AND p.prorettype = 'record'::regtype
+                               AND p.proretset AND p.prosecdef
+                               AND p.provolatile = 'v'
+                               AND p.prolang = (SELECT oid FROM pg_catalog.pg_language WHERE lanname = 'plpgsql')
                                AND p.proconfig = ARRAY['search_path=pg_catalog, registry_internal'])
                            OR (n.nspname = 'registry_internal'
                                AND p.proname = 'withdraw_statistical_release'

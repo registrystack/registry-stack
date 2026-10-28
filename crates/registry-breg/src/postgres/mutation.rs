@@ -21,13 +21,13 @@ use crate::correlation::RequestCorrelation;
 use crate::event_destination::ActivatedEventDestinationRegistry;
 use crate::ingestion_store::{self, IngestionAttemptOutcome, IngestionRunStatus};
 use crate::model::CompiledRegistry;
-#[cfg(feature = "postgres-test")]
-use crate::mutation::MutationFaultPoint;
 use crate::mutation::{
     valid_strong_etag, BatchMutationItem, BatchMutationRequest, IngestionChunkBinding,
     MutationBody, MutationError, MutationOutcome, MutationPlan, MutationRequest,
     MutationTransaction, PatchOperation,
 };
+#[cfg(feature = "postgres-test")]
+use crate::mutation::{MutationFaultPoint, NativeMutationCheckpoint};
 
 use super::cancellation::QueryCancellationGuard;
 use super::{
@@ -35,7 +35,7 @@ use super::{
     RegistryLockKey, RowBoundaryContext, RuntimePool,
 };
 
-const REQUEST_ACTION_TIMEOUT: Duration = Duration::from_secs(30);
+pub(super) const REQUEST_ACTION_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[cfg(feature = "postgres-test")]
 #[derive(Clone)]
@@ -105,7 +105,7 @@ pub struct IngestionRunListQuery {
 /// A refused ingestion-run call. `answered` is true when the call's refusal
 /// is already on record as the `response` of the ingestion `request` entry it
 /// wrote, so the caller must not record it again in another schema.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct IngestionRefusal {
     pub error: IngestionServiceError,
     pub answered: bool,
@@ -135,9 +135,13 @@ impl IngestionAudit {
 
 /// The closed refusal vocabulary of the ingestion-run service. It is bounded
 /// and value-free: no chunk bytes, row values, or bearer material appear.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum IngestionServiceError {
     RequestInvalid,
+    InvalidTimerWindow {
+        at_field: String,
+        not_after_field: String,
+    },
     PreconditionFailed,
     NotFound,
     ProfileMismatch,
@@ -570,7 +574,19 @@ impl PostgresRecordMutationService {
     #[must_use]
     #[doc(hidden)]
     pub fn with_fault_for_test(mut self, fault: MutationFaultPoint) -> Self {
+        self.coordinator = self.coordinator.with_fault_for_test(fault);
         self.fault = MutationFaultControl::At(fault);
+        self
+    }
+
+    #[cfg(feature = "postgres-test")]
+    #[must_use]
+    #[doc(hidden)]
+    pub fn with_native_mutation_checkpoint(
+        mut self,
+        checkpoint: Option<NativeMutationCheckpoint>,
+    ) -> Self {
+        self.coordinator = self.coordinator.with_native_mutation_checkpoint(checkpoint);
         self
     }
 
@@ -1873,6 +1889,16 @@ impl PostgresRecordMutationService {
                             Some(IngestionServiceError::ReceiptErased),
                         ),
                     },
+                    MutationError::InvalidTimerWindow {
+                        at_field,
+                        not_after_field,
+                    } => (
+                        IngestionAttemptOutcome::InvalidItem,
+                        Some(IngestionServiceError::InvalidTimerWindow {
+                            at_field,
+                            not_after_field,
+                        }),
+                    ),
                     MutationError::InvalidRequest | MutationError::InvalidRequestAt(_) => (
                         IngestionAttemptOutcome::InvalidItem,
                         Some(IngestionServiceError::RequestInvalid),
@@ -1899,7 +1925,8 @@ impl PostgresRecordMutationService {
                     | MutationError::FieldEncryptionUnavailable
                     | MutationError::ActionHandlerFailure(_)
                     | MutationError::ActionEvidenceFailure { .. }
-                    | MutationError::ActionRefusal(_) => {
+                    | MutationError::ActionRefusal(_)
+                    | MutationError::TimerGenerationUnsupported => {
                         (IngestionAttemptOutcome::Unavailable, None)
                     }
                 };

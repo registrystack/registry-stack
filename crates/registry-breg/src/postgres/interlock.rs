@@ -413,6 +413,47 @@ impl DedicatedApplyConnection {
         Ok(())
     }
 
+    /// Installs engine-owned catalog additions carried by an exact verified
+    /// package feature transition. No package-authored SQL is accepted; the
+    /// installation commits only after the target managed catalog verifies in
+    /// the same transaction.
+    pub(crate) async fn install_successor_engine_features(
+        &mut self,
+        registry: &CompiledRegistry,
+        target: &ExpectedRegistryIdentity,
+        transition: MaintenanceTransition<'_>,
+        statement_timeout: Duration,
+    ) -> Result<()> {
+        ensure_verified_package_session(self.locked, self.verified_migration_role)?;
+        target.validate()?;
+        validate_timeout(
+            statement_timeout,
+            MAX_VERIFIED_DDL_STATEMENT_TIMEOUT,
+            "verified DDL statement timeout must be between 1 millisecond and 1 hour",
+        )?;
+        let transaction = self.client.transaction().await?;
+        set_local_statement_timeout(&transaction, statement_timeout).await?;
+        let runtime_role = transition.runtime_role;
+        let verified = async {
+            reconcile_runtime_acl_in(&transaction, registry, runtime_role).await?;
+            verify_managed_catalog(
+                &transaction,
+                target,
+                transition.expected_catalog,
+                transition.migration_role,
+                runtime_role,
+            )
+            .await
+        }
+        .await;
+        if let Err(error) = verified {
+            transaction.rollback().await?;
+            return Err(error);
+        }
+        transaction.commit().await?;
+        Ok(())
+    }
+
     /// Executes the AST-validated reviewed plan and only its package-derived
     /// compiler DDL. Every durable checkpoint is committed with the exact
     /// chunk update that advances it.
@@ -1572,6 +1613,12 @@ impl DedicatedApplyConnection {
         }
         let superseded =
             activate_verified_package_in(&transaction, current, target, transition).await?;
+        super::timer::reconcile_record_timer_bindings(
+            &transaction,
+            registry,
+            &target.activation_id,
+        )
+        .await?;
         finish_proposal_activation_in(&transaction, registry, compatibility, current, target)
             .await?;
         transaction.commit().await?;
@@ -1827,6 +1874,12 @@ impl DedicatedApplyConnection {
         let transaction = self.client.transaction().await?;
         let superseded =
             activate_verified_package_in(&transaction, current, target, transition).await?;
+        super::timer::reconcile_record_timer_bindings(
+            &transaction,
+            registry,
+            &target.activation_id,
+        )
+        .await?;
         finish_proposal_activation_in(&transaction, registry, compatibility, current, target)
             .await?;
         transaction.commit().await?;
@@ -1882,6 +1935,68 @@ impl DedicatedApplyConnection {
         if changed != 1 {
             return Err(PostgresKernelError::RegistryUnavailable);
         }
+        transaction.commit().await?;
+        Ok(())
+    }
+
+    /// Test-only compiled activation seam. It retains the same catalog and
+    /// exclusive-lock checks as [`Self::activate_for_catalog`] and additionally
+    /// advances the engine-owned timer binding inventory in that transaction.
+    #[cfg(feature = "postgres-test")]
+    #[doc(hidden)]
+    pub async fn activate_compiled_for_catalog(
+        &mut self,
+        registry: &CompiledRegistry,
+        target: &ExpectedRegistryIdentity,
+        expected_catalog: &ExpectedManagedCatalog,
+        migration_role: &SqlIdentifier,
+        runtime_role: &SqlIdentifier,
+    ) -> Result<()> {
+        ensure_apply_lock(self.locked)?;
+        let transaction = self.client.transaction().await?;
+        target.validate()?;
+        reconcile_runtime_acl_in(&transaction, registry, runtime_role).await?;
+        verify_managed_catalog(
+            &transaction,
+            target,
+            expected_catalog,
+            migration_role,
+            runtime_role,
+        )
+        .await?;
+        let changed = transaction
+            .execute(
+                "UPDATE registry_internal.registry_state
+                 SET active_package_digest = $1,
+                     active_activation_id = $2,
+                     schema_fingerprint = $3,
+                     maintenance_status = 'ready',
+                     maintenance_target_package_digest = NULL,
+                     updated_at = transaction_timestamp()
+                 WHERE singleton
+                   AND package_id = $4
+                   AND database_id = $5
+                   AND maintenance_status IN ('applying', 'failed')
+                   AND maintenance_target_package_digest = $1
+                   AND active_activation_id <> $2",
+                &[
+                    &target.package_digest,
+                    &target.activation_uuid()?,
+                    &target.schema_fingerprint,
+                    &target.package_id,
+                    &target.database_id,
+                ],
+            )
+            .await?;
+        if changed != 1 {
+            return Err(PostgresKernelError::RegistryUnavailable);
+        }
+        super::timer::reconcile_record_timer_bindings(
+            &transaction,
+            registry,
+            &target.activation_id,
+        )
+        .await?;
         transaction.commit().await?;
         Ok(())
     }
@@ -2335,6 +2450,7 @@ async fn reconcile_runtime_acl_in(
             .await
             .map_err(|_| PostgresKernelError::Connection)?;
     }
+    super::timer::install_record_timer_schema(transaction, registry, runtime_role).await?;
     reconcile_compiled_runtime_acl(transaction, registry, runtime_role).await
 }
 
@@ -2540,7 +2656,9 @@ async fn execute_initial_package_ddl_in(
         )
         .await?;
     }
+    super::timer::install_record_timer_schema(transaction, registry, runtime_role).await?;
     reconcile_compiled_runtime_acl(transaction, registry, runtime_role).await?;
+    super::timer::initialize_record_timer_bindings(transaction, registry, package_revision).await?;
     retain_descriptor(transaction, registry, package_revision)
         .await
         .map_err(|_| PostgresKernelError::RegistryUnavailable)?;

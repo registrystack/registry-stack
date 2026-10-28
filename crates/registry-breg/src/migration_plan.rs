@@ -7,7 +7,8 @@
 //! single validator used while constructing and rederiving package closure.
 
 #[cfg(feature = "tooling")]
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 
 #[cfg(feature = "tooling")]
 use pg_query::protobuf::{
@@ -740,7 +741,6 @@ impl ReviewedMigrationStepDescriptor {
         }
     }
 
-    #[cfg(feature = "tooling")]
     fn objects(&self) -> &[ReviewedMigrationObject] {
         match self {
             Self::TransactionalSql { objects, .. }
@@ -957,6 +957,21 @@ impl ValidatedReviewedMigrationPlan {
             })
             .sum()
     }
+
+    pub(crate) fn reviewed_field_ids(&self) -> BTreeSet<(String, String)> {
+        self.migrations
+            .iter()
+            .flat_map(|migration| &migration.steps)
+            .flat_map(|step| step.descriptor.objects())
+            .filter(|object| object.kind == ReviewedMigrationObjectKind::Field)
+            .filter_map(|object| {
+                object
+                    .member_id
+                    .as_ref()
+                    .map(|member| (object.entity_id.clone(), member.clone()))
+            })
+            .collect()
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1019,7 +1034,7 @@ pub enum ReviewedArtifactKind {
 }
 
 #[cfg(feature = "tooling")]
-#[derive(Clone, Copy, Debug, Error, Eq, PartialEq)]
+#[derive(Clone, Debug, Error, Eq, PartialEq)]
 pub enum ReviewedMigrationError {
     #[error("the reviewed migration descriptor is invalid")]
     Descriptor,
@@ -1031,6 +1046,10 @@ pub enum ReviewedMigrationError {
     Evidence,
     #[error("the reviewed migration artifact closure is invalid")]
     Closure,
+    #[error(
+        "the reviewed migration cannot rewrite timer control or predicate field `{field_id}` on Record type `{entity_id}`"
+    )]
+    TimerFieldUpdate { entity_id: String, field_id: String },
 }
 
 #[cfg(feature = "tooling")]
@@ -1912,16 +1931,21 @@ fn validate_step_sql(
     let parsed = parse_one(sql)?;
     validate_ast_objects(&parsed, declared_tables, false)?;
     let root = root_node(&parsed)?;
-    let parsed_objects = match step {
+    let (parsed_objects, value_rewritten_objects) = match step {
         ReviewedMigrationStepDescriptor::TransactionalSql { affected_rows, .. } => {
-            let (dml, objects) = match root {
+            let (dml, objects, value_rewritten_objects) = match root {
                 PgNode::UpdateStmt(update) => {
                     validate_update_relation(update, declared_tables)?;
-                    (true, update_objects(update, bindings)?)
+                    let objects = update_objects(update, bindings)?;
+                    (true, objects.clone(), objects)
                 }
                 PgNode::AlterTableStmt(alter) => {
                     validate_alter_table(alter, declared_tables)?;
-                    (false, alter_table_objects(alter, bindings)?)
+                    (
+                        false,
+                        alter_table_objects(alter, bindings)?,
+                        alter_table_type_change_objects(alter, bindings)?,
+                    )
                 }
                 PgNode::IndexStmt(index) => {
                     if index.concurrent {
@@ -1931,18 +1955,18 @@ fn validate_step_sql(
                         index.relation.as_ref().ok_or(ReviewedMigrationError::Sql)?,
                         declared_tables,
                     )?;
-                    (false, index_objects(index, bindings)?)
+                    (false, index_objects(index, bindings)?, Vec::new())
                 }
                 PgNode::DropStmt(drop) => {
                     validate_drop_table(drop, declared_tables)?;
-                    (false, drop_table_objects(drop, bindings)?)
+                    (false, drop_table_objects(drop, bindings)?, Vec::new())
                 }
                 _ => return Err(ReviewedMigrationError::Sql),
             };
             if dml != affected_rows.is_some() {
                 return Err(ReviewedMigrationError::Sql);
             }
-            objects
+            (objects, value_rewritten_objects)
         }
         ReviewedMigrationStepDescriptor::ChunkedBackfill { entity_id, .. } => {
             if descriptor.change_class != CompiledRegistryChangeClass::DataBackfillRequired {
@@ -1964,7 +1988,8 @@ fn validate_step_sql(
                 return Err(ReviewedMigrationError::Sql);
             };
             validate_chunked_update(update, &entity.physical_table, declared_tables, &parsed)?;
-            update_objects(update, bindings)?
+            let objects = update_objects(update, bindings)?;
+            (objects.clone(), objects)
         }
         ReviewedMigrationStepDescriptor::FieldEncryptionBackfill { .. } => {
             unreachable!("the engine-executed backfill is handled before SQL parsing")
@@ -1973,11 +1998,41 @@ fn validate_step_sql(
     if parsed_objects != step.objects() {
         return Err(ReviewedMigrationError::Sql);
     }
+    validate_timer_field_updates(&value_rewritten_objects, bindings)?;
     Ok(reference_validation_tables(
         &parsed,
         step.objects(),
         bindings,
     ))
+}
+
+#[cfg(feature = "tooling")]
+fn validate_timer_field_updates(
+    objects: &[ReviewedMigrationObject],
+    bindings: &ReviewedPlanBindings<'_>,
+) -> Result<(), ReviewedMigrationError> {
+    for object in objects {
+        if object.kind != ReviewedMigrationObjectKind::Field {
+            continue;
+        }
+        let Some(field_id) = object.member_id.as_deref() else {
+            return Err(ReviewedMigrationError::Descriptor);
+        };
+        let timer_field = [bindings.prior_entities, bindings.candidate_entities]
+            .into_iter()
+            .filter_map(|entities| entities.get(&object.entity_id))
+            .flat_map(|entity| entity.timers.values())
+            .any(|timer| {
+                timer.control_fields.contains(field_id) || timer.predicate_fields.contains(field_id)
+            });
+        if timer_field {
+            return Err(ReviewedMigrationError::TimerFieldUpdate {
+                entity_id: object.entity_id.clone(),
+                field_id: field_id.to_owned(),
+            });
+        }
+    }
+    Ok(())
 }
 
 #[cfg(feature = "tooling")]
@@ -2721,6 +2776,43 @@ fn alter_table_objects(
 }
 
 #[cfg(feature = "tooling")]
+fn alter_table_type_change_objects(
+    alter: &pg_query::protobuf::AlterTableStmt,
+    bindings: &ReviewedPlanBindings<'_>,
+) -> Result<Vec<ReviewedMigrationObject>, ReviewedMigrationError> {
+    let relation = alter.relation.as_ref().ok_or(ReviewedMigrationError::Sql)?;
+    let entity_id = entity_for_table(&relation.relname, bindings)?;
+    let mut objects = Vec::new();
+    for command in &alter.cmds {
+        let Some(PgNode::AlterTableCmd(command)) = command.node.as_ref() else {
+            return Err(ReviewedMigrationError::Sql);
+        };
+        let subtype =
+            AlterTableType::try_from(command.subtype).map_err(|_| ReviewedMigrationError::Sql)?;
+        if subtype != AlterTableType::AtAlterColumnType {
+            continue;
+        }
+        let member_name = alter_table_command_member_name(command, subtype)?;
+        let member_id = member_for_physical(
+            &entity_id,
+            member_name,
+            ReviewedMigrationObjectKind::Field,
+            bindings,
+        )?;
+        objects.push(reviewed_object(
+            &relation.relname,
+            &entity_id,
+            ReviewedMigrationObjectKind::Field,
+            Some(member_id),
+            member_name,
+        ));
+    }
+    objects.sort();
+    objects.dedup();
+    Ok(objects)
+}
+
+#[cfg(feature = "tooling")]
 fn alter_table_command_member_name(
     command: &pg_query::protobuf::AlterTableCmd,
     subtype: AlterTableType,
@@ -3007,6 +3099,9 @@ fn covers_are_metadata_only(covers: &[ReviewedChangeCover]) -> bool {
                 | CompiledRegistryChangeCode::EventAdded
                 | CompiledRegistryChangeCode::EventRemoved
                 | CompiledRegistryChangeCode::EventChanged
+                | CompiledRegistryChangeCode::TimerAdded
+                | CompiledRegistryChangeCode::TimerRemoved
+                | CompiledRegistryChangeCode::TimerChanged
                 | CompiledRegistryChangeCode::ActionAdded
                 | CompiledRegistryChangeCode::ActionRemoved
                 | CompiledRegistryChangeCode::ActionChanged
@@ -3154,7 +3249,7 @@ mod tests {
     }
 
     #[test]
-    fn recipient_changes_are_metadata_only_covers() {
+    fn recipient_and_timer_changes_are_metadata_only_covers() {
         for code in [
             CompiledRegistryChangeCode::RecipientOrganizationAdded,
             CompiledRegistryChangeCode::RecipientOrganizationRemoved,
@@ -3162,6 +3257,9 @@ mod tests {
             CompiledRegistryChangeCode::RecipientGroupAdded,
             CompiledRegistryChangeCode::RecipientGroupRemoved,
             CompiledRegistryChangeCode::RecipientGroupChanged,
+            CompiledRegistryChangeCode::TimerAdded,
+            CompiledRegistryChangeCode::TimerRemoved,
+            CompiledRegistryChangeCode::TimerChanged,
         ] {
             assert!(covers_are_metadata_only(&[cover(code)]), "{code:?}");
         }

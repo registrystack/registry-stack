@@ -224,7 +224,7 @@ pub(crate) fn generate_artifacts(
         debug_assert_eq!(delivery.data_schema_artifact_path, binding.artifact_path);
         insert_json_value(&mut artifacts, &binding.artifact_path, &binding.schema)?;
     }
-    for action in &actions.actions {
+    for action in actions.public_actions() {
         insert_json_value(
             &mut artifacts,
             &format!(
@@ -305,7 +305,7 @@ pub(crate) fn generate_artifacts(
         );
     }
     let mut review_contexts = BTreeMap::new();
-    for action in &actions.actions {
+    for action in actions.public_actions() {
         if let Some(context) = crate::compiler::review_context::compile_schema_from_parts(
             registry_id,
             entities,
@@ -1122,8 +1122,7 @@ pub(crate) fn openapi_action_operation(
 pub(crate) fn public_action_metadata(actions: &CompiledActionInventory) -> Value {
     json!({
         "actions": actions
-            .actions
-            .iter()
+            .public_actions()
             .map(|action| public_action_metadata_entry(action, None))
             .collect::<Vec<_>>()
     })
@@ -1133,8 +1132,7 @@ pub(crate) fn public_action_metadata(actions: &CompiledActionInventory) -> Value
 /// as the receiving API. They describe policy without exporting its grants.
 fn action_contracts(actions: &CompiledActionInventory) -> Value {
     let entries = actions
-        .actions
-        .iter()
+        .public_actions()
         .map(|action| {
             let mut contract = json!({
                 "id": action.id,
@@ -2027,7 +2025,7 @@ fn openapi_document(input: OpenApiDocumentInput<'_>) -> Value {
     }
 
     let mut has_immediate_actions = false;
-    for action in &actions.actions {
+    for action in actions.public_actions() {
         has_immediate_actions = true;
         input_schemas.insert(
             openapi_action_input_schema_id(&action.id),
@@ -3924,6 +3922,8 @@ fn problem_schema() -> Value {
             "left": {"type": "string", "minLength": 1, "maxLength": 128},
             "right": {"type": "string", "minLength": 1, "maxLength": 128},
             "field": {"type": "string", "minLength": 1, "maxLength": 128},
+            "atField": {"type": "string", "minLength": 1, "maxLength": 128},
+            "notAfterField": {"type": "string", "minLength": 1, "maxLength": 128},
             "code": {
                 "type": "string",
                 "enum": crate::problem::ProblemCode::DOCUMENTED
@@ -3982,6 +3982,18 @@ fn problem_schema() -> Value {
             {
                 "if": {"properties": {"code": {"const": "action.handler_failed"}}},
                 "then": {"properties": {"status": {"const": 500}}}
+            },
+            {
+                "if": {"anyOf": [
+                    {"required": ["atField"]}, {"required": ["notAfterField"]}
+                ]},
+                "then": {
+                    "required": ["atField", "notAfterField"],
+                    "properties": {
+                        "code": {"const": "request.invalid"},
+                        "status": {"const": 400}
+                    }
+                }
             },
             {
                 "if": {"anyOf": [
@@ -4608,6 +4620,17 @@ mod problem_contract_tests {
         problem.as_object_mut().unwrap().remove("refusalCode");
         problem["recordValue"] = json!("must-not-be-disclosed");
         assert!(!validator.is_valid(&problem));
+
+        let mut timer_window = problem_example("400", "request.invalid", "The request is invalid.");
+        timer_window["atField"] = json!("activates-at");
+        assert!(!validator.is_valid(&timer_window));
+        timer_window["notAfterField"] = json!("activation-not-after");
+        assert!(validator.is_valid(&timer_window));
+        timer_window["code"] = json!("precondition.failed");
+        assert!(!validator.is_valid(&timer_window));
+        timer_window["code"] = json!("request.invalid");
+        timer_window["notAfterField"] = json!("");
+        assert!(!validator.is_valid(&timer_window));
     }
 }
 

@@ -113,11 +113,22 @@ fn app(
     identity: ExpectedRegistryIdentity,
     fault: Option<MutationFaultPoint>,
 ) -> axum::Router {
+    app_with_audit(database, registry, identity, fault).0
+}
+
+fn app_with_audit(
+    database: &TestDatabase,
+    registry: Arc<registry_breg::CompiledRegistry>,
+    identity: ExpectedRegistryIdentity,
+    fault: Option<MutationFaultPoint>,
+) -> (
+    axum::Router,
+    registry_breg::audit::test_support::AuditCapture,
+) {
     let pool = database.runtime_config.build_pool().unwrap();
-    let audit = registry_breg::audit::test_support::capturing(
+    let (audit, capture) = registry_breg::audit::test_support::capturing(
         AuditProfile::production_from_secret_bytes(vec![0x42; 32].into()).unwrap(),
-    )
-    .0;
+    );
     let lock = RegistryLockKey::derive(PACKAGE).unwrap();
     let cursors = Arc::new(
         CursorCodec::new(Zeroizing::new(vec![0x63; 32]), Duration::from_secs(300)).unwrap(),
@@ -148,10 +159,11 @@ fn app(
         Some(fault) => mutations.with_fault_for_test(fault),
         None => mutations,
     };
-    router(Arc::new(
+    let app = router(Arc::new(
         HttpService::new(registry, read_identity, reads, Arc::new(Ready), cursors)
             .with_postgres_mutations(Arc::new(mutations)),
-    ))
+    ));
+    (app, capture)
 }
 
 async fn invoke(app: axum::Router, key: &str, parent: &str) -> (StatusCode, Value) {
@@ -1051,6 +1063,45 @@ async fn action_requirements_preserve_fault_rollback() {
         .await
         .iter()
         .all(|count| *count == 0));
+    database.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn committed_action_audit_precedes_lost_response_fault() {
+    let (database, registry, identity) = setup().await;
+    let (app, audit) = app_with_audit(
+        &database,
+        registry.clone(),
+        identity,
+        Some(MutationFaultPoint::AfterCommitBeforeResponseRelease),
+    );
+
+    let lost = invoke(app, "lost-after-commit", ID).await;
+    assert!(
+        !lost.0.is_success(),
+        "the injected fault withholds the answer"
+    );
+    let committed = counts(&database, &registry).await;
+    assert!(
+        committed.iter().all(|count| *count == 1),
+        "the Action effects, revision, outbox, receipt, application, and result commit together: {committed:?}"
+    );
+
+    let terminal = audit
+        .entries()
+        .into_iter()
+        .filter(|entry| {
+            entry["phase"] == "response"
+                && entry["record"]["operationId"] == "actions.register-child.invoke"
+                && entry["record"]["phase"] == "terminal"
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        terminal.len(),
+        1,
+        "the committed Action has one terminal audit"
+    );
+    assert_eq!(terminal[0]["record"]["outcome"], "committed");
     database.cleanup().await;
 }
 

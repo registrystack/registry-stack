@@ -42,7 +42,7 @@ pub(super) fn generate(
             &projection_fields,
         );
     }
-    for action in &actions.actions {
+    for action in actions.public_actions() {
         let name = type_name(&action.api_name);
         if let Some(context) = crate::compiler::review_context::compile_schema_from_parts(
             registry_id,
@@ -174,7 +174,7 @@ pub(super) fn generate(
         writeln!(ts, "  {}: {};", quote(&entity.id), entity.api_name).unwrap();
     }
     ts.push_str("}\nexport interface ProjectActions {\n");
-    for action in &actions.actions {
+    for action in actions.public_actions() {
         let name = type_name(&action.api_name);
         writeln!(
             ts,
@@ -271,7 +271,7 @@ pub(super) fn generate(
             .replace("    # READ_OVERLOADS", &read_overloads)
             .replace("    # RELATED_OVERLOADS", &related_overloads),
     );
-    for action in &actions.actions {
+    for action in actions.public_actions() {
         let name = type_name(&action.api_name);
         writeln!(py, "    def {}(self, inputs: {name}Input, key: str) -> {name}Result:\n        return cast({name}Result, self._invoke({}, inputs, key))\n", python_name(&action.api_name), quote(&action.id)).unwrap();
     }
@@ -324,7 +324,7 @@ fn project_definitions(
     }
     json!({"records":entities.values().map(|entity| (entity.id.clone(), json!({"route":entity.route,
         "titleField":entity.display.title_field.as_ref().and_then(|id|entity.stored_fields.iter().find(|field|field.logical.id==*id)).map(|field|&field.logical.api_name)}))).collect::<BTreeMap<_,_>>(),
-        "actions":actions.actions.iter().map(|action|(action.id.clone(),json!({"mode":if action.execution.is_proposal(){"proposal"}else{"immediate"},
+        "actions":actions.public_actions().map(|action|(action.id.clone(),json!({"mode":if action.execution.is_proposal(){"proposal"}else{"immediate"},
             "conditionInputs":if action.execution.is_proposal(){Vec::new()}else{crate::plan::condition_inputs(action).into_iter().filter_map(|id|action.inputs.iter().find(|input|input.id==id).map(|input|input.api_name.clone())).collect::<Vec<_>>()},
             "refusals":action.handler.as_ref().map(|function|function.refusals.keys().collect::<Vec<_>>()).unwrap_or_default()}))).collect::<BTreeMap<_,_>>(),
         "relationships":relationships})

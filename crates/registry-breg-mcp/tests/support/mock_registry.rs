@@ -15,7 +15,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use axum::body::Bytes;
 use axum::extract::{Path, RawQuery, State};
@@ -818,31 +818,110 @@ fn grant_allows(headers: &HeaderMap, operation: &str, id: Option<Uuid>) -> bool 
 struct GrantExchange {
     upstream: String,
     issuer: GrantIssuer,
+    probe: GrantExchangeProbe,
 }
+
+#[derive(Clone, Default)]
+pub struct GrantExchangeProbe(Arc<Mutex<Vec<GrantExchangeObservationState>>>);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GrantExchangeObservation {
+    pub upstream_status: Option<u16>,
+    pub upstream_transport_failed: bool,
+    pub upstream_header_elapsed_milliseconds: u128,
+}
+
+struct GrantExchangeObservationState {
+    started: Instant,
+    status: Option<u16>,
+    completed_after: Option<Duration>,
+}
+
+impl GrantExchangeProbe {
+    pub fn observations(&self) -> Vec<GrantExchangeObservation> {
+        self.0
+            .lock()
+            .expect("grant exchange probe is not poisoned")
+            .iter()
+            .map(|observation| GrantExchangeObservation {
+                upstream_status: observation.status,
+                upstream_transport_failed: observation.status.is_none()
+                    && observation.completed_after.is_some(),
+                upstream_header_elapsed_milliseconds: observation
+                    .completed_after
+                    .unwrap_or_else(|| observation.started.elapsed())
+                    .as_millis(),
+            })
+            .collect()
+    }
+}
+
 pub async fn grant_exchange(upstream: String, issuer: GrantIssuer) -> String {
+    grant_exchange_with_probe(upstream, issuer).await.0
+}
+
+pub async fn grant_exchange_with_probe(
+    upstream: String,
+    issuer: GrantIssuer,
+) -> (String, GrantExchangeProbe) {
+    let probe = GrantExchangeProbe::default();
     let app = Router::new()
         .route("/token", axum::routing::post(exchange_grant))
-        .with_state(GrantExchange { upstream, issuer });
+        .with_state(GrantExchange {
+            upstream,
+            issuer,
+            probe: probe.clone(),
+        });
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let endpoint = format!("http://{}/token", listener.local_addr().unwrap());
     tokio::spawn(async move {
         axum::serve(listener, app).await.unwrap();
     });
-    endpoint
+    (endpoint, probe)
 }
 async fn exchange_grant(
     State(exchange): State<GrantExchange>,
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
+    let observation = {
+        let mut observations = exchange
+            .probe
+            .0
+            .lock()
+            .expect("grant exchange probe is not poisoned");
+        observations.push(GrantExchangeObservationState {
+            started: Instant::now(),
+            status: None,
+            completed_after: None,
+        });
+        observations.len() - 1
+    };
     let mut request = reqwest::Client::new().post(exchange.upstream).body(body);
     if let Some(content_type) = headers.get("content-type") {
         request = request.header("content-type", content_type);
     }
     let Ok(response) = request.send().await else {
+        let mut observations = exchange
+            .probe
+            .0
+            .lock()
+            .expect("grant exchange probe is not poisoned");
+        let observation = &mut observations[observation];
+        observation.completed_after = Some(observation.started.elapsed());
         return StatusCode::BAD_GATEWAY.into_response();
     };
     let status = response.status();
+    {
+        let mut observations = exchange
+            .probe
+            .0
+            .lock()
+            .expect("grant exchange probe is not poisoned");
+        let observation = &mut observations[observation];
+        observation.status = Some(status.as_u16());
+        observation.completed_after = Some(observation.started.elapsed());
+    }
     let Ok(mut value): Result<Value, _> = response.json().await else {
         return StatusCode::BAD_GATEWAY.into_response();
     };

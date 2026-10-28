@@ -1281,6 +1281,7 @@ fn package_code(error: &PackageError) -> &'static str {
         | PackageError::Derivation
         | PackageError::MigrationPlan
         | PackageError::ReviewedMigration(_) => "breg.package.integrity-refused",
+        PackageError::EngineFeatureUpgradeRequired => "breg.package.engine-upgrade-required",
         PackageError::Bounds | PackageError::Read => "breg.package.refused",
         PackageError::DeploymentIdentity => "breg.package.deployment-identity-refused",
         PackageError::RetiredApiVersion => "config.retired-api-version",
@@ -1304,6 +1305,7 @@ fn package_action(error: &PackageError) -> &'static str {
         PackageError::RetiredApiVersion => {
             "Rebuild the package with this bregctl: bregctl package PROJECT --test-receipt RECEIPT --output BUILD, then apply the rebuilt package to a new database: bregctl apply --initial --package BUILD."
         }
+        PackageError::EngineFeatureUpgradeRequired => super::PACKAGE_ENGINE_UPGRADE_REQUIRED,
         _ => REBUILD_PACKAGE,
     }
 }

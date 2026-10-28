@@ -2123,6 +2123,13 @@
             "$ref": "#/$defs/SelectorProfileSource"
           },
           "type": "array"
+        },
+        "timers": {
+          "description": "Additive timer definitions. Only a root-project `timerGrants` entry can\nenable a contributed timer.",
+          "items": {
+            "$ref": "#/$defs/TimerSource"
+          },
+          "type": "array"
         }
       },
       "required": [
@@ -2237,6 +2244,12 @@
         },
         "temporal": {
           "$ref": "#/$defs/TemporalSource"
+        },
+        "timers": {
+          "items": {
+            "$ref": "#/$defs/TimerSource"
+          },
+          "type": "array"
         },
         "tombstone": {
           "default": false,
@@ -4067,6 +4080,96 @@
         "maximumLength"
       ],
       "type": "object"
+    },
+    "TimerInputSource": {
+      "additionalProperties": false,
+      "description": "One complete mapping into one ordinary Action input. Exactly one member is\nselected by compilation; the flat shape preserves authored source positions.",
+      "properties": {
+        "fromField": {
+          "type": "string"
+        },
+        "fromRecordId": {
+          "const": true,
+          "type": "boolean"
+        },
+        "fromTimer": {
+          "$ref": "#/$defs/TimerValueSource"
+        },
+        "value": true
+      },
+      "type": "object"
+    },
+    "TimerPredicateSource": {
+      "additionalProperties": false,
+      "description": "A bounded conjunction of equality checks over current stored fields.",
+      "properties": {
+        "equals": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ScalarLiteral"
+          },
+          "propertyNames": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "type": "object"
+        },
+        "type": {
+          "const": "fields",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "equals"
+      ],
+      "type": "object"
+    },
+    "TimerSource": {
+      "additionalProperties": false,
+      "description": "One timer attached to a governed Record type.",
+      "properties": {
+        "at": {
+          "type": "string"
+        },
+        "id": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "input": {
+          "additionalProperties": {
+            "$ref": "#/$defs/TimerInputSource"
+          },
+          "propertyNames": {
+            "$ref": "#/$defs/LocalId"
+          },
+          "type": "object"
+        },
+        "invoke": {
+          "type": "string"
+        },
+        "notAfter": {
+          "type": "string"
+        },
+        "rearmOn": {
+          "type": "string"
+        },
+        "when": {
+          "$ref": "#/$defs/TimerPredicateSource"
+        }
+      },
+      "required": [
+        "id",
+        "at",
+        "invoke",
+        "input"
+      ],
+      "type": "object"
+    },
+    "TimerValueSource": {
+      "description": "Runtime-owned timer facts that may be mapped into Action inputs.",
+      "enum": [
+        "occurrence-id",
+        "due-at"
+      ],
+      "type": "string"
     },
     "TimestampFieldSourceSchema": {
       "additionalProperties": false,

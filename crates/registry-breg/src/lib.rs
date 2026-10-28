@@ -171,6 +171,10 @@ pub(crate) mod statistics_store;
 pub(crate) mod stored_bytes;
 #[cfg(feature = "runtime")]
 pub mod task_grant;
+#[cfg(feature = "runtime")]
+pub mod timer_activation_preview;
+#[cfg(feature = "runtime")]
+pub mod timer_operator;
 #[cfg(all(feature = "runtime", feature = "tooling"))]
 pub mod tooling;
 pub mod unique_set;

@@ -38,7 +38,8 @@ use crate::postgres::{
     catalog_drift_objects, inspect_baseline, verify_catalog_identity_for_catalog, AdvisorySeverity,
     BaselineAdvisory, DatabaseConnectionCause, ExpectedManagedCatalog, ExpectedRegistryIdentity,
     PostgresRecordMutationService, PostgresRecordReadService, PostgresRevisionReadService,
-    PostgresSnapshotReadService, RegistryLockKey, RoleMode, RuntimePool, SqlIdentifier,
+    PostgresSnapshotReadService, RecordTimerWorker, RegistryLockKey, RoleMode, RuntimePool,
+    SqlIdentifier,
 };
 use crate::runtime_config::{load_runtime_config, RuntimeConfig, RuntimeConfigError};
 
@@ -194,6 +195,8 @@ pub enum StartupError {
     Shutdown,
     #[error("a Registry background task stopped before shutdown was requested")]
     BackgroundTaskStopped,
+    #[error("the record-timer native test control was refused")]
+    TimerTestControl,
     #[error("the Registry operational log level was refused")]
     Logging,
 }
@@ -253,6 +256,7 @@ impl HookStateTransitionCode {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BackgroundTask {
     HookWorker,
+    RecordTimerWorker,
     AttachmentVerificationWorker,
     ReviewWorker,
     SubjectAccessLogRetention,
@@ -263,8 +267,9 @@ pub enum BackgroundTask {
 impl BackgroundTask {
     /// Every supervised task, used by exhaustive operational-log contract
     /// tests.
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::HookWorker,
+        Self::RecordTimerWorker,
         Self::AttachmentVerificationWorker,
         Self::ReviewWorker,
         Self::SubjectAccessLogRetention,
@@ -290,6 +295,12 @@ const fn background_task_stop_code(task: BackgroundTask, stop: BackgroundTaskSto
     match (task, stop) {
         (BackgroundTask::HookWorker, BackgroundTaskStop::Panicked) => "hook.worker.panicked",
         (BackgroundTask::HookWorker, BackgroundTaskStop::Returned) => "hook.worker.returned",
+        (BackgroundTask::RecordTimerWorker, BackgroundTaskStop::Panicked) => {
+            "record_timer.worker.panicked"
+        }
+        (BackgroundTask::RecordTimerWorker, BackgroundTaskStop::Returned) => {
+            "record_timer.worker.returned"
+        }
         (BackgroundTask::AttachmentVerificationWorker, BackgroundTaskStop::Panicked) => {
             "attachment_verification.worker.panicked"
         }
@@ -367,6 +378,7 @@ pub enum OperationalEvent {
     Stopped,
     StoppedWithError(StartupError),
     HookWorkerIterationFailed,
+    RecordTimerIterationFailed,
     AttachmentVerificationIterationFailed,
     AttachmentVerificationRetryPending,
     ReviewWorkerIterationFailed,
@@ -376,6 +388,9 @@ pub enum OperationalEvent {
     /// The queue ages could not be read for one metrics scrape, so that
     /// scrape publishes none.
     MetricsQueueSampleFailed,
+    /// Record-timer state could not be read for one metrics scrape. Other
+    /// independently sampled metrics remain available.
+    MetricsTimerSampleFailed,
     HookStateTransitionFailed(HookStateTransitionCode),
     /// One PostgreSQL baseline advisory, logged once at startup. It carries a
     /// closed code and message plus the server's observed setting counts.
@@ -452,6 +467,13 @@ impl OperationalEvent {
                 error: None,
                 code: Some("hook.worker.iteration_failed"),
             },
+            Self::RecordTimerIterationFailed => OperationalLogRecord {
+                level: OperationalLogLevel::Warn,
+                target: "registry_breg::record_timer",
+                message: "record timer worker iteration failed",
+                error: None,
+                code: Some("record_timer.worker.iteration_failed"),
+            },
             Self::AttachmentVerificationIterationFailed => OperationalLogRecord {
                 level: OperationalLogLevel::Warn,
                 target: "registry_breg::attachment_verification",
@@ -486,6 +508,13 @@ impl OperationalEvent {
                 message: "queue ages could not be sampled for this metrics scrape",
                 error: None,
                 code: Some("metrics.queue_sample.failed"),
+            },
+            Self::MetricsTimerSampleFailed => OperationalLogRecord {
+                level: OperationalLogLevel::Warn,
+                target: "registry_breg::metrics",
+                message: "record timer state could not be sampled for this metrics scrape",
+                error: None,
+                code: Some("metrics.timer_sample.failed"),
             },
             Self::HookStateTransitionFailed(code) => OperationalLogRecord {
                 level: OperationalLogLevel::Warn,
@@ -582,13 +611,19 @@ impl OperationalEvent {
                 let code = record.code.expect("review warning records have a code");
                 tracing::warn!(target: "registry_breg::review", code, message = record.message);
             }
-            Self::MetricsQueueSampleFailed => {
+            Self::MetricsQueueSampleFailed | Self::MetricsTimerSampleFailed => {
                 let code = record.code.expect("metrics warning records have a code");
                 tracing::warn!(target: "registry_breg::metrics", code, message = record.message);
             }
             Self::HookWorkerIterationFailed | Self::HookStateTransitionFailed(_) => {
                 let code = record.code.expect("hook warning records have a code");
                 tracing::warn!(target: "registry_breg::hooks", code, message = record.message);
+            }
+            Self::RecordTimerIterationFailed => {
+                let code = record
+                    .code
+                    .expect("record timer warning records have a code");
+                tracing::warn!(target: "registry_breg::record_timer", code, message = record.message);
             }
             Self::PostgresBaselineAdvisory(advisory) => {
                 let code = record.code.expect("baseline advisory records have a code");
@@ -627,6 +662,9 @@ impl StartupError {
             }
             Self::PackageRefused(PackageError::DeploymentIdentity) => {
                 "the Registry package carries a local-only identity; replace canonicalBaseIri, rerun schema-test, and rebuild the deployment package"
+            }
+            Self::PackageRefused(PackageError::EngineFeatureUpgradeRequired) => {
+                "the Registry package predates the required Record timer store; keep it as the active baseline, rebuild a successor with this release using `bregctl test --baseline-package DIR` and `bregctl package --baseline-package DIR`, then run `bregctl plan --package SUCCESSOR` and `bregctl apply --package SUCCESSOR` before restarting the runtime"
             }
             Self::PackageRefused(_) => "the Registry package was refused",
             Self::PackageEnvelopeRefused(_) => "the Registry package was refused",
@@ -696,6 +734,7 @@ impl StartupError {
             Self::BackgroundTaskStopped => {
                 "a Registry background task stopped before shutdown was requested"
             }
+            Self::TimerTestControl => "the record-timer native test control was refused",
             Self::Logging => "the Registry operational log level was refused",
         }
     }
@@ -739,6 +778,7 @@ pub struct PreparedServer {
     app: Router,
     shutdown_grace: Duration,
     hook_worker: Option<HookWorker>,
+    record_timer_worker: Option<RecordTimerWorker>,
     attachment_verification_worker: Option<AttachmentVerificationWorker>,
     review_worker: Option<crate::review_store::ReviewWorker>,
     access_log_retention: Option<(RuntimePool, Arc<LastSuccess>)>,
@@ -820,6 +860,7 @@ impl PreparedServer {
             app,
             shutdown_grace,
             hook_worker: None,
+            record_timer_worker: None,
             attachment_verification_worker: None,
             review_worker: None,
             access_log_retention: None,
@@ -859,6 +900,7 @@ impl PreparedServer {
             app,
             shutdown_grace,
             hook_worker: Some(hook_worker),
+            record_timer_worker: None,
             attachment_verification_worker: None,
             review_worker: None,
             access_log_retention: None,
@@ -1552,6 +1594,48 @@ async fn finish_prepared_server(
     let idempotency = config
         .idempotency_policy()
         .map_err(StartupError::RuntimeConfig)?;
+    let timer_coordinator = crate::mutation::MutationTransaction::new_with_event_destinations(
+        lock_key,
+        config.operational_timeouts().record_lock,
+        expected.clone(),
+        config.identity().instance_id(),
+        audit.clone(),
+        Some(Arc::clone(&event_destinations)),
+    )
+    .with_idempotency_policy(idempotency.clone());
+    let timer_coordinator = match field_encryption.clone() {
+        Some(field_encryption) => timer_coordinator.with_field_encryption(field_encryption),
+        None => timer_coordinator,
+    };
+    let record_timer_worker_required = if registry.timers().next().is_some() {
+        true
+    } else {
+        crate::postgres::retained_record_timer_state_exists(
+            &pool,
+            &expected,
+            lock_key,
+            config.operational_timeouts().record_lock,
+        )
+        .await
+        .map_err(|_| StartupError::DatabaseUnready)?
+    };
+    let record_timer_worker = if record_timer_worker_required {
+        let worker = RecordTimerWorker::new(
+            pool.clone(),
+            Arc::clone(&registry),
+            timer_coordinator,
+            expected.clone(),
+            lock_key,
+            config.operational_timeouts().record_lock,
+        );
+        #[cfg(feature = "postgres-test")]
+        let worker = worker
+            .with_native_test_controls_from_env(config.identity().instance_id())
+            .map_err(|_| StartupError::TimerTestControl)?;
+        Some(worker)
+    } else {
+        None
+    };
     let hook_delivery = HookDeliveryService::new_with_runtime_bindings(
         pool.clone(),
         Arc::clone(&event_destinations),
@@ -1648,6 +1732,11 @@ async fn finish_prepared_server(
     .with_task_status(task_status)
     .with_attachment_storage(attachment_storage)
     .with_attachment_verification(attachment_verification);
+    #[cfg(feature = "postgres-test")]
+    let mutations = mutations.with_native_mutation_checkpoint(
+        native_mutation_checkpoint_from_env(config.identity().instance_id())
+            .map_err(|_| StartupError::TimerTestControl)?,
+    );
     let mutations = match field_encryption.clone() {
         Some(field_encryption) => mutations.with_field_encryption(field_encryption),
         None => mutations,
@@ -1691,6 +1780,10 @@ async fn finish_prepared_server(
         let mut registry = Metrics::new(telemetry_pool)
             .with_active_package(startup.package().package_digest())
             .with_worker_progress(ProgressWorker::Hook, hook_progress);
+        if let Some(worker) = &record_timer_worker {
+            registry =
+                registry.with_worker_progress(ProgressWorker::RecordTimer, worker.last_success());
+        }
         if let Some(worker) = &attachment_verification_worker {
             registry = registry.with_worker_progress(
                 ProgressWorker::AttachmentVerification,
@@ -1725,6 +1818,7 @@ async fn finish_prepared_server(
         app,
         shutdown_grace: config.operational_timeouts().shutdown_grace,
         hook_worker,
+        record_timer_worker,
         attachment_verification_worker,
         review_worker,
         access_log_retention,
@@ -1740,6 +1834,25 @@ async fn finish_prepared_server(
         #[cfg(all(feature = "postgres-test", feature = "tooling"))]
         fixture_pool: Some(fixture_pool),
     })
+}
+
+#[cfg(feature = "postgres-test")]
+fn native_mutation_checkpoint_from_env(
+    instance_id: &str,
+) -> std::result::Result<Option<crate::mutation::NativeMutationCheckpoint>, ()> {
+    let observed = std::env::var_os("BREG_MUTATION_TEST_BEFORE_COMMIT_OBSERVED_PATH");
+    let release = std::env::var_os("BREG_MUTATION_TEST_BEFORE_COMMIT_RELEASE_PATH");
+    match (observed, release) {
+        (None, None) => Ok(None),
+        (Some(observed), Some(release)) => crate::mutation::NativeMutationCheckpoint::new(
+            instance_id,
+            std::path::PathBuf::from(observed),
+            std::path::PathBuf::from(release),
+        )
+        .map(Some)
+        .map_err(|_| ()),
+        _ => Err(()),
+    }
 }
 
 /// Startup may inspect storage binding identities, never attachment bytes. This
@@ -1935,6 +2048,7 @@ pub async fn serve_until_shutdown(
         app,
         shutdown_grace,
         hook_worker,
+        record_timer_worker,
         attachment_verification_worker,
         review_worker,
         access_log_retention,
@@ -1964,6 +2078,14 @@ pub async fn serve_until_shutdown(
     let mut verification_worker = attachment_verification_worker.map(|worker| {
         SupervisedTask::spawn(
             BackgroundTask::AttachmentVerificationWorker,
+            worker.run(worker_shutdown_rx.clone()),
+            worker_shutdown_rx.clone(),
+            task_stopped_tx.clone(),
+        )
+    });
+    let mut record_timer_worker = record_timer_worker.map(|worker| {
+        SupervisedTask::spawn(
+            BackgroundTask::RecordTimerWorker,
             worker.run(worker_shutdown_rx.clone()),
             worker_shutdown_rx.clone(),
             task_stopped_tx.clone(),
@@ -2058,6 +2180,9 @@ pub async fn serve_until_shutdown(
         if let Some(worker) = worker.as_mut() {
             worker.join().await;
         }
+        if let Some(worker) = record_timer_worker.as_mut() {
+            worker.join().await;
+        }
         if let Some(worker) = verification_worker.as_mut() {
             worker.join().await;
         }
@@ -2086,6 +2211,9 @@ pub async fn serve_until_shutdown(
                 metrics_server.abort_and_join().await;
             }
             if let Some(worker) = worker.as_mut() {
+                worker.abort_and_join().await;
+            }
+            if let Some(worker) = record_timer_worker.as_mut() {
                 worker.abort_and_join().await;
             }
             if let Some(worker) = verification_worker.as_mut() {
@@ -2526,6 +2654,14 @@ impl DynamicRuntimeReadiness {
         .await
         .map_err(|_| StartupError::DatabaseUnready)?;
         verify_instance_claim(&*transaction).await?;
+        let timer_protocol = crate::postgres::read_timer_protocol(&*transaction)
+            .await
+            .map_err(|_| StartupError::DatabaseUnready)?;
+        if timer_protocol.protocol_version != crate::postgres::SUPPORTED_TIMER_PROTOCOL_VERSION
+            || timer_protocol.bound_instance_epoch != timer_protocol.registry_instance_epoch
+        {
+            return Err(StartupError::DatabaseUnready);
+        }
         transaction
             .commit()
             .await
@@ -2767,5 +2903,21 @@ mod schema_preparation_error_tests {
             schema_preparation_error(PostgresKernelError::Connection),
             StartupError::DatabaseUnready
         );
+    }
+
+    #[test]
+    fn legacy_timer_store_packages_name_the_governed_upgrade_path() {
+        let message = StartupError::PackageRefused(PackageError::EngineFeatureUpgradeRequired)
+            .operational_message();
+        for required in [
+            "keep it as the active baseline",
+            "bregctl test --baseline-package DIR",
+            "bregctl package --baseline-package DIR",
+            "bregctl plan --package SUCCESSOR",
+            "bregctl apply --package SUCCESSOR",
+            "before restarting the runtime",
+        ] {
+            assert!(message.contains(required), "{required}: {message}");
+        }
     }
 }
