@@ -245,6 +245,8 @@ only. `coordinatorctl test` rejects misspelled fake record members with `scenari
 and invalid computed template data with `scenario.call-input`. Aliases without `record` or
 `template` retain their general contracts. Regenerate imports when the owning project changes.
 
+Template data schemas use [Messaging's supported reference form](../messaging/README.md#running-locally).
+
 These imports grant no access. Messaging still checks the connection's caller, sender profile
 and template at request time. The [earlier appointment alert](examples/earlier-appointment-alerts/README.md)
 shows both imports alongside their owning projects.

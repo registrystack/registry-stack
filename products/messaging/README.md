@@ -271,6 +271,10 @@ value as `dataSchema`. The export is separate from the immutable
 package inputs and never changes the package digest; an existing output file
 is refused rather than overwritten.
 
+Use local JSON Pointer references, such as `#/$defs/name`, in template data
+schemas. The current schema validator does not support named anchors or dynamic
+references.
+
 `--data` names a JSON file, read relative to the directory the command runs
 in like any other relative path; each template version's `sample.json`
 serves. `messagingctl plan` and `status` use the runtime credential in
