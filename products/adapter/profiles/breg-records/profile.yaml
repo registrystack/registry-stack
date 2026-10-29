@@ -22,6 +22,7 @@
 apiVersion: id.registrystack.org/formats/adapter/profile/v1alpha1
 kind: AdapterProfile
 id: breg-records
+version: "1"
 operations:
   - id: records.search
     method: GET

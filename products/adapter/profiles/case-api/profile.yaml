@@ -12,6 +12,7 @@
 apiVersion: id.registrystack.org/formats/adapter/profile/v1alpha1
 kind: AdapterProfile
 id: case-api
+version: "1"
 operations:
   - id: cases.find
     method: POST
