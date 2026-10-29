@@ -9,6 +9,14 @@
   `error_description` and in the service log (for example "the proof was not
   accepted: required claim `nonce` is missing"), without echoing nonces, keys or
   tokens.
+- The SD-JWT VC verifier accepts a presentation that withholds whole outputs.
+  A signed digest with no presented disclosure is a withheld output: refused
+  when the policy marks the output `required`, otherwise absent from the
+  result. A disclosed output must still match its concept and form, and a
+  structured value is disclosed whole or not at all, so presenting some fields
+  of one is refused. Duplicate, unreferenced and unknown disclosures are still
+  refused, and a key-binding JWT still covers exactly the disclosures
+  presented. Presentations that carried every disclosure verify as before.
 - `evidencectl explain` JSON reports each assertion definition's
   `validitySeconds` beside its `representations` and `subjectBinding`. The
   field is additive; the report `apiVersion` is unchanged.

@@ -1222,10 +1222,11 @@ pub fn verify_sd_jwt_vc(
 /// complete independent policy, reporting cryptographic authenticity
 /// separately from current validity.
 ///
-/// Version 1 issues only complete credentials, so verification requires every
-/// signed digest to be resolved by exactly one presented disclosure. A holder
-/// presenting a subset is out of scope for the issuance profile, and the
-/// relying procedure's expected output contract would reject it in any case.
+/// A presentation may withhold whole outputs: a signed digest with no
+/// presented disclosure is an output the holder left out. The policy's
+/// expected outputs then decide the result, so withholding an output the
+/// policy marks required is refused and withholding an optional one is
+/// accepted. A structured value is disclosed whole or not at all.
 /// A key-binding JWT is never accepted here: the serialization must end with
 /// the trailing tilde that marks its absence.
 pub fn verify_sd_jwt_vc_report(
@@ -1527,9 +1528,16 @@ fn signed_digests(claims: &mut Map<String, Value>) -> Result<Vec<String>, Verifi
     Ok(listed)
 }
 
-/// Resolve every presented disclosure against the signed digests. Each digest
-/// must be claimed by exactly one disclosure, each disclosure must carry a
-/// distinct name, and no disclosure may shadow a public claim.
+/// Resolve every presented disclosure against the signed digests. Each
+/// presented disclosure must match exactly one signed digest, each must carry
+/// a distinct name, and none may shadow a public claim.
+///
+/// A holder may withhold whole outputs, so a signed digest with no presented
+/// disclosure is an output the presentation leaves out, not an error. The
+/// relying party's policy decides whether that output was required. A
+/// structured value is all or nothing: when any field of one is presented,
+/// every field must be, so a value is never shortened. A structured value
+/// with no field presented is withheld whole and removed from the claim set.
 fn resolve_disclosures(
     encoded: &[&str],
     digests: &[String],
@@ -1552,6 +1560,8 @@ fn resolve_disclosures(
         Some(Value::Object(metadata)) => metadata.keys().cloned().collect::<Vec<_>>(),
         Some(_) => return Err(VerificationError::Disclosure),
     };
+    // The number of field digests each structured claim signs.
+    let mut signed_field_counts = BTreeMap::<String, usize>::new();
     for claim in structured_claims {
         let object = claims
             .get_mut(&claim)
@@ -1576,6 +1586,7 @@ fn resolve_disclosures(
         {
             return Err(VerificationError::Disclosure);
         }
+        signed_field_counts.insert(claim.clone(), nested.len());
         for digest in nested {
             if locations
                 .insert(digest, Location::Object(claim.clone()))
@@ -1584,9 +1595,6 @@ fn resolve_disclosures(
                 return Err(VerificationError::Disclosure);
             }
         }
-    }
-    if encoded.len() != locations.len() {
-        return Err(VerificationError::Disclosure);
     }
     let mut resolved = Vec::with_capacity(encoded.len());
     let mut seen_digests = BTreeSet::new();
@@ -1654,7 +1662,35 @@ fn resolve_disclosures(
             }
         }
     }
+    for (claim, signed) in signed_field_counts {
+        let presented = object_names.get(&claim).map_or(0, BTreeSet::len);
+        if presented == signed {
+            continue;
+        }
+        if presented != 0 {
+            return Err(VerificationError::Disclosure);
+        }
+        withhold_structured_claim(claims, &claim)?;
+    }
     Ok(resolved)
+}
+
+/// Remove a structured value no field of which was presented, together with
+/// its metadata entry, so the rebuilt payload carries no trace of the output.
+fn withhold_structured_claim(
+    claims: &mut Map<String, Value>,
+    claim: &str,
+) -> Result<(), VerificationError> {
+    claims.remove(claim);
+    let metadata = claims
+        .get_mut("structuredValues")
+        .and_then(Value::as_object_mut)
+        .ok_or(VerificationError::Disclosure)?;
+    metadata.remove(claim);
+    if metadata.is_empty() {
+        claims.remove("structuredValues");
+    }
+    Ok(())
 }
 
 /// The one P-256 public key a confirmation carries.
@@ -4374,6 +4410,40 @@ mod tests {
         );
     }
 
+    /// Issue a structured-value credential: one container claim whose two
+    /// fields are separately disclosable.
+    async fn structured_sd_jwt_vc() -> (String, JwksDocument, EvidenceVerificationPolicy) {
+        let mut evidence = fixture_evidence();
+        evidence.supported_values = vec![SupportedValue {
+            provides_value_for: "urn:example:concept:birth-certificate".to_owned(),
+            value: PublicValue::Structured(StructuredValue {
+                form: StructuredValueForm::ReviewedStructuredValue,
+                schema: "urn:example:schema:birth-certificate:v1".to_owned(),
+                fields: BTreeMap::from([
+                    ("dateOfBirth".to_owned(), json!("2000-05-23")),
+                    ("familyName".to_owned(), json!("Smith")),
+                ]),
+            }),
+        }];
+        let projections = BTreeMap::from([(
+            "urn:example:concept:birth-certificate".to_owned(),
+            "birthCertificate".to_owned(),
+        )]);
+        let signer = fixture_signer().await;
+        let input = crate::sdjwt_vc::issuance_input(&evidence, None, &projections)
+            .expect("structured evidence maps");
+        let serialized = signer
+            .sign_sd_jwt_vc(input)
+            .await
+            .expect("SD-JWT VC serializes");
+        let jwks = jwks_document(signer.public_jwk(), []).expect("JWKS builds");
+        let policy = policy_for(
+            &evidence,
+            "2026-08-02T12:00:00Z".parse().expect("time parses"),
+        );
+        (serialized, jwks, policy)
+    }
+
     /// Duplicate digests in the signed digest set. Version 1 issues complete
     /// credentials, so one digest claiming two signed slots, whether listed
     /// twice at the root, twice inside one nested set, or once at each
@@ -4396,39 +4466,6 @@ mod tests {
             verify_sd_jwt_vc(reissued.as_bytes(), &jwks, &policy),
             Err(VerificationError::Disclosure)
         );
-
-        // Field disclosures inside one container object, for the nested cases.
-        async fn structured_sd_jwt_vc() -> (String, JwksDocument, EvidenceVerificationPolicy) {
-            let mut evidence = fixture_evidence();
-            evidence.supported_values = vec![SupportedValue {
-                provides_value_for: "urn:example:concept:birth-certificate".to_owned(),
-                value: PublicValue::Structured(StructuredValue {
-                    form: StructuredValueForm::ReviewedStructuredValue,
-                    schema: "urn:example:schema:birth-certificate:v1".to_owned(),
-                    fields: BTreeMap::from([
-                        ("dateOfBirth".to_owned(), json!("2000-05-23")),
-                        ("familyName".to_owned(), json!("Smith")),
-                    ]),
-                }),
-            }];
-            let projections = BTreeMap::from([(
-                "urn:example:concept:birth-certificate".to_owned(),
-                "birthCertificate".to_owned(),
-            )]);
-            let signer = fixture_signer().await;
-            let input = crate::sdjwt_vc::issuance_input(&evidence, None, &projections)
-                .expect("structured evidence maps");
-            let serialized = signer
-                .sign_sd_jwt_vc(input)
-                .await
-                .expect("SD-JWT VC serializes");
-            let jwks = jwks_document(signer.public_jwk(), []).expect("JWKS builds");
-            let policy = policy_for(
-                &evidence,
-                "2026-08-02T12:00:00Z".parse().expect("time parses"),
-            );
-            (serialized, jwks, policy)
-        }
 
         // The same digest listed twice inside one nested set.
         let (serialized, jwks, policy) = structured_sd_jwt_vc().await;
@@ -4478,17 +4515,279 @@ mod tests {
         let (serialized, jwks, policy) = issued_sd_jwt_vc().await;
         let (jwt, _) = split_issued_sd_jwt(&serialized);
 
-        // Version 1 issues complete credentials, so an unresolved signed digest
-        // is a mutation rather than a selective presentation.
+        // Withholding every disclosure leaves no output at all, which the
+        // payload contract refuses, so stripping a credential bare is no way
+        // to pass a policy.
         assert_eq!(
             verify_sd_jwt_vc(join_sd_jwt(&jwt, &[]).as_bytes(), &jwks, &policy),
-            Err(VerificationError::Disclosure)
+            Err(VerificationError::Payload)
         );
 
         // A stripped trailing tilde is not a valid issued serialization.
         assert_eq!(
             verify_sd_jwt_vc(serialized.trim_end_matches('~').as_bytes(), &jwks, &policy),
             Err(VerificationError::MalformedJws)
+        );
+    }
+
+    /// The name a disclosure carries, so a test can pick which one a holder
+    /// withholds without depending on issuance order.
+    fn disclosure_name(disclosure: &str) -> String {
+        let decoded = URL_SAFE_NO_PAD
+            .decode(disclosure)
+            .expect("disclosure decodes");
+        let members: Vec<Value> = serde_json::from_slice(&decoded).expect("disclosure parses");
+        members[1].as_str().expect("disclosure name").to_owned()
+    }
+
+    /// The presented disclosures minus every one whose name is listed.
+    fn withholding(disclosures: &[String], names: &[&str]) -> Vec<String> {
+        disclosures
+            .iter()
+            .filter(|disclosure| !names.contains(&disclosure_name(disclosure).as_str()))
+            .cloned()
+            .collect()
+    }
+
+    const OPTIONAL_STATUS_CONCEPT: &str = "urn:example:optional-status";
+    const BIRTH_CERTIFICATE_CONCEPT: &str = "urn:example:concept:birth-certificate";
+
+    /// Evidence with one required boolean, one optional string, and one
+    /// optional structured value of two fields, in that order.
+    fn evidence_with_optional_outputs() -> Evidence {
+        let mut evidence = fixture_evidence();
+        evidence.supported_values.push(SupportedValue {
+            provides_value_for: OPTIONAL_STATUS_CONCEPT.to_owned(),
+            value: PublicValue::String("available".to_owned()),
+        });
+        evidence.supported_values.push(SupportedValue {
+            provides_value_for: BIRTH_CERTIFICATE_CONCEPT.to_owned(),
+            value: PublicValue::Structured(StructuredValue {
+                form: StructuredValueForm::ReviewedStructuredValue,
+                schema: "urn:example:schema:birth-certificate:v1".to_owned(),
+                fields: BTreeMap::from([
+                    ("dateOfBirth".to_owned(), json!("2000-05-23")),
+                    ("familyName".to_owned(), json!("Smith")),
+                ]),
+            }),
+        });
+        evidence
+    }
+
+    /// The policy that makes every output but the first optional.
+    fn policy_with_optional_outputs(evidence: &Evidence) -> EvidenceVerificationPolicy {
+        let mut policy = policy_for(
+            evidence,
+            "2026-08-02T12:00:00Z".parse().expect("time parses"),
+        );
+        for output in &mut policy.expected_outputs[1..] {
+            output.required = false;
+        }
+        policy
+    }
+
+    async fn issued_with_optional_outputs() -> (String, JwksDocument, Evidence) {
+        let evidence = evidence_with_optional_outputs();
+        let projections = BTreeMap::from([(
+            BIRTH_CERTIFICATE_CONCEPT.to_owned(),
+            "birthCertificate".to_owned(),
+        )]);
+        let signer = fixture_signer().await;
+        let input =
+            crate::sdjwt_vc::issuance_input(&evidence, None, &projections).expect("evidence maps");
+        let serialized = signer
+            .sign_sd_jwt_vc(input)
+            .await
+            .expect("SD-JWT VC serializes");
+        let jwks = jwks_document(signer.public_jwk(), []).expect("JWKS builds");
+        (serialized, jwks, evidence)
+    }
+
+    fn concepts_of(evidence: &Evidence) -> Vec<&str> {
+        evidence
+            .supported_values
+            .iter()
+            .map(|value| value.provides_value_for.as_str())
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn a_presentation_may_withhold_an_optional_output() {
+        let (serialized, jwks, evidence) = issued_with_optional_outputs().await;
+        let policy = policy_with_optional_outputs(&evidence);
+        let (jwt, disclosures) = split_issued_sd_jwt(&serialized);
+
+        // Every disclosure presented: the complete credential still verifies
+        // to exactly the issued evidence.
+        assert_eq!(
+            verify_sd_jwt_vc(serialized.as_bytes(), &jwks, &policy),
+            Ok(evidence.clone())
+        );
+
+        // One optional top-level output withheld: it is absent from the
+        // result, and nothing else changes.
+        let presented = join_sd_jwt(&jwt, &withholding(&disclosures, &[OPTIONAL_STATUS_CONCEPT]));
+        let verified = verify_sd_jwt_vc(presented.as_bytes(), &jwks, &policy)
+            .expect("a withheld optional output does not fail verification");
+        assert_eq!(
+            concepts_of(&verified),
+            vec!["urn:example:concept", BIRTH_CERTIFICATE_CONCEPT]
+        );
+        assert_eq!(verified.supported_values[1], evidence.supported_values[2]);
+
+        // Every optional output withheld, whole structured value included.
+        let presented = join_sd_jwt(
+            &jwt,
+            &withholding(
+                &disclosures,
+                &[OPTIONAL_STATUS_CONCEPT, "dateOfBirth", "familyName"],
+            ),
+        );
+        let verified = verify_sd_jwt_vc(presented.as_bytes(), &jwks, &policy)
+            .expect("only the required output remains");
+        assert_eq!(concepts_of(&verified), vec!["urn:example:concept"]);
+    }
+
+    #[tokio::test]
+    async fn a_presentation_withholding_a_required_output_is_refused() {
+        let (serialized, jwks, evidence) = issued_with_optional_outputs().await;
+        let policy = policy_with_optional_outputs(&evidence);
+        let (jwt, disclosures) = split_issued_sd_jwt(&serialized);
+
+        let presented = join_sd_jwt(&jwt, &withholding(&disclosures, &["urn:example:concept"]));
+        assert_eq!(
+            verify_sd_jwt_vc(presented.as_bytes(), &jwks, &policy),
+            Err(VerificationError::Policy)
+        );
+
+        // The same holds when the policy requires a structured value whose
+        // fields are withheld whole.
+        let mut policy = policy_with_optional_outputs(&evidence);
+        policy.expected_outputs[2].required = true;
+        let presented = join_sd_jwt(
+            &jwt,
+            &withholding(&disclosures, &["dateOfBirth", "familyName"]),
+        );
+        assert_eq!(
+            verify_sd_jwt_vc(presented.as_bytes(), &jwks, &policy),
+            Err(VerificationError::Policy)
+        );
+    }
+
+    #[tokio::test]
+    async fn a_presented_output_still_has_to_match_its_declared_form() {
+        let (serialized, jwks, evidence) = issued_with_optional_outputs().await;
+        let mut policy = policy_with_optional_outputs(&evidence);
+        policy.expected_outputs[1].form = ExpectedValueForm::Boolean;
+        let (jwt, disclosures) = split_issued_sd_jwt(&serialized);
+
+        // Presented, the optional output is held to its form.
+        assert_eq!(
+            verify_sd_jwt_vc(serialized.as_bytes(), &jwks, &policy),
+            Err(VerificationError::Policy)
+        );
+        // Withheld, it is simply absent.
+        let presented = join_sd_jwt(&jwt, &withholding(&disclosures, &[OPTIONAL_STATUS_CONCEPT]));
+        assert!(verify_sd_jwt_vc(presented.as_bytes(), &jwks, &policy).is_ok());
+    }
+
+    #[tokio::test]
+    async fn a_structured_value_is_disclosed_whole_or_not_at_all() {
+        let (serialized, jwks, evidence) = issued_with_optional_outputs().await;
+        let policy = policy_with_optional_outputs(&evidence);
+        let (jwt, disclosures) = split_issued_sd_jwt(&serialized);
+
+        for withheld_field in ["dateOfBirth", "familyName"] {
+            let presented = join_sd_jwt(&jwt, &withholding(&disclosures, &[withheld_field]));
+            assert_eq!(
+                verify_sd_jwt_vc(presented.as_bytes(), &jwks, &policy),
+                Err(VerificationError::Disclosure),
+                "a structured value missing {withheld_field} must be refused, not shortened"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn withholding_does_not_relax_the_other_disclosure_checks() {
+        let (serialized, jwks, evidence) = issued_with_optional_outputs().await;
+        let policy = policy_with_optional_outputs(&evidence);
+        let (jwt, disclosures) = split_issued_sd_jwt(&serialized);
+        let subset = withholding(&disclosures, &[OPTIONAL_STATUS_CONCEPT]);
+
+        // A repeated disclosure.
+        let mut repeated = subset.clone();
+        repeated.push(subset[0].clone());
+        assert_eq!(
+            verify_sd_jwt_vc(join_sd_jwt(&jwt, &repeated).as_bytes(), &jwks, &policy),
+            Err(VerificationError::Disclosure)
+        );
+
+        // A disclosure no signed digest refers to.
+        let mut unreferenced = subset;
+        unreferenced.push(encode_disclosure(
+            "MDEyMzQ1Njc4OWFiY2RlZg",
+            "urn:example:extra-concept",
+            json!(true),
+        ));
+        assert_eq!(
+            verify_sd_jwt_vc(join_sd_jwt(&jwt, &unreferenced).as_bytes(), &jwks, &policy),
+            Err(VerificationError::Disclosure)
+        );
+    }
+
+    /// The key-binding JWT covers the disclosures actually presented, so a
+    /// holder cannot sign over the complete credential and then drop
+    /// disclosures, and a subset signed as presented verifies.
+    #[tokio::test]
+    async fn a_holder_bound_presentation_may_withhold_an_optional_output() {
+        let mut evidence = holder_bound_evidence();
+        evidence.supported_values.push(SupportedValue {
+            provides_value_for: OPTIONAL_STATUS_CONCEPT.to_owned(),
+            value: PublicValue::String("available".to_owned()),
+        });
+        let signer = fixture_signer().await;
+        let input = crate::sdjwt_vc::issuance_input(
+            &evidence,
+            Some(&holder_public_key()),
+            &BTreeMap::new(),
+        )
+        .expect("evidence maps");
+        let issued = signer
+            .sign_sd_jwt_vc(input)
+            .await
+            .expect("SD-JWT VC serializes");
+        let jwks = jwks_document(signer.public_jwk(), []).expect("JWKS builds");
+        let mut policy = holder_bound_policy();
+        policy.expected_outputs.push(ExpectedOutput {
+            handle: "optional-status".to_owned(),
+            concept: OPTIONAL_STATUS_CONCEPT.to_owned(),
+            required: false,
+            form: ExpectedValueForm::String,
+        });
+        let (jwt, disclosures) = split_issued_sd_jwt(&issued);
+        let subset = join_sd_jwt(&jwt, &withholding(&disclosures, &[OPTIONAL_STATUS_CONCEPT]));
+
+        // Signed over the subset as presented.
+        let verified = verify_sd_jwt_vc_presentation(
+            valid_presentation(&subset).await.as_bytes(),
+            &jwks,
+            &policy,
+        )
+        .expect("a subset presentation signed as presented verifies");
+        assert_eq!(concepts_of(&verified), vec!["urn:example:concept"]);
+
+        // Signed over the complete credential, then presented as a subset.
+        let claims = key_binding_claims(&issued, verification_instant().timestamp());
+        let forged = present(
+            &subset,
+            &key_binding_header(),
+            &serde_json::to_vec(&claims).expect("claims serialize"),
+            HOLDER_PRIVATE_JWK,
+        )
+        .await;
+        assert_eq!(
+            verify_sd_jwt_vc_presentation(forged.as_bytes(), &jwks, &policy),
+            Err(VerificationError::KeyBinding)
         );
     }
 
