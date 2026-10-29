@@ -118,6 +118,20 @@ impl registry_platform_yaml::Identified for AccessProfile {
     }
 }
 
+/// The project identity block: the deployment's own name and version
+/// (`products/adapter/CONCEPT.md` section 10.1). The id is a local
+/// identifier (CFG-ID-1); the version is text, the same version-as-text
+/// rule as profiles and packs.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProjectIdentity {
+    /// The project identifier.
+    pub id: LocalId,
+    /// The project version.
+    pub version: String,
+}
+
 /// The adapter project artifact (`AdapterProject`): the declared record
 /// model, the pinned profile and pack references, the template
 /// instantiations, the bindings, and the access profiles.
@@ -125,8 +139,8 @@ impl registry_platform_yaml::Identified for AccessProfile {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AdapterProject {
-    /// The project identifier.
-    pub id: ExternalId,
+    /// The deployment's identity.
+    pub project: ProjectIdentity,
     /// The pinned facade profile.
     pub profile: PinnedRef,
     /// The pinned adapter pack.
@@ -183,7 +197,10 @@ mod tests {
     #[test]
     fn project_round_trips() {
         let project = AdapterProject {
-            id: ExternalId::new("case-deployment").expect("id"),
+            project: ProjectIdentity {
+                id: LocalId::new("case-deployment").expect("id"),
+                version: "1.0.0".to_string(),
+            },
             profile: pin("case-api"),
             pack: pin("case-api-pack"),
             record_types: UniqueIdList::new(vec![record_type()]).expect("unique"),
@@ -218,6 +235,42 @@ mod tests {
         assert_eq!(
             serde_json::from_str::<AdapterProject>(&json).ok(),
             Some(project)
+        );
+    }
+
+    /// The project identity block is required: a missing `project` block
+    /// and a bare top-level `id` are both refused, and the block's id is a
+    /// local identifier (addendum c).
+    #[test]
+    fn the_project_identity_block_is_required() {
+        let project = AdapterProject {
+            project: ProjectIdentity {
+                id: LocalId::new("case-deployment").expect("id"),
+                version: "1.0.0".to_string(),
+            },
+            profile: pin("case-api"),
+            pack: pin("case-api-pack"),
+            record_types: UniqueIdList::new(vec![record_type()]).expect("unique"),
+            templated_routes: UniqueIdList::new(Vec::new()).expect("empty"),
+            bindings: UniqueIdList::new(Vec::new()).expect("empty"),
+            access_profiles: UniqueIdList::new(Vec::new()).expect("empty"),
+        };
+        let json = serde_json::to_value(&project).expect("serialize");
+
+        let mut missing = json.clone();
+        missing.as_object_mut().expect("object").remove("project");
+        assert!(
+            serde_json::from_value::<AdapterProject>(missing).is_err(),
+            "a project without its identity block is refused"
+        );
+
+        let mut bare = json;
+        let object = bare.as_object_mut().expect("object");
+        object.remove("project");
+        object.insert("id".to_string(), serde_json::json!("case-deployment"));
+        assert!(
+            serde_json::from_value::<AdapterProject>(bare).is_err(),
+            "a bare top-level id is refused"
         );
     }
 

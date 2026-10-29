@@ -2287,7 +2287,8 @@ mod tests {
     use crate::pack::{AdapterPack, Capabilities, Endpoint, EndpointOperation};
     use crate::profile::{PaginationParameters, ParameterizedPart, ProfileOperation};
     use crate::project::{
-        AccessProfile, Binding, PinnedRef, RecordField, RecordFieldType, RecordType,
+        AccessProfile, Binding, PinnedRef, ProjectIdentity, RecordField, RecordFieldType,
+        RecordType,
     };
     use crate::route::{
         ChoiceStep, CircuitBreakerStep, DefaultErrorHandler, DoCatch, DoFinally, DoTryStep,
@@ -2449,7 +2450,10 @@ mod tests {
 
     fn project_builder(pack: &AdapterPack) -> AdapterProject {
         AdapterProject {
-            id: id("case-deployment"),
+            project: ProjectIdentity {
+                id: local("case-deployment"),
+                version: "1.0.0".to_string(),
+            },
             profile: PinnedRef {
                 id: id("case-api"),
                 version: "1.0.0".to_string(),

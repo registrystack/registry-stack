@@ -441,7 +441,7 @@ mod tests {
     use super::*;
     use crate::fixture::RecordedResponse as Expected;
     use crate::profile::{EnvelopeTemplate, ProfileOperation};
-    use crate::project::{Binding, PinnedRef, RecordField};
+    use crate::project::{Binding, PinnedRef, ProjectIdentity, RecordField};
     use crate::route::TemplatedRoute;
     use registry_platform_yaml::{
         BoundedU64, Digest, ExternalId, LocalId, UniqueIdList, UniqueList,
@@ -514,7 +514,10 @@ mod tests {
 
     fn project(bound: bool) -> AdapterProject {
         AdapterProject {
-            id: external("case-deployment"),
+            project: ProjectIdentity {
+                id: local("case-deployment"),
+                version: "1.0.0".to_string(),
+            },
             profile: pin("case-api"),
             pack: pin("case-api-pack"),
             record_types: UniqueIdList::new(vec![record_type()]).expect("unique"),
