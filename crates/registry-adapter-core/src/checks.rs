@@ -100,9 +100,36 @@ pub struct Workspace<'a> {
     pub fixtures: &'a [AdapterFixture],
 }
 
-/// The route bodies an internal id may resolve to: pack routes, pack
-/// templates, and instantiated route ids mapped to their template bodies.
+/// The route bodies a `direct:` name resolves to, keyed by the route's
+/// `from` URI as Camel connects routes: a pack route by its from name, a
+/// template by its id, and an instantiation by its route id (its from
+/// becomes `direct:<routeId>`).
 fn route_bodies<'a>(
+    pack: &'a AdapterPack,
+    project: &'a AdapterProject,
+) -> HashMap<&'a str, &'a [Step]> {
+    let mut bodies: HashMap<&str, &[Step]> = HashMap::new();
+    for route in &pack.routes {
+        bodies.insert(route.from.uri.id.as_str(), route.steps.as_slice());
+    }
+    for template in &pack.route_templates {
+        bodies.insert(template.id.as_str(), template.steps.as_slice());
+    }
+    for instantiated in &project.templated_routes {
+        if let Some(template) = pack
+            .route_templates
+            .get(instantiated.route_template_ref.as_str())
+        {
+            bodies.insert(instantiated.route_id.as_str(), template.steps.as_slice());
+        }
+    }
+    bodies
+}
+
+/// The route bodies a binding's route reference resolves to, keyed by the
+/// declared id: a pack route by its id, a template by its id, and an
+/// instantiation by its route id.
+fn route_bodies_by_id<'a>(
     pack: &'a AdapterPack,
     project: &'a AdapterProject,
 ) -> HashMap<&'a str, &'a [Step]> {
@@ -1129,6 +1156,7 @@ pub fn check_project(workspace: &Workspace<'_>) -> Vec<Diagnostic> {
     let project = workspace.project;
     let pack = workspace.pack;
     let bodies = route_bodies(pack, project);
+    let bodies_by_id = route_bodies_by_id(pack, project);
 
     for (index, instantiated) in project.templated_routes.iter().enumerate() {
         let prefix = format!("/templatedRoutes/{index}");
@@ -1232,7 +1260,7 @@ pub fn check_project(workspace: &Workspace<'_>) -> Vec<Diagnostic> {
                 "Name a record type the project declares.",
             ));
         }
-        let route_steps = bodies.get(binding.route.as_str()).copied();
+        let route_steps = bodies_by_id.get(binding.route.as_str()).copied();
         if route_steps.is_none() {
             findings.push(finding(
                 CheckCode::ProjectUnknownRoute,
@@ -2459,6 +2487,39 @@ mod tests {
         };
         let bounded_pack = pack_builder(vec![], vec![bounded]);
         assert_clean(check_routes(&bounded_pack, &project_builder(&bounded_pack)));
+    }
+
+    /// A `direct:` send resolves by the target route's `from` URI, as
+    /// Camel connects routes, not by the route id: a route whose id and
+    /// from differ is reachable by its from name, and an unknown name is
+    /// still refused (staff review P1-6).
+    #[test]
+    fn direct_sends_resolve_by_the_from_uri() {
+        let target = || RouteDefinition {
+            id: id("fetchCase"),
+            from: RouteFrom {
+                uri: direct("fetchCases"),
+            },
+            steps: vec![to_get("case-api")],
+        };
+        let caller = |target_name: &str| RouteDefinition {
+            id: id("other"),
+            from: RouteFrom {
+                uri: direct("other"),
+            },
+            steps: vec![Step::To(ToStep {
+                uri: direct(target_name),
+                parameters: None,
+            })],
+        };
+        let pack = pack_builder(vec![], vec![target(), caller("fetchCases")]);
+        assert!(!codes(&check_routes(&pack, &project_builder(&pack)))
+            .contains(&CheckCode::RouteUnknownDirectTarget.code()));
+        let pack = pack_builder(vec![], vec![target(), caller("fetchCase")]);
+        assert_has(
+            &check_routes(&pack, &project_builder(&pack)),
+            CheckCode::RouteUnknownDirectTarget,
+        );
     }
 
     /// Findings come out in one order for the same input however the
