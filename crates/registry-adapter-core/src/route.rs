@@ -509,6 +509,11 @@ pub struct EnrichStep {
     /// false; failure propagates to the error handler).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub aggregate_on_exception: bool,
+    /// The request method, query, and operation, as a `to` send carries
+    /// them; the method's safety carries the write-safety rules of
+    /// `crate::checks`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parameters: Option<ToParameters>,
 }
 
 /// A `circuitBreaker` step: resilience4j semantics and defaults
@@ -1888,5 +1893,35 @@ mod tests {
         let json = serde_json::to_value(&records).expect("serialize");
         assert!(json.get("maximumFailedRecords").is_some());
         assert!(json.get("maxFailedRecords").is_none());
+    }
+
+    /// The enrichment carries the send parameters: a method, a query, and
+    /// the operation it invokes, like a `to` send (staff review P1-13).
+    #[test]
+    fn enrichment_carries_the_send_parameters() {
+        let enrich: EnrichStep = serde_json::from_str(
+            r#"{
+                "uri": "http:case-api",
+                "parameters": {
+                    "httpMethod": "GET",
+                    "query": { "type": { "constant": "case" } },
+                    "operation": "cases.find"
+                }
+            }"#,
+        )
+        .expect("parse");
+        let parameters = enrich.parameters.as_ref().expect("parameters");
+        assert_eq!(parameters.http_method, HttpMethod::Get);
+        assert_eq!(parameters.query.len(), 1);
+        assert_eq!(
+            parameters
+                .operation
+                .as_ref()
+                .map(|operation| operation.as_str()),
+            Some("cases.find")
+        );
+        let json = serde_json::to_value(&enrich).expect("serialize");
+        assert_eq!(json["parameters"]["httpMethod"], "GET");
+        assert_eq!(json["parameters"]["operation"], "cases.find");
     }
 }

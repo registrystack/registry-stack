@@ -320,6 +320,7 @@ fn template_parameter_checks(pack: &AdapterPack) -> Vec<Diagnostic> {
             // A send's path carries placeholders like any expression slot.
             let path_text = match step {
                 Step::To(to) => to.parameters.as_ref().and_then(|p| p.path.clone()),
+                Step::Enrich(enrich) => enrich.parameters.as_ref().and_then(|p| p.path.clone()),
                 _ => None,
             };
             if let Some(text) = path_text {
@@ -787,13 +788,17 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
 
 /// Whether a `to` send is a non-safe upstream send.
 fn is_non_safe_to(to: &crate::route::ToStep) -> bool {
-    to.parameters
-        .as_ref()
-        .is_some_and(|parameters| !parameters.http_method.is_safe())
-        && matches!(
-            to.uri.component,
-            SendComponent::Http | SendComponent::GraphQl
-        )
+    is_non_safe_upstream(to.uri.component, to.parameters.as_ref())
+}
+
+/// Whether a send or enrichment to the component is a non-safe upstream
+/// send: an `http:` or `graphql:` destination carrying an unsafe method.
+fn is_non_safe_upstream(
+    component: SendComponent,
+    parameters: Option<&crate::route::ToParameters>,
+) -> bool {
+    matches!(component, SendComponent::Http | SendComponent::GraphQl)
+        && parameters.is_some_and(|parameters| !parameters.http_method.is_safe())
 }
 
 /// Whether any step in the body declares redelivery beyond the first
@@ -947,14 +952,14 @@ fn collect_non_safe_sends(steps: &[Step], bodies: &HashMap<&str, &[Step]>) -> Ve
                     repeated,
                 }),
                 Step::Enrich(enrich)
-                    if matches!(
-                        enrich.uri.component,
-                        SendComponent::Http | SendComponent::GraphQl
-                    ) =>
+                    if is_non_safe_upstream(enrich.uri.component, enrich.parameters.as_ref()) =>
                 {
                     sends.push(NonSafeSend {
                         endpoint: enrich.uri.id.clone(),
-                        operation: None,
+                        operation: enrich
+                            .parameters
+                            .as_ref()
+                            .and_then(|parameters| parameters.operation.clone()),
                         inside_idempotency,
                         repeated,
                     });
@@ -1243,7 +1248,23 @@ pub fn step_expressions(step: &Step) -> Vec<Expression> {
             expressions.extend(aggregation_expressions(&split.aggregation_strategy));
             expressions
         }
-        Step::Enrich(enrich) => aggregation_expressions(&enrich.aggregation_strategy),
+        Step::Enrich(enrich) => {
+            let mut expressions = aggregation_expressions(&enrich.aggregation_strategy);
+            if let Some(parameters) = enrich.parameters.as_ref() {
+                expressions.extend(
+                    parameters
+                        .path_parameters
+                        .values()
+                        .cloned()
+                        .collect::<Vec<_>>(),
+                );
+                expressions.extend(parameters.query.values().cloned());
+                if let Some(body) = &parameters.body {
+                    expressions.push(body.clone());
+                }
+            }
+            expressions
+        }
         Step::To(to) => {
             let Some(parameters) = to.parameters.as_ref() else {
                 return Vec::new();
@@ -2685,6 +2706,7 @@ mod tests {
                 uri: direct("sharedLookup"),
                 aggregation_strategy: None,
                 aggregate_on_exception: false,
+                parameters: None,
             })],
         };
         let shared = RouteDefinition {
@@ -2709,6 +2731,7 @@ mod tests {
                 uri: direct("second"),
                 aggregation_strategy: None,
                 aggregate_on_exception: false,
+                parameters: None,
             })],
         };
         let second = RouteDefinition {
@@ -2720,6 +2743,7 @@ mod tests {
                 uri: direct("first"),
                 aggregation_strategy: None,
                 aggregate_on_exception: false,
+                parameters: None,
             })],
         };
         let pack = pack_builder(vec![], vec![first, second]);
@@ -2741,6 +2765,7 @@ mod tests {
                     uri: direct("nowhere"),
                     aggregation_strategy: None,
                     aggregate_on_exception: false,
+                    parameters: None,
                 }),
                 to_get("undeclared-endpoint"),
             ],
@@ -3051,6 +3076,7 @@ mod tests {
                     "scripts/merge.rhai",
                 ))),
                 aggregate_on_exception: false,
+                parameters: None,
             }),
         ];
         let files: Vec<String> = steps
@@ -3098,6 +3124,101 @@ mod tests {
             })],
         };
         let pack = pack_builder(vec![basic_endpoint()], vec![route]);
+        assert_has(&check_pack(&pack), CheckCode::PackUnknownScript);
+    }
+
+    /// An enrichment classifies like a send once it carries the send
+    /// parameters: a GET stays out of the non-safe set, a POST needs the
+    /// idempotent claim, a POST naming an undeclared operation refuses,
+    /// and its query scripts join the inventory (staff review P1-13).
+    #[test]
+    fn enrichment_writes_classify_like_sends() {
+        let enrich = |http_method: HttpMethod, operation: Option<&str>| {
+            Step::Enrich(EnrichStep {
+                uri: send("case-api"),
+                aggregation_strategy: None,
+                aggregate_on_exception: false,
+                parameters: Some(ToParameters {
+                    http_method,
+                    path: None,
+                    path_parameters: BTreeMap::new(),
+                    query: BTreeMap::new(),
+                    body: None,
+                    operation: operation.map(id),
+                    throw_exception_on_failure: true,
+                    ok_status_code_range: None,
+                    resume_bindings: Vec::new(),
+                }),
+            })
+        };
+        let route = |step: Step| RouteDefinition {
+            id: id("fetchCase"),
+            from: RouteFrom {
+                uri: direct("fetchCase"),
+            },
+            steps: vec![
+                Step::ErrorHandler(ErrorHandlerStep {
+                    default_error_handler: Some(DefaultErrorHandler {
+                        redelivery_policy: Some(RedeliveryOptions {
+                            maximum_redeliveries: 2,
+                            ..Default::default()
+                        }),
+                    }),
+                    no_error_handler: None,
+                }),
+                step,
+            ],
+        };
+        // A GET enrichment is not a write; redelivery over it stays clean.
+        let read = route(enrich(HttpMethod::Get, Some("cases.find")));
+        let pack = pack_builder(vec![oauth_endpoint()], vec![read]);
+        assert_clean(check_routes(&pack, &project_builder(&pack)));
+        // A POST enrichment needs the idempotentUpstream claim; the
+        // endpoint's declared claim covers only the named operation.
+        let write = route(enrich(HttpMethod::Post, None));
+        let pack = pack_builder(vec![oauth_endpoint()], vec![write]);
+        assert_has(
+            &check_routes(&pack, &project_builder(&pack)),
+            CheckCode::RouteRedeliveryOverNonSafeSend,
+        );
+        // A POST enrichment naming an operation the endpoint does not
+        // declare refuses like any send.
+        let ghost = route(enrich(HttpMethod::Post, Some("ghost")));
+        let pack = pack_builder(vec![oauth_endpoint()], vec![ghost]);
+        assert_has(
+            &check_routes(&pack, &project_builder(&pack)),
+            CheckCode::RouteUnknownOperation,
+        );
+        // Query scripts of an enrichment join the script inventory.
+        let unscripted = RouteDefinition {
+            id: id("fetchCase"),
+            from: RouteFrom {
+                uri: direct("fetchCase"),
+            },
+            steps: vec![Step::Enrich(EnrichStep {
+                uri: send("case-api"),
+                aggregation_strategy: None,
+                aggregate_on_exception: false,
+                parameters: Some(ToParameters {
+                    http_method: HttpMethod::Get,
+                    path: None,
+                    path_parameters: BTreeMap::new(),
+                    query: BTreeMap::from([(
+                        "filter".to_string(),
+                        crate::model::Expression::Rhai(crate::model::RhaiExpression {
+                            file: "scripts/unpinned.rhai".to_string(),
+                            entrypoint: "main".to_string(),
+                        }),
+                    )]),
+                    body: None,
+                    operation: None,
+                    throw_exception_on_failure: true,
+                    ok_status_code_range: None,
+                    resume_bindings: Vec::new(),
+                }),
+            })],
+        };
+        let pack = pack_builder(vec![basic_endpoint()], vec![unscripted]);
         assert_has(&check_pack(&pack), CheckCode::PackUnknownScript);
     }
 
@@ -5242,6 +5363,7 @@ mod tests {
                     uri: direct(&format!("hop{}", index + 1)),
                     aggregation_strategy: None,
                     aggregate_on_exception: false,
+                    parameters: None,
                 })]
             } else {
                 vec![]
@@ -5274,6 +5396,7 @@ mod tests {
                     uri: direct(&format!("hop{}", index + 1)),
                     aggregation_strategy: None,
                     aggregate_on_exception: false,
+                    parameters: None,
                 })]
             } else {
                 vec![to_get("case-api")]
