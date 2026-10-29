@@ -1579,10 +1579,12 @@ async fn lookup_body_exactness_origin_types_and_unresolved_equivalence_are_value
         )
         .await;
     assert_eq!(claim_values_body.status(), StatusCode::BAD_REQUEST);
-    assert_eq!(
-        body_json(claim_values_body).await["code"],
-        "request.invalid"
-    );
+    let claim_values_problem = body_json(claim_values_body).await;
+    assert_eq!(claim_values_problem["code"], "request.invalid");
+    // The refusal names the fixed `values` member, never the submitted names
+    // or values.
+    assert_eq!(claim_values_problem["fieldPath"], "/values");
+    assert!(!claim_values_problem.to_string().contains("DO-NOT-LEAK"));
 
     let missing_claim = harness
         .send_json(

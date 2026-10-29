@@ -2820,6 +2820,9 @@ enum BRegProblemPath {
     /// A record write body member: `/data`, `/data/<apiName>`, a JSON Patch
     /// operation member, or a batch item member.
     RecordRequest,
+    /// The lookup body's `values` member, refused when the selector takes its
+    /// values from a verified claim.
+    LookupRequest,
     /// The `Idempotency-Key` header, or an `If-Match` header a batch refuses.
     Header,
     /// A fixed query parameter name such as `$select`.
@@ -2834,7 +2837,7 @@ impl BRegProblemPath {
                 code,
                 BRegProblemCode::ActionRefused | BRegProblemCode::RequestInvalid
             ),
-            Self::ActionRequest | Self::RecordRequest | Self::Header => {
+            Self::ActionRequest | Self::RecordRequest | Self::LookupRequest | Self::Header => {
                 code == BRegProblemCode::RequestInvalid
             }
             Self::StatisticalDimension => {
@@ -3015,6 +3018,9 @@ fn breg_problem_path(path: &str) -> Option<BRegProblemPath> {
     }
     if valid_statistical_dimension_problem_path(path) {
         return Some(BRegProblemPath::StatisticalDimension);
+    }
+    if path == "/values" {
+        return Some(BRegProblemPath::LookupRequest);
     }
     if path == "Idempotency-Key" || path == "If-Match" {
         return Some(BRegProblemPath::Header);

@@ -72,7 +72,7 @@
     - ['`authentication.refused`', '401', 'A bearer token is missing or rejected: bad signature, wrong issuer or audience, expired, denied key, or a claim outside policy.']
     - ['`resource.not_found`', '404', 'A verified token that does not satisfy the profile, a route the profile cannot reach, or a record outside the caller''s row boundary. The server does not distinguish these cases.']
     - ['`lookup.unresolved`', '404', 'A lookup matched zero records or more than one.']
-    - ['`request.invalid`', '400', 'The body, headers, or path did not match the compiled contract. `fieldPath` names the body member or header at fault when one is, and never a field name the grant does not admit.']
+    - ['`request.invalid`', '400', 'The body, headers, or path did not match the compiled contract. `fieldPath` names the body member or header at fault when one is, and never a field name the grant does not admit. A lookup against a selector whose values come from a verified claim answers `fieldPath` `/values` when the body sends `values`.']
     - ['`query.invalid`', '400', 'A query option was malformed, over a bound, or not permitted by the grant. `fieldPath` names the query parameter, such as `$select`, when one is at fault.']
     - ['`query.cursor_invalid`', '400', 'A `$skiptoken` that is malformed, was issued for a different query, or has expired.']
     - ['`action.refused`', '422', 'An Action function intentionally refused the operation. `refusalCode` identifies a declared reason, `detail` contains its static label, and optional `fieldPath` names an input. No effects commit.']

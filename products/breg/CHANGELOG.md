@@ -33,6 +33,13 @@
   offer reload and retry, must accept the new code. The generated OpenAPI
   `412` description for the Proposal `submit` and `apply` operations names both
   codes.
+- A lookup that sends `values` to a selector whose values come from a verified
+  claim still answers `400 request.invalid`, and now carries `fieldPath`
+  `/values`. The pointer is a fixed constant, never a submitted name or value,
+  and is returned only after the selector and its grant resolve; unknown,
+  ungranted and missing-claim selectors stay a concealed `404`. The Rust client
+  accepts `/values` only on `request.invalid`; Node.js and Python pass it
+  through `fieldPath` unchanged.
 
 ## 0.44.0 - 2026-10-27
 

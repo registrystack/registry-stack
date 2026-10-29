@@ -1213,6 +1213,17 @@ async fn lookup_dispatch(
             )
             .await;
         }
+        Err(LookupResolutionError::ValuesNotAccepted) => {
+            return audited_read_refusal(
+                &service,
+                &route,
+                &surface,
+                None,
+                invalid_request_at(&RequestLocation::lookup_values()),
+                &correlation,
+            )
+            .await;
+        }
         Err(LookupResolutionError::Unresolved) => {
             return audited_read_refusal(
                 &service,
@@ -4158,6 +4169,9 @@ struct LookupBody {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum LookupResolutionError {
     InvalidRequest,
+    /// The selector takes its values from a verified claim, so the body must
+    /// not carry `values`.
+    ValuesNotAccepted,
     Unresolved,
 }
 
@@ -4222,7 +4236,7 @@ fn resolve_lookup_selector(
         }
         LookupValueOrigin::VerifiedClaim => {
             if body.values.is_some() {
-                return Err(LookupResolutionError::InvalidRequest);
+                return Err(LookupResolutionError::ValuesNotAccepted);
             }
             lookup_verified_claim_values(surface.entity, selector, grant, claims)?
         }
