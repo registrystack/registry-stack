@@ -3911,6 +3911,209 @@ formats:
     securityMembers: []
     restrictingMembers: []
 
+  - id: adapter/project
+    product: adapter
+    title: Registry Adapter project
+    files: [project.yaml]
+    syntax: yaml
+    audience: authored
+    stability: experimental
+    current:
+      apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
+      kind: AdapterProject
+      checkedBy:
+        file: crates/registry-adapter-core/src/naming.rs
+        symbol: ADAPTER_PROJECT_API_VERSION
+    target:
+      apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
+      kind: AdapterProject
+    schema:
+      path: products/adapter/schemas/project.v1alpha1.schema.json
+      id: https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json
+      origin: generated
+      generator: cargo run -p registry-adapterctl -- schemas --output-dir products/adapter/schemas
+      driftCheck: products/adapter/scripts/check-contracts.sh
+    reader:
+      crate: registry-adapterctl
+      file: crates/registry-adapterctl/src/check.rs
+      function: run
+      type: AdapterProject
+    check: adapterctl check {project}
+    example: products/adapter/examples/dhis2-tracker/project.yaml
+    conformance:
+      requiredText: /id
+      optionalText: none
+      integer: /bindings/0/maximumUpstreamCalls
+      boolean: /recordTypes/0/fields/0/required
+    securityMembers: []
+    restrictingMembers: []
+
+  - id: adapter/profile
+    product: adapter
+    title: Registry Adapter facade profile
+    files: [profile.yaml]
+    syntax: yaml
+    audience: authored
+    stability: experimental
+    current:
+      apiVersion: id.registrystack.org/formats/adapter/profile/v1alpha1
+      kind: AdapterProfile
+      checkedBy:
+        file: crates/registry-adapter-core/src/naming.rs
+        symbol: ADAPTER_PROFILE_API_VERSION
+    target:
+      apiVersion: id.registrystack.org/formats/adapter/profile/v1alpha1
+      kind: AdapterProfile
+    schema:
+      path: products/adapter/schemas/profile.v1alpha1.schema.json
+      id: https://id.registrystack.org/schemas/adapter/profile/profile.v1alpha1.schema.json
+      origin: generated
+      generator: cargo run -p registry-adapterctl -- schemas --output-dir products/adapter/schemas
+      driftCheck: products/adapter/scripts/check-contracts.sh
+    reader:
+      crate: registry-adapterctl
+      file: crates/registry-adapterctl/src/check.rs
+      function: run
+      type: AdapterProfile
+    check: adapterctl check {project}
+    example: products/adapter/profiles/case-api/profile.yaml
+    conformance:
+      requiredText: /version
+      optionalText: none
+      integer: /operations/0/pagination/pageSizeMinimum
+      boolean: none
+    securityMembers: []
+    restrictingMembers: []
+
+  - id: adapter/pack
+    product: adapter
+    title: Registry Adapter pack
+    files: [pack.yaml]
+    syntax: yaml
+    audience: authored
+    stability: experimental
+    current:
+      apiVersion: id.registrystack.org/formats/adapter/pack/v1alpha1
+      kind: AdapterPack
+      checkedBy:
+        file: crates/registry-adapter-core/src/naming.rs
+        symbol: ADAPTER_PACK_API_VERSION
+    target:
+      apiVersion: id.registrystack.org/formats/adapter/pack/v1alpha1
+      kind: AdapterPack
+    schema:
+      path: products/adapter/schemas/pack.v1alpha1.schema.json
+      id: https://id.registrystack.org/schemas/adapter/pack/pack.v1alpha1.schema.json
+      origin: generated
+      generator: cargo run -p registry-adapterctl -- schemas --output-dir products/adapter/schemas
+      driftCheck: products/adapter/scripts/check-contracts.sh
+    reader:
+      crate: registry-adapterctl
+      file: crates/registry-adapterctl/src/check.rs
+      function: run
+      type: AdapterPack
+    check: adapterctl check {project}
+    example: products/adapter/packs/dhis2-tracker/pack.yaml
+    conformance:
+      requiredText: /version
+      optionalText: none
+      integer: none
+      boolean: /endpoints/0/operations/1/idempotentUpstream
+    securityMembers: []
+    restrictingMembers: []
+
+  - id: adapter/fixture
+    product: adapter
+    title: Registry Adapter fixture suite
+    files: [fixtures/**/*.yaml, fixtures/**/*.yml]
+    syntax: yaml
+    audience: authored
+    stability: experimental
+    current:
+      apiVersion: id.registrystack.org/formats/adapter/fixture/v1alpha1
+      kind: AdapterFixture
+      checkedBy:
+        file: crates/registry-adapter-core/src/naming.rs
+        symbol: ADAPTER_FIXTURE_API_VERSION
+    target:
+      apiVersion: id.registrystack.org/formats/adapter/fixture/v1alpha1
+      kind: AdapterFixture
+    schema:
+      path: products/adapter/schemas/fixture.v1alpha1.schema.json
+      id: https://id.registrystack.org/schemas/adapter/fixture/fixture.v1alpha1.schema.json
+      origin: generated
+      generator: cargo run -p registry-adapterctl -- schemas --output-dir products/adapter/schemas
+      driftCheck: products/adapter/scripts/check-contracts.sh
+    reader:
+      crate: registry-adapterctl
+      file: crates/registry-adapterctl/src/check.rs
+      function: run
+      type: AdapterFixture
+    check: adapterctl check {project}
+    example: products/adapter/fixtures/dhis2-tracker/get-found.yaml
+    conformance:
+      requiredText: /id
+      optionalText: none
+      integer: /entries/0/upstreamResponse/status
+      boolean: none
+    securityMembers: []
+    restrictingMembers: []
+
+  - id: adapter/runtime
+    product: adapter
+    title: Registry Adapter runtime configuration
+    files: [runtime.yaml, runtime.example.yaml]
+    syntax: yaml
+    audience: operator
+    stability: experimental
+    current:
+      apiVersion: id.registrystack.org/formats/adapter/runtime/v1alpha1
+      kind: AdapterRuntimeConfig
+      checkedBy:
+        file: crates/registry-adapter-core/src/naming.rs
+        symbol: ADAPTER_RUNTIME_API_VERSION
+    target:
+      apiVersion: id.registrystack.org/formats/adapter/runtime/v1alpha1
+      kind: AdapterRuntimeConfig
+    schema:
+      path: products/adapter/schemas/runtime.v1alpha1.schema.json
+      id: https://id.registrystack.org/schemas/adapter/runtime/runtime.v1alpha1.schema.json
+      origin: generated
+      generator: cargo run -p registry-adapterctl -- schemas --output-dir products/adapter/schemas
+      driftCheck: products/adapter/scripts/check-contracts.sh
+    reader:
+      crate: registry-adapterctl
+      file: crates/registry-adapterctl/src/check.rs
+      function: run
+      type: AdapterRuntimeConfig
+    check: adapterctl check {project} --runtime {file}
+    example: products/adapter/examples/dhis2-tracker/runtime.example.yaml
+    conformance:
+      requiredText: /listener/bind
+      optionalText: /endpoints/0/caBundleRef
+      integer: /audit/retentionDays
+      boolean: none
+    securityMembers:
+      - pointer: /listener/bind
+        whenOmitted: refused
+      - pointer: /database/runtimeUrlRef
+        whenOmitted: refused
+      - pointer: /database/testOnlyPlaintext
+        whenOmitted: closed
+      - pointer: /oidc/issuer
+        whenOmitted: refused
+      - pointer: /oidc/audience
+        whenOmitted: refused
+      - pointer: /oidc/allowInsecureHttp
+        whenOmitted: open
+      - pointer: /endpoints/*/baseUrl
+        whenOmitted: refused
+      - pointer: /endpoints/*/credential
+        whenOmitted: refused
+      - pointer: /allowedPrivateCidrs
+        whenOmitted: closed
+    restrictingMembers: [/allowedPrivateCidrs, /oidc/audience, /oidc/issuer]
+
 outOfScope:
   - files: products/breg/generated/event-schemas/proposal-lifecycle.schema.json
     reason: Generated Proposal lifecycle event payload, governed by the BReg event contract rather than a configuration format.

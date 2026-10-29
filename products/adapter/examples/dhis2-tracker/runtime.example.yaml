@@ -1,0 +1,31 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/runtime/runtime.v1alpha1.schema.json
+#
+# The dhis2-tracker example deployment's runtime configuration, in the
+# example form: every secret is a reference into the operator's provider,
+# never a value, and the listener binds loopback only. A deployment copies
+# this file to its own runtime.yaml and fills in its environment's
+# references. Check it with the project (whose header comment carries the
+# full command):
+#   adapterctl check products/adapter/examples/dhis2-tracker/project.yaml \
+#     --runtime products/adapter/examples/dhis2-tracker/runtime.example.yaml
+apiVersion: id.registrystack.org/formats/adapter/runtime/v1alpha1
+kind: AdapterRuntimeConfig
+id: dhis2-tracker-example
+endpoints:
+  - endpoint: tracker
+    baseUrl: https://tracker.example.invalid
+    caBundleRef: secret:file/dhis2-private-ca.pem
+    credential:
+      type: basic
+      usernameRef: secret:env/DHIS2_USERNAME
+      passwordRef: secret:env/DHIS2_PASSWORD
+listener:
+  bind: 127.0.0.1:8080
+database:
+  runtimeUrlRef: secret:env/ADAPTER_DB_RUNTIME
+  migrationUrlRef: secret:env/ADAPTER_DB_MIGRATION
+oidc:
+  issuer: https://issuer.example.invalid
+  audience: registry-adapter-example
+audit:
+  retentionDays: 90
