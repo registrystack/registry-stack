@@ -1425,7 +1425,7 @@ mod tests {
                     "expression": { "jsonpath": "$.instances" },
                     "maximumItems": 100,
                     "stopOnException": true,
-                    "aggregationStrategy": { "jsonArrayAppend": { "from": "pages", "into": "records", "uniqueBy": "id" } },
+                    "aggregationStrategy": { "type": "json-array-append", "from": "pages", "into": "records", "uniqueBy": "id" },
                     "steps": [ { "setBody": { "constant": 1 } } ]
                 }
             }"#,
@@ -1520,7 +1520,7 @@ mod tests {
             r#"{
                 "enrich": {
                     "uri": "http:lookup",
-                    "aggregationStrategy": { "jsonMerge": { "from": "extra", "into": "record" } }
+                    "aggregationStrategy": { "type": "json-merge", "from": "extra", "into": "record" }
                 }
             }"#,
         )

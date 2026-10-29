@@ -6,7 +6,56 @@
 //! sections 8.5, 8.6, and 8.7).
 
 use registry_platform_yaml::Digest;
-use serde::{Deserialize, Serialize};
+/// Serialize an externally tagged serde form under a `type` member, the
+/// shape `registry-platform-yaml`'s `tagged_union!` reads. The same helper
+/// pattern lives beside every tagged union in the workspace.
+pub(crate) fn serialize_tagged<S: Serializer>(
+    external: Result<serde_json::Value, serde_json::Error>,
+    tag: &'static str,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    use serde::ser::SerializeMap as _;
+
+    let external = external.map_err(serde::ser::Error::custom)?;
+    let serde_json::Value::Object(entries) = external else {
+        return Err(serde::ser::Error::custom(
+            "a tagged union serialized as a non-object",
+        ));
+    };
+    let mut entries = entries.into_iter();
+    let (Some((variant, members)), None) = (entries.next(), entries.next()) else {
+        return Err(serde::ser::Error::custom(
+            "a tagged union serialized without exactly one variant",
+        ));
+    };
+    let serde_json::Value::Object(members) = members else {
+        return Err(serde::ser::Error::custom(
+            "a tagged union variant serialized as a non-object",
+        ));
+    };
+    let mut map = serializer.serialize_map(Some(members.len() + 1))?;
+    map.serialize_entry(tag, &variant)?;
+    for (key, value) in &members {
+        map.serialize_entry(key, value)?;
+    }
+    map.end()
+}
+
+macro_rules! serialize_tagged_union {
+    ($type:ty, tag = $tag:literal) => {
+        impl Serialize for $type {
+            fn serialize<S: ::serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+                crate::model::serialize_tagged(
+                    <$type>::serialize(self, serde_json::value::Serializer),
+                    $tag,
+                    serializer,
+                )
+            }
+        }
+    };
+}
+use serde::{Deserialize, Serialize, Serializer};
+pub(crate) use serialize_tagged_union;
 
 /// A mapping keyed by local identifiers (CFG-ID-1): each key is refused at
 /// its own position unless it is a `LocalId`, and the model keeps the
@@ -161,18 +210,25 @@ pub enum Expression {
 
 /// An aggregation strategy, compiled in and named after Camel's built-ins,
 /// plus two JSON additions marked as such in
-/// `products/adapter/CONCEPT.md` section 8.6. Externally tagged by name.
+/// `products/adapter/CONCEPT.md` section 8.6. Tagged by `type` on the
+/// wire; every variant is a struct variant, the shape
+/// `registry-platform-yaml`'s `tagged_union!` reads.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
+#[serde(
+    remote = "Self",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
 pub enum AggregationStrategy {
     /// Keep the newest exchange: the default for `enrich`, which replaces
     /// the body with the resource reply.
-    UseLatest,
+    UseLatest {},
     /// Keep the original exchange: the default for `split`.
-    UseOriginal,
+    UseOriginal {},
     /// Concatenate the split results into one list, Camel's `groupedBody`.
-    GroupedBody,
+    GroupedBody {},
     /// Append one array's elements into another, refusing a duplicate
     /// `uniqueBy` value with the `aggregation.duplicate` class.
     JsonArrayAppend {
@@ -192,8 +248,15 @@ pub enum AggregationStrategy {
         into: String,
     },
     /// A custom strategy: a Rhai entrypoint over the old and new bodies.
-    Rhai(RhaiExpression),
+    Rhai {
+        /// The script file and entrypoint, resolved against the pack's
+        /// script inventory.
+        expression: RhaiExpression,
+    },
 }
+
+registry_platform_yaml::tagged_union!(AggregationStrategy, tag = "type");
+serialize_tagged_union!(AggregationStrategy, tag = "type");
 
 /// A closed error class, the port of Camel's Java exception hierarchy
 /// (`products/adapter/CONCEPT.md` section 8.7). Clauses match the closest
@@ -803,6 +866,36 @@ mod tests {
             ErrorClass::closest_match(&[ErrorClass::UpstreamTimeout], &[ErrorClass::Validation]),
             None
         );
+    }
+
+    /// The aggregation strategies tag by `type` on the wire, the
+    /// parameterless ones carry no payload, and an unknown member is
+    /// refused (CFG-ID-7, CFG-SCHEMA-8, CFG-NAME-2).
+    #[test]
+    fn aggregation_strategies_tag_by_type_with_empty_payloads() {
+        assert_eq!(
+            serde_json::to_string(&AggregationStrategy::UseLatest {}).expect("serialize"),
+            r#"{"type":"use-latest"}"#
+        );
+        let grouped: AggregationStrategy =
+            serde_json::from_str(r#"{"type": "grouped-body"}"#).expect("read");
+        assert!(matches!(grouped, AggregationStrategy::GroupedBody {}));
+        let rhai: AggregationStrategy = serde_json::from_str(
+            r#"{"type": "rhai", "expression": {"file": "s.rhai", "entrypoint": "go"}}"#,
+        )
+        .expect("read");
+        let rhai_wire = serde_json::to_value(&rhai).expect("serialize");
+        assert_eq!(rhai_wire["type"], "rhai");
+        assert_eq!(rhai_wire["expression"]["file"], "s.rhai");
+        assert_eq!(rhai_wire["expression"]["entrypoint"], "go");
+        assert!(
+            serde_json::from_str::<AggregationStrategy>(
+                r#"{"type": "json-merge", "from": "a", "into": "b", "extra": 1}"#,
+            )
+            .is_err(),
+            "an unknown member is refused"
+        );
+        assert!(serde_json::from_str::<AggregationStrategy>(r#"{"useLatest": {}}"#).is_err());
     }
 
     /// `is_within` goes down the hierarchy only: a clause naming a

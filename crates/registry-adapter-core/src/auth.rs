@@ -16,56 +16,9 @@
 //! forwarded upstream.
 
 use registry_platform_yaml::{BoundedU64, SecretReference};
-use serde::{Deserialize, Serialize, Serializer};
+use serde::{Deserialize, Serialize};
 
-/// Serialize an externally tagged serde form under a `type` member, the
-/// shape `registry-platform-yaml`'s `tagged_union!` reads. The same helper
-/// pattern lives beside every tagged union in the workspace.
-fn serialize_tagged<S: Serializer>(
-    external: Result<serde_json::Value, serde_json::Error>,
-    tag: &'static str,
-    serializer: S,
-) -> Result<S::Ok, S::Error> {
-    use serde::ser::SerializeMap as _;
-
-    let external = external.map_err(serde::ser::Error::custom)?;
-    let serde_json::Value::Object(entries) = external else {
-        return Err(serde::ser::Error::custom(
-            "a tagged union serialized as a non-object",
-        ));
-    };
-    let mut entries = entries.into_iter();
-    let (Some((variant, members)), None) = (entries.next(), entries.next()) else {
-        return Err(serde::ser::Error::custom(
-            "a tagged union serialized without exactly one variant",
-        ));
-    };
-    let serde_json::Value::Object(members) = members else {
-        return Err(serde::ser::Error::custom(
-            "a tagged union variant serialized as a non-object",
-        ));
-    };
-    let mut map = serializer.serialize_map(Some(members.len() + 1))?;
-    map.serialize_entry(tag, &variant)?;
-    for (key, value) in &members {
-        map.serialize_entry(key, value)?;
-    }
-    map.end()
-}
-
-macro_rules! serialize_tagged_union {
-    ($type:ty, tag = $tag:literal) => {
-        impl Serialize for $type {
-            fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-                serialize_tagged(
-                    <$type>::serialize(self, serde_json::value::Serializer),
-                    $tag,
-                    serializer,
-                )
-            }
-        }
-    };
-}
+pub(crate) use crate::model::serialize_tagged_union;
 
 /// Where a shared client secret travels, Evidence's `CredentialPlacement`
 /// spelling.

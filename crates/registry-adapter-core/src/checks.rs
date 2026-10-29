@@ -1218,7 +1218,9 @@ fn aggregation_expressions(
     strategy
         .as_ref()
         .and_then(|strategy| match strategy {
-            crate::model::AggregationStrategy::Rhai(rhai) => Some(Expression::Rhai(rhai.clone())),
+            crate::model::AggregationStrategy::Rhai { expression } => {
+                Some(Expression::Rhai(expression.clone()))
+            }
             _ => None,
         })
         .into_iter()
@@ -3062,9 +3064,9 @@ mod tests {
             Step::Split(SplitStep {
                 expression: rhai("scripts/pieces.rhai"),
                 maximum_items: None,
-                aggregation_strategy: Some(crate::model::AggregationStrategy::Rhai(rhai_expr(
-                    "scripts/group.rhai",
-                ))),
+                aggregation_strategy: Some(crate::model::AggregationStrategy::Rhai {
+                    expression: rhai_expr("scripts/group.rhai"),
+                }),
                 stop_on_exception: false,
                 error_threshold: None,
                 maximum_failed_records: None,
@@ -3072,9 +3074,9 @@ mod tests {
             }),
             Step::Enrich(EnrichStep {
                 uri: send("case-api"),
-                aggregation_strategy: Some(crate::model::AggregationStrategy::Rhai(rhai_expr(
-                    "scripts/merge.rhai",
-                ))),
+                aggregation_strategy: Some(crate::model::AggregationStrategy::Rhai {
+                    expression: rhai_expr("scripts/merge.rhai"),
+                }),
                 aggregate_on_exception: false,
                 parameters: None,
             }),
@@ -3114,9 +3116,9 @@ mod tests {
             steps: vec![Step::Split(SplitStep {
                 expression: rhai("scripts/pieces.rhai"),
                 maximum_items: None,
-                aggregation_strategy: Some(crate::model::AggregationStrategy::Rhai(rhai_expr(
-                    "scripts/unpinned.rhai",
-                ))),
+                aggregation_strategy: Some(crate::model::AggregationStrategy::Rhai {
+                    expression: rhai_expr("scripts/unpinned.rhai"),
+                }),
                 stop_on_exception: false,
                 error_threshold: None,
                 maximum_failed_records: None,
