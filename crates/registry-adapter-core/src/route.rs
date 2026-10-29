@@ -915,7 +915,7 @@ pub struct RouteTemplate {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TemplatedRoute {
     /// The pack template this instantiation references.
-    pub route_template_ref: ExternalId,
+    pub route_template: ExternalId,
     /// The instantiated route id; its `from` becomes `direct:<routeId>`.
     pub route_id: ExternalId,
     /// Parameter value by parameter name; each key is a local identifier,
@@ -1782,7 +1782,7 @@ mod tests {
         assert!(template.parameters[0].required);
         let templated: TemplatedRoute = serde_json::from_str(
             r#"{
-                "routeTemplateRef": "pagedFetch",
+                "routeTemplate": "pagedFetch",
                 "routeId": "listCases",
                 "parameters": { "program": "salsa" }
             }"#,
@@ -1852,7 +1852,7 @@ mod tests {
         assert!(to("two words").is_err());
         let templated = |key: &str| {
             serde_json::from_str::<TemplatedRoute>(&format!(
-                r#"{{ "routeTemplateRef": "pager", "routeId": "listCases", "parameters": {{ "{key}": "50" }} }}"#
+                r#"{{ "routeTemplate": "pager", "routeId": "listCases", "parameters": {{ "{key}": "50" }} }}"#
             ))
         };
         assert!(templated("page-size").is_ok());

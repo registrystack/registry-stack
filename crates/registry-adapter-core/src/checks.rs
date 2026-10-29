@@ -118,7 +118,7 @@ fn route_bodies<'a>(
     for instantiated in &project.templated_routes {
         if let Some(template) = pack
             .route_templates
-            .get(instantiated.route_template_ref.as_str())
+            .get(instantiated.route_template.as_str())
         {
             bodies.insert(instantiated.route_id.as_str(), template.steps.as_slice());
         }
@@ -143,7 +143,7 @@ fn route_bodies_by_id<'a>(
     for instantiated in &project.templated_routes {
         if let Some(template) = pack
             .route_templates
-            .get(instantiated.route_template_ref.as_str())
+            .get(instantiated.route_template.as_str())
         {
             bodies.insert(instantiated.route_id.as_str(), template.steps.as_slice());
         }
@@ -1498,12 +1498,12 @@ pub fn check_project(workspace: &Workspace<'_>) -> Vec<Diagnostic> {
         let prefix = format!("/templatedRoutes/{index}");
         if pack
             .route_templates
-            .get(instantiated.route_template_ref.as_str())
+            .get(instantiated.route_template.as_str())
             .is_none()
         {
             findings.push(finding(
                 CheckCode::ProjectUnknownTemplate,
-                &format!("{prefix}/routeTemplateRef"),
+                &format!("{prefix}/routeTemplate"),
                 "the instantiation references no declared template",
                 "Name a template the pinned pack declares.",
             ));
@@ -1528,7 +1528,7 @@ pub fn check_project(workspace: &Workspace<'_>) -> Vec<Diagnostic> {
         }
         if let Some(template) = pack
             .route_templates
-            .get(instantiated.route_template_ref.as_str())
+            .get(instantiated.route_template.as_str())
         {
             for (name, value) in &instantiated.parameters {
                 let Some(parameter) = template
@@ -2970,7 +2970,7 @@ mod tests {
         let mut project = project_builder(&pack);
         project.access_profiles = UniqueIdList::new(Vec::new()).expect("empty");
         project.templated_routes = UniqueIdList::new(vec![TemplatedRoute {
-            route_template_ref: id("pager"),
+            route_template: id("pager"),
             route_id: id("pager-1"),
             parameters: BTreeMap::new(),
         }])
@@ -4391,7 +4391,7 @@ mod tests {
         let pack = pack_builder(vec![oauth_endpoint()], vec![]);
         let mut project = project_builder(&pack);
         project.templated_routes = UniqueIdList::new(vec![TemplatedRoute {
-            route_template_ref: id("no-such-template"),
+            route_template: id("no-such-template"),
             route_id: id("freshRoute"),
             parameters: BTreeMap::new(),
         }])
@@ -4427,7 +4427,7 @@ mod tests {
         let mut project = project_builder(&pack);
         project.access_profiles = UniqueIdList::new(Vec::new()).expect("empty");
         project.templated_routes = UniqueIdList::new(vec![TemplatedRoute {
-            route_template_ref: id("fetchPage"),
+            route_template: id("fetchPage"),
             route_id: id("fetchCases"),
             parameters: BTreeMap::new(),
         }])
@@ -4449,12 +4449,12 @@ mod tests {
     #[test]
     fn project_reader_refuses_two_instantiations_with_one_route_id() {
         let a = TemplatedRoute {
-            route_template_ref: id("fetchPage"),
+            route_template: id("fetchPage"),
             route_id: id("fetchCases"),
             parameters: BTreeMap::new(),
         };
         let b = TemplatedRoute {
-            route_template_ref: id("fetchPage"),
+            route_template: id("fetchPage"),
             route_id: id("fetchCases"),
             parameters: BTreeMap::new(),
         };
@@ -4531,7 +4531,7 @@ mod tests {
             let mut project = project_builder(&pack);
             project.access_profiles = UniqueIdList::new(Vec::new()).expect("empty");
             project.templated_routes = UniqueIdList::new(vec![TemplatedRoute {
-                route_template_ref: id("fetchPage"),
+                route_template: id("fetchPage"),
                 route_id: id("fetchCases"),
                 parameters,
             }])
@@ -4639,7 +4639,7 @@ mod tests {
         pack.route_templates = UniqueIdList::new(vec![template_route]).expect("unique");
         let mut project = project_builder(&pack);
         project.templated_routes = UniqueIdList::new(vec![TemplatedRoute {
-            route_template_ref: id("pagedFetch"),
+            route_template: id("pagedFetch"),
             route_id: id("pagedFetch"),
             parameters: BTreeMap::new(),
         }])

@@ -188,7 +188,7 @@ mod tests {
             pack: pin("case-api-pack"),
             record_types: UniqueIdList::new(vec![record_type()]).expect("unique"),
             templated_routes: UniqueIdList::new(vec![crate::route::TemplatedRoute {
-                route_template_ref: ExternalId::new("pagedFetch").expect("id"),
+                route_template: ExternalId::new("pagedFetch").expect("id"),
                 route_id: ExternalId::new("fetchCases").expect("id"),
                 parameters: std::collections::BTreeMap::from([(
                     "program".to_string(),
