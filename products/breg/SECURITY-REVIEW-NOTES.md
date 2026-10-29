@@ -1122,9 +1122,15 @@ carries caller-controlled bytes into responses and logs.
   refused at normalization; both now take the same branch before I/O.
 - Query locations are attributed after parsing and admission in a fixed
   order that never consults the grant, so which parameter is named does not
-  depend on a withheld field either. The feature API and lookup bodies keep
-  their unlocated refusals: the feature API speaks its own parameter names,
-  and lookup refusals keep the value-free equivalence BREG-SEC-20 pins.
+  depend on a withheld field either. The feature API keeps its unlocated
+  refusals because it speaks its own parameter names. Lookup bodies keep
+  the value-free equivalence BREG-SEC-20 pins: every refusal is unlocated
+  except one, a `values` member sent to a selector whose values come from a
+  verified claim, which names the fixed pointer `/values`. That refusal is
+  reached only after the selector and its grant resolve, so unknown,
+  ungranted and missing-claim selectors still collapse to the one concealed
+  404; the pointer is a constant, never a submitted name or value, and
+  `valueOrigin` is already part of the caller's lookup metadata.
 - `detail` and `code` are unchanged, so typed clients keep matching them,
   and the Rust client accepts the new forms only on `request.invalid` and
   `query.invalid`. It retains a location only after the shared 256-character

@@ -3,7 +3,8 @@
 //! The closed locations a record or query refusal may name in `fieldPath`.
 //!
 //! A location is a fixed envelope member (`/data`, `/items/3`,
-//! `/items/3/patch/0/path`, `/0/path` in a JSON Patch document), a compiled
+//! `/items/3/patch/0/path`, `/0/path` in a JSON Patch document, `/values` in a
+//! lookup body), a compiled
 //! API name the caller's grant already admits (`/data/householdCode`), or a
 //! fixed query parameter or header name. A caller-supplied name that is
 //! unknown or withheld is never echoed: the location stops at its container,
@@ -80,6 +81,8 @@ enum Scope {
     Batch,
     /// Relative to an Action or Proposal body: `/input...`.
     Input,
+    /// Relative to a lookup body: `/values`.
+    Lookup,
 }
 
 /// A validated location inside a record write body.
@@ -144,6 +147,15 @@ impl RequestLocation {
         }
     }
 
+    /// The `values` member of a lookup body.
+    #[must_use]
+    pub fn lookup_values() -> Self {
+        Self {
+            pointer: "/values".to_owned(),
+            scope: Scope::Lookup,
+        }
+    }
+
     /// The `items` member of a batch body.
     #[must_use]
     pub fn batch_items() -> Self {
@@ -182,7 +194,7 @@ impl RequestLocation {
         let pointer = match self.scope {
             Scope::Record => format!("/items/{index}{}", self.pointer),
             Scope::Patch => format!("/items/{index}/patch{}", self.pointer),
-            Scope::Batch | Scope::Input => return self,
+            Scope::Batch | Scope::Input | Scope::Lookup => return self,
         };
         if pointer.chars().count() > MAX_FIELD_PATH_CHARS {
             return Self::batch_item(index, None);
@@ -308,6 +320,7 @@ mod tests {
                 .as_str(),
             "/items/4/ifMatch"
         );
+        assert_eq!(RequestLocation::lookup_values().as_str(), "/values");
     }
 
     #[test]
