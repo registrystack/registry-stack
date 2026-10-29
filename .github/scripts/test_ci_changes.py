@@ -32,6 +32,7 @@ from ci_changes import (
     BREG_PACKAGES,
     CASEWORK_PACKAGES,
     DOCUMENTS_PACKAGES,
+    ADAPTER_PACKAGES,
     MESSAGING_PACKAGES,
     MESSAGING_TUTORIAL_INPUTS,
     RENDER_TUTORIAL_INPUTS,
@@ -1218,6 +1219,27 @@ class CiChangesTest(unittest.TestCase):
         unrelated = classify(self.workspace, ("crates/registry-messaging/src/lib.rs",))
         self.assertFalse(unrelated["documents_contracts"])
         self.assertFalse(unrelated["documents_postgres"])
+
+    def test_adapter_crates_and_product_select_its_shard(self) -> None:
+        for path in (
+            "products/adapter/CONCEPT.md",
+            "crates/registry-adapter-core/src/lib.rs",
+            "crates/registry-adapter/src/lib.rs",
+            "crates/registry-adapterctl/src/main.rs",
+        ):
+            with self.subTest(path=path):
+                outputs = classify(self.workspace, (path,))
+                self.assertIn(
+                    "adapter",
+                    {row["name"] for row in outputs["rust_matrix"]["include"]},
+                )
+        product = classify(self.workspace, ("products/adapter/CONCEPT.md",))
+        self.assertLessEqual(set(ADAPTER_PACKAGES), set(product["rust_packages"]))
+        unrelated = classify(self.workspace, ("crates/registry-documents/src/lib.rs",))
+        self.assertNotIn(
+            "adapter",
+            {row["name"] for row in unrelated["rust_matrix"]["include"]},
+        )
 
     def test_evidence_status_store_and_dependencies_select_the_postgres_job(
         self,

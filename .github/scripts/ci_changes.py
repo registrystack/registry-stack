@@ -96,6 +96,11 @@ SHARDS = {
         "registry-documentsctl",
         "registry-documents-client",
     ),
+    "adapter": (
+        "registry-adapter-core",
+        "registry-adapter",
+        "registry-adapterctl",
+    ),
     "stack-client": ("registry-record", "registry-stack-client"),
     "evidence": (
         "registry-evidence",
@@ -132,6 +137,7 @@ CASEWORK_PACKAGES = frozenset(SHARDS["casework"])
 SCHEDULING_PACKAGES = frozenset(SHARDS["scheduling"])
 MESSAGING_PACKAGES = frozenset(SHARDS["messaging"])
 DOCUMENTS_PACKAGES = frozenset(SHARDS["documents"])
+ADAPTER_PACKAGES = frozenset(SHARDS["adapter"])
 # The Document Store PostgreSQL journey drives the real registry-render binary.
 DOCUMENTS_POSTGRES_PACKAGES = DOCUMENTS_PACKAGES | {"registry-render"}
 # The credential status ledger and the OID4VCI store run their PostgreSQL
@@ -1196,6 +1202,8 @@ def classify(
                 seeds.update(MESSAGING_PACKAGES)
             elif path.startswith("products/documents/"):
                 seeds.update(DOCUMENTS_PACKAGES)
+            elif path.startswith("products/adapter/"):
+                seeds.update(ADAPTER_PACKAGES)
             elif path.startswith("products/coordinator/"):
                 seeds.add("registry-coordinator")
             elif path.startswith("products/identifiers/"):
