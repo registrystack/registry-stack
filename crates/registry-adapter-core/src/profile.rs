@@ -165,6 +165,22 @@ mod tests {
     /// The profile declares its own version (the artifact table:
     /// authored, versioned); the reader refuses a profile without one,
     /// since a project pin compares against it (CFG-ID-4).
+    /// The version is text, compared exactly, never a number: an
+    /// unquoted numeric version is refused with the reader's usual type
+    /// diagnostic, never coerced.
+    #[test]
+    fn profile_refuses_a_numeric_version() {
+        for json in [
+            r#"{"id":"case-api","version":1,"operations":[],"problemCodes":[],"problemEnvelope":"{}"}"#,
+            r#"{"id":"case-api","version":1.0,"operations":[],"problemCodes":[],"problemEnvelope":"{}"}"#,
+        ] {
+            assert!(
+                serde_json::from_str::<AdapterProfile>(json).is_err(),
+                "a numeric version is refused, never coerced"
+            );
+        }
+    }
+
     #[test]
     fn profile_reader_requires_a_version() {
         let json = r#"{"id":"case-api","operations":[],"problemCodes":[],"problemEnvelope":"{}"}"#;

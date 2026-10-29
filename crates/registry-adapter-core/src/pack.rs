@@ -184,6 +184,22 @@ mod tests {
     /// The pack declares its own version (the artifact table: authored,
     /// versioned); the reader refuses a pack without one, since a project
     /// pin compares against it (CFG-ID-4).
+    /// The version is text, compared exactly, never a number: an
+    /// unquoted numeric version is refused with the reader's usual type
+    /// diagnostic, never coerced.
+    #[test]
+    fn pack_refuses_a_numeric_version() {
+        for json in [
+            r#"{"id":"case-api-pack","version":1,"testedVersions":["2.7"]}"#,
+            r#"{"id":"case-api-pack","version":1.0,"testedVersions":["2.7"]}"#,
+        ] {
+            assert!(
+                serde_json::from_str::<AdapterPack>(json).is_err(),
+                "a numeric version is refused, never coerced"
+            );
+        }
+    }
+
     #[test]
     fn pack_reader_requires_a_version() {
         let json = r#"{"id":"case-api-pack","testedVersions":["2.7"]}"#;
