@@ -2073,10 +2073,20 @@ async fn standalone_structured_answer_can_be_claimed_decided_and_polled_over_htt
         StatusCode::UNPROCESSABLE_ENTITY,
         "the decision type has one spelling: changes-requested"
     );
-    assert!(previous_spelling
-        .headers()
-        .get(VALIDATION_REASON_HEADER)
-        .is_none());
+    assert_eq!(
+        previous_spelling
+            .headers()
+            .get(VALIDATION_PATH_HEADER)
+            .and_then(|value| value.to_str().ok()),
+        Some("$.decision.type")
+    );
+    assert_eq!(
+        previous_spelling
+            .headers()
+            .get(VALIDATION_REASON_HEADER)
+            .and_then(|value| value.to_str().ok()),
+        Some("schema-mismatch")
+    );
     let previous_spelling_problem: Value = serde_json::from_slice(
         &to_bytes(previous_spelling.into_body(), 32 * 1024)
             .await
