@@ -401,19 +401,43 @@ pub struct SplitStep {
 }
 
 /// A `loop` step (`products/adapter/CONCEPT.md` sections 8.6 and 5.5).
-/// Pagination is `loop` with `doWhile` over the upstream cursor.
+/// Camel's shape with our bound: the count or predicate is the same flat
+/// single-language-key form as `filter` and `when`, and `doWhile: true`
+/// makes the expression a predicate loop (Camel's boolean flag, default
+/// false). `maximumIterations` stays mandatory, a declared divergence:
+/// the check refuses its absence and the runtime enforces it again.
+/// Reaching the bound with a dynamic count above it, or a predicate
+/// still holding, raises the catchable `loop.maximumIterationsReached`
+/// class, never a silent stop. Pagination is `loop` with `doWhile` over
+/// the upstream cursor.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Debug, Default, Eq, Hash, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct LoopStep {
+    /// The `constant` language member: the iteration count, or with
+    /// `doWhile`, the predicate's constant form.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub constant: Option<serde_json::Value>,
+    /// The `header` language member.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub header: Option<String>,
+    /// The `exchangeProperty` language member.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exchange_property: Option<String>,
+    /// The `jsonpath` language member.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub jsonpath: Option<String>,
+    /// The `rhai` language member.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rhai: Option<RhaiExpression>,
+    /// Camel's `doWhile` flag: true makes the expression a predicate
+    /// evaluated after each iteration; false makes it a count.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub do_while: bool,
     /// The mandatory iteration bound; the check refuses its absence and
     /// the runtime enforces it again.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub maximum_iterations: Option<BoundedU64<1, 100_000>>,
-    /// The do-while predicate: continue while it holds, bounded by
-    /// `maximumIterations`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub do_while: Option<Expression>,
     /// Whether each iteration works on a copy of the message (Camel
     /// default false).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -421,6 +445,40 @@ pub struct LoopStep {
     /// The repeated steps.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub steps: Vec<Step>,
+}
+
+impl LoopStep {
+    /// How many language keys the step carries.
+    pub fn language_members(&self) -> usize {
+        self.constant.is_some() as usize
+            + self.header.is_some() as usize
+            + self.exchange_property.is_some() as usize
+            + self.jsonpath.is_some() as usize
+            + self.rhai.is_some() as usize
+    }
+
+    /// The decoded count or predicate, when exactly one language key is
+    /// present; `None` for zero or several keys. `crate::checks` reports
+    /// the malformed shapes under `adapter.route.predicate-*` codes, so a
+    /// caller only ever sees a well-formed expression.
+    pub fn expression(&self) -> Option<Expression> {
+        if self.language_members() != 1 {
+            return None;
+        }
+        if let Some(value) = &self.constant {
+            return Some(Expression::Constant(value.clone()));
+        }
+        if let Some(name) = &self.header {
+            return Some(Expression::Header(name.clone()));
+        }
+        if let Some(name) = &self.exchange_property {
+            return Some(Expression::ExchangeProperty(name.clone()));
+        }
+        if let Some(path) = &self.jsonpath {
+            return Some(Expression::JsonPath(path.clone()));
+        }
+        self.rhai.clone().map(Expression::Rhai)
+    }
 }
 
 /// An `enrich` step: call a static endpoint and merge the reply. Static URI
@@ -1265,29 +1323,71 @@ mod tests {
     }
 
     /// The Loop, ported from
-    /// <https://camel.apache.org/components/next/eips/loop-eip.html>;
-    /// `maximumIterations` is mandatory in the checks.
+    /// <https://camel.apache.org/components/next/eips/loop-eip.html>; the
+    /// count or predicate is the flat single-language-key form, `doWhile`
+    /// is Camel's boolean flag, and `maximumIterations` is mandatory in
+    /// the checks.
     #[test]
     fn loop_step_round_trips() {
         let step: Step = serde_json::from_str(
             r#"{
                 "loop": {
+                    "constant": 20,
                     "maximumIterations": 20,
-                    "doWhile": { "jsonpath": "$.nextCursor" },
                     "steps": [ { "to": { "uri": "http:cases" } } ]
                 }
             }"#,
         )
         .expect("parse");
-        let Step::Loop(loop_step) = &step else {
+        let Step::Loop(counted) = &step else {
             panic!("expected a loop step");
         };
-        assert!(loop_step.do_while.is_some());
+        assert_eq!(counted.language_members(), 1);
+        assert!(!counted.do_while);
         let back = serde_json::to_string(&step).expect("serialize");
         assert_eq!(
             serde_json::from_str::<Step>(&back).ok().as_ref(),
             Some(&step)
         );
+
+        let step: Step = serde_json::from_str(
+            r#"{
+                "loop": {
+                    "jsonpath": "$.nextCursor",
+                    "doWhile": true,
+                    "maximumIterations": 20,
+                    "steps": [ { "to": { "uri": "http:cases" } } ]
+                }
+            }"#,
+        )
+        .expect("parse");
+        let Step::Loop(predicate) = &step else {
+            panic!("expected a loop step");
+        };
+        assert!(predicate.do_while);
+        assert_eq!(
+            predicate.expression(),
+            Some(Expression::JsonPath("$.nextCursor".into()))
+        );
+        let back = serde_json::to_string(&step).expect("serialize");
+        assert_eq!(
+            serde_json::from_str::<Step>(&back).ok().as_ref(),
+            Some(&step)
+        );
+
+        // An unknown key is refused (denyUnknownFields), not silently
+        // dropped.
+        assert!(serde_json::from_str::<Step>(
+            r#"{
+                    "loop": {
+                        "constant": 3,
+                        "maximumIterations": 5,
+                        "doWhile": { "jsonpath": "$.x" },
+                        "steps": []
+                    }
+                }"#
+        )
+        .is_err());
     }
 
     /// The Content Enricher, ported from

@@ -512,13 +512,47 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
                     )),
                 }
             }
-            Step::Loop(loop_step) if loop_step.maximum_iterations.is_none() => {
-                route_findings.push(finding(
-                    CheckCode::RouteMaximumIterationsRequired,
-                    &format!("/routes/{id}/steps{path}"),
-                    "the loop declares no maximumIterations bound",
-                    "Declare maximumIterations on every loop.",
-                ));
+            Step::Loop(loop_step) => {
+                let pointer = &format!("/routes/{id}/steps{path}");
+                match loop_step.language_members() {
+                    0 => route_findings.push(finding(
+                        CheckCode::RoutePredicateLanguageRequired,
+                        pointer,
+                        "the loop carries no count or predicate language key",
+                        "Add exactly one language key (constant, header, exchangeProperty, jsonpath, or rhai).",
+                    )),
+                    1 => {}
+                    _ => route_findings.push(finding(
+                        CheckCode::RoutePredicateAmbiguous,
+                        pointer,
+                        "the loop carries more than one count or predicate language key",
+                        "Keep exactly one language key beside maximumIterations and steps.",
+                    )),
+                }
+                if loop_step.maximum_iterations.is_none() {
+                    route_findings.push(finding(
+                        CheckCode::RouteMaximumIterationsRequired,
+                        pointer,
+                        "the loop declares no maximumIterations bound",
+                        "Declare maximumIterations on every loop.",
+                    ));
+                }
+                // A counted loop above its own bound can never finish by
+                // counting; refuse it here instead of failing at runtime.
+                if !loop_step.do_while {
+                    if let (Some(count), Some(bound)) =
+                        (loop_step.constant.as_ref(), loop_step.maximum_iterations)
+                    {
+                        if count.as_u64().is_some_and(|count| count > bound.get()) {
+                            route_findings.push(finding(
+                                CheckCode::RouteLoopCountAboveBound,
+                                pointer,
+                                "the loop's constant count exceeds maximumIterations",
+                                "Raise maximumIterations above the count, or lower the count.",
+                            ));
+                        }
+                    }
+                }
             }
             Step::OnException(clause)
                 if clause.exception.iter().any(|class| class.is_uncatchable()) =>
@@ -867,35 +901,35 @@ pub fn walk_steps<'a>(steps: &'a [Step], visit: &mut dyn FnMut(&'a Step, &str)) 
 /// adopter tooling reuses one exhaustive extraction instead of
 /// duplicating it; pair it with [`walk_steps`] and [`script_references`]
 /// to reach every expression and script in a route body.
-pub fn step_expressions(step: &Step) -> Vec<&Expression> {
+pub fn step_expressions(step: &Step) -> Vec<Expression> {
     match step {
         Step::SetBody(expression) | Step::Transform(expression) | Step::Script(expression) => {
-            vec![expression]
+            vec![expression.clone()]
         }
-        Step::SetHeader(header) => vec![&header.value],
-        Step::SetProperty(property) => vec![&property.value],
-        Step::Validate(validate) => vec![&validate.expression],
-        Step::Split(split) => vec![&split.expression],
-        Step::Throttle(throttle) => vec![&throttle.limit],
-        Step::IdempotentConsumer(idempotent) => vec![&idempotent.expression],
-        Step::Loop(loop_step) => loop_step.do_while.iter().collect(),
-        Step::OnException(clause) => clause.on_when.iter().collect(),
+        Step::SetHeader(header) => vec![header.value.clone()],
+        Step::SetProperty(property) => vec![property.value.clone()],
+        Step::Validate(validate) => vec![validate.expression.clone()],
+        Step::Split(split) => vec![split.expression.clone()],
+        Step::Throttle(throttle) => vec![throttle.limit.clone()],
+        Step::IdempotentConsumer(idempotent) => vec![idempotent.expression.clone()],
+        Step::Loop(loop_step) => loop_step.expression().into_iter().collect(),
+        Step::OnException(clause) => clause.on_when.iter().cloned().collect(),
         Step::DoTry(do_try) => do_try
             .do_catch
             .iter()
-            .flat_map(|catch| catch.on_when.iter())
+            .flat_map(|catch| catch.on_when.iter().cloned())
             .collect(),
         Step::ErrorHandler(handler) => handler
             .default_error_handler
             .as_ref()
             .and_then(|handler| handler.redelivery_policy.as_ref())
-            .and_then(|policy| policy.retry_while.as_ref())
+            .and_then(|policy| policy.retry_while.clone())
             .into_iter()
             .collect(),
         Step::To(to) => to
             .parameters
             .as_ref()
-            .and_then(|parameters| parameters.body.as_ref())
+            .and_then(|parameters| parameters.body.clone())
             .into_iter()
             .collect(),
         _ => Vec::new(),
@@ -978,7 +1012,7 @@ pub fn script_references(steps: &[Step]) -> Vec<ScriptSite> {
     let mut refs = Vec::new();
     walk_steps(steps, &mut |step, path| {
         for expression in step_expressions(step) {
-            if let Expression::Rhai(rhai) = expression {
+            if let Expression::Rhai(rhai) = &expression {
                 push(Some(rhai), path, &mut refs);
             }
         }
@@ -2066,7 +2100,7 @@ mod tests {
             .collect();
         assert_eq!(files, ["scripts/map.rhai", "scripts/guard.rhai"]);
         // The expression walk stays public for the ctl's own consumers.
-        assert_eq!(step_expressions(&steps[0]), vec![&rhai("scripts/map.rhai")]);
+        assert_eq!(step_expressions(&steps[0]), vec![rhai("scripts/map.rhai")]);
     }
 
     // ----- envelope and profile checks -----
@@ -2372,7 +2406,12 @@ mod tests {
                 }),
                 Step::Loop(LoopStep {
                     maximum_iterations: None,
-                    do_while: None,
+                    constant: None,
+                    header: None,
+                    exchange_property: None,
+                    jsonpath: None,
+                    rhai: None,
+                    do_while: false,
                     copy: false,
                     steps: vec![],
                 }),
@@ -2398,8 +2437,13 @@ mod tests {
                     steps: vec![],
                 }),
                 Step::Loop(LoopStep {
+                    constant: Some(serde_json::json!(3)),
+                    header: None,
+                    exchange_property: None,
+                    jsonpath: None,
+                    rhai: None,
+                    do_while: false,
                     maximum_iterations: Some(BoundedU64::<1, 100_000>::new(5).expect("bound")),
-                    do_while: None,
                     copy: false,
                     steps: vec![],
                 }),
@@ -2407,6 +2451,91 @@ mod tests {
         };
         let bounded_pack = pack_builder(vec![], vec![bounded]);
         assert_clean(check_routes(&bounded_pack, &project_builder(&bounded_pack)));
+    }
+
+    /// The loop carries the flat single-language-key count or predicate
+    /// form: zero keys or several are refused like a `filter` (staff
+    /// review P0-3).
+    #[test]
+    fn loop_requires_exactly_one_language_key() {
+        let loop_step =
+            |constant: Option<serde_json::Value>, rhai: Option<Expression>| RouteDefinition {
+                id: id("fetchCase"),
+                from: RouteFrom {
+                    uri: direct("fetchCase"),
+                },
+                steps: vec![Step::Loop(LoopStep {
+                    constant,
+                    header: None,
+                    exchange_property: None,
+                    jsonpath: None,
+                    rhai: rhai.and_then(|expression| match expression {
+                        Expression::Rhai(inner) => Some(inner),
+                        _ => None,
+                    }),
+                    do_while: true,
+                    maximum_iterations: Some(BoundedU64::<1, 100_000>::new(20).expect("bound")),
+                    copy: false,
+                    steps: vec![],
+                })],
+            };
+        let pack = pack_builder(vec![], vec![loop_step(None, None)]);
+        assert_has(
+            &check_routes(&pack, &project_builder(&pack)),
+            CheckCode::RoutePredicateLanguageRequired,
+        );
+        let pack = pack_builder(
+            vec![],
+            vec![loop_step(
+                Some(serde_json::json!(3)),
+                Some(rhai("scripts/next.rhai")),
+            )],
+        );
+        assert_has(
+            &check_routes(&pack, &project_builder(&pack)),
+            CheckCode::RoutePredicateAmbiguous,
+        );
+        let pack = pack_builder(
+            vec![],
+            vec![loop_step(None, Some(rhai("scripts/next.rhai")))],
+        );
+        assert_clean(check_routes(&pack, &project_builder(&pack)));
+    }
+
+    /// A counted loop whose constant count exceeds its own
+    /// `maximumIterations` bound is refused at check; at the bound it
+    /// passes, and a `doWhile` predicate form is never a count (staff
+    /// review P0-3).
+    #[test]
+    fn loop_refuses_a_constant_count_above_its_bound() {
+        let loop_step = |constant: serde_json::Value, do_while: bool| RouteDefinition {
+            id: id("fetchCase"),
+            from: RouteFrom {
+                uri: direct("fetchCase"),
+            },
+            steps: vec![Step::Loop(LoopStep {
+                constant: Some(constant),
+                header: None,
+                exchange_property: None,
+                jsonpath: None,
+                rhai: None,
+                do_while,
+                maximum_iterations: Some(BoundedU64::<1, 100_000>::new(3).expect("bound")),
+                copy: false,
+                steps: vec![],
+            })],
+        };
+        let pack = pack_builder(vec![], vec![loop_step(serde_json::json!(5), false)]);
+        assert_has(
+            &check_routes(&pack, &project_builder(&pack)),
+            CheckCode::RouteLoopCountAboveBound,
+        );
+        let pack = pack_builder(vec![], vec![loop_step(serde_json::json!(3), false)]);
+        assert_clean(check_routes(&pack, &project_builder(&pack)));
+        // A `doWhile` constant is a predicate, not a count: no refusal.
+        let pack = pack_builder(vec![], vec![loop_step(serde_json::json!(5), true)]);
+        assert!(!codes(&check_routes(&pack, &project_builder(&pack)))
+            .contains(&CheckCode::RouteLoopCountAboveBound.code()));
     }
 
     /// A non-safe send inside a split without `stopOnException` is
@@ -2877,7 +3006,12 @@ mod tests {
     fn loop_multiplies_by_maximum_iterations() {
         let steps = vec![Step::Loop(LoopStep {
             maximum_iterations: Some(BoundedU64::<1, 100_000>::new(50).expect("bound")),
-            do_while: None,
+            constant: None,
+            header: None,
+            exchange_property: None,
+            jsonpath: None,
+            rhai: None,
+            do_while: false,
             copy: false,
             steps: vec![to_get("case-api")],
         })];
@@ -3283,7 +3417,12 @@ mod tests {
             },
             steps: vec![Step::Loop(LoopStep {
                 maximum_iterations: Some(BoundedU64::<1, 100_000>::new(10).expect("bound")),
-                do_while: None,
+                constant: None,
+                header: None,
+                exchange_property: None,
+                jsonpath: None,
+                rhai: None,
+                do_while: false,
                 copy: false,
                 steps: vec![to_get("case-api")],
             })],

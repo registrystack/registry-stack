@@ -178,6 +178,7 @@ pub enum ErrorClass {
     UpstreamRedirect,
     BreakerOpen,
     ThrottleRejected,
+    LoopMaximumIterationsReached,
     Validation,
     ConversionUnmapped,
     AggregationDuplicate,
@@ -199,6 +200,7 @@ impl ErrorClass {
         Self::CredentialRejected,
         Self::DisclosureViolation,
         Self::EgressRefused,
+        Self::LoopMaximumIterationsReached,
         Self::Script,
         Self::ScriptBudgetExceeded,
         Self::ThrottleRejected,
@@ -224,6 +226,7 @@ impl ErrorClass {
             Self::UpstreamRedirect => "upstream.redirect",
             Self::BreakerOpen => "breaker.open",
             Self::ThrottleRejected => "throttle.rejected",
+            Self::LoopMaximumIterationsReached => "loop.maximumIterationsReached",
             Self::Validation => "validation",
             Self::ConversionUnmapped => "conversion.unmapped",
             Self::AggregationDuplicate => "aggregation.duplicate",
@@ -608,6 +611,15 @@ mod tests {
                 "script.budgetExceeded",
             ]
         );
+    }
+
+    /// The loop-bound class is catchable: a clause may name it, and no
+    /// prefix of another class resolves to it (staff review P0-3).
+    #[test]
+    fn loop_bound_class_is_catchable() {
+        let class = ErrorClass::from_class("loop.maximumIterationsReached");
+        assert_eq!(class, Some(ErrorClass::LoopMaximumIterationsReached));
+        assert!(!class.unwrap().is_uncatchable());
     }
 
     #[test]

@@ -56,6 +56,7 @@ pub enum CheckCode {
     RouteDirectCycle,
     RouteDirectDepthExceeded,
     RouteFromNotDirect,
+    RouteLoopCountAboveBound,
     RouteMaximumItemsRequired,
     RouteMaximumIterationsRequired,
     RouteMultipleNonSafeSends,
@@ -111,6 +112,7 @@ impl CheckCode {
         Self::RouteDirectCycle,
         Self::RouteDirectDepthExceeded,
         Self::RouteFromNotDirect,
+        Self::RouteLoopCountAboveBound,
         Self::RouteMaximumItemsRequired,
         Self::RouteMaximumIterationsRequired,
         Self::RouteMultipleNonSafeSends,
@@ -171,6 +173,7 @@ impl CheckCode {
             Self::RouteDirectCycle => "adapter.route.direct-cycle",
             Self::RouteDirectDepthExceeded => "adapter.route.direct-depth-exceeded",
             Self::RouteFromNotDirect => "adapter.route.from-not-direct",
+            Self::RouteLoopCountAboveBound => "adapter.route.loop-count-above-bound",
             Self::RouteMaximumItemsRequired => "adapter.route.maximum-items-required",
             Self::RouteMaximumIterationsRequired => "adapter.route.maximum-iterations-required",
             Self::RouteMultipleNonSafeSends => "adapter.route.multiple-non-safe-sends",
@@ -224,6 +227,7 @@ impl CheckCode {
             | Self::RouteDirectCycle
             | Self::RouteDirectDepthExceeded
             | Self::RouteFromNotDirect
+            | Self::RouteLoopCountAboveBound
             | Self::RouteMaximumItemsRequired
             | Self::RouteMaximumIterationsRequired
             | Self::RouteMultipleNonSafeSends
