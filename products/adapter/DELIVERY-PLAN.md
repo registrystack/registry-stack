@@ -36,7 +36,7 @@ Every brief carries these rules by reference; they are not optional.
     modified and untracked files you did not create as another session's
     work; never revert or reformat them.
 5. Cargo always runs as:
-   `CARGO_TARGET_DIR=/Volumes/CodexWorktrees/target/live-adapter PATH="$HOME/.cargo/bin:$PATH" cargo ...`
+   `CARGO_TARGET_DIR=<target-dir> PATH="$HOME/.cargo/bin:$PATH" cargo ...`
    Never clean a target directory another agent builds in. Concurrent
    cargo runs serialize on the target lock; wait, never kill.
 6. Shared files (root `Cargo.toml`, `Cargo.lock` dependency additions,
@@ -467,7 +467,7 @@ stopped on.
 ## Increment acceptance (runnable, from the worktree root)
 
 `CARGO` below abbreviates
-`CARGO_TARGET_DIR=/Volumes/CodexWorktrees/target/live-adapter PATH="$HOME/.cargo/bin:$PATH" cargo`.
+`CARGO_TARGET_DIR=<target-dir> PATH="$HOME/.cargo/bin:$PATH" cargo`.
 
 Increment 0:
 
@@ -481,8 +481,10 @@ Increment 0:
 5. `git --no-optional-locks log --format='%H %s' origin/main..HEAD` shows
    conventional subjects; every commit body has exactly one DCO trailer and
    no agent attribution trailer.
-6. `CARGO check --locked --workspace --all-targets` and
-   `python3 .github/scripts/test_ci_changes.py` exit 0.
+6. `CARGO check --locked --workspace --all-targets`,
+   `python3 .github/scripts/test_ci_changes.py`, and
+   `products/platform/scripts/run-config-conformance.sh --strict` exit 0;
+   any expected failure carries a written reason.
 7. `CARGO run --locked -p registry-adapterctl -- schemas --check` exits 0.
 8. Every closing-round item above is fixed or listed open in
    `products/adapter/reviews/increment-0-staff.md`.

@@ -38,7 +38,8 @@ and no platform crate; its only platform edits are format registration in
 ## Gates
 
 Run from the worktree root; every cargo invocation carries
-`CARGO_TARGET_DIR=/Volumes/CodexWorktrees/target/live-adapter PATH="$HOME/.cargo/bin:$PATH"`.
+`CARGO_TARGET_DIR=<target-dir> PATH="$HOME/.cargo/bin:$PATH"`, your own
+target directory for `<target-dir>`.
 
 ```bash
 products/adapter/scripts/check-contracts.sh
@@ -55,9 +56,9 @@ when the journal lands.
 ## Verify commands
 
 ```bash
-CARGO_TARGET_DIR=/Volumes/CodexWorktrees/target/live-adapter PATH="$HOME/.cargo/bin:$PATH" cargo fmt --check
-CARGO_TARGET_DIR=/Volumes/CodexWorktrees/target/live-adapter PATH="$HOME/.cargo/bin:$PATH" cargo clippy -p registry-adapter -p registry-adapter-core -p registry-adapterctl --all-targets -- -D warnings
-CARGO_TARGET_DIR=/Volumes/CodexWorktrees/target/live-adapter PATH="$HOME/.cargo/bin:$PATH" cargo test -p registry-adapter -p registry-adapter-core -p registry-adapterctl --locked
+CARGO_TARGET_DIR=<target-dir> PATH="$HOME/.cargo/bin:$PATH" cargo fmt --check
+CARGO_TARGET_DIR=<target-dir> PATH="$HOME/.cargo/bin:$PATH" cargo clippy -p registry-adapter -p registry-adapter-core -p registry-adapterctl --all-targets -- -D warnings
+CARGO_TARGET_DIR=<target-dir> PATH="$HOME/.cargo/bin:$PATH" cargo test -p registry-adapter -p registry-adapter-core -p registry-adapterctl --locked
 ```
 
 Every adapter diagnostic is value-free under an `adapter.*` code
