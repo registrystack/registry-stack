@@ -299,35 +299,50 @@ impl ErrorClass {
 
     /// Whether this class is the named clause class or one of its
     /// subclasses in the closed hierarchy: a clause naming a parent
-    /// matches the classes under it, as Camel's clause matching does.
+    /// matches the classes under it, as Camel's `instanceof` clause
+    /// matching does. A clause naming a subclass never matches this class
+    /// when this class is the bare superclass.
     #[must_use]
     pub fn is_within(self, clause: Self) -> bool {
-        self.class()
-            .split('.')
-            .zip(clause.class().split('.'))
-            .all(|(raised, declared)| raised == declared)
+        let raised = self.class().split('.').count();
+        let declared = clause.class().split('.').count();
+        declared <= raised
+            && self
+                .class()
+                .split('.')
+                .zip(clause.class().split('.'))
+                .all(|(raised, declared)| raised == declared)
     }
 
     /// The class a clause fires for: the closest match across the error
     /// and its cause chain, Camel's rule
     /// (`manual/exception-clause.html`). `raised` carries the error's
-    /// class followed by its causes; the first cause with a declared
-    /// match wins, and the most specific declared match on it. An
-    /// uncatchable class matches no clause, whatever prefix the clause
-    /// names.
+    /// class followed by its causes. Over every clause class a raised
+    /// class is within, the smallest distance in hierarchy segments wins;
+    /// equally close matches resolve to the clause matching the most
+    /// nested cause, later in the chain. Any uncatchable class anywhere in
+    /// the chain matches no clause whatever prefix the clause names: the
+    /// boundary is not caught through its own causes.
     #[must_use]
     pub fn closest_match(raised: &[Self], clause: &[Self]) -> Option<Self> {
-        raised
-            .iter()
-            .copied()
-            .filter(|error| !error.is_uncatchable())
-            .find_map(|error| {
-                clause
-                    .iter()
-                    .copied()
-                    .filter(|declared| error.is_within(*declared))
-                    .max_by_key(|declared| declared.class().split('.').count())
-            })
+        if raised.iter().any(|error| error.is_uncatchable()) {
+            return None;
+        }
+        let mut best: Option<(usize, Self)> = None;
+        for error in raised {
+            for declared in clause.iter().copied() {
+                if error.is_within(declared) {
+                    let distance =
+                        error.class().split('.').count() - declared.class().split('.').count();
+                    // A smaller distance wins; an equal distance keeps
+                    // replacing so the later, most nested cause wins.
+                    if best.is_none_or(|(best_distance, _)| best_distance >= distance) {
+                        best = Some((distance, declared));
+                    }
+                }
+            }
+        }
+        best.map(|(_, declared)| declared)
     }
 }
 
@@ -716,8 +731,11 @@ mod tests {
     }
 
     /// Clause matching is Camel's closest match across the error and its
-    /// cause chain, and an uncatchable class matches no clause whatever
-    /// prefix the clause names (staff review P1-10).
+    /// cause chain: a subclass clause never matches a bare superclass
+    /// error, the closest match across the whole chain wins, equally
+    /// close matches resolve to the most nested cause, and an uncatchable
+    /// class anywhere in the chain matches no clause whatever prefix the
+    /// clause names (staff review P1-10; reviewer defects M1 through M3).
     #[test]
     fn closest_match_walks_the_cause_chain_and_skips_the_boundary() {
         // The most specific declared match on a cause wins.
@@ -733,22 +751,49 @@ mod tests {
             ErrorClass::closest_match(&[ErrorClass::UpstreamTimeout], &[ErrorClass::Upstream],),
             Some(ErrorClass::Upstream)
         );
-        // The first cause with a declared match wins over a deeper match
-        // further out.
+        // A clause naming a subclass never matches the bare superclass
+        // error (M2).
+        assert_eq!(
+            ErrorClass::closest_match(&[ErrorClass::Upstream], &[ErrorClass::UpstreamHttp]),
+            None
+        );
+        // An exact match on a nested cause beats a superclass match on the
+        // outermost error: the closest match wins across the whole chain
+        // (M3).
         assert_eq!(
             ErrorClass::closest_match(
                 &[ErrorClass::UpstreamTimeout, ErrorClass::Validation],
                 &[ErrorClass::Upstream, ErrorClass::Validation],
             ),
-            Some(ErrorClass::Upstream)
+            Some(ErrorClass::Validation)
+        );
+        // Equally close matches resolve to the clause matching the most
+        // nested cause, later in the chain (M3).
+        assert_eq!(
+            ErrorClass::closest_match(
+                &[ErrorClass::UpstreamHttp, ErrorClass::Validation],
+                &[ErrorClass::UpstreamHttp, ErrorClass::Validation],
+            ),
+            Some(ErrorClass::Validation)
         );
         // An exact match matches.
         assert_eq!(
             ErrorClass::closest_match(&[ErrorClass::Script], &[ErrorClass::Script]),
             Some(ErrorClass::Script)
         );
-        // The boundary never matches: the clause names the parent and the
-        // raised class sits under it.
+        // The boundary never matches, not even through its own causes: the
+        // uncatchable class sits in the chain beside a catchable cause
+        // (M1).
+        assert_eq!(
+            ErrorClass::closest_match(
+                &[
+                    ErrorClass::ScriptBudgetExceeded,
+                    ErrorClass::UpstreamTimeout
+                ],
+                &[ErrorClass::Upstream],
+            ),
+            None
+        );
         assert_eq!(
             ErrorClass::closest_match(&[ErrorClass::ScriptBudgetExceeded], &[ErrorClass::Script],),
             None
@@ -758,6 +803,17 @@ mod tests {
             ErrorClass::closest_match(&[ErrorClass::UpstreamTimeout], &[ErrorClass::Validation]),
             None
         );
+    }
+
+    /// `is_within` goes down the hierarchy only: a clause naming a
+    /// subclass never covers the bare superclass, and the named class
+    /// itself covers (reviewer defect M2).
+    #[test]
+    fn within_never_rises_up_the_hierarchy() {
+        assert!(ErrorClass::UpstreamTimeout.is_within(ErrorClass::Upstream));
+        assert!(ErrorClass::UpstreamHttp.is_within(ErrorClass::UpstreamHttp));
+        assert!(!ErrorClass::Upstream.is_within(ErrorClass::UpstreamHttp));
+        assert!(!ErrorClass::UpstreamTimeout.is_within(ErrorClass::UpstreamHttp));
     }
 
     #[test]
