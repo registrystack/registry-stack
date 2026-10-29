@@ -167,6 +167,7 @@ pub(crate) fn run(args: SourceAddArgs, format: OutputFormat) -> Result<ExitCode>
 
 const BREGCTL_HELPER: evidence_binary::HelperSpec = evidence_binary::HelperSpec {
     binary: "bregctl",
+    noun: "a Base Registry Engine command-line tool",
     component: "breg",
     explicit_flag: "--bregctl-bin",
     explicit_env: "BREGCTL_BIN",

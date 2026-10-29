@@ -17,6 +17,11 @@
   of one is refused. Duplicate, unreferenced and unknown disclosures are still
   refused, and a key-binding JWT still covers exactly the disclosures
   presented. Presentations that carried every disclosure verify as before.
+- `evidencectl oid4vci` checks the `evidence-oid4vci` helper's reported
+  version against its own before running it, as the Evidence runtime commands
+  already do. A helper of another version, or one that does not identify
+  itself, is refused with the path found, the version found and the version
+  expected, instead of being run with the operator's configuration.
 - `evidencectl explain` JSON reports each assertion definition's
   `validitySeconds` beside its `representations` and `subjectBinding`. The
   field is additive; the report `apiVersion` is unchanged.
