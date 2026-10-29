@@ -57,6 +57,9 @@ const POLL_INTERVAL: Duration = Duration::from_millis(10);
 #[derive(Clone, Copy)]
 pub(crate) struct HelperSpec {
     pub(crate) binary: &'static str,
+    /// How a refusal names what this helper should have reported, such as
+    /// "an Evidence runtime".
+    pub(crate) noun: &'static str,
     pub(crate) component: &'static str,
     pub(crate) explicit_flag: &'static str,
     pub(crate) explicit_env: &'static str,
@@ -65,6 +68,7 @@ pub(crate) struct HelperSpec {
 
 const EVIDENCE_HELPER: HelperSpec = HelperSpec {
     binary: "evidence",
+    noun: "an Evidence runtime",
     component: "evidence",
     explicit_flag: "--evidence-bin",
     explicit_env: "EVIDENCE_BIN",
@@ -317,30 +321,78 @@ pub(crate) fn ensure_matching_version(evidence_bin: &Path) -> Result<()> {
 }
 
 fn ensure_matching_version_within(evidence_bin: &Path, deadline: Duration) -> Result<()> {
+    ensure_helper_matching_version_within(EVIDENCE_HELPER, evidence_bin, deadline)
+}
+
+/// Resolve a delegated helper binary and refuse one that is not this build's,
+/// under the same handshake the `evidence` runtime is held to.
+///
+/// The helper is launched with the operator's configuration and credentials in
+/// reach, so a build of another version must not run just because it is the
+/// one resolution found.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn resolve_matching_helper_with_environment(
+    spec: HelperSpec,
+    explicit: Option<&Path>,
+    explicit_env: Option<&OsStr>,
+    generation_dir: Option<&OsStr>,
+    managed_path: Option<&OsStr>,
+    release_tag: Option<&OsStr>,
+    path: Option<&OsStr>,
+) -> Result<PathBuf> {
+    let binary = resolve_helper_with_environment(
+        spec,
+        explicit,
+        explicit_env,
+        generation_dir,
+        managed_path,
+        release_tag,
+        path,
+    )?;
+    ensure_helper_matching_version_within(spec, &binary, VERSION_HANDSHAKE_DEADLINE)?;
+    Ok(binary)
+}
+
+/// Ask `binary` to identify itself and require it to name this build's
+/// version. The refusals name the binary found, the version it reported when it
+/// reported one, and the version this build expects.
+fn ensure_helper_matching_version_within(
+    spec: HelperSpec,
+    binary: &Path,
+    deadline: Duration,
+) -> Result<()> {
     let expected = registry_platform_buildinfo::DISPLAY_VERSION;
-    let (status, printed) = ask_for_version(evidence_bin, deadline).with_context(|| {
+    let (status, printed) = ask_for_version(binary, deadline).with_context(|| {
         format!(
             "failed to ask {} for its version, which evidencectl {expected} must match before delegating any work",
-            evidence_bin.display()
+            binary.display()
         )
     })?;
 
     let stdout = String::from_utf8_lossy(&printed).into_owned();
     let reported = if status.success() {
-        reported_version(&stdout)
+        reported_version(&stdout, spec.binary)
     } else {
         None
     };
     let Some(reported) = reported else {
         return Err(operational_invalid_data(format!(
-            "{} did not report an Evidence runtime version; evidencectl {expected} delegates every fixture decision to the matching evidence binary, so pass --evidence-bin pointing at it, set EVIDENCE_BIN, or put it on PATH",
-            evidence_bin.display()
+            "{} did not report {} version; evidencectl {expected} delegates to the matching {} binary, so pass {} pointing at it, set {}, or put it on PATH",
+            binary.display(),
+            spec.noun,
+            spec.binary,
+            spec.explicit_flag,
+            spec.explicit_env
         )));
     };
     if reported != expected {
         return Err(operational_invalid_data(format!(
-            "evidence at {} reports version {reported}, and this evidencectl is {expected}; the two must match, so pass --evidence-bin pointing at evidence {expected}, set EVIDENCE_BIN to it, or put it on PATH",
-            evidence_bin.display()
+            "{} at {} reports version {reported}, and this evidencectl is {expected}; the two must match, so pass {} pointing at {} {expected}, set {} to it, or put it on PATH",
+            spec.binary,
+            binary.display(),
+            spec.explicit_flag,
+            spec.binary,
+            spec.explicit_env
         )));
     }
     Ok(())
@@ -445,12 +497,12 @@ pub(crate) fn terminate_child(child: &mut Child) {
     let _ = child.wait();
 }
 
-/// Read the version out of `evidence <version>`, the single line the runtime
-/// prints for `--version`. Anything else is not that runtime identifying
+/// Read the version out of `<binary> <version>`, the single line a helper
+/// prints for `--version`. Anything else is not that helper identifying
 /// itself, and is reported as such rather than parsed into a guess.
-fn reported_version(stdout: &str) -> Option<&str> {
+fn reported_version<'a>(stdout: &'a str, binary: &str) -> Option<&'a str> {
     let line = stdout.lines().find(|line| !line.trim().is_empty())?;
-    let version = line.trim().strip_prefix("evidence ")?.trim();
+    let version = line.trim().strip_prefix(binary)?.strip_prefix(' ')?.trim();
     (!version.is_empty()).then_some(version)
 }
 
@@ -842,26 +894,38 @@ mod tests {
 
     #[test]
     fn the_runtimes_own_version_line_is_read() {
-        assert_eq!(reported_version("evidence 1.2.3\n"), Some("1.2.3"));
-        assert_eq!(reported_version("evidence 1.2.3-dev\n"), Some("1.2.3-dev"));
+        assert_eq!(
+            reported_version("evidence 1.2.3\n", "evidence"),
+            Some("1.2.3")
+        );
+        assert_eq!(
+            reported_version("evidence 1.2.3-dev\n", "evidence"),
+            Some("1.2.3-dev")
+        );
     }
 
     #[test]
     fn a_line_that_is_not_the_runtime_identifying_itself_reads_as_nothing() {
-        assert_eq!(reported_version(""), None);
-        assert_eq!(reported_version("\n\n"), None);
-        assert_eq!(reported_version("evidence\n"), None);
-        assert_eq!(reported_version("evidence \n"), None);
-        assert_eq!(reported_version("evidencectl 1.2.3\n"), None);
-        assert_eq!(reported_version("some other tool 1.2.3\n"), None);
+        assert_eq!(reported_version("", "evidence"), None);
+        assert_eq!(reported_version("\n\n", "evidence"), None);
+        assert_eq!(reported_version("evidence\n", "evidence"), None);
+        assert_eq!(reported_version("evidence \n", "evidence"), None);
+        assert_eq!(reported_version("evidencectl 1.2.3\n", "evidence"), None);
+        assert_eq!(
+            reported_version("some other tool 1.2.3\n", "evidence"),
+            None
+        );
     }
 
     #[test]
     fn only_the_first_printed_line_identifies_the_binary() {
         assert_eq!(
-            reported_version("evidence 1.2.3\nevidence 9.9.9\n"),
+            reported_version("evidence 1.2.3\nevidence 9.9.9\n", "evidence"),
             Some("1.2.3")
         );
-        assert_eq!(reported_version("banner\nevidence 1.2.3\n"), None);
+        assert_eq!(
+            reported_version("banner\nevidence 1.2.3\n", "evidence"),
+            None
+        );
     }
 }

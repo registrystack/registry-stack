@@ -15,6 +15,7 @@ use crate::OutputFormat;
 
 const HELPER: HelperSpec = HelperSpec {
     binary: "evidence-oid4vci",
+    noun: "an evidence-oid4vci",
     component: "evidence",
     explicit_flag: "--oid4vci-bin",
     explicit_env: "EVIDENCE_OID4VCI_BIN",
@@ -83,7 +84,7 @@ enum Oid4vciCommand {
 }
 
 pub(crate) fn run(args: Oid4vciArgs, format: OutputFormat) -> Result<ExitCode> {
-    let binary = evidence_binary::resolve_helper_with_environment(
+    let binary = evidence_binary::resolve_matching_helper_with_environment(
         HELPER,
         args.oid4vci_bin.as_deref(),
         env::var_os(HELPER.explicit_env).as_deref(),
@@ -131,7 +132,92 @@ pub(crate) fn run(args: Oid4vciArgs, format: OutputFormat) -> Result<ExitCode> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{ffi::OsStr, fs};
+    use std::{ffi::OsStr, fs, io::Write as _, os::unix::fs::OpenOptionsExt as _, path::Path};
+
+    /// A stand-in `evidence-oid4vci` that prints `version_line` when asked for
+    /// its version.
+    fn write_helper_stub(path: &Path, version_line: &str) {
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o700)
+            .open(path)
+            .expect("stub");
+        file.write_all(
+            format!("#!/bin/sh\nif [ \"$1\" = '--version' ]; then printf '%s\\n' '{version_line}'; exit 0; fi\nexit 9\n")
+                .as_bytes(),
+        )
+        .expect("write stub");
+    }
+
+    fn resolve_explicit(binary: &Path) -> Result<PathBuf> {
+        evidence_binary::retry_busy_stub(|| {
+            evidence_binary::resolve_matching_helper_with_environment(
+                HELPER,
+                Some(binary),
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+        })
+    }
+
+    #[test]
+    fn a_helper_reporting_this_build_is_resolved() {
+        let root = tempfile::tempdir().unwrap();
+        let helper = root.path().join("evidence-oid4vci");
+        write_helper_stub(
+            &helper,
+            &format!(
+                "evidence-oid4vci {}",
+                registry_platform_buildinfo::DISPLAY_VERSION
+            ),
+        );
+        assert_eq!(resolve_explicit(&helper).unwrap(), helper);
+    }
+
+    #[test]
+    fn a_helper_of_another_version_is_refused_naming_path_found_and_expected() {
+        let root = tempfile::tempdir().unwrap();
+        let helper = root.path().join("evidence-oid4vci");
+        write_helper_stub(&helper, "evidence-oid4vci 0.0.1-other");
+        let diagnostic = format!("{:#}", resolve_explicit(&helper).unwrap_err());
+        assert!(
+            diagnostic.contains(helper.to_str().unwrap()),
+            "the refusal names the helper it found: {diagnostic}"
+        );
+        assert!(diagnostic.contains("0.0.1-other"), "{diagnostic}");
+        assert!(
+            diagnostic.contains(registry_platform_buildinfo::DISPLAY_VERSION),
+            "the refusal names the version it expected: {diagnostic}"
+        );
+        assert!(diagnostic.contains("--oid4vci-bin"), "{diagnostic}");
+        assert!(diagnostic.contains("EVIDENCE_OID4VCI_BIN"), "{diagnostic}");
+    }
+
+    #[test]
+    fn a_helper_that_does_not_identify_itself_is_refused() {
+        let root = tempfile::tempdir().unwrap();
+        for (name, line) in [
+            ("silent", ""),
+            ("runtime", "evidence 0.0.1"),
+            ("other", "some other tool 0.0.1"),
+        ] {
+            let helper = root.path().join(name);
+            write_helper_stub(&helper, line);
+            let diagnostic = format!("{:#}", resolve_explicit(&helper).unwrap_err());
+            assert!(
+                diagnostic.contains("did not report an evidence-oid4vci version"),
+                "{name}: {diagnostic}"
+            );
+            assert!(
+                diagnostic.contains(helper.to_str().unwrap()),
+                "{diagnostic}"
+            );
+        }
+    }
 
     #[test]
     fn selected_wallet_helper_cannot_fall_back_to_path_or_wrong_override() {
