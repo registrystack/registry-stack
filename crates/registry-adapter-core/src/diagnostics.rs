@@ -32,6 +32,7 @@ pub enum CheckCode {
     PackReservedHeaderName,
     PackScriptUncompilable,
     PackUnknownScript,
+    PackUnknownTemplateParameter,
     // adapter.profile.*
     ProfileProblemEnvelopeMissingCodeSlot,
     ProfileRequestEnvelopeMissingRecordSlot,
@@ -39,10 +40,13 @@ pub enum CheckCode {
     ProfileUnknownSlot,
     // adapter.project.*
     ProjectDuplicateRouteId,
+    ProjectParameterTypeMismatch,
+    ProjectRequiredParameterUnbound,
     ProjectUnknownOperation,
     ProjectUnknownRecordType,
     ProjectUnknownRoute,
     ProjectUnknownTemplate,
+    ProjectUnknownTemplateParameter,
     ProjectUpstreamBudgetExceeded,
     // adapter.route.*
     RouteDirectCycle,
@@ -81,15 +85,19 @@ impl CheckCode {
         Self::PackReservedHeaderName,
         Self::PackScriptUncompilable,
         Self::PackUnknownScript,
+        Self::PackUnknownTemplateParameter,
         Self::ProfileProblemEnvelopeMissingCodeSlot,
         Self::ProfileRequestEnvelopeMissingRecordSlot,
         Self::ProfileResponseEnvelopeMissingResultSlot,
         Self::ProfileUnknownSlot,
         Self::ProjectDuplicateRouteId,
+        Self::ProjectParameterTypeMismatch,
+        Self::ProjectRequiredParameterUnbound,
         Self::ProjectUnknownOperation,
         Self::ProjectUnknownRecordType,
         Self::ProjectUnknownRoute,
         Self::ProjectUnknownTemplate,
+        Self::ProjectUnknownTemplateParameter,
         Self::ProjectUpstreamBudgetExceeded,
         Self::RouteDirectCycle,
         Self::RouteDirectDepthExceeded,
@@ -126,6 +134,7 @@ impl CheckCode {
             Self::PackReservedHeaderName => "adapter.pack.reserved-header-name",
             Self::PackScriptUncompilable => "adapter.pack.script-uncompilable",
             Self::PackUnknownScript => "adapter.pack.unknown-script",
+            Self::PackUnknownTemplateParameter => "adapter.pack.unknown-template-parameter",
             Self::ProfileProblemEnvelopeMissingCodeSlot => {
                 "adapter.profile.problem-envelope-missing-code-slot"
             }
@@ -137,10 +146,13 @@ impl CheckCode {
             }
             Self::ProfileUnknownSlot => "adapter.profile.unknown-slot",
             Self::ProjectDuplicateRouteId => "adapter.project.duplicate-route-id",
+            Self::ProjectParameterTypeMismatch => "adapter.project.parameter-type-mismatch",
+            Self::ProjectRequiredParameterUnbound => "adapter.project.required-parameter-unbound",
             Self::ProjectUnknownOperation => "adapter.project.unknown-operation",
             Self::ProjectUnknownRecordType => "adapter.project.unknown-record-type",
             Self::ProjectUnknownRoute => "adapter.project.unknown-route",
             Self::ProjectUnknownTemplate => "adapter.project.unknown-template",
+            Self::ProjectUnknownTemplateParameter => "adapter.project.unknown-template-parameter",
             Self::ProjectUpstreamBudgetExceeded => "adapter.project.upstream-budget-exceeded",
             Self::RouteDirectCycle => "adapter.route.direct-cycle",
             Self::RouteDirectDepthExceeded => "adapter.route.direct-depth-exceeded",
@@ -192,6 +204,7 @@ impl CheckCode {
             | Self::PackReservedHeaderName
             | Self::PackScriptUncompilable
             | Self::PackUnknownScript
+            | Self::PackUnknownTemplateParameter
             | Self::RouteDirectCycle
             | Self::RouteDirectDepthExceeded
             | Self::RouteFromNotDirect
@@ -209,10 +222,13 @@ impl CheckCode {
             | Self::RouteUnknownEndpoint
             | Self::RouteWriteWithoutIdempotency => crate::naming::ADAPTER_PACK_KIND,
             Self::ProjectDuplicateRouteId
+            | Self::ProjectParameterTypeMismatch
+            | Self::ProjectRequiredParameterUnbound
             | Self::ProjectUnknownOperation
             | Self::ProjectUnknownRecordType
             | Self::ProjectUnknownRoute
             | Self::ProjectUnknownTemplate
+            | Self::ProjectUnknownTemplateParameter
             | Self::ProjectUpstreamBudgetExceeded => crate::naming::ADAPTER_PROJECT_KIND,
         }
     }

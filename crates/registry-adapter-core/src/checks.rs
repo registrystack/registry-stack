@@ -16,7 +16,7 @@ use crate::profile::{
     SLOT_RECORDS,
 };
 use crate::project::AdapterProject;
-use crate::route::Step;
+use crate::route::{Step, TemplateParameterType};
 use crate::runtime::AdapterRuntimeConfig;
 use registry_platform_yaml::{Diagnostic, ExternalId};
 use std::collections::{HashMap, HashSet};
@@ -275,7 +275,57 @@ pub fn check_pack(pack: &AdapterPack) -> Vec<Diagnostic> {
         }
     }
     findings.extend(script_reference_checks(pack));
+    findings.extend(template_parameter_checks(pack));
     findings
+}
+
+/// Every placeholder a template body uses must name a declared template
+/// parameter (CFG-VAL-9): a body reference with no declaration can never
+/// resolve at instantiation.
+fn template_parameter_checks(pack: &AdapterPack) -> Vec<Diagnostic> {
+    let mut findings = Vec::new();
+    for (index, template) in pack.route_templates.iter().enumerate() {
+        let mut refused: HashSet<(String, String)> = HashSet::new();
+        walk_steps(&template.steps, &mut |step, path| {
+            for expression in step_expressions(step) {
+                if let Expression::Constant(value) = expression {
+                    let Some(text) = value.as_str() else {
+                        continue;
+                    };
+                    for (name, _) in placeholders(text) {
+                        let declared = template
+                            .parameters
+                            .iter()
+                            .any(|parameter| parameter.name.as_str() == name);
+                        if !declared && refused.insert((name.clone(), path.to_string())) {
+                            findings.push(finding(
+                                CheckCode::PackUnknownTemplateParameter,
+                                &format!("/routeTemplates/{index}/steps{path}"),
+                                &format!(
+                                    "the template body references {{{{{name}}}}}, which no declared parameter provides"
+                                ),
+                                "Declare the parameter in the template's parameters or remove the placeholder.",
+                            ));
+                        }
+                    }
+                }
+            }
+        });
+    }
+    findings
+}
+
+/// Whether a supplied parameter value matches the declared parameter type
+/// (CFG-VAL-9): `string` accepts JSON strings, `integer` accepts integral
+/// JSON numbers, `number` accepts any JSON number, and `boolean` accepts
+/// JSON booleans.
+fn value_matches_type(value: &serde_json::Value, expected: TemplateParameterType) -> bool {
+    match expected {
+        TemplateParameterType::String => value.is_string(),
+        TemplateParameterType::Integer => value.is_i64() || value.is_u64(),
+        TemplateParameterType::Number => value.is_number(),
+        TemplateParameterType::Boolean => value.is_boolean(),
+    }
 }
 
 /// Every Rhai reference in every route body must resolve to a digest-pinned
@@ -1019,6 +1069,50 @@ pub fn check_project(workspace: &Workspace<'_>) -> Vec<Diagnostic> {
                 "Choose a route id no pack route, template, or other instantiation uses.",
             ));
         }
+        if let Some(template) = pack
+            .route_templates
+            .get(instantiated.route_template_ref.as_str())
+        {
+            for (name, value) in &instantiated.parameters {
+                let Some(parameter) = template
+                    .parameters
+                    .iter()
+                    .find(|parameter| parameter.name.as_str() == name.as_str())
+                else {
+                    findings.push(finding(
+                        CheckCode::ProjectUnknownTemplateParameter,
+                        &format!("{prefix}/parameters/{name}"),
+                        "the instantiation supplies a parameter the template does not declare",
+                        "Supply only parameters the template declares.",
+                    ));
+                    continue;
+                };
+                if !value_matches_type(value, parameter.r#type) {
+                    findings.push(finding(
+                        CheckCode::ProjectParameterTypeMismatch,
+                        &format!("{prefix}/parameters/{name}"),
+                        "the supplied value does not match the declared parameter type",
+                        "Supply a value of the declared type.",
+                    ));
+                }
+            }
+            // A default_value fills an omitted optional parameter; a
+            // required parameter must be supplied explicitly.
+            for parameter in &template.parameters {
+                if parameter.required
+                    && !instantiated
+                        .parameters
+                        .contains_key(parameter.name.as_str())
+                {
+                    findings.push(finding(
+                        CheckCode::ProjectRequiredParameterUnbound,
+                        &format!("{prefix}/parameters/{}", parameter.name.as_str()),
+                        "a required parameter is not bound by the instantiation",
+                        "Supply the parameter in the instantiation's parameters.",
+                    ));
+                }
+            }
+        }
     }
 
     for (index, binding) in project.bindings.iter().enumerate() {
@@ -1586,8 +1680,8 @@ mod tests {
     use crate::route::{
         ChoiceStep, DefaultErrorHandler, DoCatch, DoFinally, DoTryStep, EnrichStep,
         ErrorHandlerStep, FilterStep, IdempotentConsumerStep, LoopStep, OnExceptionStep,
-        RedeliveryOptions, RouteDefinition, RouteFrom, RouteTemplate, SplitStep, TemplatedRoute,
-        ToParameters, ToStep, When,
+        RedeliveryOptions, RouteDefinition, RouteFrom, RouteTemplate, SplitStep, TemplateParameter,
+        TemplateParameterType, TemplatedRoute, ToParameters, ToStep, When,
     };
     use crate::runtime::{AdapterRuntimeConfig, AuditRetention, EndpointBinding};
     use registry_platform_yaml::Url;
@@ -2582,6 +2676,109 @@ mod tests {
             UniqueIdList::new(vec![a, b]).is_err(),
             "two instantiations with one route id are refused at the reader"
         );
+    }
+
+    /// A template body placeholder must name a declared parameter: a
+    /// body reference with no declaration can never resolve at
+    /// instantiation.
+    #[test]
+    fn pack_refuses_a_template_body_placeholder_without_a_declared_parameter() {
+        let body = || {
+            Step::SetBody(crate::model::Expression::Constant(serde_json::json!(
+                "/v2/cases?region={{region}}"
+            )))
+        };
+        let mut pack = pack_builder(vec![], vec![]);
+        pack.route_templates = UniqueIdList::new(vec![RouteTemplate {
+            id: id("fetchPage"),
+            parameters: Vec::new(),
+            steps: vec![body()],
+        }])
+        .expect("unique");
+        assert_has(&check_pack(&pack), CheckCode::PackUnknownTemplateParameter);
+
+        pack.route_templates = UniqueIdList::new(vec![RouteTemplate {
+            id: id("fetchPage"),
+            parameters: vec![TemplateParameter {
+                name: id("region"),
+                r#type: TemplateParameterType::String,
+                required: true,
+                default_value: None,
+                description: None,
+            }],
+            steps: vec![body()],
+        }])
+        .expect("unique");
+        assert_clean(check_pack(&pack));
+    }
+
+    /// Typed instantiation checking: an unknown supplied name, a value
+    /// whose JSON type does not match the declared parameter type, and a
+    /// required parameter left unbound are each refused; a well-typed
+    /// instantiation is admitted.
+    #[test]
+    fn project_checks_templated_parameter_names_types_and_bindings() {
+        let profile = profile_builder(vec![operation("cases.find", HttpMethod::Get)]);
+        let template = || RouteTemplate {
+            id: id("fetchPage"),
+            parameters: vec![
+                TemplateParameter {
+                    name: id("page"),
+                    r#type: TemplateParameterType::Integer,
+                    required: true,
+                    default_value: None,
+                    description: None,
+                },
+                TemplateParameter {
+                    name: id("label"),
+                    r#type: TemplateParameterType::String,
+                    required: false,
+                    default_value: None,
+                    description: None,
+                },
+            ],
+            steps: vec![to_get("case-api")],
+        };
+        let instantiate = |parameters: BTreeMap<String, serde_json::Value>| {
+            let mut pack = pack_builder(vec![basic_endpoint()], vec![]);
+            pack.route_templates = UniqueIdList::new(vec![template()]).expect("unique");
+            let mut project = project_builder(&pack);
+            project.access_profiles = UniqueIdList::new(Vec::new()).expect("empty");
+            project.templated_routes = UniqueIdList::new(vec![TemplatedRoute {
+                route_template_ref: id("fetchPage"),
+                route_id: id("fetchCases"),
+                parameters,
+            }])
+            .expect("unique");
+            check_project(&workspace(&profile, &pack, &project))
+        };
+
+        let unknown_name = BTreeMap::from([("pag".to_string(), serde_json::json!(3))]);
+        assert_has(
+            &instantiate(unknown_name),
+            CheckCode::ProjectUnknownTemplateParameter,
+        );
+
+        let wrong_type = BTreeMap::from([
+            ("page".to_string(), serde_json::json!("3")),
+            ("label".to_string(), serde_json::json!("weekly")),
+        ]);
+        assert_has(
+            &instantiate(wrong_type),
+            CheckCode::ProjectParameterTypeMismatch,
+        );
+
+        let unbound_required = BTreeMap::from([("label".to_string(), serde_json::json!("weekly"))]);
+        assert_has(
+            &instantiate(unbound_required),
+            CheckCode::ProjectRequiredParameterUnbound,
+        );
+
+        let well_typed = BTreeMap::from([
+            ("page".to_string(), serde_json::json!(3)),
+            ("label".to_string(), serde_json::json!("weekly")),
+        ]);
+        assert_clean(instantiate(well_typed));
     }
 
     #[test]
