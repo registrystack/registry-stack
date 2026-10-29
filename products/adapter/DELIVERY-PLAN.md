@@ -32,9 +32,10 @@ Every brief carries these rules by reference; they are not optional.
    `CARGO_TARGET_DIR=/Volumes/CodexWorktrees/target/live-adapter PATH="$HOME/.cargo/bin:$PATH" cargo ...`
    Never clean a target directory another agent builds in. Concurrent
    cargo runs serialize on the target lock; wait, never kill.
-6. Shared files are frozen after Wave 0: root `Cargo.toml`, `deny.toml`,
-   `rust-toolchain.toml`, root `AGENTS.md`, `.github/**`. If your stream
-   needs a change there, stop and report it instead of editing.
+6. Shared files (root `Cargo.toml`, `deny.toml`, `rust-toolchain.toml`,
+   root `AGENTS.md`, `.github/**`) change only in Wave 0 or by the
+   integration stream at a wave boundary. If your stream needs a change
+   there mid-wave, stop and report it instead of editing.
 7. TDD: write the failing test first; write only enough code to pass;
    refactor while green. Test output must be clean; errors that are
    expected are captured and asserted on, never printed past.
