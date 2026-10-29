@@ -643,6 +643,28 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
             _ => {}
         });
 
+        // A non-safe send naming an operation the endpoint does not
+        // declare is a reference defect on its own (CFG-ID-4).
+        for send in &sends {
+            let declared = send.operation.as_ref().is_none_or(|operation| {
+                pack.endpoints
+                    .get(send.endpoint.as_str())
+                    .is_some_and(|endpoint| {
+                        endpoint
+                            .operations
+                            .iter()
+                            .any(|op| op.id.as_str() == operation.as_str())
+                    })
+            });
+            if !declared {
+                findings.push(finding(
+                    CheckCode::RouteUnknownOperation,
+                    &format!("/routes/{id}"),
+                    "the send names no operation its endpoint declares",
+                    "Name an operation the send's endpoint declares.",
+                ));
+            }
+        }
         // Redelivery over a non-safe send needs every non-safe send the
         // route makes to carry an idempotentUpstream claim
         // (`products/adapter/CONCEPT.md` section 8.7).
@@ -724,8 +746,10 @@ fn declares_redelivery(steps: &[Step]) -> bool {
     declared
 }
 
-/// Whether the send's endpoint operation declares `idempotentUpstream`; a
-/// send that names no operation uses the endpoint-wide verdict.
+/// Whether the send's endpoint operation declares `idempotentUpstream`. A
+/// send naming no operation is never idempotent, and an operation id the
+/// endpoint does not declare is refused on its own under
+/// `adapter.route.unknown-operation`, never silently false.
 fn send_claims_idempotent(
     pack: &AdapterPack,
     endpoint_id: &str,
@@ -734,13 +758,13 @@ fn send_claims_idempotent(
     let Some(endpoint) = pack.endpoints.get(endpoint_id) else {
         return false;
     };
-    match operation {
-        Some(operation_id) => endpoint
-            .operations
-            .iter()
-            .any(|op| op.id.as_str() == operation_id.as_str() && op.idempotent_upstream),
-        None => endpoint.operations.iter().any(|op| op.idempotent_upstream),
-    }
+    let Some(operation_id) = operation else {
+        return false;
+    };
+    endpoint
+        .operations
+        .iter()
+        .any(|op| op.id.as_str() == operation_id.as_str() && op.idempotent_upstream)
 }
 
 /// Whether any upstream component send (`http:` or `graphql:`) is
@@ -2698,6 +2722,90 @@ mod tests {
             &check_routes(&pack, &project_builder(&pack)),
             CheckCode::RouteUnknownDirectTarget,
         );
+    }
+
+    /// A send naming no operation is never idempotent by inheritance:
+    /// caller redelivery over such a POST refuses (staff review P1-3).
+    #[test]
+    fn redelivery_refuses_a_post_that_names_no_operation() {
+        let post = Step::To(ToStep {
+            uri: send("case-api"),
+            parameters: Some(ToParameters {
+                http_method: HttpMethod::Post,
+                path: None,
+                path_parameters: BTreeMap::new(),
+                query: BTreeMap::new(),
+                body: None,
+                operation: None,
+                throw_exception_on_failure: true,
+                ok_status_code_range: None,
+                resume_bindings: Vec::new(),
+            }),
+        });
+        let route = RouteDefinition {
+            id: id("createCase"),
+            from: RouteFrom {
+                uri: direct("createCase"),
+            },
+            steps: vec![
+                Step::ErrorHandler(ErrorHandlerStep {
+                    default_error_handler: Some(DefaultErrorHandler {
+                        redelivery_policy: Some(RedeliveryOptions {
+                            maximum_redeliveries: 2,
+                            ..Default::default()
+                        }),
+                    }),
+                    no_error_handler: None,
+                }),
+                post,
+            ],
+        };
+        let pack = pack_builder(vec![oauth_endpoint()], vec![route]);
+        assert_has(
+            &check_routes(&pack, &project_builder(&pack)),
+            CheckCode::RouteRedeliveryOverNonSafeSend,
+        );
+    }
+
+    /// A send naming an operation the endpoint does not declare is a
+    /// reference defect refused on its own, redelivery or not (staff
+    /// review P1-3).
+    #[test]
+    fn routes_refuse_a_send_naming_an_undeclared_operation() {
+        let pack = |operation: Option<&str>| {
+            let post = Step::To(ToStep {
+                uri: send("case-api"),
+                parameters: Some(ToParameters {
+                    http_method: HttpMethod::Post,
+                    path: None,
+                    path_parameters: BTreeMap::new(),
+                    query: BTreeMap::new(),
+                    body: None,
+                    operation: operation.map(id),
+                    throw_exception_on_failure: true,
+                    ok_status_code_range: None,
+                    resume_bindings: Vec::new(),
+                }),
+            });
+            let route = RouteDefinition {
+                id: id("createCase"),
+                from: RouteFrom {
+                    uri: direct("createCase"),
+                },
+                steps: vec![post],
+            };
+            pack_builder(vec![oauth_endpoint()], vec![route])
+        };
+        assert_has(
+            &check_routes(&pack(Some("ghost")), &project_builder(&pack(Some("ghost")))),
+            CheckCode::RouteUnknownOperation,
+        );
+        // The declared operation passes.
+        assert!(!codes(&check_routes(
+            &pack(Some("cases.create")),
+            &project_builder(&pack(Some("cases.create")))
+        ))
+        .contains(&CheckCode::RouteUnknownOperation.code()));
     }
 
     /// Write safety looks through `direct:`: two wrapped POSTs reached

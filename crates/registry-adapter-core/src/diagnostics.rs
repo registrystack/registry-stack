@@ -70,6 +70,7 @@ pub enum CheckCode {
     RouteUncatchableClause,
     RouteUnknownDirectTarget,
     RouteUnknownEndpoint,
+    RouteUnknownOperation,
     RouteWriteWithoutIdempotency,
     // adapter.runtime.*
     RuntimeInsecureOrigin,
@@ -126,6 +127,7 @@ impl CheckCode {
         Self::RouteUncatchableClause,
         Self::RouteUnknownDirectTarget,
         Self::RouteUnknownEndpoint,
+        Self::RouteUnknownOperation,
         Self::RouteWriteWithoutIdempotency,
         Self::RuntimeInsecureOrigin,
         Self::RuntimeMissingEndpoint,
@@ -191,6 +193,7 @@ impl CheckCode {
             Self::RouteUncatchableClause => "adapter.route.uncatchable-clause",
             Self::RouteUnknownDirectTarget => "adapter.route.unknown-direct-target",
             Self::RouteUnknownEndpoint => "adapter.route.unknown-endpoint",
+            Self::RouteUnknownOperation => "adapter.route.unknown-operation",
             Self::RouteWriteWithoutIdempotency => "adapter.route.write-without-idempotency",
             Self::RuntimeInsecureOrigin => "adapter.runtime.insecure-origin",
             Self::RuntimeMissingEndpoint => "adapter.runtime.missing-endpoint",
@@ -241,6 +244,7 @@ impl CheckCode {
             | Self::RouteUncatchableClause
             | Self::RouteUnknownDirectTarget
             | Self::RouteUnknownEndpoint
+            | Self::RouteUnknownOperation
             | Self::RouteWriteWithoutIdempotency => crate::naming::ADAPTER_PACK_KIND,
             Self::ProjectDuplicateRouteId
             | Self::ProjectParameterTypeMismatch
