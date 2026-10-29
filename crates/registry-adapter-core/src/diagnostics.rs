@@ -56,6 +56,7 @@ pub enum CheckCode {
     // adapter.route.*
     RouteDirectCycle,
     RouteDirectDepthExceeded,
+    RouteErrorHandlerShape,
     RouteFromNotDirect,
     RouteLoopCountAboveBound,
     RouteMaximumItemsRequired,
@@ -114,6 +115,7 @@ impl CheckCode {
         Self::ProjectUpstreamBudgetExceeded,
         Self::RouteDirectCycle,
         Self::RouteDirectDepthExceeded,
+        Self::RouteErrorHandlerShape,
         Self::RouteFromNotDirect,
         Self::RouteLoopCountAboveBound,
         Self::RouteMaximumItemsRequired,
@@ -177,6 +179,7 @@ impl CheckCode {
             Self::ProjectUpstreamBudgetExceeded => "adapter.project.upstream-budget-exceeded",
             Self::RouteDirectCycle => "adapter.route.direct-cycle",
             Self::RouteDirectDepthExceeded => "adapter.route.direct-depth-exceeded",
+            Self::RouteErrorHandlerShape => "adapter.route.error-handler-shape",
             Self::RouteFromNotDirect => "adapter.route.from-not-direct",
             Self::RouteLoopCountAboveBound => "adapter.route.loop-count-above-bound",
             Self::RouteMaximumItemsRequired => "adapter.route.maximum-items-required",
@@ -232,6 +235,7 @@ impl CheckCode {
             | Self::PackUnknownTemplateParameter
             | Self::RouteDirectCycle
             | Self::RouteDirectDepthExceeded
+            | Self::RouteErrorHandlerShape
             | Self::RouteFromNotDirect
             | Self::RouteLoopCountAboveBound
             | Self::RouteMaximumItemsRequired

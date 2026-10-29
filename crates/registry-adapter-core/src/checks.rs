@@ -610,6 +610,34 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
                     }
                 }
             }
+            Step::ErrorHandler(handler) => {
+                let members = handler.default_error_handler.is_some() as usize
+                    + handler.no_error_handler.is_some() as usize;
+                if members != 1 {
+                    route_findings.push(finding(
+                        CheckCode::RouteErrorHandlerShape,
+                        &format!("/routes/{id}/steps{path}"),
+                        "the errorHandler carries none or both handlers",
+                        "Carry exactly one of defaultErrorHandler or noErrorHandler.",
+                    ));
+                }
+                if let Some(policy) = handler
+                    .default_error_handler
+                    .as_ref()
+                    .and_then(|handler| handler.redelivery_policy.as_ref())
+                {
+                    // A retryWhile only stops redelivery earlier; with no
+                    // redeliveries behind it, it could never fire.
+                    if policy.retry_while.is_some() && policy.maximum_redeliveries == 0 {
+                        route_findings.push(finding(
+                            CheckCode::RouteRetryWhileWithoutRedeliveries,
+                            &format!("/routes/{id}/steps{path}"),
+                            "a retryWhile predicate sits on a redelivery policy with maximumRedeliveries 0",
+                            "Set maximumRedeliveries above zero, or drop the retryWhile.",
+                        ));
+                    }
+                }
+            }
             Step::OnException(clause)
                 if clause.exception.iter().any(|class| class.is_uncatchable()) =>
             {
@@ -635,22 +663,6 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
             }
             // A retryWhile only stops redelivery earlier; with no
             // redeliveries behind it, it could never fire.
-            Step::ErrorHandler(handler)
-                if handler
-                    .default_error_handler
-                    .as_ref()
-                    .and_then(|handler| handler.redelivery_policy.as_ref())
-                    .is_some_and(|policy| {
-                        policy.retry_while.is_some() && policy.maximum_redeliveries == 0
-                    }) =>
-            {
-                route_findings.push(finding(
-                    CheckCode::RouteRetryWhileWithoutRedeliveries,
-                    &format!("/routes/{id}/steps{path}"),
-                    "a retryWhile predicate sits on a redelivery policy with maximumRedeliveries 0",
-                    "Set maximumRedeliveries above zero, or drop the retryWhile.",
-                ));
-            }
             Step::OnException(clause)
                 if clause.redelivery_policy.as_ref().is_some_and(|policy| {
                     policy.retry_while.is_some() && policy.maximum_redeliveries == 0
@@ -2809,6 +2821,54 @@ mod tests {
             &check_routes(&pack, &project_builder(&pack)),
             CheckCode::RouteUnknownDirectTarget,
         );
+    }
+
+    /// The errorHandler carries exactly one handler: none or both refuse
+    /// (staff review P1-7).
+    #[test]
+    fn routes_refuse_an_error_handler_without_exactly_one_handler() {
+        let route = |handler: ErrorHandlerStep| RouteDefinition {
+            id: id("fetchCase"),
+            from: RouteFrom {
+                uri: direct("fetchCase"),
+            },
+            steps: vec![Step::ErrorHandler(handler)],
+        };
+        let empty = pack_builder(
+            vec![basic_endpoint()],
+            vec![route(ErrorHandlerStep {
+                default_error_handler: None,
+                no_error_handler: None,
+            })],
+        );
+        assert_has(
+            &check_routes(&empty, &project_builder(&empty)),
+            CheckCode::RouteErrorHandlerShape,
+        );
+        let both = pack_builder(
+            vec![basic_endpoint()],
+            vec![route(ErrorHandlerStep {
+                default_error_handler: Some(DefaultErrorHandler {
+                    redelivery_policy: None,
+                }),
+                no_error_handler: Some(crate::route::NoErrorHandler {}),
+            })],
+        );
+        assert_has(
+            &check_routes(&both, &project_builder(&both)),
+            CheckCode::RouteErrorHandlerShape,
+        );
+        let one = pack_builder(
+            vec![basic_endpoint()],
+            vec![route(ErrorHandlerStep {
+                default_error_handler: Some(DefaultErrorHandler {
+                    redelivery_policy: None,
+                }),
+                no_error_handler: None,
+            })],
+        );
+        assert!(!codes(&check_routes(&one, &project_builder(&one)))
+            .contains(&CheckCode::RouteErrorHandlerShape.code()));
     }
 
     /// A binding may not name a raw template: only a pack route or an
