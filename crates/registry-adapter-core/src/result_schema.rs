@@ -38,7 +38,20 @@ pub fn derive_operation_result_schema(
         .bindings
         .iter()
         .find(|binding| binding.operation.as_str() == operation_id);
-    derive_value(&template, binding, project)
+    derive_value(&template, binding, Some(project))
+}
+
+/// The derived schema of the profile's problem envelope
+/// (`products/adapter/CONCEPT.md` section 7): the envelope template with
+/// every slot replaced by the closed schema of what fills it. The same
+/// single-source discipline as [`derive_operation_result_schema`]:
+/// `adapterctl check`, the fixture error-path check, and the runtime's
+/// problem-body validation all call this, so the three never diverge. A
+/// problem envelope naming a record slot is refused: a problem carries
+/// the problem slots, never a record.
+pub fn derive_problem_envelope_schema(profile: &AdapterProfile) -> Result<Value, String> {
+    let template = parse_envelope_template(profile.problem_envelope.text())?;
+    derive_value(&template, None, None)
 }
 
 /// The sentinel opening (and closing) one slot in a parsed envelope
@@ -109,7 +122,7 @@ fn decode_slot(text: &str) -> Option<(&str, bool)> {
 fn derive_value(
     template: &Value,
     binding: Option<&Binding>,
-    project: &AdapterProject,
+    project: Option<&AdapterProject>,
 ) -> Result<Value, String> {
     match template {
         Value::String(text) => Ok(derive_member(text, binding, project)?.0),
@@ -164,7 +177,7 @@ fn derive_value(
 fn derive_member(
     text: &str,
     binding: Option<&Binding>,
-    project: &AdapterProject,
+    project: Option<&AdapterProject>,
 ) -> Result<(Value, bool), String> {
     match decode_slot(text) {
         Some((name, optional)) => Ok((slot_schema(name, binding, project)?, optional)),
@@ -178,7 +191,7 @@ fn derive_member(
 fn slot_schema(
     name: &str,
     binding: Option<&Binding>,
-    project: &AdapterProject,
+    project: Option<&AdapterProject>,
 ) -> Result<Value, String> {
     match name {
         "record" => record_schema(binding, project),
@@ -193,8 +206,11 @@ fn slot_schema(
     }
 }
 
-fn record_schema(binding: Option<&Binding>, project: &AdapterProject) -> Result<Value, String> {
-    let Some(binding) = binding else {
+fn record_schema(
+    binding: Option<&Binding>,
+    project: Option<&AdapterProject>,
+) -> Result<Value, String> {
+    let (Some(binding), Some(project)) = (binding, project) else {
         return Err(
             "the response envelope carries a record slot, but the operation has no binding to a record type"
                 .to_string(),
@@ -319,23 +335,45 @@ fn escape_token(token: &str) -> String {
 }
 
 /// Checks one fixture entry's expected facade response body against the
-/// derived result schema, refusing every violation, and a missing body,
-/// under `adapter.fixture.response-schema` at the fixture path it
-/// concerns. The caller pairs entries with operations; core stays
-/// no-I/O.
+/// schema the entry's expected status selects, refusing every violation,
+/// and a missing body, under `adapter.fixture.response-schema` at the
+/// fixture path it concerns. A 2xx expected status validates against the
+/// operation's result schema; any other expected status validates
+/// against the profile's problem envelope (CONCEPT section 6), so an
+/// honest error-path suite is not refused as if it promised a record.
+/// Both schemas come pre-derived: the caller derives each once per
+/// workspace check and reuses it (addendum ruling). The caller pairs
+/// entries with operations; core stays no-I/O.
 #[must_use]
 pub fn check_fixture_expected_response(
     entry_index: usize,
     expected: &RecordedResponse,
-    schema: &Value,
+    result_schema: &Value,
+    problem_schema: &Value,
 ) -> Vec<Diagnostic> {
+    let two_hundred = registry_platform_yaml::BoundedU32::<200, 299>::new(expected.status.get());
+    let is_result = two_hundred.is_ok();
+    let kind = if is_result {
+        "the operation's result schema"
+    } else {
+        "the profile's problem envelope"
+    };
     let Some(body) = expected.body.as_ref() else {
         return vec![finding(
             CheckCode::FixtureResponseSchema,
             &format!("/entries/{entry_index}/expectedFacadeResponse"),
-            "the fixture expects no facade response body where the operation's result schema requires one",
-            "Give the entry the facade body the profile envelope and the bound record type produce.",
+            &format!("the fixture expects no facade response body where {kind} requires one"),
+            if is_result {
+                "Give the entry the facade body the profile envelope and the bound record type produce."
+            } else {
+                "Give the entry the problem body the profile's problem envelope produces."
+            },
         )];
+    };
+    let schema = if is_result {
+        result_schema
+    } else {
+        problem_schema
     };
     validate_result_schema(body, schema)
         .into_iter()
@@ -343,8 +381,12 @@ pub fn check_fixture_expected_response(
             finding(
                 CheckCode::FixtureResponseSchema,
                 &format!("/entries/{entry_index}/expectedFacadeResponse/body{violation}"),
-                "the fixture's expected facade response body does not match the operation's result schema",
-                "Bring the expected body in line with the profile envelope and the bound record type.",
+                &format!("the fixture's expected facade response body does not match {kind}"),
+                if is_result {
+                    "Bring the expected body in line with the profile envelope and the bound record type."
+                } else {
+                    "Bring the expected body in line with the profile's problem envelope."
+                },
             )
         })
         .collect()
@@ -541,18 +583,21 @@ mod tests {
         let profile = profile(r#"{"record": {{record}}}"#);
         let schema =
             derive_operation_result_schema(&profile, &project(true), "cases.find").expect("derive");
-        let expected = |body: Option<Value>| Expected {
-            status: crate::fixture::HttpStatus::new(200).expect("a status"),
+        let problem = derive_problem_envelope_schema(&profile).expect("derive");
+        let expected = |status: u32, body: Option<Value>| Expected {
+            status: crate::fixture::HttpStatus::new(status).expect("a status"),
             body,
         };
+        let check = |index: usize, expected: &Expected| {
+            check_fixture_expected_response(index, expected, &schema, &problem)
+        };
 
-        let good = expected(Some(json!({"record": {"id": "c-1"}})));
-        assert!(check_fixture_expected_response(0, &good, &schema).is_empty());
+        let good = expected(200, Some(json!({"record": {"id": "c-1"}})));
+        assert!(check(0, &good).is_empty());
 
-        let findings = check_fixture_expected_response(
+        let findings = check(
             0,
-            &expected(Some(json!({"record": {"id": "c-1", "ghost": true}}))),
-            &schema,
+            &expected(200, Some(json!({"record": {"id": "c-1", "ghost": true}}))),
         );
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].code, CheckCode::FixtureResponseSchema.code());
@@ -561,25 +606,100 @@ mod tests {
             "/entries/0/expectedFacadeResponse/body/record/ghost"
         );
 
-        let findings = check_fixture_expected_response(
-            2,
-            &expected(Some(json!({"record": {"id": 7}}))),
-            &schema,
-        );
+        let findings = check(2, &expected(200, Some(json!({"record": {"id": 7}}))));
         assert_eq!(
             findings[0].path,
             "/entries/2/expectedFacadeResponse/body/record/id"
         );
 
-        let findings =
-            check_fixture_expected_response(0, &expected(Some(json!({"record": {}}))), &schema);
+        let findings = check(0, &expected(200, Some(json!({"record": {}}))));
         assert_eq!(
             findings[0].path,
             "/entries/0/expectedFacadeResponse/body/record/id"
         );
 
-        let findings = check_fixture_expected_response(0, &expected(None), &schema);
+        let findings = check(0, &expected(200, None));
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].path, "/entries/0/expectedFacadeResponse");
+    }
+
+    /// The problem-envelope derivation closes the profile's problem
+    /// template: the problem slots derive as strings, a record slot is
+    /// refused, and a malformed template is refused by name of the fault.
+    #[test]
+    fn problem_envelope_derivation_closes_the_problem_template() {
+        let problem_envelope = |text: &str| {
+            let mut profile = profile(r#"{"record": {{record}}}"#);
+            profile.problem_envelope = EnvelopeTemplate(text.to_string());
+            profile
+        };
+        let with_detail = problem_envelope(
+            r#"{"code": "{{problemCode}}", "title": "{{problemTitle}}", "detail": "{{?problemDetail}}"}"#,
+        );
+        let schema = derive_problem_envelope_schema(&with_detail).expect("derive");
+        assert_eq!(schema["required"], json!(["code", "title"]));
+        assert_eq!(schema["properties"]["code"], json!({"type": "string"}));
+        assert_eq!(schema["properties"]["detail"], json!({"type": "string"}));
+
+        let record_slot = problem_envelope(r#"{"code": "{{problemCode}}", "record": {{record}}}"#);
+        assert!(
+            derive_problem_envelope_schema(&record_slot).is_err(),
+            "a problem envelope carries no record slot"
+        );
+        assert!(derive_problem_envelope_schema(&problem_envelope(r#"{"code": "#)).is_err());
+    }
+
+    /// The entry's expected status selects the schema: a non-2xx entry
+    /// with a well-formed problem body passes, a malformed one refuses at
+    /// its pointer, and a 2xx entry carrying a problem body refuses
+    /// against the result schema (addendum A).
+    #[test]
+    fn the_expected_status_selects_the_schema() {
+        let with_record = profile(r#"{"record": {{record}}}"#);
+        let schema = derive_operation_result_schema(&with_record, &project(true), "cases.find")
+            .expect("derive");
+        let problem_code_only = profile(r#"{"code": "{{problemCode}}"}"#);
+        let problem = derive_problem_envelope_schema(&problem_code_only).expect("derive");
+        let expected = |status: u32, body: Option<Value>| Expected {
+            status: crate::fixture::HttpStatus::new(status).expect("a status"),
+            body,
+        };
+        let check =
+            |expected: &Expected| check_fixture_expected_response(0, expected, &schema, &problem);
+
+        let good = expected(404, Some(json!({"code": "cases.conflict"})));
+        assert!(check(&good).is_empty(), "an honest error-path entry passes");
+
+        let findings = check(&expected(
+            404,
+            Some(json!({"code": "cases.conflict", "ghost": 1})),
+        ));
+        assert_eq!(findings.len(), 1);
+        assert_eq!(
+            findings[0].path,
+            "/entries/0/expectedFacadeResponse/body/ghost"
+        );
+        assert!(
+            findings[0].message.contains("problem envelope"),
+            "the message names which envelope kind failed"
+        );
+
+        let findings = check(&expected(404, Some(json!({"code": 7}))));
+        assert_eq!(
+            findings[0].path,
+            "/entries/0/expectedFacadeResponse/body/code"
+        );
+
+        let findings = check(&expected(404, None));
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].path, "/entries/0/expectedFacadeResponse");
+
+        // A 2xx entry carrying a problem body refuses against the result
+        // schema.
+        let findings = check(&expected(200, Some(json!({"code": "cases.conflict"}))));
+        assert_eq!(findings.len(), 2);
+        assert!(findings
+            .iter()
+            .all(|finding| finding.message.contains("result schema")));
     }
 }
