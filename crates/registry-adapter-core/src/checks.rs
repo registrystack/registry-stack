@@ -1303,7 +1303,9 @@ fn write_route_checks(prefix: &str, steps: &[Step]) -> Vec<Diagnostic> {
 /// counts its body once per route-body worst-case send because it
 /// resumes after the failure point; every send counts one plus the
 /// declared `maximumRedeliveries` attempts; and each OAuth endpoint the
-/// route touches adds at most two token requests per exchange.
+/// route touches adds the single resend after a refreshed 401. Token
+/// requests themselves sit outside `maximumUpstreamCalls` (CONCEPT
+/// section 10.2): the runtime caps them separately.
 fn route_worst_case(
     steps: &[Step],
     bodies: &HashMap<&str, &[Step]>,
@@ -1317,7 +1319,7 @@ fn route_worst_case(
         depth_exceeded: false,
     };
     let main = worst_body(steps, &mut walk, 0, declared_redeliveries(steps), false, 1);
-    let tokens = 2u64.saturating_mul(u64::try_from(walk.used_oauth.len()).unwrap_or(u64::MAX));
+    let resends = u64::try_from(walk.used_oauth.len()).unwrap_or(u64::MAX);
     // A `continued` clause resumes after the failure point and can fire
     // once per body failure, so its candidate is the clause worst-case
     // once per route-body send, plus the clause worst-case when the body
@@ -1335,7 +1337,7 @@ fn route_worst_case(
         .max()
         .unwrap_or(0);
     (
-        main.saturating_add(clause_worst).saturating_add(tokens),
+        main.saturating_add(clause_worst).saturating_add(resends),
         walk.depth_exceeded,
     )
 }
@@ -1369,7 +1371,7 @@ fn declared_redeliveries(steps: &[Step]) -> u32 {
 }
 
 /// The shared state of one worst-case walk: the direct-expansion bodies,
-/// the pack endpoints needing token requests, and the accumulators.
+/// the pack endpoints needing the 401 resend, and the accumulators.
 struct WorstCaseWalk<'a> {
     bodies: &'a HashMap<&'a str, &'a [Step]>,
     oauth_endpoints: &'a HashSet<&'a str>,
@@ -3289,8 +3291,9 @@ mod tests {
         let pack = pack_builder(vec![oauth_endpoint()], vec![route]);
         let mut project = project_builder(&pack);
         project.access_profiles = UniqueIdList::new(Vec::new()).expect("empty");
-        // Ten looped sends plus two token requests for the one OAuth
-        // endpoint (CONCEPT 10.2): twelve.
+        // Ten looped sends plus the single resend after a refreshed 401
+        // for the one OAuth endpoint (CONCEPT 10.2): eleven; token
+        // requests sit outside the budget.
         project.bindings = UniqueIdList::new(vec![Binding {
             id: id("find-cases"),
             operation: id("cases.find"),
@@ -3306,7 +3309,7 @@ mod tests {
             operation: id("cases.find"),
             record_type: local("case"),
             route: id("fetchCase"),
-            maximum_upstream_calls: BoundedU64::<1, 100_000>::new(12).expect("budget"),
+            maximum_upstream_calls: BoundedU64::<1, 100_000>::new(11).expect("budget"),
         }])
         .expect("unique");
         assert_clean(check_project(&workspace(&profile, &pack, &project)));
@@ -3514,13 +3517,13 @@ mod tests {
         .expect("unique");
         let findings = check_project(&workspace(&profile, &pack, &project));
         assert_has(&findings, CheckCode::ProjectUpstreamBudgetExceeded);
-        // The exact worst case fits: 9 sends + 2 token requests.
+        // The exact worst case fits: 9 sends + 1 resend.
         project.bindings = UniqueIdList::new(vec![Binding {
             id: id("find-cases"),
             operation: id("cases.find"),
             record_type: local("case"),
             route: id("fetchCase"),
-            maximum_upstream_calls: BoundedU64::<1, 100_000>::new(11).expect("budget"),
+            maximum_upstream_calls: BoundedU64::<1, 100_000>::new(10).expect("budget"),
         }])
         .expect("unique");
         assert_clean(check_project(&workspace(&profile, &pack, &project)));
