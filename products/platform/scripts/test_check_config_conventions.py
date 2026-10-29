@@ -281,6 +281,35 @@ def report_format() -> dict:
     }
 
 
+def adapter_format(format_id: str, kind: str) -> dict:
+    """The project fixture re-homed under the Adapter product token.
+
+    The reader and schema stay on the casework fixture's files: this helper
+    exercises the product-token and kind-derivation checks, not the format's
+    own artifacts.
+    """
+
+    entry = copy.deepcopy(project_format())
+    entry.update(
+        {
+            "id": format_id,
+            "product": "adapter",
+            "title": f"Adapter {kind}",
+            "current": {
+                "apiVersion": f"id.registrystack.org/formats/{format_id}/v1alpha1",
+                "kind": kind,
+                "checkedBy": "none",
+            },
+            "target": {
+                "apiVersion": f"id.registrystack.org/formats/{format_id}/v1alpha1",
+                "kind": kind,
+            },
+        }
+    )
+    del entry["topLevel"]
+    return entry
+
+
 CONFIG_RS_TEXT = """\
 use registry_platform_config::ProjectIdentity;
 use registry_platform_yaml::from_str;
@@ -603,6 +632,14 @@ class RegistryAccuracyTests(ConventionsTestCase):
     def test_cfg_schema_1_refuses_a_kind_two_formats_share(self) -> None:
         self.repo.fmt(R)["target"]["kind"] = "CaseworkProject"
         self.assertError(self.repo.run(), "kind CaseworkProject is not unique")
+
+    def test_cfg_env_3_accepts_the_adapter_product_prefix(self) -> None:
+        self.repo.formats[0] = adapter_format("adapter/profile", "AdapterProfile")
+        self.assertEqual(self.repo.run().errors, [])
+
+    def test_cfg_env_2_derives_the_adapter_runtime_format_from_the_kind(self) -> None:
+        self.repo.formats[0] = adapter_format("adapter/runtime", "AdapterRuntimeConfig")
+        self.assertEqual(self.repo.run().errors, [])
 
     def test_cfg_schema_1_refuses_missing_example(self) -> None:
         self.repo.fmt()["example"] = "products/casework/examples/missing.yaml"
