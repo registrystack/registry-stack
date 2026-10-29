@@ -1,0 +1,66 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json
+#
+# Experiment project: the breg-records profile bound to the
+# jsonapi-households experiment pack over one record type, `household`.
+#
+# Upstream-call budget (worst-case rule):
+#   records.search: loop bound 10 x 1 send (behind direct:) x (1 + 0
+#   redelivery) = 10, plus 1 token resend after a refreshed 401 = 11.
+#   records.get: 1 send, plus 1 token resend = 2.
+#
+# Check with:
+#   adapterctl check products/adapter/experiments/rest-offset-mtls/project.yaml \
+#     --profile products/adapter/profiles/breg-records/profile.yaml \
+#     --runtime products/adapter/experiments/rest-offset-mtls/runtime.yaml
+apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
+kind: AdapterProject
+id: jsonapi-households-experiment
+profile:
+  id: breg-records
+  version: "1"
+  digest: sha256:a4608387ad998d535bcd593b2b147d74cc25dc0167ef2a12a2171c228488fee6
+pack:
+  id: jsonapi-households
+  version: "1"
+  digest: sha256:40f954e18bc6b301a8aaeb4fdad496457ccb2ccb027f7aaa76e04d2050ec9533
+recordTypes:
+  - name: household
+    fields:
+      - name: household_number
+        type: string
+      - name: region_code
+        type: string
+      - name: member_count
+        type: integer
+      - name: registered_on
+        type: date
+templatedRoutes:
+  - routeTemplate: searchHouseholds
+    routeId: householdSearch
+    parameters:
+      region_code: R-07
+      page_size: 100
+      maximum_total: 1000
+  - routeTemplate: getHousehold
+    routeId: householdGet
+    parameters: {}
+bindings:
+  - id: household-search
+    operation: records.search
+    recordType: household
+    route: householdSearch
+    maximumUpstreamCalls: 11
+  - id: household-get
+    operation: records.get
+    recordType: household
+    route: householdGet
+    maximumUpstreamCalls: 2
+accessProfiles:
+  - id: household-reader
+    scopes:
+      - records.read
+    operations:
+      - records.search
+      - records.get
+    recordTypes:
+      - household

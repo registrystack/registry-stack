@@ -1,0 +1,57 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json
+#
+# Experiment project: the breg-records profile bound to the
+# fhir-r4-patient experiment pack over one record type, `patient`.
+#
+# Upstream-call budget (worst-case rule): loop bound 10 pages x (widest
+# choice branch, 1 send) x (1 + 1 redelivery) = 20, plus the single
+# resend after a refreshed 401 for the OAuth endpoint = 21; budget 24.
+#
+# Check with:
+#   adapterctl check products/adapter/experiments/fhir-r4-patient-source/project.yaml \
+#     --profile products/adapter/profiles/breg-records/profile.yaml \
+#     --runtime products/adapter/experiments/fhir-r4-patient-source/runtime.yaml
+apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
+kind: AdapterProject
+id: fhir-r4-patient-experiment
+profile:
+  id: breg-records
+  version: "1"
+  digest: sha256:a4608387ad998d535bcd593b2b147d74cc25dc0167ef2a12a2171c228488fee6
+pack:
+  id: fhir-r4-patient
+  version: "1"
+  digest: sha256:1777329bec31a44fe041ed72a482d7c882b213383f6be295b21bf5c1f1fca489
+recordTypes:
+  - name: patient
+    fields:
+      - name: national_id
+        type: string
+      - name: family_name
+        type: string
+      - name: given_names
+        type: string
+      - name: birth_date
+        type: date
+      - name: gender
+        type: string
+templatedRoutes:
+  - routeTemplate: searchPatients
+    routeId: patientSearch
+    parameters:
+      identifier_system: https://id.example.invalid/national-id
+      page_size: 50
+bindings:
+  - id: patient-search
+    operation: records.search
+    recordType: patient
+    route: patientSearch
+    maximumUpstreamCalls: 24
+accessProfiles:
+  - id: patient-reader
+    scopes:
+      - records.read
+    operations:
+      - records.search
+    recordTypes:
+      - patient

@@ -1,0 +1,77 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/fixture/fixture.v1alpha1.schema.json
+#
+# Documented fixture (NOT captured): reconstructed from the FHIR R4
+# search and paging pages (https://hl7.org/fhir/R4/http.html#paging,
+# https://hl7.org/fhir/R4/bundle.html) and HAPI FHIR's documented
+# continuation link spelling. No server was contacted.
+#
+# The search fetches two pages, so it is two upstream exchanges plus a
+# token request. The fixture format holds one upstream exchange per entry
+# and no facade request (the national_id filter, cursor, limit), so the
+# second page cannot be expressed as part of the same facade call; this
+# file records the first page only and the README records the gap.
+apiVersion: id.registrystack.org/formats/adapter/fixture/v1alpha1
+kind: AdapterFixture
+id: fhir-r4-patient-search-two-pages
+pack: fhir-r4-patient
+upstreamVersion: "4.0.1"
+provenance:
+  type: documented
+  reference: https://hl7.org/fhir/R4/http.html#paging
+intercepts:
+  - type: token-endpoint
+    endpoint: fhir
+  - type: endpoint
+    endpoint: fhir
+entries:
+  - operation: records.search
+    given:
+      endpoint: fhir
+      method: GET
+      path: /Patient
+      query: _count=50&_format=json&identifier=https%3A%2F%2Fid.example.invalid%2Fnational-id%7CNID-0001
+    upstreamResponse:
+      status: 200
+      body:
+        resourceType: Bundle
+        type: searchset
+        total: 2
+        link:
+          - relation: self
+            url: https://fhir.example.invalid/baseR4/Patient?identifier=https%3A%2F%2Fid.example.invalid%2Fnational-id%7CNID-0001&_count=50
+          - relation: next
+            url: https://fhir.example.invalid/baseR4?_getpages=7f3c2a&_getpagesoffset=1&_count=1&_bundletype=searchset
+        entry:
+          - fullUrl: https://fhir.example.invalid/baseR4/Patient/pat-001
+            resource:
+              resourceType: Patient
+              id: pat-001
+              meta:
+                versionId: "3"
+              identifier:
+                - system: https://id.example.invalid/national-id
+                  value: NID-0001
+              name:
+                - use: official
+                  family: Rivera
+                  given:
+                    - Ana
+                    - Lucia
+              gender: female
+              birthDate: "1984-03-12"
+            search:
+              mode: match
+    expectedFacadeResponse:
+      status: 200
+      body:
+        items:
+          - national_id: NID-0001
+            family_name: Rivera
+            given_names: Ana Lucia
+            birth_date: "1984-03-12"
+            gender: female
+        pageInfo: {}
+        meta:
+          registryIdentifier: registryIdentifier
+          datasetIdentifier: datasetIdentifier
+          entityTypeIdentifier: patient

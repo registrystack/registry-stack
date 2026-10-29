@@ -1,0 +1,331 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/pack/pack.v1alpha1.schema.json
+#
+# Experiment pack (not maintained): a JSON:API 1.1 household registry
+# (https://jsonapi.org/format/) with offset pagination
+# (`page[offset]`, `page[limit]`, https://jsonapi.org/format/#fetching-pagination),
+# behind mutual TLS (RFC 8705 transport) and an OAuth 2.0 client-credentials
+# grant authenticated by a private-key JWT (RFC 7523). It tries a hard total
+# cap, a circuit breaker whose rejection maps to the profile's unavailable,
+# and a doTry/doCatch inside the breaker that keeps an upstream 404 from
+# counting as a breaker failure and maps it to the profile's not-found.
+# See README.md beside this file.
+apiVersion: id.registrystack.org/formats/adapter/pack/v1alpha1
+kind: AdapterPack
+id: jsonapi-households
+version: "1"
+testedVersions:
+  - "1.1"
+endpoints:
+  - id: registry
+    component: http
+    authentication:
+      type: oauth2-private-key-jwt
+    operations:
+      - id: households.list
+      - id: households.read
+    testedVersions:
+      - "1.1"
+routeTemplates:
+  - id: searchHouseholds
+    parameters:
+      - name: region_code
+        type: string
+        required: true
+        description: The JSON:API filter value the search is limited to.
+      - name: page_size
+        type: integer
+        defaultValue: 100
+        description: The page[limit] each loop iteration asks for.
+      - name: maximum_total
+        type: integer
+        defaultValue: 1000
+        description: >-
+          The hard cap on the upstream total; a larger result is refused
+          whole. Must not exceed maximumIterations x pageSize, which nothing
+          checks.
+    steps:
+      - onException:
+          exception:
+            - upstream.http
+          handled: true
+          steps:
+            - setBody:
+                constant:
+                  type: https://id.registrystack.org/problems/registry-adapter/source.upstream-error
+                  title: The registry refused the request.
+                  status: 502
+                  code: source.upstream-error
+            - setHeader:
+                name: CamelHttpResponseCode
+                value:
+                  constant: 502
+            - stop: {}
+      - onException:
+          exception:
+            - upstream.malformed
+            - upstream.too-large
+            - script
+          handled: true
+          steps:
+            - setBody:
+                constant:
+                  type: https://id.registrystack.org/problems/registry-adapter/source.upstream-error
+                  title: The registry answered something unusable.
+                  status: 502
+                  code: source.upstream-error
+            - setHeader:
+                name: CamelHttpResponseCode
+                value:
+                  constant: 502
+            - stop: {}
+      - onException:
+          exception:
+            - breaker.open
+          handled: true
+          steps:
+            - setBody:
+                constant:
+                  type: https://id.registrystack.org/problems/registry-adapter/source.unavailable
+                  title: The registry is unavailable.
+                  status: 503
+                  code: source.unavailable
+            - setHeader:
+                name: CamelHttpResponseCode
+                value:
+                  constant: 503
+            - stop: {}
+      - onException:
+          exception:
+            - validation
+          handled: true
+          steps:
+            - setBody:
+                constant:
+                  type: https://id.registrystack.org/problems/registry-adapter/source.upstream-error
+                  title: The search matches more households than this deployment serves at once.
+                  status: 502
+                  code: source.upstream-error
+            - setHeader:
+                name: CamelHttpResponseCode
+                value:
+                  constant: 502
+            - stop: {}
+      - setProperty:
+          name: regionCode
+          value:
+            constant: "{{region_code}}"
+      - setProperty:
+          name: pageLimit
+          value:
+            constant: "{{page_size}}"
+      - setProperty:
+          name: maximumTotal
+          value:
+            constant: "{{maximum_total}}"
+      - setProperty:
+          name: pageOffset
+          value:
+            constant: 0
+      - loop:
+          rhai:
+            file: scripts/has-more.rhai
+            entrypoint: has_more
+          doWhile: true
+          maximumIterations: 10
+          steps:
+            - to:
+                uri: direct:fetchHouseholdPage
+      - setBody:
+          rhai:
+            file: scripts/to-households.rhai
+            entrypoint: to_households
+  - id: getHousehold
+    parameters: []
+    steps:
+      - onException:
+          exception:
+            - upstream.http
+          handled: true
+          steps:
+            - setBody:
+                constant:
+                  type: https://id.registrystack.org/problems/registry-adapter/source.upstream-error
+                  title: The registry refused the request.
+                  status: 502
+                  code: source.upstream-error
+            - setHeader:
+                name: CamelHttpResponseCode
+                value:
+                  constant: 502
+            - stop: {}
+      - onException:
+          exception:
+            - upstream.malformed
+            - upstream.too-large
+            - script
+          handled: true
+          steps:
+            - setBody:
+                constant:
+                  type: https://id.registrystack.org/problems/registry-adapter/source.upstream-error
+                  title: The registry answered something unusable.
+                  status: 502
+                  code: source.upstream-error
+            - setHeader:
+                name: CamelHttpResponseCode
+                value:
+                  constant: 502
+            - stop: {}
+      - onException:
+          exception:
+            - breaker.open
+          handled: true
+          steps:
+            - setBody:
+                constant:
+                  type: https://id.registrystack.org/problems/registry-adapter/source.unavailable
+                  title: The registry is unavailable.
+                  status: 503
+                  code: source.unavailable
+            - setHeader:
+                name: CamelHttpResponseCode
+                value:
+                  constant: 503
+            - stop: {}
+      - onException:
+          exception:
+            - validation
+          handled: true
+          steps:
+            - setBody:
+                constant:
+                  type: https://id.registrystack.org/problems/registry-adapter/source.not-found
+                  title: No household has this identifier.
+                  status: 404
+                  code: source.not-found
+            - setHeader:
+                name: CamelHttpResponseCode
+                value:
+                  constant: 404
+            - stop: {}
+      - circuitBreaker:
+          failureRateThreshold: 50
+          slidingWindowCalls: 20
+          minimumNumberOfCalls: 10
+          openStateWaitSeconds: 30
+          steps:
+            - doTry:
+                steps:
+                  - to:
+                      uri: http:registry
+                      parameters:
+                        httpMethod: GET
+                        path: /households/{id}
+                        pathParameters:
+                          id:
+                            header: recordId
+                        operation: households.read
+                doCatch:
+                  - exception:
+                      - upstream.http
+                    onWhen:
+                      rhai:
+                        file: scripts/is-not-found.rhai
+                        entrypoint: is_not_found
+                    steps:
+                      - setProperty:
+                          name: householdMissing
+                          value:
+                            constant: true
+      - validate:
+          expression:
+            rhai:
+              file: scripts/is-present.rhai
+              entrypoint: is_present
+      - setBody:
+          rhai:
+            file: scripts/to-household.rhai
+            entrypoint: to_household
+routes:
+  - id: fetchHouseholdPage
+    from:
+      uri: direct:fetchHouseholdPage
+    steps:
+      - circuitBreaker:
+          failureRateThreshold: 50
+          slidingWindowCalls: 20
+          minimumNumberOfCalls: 10
+          openStateWaitSeconds: 30
+          steps:
+            - to:
+                uri: http:registry
+                parameters:
+                  httpMethod: GET
+                  path: /households
+                  query:
+                    "filter[regionCode]":
+                      exchangeProperty: regionCode
+                    "page[offset]":
+                      exchangeProperty: pageOffset
+                    "page[limit]":
+                      exchangeProperty: pageLimit
+                  operation: households.list
+      - setProperty:
+          name: upstreamTotal
+          value:
+            jsonpath: $.meta.total
+      - validate:
+          expression:
+            rhai:
+              file: scripts/within-cap.rhai
+              entrypoint: within_cap
+      - setProperty:
+          name: households
+          value:
+            rhai:
+              file: scripts/append-page.rhai
+              entrypoint: append_page
+      - setProperty:
+          name: pageOffset
+          value:
+            rhai:
+              file: scripts/next-offset.rhai
+              entrypoint: next_offset
+scripts:
+  - path: scripts/has-more.rhai
+    digest: sha256:896d298f6f400e813983a6ff253c123f979448f3f40688c655149e2a180c4467
+  - path: scripts/within-cap.rhai
+    digest: sha256:d62470fb4e04d479b33a6489bb376e193d56eae7bfea9fed9c08f68a6b5293ae
+  - path: scripts/append-page.rhai
+    digest: sha256:f5afff72c1e8829bf0e6feaad7484bf3043e0ac502de7e846ff0694e79db25cf
+  - path: scripts/next-offset.rhai
+    digest: sha256:99423930d78ad15067e0866bf6e60ec21af027aa33f5cd52258d6ccd9fe7f660
+  - path: scripts/is-not-found.rhai
+    digest: sha256:7d2e9e274f6dd4377b8f3209c42a7907ec1f80f930202afe7e0bfea7d9e6fa3e
+  - path: scripts/is-present.rhai
+    digest: sha256:e749ecd4e94d9f484ff97c0df07b10410b9104b1af2f802a6ef017893df542a8
+  - path: scripts/to-households.rhai
+    digest: sha256:b568345838cece67caca102cbb40b06197e1e9bc6438e90ac8db0586a5b7e8ea
+  - path: scripts/to-household.rhai
+    digest: sha256:2e4c67a3abc34f799b15be1e6be4d44debbd7689f8c303f089eb95bb965f7fc0
+capabilities:
+  components:
+    - direct
+    - http
+  languages:
+    - constant
+    - header
+    - exchangeProperty
+    - jsonpath
+    - rhai
+  eips:
+    - circuitBreaker
+    - doTry
+    - loop
+    - onException
+    - setBody
+    - setHeader
+    - setProperty
+    - stop
+    - to
+    - validate

@@ -1,0 +1,30 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/runtime/runtime.v1alpha1.schema.json
+#
+# Experiment runtime config. The two graphql endpoints are one upstream
+# (one origin, one key); the format binds each endpoint separately, so the
+# origin and the key reference are repeated. Every secret is a reference;
+# every origin is under .example.invalid.
+apiVersion: id.registrystack.org/formats/adapter/runtime/v1alpha1
+kind: AdapterRuntimeConfig
+id: graphql-cases-experiment
+endpoints:
+  - endpoint: casesQuery
+    baseUrl: https://cases.example.invalid/graphql
+    credential:
+      type: static-api-key
+      valueRef: secret:env/CASES_API_KEY
+  - endpoint: caseNode
+    baseUrl: https://cases.example.invalid/graphql
+    credential:
+      type: static-api-key
+      valueRef: secret:env/CASES_API_KEY
+listener:
+  bind: 127.0.0.1:8080
+database:
+  runtimeUrlRef: secret:env/ADAPTER_DB_RUNTIME
+  migrationUrlRef: secret:env/ADAPTER_DB_MIGRATION
+oidc:
+  issuer: https://issuer.example.invalid
+  audience: registry-adapter
+audit:
+  retentionDays: 90

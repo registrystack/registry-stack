@@ -1,0 +1,237 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/pack/pack.v1alpha1.schema.json
+#
+# Experiment pack (not maintained): a Relay-style GraphQL case system,
+# authored from the Relay connection and object-identification specs
+# (https://relay.dev/graphql/connections.htm,
+# https://relay.dev/graphql/objectidentification.htm) and GraphQL over
+# HTTP (https://graphql.github.io/graphql-over-http/draft/). It serves the
+# case-api profile (cases.find, cases.get) behind a static API key. See
+# README.md beside this file.
+#
+# A graphql endpoint carries exactly one query file, operation name, and
+# variables expression, so the two queries need two endpoints over the same
+# origin and the same key.
+apiVersion: id.registrystack.org/formats/adapter/pack/v1alpha1
+kind: AdapterPack
+id: graphql-cases
+version: "1"
+testedVersions:
+  - "2024-01"
+endpoints:
+  - id: casesQuery
+    component: graphql
+    authentication:
+      type: static-api-key
+      headerName: X-Api-Key
+    queryFile: queries/find-cases.graphql
+    operationName: FindCases
+    variables:
+      rhai:
+        file: scripts/find-variables.rhai
+        entrypoint: find_variables
+    operations:
+      - id: cases.query
+    testedVersions:
+      - "2024-01"
+  - id: caseNode
+    component: graphql
+    authentication:
+      type: static-api-key
+      headerName: X-Api-Key
+    queryFile: queries/get-case.graphql
+    operationName: GetCase
+    variables:
+      rhai:
+        file: scripts/get-variables.rhai
+        entrypoint: get_variables
+    operations:
+      - id: cases.node
+    testedVersions:
+      - "2024-01"
+routeTemplates:
+  - id: findCases
+    parameters:
+      - name: case_type
+        type: string
+        required: true
+        description: The upstream case type the connection is filtered to.
+    steps:
+      - onException:
+          exception:
+            - upstream.timeout
+            - upstream.connection
+          handled: true
+          redeliveryPolicy:
+            maximumRedeliveries: 1
+            retryDelaySeconds: 1
+          steps:
+            - setBody:
+                constant:
+                  family: cases.unreachable
+                  message: The case system did not answer in time.
+                  httpStatus: 503
+            - setHeader:
+                name: CamelHttpResponseCode
+                value:
+                  constant: 503
+            - stop: {}
+      - onException:
+          exception:
+            - upstream.http
+          handled: true
+          steps:
+            - setBody:
+                constant:
+                  family: cases.refused
+                  message: The case system refused the query.
+                  httpStatus: 502
+            - setHeader:
+                name: CamelHttpResponseCode
+                value:
+                  constant: 502
+            - stop: {}
+      - onException:
+          exception:
+            - upstream.malformed
+            - upstream.too-large
+            - script
+            - validation
+          handled: true
+          steps:
+            - setBody:
+                constant:
+                  family: cases.refused
+                  message: The case system answered something unusable.
+                  httpStatus: 502
+            - setHeader:
+                name: CamelHttpResponseCode
+                value:
+                  constant: 502
+            - stop: {}
+      - setProperty:
+          name: caseType
+          value:
+            constant: "{{case_type}}"
+      - to:
+          uri: graphql:casesQuery
+      - setProperty:
+          name: nextCursor
+          value:
+            rhai:
+              file: scripts/next-cursor.rhai
+              entrypoint: next_cursor
+      - setBody:
+          rhai:
+            file: scripts/to-cases.rhai
+            entrypoint: to_cases
+  - id: getCase
+    parameters: []
+    steps:
+      - onException:
+          exception:
+            - upstream.timeout
+            - upstream.connection
+          handled: true
+          redeliveryPolicy:
+            maximumRedeliveries: 1
+            retryDelaySeconds: 1
+          steps:
+            - setBody:
+                constant:
+                  family: cases.unreachable
+                  message: The case system did not answer in time.
+                  httpStatus: 503
+            - setHeader:
+                name: CamelHttpResponseCode
+                value:
+                  constant: 503
+            - stop: {}
+      - onException:
+          exception:
+            - upstream.http
+          handled: true
+          steps:
+            - setBody:
+                constant:
+                  family: cases.refused
+                  message: The case system refused the query.
+                  httpStatus: 502
+            - setHeader:
+                name: CamelHttpResponseCode
+                value:
+                  constant: 502
+            - stop: {}
+      - onException:
+          exception:
+            - upstream.malformed
+            - upstream.too-large
+            - script
+            - validation
+          handled: true
+          steps:
+            - setBody:
+                constant:
+                  family: cases.refused
+                  message: The case system answered something unusable.
+                  httpStatus: 502
+            - setHeader:
+                name: CamelHttpResponseCode
+                value:
+                  constant: 502
+            - stop: {}
+      - to:
+          uri: graphql:caseNode
+      - choice:
+          when:
+            - rhai:
+                file: scripts/is-missing.rhai
+                entrypoint: is_missing
+              steps:
+                - setBody:
+                    constant:
+                      family: cases.missing
+                      message: No case has this identifier.
+                      httpStatus: 404
+                - setHeader:
+                    name: CamelHttpResponseCode
+                    value:
+                      constant: 404
+                - stop: {}
+          otherwise:
+            steps:
+              - setBody:
+                  rhai:
+                    file: scripts/to-case.rhai
+                    entrypoint: to_case
+scripts:
+  - path: scripts/find-variables.rhai
+    digest: sha256:e2199117406566aa318ee5345e0445738842b314f020802e49e8c99c6223d2c1
+  - path: scripts/get-variables.rhai
+    digest: sha256:aa0d1c6685c58e974421107e6e077bd11551eb1f22124865ce3221c60a7daf39
+  - path: scripts/next-cursor.rhai
+    digest: sha256:fbfc328262af7147ce307afbe69a15a7e9712b4885d3c819bc2e4fbaccf38f49
+  - path: scripts/to-cases.rhai
+    digest: sha256:87574830cfc42aa93adecdf44814d0b6323a908a0026dec832a28aa20ff13352
+  - path: scripts/to-case.rhai
+    digest: sha256:d0363d1b60d7db85b9c86acc30fe8881b1da8db63b26b5a4b3f498c62f8211c6
+  - path: scripts/is-missing.rhai
+    digest: sha256:18975718664a3a46c79880cef8e58791569ce3844920c1060c0224ff19cf731a
+queryFiles:
+  - path: queries/find-cases.graphql
+    digest: sha256:421914094b55be5ff87cae67b8cddced241100b22348b4d1a4cf6f5edcce4e59
+  - path: queries/get-case.graphql
+    digest: sha256:bc2a14a499276eb3ef938af86e32290561a86b725586a5f76f2536e98273bc96
+capabilities:
+  components:
+    - graphql
+  languages:
+    - constant
+    - rhai
+  eips:
+    - choice
+    - onException
+    - setBody
+    - setHeader
+    - setProperty
+    - stop
+    - to

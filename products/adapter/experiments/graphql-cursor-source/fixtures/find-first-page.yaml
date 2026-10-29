@@ -1,0 +1,67 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/fixture/fixture.v1alpha1.schema.json
+#
+# Documented fixture (NOT captured): reconstructed from the Relay cursor
+# connection spec (https://relay.dev/graphql/connections.htm) and GraphQL
+# over HTTP (https://graphql.github.io/graphql-over-http/draft/). No server
+# was contacted.
+#
+# The format has no member for the GraphQL operation name or variables as
+# such; the request body below is the GraphQL-over-HTTP POST body the
+# engine is assumed to send. It has no member for the facade request (the
+# status filter, pageStateToken, maxResults) or the facade nextCursor
+# either, so the pass-through cursor cannot be asserted.
+#
+# The cases.get not-found entry (a Relay `node: null` answer mapped to the
+# cases.missing problem) is not in this file: an expected facade response
+# is validated against the success result schema whatever its status, so a
+# problem body is refused (adapter.fixture.response-schema). The README
+# records the entry and the refusal.
+apiVersion: id.registrystack.org/formats/adapter/fixture/v1alpha1
+kind: AdapterFixture
+id: graphql-cases-find-first-page
+pack: graphql-cases
+upstreamVersion: "2024-01"
+provenance:
+  type: documented
+  reference: https://relay.dev/graphql/connections.htm
+intercepts:
+  - type: endpoint
+    endpoint: casesQuery
+entries:
+  - operation: cases.find
+    given:
+      endpoint: casesQuery
+      method: POST
+      path: /
+      body:
+        operationName: FindCases
+        variables:
+          caseType: BENEFIT
+          first: 50
+          status: OPEN
+    upstreamResponse:
+      status: 200
+      body:
+        data:
+          cases:
+            pageInfo:
+              hasNextPage: true
+              endCursor: Y3Vyc29yOjUw
+            edges:
+              - node:
+                  id: Q2FzZTox
+                  version: "3"
+                  status: OPEN
+                  openedOn: "2026-02-11"
+                  programme: CHILD-GRANT
+                  applicant:
+                    nationalId: NID-0001
+    expectedFacadeResponse:
+      status: 200
+      body:
+        cases:
+          - status: open
+            opened_on: "2026-02-11"
+            programme: CHILD-GRANT
+            applicant_national_id: NID-0001
+        pageStateToken: opaque-engine-cursor

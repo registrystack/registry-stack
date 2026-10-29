@@ -1,0 +1,65 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json
+#
+# Experiment project: experiment 4's jsonapi-households pack, byte for byte
+# (pack.yaml and scripts/ are copies, same digest), bound to the
+# FHIR-shaped experiment profile in profile.yaml beside this file. It tests
+# D17: one pack, a second target API, no pack change.
+#
+# Upstream-call budgets as in experiment 4: search 11, read 2.
+#
+# Check with:
+#   adapterctl check products/adapter/experiments/second-target-profile/project.yaml \
+#     --profile products/adapter/experiments/second-target-profile/profile.yaml \
+#     --runtime products/adapter/experiments/second-target-profile/runtime.yaml
+apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
+kind: AdapterProject
+id: fhir-facade-households-experiment
+profile:
+  id: fhir-facade
+  version: "1"
+  digest: sha256:3217b3ba399b688c371c60faf2d16dfd6ec1ee94d9220655a4817bba97a0e8f3
+pack:
+  id: jsonapi-households
+  version: "1"
+  digest: sha256:40f954e18bc6b301a8aaeb4fdad496457ccb2ccb027f7aaa76e04d2050ec9533
+recordTypes:
+  - name: household
+    fields:
+      - name: household_number
+        type: string
+      - name: region_code
+        type: string
+      - name: member_count
+        type: integer
+      - name: registered_on
+        type: date
+templatedRoutes:
+  - routeTemplate: searchHouseholds
+    routeId: householdSearch
+    parameters:
+      region_code: R-07
+      page_size: 100
+      maximum_total: 1000
+  - routeTemplate: getHousehold
+    routeId: householdGet
+    parameters: {}
+bindings:
+  - id: household-search
+    operation: fhir.search-type
+    recordType: household
+    route: householdSearch
+    maximumUpstreamCalls: 11
+  - id: household-read
+    operation: fhir.read
+    recordType: household
+    route: householdGet
+    maximumUpstreamCalls: 2
+accessProfiles:
+  - id: household-reader
+    scopes:
+      - system/Basic.read
+    operations:
+      - fhir.search-type
+      - fhir.read
+    recordTypes:
+      - household

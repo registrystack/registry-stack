@@ -1,0 +1,77 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/fixture/fixture.v1alpha1.schema.json
+#
+# Documented fixture (NOT captured): reconstructed from the JSON:API 1.1
+# document structure and pagination pages
+# (https://jsonapi.org/format/#document-structure,
+# https://jsonapi.org/format/#fetching-pagination). JSON:API leaves the
+# pagination strategy open; `page[offset]`/`page[limit]` and `meta.total`
+# follow the profile the spec names as an example. No server was contacted.
+#
+# The upstream exchange is experiment 4's; only the expected facade
+# response changes, to the fhir-facade profile's Bundle shape. Each `entry`
+# member is the bare record, not FHIR's `{"resource": ...}` wrapper, because
+# the `records` slot cannot wrap its items; see README.md.
+#
+# One page holds the whole result (total 2 under a page[limit] of 100), so
+# the loop runs once. The fixture format cannot express the facade request
+# (filter, cursor, limit), a second upstream exchange, or the upstream
+# response's Content-Type (application/vnd.api+json); response headers are
+# refused.
+apiVersion: id.registrystack.org/formats/adapter/fixture/v1alpha1
+kind: AdapterFixture
+id: fhir-facade-households-search-first-page
+pack: jsonapi-households
+upstreamVersion: "1.1"
+provenance:
+  type: documented
+  reference: https://jsonapi.org/format/#fetching-pagination
+intercepts:
+  - type: token-endpoint
+    endpoint: registry
+  - type: endpoint
+    endpoint: registry
+entries:
+  - operation: fhir.search-type
+    given:
+      endpoint: registry
+      method: GET
+      path: /households
+      query: filter%5BregionCode%5D=R-07&page%5Boffset%5D=0&page%5Blimit%5D=100
+    upstreamResponse:
+      status: 200
+      body:
+        meta:
+          total: 2
+        links:
+          self: https://households.example.invalid/api/households?filter%5BregionCode%5D=R-07&page%5Boffset%5D=0&page%5Blimit%5D=100
+        data:
+          - type: households
+            id: hh-1001
+            attributes:
+              householdNumber: H-2024-1001
+              regionCode: R-07
+              memberCount: 4
+              registeredOn: "2024-02-19"
+          - type: households
+            id: hh-1002
+            attributes:
+              householdNumber: H-2024-1002
+              regionCode: R-07
+              memberCount: 2
+              registeredOn: "2024-05-03"
+    expectedFacadeResponse:
+      status: 200
+      body:
+        resourceType: Bundle
+        type: searchset
+        entry:
+          - household_number: H-2024-1001
+            region_code: R-07
+            member_count: 4
+            registered_on: "2024-02-19"
+          - household_number: H-2024-1002
+            region_code: R-07
+            member_count: 2
+            registered_on: "2024-05-03"
+        link:
+          - relation: next

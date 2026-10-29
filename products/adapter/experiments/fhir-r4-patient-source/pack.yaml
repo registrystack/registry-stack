@@ -1,0 +1,220 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/pack/pack.v1alpha1.schema.json
+#
+# Experiment pack (not maintained): FHIR R4 Patient search by identifier,
+# authored from the public FHIR R4 specification (https://hl7.org/fhir/R4/)
+# to find where the authoring model stops. See README.md beside this file
+# for what each construct proves and where the grammar forced a
+# workaround.
+#
+# Shape of the upstream API:
+#   GET [base]/Patient?identifier=[system]|[value]&_count=[n]&_format=json
+#   answers a searchset Bundle (https://hl7.org/fhir/R4/bundle.html);
+#   `entry[].resource` carries the Patients, `entry[].search.mode` is
+#   `match` for a hit and `include` or `outcome` otherwise, and the
+#   `link[relation=next].url` names the next page as an opaque absolute
+#   URL (https://hl7.org/fhir/R4/http.html#paging).
+#
+# `_format=json` is the FHIR query-parameter override of the Accept header
+# (https://hl7.org/fhir/R4/http.html#mime-type); it stands in for
+# `Accept: application/fhir+json`, which the `to` step cannot declare.
+#
+# Authentication: SMART Backend Services style OAuth2 client credentials
+# (https://hl7.org/fhir/smart-app-launch/backend-services.html uses
+# private-key JWT; a shared-secret client is the common gateway variant).
+apiVersion: id.registrystack.org/formats/adapter/pack/v1alpha1
+kind: AdapterPack
+id: fhir-r4-patient
+version: "1"
+testedVersions:
+  - "4.0.1"
+endpoints:
+  - id: fhir
+    component: http
+    authentication:
+      type: oauth2-client-credentials
+    operations:
+      - id: fhir.search
+    testedVersions:
+      - "4.0.1"
+routeTemplates:
+  - id: searchPatients
+    parameters:
+      - name: identifier_system
+        type: string
+        required: true
+        description: The identifier system URI the national_id filter searches under.
+      - name: page_size
+        type: integer
+        defaultValue: 50
+        description: The FHIR _count each page asks for.
+    steps:
+      - onException:
+          exception:
+            - upstream.timeout
+            - upstream.connection
+          handled: true
+          redeliveryPolicy:
+            maximumRedeliveries: 1
+            retryDelaySeconds: 2
+          steps:
+            - setBody:
+                constant:
+                  type: https://id.registrystack.org/problems/registry-adapter/source.unavailable
+                  title: The source did not answer in time.
+                  status: 503
+                  code: source.unavailable
+            - setHeader:
+                name: CamelHttpResponseCode
+                value:
+                  constant: 503
+            - stop: {}
+      - onException:
+          exception:
+            - upstream.http
+            - upstream.malformed
+            - upstream.too-large
+            - aggregation.duplicate
+            - loop.maximum-iterations-reached
+            - script
+          handled: true
+          steps:
+            - setBody:
+                constant:
+                  type: https://id.registrystack.org/problems/registry-adapter/source.upstream-error
+                  title: The source answered something unusable.
+                  status: 502
+                  code: source.upstream-error
+            - setHeader:
+                name: CamelHttpResponseCode
+                value:
+                  constant: 502
+            - stop: {}
+      - setProperty:
+          name: fhirIdentifierSystem
+          value:
+            constant: "{{identifier_system}}"
+      - setProperty:
+          name: fhirPageSize
+          value:
+            constant: "{{page_size}}"
+      - setProperty:
+          name: fhirIdentifier
+          value:
+            rhai:
+              file: scripts/identifier-token.rhai
+              entrypoint: identifier_token
+      - setBody:
+          constant:
+            records: []
+      - loop:
+          rhai:
+            file: scripts/has-next-link.rhai
+            entrypoint: has_next_link
+          doWhile: true
+          maximumIterations: 10
+          steps:
+            - enrich:
+                uri: direct:fetchSearchPage
+                aggregationStrategy:
+                  type: json-array-append
+                  from: pages
+                  into: records
+                  uniqueBy: id
+      - setBody:
+          rhai:
+            file: scripts/to-records.rhai
+            entrypoint: to_records
+routes:
+  - id: fetchSearchPage
+    from:
+      uri: direct:fetchSearchPage
+    steps:
+      - choice:
+          when:
+            - rhai:
+                file: scripts/is-continuation.rhai
+                entrypoint: is_continuation
+              steps:
+                # HAPI FHIR continuation: the opaque next link cannot be
+                # followed, so its HAPI-specific query is rebuilt here.
+                - setProperty:
+                    name: fhirPagesId
+                    value:
+                      rhai:
+                        file: scripts/next-page-token.rhai
+                        entrypoint: next_page_token
+                - setProperty:
+                    name: fhirPagesOffset
+                    value:
+                      rhai:
+                        file: scripts/next-page-token.rhai
+                        entrypoint: next_page_offset
+                - to:
+                    uri: http:fhir
+                    parameters:
+                      httpMethod: GET
+                      path: /
+                      operation: fhir.search
+                      query:
+                        _getpages:
+                          exchangeProperty: fhirPagesId
+                        _getpagesoffset:
+                          exchangeProperty: fhirPagesOffset
+                        _count:
+                          exchangeProperty: fhirPageSize
+                        _bundletype:
+                          constant: searchset
+                        _format:
+                          constant: json
+          otherwise:
+            steps:
+              - to:
+                  uri: http:fhir
+                  parameters:
+                    httpMethod: GET
+                    path: /Patient
+                    operation: fhir.search
+                    query:
+                      identifier:
+                        exchangeProperty: fhirIdentifier
+                      _count:
+                        exchangeProperty: fhirPageSize
+                      _format:
+                        constant: json
+      - setProperty:
+          name: fhirNextUrl
+          value:
+            jsonpath: "$.link[?@.relation == 'next'].url"
+      - setProperty:
+          name: pages
+          value:
+            jsonpath: "$.entry[?@.search.mode == 'match'].resource"
+scripts:
+  - path: scripts/identifier-token.rhai
+    digest: sha256:c468261a60d3c1a07b408d83648cdb37cb9b106a950a3d6f63cf5be3c77bdef5
+  - path: scripts/has-next-link.rhai
+    digest: sha256:4851194219a7e179bf1bc1c0b604a19a2a955a81e2bffe4258c4ab83952c9fbb
+  - path: scripts/is-continuation.rhai
+    digest: sha256:ee61f30102de5ac0ce051413c29ba9f1786d2c0bd404a0508f1f30dc97bb1817
+  - path: scripts/next-page-token.rhai
+    digest: sha256:8634cbffdb85f050f463c6b4c79a23653fe7937f38cad8e8be65119a18dd4216
+  - path: scripts/to-records.rhai
+    digest: sha256:66e457e9014ba7fc28584f551ffdfe4fba9a9f98351db9a6ddf7717f9d64afa4
+capabilities:
+  components:
+    - http
+  languages:
+    - constant
+    - exchangeProperty
+    - jsonpath
+    - rhai
+  eips:
+    - choice
+    - enrich
+    - loop
+    - onException
+    - setBody
+    - setHeader
+    - setProperty
+    - stop
+    - to
