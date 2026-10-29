@@ -1,0 +1,60 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/fixture/fixture.v1alpha1.schema.json
+#
+# Documented fixture (NOT captured): reconstructed from the DHIS2 tracker
+# export documentation. The reply's page block ($.page.totalPage) is the
+# pack's paging assumption; a capture from a live or containerized DHIS2
+# 2.41 replaces this reference once run.
+#
+# The expected facade body echoes the profile envelope's literals: the
+# meta registry and dataset identifiers are deployment values the engine
+# writes at instantiation, so the replay expectation carries the envelope
+# template's stand-in literals.
+apiVersion: id.registrystack.org/formats/adapter/fixture/v1alpha1
+kind: AdapterFixture
+id: dhis2-tracker-search-page
+pack: dhis2-tracker
+upstreamVersion: "2.41"
+provenance:
+  kind: documented
+  reference: https://docs.dhis2.org/en/develop/using-the-api/dhis-core-version-241/tracker.html
+intercepts:
+  - kind: endpoint
+    endpoint: tracker
+entries:
+  - given:
+      endpoint: tracker
+      method: GET
+      path: /api/tracker/trackedEntities
+      query: order=createdAt%3Adesc&page=1&pageSize=50&program=qyVpUaAYv2A&totalPages=true
+    upstreamResponse:
+      status: 200
+      body:
+        instances:
+          - trackedEntity: Uid00000001
+            trackedEntityType: person
+            orgUnit: OqVpUaAYv2B
+            createdAt: "2026-01-05T10:00:00.000"
+            updatedAt: "2026-02-11T09:30:00.000"
+            deleted: false
+            inactive: false
+            attributes: []
+        page:
+          page: 1
+          pageSize: 50
+          totalPage: 1
+    expectedFacadeResponse:
+      status: 200
+      body:
+        items:
+          - recordIdentifier: Uid00000001
+            revisionIdentifier: "2026-02-11T09:30:00.000"
+            domainData:
+              tracked_entity_type: person
+              org_unit: OqVpUaAYv2B
+              created_at: "2026-01-05T10:00:00.000"
+              updated_at: "2026-02-11T09:30:00.000"
+        pageInfo: {}
+        meta:
+          registryIdentifier: registryIdentifier
+          datasetIdentifier: datasetIdentifier
+          entityTypeIdentifier: person

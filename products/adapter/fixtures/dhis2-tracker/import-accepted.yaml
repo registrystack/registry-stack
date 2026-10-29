@@ -1,0 +1,57 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/fixture/fixture.v1alpha1.schema.json
+#
+# Documented fixture (NOT captured): reconstructed from the DHIS2 tracker
+# import documentation (synchronous import, POST /api/tracker?async=false;
+# the summary carries status OK/WARNING/ERROR). The accepted case echoes
+# the submitted record, whose own identifier is the DHIS2 UID.
+apiVersion: id.registrystack.org/formats/adapter/fixture/v1alpha1
+kind: AdapterFixture
+id: dhis2-tracker-import-accepted
+pack: dhis2-tracker
+upstreamVersion: "2.41"
+provenance:
+  kind: documented
+  reference: https://docs.dhis2.org/en/develop/using-the-api/dhis-core-version-241/tracker.html
+intercepts:
+  - kind: endpoint
+    endpoint: tracker
+entries:
+  - given:
+      endpoint: tracker
+      method: POST
+      path: /api/tracker
+      query: async=false
+      body:
+        trackedEntities:
+          - trackedEntity: Uid00000003
+            orgUnit: OqVpUaAYv2B
+            attributes: []
+    upstreamResponse:
+      status: 200
+      body:
+        status: OK
+        stats:
+          created: 1
+          updated: 0
+          deleted: 0
+          ignored: 0
+          total: 1
+        bundleReport:
+          typeReportMap:
+            TRACKED_ENTITY:
+              created: 1
+    expectedFacadeResponse:
+      status: 200
+      body:
+        data:
+          recordIdentifier: Uid00000003
+          revisionIdentifier: "2026-03-01T12:00:00.000"
+          domainData:
+            tracked_entity_type: person
+            org_unit: OqVpUaAYv2B
+            created_at: "2026-03-01T12:00:00.000"
+            updated_at: "2026-03-01T12:00:00.000"
+        meta:
+          registryIdentifier: registryIdentifier
+          datasetIdentifier: datasetIdentifier
+          entityTypeIdentifier: person

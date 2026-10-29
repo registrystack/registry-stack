@@ -1,0 +1,40 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/fixture/fixture.v1alpha1.schema.json
+#
+# Documented fixture (NOT captured): reconstructed from the DHIS2 tracker
+# object property table (deleted and inactive flags; DHIS2 keeps
+# soft-deleted entities in the tracker store and answers 200). The pack's
+# soft-deleted seam maps that answer to the facade's not-found problem.
+apiVersion: id.registrystack.org/formats/adapter/fixture/v1alpha1
+kind: AdapterFixture
+id: dhis2-tracker-get-soft-deleted
+pack: dhis2-tracker
+upstreamVersion: "2.41"
+provenance:
+  kind: documented
+  reference: https://docs.dhis2.org/en/develop/using-the-api/dhis-core-version-241/tracker.html
+intercepts:
+  - kind: endpoint
+    endpoint: tracker
+entries:
+  - given:
+      endpoint: tracker
+      method: GET
+      path: /api/tracker/trackedEntities/Uid00000002
+    upstreamResponse:
+      status: 200
+      body:
+        trackedEntity: Uid00000002
+        trackedEntityType: person
+        orgUnit: OqVpUaAYv2B
+        createdAt: "2025-11-02T08:00:00.000"
+        updatedAt: "2026-01-20T16:45:00.000"
+        deleted: true
+        inactive: false
+        attributes: []
+    expectedFacadeResponse:
+      status: 404
+      body:
+        type: https://id.registrystack.org/problems/registry-adapter/source.not-found
+        title: No record with that identifier exists at the source.
+        status: 404
+        code: source.not-found
