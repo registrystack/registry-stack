@@ -15,7 +15,8 @@ intercepts:
   - kind: endpoint
     endpoint: tracker
 entries:
-  - given:
+  - operation: records.get
+    given:
       endpoint: tracker
       method: GET
       path: /api/tracker/trackedEntities/Uid00000001

@@ -21,7 +21,8 @@ intercepts:
   - kind: endpoint
     endpoint: tracker
 entries:
-  - given:
+  - operation: records.search
+    given:
       endpoint: tracker
       method: GET
       path: /api/tracker/trackedEntities

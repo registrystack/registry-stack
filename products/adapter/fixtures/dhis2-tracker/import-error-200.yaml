@@ -18,7 +18,8 @@ intercepts:
   - kind: endpoint
     endpoint: tracker
 entries:
-  - given:
+  - operation: records.create
+    given:
       endpoint: tracker
       method: POST
       path: /api/tracker
