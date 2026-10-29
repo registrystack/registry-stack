@@ -17,5 +17,6 @@ python3 -m unittest \
   "$script_dir/test_generated_gates.py" \
   "$script_dir/test_quickstart.py" \
   "$script_dir/../examples/webhook-receiver/test_receiver.py"
+python3 -m unittest discover -s "$script_dir/../acceptance/reviewed-evidence-journey/tests"
 
 echo "Base Registry Engine product contracts passed"
