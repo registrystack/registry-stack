@@ -490,6 +490,8 @@ pub(crate) struct ProposalDocument {
     pub input: Option<Map<String, Value>>,
     pub input_targets: Vec<(String, Uuid)>,
     pub blocked_reason: Option<String>,
+    /// When the draft was started, as RFC 3339 UTC text.
+    pub created_at: String,
     pub header: ProposalWorkflowHeader,
 }
 
@@ -512,7 +514,8 @@ pub(crate) async fn load_document(
     lock: DocumentLock,
 ) -> Result<ProposalDocument, MutationError> {
     let sql = format!(
-        "SELECT action_id, action_revision, action_title, input, blocked_reason, input_targets
+        "SELECT action_id, action_revision, action_title, input, blocked_reason, input_targets,
+                to_char(created_at AT TIME ZONE 'UTC','YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"')
            FROM registry_internal.registry_proposal_state WHERE proposal_id=$1{}",
         match lock {
             DocumentLock::None => "",
@@ -538,6 +541,7 @@ pub(crate) async fn load_document(
         action_title: row.get(2),
         input,
         blocked_reason: row.get(4),
+        created_at: row.get(6),
         header,
         input_targets: serde_json::from_value(row.get(5))
             .map_err(|_| MutationError::Unavailable)?,

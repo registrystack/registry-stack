@@ -14,9 +14,14 @@ use std::collections::{BTreeMap, BTreeSet};
 // Keep status selection in the single candidate query before its scan bound.
 // Caller ownership is exact here, so another holder's Proposal never reaches a
 // per-candidate read; `$4` pairs each `$1` Action with the caller's owner
-// reference, or NULL when that authority is not ownership-scoped.
+// reference, or NULL when that authority is not ownership-scoped. `$5` and `$6`
+// are the caller's optional `action` and `state` filters: they only narrow rows
+// the collection authority already lists, so applying them here spends the scan
+// budget on candidates that can match without revealing anything further.
 const PROPOSAL_LIST_CANDIDATES: &str = "SELECT p.proposal_id,p.action_id FROM registry_internal.registry_proposal_state p
                 WHERE p.action_id=ANY($1) AND ($2::uuid IS NULL OR p.proposal_id>$2)
+                  AND ($5::text IS NULL OR p.action_id=$5)
+                  AND ($6::text IS NULL OR p.state=$6)
                   AND EXISTS (SELECT 1 FROM unnest($1::text[],$4::text[]) AS a(action_id,owner_reference)
                     WHERE a.action_id=p.action_id
                       AND (a.owner_reference IS NULL OR a.owner_reference=p.owner_reference))
@@ -53,6 +58,8 @@ impl PostgresRecordMutationService {
                     &Option::<Uuid>::None,
                     &true,
                     &vec![None::<String>; actions.len()],
+                    &Option::<String>::None,
+                    &Option::<String>::None,
                 ],
             )
             .await
@@ -1214,6 +1221,8 @@ impl PostgresRecordMutationService {
                         &after,
                         &query.pending_manual_application,
                         &owner_references,
+                        &query.action,
+                        &query.state,
                     ],
                 )
                 .await

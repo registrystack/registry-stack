@@ -432,6 +432,7 @@ mod tests {
             "revision":2,
             "state":"applied",
             "turn":"nobody",
+            "createdAt":"2026-10-16T01:00:00.000000Z",
             "effectDigest":digest,
             "application":{
                 "applicationId":"00000000-0000-4000-8000-000000000002",

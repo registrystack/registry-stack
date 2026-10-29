@@ -287,9 +287,11 @@ class ProposalResultTests(unittest.TestCase):
         decision = {'status': 'rejected', 'decidedAt': '2026-10-01T10:00:00.000000Z', 'publicReason': 'Public reason'}
         self.value = document()
         del self.value['application']
-        self.value.update(state='rejected', turn='nobody', decision=decision, applicationStatus={'state': 'rejected', 'mode': 'manual'})
+        self.value.update(state='rejected', turn='nobody', decision=decision, createdAt='2026-10-01T09:00:00.123456Z',
+                          applicationStatus={'state': 'rejected', 'mode': 'manual'})
         proposal = self.client.get_proposal(self.binding, ID)
         self.assertEqual(proposal.document['turn'], 'nobody')
+        self.assertEqual(proposal.document['createdAt'], '2026-10-01T09:00:00.123456Z')
         self.assertEqual(proposal.document['decision'], decision)
         submission = {'id': ID, 'actionId': 'correct', 'submissionVersion': 2, 'current': True, 'effectDigest': DIGEST,
                       'review': {'state': 'rejected', 'resultId': TARGET, 'completedAt': '2026-10-01T10:00:00.000000Z',

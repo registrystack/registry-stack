@@ -49,6 +49,17 @@
   OpenAPI schema lists it. The Rust client rejects unknown response members, so
   update the client together with the server. See
   [Proposals](proposals.md).
+- Fix `GET /v1/proposals` returning empty or short pages when the `action` or
+  `state` filter matches few Proposals: both filters now narrow the candidate
+  query before the per-request scan budget is spent, so the budget goes to
+  Proposals that can match. Ordering, cursors and concealment are unchanged,
+  and read-audit counts still count only the returned items.
+- Proposal documents add `createdAt`, the UTC time the draft was started. It
+  stays fixed through submission and application, so clients can order
+  attempts on one target chronologically. The generated OpenAPI and Action
+  response schemas list it (so Action contract revisions change), and the Rust
+  client, which rejects unknown response members, exposes `createdAt()`; update
+  the client together with the server. See [Proposals](proposals.md).
 
 ## 0.44.0 - 2026-10-27
 

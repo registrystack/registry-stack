@@ -401,7 +401,7 @@ test('Proposal response boundaries preserve disclosure and exact Action revision
 });
 
 test('Proposal turn, decision and the submission read decode exactly', async () => {
-  const proposal = {...document(), state: 'rejected', turn: 'nobody',
+  const proposal = {...document(), state: 'rejected', turn: 'nobody', createdAt: '2026-10-01T09:00:00.123456Z',
     decision: {status: 'rejected', decidedAt: '2026-10-01T10:00:00.000000Z', publicReason: 'Public reason'},
     applicationStatus: {state: 'rejected', mode: 'manual'}};
   delete proposal.application;
@@ -435,6 +435,7 @@ test('Proposal turn, decision and the submission read decode exactly', async () 
     const observed = JSON.parse(current.documentJson);
     assert.equal(observed.state, 'rejected');
     assert.equal(observed.turn, 'nobody');
+    assert.equal(observed.createdAt, '2026-10-01T09:00:00.123456Z');
     assert.deepEqual(observed.decision, proposal.decision);
     const read = await client.readProposalSubmission(current, 2);
     assert.deepEqual(read.value, submission);

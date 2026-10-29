@@ -326,6 +326,18 @@ the links still decide what the current caller may do. List Proposals by turn
 with `GET /v1/proposals?turn=party` (or `official`, `nobody`). A page may hold
 fewer than `limit` items, so keep paging while `nextCursor` is present.
 
+Every Proposal document carries `createdAt`, the UTC time its draft was
+started (RFC 3339, microsecond precision). It does not change when the Proposal
+is submitted, revised or applied, so it orders attempts on the same target
+chronologically; the list itself is ordered by Proposal id, not by time. A
+command receipt stored before this member was served replays without it.
+
+The `action` and `state` filters narrow the candidate Proposals before a
+request spends its scan budget, so a filtered page is not emptied by
+Proposals of other Actions or states. The `owner`, `target` and `turn` filters
+apply to each authorized Proposal after that, so a page filtered only by
+those may still hold fewer than `limit` items.
+
 Use `GET /v1/proposals?pendingManualApplication=true` for a work queue of
 submitted manual Proposals that the caller may see and whose local application
 status is pending. The filter includes review-free submissions and

@@ -521,6 +521,8 @@ pub struct BRegProposal {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     blocked_reason: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    created_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     effect_digest: Option<String>,
     links: BTreeMap<String, BRegProposalLink>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -569,6 +571,10 @@ impl BRegProposal {
                 .blocked_reason
                 .as_deref()
                 .is_some_and(|reason| reason != "package-changed")
+            || self
+                .created_at
+                .as_deref()
+                .is_some_and(|created_at| proposal_instant(created_at).is_none())
             || self.state == BRegProposalState::Draft && self.decision.is_some()
             // Only a rejected review result ends a Proposal in rejected.
             || self.state == BRegProposalState::Rejected
@@ -766,6 +772,11 @@ impl BRegProposal {
     }
     pub fn effect_digest(&self) -> Option<&str> {
         self.effect_digest.as_deref()
+    }
+    /// When the draft was started (RFC 3339 UTC). A stored command receipt
+    /// replayed from before the creation time was served carries none.
+    pub fn created_at(&self) -> Option<&str> {
+        self.created_at.as_deref()
     }
     pub fn title(&self) -> Option<&str> {
         self.title.as_deref()
@@ -3451,6 +3462,25 @@ mod tests {
         }
         value["applicationStatus"] = status;
         value
+    }
+
+    #[test]
+    fn creation_time_is_exposed_and_must_be_a_valid_instant() {
+        let mut value = document();
+        assert_eq!(
+            BRegProposal::from_slice(&serde_json::to_vec(&value).unwrap())
+                .unwrap()
+                .created_at(),
+            None,
+            "a receipt replayed from before the creation time was served carries none"
+        );
+        value["createdAt"] = json!("2026-10-16T01:02:03.123456Z");
+        let decoded = BRegProposal::from_slice(&serde_json::to_vec(&value).unwrap()).unwrap();
+        assert_eq!(decoded.created_at(), Some("2026-10-16T01:02:03.123456Z"));
+        for invalid in [json!("yesterday"), json!(""), json!(17)] {
+            value["createdAt"] = invalid;
+            assert!(BRegProposal::from_slice(&serde_json::to_vec(&value).unwrap()).is_err());
+        }
     }
 
     #[test]

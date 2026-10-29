@@ -3131,7 +3131,8 @@ impl MutationTransaction {
         let action = proposal_action(registry, &document.action_id)?;
         let mut value = json!({"id":document.proposal_id,"actionId":document.action_id,
             "actionRevision":document.action_revision,"submissionVersion":document.header.submission_version,
-            "revision":document.header.workflow_revision,"state":document.header.state,"links":{}});
+            "revision":document.header.workflow_revision,"state":document.header.state,
+            "createdAt":document.created_at,"links":{}});
         if let Some(title) = &document.action_title {
             value["title"] = json!(title);
         }
