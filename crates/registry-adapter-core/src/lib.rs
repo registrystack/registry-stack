@@ -26,6 +26,7 @@ mod pack;
 mod problem;
 mod profile;
 mod project;
+mod result_schema;
 mod route;
 mod runtime;
 
@@ -39,5 +40,6 @@ pub use pack::*;
 pub use problem::*;
 pub use profile::*;
 pub use project::*;
+pub use result_schema::*;
 pub use route::*;
 pub use runtime::*;

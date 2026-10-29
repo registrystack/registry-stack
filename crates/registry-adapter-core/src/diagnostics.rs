@@ -23,6 +23,7 @@ pub enum CheckCode {
     // adapter.envelope.*
     EnvelopeInvalidPlaceholder,
     // adapter.fixture.*
+    FixtureResponseSchema,
     FixtureUnknownEndpoint,
     FixtureUnknownIntercept,
     // adapter.pack.*
@@ -78,6 +79,7 @@ impl CheckCode {
         Self::AuthKindMismatch,
         Self::AuthNoneNotLoopback,
         Self::EnvelopeInvalidPlaceholder,
+        Self::FixtureResponseSchema,
         Self::FixtureUnknownEndpoint,
         Self::FixtureUnknownIntercept,
         Self::PackDigestPinRequired,
@@ -128,6 +130,7 @@ impl CheckCode {
             Self::AuthKindMismatch => "adapter.auth.kind-mismatch",
             Self::AuthNoneNotLoopback => "adapter.auth.none-not-loopback",
             Self::EnvelopeInvalidPlaceholder => "adapter.envelope.invalid-placeholder",
+            Self::FixtureResponseSchema => "adapter.fixture.response-schema",
             Self::FixtureUnknownEndpoint => "adapter.fixture.unknown-endpoint",
             Self::FixtureUnknownIntercept => "adapter.fixture.unknown-intercept",
             Self::PackDigestPinRequired => "adapter.pack.digest-pin-required",
@@ -198,9 +201,9 @@ impl CheckCode {
             | Self::ProfileRequestEnvelopeMissingRecordSlot
             | Self::ProfileResponseEnvelopeMissingResultSlot
             | Self::ProfileUnknownSlot => crate::naming::ADAPTER_PROFILE_KIND,
-            Self::FixtureUnknownEndpoint | Self::FixtureUnknownIntercept => {
-                crate::naming::ADAPTER_FIXTURE_KIND
-            }
+            Self::FixtureResponseSchema
+            | Self::FixtureUnknownEndpoint
+            | Self::FixtureUnknownIntercept => crate::naming::ADAPTER_FIXTURE_KIND,
             Self::PackDigestPinRequired
             | Self::PackEndpointComponentInvalid
             | Self::PackGraphQlQueryRequired

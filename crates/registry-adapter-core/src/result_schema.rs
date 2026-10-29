@@ -1,0 +1,581 @@
+// SPDX-License-Identifier: Apache-2.0
+
+//! The per-operation result schema: one derivation shared by `adapterctl
+//! check`, the fixture response check, and the runtime's final-exchange
+//! body validation, so the three never diverge (`products/adapter/CONCEPT.md`
+//! section 6). The schema vocabulary is closed: `object` with
+//! `properties`, `required`, and `additionalProperties: false`; `array`
+//! with `items`; and the scalars `string`, `integer`, `number`,
+//! `boolean`, and `null`.
+
+use crate::checks::is_placeholder_name;
+use crate::diagnostics::{finding, CheckCode};
+use crate::fixture::RecordedResponse;
+use crate::profile::AdapterProfile;
+use crate::project::{AdapterProject, Binding, RecordFieldType, RecordType};
+use registry_platform_yaml::Diagnostic;
+use serde_json::{json, Map, Value};
+
+/// The derived schema of one facade operation's response body
+/// (`products/adapter/CONCEPT.md` section 6): the operation's response
+/// envelope with every slot replaced by the closed schema of what fills
+/// it, and the `record` and `records` slots expanded from the record type
+/// the deployment binds to the operation. Errors are value-free and name
+/// the configuration gap: an unknown operation, an envelope that is not a
+/// JSON template, or a result slot with no binding to a declared record
+/// type.
+pub fn derive_operation_result_schema(
+    profile: &AdapterProfile,
+    project: &AdapterProject,
+    operation_id: &str,
+) -> Result<Value, String> {
+    let operation = profile
+        .operations
+        .get(operation_id)
+        .ok_or_else(|| format!("the profile declares no operation {operation_id}"))?;
+    let template = parse_envelope_template(operation.response_envelope.text())?;
+    let binding = project
+        .bindings
+        .iter()
+        .find(|binding| binding.operation.as_str() == operation_id);
+    derive_value(&template, binding, project)
+}
+
+/// The sentinel opening (and closing) one slot in a parsed envelope
+/// template. A control character real template text cannot carry opens
+/// it, so no literal envelope string can decode as a slot.
+const SLOT_MARK: char = '\u{1}';
+
+/// Parses an envelope template text into JSON: every `{{slot}}` or
+/// `{{?slot}}` placeholder, whether it fills a quoted string member or a
+/// whole JSON value, becomes one quoted sentinel string the walk decodes.
+fn parse_envelope_template(text: &str) -> Result<Value, String> {
+    let mut parsed = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(open) = rest.find("{{") {
+        let Some(close) = rest[open..].find("}}") else {
+            return Err(
+                "the response envelope template carries an unterminated placeholder".to_string(),
+            );
+        };
+        let inner = &rest[open + 2..open + close];
+        let (name, optional) = match inner.strip_prefix('?') {
+            Some(stripped) => (stripped, true),
+            None => (inner, false),
+        };
+        if !is_placeholder_name(name) {
+            parsed.push_str(&rest[..open + 2]);
+            rest = &rest[open + 2..];
+            continue;
+        }
+        // A quoted placeholder `"{{slot}}"` fills the whole string
+        // member; drop the surrounding quote pair so the sentinel is the
+        // member's whole value.
+        let trailing = rest[open + close + 2..].starts_with('"');
+        let quoted = open > 0 && rest.as_bytes()[open - 1] == b'"' && trailing;
+        if quoted {
+            parsed.push_str(&rest[..open - 1]);
+        } else {
+            parsed.push_str(&rest[..open]);
+        }
+        parsed.push('"');
+        parsed.push_str("\\u0001");
+        parsed.push_str(if optional { "opt:" } else { "req:" });
+        parsed.push_str(name);
+        parsed.push_str("\\u0001");
+        parsed.push('"');
+        rest = if quoted {
+            &rest[open + close + 3..]
+        } else {
+            &rest[open + close + 2..]
+        };
+    }
+    parsed.push_str(rest);
+    serde_json::from_str(&parsed)
+        .map_err(|error| format!("the response envelope template is not a JSON template: {error}"))
+}
+
+/// Decodes one sentinel string back to `(slot name, optional)`.
+fn decode_slot(text: &str) -> Option<(&str, bool)> {
+    text.strip_prefix(SLOT_MARK)
+        .and_then(|rest| rest.strip_suffix(SLOT_MARK))
+        .map(|inner| match inner.strip_prefix("opt:") {
+            Some(name) => (name, true),
+            None => (inner.strip_prefix("req:").unwrap_or(inner), false),
+        })
+}
+
+/// Derives the schema of one template value.
+fn derive_value(
+    template: &Value,
+    binding: Option<&Binding>,
+    project: &AdapterProject,
+) -> Result<Value, String> {
+    match template {
+        Value::String(text) => Ok(derive_member(text, binding, project)?.0),
+        Value::Object(members) => {
+            let mut properties = Map::new();
+            let mut required = Vec::new();
+            for (key, value) in members {
+                let text = value.as_str();
+                let (schema, optional) = match text.and_then(decode_slot) {
+                    Some(slot) => (slot_schema(slot.0, binding, project)?, slot.1),
+                    None => (derive_value(value, binding, project)?, false),
+                };
+                properties.insert(key.clone(), schema);
+                if !optional {
+                    required.push(Value::String(key.clone()));
+                }
+            }
+            Ok(json!({
+                "type": "object",
+                "properties": Value::Object(properties),
+                "required": required,
+                "additionalProperties": false,
+            }))
+        }
+        Value::Array(items) => {
+            let mut items_schema: Option<Value> = None;
+            for item in items {
+                let schema = derive_value(item, binding, project)?;
+                match &items_schema {
+                    Some(previous) if previous != &schema => {
+                        return Err(
+                            "the response envelope template carries array members of different shapes"
+                                .to_string(),
+                        );
+                    }
+                    _ => items_schema = Some(schema),
+                }
+            }
+            Ok(json!({
+                "type": "array",
+                "items": items_schema.unwrap_or_else(|| json!({"type": "null"})),
+            }))
+        }
+        Value::Number(_) => Ok(json!({"type": "number"})),
+        Value::Bool(_) => Ok(json!({"type": "boolean"})),
+        Value::Null => Ok(json!({"type": "null"})),
+    }
+}
+
+/// One object member's schema and whether it may be absent: a whole-value
+/// optional slot (`{{?slot}}`) is optional, everything else is required.
+fn derive_member(
+    text: &str,
+    binding: Option<&Binding>,
+    project: &AdapterProject,
+) -> Result<(Value, bool), String> {
+    match decode_slot(text) {
+        Some((name, optional)) => Ok((slot_schema(name, binding, project)?, optional)),
+        None => Ok((json!({"type": "string"}), false)),
+    }
+}
+
+/// The closed schema of what fills one envelope slot: the bound record
+/// type for `record` and `records`, typed scalars for the engine-filled
+/// slots.
+fn slot_schema(
+    name: &str,
+    binding: Option<&Binding>,
+    project: &AdapterProject,
+) -> Result<Value, String> {
+    match name {
+        "record" => record_schema(binding, project),
+        "records" => record_schema(binding, project)
+            .map(|schema| json!({"type": "array", "items": schema})),
+        "nextCursor" | "problemCode" | "problemDetail" | "problemTitle" | "recordId"
+        | "recordType" | "requestId" => Ok(json!({"type": "string"})),
+        "status" => Ok(json!({"type": "integer"})),
+        other => Err(format!(
+            "the response envelope names slot {other}, which the closed slot vocabulary does not declare"
+        )),
+    }
+}
+
+fn record_schema(binding: Option<&Binding>, project: &AdapterProject) -> Result<Value, String> {
+    let Some(binding) = binding else {
+        return Err(
+            "the response envelope carries a record slot, but the operation has no binding to a record type"
+                .to_string(),
+        );
+    };
+    let record_type = project
+        .record_types
+        .get(binding.record_type.as_str())
+        .ok_or_else(|| "the binding names no declared record type".to_string())?;
+    Ok(record_object_schema(record_type))
+}
+
+fn record_object_schema(record_type: &RecordType) -> Value {
+    let mut properties = Map::new();
+    let mut required = Vec::new();
+    for field in record_type.fields.iter() {
+        properties.insert(field.name.as_str().to_string(), field_schema(field.r#type));
+        if field.required {
+            required.push(Value::String(field.name.as_str().to_string()));
+        }
+    }
+    json!({
+        "type": "object",
+        "properties": Value::Object(properties),
+        "required": required,
+        "additionalProperties": false,
+    })
+}
+
+fn field_schema(field_type: RecordFieldType) -> Value {
+    match field_type {
+        RecordFieldType::String => json!({"type": "string"}),
+        RecordFieldType::Integer => json!({"type": "integer"}),
+        RecordFieldType::Decimal => json!({"type": "number"}),
+        RecordFieldType::Boolean => json!({"type": "boolean"}),
+        RecordFieldType::Date => json!({"type": "string", "format": "date"}),
+        RecordFieldType::DateTime => json!({"type": "string", "format": "date-time"}),
+    }
+}
+
+/// Checks one value against a derived result schema, returning the JSON
+/// pointer of every violation: a value of the wrong type, an object key
+/// the schema does not declare, or a missing required key. Pointers are
+/// value-free; the checked value is never echoed.
+#[must_use]
+pub fn validate_result_schema(value: &Value, schema: &Value) -> Vec<String> {
+    let mut violations = Vec::new();
+    validate_at(value, schema, "", &mut violations);
+    violations
+}
+
+fn validate_at(value: &Value, schema: &Value, pointer: &str, violations: &mut Vec<String>) {
+    let Some(expected) = schema.get("type").and_then(Value::as_str) else {
+        return;
+    };
+    if !type_matches(value, expected) {
+        violations.push(pointer.to_string());
+        return;
+    }
+    match expected {
+        "object" => {
+            let Some(members) = value.as_object() else {
+                return;
+            };
+            let Some(properties) = schema.get("properties").and_then(Value::as_object) else {
+                return;
+            };
+            if schema.get("additionalProperties") == Some(&Value::Bool(false)) {
+                for key in members.keys() {
+                    if !properties.contains_key(key) {
+                        violations.push(format!("{}/{}", pointer, escape_token(key)));
+                    }
+                }
+            }
+            let required = schema.get("required").and_then(Value::as_array);
+            for (key, member_schema) in properties {
+                match members.get(key) {
+                    Some(member) => validate_at(
+                        member,
+                        member_schema,
+                        &format!("{}/{}", pointer, escape_token(key)),
+                        violations,
+                    ),
+                    None => {
+                        let required_member = required.is_some_and(|names| {
+                            names.iter().any(|name| name.as_str() == Some(key.as_str()))
+                        });
+                        if required_member {
+                            violations.push(format!("{}/{}", pointer, escape_token(key)));
+                        }
+                    }
+                }
+            }
+        }
+        "array" => {
+            if let (Some(items), Some(members)) = (schema.get("items"), value.as_array()) {
+                for (index, member) in members.iter().enumerate() {
+                    validate_at(member, items, &format!("{pointer}/{index}"), violations);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn type_matches(value: &Value, expected: &str) -> bool {
+    match expected {
+        "object" => value.is_object(),
+        "array" => value.is_array(),
+        "string" => value.is_string(),
+        "integer" => value.is_i64() || value.is_u64(),
+        "number" => value.is_number(),
+        "boolean" => value.is_boolean(),
+        "null" => value.is_null(),
+        _ => false,
+    }
+}
+
+/// Escapes one object key for a JSON pointer (`~` to `~0`, `/` to `~1`).
+fn escape_token(token: &str) -> String {
+    token.replace('~', "~0").replace('/', "~1")
+}
+
+/// Checks one fixture entry's expected facade response body against the
+/// derived result schema, refusing every violation, and a missing body,
+/// under `adapter.fixture.response-schema` at the fixture path it
+/// concerns. The caller pairs entries with operations; core stays
+/// no-I/O.
+#[must_use]
+pub fn check_fixture_expected_response(
+    entry_index: usize,
+    expected: &RecordedResponse,
+    schema: &Value,
+) -> Vec<Diagnostic> {
+    let Some(body) = expected.body.as_ref() else {
+        return vec![finding(
+            CheckCode::FixtureResponseSchema,
+            &format!("/entries/{entry_index}/expectedFacadeResponse"),
+            "the fixture expects no facade response body where the operation's result schema requires one",
+            "Give the entry the facade body the profile envelope and the bound record type produce.",
+        )];
+    };
+    validate_result_schema(body, schema)
+        .into_iter()
+        .map(|violation| {
+            finding(
+                CheckCode::FixtureResponseSchema,
+                &format!("/entries/{entry_index}/expectedFacadeResponse/body{violation}"),
+                "the fixture's expected facade response body does not match the operation's result schema",
+                "Bring the expected body in line with the profile envelope and the bound record type.",
+            )
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::fixture::RecordedResponse as Expected;
+    use crate::profile::{EnvelopeTemplate, ProfileOperation};
+    use crate::project::{Binding, PinnedRef, RecordField};
+    use crate::route::TemplatedRoute;
+    use registry_platform_yaml::{
+        BoundedU64, Digest, ExternalId, LocalId, UniqueIdList, UniqueList,
+    };
+
+    fn external(text: &str) -> ExternalId {
+        ExternalId::new(text).expect("id")
+    }
+
+    fn local(text: &str) -> LocalId {
+        LocalId::new(text).expect("id")
+    }
+
+    fn pin(id: &str) -> PinnedRef {
+        PinnedRef {
+            id: external(id),
+            version: "1.0.0".to_string(),
+            digest: Digest::new(
+                "sha256:678260a56715cba21db1f0687e5a2c5e5efb2ea0b8eea687b5f3ee8723c5f6c9",
+            )
+            .expect("digest"),
+        }
+    }
+
+    fn operation(envelope: &str) -> ProfileOperation {
+        ProfileOperation {
+            id: external("cases.find"),
+            method: crate::model::HttpMethod::Get,
+            path: "/v2/cases".to_string(),
+            request_envelope: None,
+            response_envelope: EnvelopeTemplate(envelope.to_string()),
+            pagination: None,
+        }
+    }
+
+    fn profile(envelope: &str) -> AdapterProfile {
+        AdapterProfile {
+            id: external("case-api"),
+            operations: UniqueIdList::new(vec![operation(envelope)]).expect("unique"),
+            problem_codes: UniqueList::new(vec![external("cases.conflict")]).expect("unique"),
+            problem_envelope: EnvelopeTemplate(r#"{"code": "{{problemCode}}"}"#.to_string()),
+            parameterized_parts: UniqueList::new(Vec::new()).expect("empty"),
+        }
+    }
+
+    fn record_type() -> RecordType {
+        RecordType {
+            name: local("case"),
+            fields: UniqueList::new(vec![
+                RecordField {
+                    name: local("id"),
+                    r#type: RecordFieldType::String,
+                    required: true,
+                },
+                RecordField {
+                    name: local("region"),
+                    r#type: RecordFieldType::String,
+                    required: false,
+                },
+                RecordField {
+                    name: local("opened-on"),
+                    r#type: RecordFieldType::Date,
+                    required: false,
+                },
+            ])
+            .expect("unique"),
+        }
+    }
+
+    fn project(bound: bool) -> AdapterProject {
+        AdapterProject {
+            id: external("case-deployment"),
+            profile: pin("case-api"),
+            pack: pin("case-api-pack"),
+            record_types: UniqueIdList::new(vec![record_type()]).expect("unique"),
+            templated_routes: UniqueIdList::<TemplatedRoute>::new(Vec::new()).expect("empty"),
+            bindings: UniqueIdList::new(if bound {
+                vec![Binding {
+                    id: external("find-cases"),
+                    operation: external("cases.find"),
+                    record_type: local("case"),
+                    route: external("fetchCases"),
+                    maximum_upstream_calls: BoundedU64::<1, 100_000>::new(5).expect("budget"),
+                }]
+            } else {
+                Vec::new()
+            })
+            .expect("unique"),
+            access_profiles: UniqueIdList::new(Vec::new()).expect("empty"),
+        }
+    }
+
+    /// The derivation expands the `record` and `records` slots from the
+    /// bound record type, keeps the profile's own envelope shape closed,
+    /// and carries the profile's literal slots as typed scalars.
+    #[test]
+    fn derive_expands_the_bound_record_type_into_the_envelope() {
+        let profile = profile(
+            r#"{"record": {{record}}, "recordType": "{{recordType}}", "cases": {{records}}}"#,
+        );
+        let deployment = project(true);
+        let schema =
+            derive_operation_result_schema(&profile, &deployment, "cases.find").expect("derive");
+        // serde_json objects are sorted, so member order follows.
+        assert_eq!(schema["required"], json!(["cases", "record", "recordType"]));
+        assert_eq!(schema["additionalProperties"], json!(false));
+        assert_eq!(schema["properties"]["record"]["required"], json!(["id"]));
+        assert_eq!(
+            schema["properties"]["record"]["additionalProperties"],
+            json!(false)
+        );
+        assert_eq!(
+            schema["properties"]["record"]["properties"]["opened-on"],
+            json!({"type": "string", "format": "date"})
+        );
+        assert_eq!(
+            schema["properties"]["cases"]["items"]["required"],
+            json!(["id"])
+        );
+        assert_eq!(schema["properties"]["cases"]["type"], json!("array"));
+        assert_eq!(
+            schema["properties"]["recordType"],
+            json!({"type": "string"})
+        );
+    }
+
+    /// A whole-body record slot derives the record schema itself; an
+    /// operation with no binding, and an unknown operation, are refused.
+    #[test]
+    fn derive_accepts_a_whole_body_record_slot_and_refuses_an_unbound_one() {
+        let profile = profile(r#"{{record}}"#);
+        let schema =
+            derive_operation_result_schema(&profile, &project(true), "cases.find").expect("derive");
+        assert_eq!(schema["type"], json!("object"));
+        assert_eq!(schema["required"], json!(["id"]));
+        assert!(
+            derive_operation_result_schema(&profile, &project(false), "cases.find").is_err(),
+            "a result slot without a binding is refused"
+        );
+        assert!(
+            derive_operation_result_schema(&profile, &project(true), "cases.missing").is_err(),
+            "an unknown operation is refused"
+        );
+    }
+
+    /// Validation refuses extra members, members of the wrong type, and
+    /// missing required members, each at its pointer; a conforming value,
+    /// including one omitting optional members, passes.
+    #[test]
+    fn validate_refuses_extra_wrong_and_missing_members() {
+        let profile = profile(r#"{"record": {{record}}}"#);
+        let schema =
+            derive_operation_result_schema(&profile, &project(true), "cases.find").expect("derive");
+
+        let good = json!({"record": {"id": "c-1", "region": "north", "opened-on": "2026-01-01"}});
+        assert!(validate_result_schema(&good, &schema).is_empty());
+
+        let extra = json!({"record": {"id": "c-1", "ghost": true}});
+        assert_eq!(
+            validate_result_schema(&extra, &schema),
+            vec!["/record/ghost"]
+        );
+
+        let wrong = json!({"record": {"id": 7}});
+        assert_eq!(validate_result_schema(&wrong, &schema), vec!["/record/id"]);
+
+        let missing = json!({"record": {"region": "north"}});
+        assert_eq!(
+            validate_result_schema(&missing, &schema),
+            vec!["/record/id"]
+        );
+
+        let wrong_root = json!([1]);
+        assert_eq!(validate_result_schema(&wrong_root, &schema), vec![""]);
+    }
+
+    /// The fixture check refuses extra, wrong-typed, and missing members
+    /// and a missing body under the fixture response-schema code, each at
+    /// the fixture path it concerns; a conforming body passes.
+    #[test]
+    fn fixture_check_refuses_with_the_response_schema_code() {
+        let profile = profile(r#"{"record": {{record}}}"#);
+        let schema =
+            derive_operation_result_schema(&profile, &project(true), "cases.find").expect("derive");
+        let expected = |body: Option<Value>| Expected { status: 200, body };
+
+        let good = expected(Some(json!({"record": {"id": "c-1"}})));
+        assert!(check_fixture_expected_response(0, &good, &schema).is_empty());
+
+        let findings = check_fixture_expected_response(
+            0,
+            &expected(Some(json!({"record": {"id": "c-1", "ghost": true}}))),
+            &schema,
+        );
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].code, CheckCode::FixtureResponseSchema.code());
+        assert_eq!(
+            findings[0].path,
+            "/entries/0/expectedFacadeResponse/body/record/ghost"
+        );
+
+        let findings = check_fixture_expected_response(
+            2,
+            &expected(Some(json!({"record": {"id": 7}}))),
+            &schema,
+        );
+        assert_eq!(
+            findings[0].path,
+            "/entries/2/expectedFacadeResponse/body/record/id"
+        );
+
+        let findings =
+            check_fixture_expected_response(0, &expected(Some(json!({"record": {}}))), &schema);
+        assert_eq!(
+            findings[0].path,
+            "/entries/0/expectedFacadeResponse/body/record/id"
+        );
+
+        let findings = check_fixture_expected_response(0, &expected(None), &schema);
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].path, "/entries/0/expectedFacadeResponse");
+    }
+}

@@ -78,7 +78,10 @@ pub fn has_malformed_placeholder(text: &str) -> bool {
 }
 
 /// The character set a placeholder name may carry.
-fn is_placeholder_name(name: &str) -> bool {
+/// Whether a placeholder text is a valid `{{name}}` name: an ASCII
+/// alphabetic lead and alphanumeric, `_`, or `-` thereafter. Public so the
+/// envelope-template parse shares one name rule with the scanner.
+pub fn is_placeholder_name(name: &str) -> bool {
     let mut chars = name.chars();
     match chars.next() {
         Some(first) if first.is_ascii_alphabetic() => {}
