@@ -30,6 +30,7 @@ pub enum CheckCode {
     PackEndpointComponentInvalid,
     PackGraphQlQueryRequired,
     PackReservedHeaderName,
+    PackScriptUncompilable,
     PackUnknownScript,
     // adapter.profile.*
     ProfileProblemEnvelopeMissingCodeSlot,
@@ -78,6 +79,7 @@ impl CheckCode {
         Self::PackEndpointComponentInvalid,
         Self::PackGraphQlQueryRequired,
         Self::PackReservedHeaderName,
+        Self::PackScriptUncompilable,
         Self::PackUnknownScript,
         Self::ProfileProblemEnvelopeMissingCodeSlot,
         Self::ProfileRequestEnvelopeMissingRecordSlot,
@@ -122,6 +124,7 @@ impl CheckCode {
             Self::PackEndpointComponentInvalid => "adapter.pack.endpoint-component-invalid",
             Self::PackGraphQlQueryRequired => "adapter.pack.graphql-query-required",
             Self::PackReservedHeaderName => "adapter.pack.reserved-header-name",
+            Self::PackScriptUncompilable => "adapter.pack.script-uncompilable",
             Self::PackUnknownScript => "adapter.pack.unknown-script",
             Self::ProfileProblemEnvelopeMissingCodeSlot => {
                 "adapter.profile.problem-envelope-missing-code-slot"
@@ -187,6 +190,7 @@ impl CheckCode {
             | Self::PackEndpointComponentInvalid
             | Self::PackGraphQlQueryRequired
             | Self::PackReservedHeaderName
+            | Self::PackScriptUncompilable
             | Self::PackUnknownScript
             | Self::RouteDirectCycle
             | Self::RouteDirectDepthExceeded

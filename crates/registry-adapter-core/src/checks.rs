@@ -289,20 +289,16 @@ fn script_reference_checks(pack: &AdapterPack) -> Vec<Diagnostic> {
         .collect();
     bodies.extend(pack.route_templates.iter().map(|t| t.steps.as_slice()));
     for steps in bodies {
-        walk_steps(steps, &mut |step, path| {
-            for expression in step_expressions(step) {
-                if let Expression::Rhai(rhai) = expression {
-                    if pack.pinned_file(&rhai.file).is_none() {
-                        findings.push(finding(
-                            CheckCode::PackUnknownScript,
-                            &format!("/steps{path}/expression/rhai"),
-                            "the script file is not in the pack's digest-pinned inventory",
-                            "List the script in scripts with its sha256 digest.",
-                        ));
-                    }
-                }
+        for script in script_references(steps) {
+            if pack.pinned_file(&script.file).is_none() {
+                findings.push(finding(
+                    CheckCode::PackUnknownScript,
+                    &format!("/steps{}/rhai", script.path),
+                    "the script file is not in the pack's digest-pinned inventory",
+                    "List the script in scripts with its sha256 digest.",
+                ));
             }
-        });
+        }
     }
     findings
 }
@@ -758,8 +754,9 @@ fn collect_non_safe_sends(steps: &[Step]) -> Vec<NonSafeSend> {
 }
 
 /// Depth-first visit of every step, with the relative step path inside the
-/// visited body.
-fn walk_steps<'a>(steps: &'a [Step], visit: &mut dyn FnMut(&'a Step, &str)) {
+/// visited body. Public so adopter tooling reuses one exhaustive walk
+/// over `Step` instead of duplicating it.
+pub fn walk_steps<'a>(steps: &'a [Step], visit: &mut dyn FnMut(&'a Step, &str)) {
     fn walk<'a>(steps: &'a [Step], prefix: &str, visit: &mut dyn FnMut(&'a Step, &str)) {
         for (index, step) in steps.iter().enumerate() {
             let path = format!("{prefix}/{index}");
@@ -811,8 +808,13 @@ fn walk_steps<'a>(steps: &'a [Step], visit: &mut dyn FnMut(&'a Step, &str)) {
     walk(steps, "", visit);
 }
 
-/// The expressions a step carries directly.
-fn step_expressions(step: &Step) -> Vec<&Expression> {
+/// Every expression a step carries directly, including the optional ones
+/// (`onWhen`, `doWhile`, `retryWhile`, a send's `body`) and the language
+/// members of `split`, `throttle`, and `idempotentConsumer`. Public so
+/// adopter tooling reuses one exhaustive extraction instead of
+/// duplicating it; pair it with [`walk_steps`] and [`script_references`]
+/// to reach every expression and script in a route body.
+pub fn step_expressions(step: &Step) -> Vec<&Expression> {
     match step {
         Step::SetBody(expression) | Step::Transform(expression) | Step::Script(expression) => {
             vec![expression]
@@ -820,8 +822,76 @@ fn step_expressions(step: &Step) -> Vec<&Expression> {
         Step::SetHeader(header) => vec![&header.value],
         Step::SetProperty(property) => vec![&property.value],
         Step::Validate(validate) => vec![&validate.expression],
+        Step::Split(split) => vec![&split.expression],
+        Step::Throttle(throttle) => vec![&throttle.limit],
+        Step::IdempotentConsumer(idempotent) => vec![&idempotent.expression],
+        Step::Loop(loop_step) => loop_step.do_while.iter().collect(),
+        Step::OnException(clause) => clause.on_when.iter().collect(),
+        Step::DoTry(do_try) => do_try
+            .do_catch
+            .iter()
+            .flat_map(|catch| catch.on_when.iter())
+            .collect(),
+        Step::ErrorHandler(handler) => handler
+            .default_error_handler
+            .as_ref()
+            .and_then(|handler| handler.redelivery_policy.as_ref())
+            .and_then(|policy| policy.retry_while.as_ref())
+            .into_iter()
+            .collect(),
+        Step::To(to) => to
+            .parameters
+            .as_ref()
+            .and_then(|parameters| parameters.body.as_ref())
+            .into_iter()
+            .collect(),
         _ => Vec::new(),
     }
+}
+
+/// One Rhai script site reachable in a route body.
+pub struct ScriptSite {
+    /// The relative step path inside the walked body.
+    pub path: String,
+    /// The pack inventory file the script runs.
+    pub file: String,
+    /// The function the script calls.
+    pub entrypoint: String,
+}
+
+/// Every Rhai script site in a route body, covering the language
+/// members of predicates (`when` and `filter`) as well as every
+/// expression [`step_expressions`] reaches. Public so adopter tooling
+/// reuses core's exhaustive walk instead of duplicating it.
+pub fn script_references(steps: &[Step]) -> Vec<ScriptSite> {
+    fn push(rhai: Option<&crate::model::RhaiExpression>, path: &str, refs: &mut Vec<ScriptSite>) {
+        if let Some(rhai) = rhai {
+            refs.push(ScriptSite {
+                path: path.to_string(),
+                file: rhai.file.clone(),
+                entrypoint: rhai.entrypoint.clone(),
+            });
+        }
+    }
+
+    let mut refs = Vec::new();
+    walk_steps(steps, &mut |step, path| {
+        for expression in step_expressions(step) {
+            if let Expression::Rhai(rhai) = expression {
+                push(Some(rhai), path, &mut refs);
+            }
+        }
+        match step {
+            Step::Choice(choice) => {
+                for when in &choice.when {
+                    push(when.rhai.as_ref(), path, &mut refs);
+                }
+            }
+            Step::Filter(filter) => push(filter.rhai.as_ref(), path, &mut refs),
+            _ => {}
+        }
+    });
+    refs
 }
 
 /// The direct: targets a body sends to.
@@ -1732,6 +1802,38 @@ mod tests {
             "expected no findings, got {:?}",
             findings.iter().map(|f| f.code.as_str()).collect::<Vec<_>>()
         );
+    }
+
+    /// The script-uncompilable code exists for the ctl's precompile walk,
+    /// and the public walkers expose every expression so the ctl reuses
+    /// core's exhaustive walk instead of duplicating it.
+    #[test]
+    fn script_uncompilable_code_resolves_and_walkers_expose_expressions() {
+        assert_eq!(
+            CheckCode::from_code("adapter.pack.script-uncompilable"),
+            Some(CheckCode::PackScriptUncompilable)
+        );
+        let steps = vec![
+            Step::SetBody(rhai("scripts/map.rhai")),
+            Step::Filter(crate::route::FilterStep {
+                constant: None,
+                header: None,
+                exchange_property: None,
+                jsonpath: None,
+                rhai: Some(RhaiExpression {
+                    file: "scripts/guard.rhai".to_string(),
+                    entrypoint: "admits".to_string(),
+                }),
+                steps: vec![],
+            }),
+        ];
+        let files: Vec<String> = script_references(&steps)
+            .into_iter()
+            .map(|script| script.file)
+            .collect();
+        assert_eq!(files, ["scripts/map.rhai", "scripts/guard.rhai"]);
+        // The expression walk stays public for the ctl's own consumers.
+        assert_eq!(step_expressions(&steps[0]), vec![&rhai("scripts/map.rhai")]);
     }
 
     // ----- envelope and profile checks -----
