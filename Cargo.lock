@@ -5031,6 +5031,7 @@ dependencies = [
  "registry-platform-script",
  "registry-platform-yaml",
  "schemars",
+ "serde",
  "serde_json",
  "tempfile",
 ]
