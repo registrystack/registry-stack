@@ -4725,7 +4725,7 @@ mod tests {
         // A disclosure no signed digest refers to.
         let mut unreferenced = subset;
         unreferenced.push(encode_disclosure(
-            "MDEyMzQ1Njc4OWFiY2RlZg",
+            &URL_SAFE_NO_PAD.encode([0u8; 16]),
             "urn:example:extra-concept",
             json!(true),
         ));

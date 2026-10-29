@@ -3100,8 +3100,8 @@ mod tests {
         };
 
         let missing_nonce = description(
-            credential_request_with_proof(|key, _nonce| {
-                let mut payload = proof_payload("unused");
+            credential_request_with_proof(|key, nonce| {
+                let mut payload = proof_payload(nonce);
                 payload.as_object_mut().expect("payload").remove("nonce");
                 proof_jwt_with_header(key, proof_header(key), payload)
             })
