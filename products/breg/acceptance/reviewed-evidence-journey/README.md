@@ -95,6 +95,8 @@ Generated output is retained for inspection, including after a failed run.
 The unit suite tests the acceptance oracle with deliberately mismatched review
 identities, policies, digests, decisions, disclosed values and cleanup receipts.
 It also refuses before/after pairs whose subject, contract or issuer drifts.
+`products/breg/scripts/check-contracts.sh` runs this unit suite. The live run
+needs Docker and matching binaries and runs only when invoked.
 The 11 Evidence fixtures are synthetic calculation and protocol checks. The
 combined run is real-runtime HTTP proof. Neither establishes released artifact
 installation, production issuer integration, outages, upgrades, or production

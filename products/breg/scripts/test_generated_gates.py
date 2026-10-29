@@ -240,6 +240,7 @@ class GeneratedGateTests(unittest.TestCase):
             product / "acceptance/person-registration-rhai/tests/live_registration.py",
             product / "acceptance/farmer-landholding-evidence/tests/live_registration.py",
             product / "acceptance/farmer-landholding-evidence/tests/run-live.py",
+            product / "acceptance/reviewed-evidence-journey/tests/run_live.py",
         ]
         for workflow in workflows:
             source = workflow.read_text(encoding="utf-8")
