@@ -4180,7 +4180,7 @@
       "description": "Base Registry Engine portable Action contract export schema, reproduced from the canonical compiled project.",
       "source": {
         "path": "crates/registry-breg/src/artifacts.rs",
-        "sha256": "9c8acc09382db4302ebfe0bdf17e326cb8b53963c0f735f72b7c0c5aaf95d454"
+        "sha256": "c65b5b2b97e60424fb03b0d527d1e5fe6973ba9ef9f5bed5ea1764261bb18463"
       },
       "artifact": {
         "path": "products/breg/generated/facility/generated/action-contracts.schema.json",
@@ -4414,11 +4414,11 @@
       "description": "Base Registry Engine project authoring JSON Schema.",
       "source": {
         "path": "crates/registry-breg/src/schema.rs",
-        "sha256": "c416a52a4fc41b2d5f371e08182cb9dd0671d90601adc8f87900688d470f3e52"
+        "sha256": "9bdd4f0ab3bfe3f5dff737fa7f6409c926b063311d6d438b21299915d5fead56"
       },
       "artifact": {
         "path": "products/breg/generated/authoring/registry-module.schema.json",
-        "sha256": "c45bd53efa7ce3e859a78ecef0266534cbbb666bf8ef1d18b0626ac2df449e87",
+        "sha256": "0476a7c508dbcb78e5d5f91c1329b121c23d0af6e9081d5f774bf4241a3c23ae",
         "mediaType": "application/schema+json"
       }
     },
@@ -4432,11 +4432,11 @@
       "description": "Base Registry Engine project authoring JSON Schema.",
       "source": {
         "path": "crates/registry-breg/src/schema.rs",
-        "sha256": "c416a52a4fc41b2d5f371e08182cb9dd0671d90601adc8f87900688d470f3e52"
+        "sha256": "9bdd4f0ab3bfe3f5dff737fa7f6409c926b063311d6d438b21299915d5fead56"
       },
       "artifact": {
         "path": "products/breg/generated/authoring/registry-project.schema.json",
-        "sha256": "6d5de717bd1327226e892595ee62c9df49b6dd33f449d05ccd5089deade5a0ff",
+        "sha256": "f44341258e28ad59326ca0f1a740a6bad00df3d560b83378e996724e1e4ea331",
         "mediaType": "application/schema+json"
       }
     },
@@ -4522,7 +4522,7 @@
       "description": "Base Registry Engine runtime configuration JSON Schema.",
       "source": {
         "path": "crates/registry-breg/src/schema.rs",
-        "sha256": "c416a52a4fc41b2d5f371e08182cb9dd0671d90601adc8f87900688d470f3e52"
+        "sha256": "9bdd4f0ab3bfe3f5dff737fa7f6409c926b063311d6d438b21299915d5fead56"
       },
       "artifact": {
         "path": "products/breg/generated/runtime/runtime.schema.json",
