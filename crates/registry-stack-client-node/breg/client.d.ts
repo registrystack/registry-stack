@@ -887,6 +887,13 @@ export declare class BaseRegistryClient {
   /** Read one retained submission version under the access profile of the Proposal's self link. */
   readProposalSubmission(proposal: BRegProposal, version: number): Promise<CompleteOutcome<BRegProposalSubmission>>
   listProposals(collection: BRegProposalCollection, queryJson: string): Promise<BRegProposalPage>
+  /**
+   * Bind an available transition without I/O. Throws locally when the operation
+   * is not a legal transition from the Proposal's observed state; `cancel` is
+   * prepared only for a Draft or Submitted Proposal, so cancelling an Applied or
+   * Cancelled Proposal never reaches the server. Call the HTTP route directly to
+   * exercise the server's terminal-state refusal.
+   */
   prepareProposal(proposal: BRegProposal, operation: BRegProposalTransition, bodyJson: string, key: string): BRegPreparedProposal
   recoverProposal(proposal: BRegProposal, attempt: BRegPreparedProposal): BRegPreparedProposal
   executeProposal(attempt: BRegPreparedProposal): Promise<BRegProposal>

@@ -1641,6 +1641,14 @@ impl BaseRegistryClient {
         })
     }
     /// Validate and bind a promoted transition without I/O or Evidence acquisition.
+    ///
+    /// The client refuses locally, with the same generic refusal as an absent
+    /// link, any operation that is not a legal transition from the Proposal's
+    /// observed state. In particular `cancel` is prepared only for a Draft or
+    /// Submitted Proposal; a Proposal that is already Applied or Cancelled
+    /// yields no prepared attempt, so no request reaches the server. A test that
+    /// needs the server's own terminal-state refusal must call the HTTP route
+    /// directly.
     pub fn prepare_proposal(
         &self,
         proposal: &BRegProposal,
