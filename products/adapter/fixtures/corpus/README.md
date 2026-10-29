@@ -91,6 +91,13 @@ member can reach it from authored files. Every other code in the closed
 authoring vocabulary carries exactly one member, and the sweep over all of
 them must stay green before this corpus is relied on as a gate.
 
+One structural co-fire is accepted: `adapter.project.unknown-route`'s
+condition (a binding whose route id has no steps) is a strict subset of
+`adapter.project.template-not-instantiated`'s condition (a template ref
+that never materializes as a pack route or instantiated route), so the
+unknown-route member is refused with both codes at once and its sweep
+expectation lists both.
+
 ### Project members
 
 | Member | Defect | Expected code | Layer |
@@ -104,7 +111,8 @@ them must stay green before this corpus is relied on as a gate.
 | `adapter.project.duplicate-route-id` | Instantiated route id collides with the pack template name | `adapter.project.duplicate-route-id` | checks |
 | `adapter.project.unknown-operation` | Binding references no declared profile operation | `adapter.project.unknown-operation` | checks |
 | `adapter.project.unknown-record-type` | Binding references no declared record type | `adapter.project.unknown-record-type` | checks |
-| `adapter.project.unknown-route` | Binding references no declared route | `adapter.project.unknown-route` | checks |
+| `adapter.project.unknown-route` | Binding references no declared route (co-fires `adapter.project.template-not-instantiated`, see the note above) | `adapter.project.unknown-route` | checks |
+| `adapter.project.template-not-instantiated` | Binding names the raw template `findCases`; `templatedRoutes` is empty | `adapter.project.template-not-instantiated` | checks |
 | `adapter.project.upstream-budget-exceeded` | Worst case 2 sends (loop bound 2) against a budget of 1 | `adapter.project.upstream-budget-exceeded` | checks |
 
 ### Route members
@@ -119,6 +127,7 @@ them must stay green before this corpus is relied on as a gate.
 | `adapter.route.maximum-items-required` | Split declares no `maximumItems` | `adapter.route.maximum-items-required` | checks, per body |
 | `adapter.route.non-safe-send-in-split` | POST inside a split with `stopOnException: false` | `adapter.route.non-safe-send-in-split` | checks, per body |
 | `adapter.route.maximum-iterations-required` | Loop declares no `maximumIterations` | `adapter.route.maximum-iterations-required` | checks, per body |
+| `adapter.route.loop-count-above-bound` | Loop count `5` exceeds `maximumIterations: 2` | `adapter.route.loop-count-above-bound` | checks, per body |
 | `adapter.route.multiple-non-safe-sends` | One `idempotentConsumer` guards two POST sends | `adapter.route.multiple-non-safe-sends` | checks |
 | `adapter.route.write-without-idempotency` | Write route's POST sits outside any `idempotentConsumer` | `adapter.route.write-without-idempotency` | checks |
 | `adapter.route.redelivery-over-non-safe-send` | Redelivery over a POST send whose endpoint operation claims no `idempotentUpstream` | `adapter.route.redelivery-over-non-safe-send` | checks, per body |
@@ -127,6 +136,10 @@ them must stay green before this corpus is relied on as a gate.
 | `adapter.route.retry-while-without-redeliveries` | `retryWhile` on a policy with `maximumRedeliveries` 0 | `adapter.route.retry-while-without-redeliveries` | checks, per body |
 | `adapter.route.predicate-ambiguous` | `when` clause carries `constant` and `jsonpath` | `adapter.route.predicate-ambiguous` | checks, per body |
 | `adapter.route.predicate-language-required` | `when` clause carries no language key | `adapter.route.predicate-language-required` | checks, per body |
+| `adapter.route.error-handler-shape` | `errorHandler` step carries no handler | `adapter.route.error-handler-shape` | checks, per body |
+| `adapter.route.empty-exception-list` | onException clause names no error class | `adapter.route.empty-exception-list` | checks, per body |
+| `adapter.route.handled-and-continued` | onException clause sets `handled: true` and `continued: true` | `adapter.route.handled-and-continued` | checks, per body |
+| `adapter.route.unknown-operation` | POST send names operation `nope`, which its endpoint does not declare | `adapter.route.unknown-operation` | checks, per body |
 
 ### Runtime and auth members
 

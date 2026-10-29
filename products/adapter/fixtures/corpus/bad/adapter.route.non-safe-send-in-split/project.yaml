@@ -27,7 +27,7 @@ templatedRoutes:
     routeId: caseFind
 bindings:
   - id: case-get
-    operation: cases.file
+    operation: cases.get
     recordType: case
     route: caseFind
     maximumUpstreamCalls: 8

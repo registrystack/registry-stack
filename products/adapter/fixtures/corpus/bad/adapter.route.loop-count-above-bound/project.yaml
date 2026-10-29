@@ -1,0 +1,41 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.route.loop-count-above-bound: this artifact set must be refused with
+# exactly adapter.route.loop-count-above-bound. A counted loop's constant exceeds its own maximumIterations bound.
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.route.loop-count-above-bound/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
+kind: AdapterProject
+id: case-api-example
+profile:
+  id: case-api
+  version: "1"
+  digest: sha256:9639703b1c1ec83ee7d3a747c0e0ea67bceb8e6d786ae0b5281f19a74161c987
+pack:
+  id: case-api-pack
+  version: "1"
+  digest: sha256:f8cc37650886ef1a0aee3ffb81df3501fc5c41822abb93719b6fe9f69e28b24c
+recordTypes:
+  - name: case
+    fields:
+      - name: case_type
+        type: string
+        required: true
+templatedRoutes:
+  - routeTemplateRef: findCases
+    routeId: caseFind
+bindings:
+  - id: case-get
+    operation: cases.get
+    recordType: case
+    route: caseFind
+    maximumUpstreamCalls: 4
+accessProfiles:
+  - id: case-reader
+    scopes:
+      - cases.read
+    operations:
+      - cases.get
+    recordTypes:
+      - case
