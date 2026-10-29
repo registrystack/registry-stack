@@ -1,0 +1,447 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/pack/pack.v1alpha1.schema.json
+#
+# The dhis2-tracker pack: DHIS2 tracker export and import, ported from the
+# DHIS2 Web API documentation (https://docs.dhis2.org/en/develop/using-the-api/
+# dhis-core-version-241/), tested against DHIS2 2.41 documented behavior.
+#
+# Authentication (cited choices):
+#   - User accounts authenticate over `Authorization: Basic
+#     base64encode(username:password)`; the DHIS2 documentation recommends
+#     Basic only over TLS. The endpoint below declares `basic`; the runtime
+#     config binds usernameRef and passwordRef.
+#   - Personal access tokens authenticate over `Authorization: ApiToken
+#     <token>` (same page). A deployment that prefers a PAT swaps this
+#     endpoint's kind to `static-authorization` with `scheme: ApiToken` and
+#     binds tokenRef in the runtime config; both sides of the kind match
+#     must move together.
+#   - DHIS2's OAuth2 support carries the password, refresh, and
+#     authorization-code grants, not the client-credentials grant, so no
+#     `oauth2-client-credentials` or `oauth2-private-key-jwt` endpoint is
+#     declared here.
+#
+# Upstream responses and their declared headers: the tracker endpoints'
+# documented behavior carries no response header the facade consumes, so
+# the allowlist stays empty and the engine copies nothing.
+#
+# Idempotency basis for `tracker.import` (idempotentUpstream: true): the
+# tracker importer treats a payload object whose UID already exists as an
+# update, and refuses a create whose UID collides (error E1002); repeating
+# an import whose objects carry client-supplied UIDs therefore lands every
+# object on the same one. Imports without client-supplied UIDs are NOT
+# idempotent (each repeat would mint new UIDs or collide), so the claim
+# holds only for the client-supplied-UID payload this pack's to-bundle
+# mapping produces, and the script throws when a record carries no
+# recordIdentifier.
+#
+# The 200-with-error-body quirk: the tracker importer reports its outcome
+# in the summary body, not the status line; DHIS2 answers HTTP 200 with a
+# summary whose `status` is ERROR in the field. Detecting that answer is
+# this pack's concern (scripts/import-failed.rhai) through the grammar's
+# choice step, never an inline check.
+#
+# Error clauses: DHIS2 errors map to the breg-records profile's problem
+# vocabulary (`profiles/breg-records/profile.yaml`: source.not-found,
+# source.unavailable, source.upstream-error, source.write-rejected,
+# source.write-partial). The clause bodies carry that profile's problem
+# shape (type, title, status, code) per CONCEPT 8.7, so binding this pack
+# to a profile with a different problem vocabulary requires a reviewed
+# pack update.
+#
+# Paging assumption, to be proven by a captured fixture: the tracker
+# export reply's page block is read at $.page.totalPage; DHIS2 fills it
+# only when the request carries totalPages=true, which the fetchPage route
+# always sends (docs.dhis2.org tracker export parameters). The reviewed
+# page bound is 10: the loop's maximumIterations and the
+# dhis2MaximumPages property are the same fact and must stay in step.
+apiVersion: id.registrystack.org/formats/adapter/pack/v1alpha1
+kind: AdapterPack
+id: dhis2-tracker
+testedVersions:
+  - "2.41"
+endpoints:
+  - id: tracker
+    component: http
+    authentication:
+      type: basic
+    operations:
+      - id: tracker.export
+      - id: tracker.import
+        idempotentUpstream: true
+    testedVersions:
+      - "2.41"
+routeTemplates:
+  - id: searchTrackedEntities
+    parameters:
+      - name: program
+        type: string
+        required: true
+        description: The DHIS2 program the search narrows to.
+      - name: pageSize
+        type: integer
+        defaultValue: 50
+        description: The DHIS2 page size each loop iteration fetches (DHIS2 default 50).
+    steps:
+      - onException:
+          exception:
+            - upstream.timeout
+            - upstream.connection
+          handled: true
+          redeliveryPolicy:
+            maximumRedeliveries: 1
+            retryDelaySeconds: 2
+          steps:
+            - setBody:
+                constant:
+                  type: https://id.registrystack.org/problems/registry-adapter/source.unavailable
+                  title: The source did not answer in time.
+                  status: 503
+                  code: source.unavailable
+            - setHeader:
+                name: CamelHttpResponseCode
+                value:
+                  constant: 503
+            - stop: {}
+      - onException:
+          exception:
+            - upstream.http
+          handled: true
+          steps:
+            - setBody:
+                constant:
+                  type: https://id.registrystack.org/problems/registry-adapter/source.upstream-error
+                  title: The source refused the search.
+                  status: 502
+                  code: source.upstream-error
+            - setHeader:
+                name: CamelHttpResponseCode
+                value:
+                  constant: 502
+            - stop: {}
+      - onException:
+          exception:
+            - upstream.malformed
+            - upstream.tooLarge
+            - script
+          handled: true
+          steps:
+            - setBody:
+                constant:
+                  type: https://id.registrystack.org/problems/registry-adapter/source.upstream-error
+                  title: The source answered something unusable.
+                  status: 502
+                  code: source.upstream-error
+            - setHeader:
+                name: CamelHttpResponseCode
+                value:
+                  constant: 502
+            - stop: {}
+      - setProperty:
+          name: dhis2Program
+          value:
+            constant: "{{program}}"
+      - setProperty:
+          name: dhis2PageSize
+          value:
+            constant: "{{pageSize}}"
+      - setProperty:
+          name: dhis2Page
+          value:
+            constant: 1
+      - setProperty:
+          name: dhis2MaximumPages
+          value:
+            constant: 10
+      - loop:
+          maximumIterations: 10
+          doWhile:
+            rhai:
+              file: scripts/has-more-pages.rhai
+              entrypoint: has_more_pages
+          steps:
+            - enrich:
+                uri: direct:fetchPage
+                aggregationStrategy:
+                  jsonArrayAppend:
+                    from: pages
+                    into: records
+                    uniqueBy: trackedEntity
+            - setProperty:
+                name: dhis2Page
+                value:
+                  rhai:
+                    file: scripts/next-page.rhai
+                    entrypoint: next_page
+      - setBody:
+          rhai:
+            file: scripts/shape-records.rhai
+            entrypoint: shape_records
+  - id: fetchTrackedEntity
+    parameters: []
+    steps:
+      - onException:
+          exception:
+            - upstream.http
+          handled: true
+          steps:
+            - setBody:
+                constant:
+                  type: https://id.registrystack.org/problems/registry-adapter/source.not-found
+                  title: No record with that identifier exists at the source.
+                  status: 404
+                  code: source.not-found
+            - setHeader:
+                name: CamelHttpResponseCode
+                value:
+                  constant: 404
+            - stop: {}
+      - onException:
+          exception:
+            - upstream.timeout
+            - upstream.connection
+          handled: true
+          redeliveryPolicy:
+            maximumRedeliveries: 1
+            retryDelaySeconds: 2
+          steps:
+            - setBody:
+                constant:
+                  type: https://id.registrystack.org/problems/registry-adapter/source.unavailable
+                  title: The source did not answer in time.
+                  status: 503
+                  code: source.unavailable
+            - setHeader:
+                name: CamelHttpResponseCode
+                value:
+                  constant: 503
+            - stop: {}
+      - onException:
+          exception:
+            - upstream.malformed
+            - upstream.tooLarge
+            - script
+          handled: true
+          steps:
+            - setBody:
+                constant:
+                  type: https://id.registrystack.org/problems/registry-adapter/source.upstream-error
+                  title: The source answered something unusable.
+                  status: 502
+                  code: source.upstream-error
+            - setHeader:
+                name: CamelHttpResponseCode
+                value:
+                  constant: 502
+            - stop: {}
+      - to:
+          uri: http:tracker
+          parameters:
+            httpMethod: GET
+            path: /api/tracker/trackedEntities/{id}
+            pathParameters:
+              id:
+                header: recordId
+            operation: tracker.export
+      - choice:
+          when:
+            - rhai:
+                file: scripts/soft-deleted.rhai
+                entrypoint: soft_deleted
+              steps:
+                - setBody:
+                    constant:
+                      type: https://id.registrystack.org/problems/registry-adapter/source.not-found
+                      title: No record with that identifier exists at the source.
+                      status: 404
+                      code: source.not-found
+                - setHeader:
+                    name: CamelHttpResponseCode
+                    value:
+                      constant: 404
+                - stop: {}
+          otherwise:
+            steps:
+              - setBody:
+                  rhai:
+                    file: scripts/to-record.rhai
+                    entrypoint: to_record
+  - id: importTrackedEntity
+    parameters: []
+    steps:
+      - onException:
+          exception:
+            - upstream.timeout
+            - upstream.connection
+          handled: true
+          redeliveryPolicy:
+            maximumRedeliveries: 1
+            retryDelaySeconds: 2
+          steps:
+            - setBody:
+                constant:
+                  type: https://id.registrystack.org/problems/registry-adapter/source.unavailable
+                  title: The source did not answer in time.
+                  status: 503
+                  code: source.unavailable
+            - setHeader:
+                name: CamelHttpResponseCode
+                value:
+                  constant: 503
+            - stop: {}
+      - onException:
+          exception:
+            - upstream.http
+          handled: true
+          redeliveryPolicy:
+            maximumRedeliveries: 1
+            retryDelaySeconds: 2
+          steps:
+            - setBody:
+                constant:
+                  type: https://id.registrystack.org/problems/registry-adapter/source.write-rejected
+                  title: The source refused the write.
+                  status: 409
+                  code: source.write-rejected
+            - setHeader:
+                name: CamelHttpResponseCode
+                value:
+                  constant: 409
+            - stop: {}
+      - onException:
+          exception:
+            - upstream.malformed
+            - upstream.tooLarge
+            - script
+            - validation
+            - conversion.unmapped
+            - aggregation.duplicate
+          handled: true
+          steps:
+            - setBody:
+                constant:
+                  type: https://id.registrystack.org/problems/registry-adapter/source.write-rejected
+                  title: The write could not be prepared for the source.
+                  status: 409
+                  code: source.write-rejected
+            - setHeader:
+                name: CamelHttpResponseCode
+                value:
+                  constant: 409
+            - stop: {}
+      - idempotentConsumer:
+          expression:
+            header: Idempotency-Key
+          steps:
+            - to:
+                uri: http:tracker
+                parameters:
+                  httpMethod: POST
+                  path: /api/tracker
+                  query:
+                    async:
+                      constant: "false"
+                  body:
+                    rhai:
+                      file: scripts/to-bundle.rhai
+                      entrypoint: to_bundle
+                  operation: tracker.import
+            - choice:
+                when:
+                  - rhai:
+                      file: scripts/import-failed.rhai
+                      entrypoint: import_failed
+                    steps:
+                      - setBody:
+                          constant:
+                            type: https://id.registrystack.org/problems/registry-adapter/source.write-rejected
+                            title: The source refused the write.
+                            status: 409
+                            code: source.write-rejected
+                      - setHeader:
+                          name: CamelHttpResponseCode
+                          value:
+                            constant: 409
+                      - stop: {}
+                otherwise:
+                  steps:
+                    - setBody:
+                        rhai:
+                          file: scripts/accepted-record.rhai
+                          entrypoint: accepted_record
+routes:
+  - id: fetchPage
+    from:
+      uri: direct:fetchPage
+    steps:
+      - to:
+          uri: http:tracker
+          parameters:
+            httpMethod: GET
+            path: /api/tracker/trackedEntities
+            operation: tracker.export
+            query:
+              program:
+                exchangeProperty: dhis2Program
+              page:
+                exchangeProperty: dhis2Page
+              pageSize:
+                exchangeProperty: dhis2PageSize
+              totalPages:
+                constant: true
+              order:
+                constant: "createdAt:desc"
+      - setProperty:
+          name: dhis2TotalPages
+          value:
+            jsonpath: "$.page.totalPage"
+      - setProperty:
+          name: pages
+          value:
+            jsonpath: "$.instances"
+codeMaps:
+  - id: trackerImportStatus
+    entries:
+      OK:
+        outcome: accepted
+      WARNING:
+        outcome: accepted-with-warnings
+      ERROR:
+        outcome: refused
+        problemCode: source.write-rejected
+        httpStatus: 409
+scripts:
+  - path: scripts/has-more-pages.rhai
+    digest: sha256:24d94491edd0560390ba818c53c1dc4f4faac9a9a529e55a00f634ef5380351c
+  - path: scripts/next-page.rhai
+    digest: sha256:90c9a587cc85b1955e8132b13e2ec039036854d4f5b188ed62f5df2e0f1a171d
+  - path: scripts/soft-deleted.rhai
+    digest: sha256:747885f0e440c1d5eec9e2ae94fe4b96a55dbb6b97e6399dd3fa6e6584715de7
+  - path: scripts/to-record.rhai
+    digest: sha256:061f1f3202de34cebc29175bce58f49709addd9426b861ed33f87ffa3453e2c8
+  - path: scripts/shape-records.rhai
+    digest: sha256:088bd184bb36dd6738bb919965a74e80c971c0210d040f5298b22d384406f959
+  - path: scripts/to-bundle.rhai
+    digest: sha256:25499fde562770b39109b70941f2ad1f83d00ef725c2d87fdc0fa2fefb40afde
+  - path: scripts/import-failed.rhai
+    digest: sha256:3c134059622ceda11bbcb2fbac36b5f96831abeffe2bb0bcfcb4acda36799afe
+  - path: scripts/accepted-record.rhai
+    digest: sha256:0bd66973a622f40baa62d58a8f68b96a1233607eb17dea02da62dc7058ca0a71
+capabilities:
+  components:
+    - http
+  languages:
+    - constant
+    - header
+    - exchangeProperty
+    - jsonpath
+    - rhai
+  eips:
+    - choice
+    - enrich
+    - idempotentConsumer
+    - loop
+    - onException
+    - setBody
+    - setHeader
+    - setProperty
+    - stop
+    - to
