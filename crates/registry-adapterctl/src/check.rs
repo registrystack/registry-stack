@@ -17,18 +17,40 @@
 
 use clap::Args;
 use registry_adapter_core::{
-    check_workspace, finding, CheckCode, Workspace, ADAPTER_FIXTURE_API_VERSION,
-    ADAPTER_FIXTURE_KIND, ADAPTER_PACK_API_VERSION, ADAPTER_PACK_KIND, ADAPTER_PROFILE_API_VERSION,
-    ADAPTER_PROFILE_KIND, ADAPTER_PROJECT_API_VERSION, ADAPTER_PROJECT_KIND,
-    ADAPTER_RUNTIME_API_VERSION, ADAPTER_RUNTIME_KIND,
+    check_workspace, finding, script_references, CheckCode, ScriptSite, Workspace,
+    ADAPTER_FIXTURE_API_VERSION, ADAPTER_FIXTURE_KIND, ADAPTER_PACK_API_VERSION, ADAPTER_PACK_KIND,
+    ADAPTER_PROFILE_API_VERSION, ADAPTER_PROFILE_KIND, ADAPTER_PROJECT_API_VERSION,
+    ADAPTER_PROJECT_KIND, ADAPTER_RUNTIME_API_VERSION, ADAPTER_RUNTIME_KIND,
 };
 use registry_platform_config::sha256_uri;
+use registry_platform_script::rhai::{
+    compile_entrypoint, RhaiBaseEngine, RhaiCompileError, RhaiLimits, RhaiProfile,
+};
 use registry_platform_yaml::{
     ApiVersion, Decoded, Diagnostic, EnvelopeRule, Expect, FormatSpec, Reader, Report,
 };
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 use std::path::{Path, PathBuf};
+
+/// The engine contract a pack's Rhai entrypoints must compile under: the
+/// platform authoring shape, the limits every maintained runtime profile
+/// publishes (CFG-EMBED-1's compile half).
+const SCRIPT_PROFILE: RhaiProfile = RhaiProfile {
+    limits: RhaiLimits {
+        operations: 100_000,
+        call_levels: 32,
+        expression_depth: 64,
+        modules: 0,
+        string_bytes: 16_384,
+        array_items: 256,
+        map_entries: 256,
+    },
+    base: RhaiBaseEngine::Standard,
+    disabled_symbols: &["import", "export", "eval", "print", "debug"],
+    allow_anonymous_fn: false,
+    maximum_source_bytes: 65_536,
+};
 
 /// The authored project format, derived per CFG-ENV-2 and CFG-ENV-3 from the
 /// core naming constants.
@@ -205,7 +227,8 @@ pub(crate) fn run(args: &CheckArgs) -> Result<CheckRun, CheckFailure> {
     let profile = profile.expect("the profile decoded").value;
     let pack = pack.expect("the pack decoded").value;
 
-    verify_digest_pins(&pack, &pack_path, &mut report, &mut files)?;
+    let pinned = verify_digest_pins(&pack, &pack_path, &mut report, &mut files)?;
+    verify_entrypoints(&pack, &pack_path, &pinned, &mut report);
 
     // Compose the core's pure checks over the parsed workspace.
     let workspace = Workspace {
@@ -279,19 +302,22 @@ fn discovered_fixtures(directory: &Path) -> Vec<PathBuf> {
 /// Verify every script and query-file inventory entry against the bytes on
 /// disk beside the pack document (CFG-EMBED-1). A missing or altered file
 /// refuses with the pack's digest-pin code; the pack is incomplete as
-/// authored, which is a refusal, not an environment failure.
+/// authored, which is a refusal, not an environment failure. Returns the
+/// bytes each read accepted, so the entrypoint compile reuses one read.
 fn verify_digest_pins(
     pack: &registry_adapter_core::AdapterPack,
     pack_path: &Path,
     report: &mut Report,
     files: &mut usize,
-) -> Result<(), CheckFailure> {
+) -> Result<BTreeMap<PathBuf, Vec<u8>>, CheckFailure> {
+    let mut pinned = BTreeMap::new();
     let mut counted: BTreeSet<PathBuf> = BTreeSet::new();
     verify_inventory(
         &pack.scripts,
         "/scripts",
         pack_path,
         &mut counted,
+        &mut pinned,
         report,
         files,
     )?;
@@ -300,10 +326,11 @@ fn verify_digest_pins(
         "/queryFiles",
         pack_path,
         &mut counted,
+        &mut pinned,
         report,
         files,
     )?;
-    Ok(())
+    Ok(pinned)
 }
 
 /// Verify one inventory list. A file two entries name is still read once,
@@ -314,6 +341,7 @@ fn verify_inventory(
     pointer: &str,
     pack_path: &Path,
     counted: &mut BTreeSet<PathBuf>,
+    pinned: &mut BTreeMap<PathBuf, Vec<u8>>,
     report: &mut Report,
     files: &mut usize,
 ) -> Result<(), CheckFailure> {
@@ -335,7 +363,7 @@ fn verify_inventory(
                 continue;
             }
         };
-        if counted.insert(path) {
+        if counted.insert(path.clone()) {
             *files += 1;
         }
         if sha256_uri(&bytes) != script.digest.as_str() {
@@ -346,8 +374,105 @@ fn verify_inventory(
                 &script.path,
             ));
         }
+        pinned.insert(path, bytes);
     }
     Ok(())
+}
+
+/// Compile every Rhai entrypoint the pack's routes and route templates
+/// reference, over the bytes the digest pins accepted (CFG-EMBED-1). Core
+/// owns the exhaustive walk ([`script_references`]); a site whose file the
+/// pins refused is already reported there and compiles nowhere.
+fn verify_entrypoints(
+    pack: &registry_adapter_core::AdapterPack,
+    pack_path: &Path,
+    pinned: &BTreeMap<PathBuf, Vec<u8>>,
+    report: &mut Report,
+) {
+    let directory = pack_path.parent();
+    let resolve = |file: &str| match directory {
+        Some(directory) => directory.join(file),
+        None => PathBuf::from(file),
+    };
+    let bodies = pack
+        .routes
+        .iter()
+        .map(|route| route.steps.as_slice())
+        .chain(
+            pack.route_templates
+                .iter()
+                .map(|template| template.steps.as_slice()),
+        );
+    for body in bodies {
+        for site in script_references(body) {
+            let bytes = match pinned.get(&resolve(&site.file)) {
+                Some(bytes) => bytes,
+                None => continue,
+            };
+            let source = match std::str::from_utf8(bytes) {
+                Ok(source) => source,
+                Err(_) => {
+                    report.push(uncompilable_finding(
+                        pack_path,
+                        &site,
+                        "the pinned script is not UTF-8 text",
+                        None,
+                    ));
+                    continue;
+                }
+            };
+            match compile_entrypoint(&SCRIPT_PROFILE, source, &site.entrypoint, &[1]) {
+                Ok(_) => {}
+                Err(RhaiCompileError::SourceBound) => {
+                    report.push(uncompilable_finding(
+                        pack_path,
+                        &site,
+                        "the script exceeds the compile source bound",
+                        None,
+                    ));
+                }
+                Err(RhaiCompileError::Parse(position)) => {
+                    let position = (position.line(), position.position());
+                    report.push(uncompilable_finding(
+                        pack_path,
+                        &site,
+                        "the script does not parse",
+                        Some(position),
+                    ));
+                }
+                Err(RhaiCompileError::Entrypoint) => {
+                    report.push(uncompilable_finding(
+                        pack_path,
+                        &site,
+                        "the script does not declare exactly one public function under the entrypoint name at one parameter",
+                        None,
+                    ));
+                }
+            }
+        }
+    }
+}
+
+/// The compile finding for one script site. The message names the rule,
+/// never a file's contents (CFG-SEC-3).
+fn uncompilable_finding(
+    pack_path: &Path,
+    site: &ScriptSite,
+    message: &str,
+    position: Option<(Option<usize>, Option<usize>)>,
+) -> Diagnostic {
+    let mut diagnostic = finding(
+        CheckCode::PackScriptUncompilable,
+        &format!("/steps{}/rhai", site.path),
+        message,
+        "Repair the script beside the pack so it parses and declares exactly one public entrypoint function with one parameter.",
+    );
+    diagnostic.source = Some(registry_platform_yaml::Source {
+        file: format!("{} ({})", pack_path.display(), site.file),
+        line: position.and_then(|(line, _)| line),
+        column: position.and_then(|(_, column)| column),
+    });
+    diagnostic
 }
 
 /// The digest-pin finding for one inventory entry. The message names the

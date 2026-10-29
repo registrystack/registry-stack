@@ -234,6 +234,43 @@ fn an_altered_pinned_script_refuses_with_the_digest_pin_code() {
     );
 }
 
+/// A pinned script that no longer parses refuses with the compile code
+/// beside the digest-pin code: one pass names everything to fix, and the
+/// refusal never quotes the script's own text.
+#[test]
+fn an_uncompilable_script_refuses_with_the_compile_code() {
+    let (_root, project) = mutated_project(|root| {
+        edit(
+            &root.join("scripts/map.rhai"),
+            "fn map(body) {\n    body\n}",
+            "fn map(body) {\n    body",
+        );
+    });
+    let (exit, report, _) = run_json(&["check", &project]);
+    assert_refused(exit, &report, "adapter.pack.script-uncompilable");
+    assert_refused(exit, &report, "adapter.pack.digest-pin-required");
+    let rendered = serde_json::to_string(&report).unwrap();
+    assert!(
+        !rendered.contains("expecting"),
+        "the refusal must stay value-free: {rendered}"
+    );
+}
+
+/// A pinned script that parses but declares no function under the
+/// entrypoint name the pack routes name refuses with the compile code.
+#[test]
+fn a_script_without_the_declared_entrypoint_refuses_with_the_compile_code() {
+    let (_root, project) = mutated_project(|root| {
+        edit(
+            &root.join("scripts/map.rhai"),
+            "fn map(body) {\n    body\n}",
+            "fn other(input) {\n    input\n}",
+        );
+    });
+    let (exit, report, _) = run_json(&["check", &project]);
+    assert_refused(exit, &report, "adapter.pack.script-uncompilable");
+}
+
 /// An instantiation naming no declared template refuses with the core
 /// code, and the refusal never repeats the rejected identifier.
 #[test]
