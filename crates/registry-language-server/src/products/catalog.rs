@@ -178,6 +178,20 @@ const BREG_REFERENCES: &[N] = &[
     N {
         scope: Scope::BregAction,
         ..N::global(
+            "actions/*/commitGuards/targets/*/atLeastFromInput",
+            "BReg action input",
+        )
+    },
+    N {
+        scope: Scope::BregAction,
+        ..N::global(
+            "actions/*/commitGuards/targets/*/atMostFromInput",
+            "BReg action input",
+        )
+    },
+    N {
+        scope: Scope::BregAction,
+        ..N::global(
             "actions/*/execution/proposal/reviewContext/fields/*/input",
             "BReg action input",
         )

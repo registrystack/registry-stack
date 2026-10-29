@@ -2259,6 +2259,14 @@ pub struct ActionRequirementSource {
     pub at_most: Option<i64>,
     #[serde(default)]
     pub current_date: Option<CurrentDatePredicateSource>,
+    /// Requires the stored value to be at or above the named required action
+    /// input of the same date, instant, or integer type.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at_least_from_input: Option<String>,
+    /// Requires the stored value to be at or below the named required action
+    /// input of the same date, instant, or integer type.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at_most_from_input: Option<String>,
 }
 
 impl ActionRequirementSource {

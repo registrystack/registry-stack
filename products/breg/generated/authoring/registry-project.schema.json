@@ -835,11 +835,19 @@
           "minimum": -9223372036854775808,
           "type": "integer"
         },
+        "atLeastFromInput": {
+          "description": "Requires the stored value to be at or above the named required action\ninput of the same date, instant, or integer type.",
+          "type": "string"
+        },
         "atMost": {
           "format": "int64",
           "maximum": 9223372036854775807,
           "minimum": -9223372036854775808,
           "type": "integer"
+        },
+        "atMostFromInput": {
+          "description": "Requires the stored value to be at or below the named required action\ninput of the same date, instant, or integer type.",
+          "type": "string"
         },
         "currentDate": {
           "$ref": "#/$defs/CurrentDatePredicateSource"

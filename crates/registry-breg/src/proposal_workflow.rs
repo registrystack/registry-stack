@@ -604,8 +604,7 @@ impl FrozenApplicationPreconditions {
                     != Some(target.record_id.as_str())
                 || (!guard.field.is_empty() && !target.values.contains_key(&guard.field))
                 || guard
-                    .equals_input
-                    .as_ref()
+                    .compared_input()
                     .is_some_and(|input| !self.input_values.contains_key(input))
             {
                 return Err(WorkflowError::InvalidRestoredState);
@@ -2828,6 +2827,8 @@ mod source_owned_review_tests {
                 at_least: None,
                 at_most: None,
                 current_date: Some(crate::model::CompiledCurrentDateRelation::OnOrAfter),
+                at_least_input: None,
+                at_most_input: None,
             }],
             input_values: BTreeMap::from([
                 ("guard".to_owned(), json!("guard-1")),
