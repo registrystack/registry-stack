@@ -931,7 +931,17 @@ pub fn check_project(workspace: &Workspace<'_>) -> Vec<Diagnostic> {
                 "Name a template the pinned pack declares.",
             ));
         }
-        if bodies.contains_key(instantiated.route_id.as_str()) {
+        // Collisions are judged against pack routes and templates only.
+        // An instantiation never collides with its own resolved body,
+        // which is also in the map for binding resolution; two
+        // instantiations cannot share a route id at all, because the
+        // unique-list reader refuses duplicates by id.
+        if pack.routes.get(instantiated.route_id.as_str()).is_some()
+            || pack
+                .route_templates
+                .get(instantiated.route_id.as_str())
+                .is_some()
+        {
             findings.push(finding(
                 CheckCode::ProjectDuplicateRouteId,
                 &format!("{prefix}/routeId"),
@@ -2417,6 +2427,59 @@ mod tests {
         assert_has(&findings, CheckCode::ProjectUnknownOperation);
         assert_has(&findings, CheckCode::ProjectUnknownRecordType);
         assert_has(&findings, CheckCode::ProjectUnknownRoute);
+    }
+
+    /// A valid instantiation resolves into the body map and must be
+    /// admitted; its own route id is not a collision. Regression: every
+    /// valid instantiation was refused as a duplicate of itself.
+    #[test]
+    fn project_admits_a_resolved_instantiation_within_budget() {
+        let profile = profile_builder(vec![operation("cases.find", HttpMethod::Get)]);
+        let template = RouteTemplate {
+            id: id("fetchPage"),
+            parameters: Vec::new(),
+            steps: vec![to_get("case-api")],
+        };
+        let mut pack = pack_builder(vec![basic_endpoint()], vec![]);
+        pack.route_templates = UniqueIdList::new(vec![template]).expect("unique");
+        let mut project = project_builder(&pack);
+        project.access_profiles = UniqueIdList::new(Vec::new()).expect("empty");
+        project.templated_routes = UniqueIdList::new(vec![TemplatedRoute {
+            route_template_ref: id("fetchPage"),
+            route_id: id("fetchCases"),
+            parameters: BTreeMap::new(),
+        }])
+        .expect("unique");
+        project.bindings = UniqueIdList::new(vec![Binding {
+            id: id("find-cases"),
+            operation: id("cases.find"),
+            record_type: local("case"),
+            route: id("fetchCases"),
+            maximum_upstream_calls: BoundedU64::<1, 100_000>::new(1).expect("budget"),
+        }])
+        .expect("unique");
+        assert_clean(check_project(&workspace(&profile, &pack, &project)));
+    }
+
+    /// Two instantiations cannot share one route id at all: the
+    /// unique-list reader refuses duplicates by id (CFG-ID-6), so the
+    /// check judges a single instantiation against pack ids only.
+    #[test]
+    fn project_reader_refuses_two_instantiations_with_one_route_id() {
+        let a = TemplatedRoute {
+            route_template_ref: id("fetchPage"),
+            route_id: id("fetchCases"),
+            parameters: BTreeMap::new(),
+        };
+        let b = TemplatedRoute {
+            route_template_ref: id("fetchPage"),
+            route_id: id("fetchCases"),
+            parameters: BTreeMap::new(),
+        };
+        assert!(
+            UniqueIdList::new(vec![a, b]).is_err(),
+            "two instantiations with one route id are refused at the reader"
+        );
     }
 
     #[test]
