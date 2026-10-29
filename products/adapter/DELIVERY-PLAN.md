@@ -1,8 +1,14 @@
 # Adapter Delivery Plan
 
-Status: active, 2026-10-30. Companion to `CONCEPT.md`: the concept is the
-product contract; this file decomposes its section 14 into parallel
-workstreams with definitions of done. On any conflict, `CONCEPT.md` wins.
+Status: active, revised 2026-10-30 for the Camel port (`CONCEPT.md` D7 to
+D15). Companion to `CONCEPT.md`: the concept is the product contract; this
+file decomposes its section 14 into parallel workstreams with definitions of
+done and runnable acceptance commands. On any conflict, `CONCEPT.md` wins.
+
+The scope is the full port table in `CONCEPT.md` section 8.10, every row,
+whether or not a maintained pack uses it today (Jeremi's ruling: the engine
+is a reusable integration piece). No stream shrinks a row to what a pack
+needs; a row that cannot land says so in its report.
 
 ## Rules every agent works under
 
@@ -17,14 +23,13 @@ Every brief carries these rules by reference; they are not optional.
 3. Never push, merge, rebase, tag, reset, stash, `checkout --`, or clean.
     Commit with plain `git commit -m ...`: this machine's commit-msg hook
     appends the DCO `Signed-off-by` trailer automatically. Never type that
-    trailer yourself and never set author or committer to an agent. After
-    your first commit, run
+    trailer yourself, never add agent attribution trailers, and never set
+    author or committer to an agent. After your first commit, run
     `git --no-optional-locks log -1 --format=%B | rg 'Signed-off-by'` and
     confirm exactly one such line; if there is none, amend with
     `git commit --amend --no-edit -s`. Conventional subjects, imperative
     mood: `feat(adapter):`, `test(adapter):`, `chore(adapter):`, or the
-    owning area's prefix (`feat(platform):` for `products/platform`,
-    `crates/registry-platform-*`).
+    owning area's prefix (`feat(platform):` for `products/platform`).
 4. Delete nothing outside `products/adapter/scratch/<your-stream>/`. Treat
     modified and untracked files you did not create as another session's
     work; never revert or reformat them.
@@ -32,13 +37,14 @@ Every brief carries these rules by reference; they are not optional.
    `CARGO_TARGET_DIR=/Volumes/CodexWorktrees/target/live-adapter PATH="$HOME/.cargo/bin:$PATH" cargo ...`
    Never clean a target directory another agent builds in. Concurrent
    cargo runs serialize on the target lock; wait, never kill.
-6. Shared files (root `Cargo.toml`, `deny.toml`, `rust-toolchain.toml`,
-   root `AGENTS.md`, `.github/**`) change only in Wave 0 or by the
-   integration stream at a wave boundary. If your stream needs a change
-   there mid-wave, stop and report it instead of editing.
+6. Shared files (root `Cargo.toml`, `Cargo.lock` dependency additions,
+   `deny.toml`, `rust-toolchain.toml`, root `AGENTS.md`, `.github/**`, and
+   each crate's `lib.rs` module list) change only in a wave's scaffold step
+   or by the integration stream at a wave boundary. If your stream needs a
+   change there mid-wave, stop and report it instead of editing.
 7. TDD: write the failing test first; write only enough code to pass;
-   refactor while green. Test output must be clean; errors that are
-   expected are captured and asserted on, never printed past.
+   refactor while green. Test output must be clean; expected errors are
+   captured and asserted on, never printed past.
 8. Verification floor, reported verbatim with failures included:
    `cargo fmt --check`; `cargo clippy -p <owned crates> --all-targets --
    -D warnings`; `cargo test -p <owned crates> --locked`.
@@ -46,146 +52,225 @@ Every brief carries these rules by reference; they are not optional.
    scope must shrink, the report says so, not the silence.
 10. Never log secrets or environment dumps. All adapter diagnostics are
     value-free (`adapter.*` codes, CFG-SEC-3).
+11. Port, do not invent. Before writing a port-table row, open its Camel
+    4.x page (and the resilience4j page for the breaker), and write the
+    conformance cases from what the page says: option names, defaults,
+    exchange properties, matching and ordering rules. Each case's doc
+    comment cites the page URL. If the page contradicts `CONCEPT.md`, the
+    report says so and the stream follows the page for semantics and
+    `CONCEPT.md` for spelling and divergences; the integration stream
+    corrects the concept. Never write a default from memory.
 
-## Wave model
+## Wave model and review protocol
 
 Waves run sequentially; streams inside a wave run in parallel on disjoint
-paths and commit their own work. The integration stream closes each wave
-set; an Opus review agent closes each increment. HEAD SHAs are captured at
-wave launch and carried in every brief.
+paths and commit their own work. Each increment opens with a scaffold step
+(module roots and dependency additions, serial) so parallel streams never
+touch a shared file. The integration stream closes each increment; an Opus
+review agent then reviews it. HEAD SHAs are captured at wave launch and
+carried in every brief.
 
-## Increment 0 (detailed)
+After each increment's own Opus review, the orchestrator sends the lead
+reviewer (the session in the Orca terminal "Live adapter CONCEPT and
+DELIVERY-PLAN review") a message through orca with: the increment, the HEAD
+SHA, the acceptance command results verbatim, the review report path, and
+open findings. It then waits for the reviewer's go or feedback before
+starting the next increment. Blockers and any `CONCEPT.md` contradiction
+are sent the same way as they happen. The reviewer's feedback is binding
+in the same way as Jeremi's for this program.
 
-### Wave 0, stream S0: scaffold (single, serial)
+## Increment 0: formats and the route model
 
-Owns: `crates/registry-adapter{,-core,-ctl}/` skeletons (real module roots,
-no placeholder logic), root `Cargo.toml` workspace members,
-`products/adapter/AGENTS.md` (routing guide: names `CONCEPT.md`, this plan,
-the gates), `products/adapter/scripts/check-contracts.sh` v0 (fmt + clippy
-+ test over the adapter crates), root `AGENTS.md` repository-map and
-routing rows, CI registration through `.github/scripts/ci_changes.py`.
+### Wave 0, S0: scaffold (done)
 
-DoD:
-- Workspace `cargo check --workspace --all-targets` green with the three
-  crates present.
-- `python3 .github/scripts/test_ci_changes.py` green (the `--help` run is
-  not the check; the test file is).
-- `check-contracts.sh` exits 0 from a clean shell; `shellcheck` and
-  `shfmt -d` clean on it.
-- Root `AGENTS.md` routes `registry-adapter*` to `products/adapter/AGENTS.md`.
+Landed: the crate trio, workspace members, `products/adapter/AGENTS.md`,
+`check-contracts.sh` v0, root `AGENTS.md` routing, CI shard. The revised
+concept moves `test-postgres.sh` to Increment 1 and replaces the call-plan
+vocabulary; the doc commit that carries this plan updates
+`products/adapter/AGENTS.md` to match.
 
 ### Wave 1 (parallel)
 
-**A1, core model**, owns `crates/registry-adapter-core/**`:
-profile, pack, project, and call-plan AST types (every step kind and
-budget from `CONCEPT.md` 8.3; every kind from section 12), problem codes,
-and the pure authoring checks: binding resolution totality, budget bounds,
-`iterate` policy presence, digest-pin shape, envelope-name validity, plan
-reference resolution (CFG-ID-4 shape, on parsed values; this crate does no
-file I/O).
+**A1, core model**, owns `crates/registry-adapter-core/**`.
+Reader types (serde, `deny_unknown_fields`, externally tagged step union
+per CFG-ID-7) for: `AdapterProfile`; `AdapterPack` (endpoints with
+component kind, auth kind, declared response headers, `idempotentUpstream`
+per operation, tested versions; `routeTemplates` with typed parameters;
+internal `routes`; code maps; script and query-file references with digest
+pins; required capabilities); `AdapterProject` (record types and fields,
+pinned pack and profile references, `templatedRoutes`, bindings, access
+profiles); `AdapterRuntimeConfig`; `AdapterFixture` with provenance
+(`kind: captured | documented`, `upstreamVersion`, `reference`). The step
+union covers every port-table row in `CONCEPT.md` 8.10 for Increments 0 to
+3, including `idempotentConsumer` and the `graphql` endpoint kind, so the
+format does not change later. The error-class hierarchy and the
+uncatchable set from `CONCEPT.md` 8.7; `adapter.*` problem codes.
+Pure checks on parsed values (no I/O): reference resolution, template
+instantiation with typed parameter checking and `{{name}}` / `{{?name}}`
+resolution, acyclic `direct:` graph with bounded depth, mandatory
+`maximumItems` and `maximumIterations`, static worst-case upstream call
+count per bound operation against `maximumUpstreamCalls`, write-safety
+(redelivery over a non-safe send without `idempotentUpstream`; non-safe
+`to` inside `split` without `stopOnException: true`; write route without
+`idempotentConsumer`; more than one non-safe send in a write route until
+Increment 3), refusal of `onException`/`doCatch` naming an uncatchable
+class, digest-pin shape, envelope-name validity.
 
-DoD: accept/reject unit tests for every check, asserting `adapter.*` codes
-(not prose); verification floor green; dependencies stay minimal (serde and
-platform types only where the model needs them).
+DoD: accept and reject unit tests for every check asserting `adapter.*`
+codes, not prose; a round-trip test per step variant; verification floor
+green; dependencies minimal.
 
-**A2, platform token**, owns `products/platform/**`:
-`Adapter` envelope prefix and `adapter.*` diagnostic token in
-CONFIG-CONVENTIONS.md (CFG-ENV-2, CFG-ENV-3, CFG-DIAG-3) and the five
-format kinds in `config-formats.yaml`, plus whatever the platform's
-registry regenerates; follow `products/platform/AGENTS.md` for its checks.
+**A2, platform registration**, owns `products/platform/**`.
+`Adapter` envelope prefix and `adapter` product token in
+CONFIG-CONVENTIONS.md (CFG-ENV-2, CFG-ENV-3, CFG-DIAG-3); the five format
+kinds in `config-formats.yaml`; the CFG-EMBED-1 amendment admitting inline
+RFC 9535 JSONPath selectors as queries, beside inline regular expressions,
+with the reasoning in `CONCEPT.md` 8.5. Follow `products/platform/AGENTS.md`
+for its checks.
 
-DoD: the platform product's own gates green; the five kinds registered;
-conventions tables carry the new rows.
+DoD: the platform product's gates green; five kinds registered; tables and
+the amendment present.
 
-### Wave 2 (parallel; needs A1's commit)
+### Wave 2 (parallel; needs A1 and A2)
 
-**B1, check tooling**, owns `crates/registry-adapterctl/**` (plus a read
-layer in core where pure): `adapterctl check` (envelope, digest pinning,
-reference resolution, budgets, script seams precompiled through
-`registry-platform-script`), committed generated schemas under
-`products/adapter/schemas/`, the fixture-replay harness (golden transcripts
-including multi-step and paginated sequences), the clap tree with
-`registry-cli-docs --write` catalog regeneration.
+**B1, check tooling**, owns `crates/registry-adapterctl/**` and
+`products/adapter/{schemas,scripts/check-port-table.py}`.
+`adapterctl check` (envelope, file reads and digest verification,
+template instantiation, A1's checks, Rhai entrypoints precompiled through
+`registry-platform-script`, fixture provenance presence, fixture response
+validation against the generated schema); generated schemas under
+`products/adapter/schemas/` with a drift check; `check-port-table.py`
+parsing `CONCEPT.md` 8.10 (fails when a delivered row's conformance module
+is missing or empty, when a step or component key A1 accepts has no row,
+or when a row's Camel reference is not a camel.apache.org path); clap tree
+and `cargo run --locked -p registry-cli-docs -- --write`.
 
 DoD: check accepts the good corpus and refuses every bad corpus member with
-the exact code; schema drift gate green; CLI catalog snapshot test green.
+the exact code; schema drift gate green; CLI catalog snapshot green;
+`check-port-table.py` runs and reports Increment 1 rows as pending, not
+passing.
 
 **B2, authored artifacts**, owns
-`products/adapter/{profiles,packs,examples,fixtures}/**`:
-`breg-records` v1 profile; `dhis2-tracker` read pack (operations,
-declarative maps, one script seam in its own digest-pinned file, a
-pagination plan, code maps); an example project; the fixture corpus with
-upstream-version provenance on every fixture.
+`products/adapter/{profiles,packs,examples,fixtures}/**`.
+`breg-records` v1 profile (operations, problem schema and codes); the
+`dhis2-tracker` pack as route templates: search with pagination as `loop`
+plus `enrich` with `jsonArrayAppend` and `uniqueBy`, get with `choice` and
+a Rhai seam in its own digest-pinned file, code maps, `onException`
+clauses mapping DHIS2 errors to profile problems; an example project
+instantiating the templates; a bad corpus (one member per A1 check);
+read fixtures with `kind: documented`, the DHIS2 version, and the
+documentation URL (no fixture claims capture unless captured from a running
+instance, which this stream may do with a local `dhis2/core` container if
+it fits the time box; report which).
 
-DoD: envelopes correct per A2's registration; no inline scripts; every
-fixture carries provenance; corpus participates in the platform value-free
-marker once B1 wires it.
+DoD: envelopes per A2; no inline scripts; every fixture has provenance;
+the pack uses only port-table constructs.
 
 ### Wave 3, integration (single stream)
 
-Owns cross-cutting wiring only: `check-contracts.sh` gains schema drift,
-fixture replay, and corpus participation; reconciles B1/B2 drift; ticks the
-Increment 0 checklist below; updates the `CONCEPT.md` status line.
+Owns cross-cutting wiring: `check-contracts.sh` gains schema drift,
+`check-port-table.py`, fixture check, corpus participation; reconciles B1
+and B2; corrects `CONCEPT.md` where rule 11 found a contradiction; writes
+`products/adapter/reviews/increment-0.md` after the Opus review.
 
-DoD: `products/adapter/scripts/check-contracts.sh` green from a clean
-shell; clippy and fmt over the adapter crates green; the report lists every
-gate result verbatim.
+DoD: `check-contracts.sh` green from a clean shell; report lists every gate
+result verbatim.
 
-### Review gate (Opus agent, after each increment)
+## Increment 1: the read engine
 
-Verify the section-13 items that exist so far; adversarial pass: flip a
-fixture byte, unpin a digest, exceed a declared budget in a test, confirm
-the tests fail and the diagnostics carry no values. Findings only; fixes
-return to the owning streams.
+### Wave 0, scaffold (serial)
 
-## Increment 1 (streams; briefs detailed at launch)
+Creates the runtime module roots named in `CONCEPT.md` 8.1 (`exchange`,
+`route`, `processor/*` one file per EIP, `component/{direct,http,rest}`,
+`language`, `errorhandler`, `notifier`, `idempotent`) with module docs and
+no logic; adds dependencies (RFC 9535 JSONPath crate after `cargo deny
+check`, PostgreSQL driver matching the workspace's, platform crates);
+`products/adapter/scripts/test-postgres.sh` skeleton that starts and removes
+its own loopback PostgreSQL 17 container when `ADAPTER_TEST_DATABASE_URL`
+is absent; root `AGENTS.md` and `products/adapter/AGENTS.md` gate rows.
 
-- **P1, platform upstream layer**, owns `crates/registry-platform-httputil/**`
-  only: the read-class redelivery executor (attempts, backoff, bounded
-  jitter 0.1 to 0.3, matching by upstream error class; `CONCEPT.md` 8.4
-  retry row) and the circuit breaker module (CLOSED/OPEN/HALF_OPEN,
-  failure-rate threshold over a window, single-probe half-open admission).
-  Additive API; zero Evidence crate changes; Evidence adopting these is a
-  recorded follow-up candidate, not this stream's work.
-- **C1, plan interpreter**, owns `registry-adapter/src/plans/**` plus the
-  in-process upstream double (fault injection: timeout, reset, 5xx storm,
-  malformed JSON, oversized body, slow trickle, redirect attempt, duplicate
-  and drifting pages).
-- **C2, facade HTTP**, owns `registry-adapter/src/{http,auth}/**`:
-  `registry-platform-httpsec` server side, OIDC caller authentication,
-  access profiles, routes for bound operations only.
-- **C3, journal**, owns `registry-adapter/src/journal/**`: PostgreSQL
-  migrations and audit rows (metadata, digests, outcomes; no bodies),
-  `postgres-test` suite on a disposable database.
-- **C4, compile**, owns `adapterctl compile`: per-deployment OpenAPI
-  emission, byte-stable, drift-gated; Record v1 shape checked against
-  `products/breg/generated/` goldens.
-- Integration: dhis2-tracker reads end to end over the double; contract
-  tests (13.5); property tests (13.4) in the default suite.
+### Wave 1 (parallel, disjoint modules)
 
-## Increment 2 (outline)
+- **C1, exchange and core EIPs**, owns `src/{exchange,route,language}/**`,
+  `src/processor/{to,set_body,transform,set_header,set_property,remove_header,remove_property,script,choice,filter,validate,stop}.rs`,
+  and `tests/camel_{exchange,message,routes,languages,to,set_body,transform,headers_properties,script,choice,filter,validate,stop}.rs`.
+- **C2, splitting, aggregation, conversion**, owns
+  `src/processor/{split,loop,enrich}.rs`, `src/processor/aggregation/**`,
+  code-map conversion, and `tests/camel_{split,loop,enrich,aggregation,type_converter}.rs`.
+- **C3, error handling and resilience**, owns `src/errorhandler/**`,
+  `src/processor/{do_try,circuit_breaker,throttle}.rs`, and
+  `tests/camel_{error_handler,redelivery,exception_clause,try_catch_finally,circuit_breaker,throttle}.rs`.
+- **C4, components and facade**, owns `src/component/**`, `src/http/**`,
+  `src/auth/**`, the upstream double under `tests/support/upstream/**`, and
+  `tests/camel_{direct,http,rest_dsl,header_filter}.rs`: `direct`, `http` on
+  `FixedDestinationPolicy`, the `rest` consumer on `registry-platform-httpsec`
+  with OIDC and access profiles.
+- **C5, journal**, owns `src/notifier/**`, migrations, `tests/camel_event_notifier.rs`,
+  and the PostgreSQL suite: event kinds from `CONCEPT.md` 11, value-free,
+  written before the response; retention.
+- **C6, compile and replay tooling**, owns `crates/registry-adapterctl/src/{compile,fixtures,verify}/**`
+  and `tests/camel_testing.rs`: `adapterctl compile` (byte-stable OpenAPI
+  into the built package, Record v1 shape against `products/breg/generated/`),
+  `fixtures replay` (intercept and skip semantics), `verify --live` (tested
+  against the double; a live DHIS2 run is Jeremi's optional step).
 
-Write plans under `stopOnFirstFailure`; the idempotency journal and replay
-(evaluate `registry-platform-dispatch`'s idempotency-key recipe under the
-two-system rule first; adopt it or record why not); DHIS2 import-summary
-mapping, partial-acceptance 409 with counts only, conflict fixtures;
-`test-postgres.sh`; the writes' property tests from 13.4.
+Each C stream ports its rows completely, every option and default the
+Camel page documents within the port's boundaries, with conformance cases
+per rule 11.
 
-## Increment 3 (outline)
+### Wave 2, integration
 
-The `graphql` envelope executor (ladder rung 1, mechanism only); the
-`opencrvs` pack, reads first, then writes (draft, declare); fixtures with
-provenance; gates extended to the new pack.
+Wires C1 to C6 into one engine; dhis2-tracker search and get end to end
+over the double and by replay; fault injection (13.4), read property tests
+(13.5), contract tests (13.6), security tests (13.7) in the default suite;
+`check-port-table.py` now requires every Increment 1 row; review report.
 
-## Platform improvement rules
+## Increment 2: writes
 
-- Mechanism moves up into platform crates; product logic never does.
-- Additions are additive; consuming products' served behavior is frozen.
-  Evidence's adoption of new shared pieces is a later decision on
-  Evidence's schedule, never adapter scope.
-- Candidates register: httputil redelivery and breaker (Increment 1,
-  needed); dispatch idempotency-key recipe (Increment 2, evaluate first);
-  script JSON-to-Rhai conversion helpers (when mapping seams need them).
+Scaffold: none needed beyond migrations, which D1 owns.
+
+- **D1, idempotent consumer**, owns `src/idempotent/**`, its migrations,
+  `src/processor/idempotent_consumer.rs`, `tests/camel_idempotent_consumer.rs`:
+  Camel's options and defaults, our divergences (`CONCEPT.md` 9), the
+  PostgreSQL store with retention sweep, replay, in-flight 409, digest
+  mismatch 422; security review note on D12.
+- **D2, DHIS2 writes**, owns pack, example, and fixture files for create and
+  update: import summary via `choice` and `validate`, partial acceptance 409
+  with counts only, conflict mapping via `onException`, `documented` write
+  fixtures. No `.rs` change.
+- Integration: write property tests (idempotency, mapping totality), write
+  security tests, write-safety refusals live, review report.
+
+Precondition: Jeremi decides D16 (accepted but not complete) before this
+increment starts; until then such a route is refused and the increment
+proceeds on synchronous outcomes only.
+
+## Increment 3: the second system
+
+Pre-launch check (orchestrator, before any stream): confirm from current
+OpenCRVS documentation which API the current release exposes for reads and
+registration (GraphQL gateway or REST events API), and send the finding to
+the lead reviewer before launching.
+
+- **E1, graphql component** (if OpenCRVS is GraphQL), owns
+  `src/component/graphql.rs`, `tests/camel_graphql.rs`; its own commit.
+- **E2, write resume**, owns resume bindings in core and runtime and the
+  resume property test; its own commit; port-table entry added as an
+  addition.
+- **E3, opencrvs pack**, owns `products/adapter/packs/opencrvs/**`, its
+  example and fixtures: reads, then draft and declare writes. Its commits
+  change no `.rs` file.
+- Integration: both packs' example projects served by one binary; review
+  report; final multi-expert review (security, Camel semantics, contracts,
+  data minimization) recorded as `products/adapter/reviews/final.md`.
+
+## Platform rules
+
+- Mechanism moves into platform crates only under the two-system rule; this
+  program adds none. The redelivery, breaker, and throttle processors are
+  adapter-local (D13).
+- The only platform edits are A2's registration and amendment in
+  `products/platform/**`. No Evidence crate changes.
 
 ## Brief template
 
@@ -194,62 +279,72 @@ Stream: <id>, Increment <n>, Wave <m>
 Worktree: /Users/jeremi/orca/workspaces/registry-stack/live-adapter
 Expected HEAD: <sha captured at launch>
 You own these paths (create or edit only these): <paths>
-Read first: products/adapter/CONCEPT.md sections <s>; this plan's rules
-and your stream DoD.
+Read first: products/adapter/CONCEPT.md sections <s> and the port-table
+rows <rows>; this plan's rules and your stream DoD.
 Task: <one-paragraph scope>
-Rules: the ten rules in products/adapter/DELIVERY-PLAN.md "Rules every
+Rules: the eleven rules in products/adapter/DELIVERY-PLAN.md "Rules every
 agent works under", all of them.
 DoD: <stream DoD, copied>
-Report: what landed, what did not, gate output verbatim, any shared-file
-need you stopped on.
+Report: what landed, what did not, gate output verbatim, every Camel page
+you cited and any contradiction with CONCEPT.md, any shared-file need you
+stopped on.
 ```
 
-## Launch checklist (per wave)
+## Increment acceptance (runnable, from the worktree root)
 
-1. Capture the wave's base HEAD SHA; confirm stream ownership paths are
-   disjoint.
-2. Instantiate briefs from the template; S0-style single streams do not
-   need parallel verification.
-3. After the wave: integration stream verifies, commits reconciliations.
-4. After the increment: review gate, then Jeremi reviews the branch before
-   any PR.
+`CARGO` below abbreviates
+`CARGO_TARGET_DIR=/Volumes/CodexWorktrees/target/live-adapter PATH="$HOME/.cargo/bin:$PATH" cargo`.
 
-## Increment acceptance (what Jeremi runs)
-
-Increment 0, from the worktree root:
+Increment 0:
 
 1. `products/adapter/scripts/check-contracts.sh` exits 0.
-2. `CARGO_TARGET_DIR=/Volumes/CodexWorktrees/target/live-adapter PATH="$HOME/.cargo/bin:$PATH" cargo run --locked -p registry-adapterctl -- check <example-project-path>` exits 0 with a value-free report; the integration report names the exact path and arguments.
-3. `git --no-optional-locks log --oneline origin/main..HEAD` shows conventional subjects, and every commit body carries exactly one DCO trailer.
-4. `rg -n 'registry-adapter' AGENTS.md` shows the routing row.
+2. `CARGO run --locked -p registry-adapterctl -- check products/adapter/examples/dhis2-tracker/project.yaml`
+   exits 0 with a value-free report (the integration report names the
+   exact path if it differs).
+3. Each bad corpus member fails `check` with its expected code (driven by
+   the gate).
+4. `python3 products/adapter/scripts/check-port-table.py` exits 0.
+5. `git --no-optional-locks log --format='%H %s' origin/main..HEAD` shows
+   conventional subjects; every commit body has exactly one DCO trailer and
+   no agent attribution trailer.
+6. `CARGO check --locked --workspace --all-targets` and
+   `python3 .github/scripts/test_ci_changes.py` exit 0.
 
-Each later increment's acceptance commands are added here at its launch,
-before its streams start, in the same runnable form.
+Increment 1:
 
-Increment 1, from the worktree root (all must exit 0):
-
-1. `products/adapter/scripts/check-contracts.sh` (now includes the
-   contract tests of 13.5 and property tests of 13.4).
-2. `CARGO_TARGET_DIR=/Volumes/CodexWorktrees/target/live-adapter PATH="$HOME/.cargo/bin:$PATH" cargo test --locked -p registry-adapter` (double-driven end-to-end reads included).
-3. `... cargo run --locked -p registry-adapterctl -- compile <example-project-path>` emits `openapi.json` into the built package; a second run is byte-identical.
+1. Increment 0's commands still pass.
+2. `products/adapter/scripts/test-postgres.sh` exits 0 and reports a
+   nonzero number of journal tests run.
+3. `CARGO test --locked -p registry-adapter` includes every
+   `camel_*` module for Increment 1 rows, the fault-injection suite, and
+   the end-to-end reads over the double.
+4. `CARGO run --locked -p registry-adapterctl -- compile <example project>`
+   twice yields byte-identical `openapi.json`.
+5. `CARGO run --locked -p registry-cli-docs -- --check` (or the snapshot
+   test) passes; `CARGO clippy --workspace --all-targets -- -D warnings`
+   exits 0.
 
 Increment 2:
 
-1. `products/adapter/scripts/test-postgres.sh` exits 0 on a disposable
-   database (journal, idempotency replay, step-failure replay).
-2. Increment 1's commands still pass, including the write fixtures in
-   `check-contracts.sh` fixture replay.
+1. Increments 0 and 1 commands still pass.
+2. `test-postgres.sh` includes the idempotency store, replay, and sweep
+   suites.
+3. Write fixtures replay in `check-contracts.sh`.
+4. `git --no-optional-locks diff --name-only <first D2 commit>^ <last D2 commit> | rg '\.rs$'`
+   prints nothing.
 
 Increment 3:
 
-1. `check-contracts.sh` replays the `opencrvs` fixture suite with
-   provenance, green.
-2. `... cargo run --locked -p registry-adapterctl -- check <opencrvs-example-path>` exits 0.
+1. All earlier commands still pass.
+2. `check` and replay pass for the `opencrvs` example.
+3. The no-Rust diff check passes for the E3 commits.
+4. `products/adapter/reviews/final.md` exists, and each finding is fixed
+   or listed open.
 
-Global (CONCEPT.md section 14): the same engine serves both packs' example
-projects; `adapterctl check` is green on every maintained pack; every gate
-in 13.1 exists and is green; the review-gate report from each increment is
-recorded under `products/adapter/reviews/`.
+Global definition of done: `CONCEPT.md` section 14, items 1 to 6, each
+verified by the commands above. The final report to Jeremi states the count
+of `captured` and `documented` fixtures, every open finding, every
+contradiction rule 11 surfaced, and the decisions still pending (D7 to D16).
 
 ## Increment checklist
 
