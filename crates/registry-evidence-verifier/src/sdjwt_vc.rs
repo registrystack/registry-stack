@@ -360,10 +360,9 @@ pub fn evidence_payload_from_claims(
     }
     projected.sort_by_key(|(position, _)| *position);
     for (position, value) in projected {
-        if position > supported_values.len() {
-            return Err(SdJwtVcClaimError::ClaimShape);
-        }
-        supported_values.insert(position, value);
+        // A presentation may withhold outputs, so a position can point past
+        // the outputs that remain; such a value goes last.
+        supported_values.insert(position.min(supported_values.len()), value);
     }
 
     let mut payload = serde_json::json!({

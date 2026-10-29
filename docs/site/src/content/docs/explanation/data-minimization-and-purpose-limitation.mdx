@@ -6,7 +6,7 @@ owner: registry-docs
 source_repos:
   - registry-stack
   - registry-evidence
-last_reviewed: "2026-08-08"
+last_reviewed: "2026-10-29"
 doc_type: explanation
 locale: en
 standards_referenced:
@@ -64,11 +64,19 @@ format. That format is a second encoding of the same assertion, never a credenti
 signed body carries a SHA-256 digest of each selectively disclosable value, so a holder can later
 present a subset. A value uses one disclosure by default. A governed structured value can instead
 place each direct field in a separate disclosure while keeping nested field values atomic. Two
-limits matter to a reviewer. The issuer appends every disclosure, so the response the caller
-receives reveals the same set as the signed JWS, and holder-side omission is outside this version.
-Registry Evidence also runs no wallet interaction and speaks no part of OID4VCI. Under the default
-audience-scoped binding mode a caller may supply a holder public key that Registry Evidence echoes
-into the `cnf` claim for a relying party to check itself, and nothing verifies it.
+points matter to a reviewer. The issuer appends every disclosure, so the response the caller
+receives reveals the same set as the signed JWS. Holder-side omission works on whole outputs
+only: a holder may withhold an output, a signed digest with no presented disclosure, and the
+verifier accepts the result when the relying party's policy does not require that output. An
+output the policy marks required must be disclosed, a disclosed output must match its declared
+concept and form, and a structured value is disclosed whole or not at all, so a presentation that
+shows some fields of one and withholds the others is refused. The verifier never accepts a
+shortened value. Registry Evidence runs no wallet interaction of its own; the experimental
+`evidence-oid4vci` service beside it delivers the credential to a wallet (see [OID4VCI
+issuance](../../configure/evidence-oid4vci/)), and the holder's wallet decides what to present.
+Under the default audience-scoped binding mode a caller may supply a holder public key that
+Registry Evidence echoes into the `cnf` claim for a relying party to check itself, and nothing
+verifies it.
 
 A requirement may instead declare the holder-bound subject binding mode, which changes what the
 credential is bound to and moves the audience check from issuance to presentation. The service

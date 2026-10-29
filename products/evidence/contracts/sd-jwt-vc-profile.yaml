@@ -163,8 +163,8 @@ verifier_rules:
   - Resolve kid only in the pinned provider key set.
   - Reject a policy-denied kid before selecting a pinned public key.
   - Verify the issuer-signed JWT signature before parsing or acting on any claim or disclosure.
-  - Recompute every root-value and structured-field disclosure digest and require an exact match against its owning _sd; reject unmatched disclosures and unmatched digests alike.
-  - Require the exact expected concept identifiers, value forms, and cardinalities after digest verification; missing, extra, duplicated, or wrongly formed output fails even under a valid signature.
+  - Recompute every presented root-value and structured-field disclosure digest and require an exact match against its owning _sd; reject unmatched, duplicated, and unreferenced disclosures. A signed digest with no presented disclosure is a withheld output, not an error, except that a structured value is disclosed whole or not at all: presenting some of its fields but not every one is rejected.
+  - Require the exact expected concept identifiers, value forms, and cardinalities after digest verification; a missing required output, and any extra, duplicated, or wrongly formed output, fails even under a valid signature. An optional output the presentation withholds is absent from the result and is not an error.
   - Require the exact independently expected assurance profile; a local assertion never satisfies a production or evidence-grade expectation.
   - Require the exact expected role-bound subject bindings as an unordered set, compared only after signature verification, from independent trusted state.
   - Require the exact request nonce from the independently retained original request. Nonce reuse is not replay prevention and is not rejected by the runtime.
