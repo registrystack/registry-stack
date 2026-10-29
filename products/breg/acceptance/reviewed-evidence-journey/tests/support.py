@@ -129,7 +129,6 @@ class Harness:
         log.close()
         self.processes.append(process)
         deadline = time.monotonic() + 40
-        last_failure = "not ready"
         while True:
             if process.poll() is not None:
                 raise RuntimeError(f"{name} stopped before readiness; inspect protected log")

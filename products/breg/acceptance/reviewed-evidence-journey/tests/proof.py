@@ -25,7 +25,15 @@ def check_minimized(payload, expected):
     encoded = json.dumps(payload)
     assert not any(
         value in encoded
-        for value in ("PRIVATE-CANARY", "SYNTHETIC-LIVE", '"label"', '"status"', '"registrationNumber"')
+        for value in (
+            "PRIVATE-CANARY",
+            "SYNTHETIC-LIVE",
+            '"label"',
+            '"status"',
+            '"active"',
+            '"retired"',
+            '"registrationNumber"',
+        )
     ), "private source values disclosed"
 
 

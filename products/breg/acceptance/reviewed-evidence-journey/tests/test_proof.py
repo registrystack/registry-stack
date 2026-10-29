@@ -83,6 +83,12 @@ class DisclosureTests(unittest.TestCase):
                 ],
                 "label": "PRIVATE-CANARY",
             },
+            {
+                "supportedValues": [
+                    {"providesValueFor": "urn:example:concept:record-active:active", "value": True}
+                ],
+                "sourceState": "retired",
+            },
         ]:
             with self.subTest(payload=payload), self.assertRaises(AssertionError):
                 check_minimized(payload, True)
