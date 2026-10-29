@@ -1,7 +1,9 @@
 # Adapter Delivery Plan
 
 Status: active, revised 2026-10-30 for the Camel port (`CONCEPT.md` D7 to
-D15). Companion to `CONCEPT.md`: the concept is the product contract; this
+D15) and again the same day for the exchange contract (`CONCEPT.md` 8.11,
+D20 to D28), which the first API transformation experiments showed the
+Increment 1 runtime could not be designed without. Companion to `CONCEPT.md`: the concept is the product contract; this
 file decomposes its section 14 into parallel workstreams with definitions of
 done and runnable acceptance commands. On any conflict, `CONCEPT.md` wins.
 
@@ -87,7 +89,17 @@ reviewer's feedback and, where the plan should change, a doc commit before
 the next increment launches. The report lands as
 `products/adapter/reviews/increment-<n>-staff.md`.
 
-## API transformation experiments (after Increment 1, again after 3)
+## API transformation experiments (before Increment 1, after it, after 3)
+
+The first run happened on the Increment 0 model, before any runtime: five
+experiments (FHIR R4 search and conditional create, GraphQL cursor paging,
+REST offset paging over mTLS with `private_key_jwt`, and a FHIR-shaped
+second target profile) all passed `check` and still could not have run.
+Their eight P0 gaps became `CONCEPT.md` 8.11; their check defects became
+Increment 0's closing round; their P1 gaps are assigned to Increment 1
+streams below. `products/adapter/experiments/FINDINGS.md` holds the record.
+The experiments are rerun after Increment 1, migrated to 8.11, and after
+Increment 3.
 
 Owned by the lead reviewer, under `products/adapter/experiments/**`, no
 `.rs` file. Each experiment is a pack, a profile, a project, and
@@ -231,6 +243,33 @@ and B2; corrects `CONCEPT.md` where rule 11 found a contradiction; writes
 DoD: `check-contracts.sh` green from a clean shell; report lists every gate
 result verbatim.
 
+### Closing rounds (staff review)
+
+Increment 0 closes when the lead reviewer's staff-review rounds have
+landed, recorded in `products/adapter/reviews/increment-0-staff.md`. The
+last round carries the experiments' check defects (FINDINGS.md C1 to C23,
+O8, O9), split by owner:
+
+- A1 (core): header writes and reads bounded, credential and hop-by-hop
+  headers refused on `setHeader` (C3, security); `tokenEndpoint` parsed as
+  an https URL, loopback http only (C13, security); origin-relative static
+  `path` (C1, C17); every `path` placeholder bound and every binding used
+  (C12); `okStatusCodeRange` grammar (C2); apiKey `headerName` a token and
+  not reserved (C10); no http parameters on `graphql:` (C11); GraphQL
+  safety from the operation type (C19); envelope literals constrain the
+  result schema (C16); envelope parse errors and the fixture body check
+  (C15); one finding per defect and full pointers (C6, C7); the core halves
+  of C8 and C9; problem codes inside the profile (C14).
+- B1 (ctl): script parse errors and missing entrypoints in every slot (C8);
+  query-file parse and `operationName` declared (C9); schema drift (C22).
+- B2 (artifacts): the `dhis2-tracker` pack respelled to the kebab classes
+  (C23); `shape-records.rhai` self-contained (O8); only a 404 maps to
+  not-found on the read (O9); corpus members for C3 and C13.
+
+C18 (a problem body built in a fallback passes as a success) and C20 (a
+FHIR `POST _search` counts as a write) are resolved by 8.11.6 and the
+`safeUpstream` claim, and land in Increment 1 stream X1.
+
 ## Increment 1: the read engine
 
 ### Wave 0, scaffold (serial)
@@ -242,19 +281,67 @@ no logic; adds dependencies (RFC 9535 JSONPath crate after `cargo deny
 check`, PostgreSQL driver matching the workspace's, platform crates);
 `products/adapter/scripts/test-postgres.sh` skeleton that starts and removes
 its own loopback PostgreSQL 17 container when `ADAPTER_TEST_DATABASE_URL`
-is absent; root `AGENTS.md` and `products/adapter/AGENTS.md` gate rows.
+is absent; root `AGENTS.md` and `products/adapter/AGENTS.md` gate rows. The
+AEAD for the continuation cursor (8.11.2) is one already in the workspace
+(`aws-lc-rs` AES-256-GCM, or `chacha20poly1305` as BReg uses), chosen here
+with the reason recorded.
+
+### Wave 0b, the exchange contract in the format (serial: X1, then X2)
+
+The runtime streams build against these types, so they land first.
+
+**X1, contract model and checks**, owns `crates/registry-adapter-core/**`.
+Reader types and pure checks for `CONCEPT.md` 8.11: the profile's
+`problems` list (`code`, `status`, `title`, `classes`) replacing
+`problemCodes`, with the totality check (every class resolves to exactly
+one problem, by closest match, uncatchable and facade classes included);
+the `outcome` and `facade` class branches; the `throwException` step
+(`exceptionType` catchable, `message` constant and bounded); `httpUri` on
+`http` sends (exactly one of `path` and `httpUri`, no `query` beside it);
+the endpoint's `requestHeaders` allowlist and its never-allowlistable set;
+the `safeUpstream` operation claim, `POST` only, feeding write safety (C20);
+the read-only facade inputs of 8.11.1 (refusing writes to them except
+`AdapterNextContinuation`) and the header-read bound of 8.11.4; the
+singular-query predicate rule of 8.11.8; runtime config `cursorKeyRef`,
+`previousCursorKeyRef`, `cursorTtlSeconds`; and the P1 format gaps:
+`recordException` and `ignoreException` on `circuitBreaker`
+(G-BREAKERCLASS, resilience4j names), per-endpoint `connectTimeoutSeconds`
+and `responseTimeoutSeconds` (G-TIMEOUT, Camel's http options), a CA bundle
+and mTLS identity for the token endpoint (G-TOKENTLS), `maximumIterations`
+as a typed template parameter and `maximumTotal` checked against the loop
+bound (G-BOUNDS). DoD as A1's, plus an accept and a reject unit test per
+new check asserting its `adapter.*` code.
+
+**X2, contract tooling and artifacts**, owns `crates/registry-adapterctl/**`
+and `products/adapter/{schemas,profiles,packs,examples,fixtures}/**`.
+The per-file script call check of 8.11.3; schema regeneration; both
+profiles gain `problems`; the `dhis2-tracker` pack drops every
+profile-shaped problem body and `CamelHttpResponseCode` write in favor of
+`throwException` with `outcome.*` classes (C18), and its search route sets
+`AdapterNextContinuation`; corpus members for every new check. DoD: the
+pack names no profile problem code (acceptance 9 below); check accepts the
+good corpus and refuses each new bad member with its code.
 
 ### Wave 1 (parallel, disjoint modules)
 
 - **C1, exchange and core EIPs**, owns `src/{exchange,route,language}/**`,
-  `src/processor/{to,set_body,transform,set_header,set_property,remove_header,remove_property,script,choice,filter,validate,stop}.rs`,
-  and `tests/camel_{exchange,message,routes,languages,to,set_body,transform,headers_properties,script,choice,filter,validate,stop}.rs`.
+  `src/processor/{to,set_body,transform,set_header,set_property,remove_header,remove_property,script,choice,filter,validate,stop,throw_exception}.rs`,
+  and `tests/camel_{exchange,message,routes,languages,to,set_body,transform,headers_properties,script,choice,filter,validate,stop,throw_exception}.rs`:
+  the script ABI of 8.11.3 (exchange view, JSON mapping, per-slot returns),
+  the JSONPath result rule of 8.11.8, and the read-only facade inputs.
 - **C2, splitting, aggregation, conversion**, owns
   `src/processor/{split,loop,enrich}.rs`, `src/processor/aggregation/**`,
-  code-map conversion, and `tests/camel_{split,loop,enrich,aggregation,type_converter}.rs`.
+  code-map conversion, and `tests/camel_{split,loop,enrich,aggregation,type_converter}.rs`:
+  `enrich` on a copy with strategy-named `properties` (8.11.7), and `loop`'s
+  `doWhile` timing and `copy` semantics from the Camel page (G-LOOPTIMING).
 - **C3, error handling and resilience**, owns `src/errorhandler/**`,
   `src/processor/{do_try,circuit_breaker,throttle}.rs`, and
-  `tests/camel_{error_handler,redelivery,exception_clause,try_catch_finally,circuit_breaker,throttle}.rs`.
+  `tests/camel_{error_handler,redelivery,exception_clause,try_catch_finally,circuit_breaker,throttle}.rs`:
+  the clause semantics of 8.7 and 8.11.6 (a handled clause answers with a
+  success body; `throwException` inside a clause ends the exchange; an
+  uncatchable in the chain fires no clause), `direct:` error propagation
+  without redelivery (8.11.7), the class-to-problem resolution, and the
+  breaker's `recordException` and `ignoreException`.
 - **C4, components and facade**, owns `src/component/**`, `src/http/**`,
   `src/auth/**`, the upstream double under `tests/support/upstream/**`, and
   `tests/camel_{direct,http,rest_dsl,header_filter}.rs`: `direct`, `http` on
@@ -264,12 +351,22 @@ is absent; root `AGENTS.md` and `products/adapter/AGENTS.md` gate rows.
   the token cache, the single refresh after a 401, `credential.rejected`,
   and mTLS identity, plus `tests/camel_http_authentication.rs` with one
   module per kind against a double token endpoint, and a marker secret
-  asserted absent from journal, diagnostics, and replay output.
+  asserted absent from journal, diagnostics, and replay output. The same
+  stream owns the facade inputs of 8.11.1, the continuation codec of 8.11.2
+  (`src/component/rest/continuation.rs`, `tests/adapter_continuation.rs`:
+  tamper, expiry, other caller, other filters, key rotation), the header
+  allowlists of 8.11.4, `httpUri` pinning of 8.11.5
+  (`tests/camel_http_uri.rs`), the JSON media types, and the per-endpoint
+  timeouts. Security-sensitive: the report carries review notes for the
+  codec and the header filter.
 - **C5, journal**, owns `src/notifier/**`, migrations, `tests/camel_event_notifier.rs`,
   and the PostgreSQL suite: event kinds from `CONCEPT.md` 11, value-free,
   written before the response; retention.
-- **C6, compile and replay tooling**, owns `crates/registry-adapterctl/src/{compile,fixtures,verify}/**`
-  and `tests/camel_testing.rs`: `adapterctl compile` (byte-stable OpenAPI
+- **C6, compile and replay tooling**, owns `crates/registry-adapterctl/src/{compile,fixtures,verify}/**`,
+  the `AdapterFixture` format change, and `tests/camel_testing.rs`: the
+  fixture format carries what replay needs (G-FIXTURES: the facade request,
+  several upstream exchanges per entry in order, request and response
+  headers, JSON `null`, an expected problem by class and code); `adapterctl compile` (byte-stable OpenAPI
   into the built package, composed from the profile's envelopes and the
   declared model; the `breg-records` output checked against
   `registry-record` goldens (dev-dependency) and `products/breg/generated/`),
@@ -284,9 +381,20 @@ per rule 11.
 
 Wires C1 to C6 into one engine; dhis2-tracker search and get end to end
 over the double and by replay, under both the `breg-records` profile and
-the test profile; fault injection (13.4), read property tests
-(13.5), contract tests (13.6), security tests (13.7) in the default suite;
-`check-port-table.py` now requires every Increment 1 row; review report.
+the test profile, with an identical pack (errors included); fault injection
+(13.4), read property tests (13.5), contract tests (13.6), security tests
+(13.7) in the default suite; `check-port-table.py` now requires every
+Increment 1 row; review report. Then the lead reviewer migrates the
+experiments to 8.11 and reruns them; a gap that still needs Rust is a
+finding against this increment.
+
+P1 gaps from the first experiments not owned above, with their
+disposition: G-IDEMCLAIM (an `idempotentUpstream` or `safeUpstream` claim
+needs a comment citing its source documentation, enforced by review, not
+by `check`); G-COMPARE (no comparison language: Simple stays not ported,
+a status or value comparison is a one-line `rhai` predicate; revisited if
+the reruns show it in most packs); G-LOOPCLASS (resolved in 8.7);
+G-CONTENTTYPE (resolved in 8.11.8, built by C4).
 
 ## Increment 2: writes
 
@@ -375,6 +483,9 @@ Increment 0:
    no agent attribution trailer.
 6. `CARGO check --locked --workspace --all-targets` and
    `python3 .github/scripts/test_ci_changes.py` exit 0.
+7. `CARGO run --locked -p registry-adapterctl -- schemas --check` exits 0.
+8. Every closing-round item above is fixed or listed open in
+   `products/adapter/reviews/increment-0-staff.md`.
 
 Increment 1:
 
@@ -395,6 +506,13 @@ Increment 1:
    nothing (dev-dependency only).
 7. `CARGO test --locked -p registry-adapter --test camel_http_authentication`
    runs a nonzero number of tests covering each of the six kinds.
+8. `CARGO test --locked -p registry-adapter --test adapter_continuation`
+   and `--test camel_http_uri` run a nonzero number of tests.
+9. `rg -n 'CamelHttpResponseCode|source\.(not-found|unavailable|upstream-error|write-rejected|write-partial)' products/adapter/packs`
+   prints no `setHeader` of the response code and no profile problem code
+   (packs raise classes; profiles own problems).
+10. `adapterctl check` exits 0 for every experiment under
+    `products/adapter/experiments/`, and `FINDINGS.md` carries the rerun.
 
 Increment 2:
 
@@ -413,11 +531,11 @@ Increment 3:
 4. `products/adapter/reviews/final.md` exists, and each finding is fixed
    or listed open.
 
-Global definition of done: `CONCEPT.md` section 14, items 1 to 8, each
+Global definition of done: `CONCEPT.md` section 14, items 1 to 9, each
 verified by the commands above. The final report to Jeremi states the count
 of `captured` and `documented` fixtures, every open finding, every
 contradiction rule 11 surfaced, and the decisions still pending (D7 to D16,
-D18, D19).
+D18 to D28).
 
 ## Increment checklist
 

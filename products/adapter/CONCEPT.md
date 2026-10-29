@@ -185,10 +185,10 @@ today, not what a profile family could someday offer.
 
 | Artifact | Kind | Registered format | Contains |
 |---|---|---|---|
-| Facade profile | Authored, versioned, maintained by us | `AdapterProfile` | Operation set by id, methods and paths, request and response envelope templates, pagination parameters, problem codes and problem envelope, parameterized parts. First: `breg-records` v1 |
+| Facade profile | Authored, versioned, maintained by us | `AdapterProfile` | Operation set by id, methods and paths, request and response envelope templates, pagination parameters, the problem envelope and the `problems` list mapping error classes to problems (section 8.11.6), parameterized parts. First: `breg-records` v1 |
 | Adapter pack | Authored, versioned, reviewed | `AdapterPack` | Per source system, Kamelet-style: endpoint declarations (component, auth kind, tested upstream versions), route templates with typed template parameters, internal `direct:` routes, code maps, script references (own files, digest-pinned), required engine capabilities |
 | Adapter project | Authored, top-level | `AdapterProject` | Declared record types and fields, profile and pack references pinned by version and digest, `templatedRoutes` instantiating pack templates, bindings of concrete contract operations to route ids, access profiles |
-| Runtime config | Operator | `AdapterRuntimeConfig` | Environment bindings: endpoint base URLs and TLS, secret references, `allowedPrivateCidrs`, listener, database, OIDC, audit retention, from platform shared blocks |
+| Runtime config | Operator | `AdapterRuntimeConfig` | Environment bindings: endpoint base URLs and TLS, secret references (credentials and the cursor key `cursorKeyRef`), `allowedPrivateCidrs`, listener, database, OIDC, audit retention, from platform shared blocks |
 | Fixture suite | Authored, per pack | `AdapterFixture` | Recorded upstream exchanges with expected facade responses, each with provenance (section 13.3) |
 | Generated outputs | Build artifacts | read-back, drift-gated | Per-deployment facade OpenAPI and computed schemas, emitted by `adapterctl compile` into the built package |
 
@@ -220,11 +220,18 @@ vocabulary the engine fills: `record` (one validated route result),
 `nextCursor`, `requestId`, and, in the problem envelope, `problemCode`,
 `problemTitle`, `problemDetail`, `status`. Request envelopes name where the
 writable record sits in an incoming body; pagination parameters name the
-cursor and page-size query parameters and their bounds. `adapterctl check`
-refuses an unknown slot, a response envelope without its result slot, and a
-problem envelope without its code slot. The engine owns the mechanism
-(filling slots, encoding cursors, setting the status); the profile owns
-every name and shape a caller sees.
+cursor and page-size query parameters and their bounds. The profile's
+`problems` list declares each problem a caller can receive (`code`,
+`status`, `title`, and the error `classes` it answers, section 8.11), so a
+pack raises error classes and never names a profile's problem codes or
+builds a problem body. `adapterctl check` refuses an unknown slot, a
+response envelope without its result slot, a problem envelope without its
+code slot, and a profile under which some error class resolves to no
+problem or to more than one. The engine owns the mechanism (filling slots,
+encoding cursors, setting the status); the profile owns every name and
+shape a caller sees. Section 8.11 is the contract between the three: what
+the facade places on the exchange, what a route hands back, and how errors
+become problems.
 
 This keeps three artifacts independent: a pack knows a source system and
 produces records in the project's declared model; a profile knows a target
@@ -299,10 +306,13 @@ steps; our components speak exactly one data format, so the step would be
 noise).
 
 What enters the exchange is declared. The `rest` consumer places only the
-bound operation's validated path, query, and body parameters on it; the
-`http` component copies upstream response headers onto it only where the
-endpoint declares them (Camel's `HeaderFilterStrategy`, ported as an
-allowlist). Credentials, base URLs, and secrets never enter the exchange.
+bound operation's validated inputs on it, under the closed names of section
+8.11.1; the `http` component copies upstream response headers onto it only
+where the endpoint declares them, and sends exchange headers upstream only
+where the endpoint's `requestHeaders` allowlist names them (Camel's
+`HeaderFilterStrategy`, ported as two allowlists, section 8.11.4).
+Credentials, base URLs, and secrets never enter the exchange, and no
+expression or header can carry them out.
 
 ### 8.3 Routes and the YAML DSL
 
@@ -390,11 +400,14 @@ otherwise. Section 8.10 is the authoritative list.
   `setProperty`, `removeHeader`, `removeProperty`, `script` (runs an
   expression for effect on properties without changing the body, as Camel's
   `script` EIP).
-- Routing: `to` (send to an endpoint; static URI, no `toD`), `choice` with
-  `when` and `otherwise` (first matching predicate wins), `filter` (nested
-  steps run only on match; `CamelFilterMatched` is set; the route continues
-  after the filter either way), `stop`, `validate` (a failing predicate
-  raises the `validation` class).
+- Routing: `to` (send to an endpoint; static URI, no `toD`; an `http` send
+  may follow an origin-pinned link through `httpUri`, section 8.11.5),
+  `choice` with `when` and `otherwise` (first matching predicate wins),
+  `filter` (nested steps run only on match; `CamelFilterMatched` is set; the
+  route continues after the filter either way), `stop`, `validate` (a
+  failing predicate raises the `validation` class), `throwException`
+  (raises a declared catchable error class with a constant message, section
+  8.11.6).
 - Splitting and aggregation: `split` (`expression`, `aggregationStrategy`
   default returns the original message, `stopOnException` default false,
   `CamelSplitIndex`, `CamelSplitSize`, `CamelSplitComplete`, plus the
@@ -421,10 +434,23 @@ otherwise. Section 8.10 is the authoritative list.
   `throttle.rejected`).
 - Idempotency: `idempotentConsumer` (section 9).
 
-Pagination is not an EIP and gets none: it is `loop` with `doWhile` over the
-upstream cursor, an `enrich` per page with `jsonArrayAppend` and `uniqueBy`,
-so duplicate and shifting pages fail the exchange instead of merging
-silently.
+Pagination is not an EIP and gets none. The facade side is the
+continuation contract of section 8.11.2: the route reads
+`AdapterContinuation` and sets `AdapterNextContinuation`; the engine owns
+the caller-facing cursor. Two upstream shapes cover the sources seen so far:
+
+- One facade page per upstream page (the default, and the cheapest bound):
+  one `to` whose query or `httpUri` comes from `AdapterContinuation`, then a
+  `setProperty` of `AdapterNextContinuation` from the upstream's cursor,
+  offset, or next link, absent on the last page.
+- Several upstream pages per facade page: `loop` with `doWhile` over a
+  property holding the upstream cursor, an `enrich` per page with
+  `jsonArrayAppend`, `uniqueBy`, and `properties` (which carries the next
+  cursor or link out of the reply, section 8.11.7), so duplicate and
+  shifting pages fail the exchange instead of merging silently; the loop's
+  `maximumIterations` bounds the calls, and reaching it raises
+  `loop.maximum-iterations-reached` unless the route stops earlier and hands
+  the remainder back as `AdapterNextContinuation`.
 
 ### 8.7 Error handling
 
@@ -435,26 +461,48 @@ hierarchy wins, across the error and its cause; `onWhen` narrows a clause.
 
 ```
 upstream
-  upstream.http          HttpOperationFailedException: status outside okStatusCodeRange (CamelHttpResponseCode set)
+  upstream.http                      HttpOperationFailedException: status outside okStatusCodeRange (CamelHttpResponseCode set)
   upstream.timeout
   upstream.connection
-  upstream.malformed     body not JSON, or over the depth bound
-  upstream.tooLarge
-  upstream.redirect      redirects are never followed
-breaker.open             CallNotPermittedException
-throttle.rejected        ThrottlerRejectedExecutionException
-validation               PredicateValidationException
-conversion.unmapped      NoTypeConversionAvailableException: a code map has no entry
+  upstream.malformed                 body not JSON, or over the depth bound
+  upstream.too-large
+  upstream.redirect                  redirects are never followed
+breaker.open                         CallNotPermittedException
+throttle.rejected                    ThrottlerRejectedExecutionException
+loop.maximum-iterations-reached      a doWhile loop still true at maximumIterations
+validation                           PredicateValidationException
+conversion.unmapped                  NoTypeConversionAvailableException: a code map has no entry
 aggregation.duplicate
-script                   script error inside its budget
+script                               script error inside its budget
+outcome                              raised by a pack (throwException), never by the engine
+  outcome.not-found                  the source has no such record
+  outcome.conflict                   the source refused the write as conflicting
+  outcome.invalid-request            the source refused the request as malformed for it
+  outcome.rejected                   the source refused the write for its own reasons
 ```
+
+Class names are kebab-case segments joined by dots. The `outcome` branch is
+an addition: it is how a pack says what a source meant (a 404, an import
+summary with status ERROR inside a 200) in profile-neutral terms, and the
+profile decides the problem a caller sees (section 8.11.6).
 
 Uncatchable, terminal, journaled (an addition with no Camel equivalent):
 `budget.exhausted`, `credential.rejected` (the upstream refused the
 deployment's credential after the single token refresh of section 10.2; it
 sits outside `upstream` so no clause for `upstream` matches it),
-`disclosure.violation`, `egress.refused`, `script.budgetExceeded`. No `onException` or `doCatch` may name them;
-`adapterctl check` refuses a clause that does.
+`disclosure.violation`, `egress.refused`, `script.budget-exceeded`. No
+`onException` or `doCatch` may name them, and `adapterctl check` refuses a
+clause that does; when any of them is in an error's cause chain, no clause
+fires at all, whatever the other causes are.
+
+Facade classes, raised by the `rest` consumer outside any route, so neither
+catchable nor raisable: `facade.unauthenticated`, `facade.forbidden`,
+`facade.invalid-request` (contract validation, a cursor that fails section
+8.11.2), `facade.not-found` (no record path matched), `facade.method-not-allowed`,
+`facade.conflict` (an idempotency key in flight, section 9),
+`facade.idempotency-mismatch` (same key, different body). They exist so the
+profile maps them like every other class: every response a caller receives
+is in the profile's shape.
 
 - `errorHandler`: `defaultErrorHandler` (Camel's default: no redelivery,
   the error propagates to the caller) and `noErrorHandler`. The Dead Letter
@@ -472,13 +520,20 @@ sits outside `upstream` so no clause for `upstream` matches it),
   safe, unless that endpoint operation declares `idempotentUpstream: true`
   (a reviewed claim, for example DHIS2 creates with client-supplied UIDs).
 - `onException`: `exception` (classes), `onWhen`, `handled`, `continued`,
-  redelivery options, nested steps. `handled: true` ends the exchange with the
-  clause's result; the clause sets `CamelHttpResponseCode` and a body that
-  must validate against the profile's problem schema with a code from the
-  profile's problem code list, so translated detail is declared and a raw
-  upstream body cannot pass. `continued: true` resumes the route at the step
-  after the failure. An unhandled upstream error surfaces as
-  `adapter.upstream.unmapped` (502) with no upstream content.
+  redelivery options, nested steps. Matching is Camel's: the clause whose
+  class is closest to the error or any of its causes wins, ties going to the
+  most deeply nested cause; a clause never matches a class above its own.
+  `handled: true` ends the exchange successfully with the clause's result,
+  which is validated against the operation's result schema like any route
+  output (an empty search page, a fallback record). To translate an error
+  instead, the clause ends with `throwException`: as in Camel, an error
+  raised inside an exception clause is not handled again and becomes the
+  exchange's failure, which the profile maps to a problem (section 8.11.6).
+  A clause never builds a problem body or sets `CamelHttpResponseCode`.
+  `continued: true` resumes the route at the step after the failure. An
+  unhandled error surfaces as the profile's problem for its class, with no
+  upstream content; the profile's mapping for the `upstream` root is the
+  catch-all for source failures.
 - `doTry`, `doCatch` (with `onWhen`), `doFinally`: ported as in Camel.
 - `circuitBreaker`: resilience4j semantics and defaults, per EIP node,
   process-local state (as in Camel; replicas have independent breakers):
@@ -511,20 +566,38 @@ sits outside `upstream` so no clause for `upstream` matches it),
   profile's template, filled by the engine.
 - `http`: producer on `FixedDestinationPolicy`. `uri: "http:<endpointId>"`
   names an endpoint declared in the pack and bound to a base URL in the
-  runtime config. Parameters: `httpMethod`, `path` (a template whose
+  runtime config. Parameters: `httpMethod`, `path` (an origin-relative
+  template, starting with `/`, appended to the endpoint's base path, whose
   `{name}` segments are filled from `pathParameters` expressions and
-  percent-encoded by the engine as single segments), `query` (name to
-  expression, engine-encoded), `body` (expression, marshalled to JSON),
-  `throwExceptionOnFailure` (default true), `okStatusCodeRange` (default
-  `200-299`). Divergence: Camel builds dynamic requests from the
-  `CamelHttpPath` and `CamelHttpQuery` headers or `toD`; ours are structured
-  and encoded by the engine so no expression can change the origin or inject
-  a path. Authentication to the upstream is one of the closed kinds of
-  section 10.2, declared on the endpoint and injected at send time.
+  percent-encoded by the engine as single segments; every placeholder is
+  bound and every binding is used), or instead of `path`, `httpUri` (an
+  expression yielding an absolute link the source returned, pinned to the
+  endpoint's origin, section 8.11.5); `query` (name to expression,
+  engine-encoded; not allowed with `httpUri`), `body` (expression,
+  marshalled to JSON), `throwExceptionOnFailure` (default true),
+  `okStatusCodeRange` (default `200-299`; a comma-separated list of status
+  codes and inclusive ranges inside 100 to 599, as Camel writes it).
+  Request headers go out only through the endpoint's `requestHeaders`
+  allowlist (section 8.11.4). Divergence: Camel builds dynamic requests from
+  the `CamelHttpPath`, `CamelHttpQuery`, and `CamelHttpUri` headers or
+  `toD`; ours are structured and encoded by the engine, and the one dynamic
+  form, `httpUri`, is checked against the origin, so no expression can
+  change the origin or inject a path. Authentication to the upstream is one
+  of the closed kinds of section 10.2, declared on the endpoint and injected
+  at send time, after the header allowlist has been applied. A send's
+  safety comes from its method; a `POST` whose endpoint operation declares
+  `safeUpstream: true` (a reviewed claim, as for FHIR `POST _search`)
+  counts as safe for the write-safety rules.
 - `graphql`: producer, Camel's `camel-graphql` shape (`query` as a
   digest-pinned `queryFile`, `operationName`, `variables` expression) over
-  the same transport; a GraphQL `errors` array raises `upstream.http`-class
-  errors with the declared detail only. Arrives in Increment 3.
+  the same transport, with no `httpMethod`, `path`, `pathParameters`, or
+  `query`; `check` parses the query file and requires the named operation.
+  A send is safe only when that operation is a GraphQL `query`; a
+  `mutation` is non-safe under every write-safety rule. The reply's `data`
+  member is the body. A GraphQL `errors` array raises `upstream.http`-class
+  errors with the declared detail only (divergence: Camel leaves errors in
+  the body; partial data with errors fails the exchange). Arrives in
+  Increment 3.
 - Not ported: every other component, including `log` (value leakage) and
   `mock` outside the test harness (section 13.3).
 
@@ -555,21 +628,22 @@ delivers the row.
 |---|---|---|---|---|
 | Exchange, MEP | `manual/exchange.html`, `manual/exchange-pattern.html` | `exchange` module; InOut only | InOnly not ported | 1 |
 | Message | `manual/message.html` | Bounded case-insensitive headers, JSON body | Components marshal JSON themselves | 1 |
-| HeaderFilterStrategy | `manual/header-filter-strategy.html` (component docs) | Declared header allowlist per endpoint | Allowlist, not denylist | 1 |
+| HeaderFilterStrategy | `manual/header-filter-strategy.html` (component docs) | `responseHeaders` and `requestHeaders` allowlists per endpoint (section 8.11.4) | Allowlists, not denylists; credential, cookie, host, and hop-by-hop headers can never be allowlisted | 1 |
 | Route, YAML DSL | `manual/routes.html`, `components/next/others/yaml-dsl.html` | `routes` in packs, externally tagged steps | `direct:` `from` only; acyclic; bounded depth | 0 |
 | Route template, templatedRoute | `manual/route-template.html` | `routeTemplates` in packs, `templatedRoutes` in projects | Typed parameters; no `from` in templates | 0 |
 | Kamelet catalog | `camel-kamelets/next/index.html` | The pack as a reviewed catalog of templates | Not Kubernetes resources; digest-pinned | 0 |
 | Property placeholders | `manual/using-propertyplaceholder.html` | `{{name}}`, `{{?name}}` for template parameters only | No environment placeholders in authored files | 0 |
-| REST DSL contract-first | `manual/rest-dsl-openapi.html` | `rest` consumer over the generated OpenAPI | Validation always on; `missingOperation` fail only | 1 |
-| `direct` | `components/next/direct-component.html` | `direct:<routeId>` | Depth bound | 1 |
-| `http` | `components/next/http-component.html` | `http:<endpointId>` on `FixedDestinationPolicy` | Structured, engine-encoded path and query; no redirects | 1 |
+| REST DSL contract-first | `manual/rest-dsl-openapi.html`, `manual/rest-dsl.html` | `rest` consumer over the generated OpenAPI; facade inputs on the exchange under closed names (section 8.11.1) | Validation always on; `missingOperation` fail only; profile-neutral input names, not the caller's parameter names; caller headers never enter | 1 |
+| `direct` | `components/next/direct-component.html` | `direct:<routeId>`, sharing the exchange (section 8.11.7) | Depth bound; no redelivery of a `to: direct:` send | 1 |
+| `http` | `components/next/http-component.html` | `http:<endpointId>` on `FixedDestinationPolicy`; `httpUri` for an origin-pinned link | Structured, engine-encoded path and query; `httpUri` pinned to the endpoint origin and base path; no redirects | 1 |
 | HTTP authentication | `components/next/http-component.html` (authentication options) | `authentication` on the pack endpoint, credentials bound in the runtime config (section 10.2) | Closed kinds; secret references only; the token endpoint is a fixed destination too; no NTLM, no Digest, no query-placed keys | 1 |
-| `graphql` | `components/next/graphql-component.html` | `graphql:<endpointId>` | Query from a pinned file only | 3 |
-| Languages | `components/next/languages/constant-language.html`, `header-language.html`, `exchangeProperty-language.html`, `jsonpath-language.html` | `constant`, `header`, `exchangeProperty`, `jsonpath` | RFC 9535, not Jayway | 1 |
-| Simple, bean, process | `components/next/languages/simple-language.html` | `rhai` files | Not ported; Rhai replaces them | 1 |
-| `to` | `components/next/eips/to-eip.html` | `to` | No `toD` | 1 |
+| `graphql` | `components/next/graphql-component.html` | `graphql:<endpointId>` | Query from a pinned file only; `errors` fail the exchange; a mutation is non-safe | 3 |
+| Languages | `components/next/languages/constant-language.html`, `header-language.html`, `exchangeProperty-language.html`, `jsonpath-language.html` | `constant`, `header`, `exchangeProperty`, `jsonpath` | RFC 9535, not Jayway; singular-query result rule (section 8.11.8); header reads bounded to known headers | 1 |
+| Simple, bean, process | `components/next/languages/simple-language.html` | `rhai` files with the script ABI of section 8.11.3 | Not ported; Rhai replaces them; scripts see a read-only exchange view | 1 |
+| `to` | `components/next/eips/to-eip.html` | `to` | No `toD`; `httpUri` is the only dynamic form | 1 |
 | `setBody`, `transform` | `components/next/eips/setBody-eip.html`, `transform-eip.html` | Same | None | 1 |
-| `setHeader`, `setProperty`, `removeHeader`, `removeProperty` | `components/next/eips/setHeader-eip.html` and siblings | Same | Header names bounded | 1 |
+| `setHeader`, `setProperty`, `removeHeader`, `removeProperty` | `components/next/eips/setHeader-eip.html` and siblings | Same | Header names bounded; `Camel`- and `Adapter`-prefixed engine headers and credential headers cannot be set or removed | 1 |
+| Throw Exception | `components/next/eips/throwException-eip.html` | `throwException` (`exceptionType` names a catchable class, `message` a constant) | Closed classes, not Java types; no message expression; inside an exception clause it ends the exchange | 1 |
 | `script` | `components/next/eips/script-eip.html` | Same | Rhai only | 1 |
 | Content-Based Router | `components/next/eips/choice-eip.html` | `choice`, `when`, `otherwise` | Predicates must be boolean | 1 |
 | Message Filter | `components/next/eips/filter-eip.html` | `filter` | Predicates must be boolean | 1 |
@@ -577,11 +651,11 @@ delivers the row.
 | `stop` | `components/next/eips/stop-eip.html` | `stop` | None | 1 |
 | Splitter | `components/next/eips/split-eip.html` | `split` | Mandatory `maximumItems`; no parallel or streaming | 1 |
 | Loop | `components/next/eips/loop-eip.html` | `loop` | Mandatory `maximumIterations` | 1 |
-| Content Enricher | `components/next/eips/enrich-eip.html` | `enrich` | Static URI only; no `pollEnrich` | 1 |
+| Content Enricher | `components/next/eips/enrich-eip.html` | `enrich`, the resource send on a copy of the exchange (section 8.11.7) | Static URI only; no `pollEnrich`; strategies merge bodies and named `properties` only | 1 |
 | Aggregation strategies | `components/next/eips/aggregate-eip.html` (strategies section) | `useLatest`, `useOriginal`, `groupedBody`, `rhai` | Additions: `jsonArrayAppend`, `jsonMerge` | 1 |
 | Default error handler | `manual/defaulterrorhandler.html`, `manual/error-handler.html` | `errorHandler: defaultErrorHandler`, `noErrorHandler` | Dead letter is always the journal | 1 |
 | Redelivery policy | `manual/error-handler.html` (redelivery) | Options in 8.7 | CFG-NAME spelling; write-safety refusal | 1 |
-| Exception clause | `manual/exception-clause.html` | `onException` | Closed class hierarchy; uncatchable boundary errors | 1 |
+| Exception clause | `manual/exception-clause.html` | `onException` | Closed class hierarchy; uncatchable boundary errors; a handled clause answers with a success body, problems come from the profile | 1 |
 | Try, catch, finally | `manual/try-catch-finally.html` | `doTry`, `doCatch`, `doFinally` | Uncatchable boundary errors | 1 |
 | Circuit Breaker | `components/next/eips/circuitBreaker-eip.html`, `resilience4j-eip.html` | `circuitBreaker`, `onFallback` | Rejection always raises; fallback on rejection | 1 |
 | Throttler | `components/next/eips/throttle-eip.html` | `throttle` | Waits bounded by the deadline | 1 |
@@ -602,6 +676,183 @@ Not ported, deliberately: Java and XML DSLs, the code-first REST DSL, Simple,
 processing, streaming, brokers and the rest of the component library, route
 controllers, hot reload, JMX, Camel K, Quarkus, and Spring runtimes. Adding
 one later is a port-table row and a conformance test, not an invention.
+
+### 8.11 The exchange contract
+
+Sections 7 and 8.2 say what may enter and leave an exchange; this section
+says exactly where, so that a pack written against it runs under any
+profile. The API transformation experiments
+(`products/adapter/experiments/FINDINGS.md`) found that without it a pack
+could pass `check` and still not be executable: it had to guess where the
+caller's inputs sit, how a page hands back a cursor, what a script
+receives, and how to report a not-found without naming a profile's codes.
+
+#### 8.11.1 Facade inputs
+
+As in Camel's REST DSL, the `rest` consumer turns the validated request
+into headers and a body, but under closed, profile-neutral names, so a
+pack never learns a profile's path or parameter names:
+
+| Input | On the exchange | Present for |
+|---|---|---|
+| Record type | header `recordType` | every operation |
+| Record identifier | header `recordId` | get, update, patch |
+| Page size | header `pageSize`, an integer inside the profile's bounds, the profile's default when absent | search |
+| Filters | property `AdapterFilters`, an object from declared field name to typed value, holding only the filters the caller sent | search |
+| Continuation | property `AdapterContinuation`, absent on the first page (8.11.2) | search |
+| Request record | the body, extracted through the profile's request envelope and validated against the declared model | create, update, patch |
+| Idempotency key | header `Idempotency-Key`, the one caller header that enters | write operations, read by `idempotentConsumer` |
+
+Reads start with a `null` body. No other caller header, cookie, query
+parameter, or token ever enters the exchange (section 10.1). These headers
+and properties are read-only: `check` refuses a `setHeader`,
+`removeHeader`, `setProperty`, or `removeProperty` naming them, except
+`AdapterNextContinuation`, which exists to be set.
+
+#### 8.11.2 Continuation
+
+The route owns the upstream position; the engine owns the caller's cursor.
+
+- A search route that can return more sets property
+  `AdapterNextContinuation` to a JSON value (an upstream cursor, an offset,
+  an origin-pinned next link, or an object of these), at most 2 KiB
+  serialized. Absent or `null` at the end of the route means the last page.
+- The engine encodes it as the opaque `nextCursor` slot of section 7 with
+  authenticated encryption under the runtime secret `cursorKeyRef`, bound
+  to the concrete operation, the binding id, the caller's subject, a digest
+  of the filters and page size, and an expiry (`cursorTtlSeconds`, default
+  900). An optional `previousCursorKeyRef` keeps cursors valid across one
+  key rotation.
+- On the next request the engine verifies and decrypts the cursor and
+  places the value as `AdapterContinuation`. A cursor that fails
+  authentication, has expired, or was minted for another operation,
+  caller, or filter set raises `facade.invalid-request` before any route
+  step runs.
+
+The caller can therefore neither read nor forge an upstream position, and
+a next link the source returned comes back to the route only as the route
+handed it out, still subject to 8.11.5. This is security-sensitive (it
+carries source state through the caller) and needs review notes.
+
+#### 8.11.3 Script ABI
+
+Every `rhai` entrypoint receives one argument, `exchange`, a read-only map
+`#{ body, headers, properties }`: `body` is the current body, `headers` the
+current headers with lowercased names, `properties` the current
+properties. JSON maps to Rhai as objects to maps, arrays to arrays, strings
+to strings, integers to `i64`, other numbers to `f64`, booleans to `bool`,
+and `null` to `()`; the reverse on return. A number outside `i64` that is
+not integral stays `f64`; an integer outside `i64` raises `script`. Typed
+template parameters keep their type when instantiated into a script
+argument or expression.
+
+What an entrypoint returns depends on its slot:
+
+| Slot | Returns |
+|---|---|
+| `setBody`, `transform`, an expression value (`setHeader`, `setProperty`, `query`, `body`, `pathParameters`, `httpUri`, `split` expression, `loop` count) | the value |
+| A predicate (`when`, `filter`, `validate`, `onWhen`, `retryWhile`, `doWhile`) | a `bool`; anything else raises `script` |
+| `script` EIP | a map of property names to values, set on the exchange; the body is unchanged |
+| A custom aggregation strategy on `split` or `loop` | `fn(old, new)`, with `old` as `()` on the first call, returning the aggregated body |
+| A custom aggregation strategy on `enrich` | `fn(original, resource)`, returning `#{ body, properties }` |
+
+Each script file is its own compilation unit: an entrypoint may call
+functions defined in the same file only, and `check` refuses a call to a
+function the file does not define (no `import`, no shared prelude). Budgets
+are `registry-platform-script`'s; exceeding one raises the uncatchable
+`script.budget-exceeded`.
+
+#### 8.11.4 Headers on the wire
+
+The endpoint declares two allowlists, Camel's `HeaderFilterStrategy` in
+both directions:
+
+- `responseHeaders`: upstream response headers copied onto the exchange,
+  read by `header` under their declared names.
+- `requestHeaders`: exchange headers sent upstream on every send to the
+  endpoint, by name (`Accept`, `Prefer`, `If-None-Exist`). A header in the
+  list that is absent from the exchange is not sent. Camel engine headers
+  and the facade inputs of 8.11.1 are never sent unless listed.
+
+Never allowlistable in either list: `Authorization`, `Proxy-Authorization`,
+`Cookie`, `Set-Cookie`, `Host`, `Content-Length`, `Transfer-Encoding`,
+`Connection`, `Upgrade`, `TE`, `Trailer`, `Keep-Alive`, the hop-by-hop
+`Proxy-*` headers, and the endpoint's own apiKey header. Credentials are
+injected after the allowlist is applied, so no exchange header can replace
+or shadow one. Header names are RFC 9110 tokens, compared without case.
+The same names are refused as a `static-api-key` `headerName` (section
+10.2); a key sent in `Authorization` is the `static-authorization` kind.
+
+A `header` expression may read only a facade input header, a declared
+response header, a Camel engine header the engine sets
+(`CamelHttpResponseCode`, `CamelSplitIndex`, and the others the port table
+names), or a header an earlier step of the same route set; `check` refuses
+any other read, so a pack cannot depend on a header that is never there.
+
+#### 8.11.5 Origin-pinned links
+
+Sources page and link by URL (FHIR `link[relation=next]`, HAL, JSON:API).
+Camel follows such a link with `toD` or the `CamelHttpUri` header; ours is
+the `httpUri` parameter on an `http` send, exactly one of `path` and
+`httpUri`, with no `query` beside it. At send time the engine parses the
+value as an absolute URL and refuses it with the uncatchable
+`egress.refused` unless its scheme, host, and port equal the endpoint's
+configured origin, its path stays under the endpoint's base path after
+normalization, it carries no userinfo or fragment, and it fits the URL
+length bound. The query string the source wrote is sent as written. `toD`
+stays not ported; redirects stay unfollowed.
+
+#### 8.11.6 Errors become problems
+
+A pack never writes a problem body and never names a profile's problem
+code; it raises error classes and the profile decides what the caller sees.
+
+- `throwException` (Camel's Throw Exception EIP): `exceptionType` names a
+  catchable class of section 8.7, typically an `outcome.*` class;
+  `message` is an optional constant, bounded, which fills the profile's
+  `problemDetail` slot when the problem's envelope has one. Raised inside a
+  route it is handled by the route's clauses like any error; raised inside
+  an `onException` clause it is the exchange's final failure.
+- The profile's `problems` list maps classes to problems: each entry has
+  `code`, `status`, `title`, and `classes`. The problem for an error is the
+  entry whose class is closest to the error's class, by the rule of 8.7,
+  uncatchable and facade classes included. `check` requires every class in
+  the hierarchy to resolve to exactly one entry, so listing the roots is
+  enough and nothing is ever unmapped; it refuses a class listed twice, an
+  unknown class, and a status outside 400 to 599.
+- The engine fills the problem envelope from the resolved entry. The
+  journal records the class and the code.
+
+This replaces the earlier rule that an exception clause sets
+`CamelHttpResponseCode` and a profile-shaped body; that rule made every
+pack profile-specific, which D17 forbids.
+
+#### 8.11.7 `direct:` and `enrich`
+
+- `to: direct:<routeId>` runs the target route on the same exchange, as
+  Camel's `direct` does: body, headers, and properties flow in and come back
+  changed. Errors raised in the target are offered first to the target's
+  own clauses; an unhandled error propagates unchanged to the caller's
+  clauses. A `to: direct:` send is never redelivered (divergence: Camel's
+  default error handler would redeliver it; ours redelivers endpoint sends
+  only, so the target's own sends carry their redelivery).
+- `enrich` runs its resource send on a copy of the exchange and merges the
+  reply back through its strategy. The built-in strategies merge bodies
+  only, and properties set by the resource route are discarded, unless the
+  strategy names them: `jsonArrayAppend` and `jsonMerge` accept
+  `properties`, a map from property name to a JSONPath on the reply, so a
+  pagination loop carries the next cursor or link out of each page.
+
+#### 8.11.8 JSONPath results
+
+A singular query (RFC 9535 section 2.3.5, a path of name and index
+selectors only) yields its one value, or absent when nothing matches. Any
+other query yields the node list as a JSON array, empty when nothing
+matches. Absent raises `validation` where a value is required (`setBody`,
+a `pathParameters` entry). As a predicate, a singular query must yield a
+boolean, and absent counts as `false`, the one place absence has a meaning;
+`check` refuses a non-singular query as a predicate. Media types counted as
+JSON are `application/json` and any `application/*+json`.
 
 ## 9. Writes, idempotency, and failure semantics
 
@@ -641,13 +892,17 @@ process (draft, declare), several `to` steps in sequence.
   acceptance; partial acceptance maps to a bounded 409 problem carrying the
   counts alone (imported, updated, ignored, rejected), never the raw
   upstream summary.
-- Conflicts (DHIS2 import conflicts, GraphQL error arrays) map through
-  `onException` to bounded 409 problem codes with declared detail only.
+- Conflicts (DHIS2 import conflicts, GraphQL error arrays) are raised as
+  `outcome.conflict` or `outcome.rejected` (`throwException`, directly or
+  from an `onException` clause), and the profile maps them to its bounded
+  problems with declared detail only (section 8.11.6).
 - No compensation and no rollback across upstream calls. Recovery is the
   source system's native process surface; the adapter reports exactly where
   a sequence stopped.
-- Unknown upstream errors never leak: they surface as
-  `adapter.upstream.unmapped`, and mapping totality is tested (section 13).
+- Unknown upstream errors never leak: they surface as the profile's
+  problem for their class, at worst the one for the `upstream` root, with
+  no upstream content; `check` proves every class maps (section 8.11.6)
+  and mapping totality is tested (section 13).
 - Open (D16): a write the source accepts but has not finished (an OpenCRVS
   declaration entering its validation queue, a DHIS2 asynchronous import
   job) has no defined facade outcome yet. The profile must define it before
@@ -834,9 +1089,9 @@ rate; exhausted exchanges land in the journal with the terminal problem code.
   corpus of models and route outputs.
 - Idempotency: a replayed key produces the identical facade response and
   exactly one upstream effect, including under injected failure.
-- Mapping totality: every declared upstream error class maps to a problem
-  code; unknown upstream errors produce the bounded unmapped problem, never
-  a leaked body.
+- Mapping totality: every error class resolves to exactly one profile
+  problem; unknown upstream errors produce the profile's problem for their
+  class, never a leaked body.
 - Pagination convergence: no duplicates or omissions across synthetic page
   sequences, including empty pages and page drift.
 - Route determinism: the same upstream transcript produces byte-identical
@@ -871,8 +1126,13 @@ The platform's fixed-destination policy already decides this correctly;
 private CIDRs are reachable only when the runtime config declares them
 explicitly (`allowedPrivateCidrs`, bounded count), and plain HTTP stays
 confined to those addresses. No expression can alter the origin or inject a
-path segment. Uncatchable errors cannot be handled by any `onException` or
-`doCatch`. Secrets never appear in the exchange, scripts, diagnostics, or
+path segment; an `httpUri` off the endpoint's origin or base path is
+refused and journaled. Only allowlisted headers leave the engine, and no
+exchange header can replace an injected credential. A continuation cursor
+that is tampered with, expired, replayed by another caller, or replayed
+with other filters is refused before any route step runs. Uncatchable
+errors cannot be handled by any `onException` or `doCatch`, and an
+uncatchable anywhere in the cause chain fires no clause. Secrets never appear in the exchange, scripts, diagnostics, or
 audit. Every upstream authentication kind of section 10.2 is exercised over
 the double, including token caching, the single retry after a 401, token
 endpoint failure, and a marker secret proven absent from the journal,
@@ -887,8 +1147,8 @@ idempotency store's retention sweep erases expired bodies.
   measured in paired before/after local runs; local numbers are directional
   only and never cited as evidence.
 - Memory bounded by `maximumResponseBytes` and the aggregation caps.
-- Observability: per-operation structured metrics (mapped and unmapped
-  errors, redeliveries, breaker state) and the queryable journal.
+- Observability: per-operation structured metrics (errors by class and
+  problem code, redeliveries, breaker state) and the queryable journal.
 
 ## 14. Delivery increments and definition of done
 
@@ -905,8 +1165,11 @@ acceptance commands.
   mandatory maxima, static worst-case call bound, write-safety refusals,
   uncatchable-class refusal, digest pins); `adapterctl check`; generated
   schemas; corpus examples; `check-port-table.py`.
-- Increment 1, the read engine: the Camel core for every Increment 1
-  port-table row with its conformance module; the `rest`, `direct`, and
+- Increment 1, the read engine: the exchange contract of section 8.11
+  (facade inputs, continuation, script ABI, header allowlists,
+  origin-pinned links, profile problem mapping) in the model, the checks,
+  and the runtime; the Camel core for every Increment 1 port-table row with
+  its conformance module; the `rest`, `direct`, and
   `http` components; the facade with OIDC and access profiles; `adapterctl
   compile` and the generated OpenAPI; the event-notifier journal on
   PostgreSQL with `test-postgres.sh`; fixture replay; `verify --live`; the
@@ -942,9 +1205,10 @@ Definition of done for the program, every item verified by a command in
 5. Every fixture carries honest provenance; the morning report states how
    many are `captured` and how many `documented`.
 6. The exposed API is configuration: the test profile of section 13.6
-   serves over the `dhis2-tracker` pack with no Rust change, and no
-   adapter crate names a `breg-records` path, operation, or field outside
-   tests.
+   serves over the `dhis2-tracker` pack with no Rust change and no pack
+   change, errors included (the pack names no profile problem code), and
+   no adapter crate names a `breg-records` path, operation, or field
+   outside tests.
 7. A review report per increment and a final multi-expert review are
    recorded under `products/adapter/reviews/`, with every finding either
    fixed or listed as open.
@@ -953,6 +1217,10 @@ Definition of done for the program, every item verified by a command in
    them use at least four distinct kinds (DHIS2 `basic` and
    `static-authorization`, OpenCRVS's confirmed kind, and the OAuth2 kinds
    in experiments).
+9. Every experiment under `products/adapter/experiments/` passes `check`,
+   and each one whose constructs have landed replays its fixtures; its
+   `FINDINGS.md` lists every gap as resolved, scheduled to a named
+   increment, or a recorded divergence.
 
 ## 15. Credit and licensing
 
@@ -998,3 +1266,12 @@ the product documentation credits Camel and the EIP book regardless.
 | D17 | The exposed API, envelope included, is wholly a profile artifact (envelope templates over a closed slot vocabulary); `breg-records` v1 is the first target, not a built-in; `registry-record` is a dev-dependency for goldens only | 2026-10-30, accepted by Jeremi |
 | D18 | Upstream authentication is a closed list of six kinds with Evidence's `SourceAuthentication` shape and spelling (section 10.2), plus orthogonal mTLS; adapter-local in this program, lifted to the platform later | 2026-10-30, under delegation, pending Jeremi |
 | D19 | The facade caller's token is never forwarded or exchanged upstream; upstream calls use the deployment's per-source credential, and per-user upstream authority waits for a source that requires it | 2026-10-30, under delegation, pending Jeremi |
+| D20 | The exchange contract (section 8.11) is part of the format: facade inputs arrive under closed, profile-neutral names; no caller header enters except `Idempotency-Key` on writes; scripts receive a read-only `#{body, headers, properties}` view and return per slot | 2026-10-30, under delegation, pending Jeremi |
+| D21 | Packs raise error classes and never name problem codes; an `outcome` branch and Camel's `throwException` carry source meaning; the profile's `problems` list maps every class, uncatchable and facade classes included, to exactly one problem; a handled clause answers with a success body | 2026-10-30, under delegation, pending Jeremi |
+| D22 | The facade cursor is engine-owned authenticated encryption under a runtime-config key (`cursorKeyRef`), bound to operation, binding, caller, filters, and expiry; the route sees only `AdapterContinuation` and sets `AdapterNextContinuation`; security review note required | 2026-10-30, under delegation, pending Jeremi |
+| D23 | Sources that page by URL use `httpUri`, an origin-pinned and base-path-pinned link checked at send time (`egress.refused` otherwise); `toD` stays not ported | 2026-10-30, under delegation, pending Jeremi |
+| D24 | Request headers leave only through the endpoint's `requestHeaders` allowlist; credential, cookie, host, and hop-by-hop headers are never allowlistable; credentials are injected after filtering | 2026-10-30, under delegation, pending Jeremi |
+| D25 | `direct:` shares the exchange and its sends are not redelivered; `enrich` runs on a copy and only strategy-named `properties` come back | 2026-10-30, under delegation, pending Jeremi |
+| D26 | A `POST` counts as safe only under a reviewed `safeUpstream: true` operation claim; a GraphQL send's safety comes from its parsed operation type | 2026-10-30, under delegation, pending Jeremi |
+| D27 | Exception matching is Camel's closest match across the error and its causes, ties to the most nested cause, never rising the hierarchy; any uncatchable class in the chain fires no clause | 2026-10-30, under delegation, pending Jeremi |
+| D28 | `AdapterProject` carries a `project` block (`id`, `version`) as CFG-ENV-6 requires, rather than a top-level `id` | 2026-10-30, under delegation, pending Jeremi |
