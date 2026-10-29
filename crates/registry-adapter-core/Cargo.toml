@@ -15,6 +15,7 @@ workspace = true
 schema = ["dep:schemars", "registry-platform-yaml/schema", "registry-platform-config/schema"]
 
 [dependencies]
+ipnet.workspace = true
 registry-platform-canonical-json.workspace = true
 registry-platform-config.workspace = true
 registry-platform-yaml.workspace = true
@@ -22,4 +23,3 @@ schemars = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
-url.workspace = true

@@ -17,157 +17,135 @@ use registry_platform_yaml::Diagnostic;
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum CheckCode {
+    // adapter.auth.*
+    AuthKindMismatch,
+    AuthNoneNotLoopback,
+    // adapter.envelope.*
+    EnvelopeInvalidPlaceholder,
     // adapter.fixture.*
-    FixtureDigestMismatch,
-    FixtureEmptyTranscript,
-    FixtureExpectationRequired,
-    FixtureInvalidStatus,
-    FixturePackMismatch,
-    FixtureUnknownTemplate,
-    FixtureUntestedVersion,
+    FixtureUnknownEndpoint,
+    FixtureUnknownIntercept,
     // adapter.pack.*
-    PackCodeMapTargetInvalid,
-    PackDuplicateCodeMap,
-    PackInvalidDetectionRange,
-    PackInvalidPaginateBound,
-    PackInvalidRetryPolicy,
-    PackInvalidScriptDigest,
-    PackInvalidScriptPath,
-    PackOverlappingDetection,
-    PackPaginateBoundsRequired,
-    PackUnboundOperation,
-    PackUnknownCodeValue,
-    PackUnknownCursorShape,
-    PackDuplicateErrorClass,
-    PackUnknownEnvelope,
-    PackUnknownErrorClass,
-    PackUnknownField,
-    PackUnknownPlaceholder,
-    // adapter.plan.*
-    PlanBudgetRequired,
-    PlanDuplicateBinding,
-    PlanEmptyFieldMap,
-    PlanForwardBinding,
-    PlanInvalidBudget,
-    PlanIteratePolicyRequired,
-    PlanNormalizeBranchRequired,
-    PlanNormalizeBranchTotality,
-    PlanUnknownBinding,
-    PlanUnknownJoinField,
-    PlanUnknownPaginationPlan,
-    PlanUnknownTemplate,
-    PlanWriteIteratePolicy,
+    PackDigestPinRequired,
+    PackEndpointComponentInvalid,
+    PackGraphQlQueryRequired,
+    PackReservedHeaderName,
+    PackUnknownScript,
     // adapter.profile.*
-    ProfilePartMismatch,
+    ProfileProblemEnvelopeMissingCodeSlot,
+    ProfileRequestEnvelopeMissingRecordSlot,
+    ProfileResponseEnvelopeMissingResultSlot,
+    ProfileUnknownSlot,
     // adapter.project.*
-    ProjectInvalidReference,
+    ProjectDuplicateRouteId,
     ProjectUnknownOperation,
+    ProjectUnknownRecordType,
+    ProjectUnknownRoute,
+    ProjectUnknownTemplate,
+    ProjectUpstreamBudgetExceeded,
+    // adapter.route.*
+    RouteDirectCycle,
+    RouteDirectDepthExceeded,
+    RouteFromNotDirect,
+    RouteMaximumItemsRequired,
+    RouteMaximumIterationsRequired,
+    RouteMultipleNonSafeSends,
+    RouteNonSafeSendInSplit,
+    RouteRedeliveryOverNonSafeSend,
+    RouteUncatchableClause,
+    RouteUnknownDirectTarget,
+    RouteUnknownEndpoint,
+    RouteWriteWithoutIdempotency,
     // adapter.runtime.*
-    RuntimeInvalidBaseUrl,
-    RuntimeInvalidCidr,
-    RuntimeInvalidRetention,
-    RuntimeInvalidUpstreamAuth,
-    RuntimePrivateCidrLimit,
+    RuntimeInsecureOrigin,
+    RuntimeMissingEndpoint,
+    RuntimeUnknownEndpoint,
 }
 
 impl CheckCode {
     /// The complete closed vocabulary, in code-string order.
     pub const ALL: &'static [Self] = &[
-        Self::FixtureDigestMismatch,
-        Self::FixtureEmptyTranscript,
-        Self::FixtureExpectationRequired,
-        Self::FixtureInvalidStatus,
-        Self::FixturePackMismatch,
-        Self::FixtureUnknownTemplate,
-        Self::FixtureUntestedVersion,
-        Self::PackCodeMapTargetInvalid,
-        Self::PackDuplicateCodeMap,
-        Self::PackDuplicateErrorClass,
-        Self::PackInvalidDetectionRange,
-        Self::PackInvalidPaginateBound,
-        Self::PackInvalidRetryPolicy,
-        Self::PackInvalidScriptDigest,
-        Self::PackInvalidScriptPath,
-        Self::PackOverlappingDetection,
-        Self::PackPaginateBoundsRequired,
-        Self::PackUnboundOperation,
-        Self::PackUnknownCodeValue,
-        Self::PackUnknownCursorShape,
-        Self::PackUnknownEnvelope,
-        Self::PackUnknownErrorClass,
-        Self::PackUnknownField,
-        Self::PackUnknownPlaceholder,
-        Self::PlanBudgetRequired,
-        Self::PlanDuplicateBinding,
-        Self::PlanEmptyFieldMap,
-        Self::PlanForwardBinding,
-        Self::PlanInvalidBudget,
-        Self::PlanIteratePolicyRequired,
-        Self::PlanNormalizeBranchRequired,
-        Self::PlanNormalizeBranchTotality,
-        Self::PlanUnknownBinding,
-        Self::PlanUnknownJoinField,
-        Self::PlanUnknownPaginationPlan,
-        Self::PlanUnknownTemplate,
-        Self::PlanWriteIteratePolicy,
-        Self::ProfilePartMismatch,
-        Self::ProjectInvalidReference,
+        Self::AuthKindMismatch,
+        Self::AuthNoneNotLoopback,
+        Self::EnvelopeInvalidPlaceholder,
+        Self::FixtureUnknownEndpoint,
+        Self::FixtureUnknownIntercept,
+        Self::PackDigestPinRequired,
+        Self::PackEndpointComponentInvalid,
+        Self::PackGraphQlQueryRequired,
+        Self::PackReservedHeaderName,
+        Self::PackUnknownScript,
+        Self::ProfileProblemEnvelopeMissingCodeSlot,
+        Self::ProfileRequestEnvelopeMissingRecordSlot,
+        Self::ProfileResponseEnvelopeMissingResultSlot,
+        Self::ProfileUnknownSlot,
+        Self::ProjectDuplicateRouteId,
         Self::ProjectUnknownOperation,
-        Self::RuntimeInvalidBaseUrl,
-        Self::RuntimeInvalidCidr,
-        Self::RuntimeInvalidRetention,
-        Self::RuntimeInvalidUpstreamAuth,
-        Self::RuntimePrivateCidrLimit,
+        Self::ProjectUnknownRecordType,
+        Self::ProjectUnknownRoute,
+        Self::ProjectUnknownTemplate,
+        Self::ProjectUpstreamBudgetExceeded,
+        Self::RouteDirectCycle,
+        Self::RouteDirectDepthExceeded,
+        Self::RouteFromNotDirect,
+        Self::RouteMaximumItemsRequired,
+        Self::RouteMaximumIterationsRequired,
+        Self::RouteMultipleNonSafeSends,
+        Self::RouteNonSafeSendInSplit,
+        Self::RouteRedeliveryOverNonSafeSend,
+        Self::RouteUncatchableClause,
+        Self::RouteUnknownDirectTarget,
+        Self::RouteUnknownEndpoint,
+        Self::RouteWriteWithoutIdempotency,
+        Self::RuntimeInsecureOrigin,
+        Self::RuntimeMissingEndpoint,
+        Self::RuntimeUnknownEndpoint,
     ];
 
     #[must_use]
     pub const fn code(self) -> &'static str {
         match self {
-            Self::FixtureDigestMismatch => "adapter.fixture.digest-mismatch",
-            Self::FixtureEmptyTranscript => "adapter.fixture.empty-transcript",
-            Self::FixtureExpectationRequired => "adapter.fixture.expectation-required",
-            Self::FixtureInvalidStatus => "adapter.fixture.invalid-status",
-            Self::FixturePackMismatch => "adapter.fixture.pack-mismatch",
-            Self::FixtureUnknownTemplate => "adapter.fixture.unknown-template",
-            Self::FixtureUntestedVersion => "adapter.fixture.untested-version",
-            Self::PackCodeMapTargetInvalid => "adapter.pack.code-map-target-invalid",
-            Self::PackDuplicateCodeMap => "adapter.pack.duplicate-code-map",
-            Self::PackInvalidDetectionRange => "adapter.pack.invalid-detection-range",
-            Self::PackInvalidPaginateBound => "adapter.pack.invalid-paginate-bound",
-            Self::PackInvalidRetryPolicy => "adapter.pack.invalid-retry-policy",
-            Self::PackInvalidScriptDigest => "adapter.pack.invalid-script-digest",
-            Self::PackInvalidScriptPath => "adapter.pack.invalid-script-path",
-            Self::PackOverlappingDetection => "adapter.pack.overlapping-detection",
-            Self::PackPaginateBoundsRequired => "adapter.pack.paginate-bounds-required",
-            Self::PackUnboundOperation => "adapter.pack.unbound-operation",
-            Self::PackUnknownCodeValue => "adapter.pack.unknown-code-value",
-            Self::PackUnknownCursorShape => "adapter.pack.unknown-cursor-shape",
-            Self::PackDuplicateErrorClass => "adapter.pack.duplicate-error-class",
-            Self::PackUnknownEnvelope => "adapter.pack.unknown-envelope",
-            Self::PackUnknownErrorClass => "adapter.pack.unknown-error-class",
-            Self::PackUnknownField => "adapter.pack.unknown-field",
-            Self::PackUnknownPlaceholder => "adapter.pack.unknown-placeholder",
-            Self::PlanBudgetRequired => "adapter.plan.budget-required",
-            Self::PlanDuplicateBinding => "adapter.plan.duplicate-binding",
-            Self::PlanEmptyFieldMap => "adapter.plan.empty-field-map",
-            Self::PlanForwardBinding => "adapter.plan.forward-binding",
-            Self::PlanInvalidBudget => "adapter.plan.invalid-budget",
-            Self::PlanIteratePolicyRequired => "adapter.plan.iterate-policy-required",
-            Self::PlanNormalizeBranchRequired => "adapter.plan.normalize-branch-required",
-            Self::PlanNormalizeBranchTotality => "adapter.plan.normalize-branch-totality",
-            Self::PlanUnknownBinding => "adapter.plan.unknown-binding",
-            Self::PlanUnknownJoinField => "adapter.plan.unknown-join-field",
-            Self::PlanUnknownPaginationPlan => "adapter.plan.unknown-pagination-plan",
-            Self::PlanUnknownTemplate => "adapter.plan.unknown-template",
-            Self::PlanWriteIteratePolicy => "adapter.plan.write-iterate-policy",
-            Self::ProfilePartMismatch => "adapter.profile.part-mismatch",
-            Self::ProjectInvalidReference => "adapter.project.invalid-reference",
+            Self::AuthKindMismatch => "adapter.auth.kind-mismatch",
+            Self::AuthNoneNotLoopback => "adapter.auth.none-not-loopback",
+            Self::EnvelopeInvalidPlaceholder => "adapter.envelope.invalid-placeholder",
+            Self::FixtureUnknownEndpoint => "adapter.fixture.unknown-endpoint",
+            Self::FixtureUnknownIntercept => "adapter.fixture.unknown-intercept",
+            Self::PackDigestPinRequired => "adapter.pack.digest-pin-required",
+            Self::PackEndpointComponentInvalid => "adapter.pack.endpoint-component-invalid",
+            Self::PackGraphQlQueryRequired => "adapter.pack.graphql-query-required",
+            Self::PackReservedHeaderName => "adapter.pack.reserved-header-name",
+            Self::PackUnknownScript => "adapter.pack.unknown-script",
+            Self::ProfileProblemEnvelopeMissingCodeSlot => {
+                "adapter.profile.problem-envelope-missing-code-slot"
+            }
+            Self::ProfileRequestEnvelopeMissingRecordSlot => {
+                "adapter.profile.request-envelope-missing-record-slot"
+            }
+            Self::ProfileResponseEnvelopeMissingResultSlot => {
+                "adapter.profile.response-envelope-missing-result-slot"
+            }
+            Self::ProfileUnknownSlot => "adapter.profile.unknown-slot",
+            Self::ProjectDuplicateRouteId => "adapter.project.duplicate-route-id",
             Self::ProjectUnknownOperation => "adapter.project.unknown-operation",
-            Self::RuntimeInvalidBaseUrl => "adapter.runtime.invalid-base-url",
-            Self::RuntimeInvalidCidr => "adapter.runtime.invalid-cidr",
-            Self::RuntimeInvalidRetention => "adapter.runtime.invalid-retention",
-            Self::RuntimeInvalidUpstreamAuth => "adapter.runtime.invalid-upstream-auth",
-            Self::RuntimePrivateCidrLimit => "adapter.runtime.private-cidr-limit",
+            Self::ProjectUnknownRecordType => "adapter.project.unknown-record-type",
+            Self::ProjectUnknownRoute => "adapter.project.unknown-route",
+            Self::ProjectUnknownTemplate => "adapter.project.unknown-template",
+            Self::ProjectUpstreamBudgetExceeded => "adapter.project.upstream-budget-exceeded",
+            Self::RouteDirectCycle => "adapter.route.direct-cycle",
+            Self::RouteDirectDepthExceeded => "adapter.route.direct-depth-exceeded",
+            Self::RouteFromNotDirect => "adapter.route.from-not-direct",
+            Self::RouteMaximumItemsRequired => "adapter.route.maximum-items-required",
+            Self::RouteMaximumIterationsRequired => "adapter.route.maximum-iterations-required",
+            Self::RouteMultipleNonSafeSends => "adapter.route.multiple-non-safe-sends",
+            Self::RouteNonSafeSendInSplit => "adapter.route.non-safe-send-in-split",
+            Self::RouteRedeliveryOverNonSafeSend => "adapter.route.redelivery-over-non-safe-send",
+            Self::RouteUncatchableClause => "adapter.route.uncatchable-clause",
+            Self::RouteUnknownDirectTarget => "adapter.route.unknown-direct-target",
+            Self::RouteUnknownEndpoint => "adapter.route.unknown-endpoint",
+            Self::RouteWriteWithoutIdempotency => "adapter.route.write-without-idempotency",
+            Self::RuntimeInsecureOrigin => "adapter.runtime.insecure-origin",
+            Self::RuntimeMissingEndpoint => "adapter.runtime.missing-endpoint",
+            Self::RuntimeUnknownEndpoint => "adapter.runtime.unknown-endpoint",
         }
     }
 
@@ -176,52 +154,42 @@ impl CheckCode {
     #[must_use]
     pub const fn artifact(self) -> &'static str {
         match self {
-            Self::FixtureDigestMismatch
-            | Self::FixtureEmptyTranscript
-            | Self::FixtureExpectationRequired
-            | Self::FixtureInvalidStatus
-            | Self::FixturePackMismatch
-            | Self::FixtureUnknownTemplate
-            | Self::FixtureUntestedVersion => crate::naming::ADAPTER_FIXTURE_KIND,
-            Self::PackCodeMapTargetInvalid
-            | Self::PackDuplicateCodeMap
-            | Self::PackInvalidDetectionRange
-            | Self::PackInvalidPaginateBound
-            | Self::PackInvalidRetryPolicy
-            | Self::PackInvalidScriptDigest
-            | Self::PackInvalidScriptPath
-            | Self::PackOverlappingDetection
-            | Self::PackPaginateBoundsRequired
-            | Self::PackUnboundOperation
-            | Self::PackUnknownCodeValue
-            | Self::PackUnknownCursorShape
-            | Self::PackDuplicateErrorClass
-            | Self::PackUnknownEnvelope
-            | Self::PackUnknownErrorClass
-            | Self::PackUnknownField
-            | Self::PackUnknownPlaceholder => crate::naming::ADAPTER_PACK_KIND,
-            Self::PlanBudgetRequired
-            | Self::PlanDuplicateBinding
-            | Self::PlanEmptyFieldMap
-            | Self::PlanForwardBinding
-            | Self::PlanInvalidBudget
-            | Self::PlanIteratePolicyRequired
-            | Self::PlanNormalizeBranchRequired
-            | Self::PlanNormalizeBranchTotality
-            | Self::PlanUnknownBinding
-            | Self::PlanUnknownJoinField
-            | Self::PlanUnknownPaginationPlan
-            | Self::PlanUnknownTemplate
-            | Self::PlanWriteIteratePolicy => crate::naming::ADAPTER_PACK_KIND,
-            Self::ProfilePartMismatch => crate::naming::ADAPTER_PROFILE_KIND,
-            Self::ProjectInvalidReference | Self::ProjectUnknownOperation => {
-                crate::naming::ADAPTER_PROJECT_KIND
+            Self::AuthKindMismatch
+            | Self::AuthNoneNotLoopback
+            | Self::RuntimeInsecureOrigin
+            | Self::RuntimeMissingEndpoint
+            | Self::RuntimeUnknownEndpoint => crate::naming::ADAPTER_RUNTIME_KIND,
+            Self::EnvelopeInvalidPlaceholder
+            | Self::ProfileProblemEnvelopeMissingCodeSlot
+            | Self::ProfileRequestEnvelopeMissingRecordSlot
+            | Self::ProfileResponseEnvelopeMissingResultSlot
+            | Self::ProfileUnknownSlot => crate::naming::ADAPTER_PROFILE_KIND,
+            Self::FixtureUnknownEndpoint | Self::FixtureUnknownIntercept => {
+                crate::naming::ADAPTER_FIXTURE_KIND
             }
-            Self::RuntimeInvalidBaseUrl
-            | Self::RuntimeInvalidCidr
-            | Self::RuntimeInvalidRetention
-            | Self::RuntimeInvalidUpstreamAuth
-            | Self::RuntimePrivateCidrLimit => crate::naming::ADAPTER_RUNTIME_KIND,
+            Self::PackDigestPinRequired
+            | Self::PackEndpointComponentInvalid
+            | Self::PackGraphQlQueryRequired
+            | Self::PackReservedHeaderName
+            | Self::PackUnknownScript
+            | Self::RouteDirectCycle
+            | Self::RouteDirectDepthExceeded
+            | Self::RouteFromNotDirect
+            | Self::RouteMaximumItemsRequired
+            | Self::RouteMaximumIterationsRequired
+            | Self::RouteMultipleNonSafeSends
+            | Self::RouteNonSafeSendInSplit
+            | Self::RouteRedeliveryOverNonSafeSend
+            | Self::RouteUncatchableClause
+            | Self::RouteUnknownDirectTarget
+            | Self::RouteUnknownEndpoint
+            | Self::RouteWriteWithoutIdempotency => crate::naming::ADAPTER_PACK_KIND,
+            Self::ProjectDuplicateRouteId
+            | Self::ProjectUnknownOperation
+            | Self::ProjectUnknownRecordType
+            | Self::ProjectUnknownRoute
+            | Self::ProjectUnknownTemplate
+            | Self::ProjectUpstreamBudgetExceeded => crate::naming::ADAPTER_PROJECT_KIND,
         }
     }
 
@@ -255,7 +223,7 @@ mod tests {
         for code in CheckCode::ALL {
             assert_eq!(CheckCode::from_code(code.code()), Some(*code));
         }
-        assert_eq!(CheckCode::from_code("adapter.pack.invented"), None);
+        assert_eq!(CheckCode::from_code("adapter.route.invented"), None);
     }
 
     #[test]
@@ -291,13 +259,13 @@ mod tests {
     #[test]
     fn findings_are_value_free_errors_with_an_artifact() {
         let diagnostic = finding(
-            CheckCode::PlanBudgetRequired,
-            "/operations/records.search/plan",
-            "the plan declares no budgets",
-            "Declare the plan's budgets.",
+            CheckCode::RouteMaximumItemsRequired,
+            "/routeTemplates/0/steps/1",
+            "the split declares no maximumItems bound",
+            "Declare maximumItems on every split step.",
         );
         assert_eq!(diagnostic.severity, registry_platform_yaml::Severity::Error);
         assert_eq!(diagnostic.artifact.as_deref(), Some("AdapterPack"));
-        assert!(diagnostic.message.contains("budgets"));
+        assert!(diagnostic.message.contains("maximumItems"));
     }
 }

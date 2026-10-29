@@ -1,82 +1,16 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! Vocabulary shared by the Adapter artifacts: facade operations, envelope
-//! names, HTTP methods, script seams, field maps, and detection rules.
+//! Vocabulary shared by the Adapter artifacts: envelope kinds, HTTP methods,
+//! expressions, aggregation strategies, the closed error-class hierarchy,
+//! component kinds, and script seams (`products/adapter/CONCEPT.md`
+//! sections 8.5, 8.6, and 8.7).
 
 use registry_platform_yaml::Digest;
 use serde::{Deserialize, Serialize};
 
-/// A facade operation, the closed set the `breg-records` v1 profile serves
-/// (`products/adapter/CONCEPT.md` section 7). `records.update` covers the
-/// full and the partial update; the profile's method and path distinguish
-/// them.
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-pub enum FacadeOperation {
-    RecordsSearch,
-    RecordsGet,
-    RecordsCreate,
-    RecordsUpdate,
-}
-
-impl FacadeOperation {
-    /// The complete closed set, in id order.
-    pub const ALL: &'static [Self] = &[
-        Self::RecordsSearch,
-        Self::RecordsGet,
-        Self::RecordsCreate,
-        Self::RecordsUpdate,
-    ];
-
-    #[must_use]
-    pub const fn id(self) -> &'static str {
-        match self {
-            Self::RecordsSearch => "records.search",
-            Self::RecordsGet => "records.get",
-            Self::RecordsCreate => "records.create",
-            Self::RecordsUpdate => "records.update",
-        }
-    }
-
-    /// Resolve an operation id back to its variant, or `None` for any string
-    /// outside the closed set.
-    #[must_use]
-    pub fn from_id(id: &str) -> Option<Self> {
-        Self::ALL
-            .iter()
-            .copied()
-            .find(|candidate| candidate.id() == id)
-    }
-
-    /// Whether the operation changes the upstream system. Writes carry the
-    /// plan restrictions of `products/adapter/CONCEPT.md` section 9.
-    #[must_use]
-    pub const fn is_write(self) -> bool {
-        matches!(self, Self::RecordsCreate | Self::RecordsUpdate)
-    }
-}
-
-impl serde::Serialize for FacadeOperation {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_str(self.id())
-    }
-}
-
-impl<'de> serde::Deserialize<'de> for FacadeOperation {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let id = String::deserialize(deserializer)?;
-        Self::from_id(&id).ok_or_else(|| {
-            serde::de::Error::custom(registry_platform_yaml::Invalid::expected(
-                "one of: records.search, records.get, records.create, records.update",
-                "Write one facade operation id from the closed set.",
-            ))
-        })
-    }
-}
-
 /// The wire envelope an artifact speaks: the closed set of envelope
 /// executors compiled into the engine (`products/adapter/CONCEPT.md`
-/// section 8.4). Executors are named for mechanisms, never products.
+/// section 8.8). Executors are named for mechanisms, never products.
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Serialize, Deserialize)]
@@ -110,7 +44,9 @@ impl Envelope {
     }
 }
 
-/// An HTTP method a facade operation or upstream template may declare.
+/// An HTTP method a facade operation or an upstream send may declare. The
+/// method decides send safety: `GET` is safe, the write methods are not
+/// (`products/adapter/CONCEPT.md` sections 8.7 and 9).
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Serialize, Deserialize)]
@@ -122,10 +58,24 @@ pub enum HttpMethod {
     Patch,
 }
 
+impl HttpMethod {
+    /// The complete closed set, in name order.
+    pub const ALL: &'static [Self] = &[Self::Get, Self::Patch, Self::Post, Self::Put];
+
+    /// Whether the method can repeat without an upstream effect. Redelivery
+    /// over a non-safe send needs the endpoint operation to declare
+    /// `idempotentUpstream` (`products/adapter/CONCEPT.md` section 8.7).
+    #[must_use]
+    pub const fn is_safe(self) -> bool {
+        matches!(self, Self::Get)
+    }
+}
+
 /// A script seam: code in its own file beside the pack, referenced by a
 /// relative path and pinned by digest (CFG-EMBED-1). Scripts never carry
-/// credentials and never construct URLs; they fill declared placeholders and
-/// transform values at the seams the pack declares.
+/// credentials and never construct URLs; the `http` component builds every
+/// request from its declared template
+/// (`products/adapter/CONCEPT.md` section 5.6).
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -136,66 +86,458 @@ pub struct ScriptReference {
     pub digest: Digest,
 }
 
-/// One declarative field mapping: an upstream field path, the declared field
-/// it fills, and an optional script seam that transforms the value. The
-/// target is a declared field id; the source is a path into the upstream
-/// response, kept exactly as the source system writes it.
+/// A Rhai expression reference: the digest-pinned file from the pack's
+/// script inventory and the precompiled entrypoint to call
+/// (`products/adapter/CONCEPT.md` sections 5.6 and 8.5). Inline code is
+/// refused (CFG-EMBED-1).
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct FieldMapping {
-    /// Path into the upstream response this mapping reads.
-    #[cfg_attr(feature = "schema", schemars(length(min = 1, max = crate::naming::MAX_FIELD_PATH_CHARACTERS)))]
-    pub from: String,
-    /// The declared field this mapping fills.
-    pub to: registry_platform_yaml::LocalId,
-    /// Optional script seam that transforms the value before it binds.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub script: Option<ScriptReference>,
+pub struct RhaiExpression {
+    /// The script file path, resolved against the pack's script inventory.
+    pub file: String,
+    /// The precompiled entrypoint the engine calls.
+    pub entrypoint: String,
 }
 
-/// A declarative field map: the ordered mappings one `map` step or normalize
-/// branch applies. Declarative first; the script seams are the escape hatch
-/// (`products/adapter/CONCEPT.md` section 8.5, rung 2).
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Debug, Default, Eq, Hash, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct FieldMap {
-    pub mappings: Vec<FieldMapping>,
-}
-
-/// How the engine decides an upstream exchange succeeded or which declared
-/// error class it hit. Status ranges are the declarative rung; a script seam
-/// covers body-level detection, which source systems such as DHIS2 need
-/// because a 200 may still carry import errors.
+/// An expression in one of the ported languages, externally tagged by
+/// language name as in Camel's YAML DSL (`products/adapter/CONCEPT.md`
+/// section 8.5). `rhai` replaces Simple, Groovy, JavaScript, and `bean`.
+/// A predicate is an expression whose result is a boolean; the runtime
+/// never coerces.
+///
+/// Round-trip forms are covered beside the steps that carry them, in
+/// `crate::route`.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "kebab-case")]
-pub enum DetectionRule {
-    /// The exchange succeeded, or the class applies, when the upstream
-    /// status is in the inclusive range.
-    StatusRange { minimum: u16, maximum: u16 },
-    /// The script answers the yes-or-no detection question.
-    Script { seam: ScriptReference },
+#[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
+pub enum Expression {
+    /// A literal JSON value, Camel's `constant` language.
+    Constant(serde_json::Value),
+    /// A message header by name, Camel's `header` language.
+    Header(String),
+    /// An exchange property by name, Camel's `exchangeProperty` language.
+    ExchangeProperty(String),
+    /// An inline RFC 9535 JSONPath selector over the message body, as
+    /// Camel's `jsonpath` language but on the IETF standard.
+    #[serde(rename = "jsonpath")]
+    JsonPath(String),
+    /// A digest-pinned Rhai script and entrypoint.
+    Rhai(RhaiExpression),
 }
 
-impl DetectionRule {
-    /// The status range this rule declares, or `None` for a script rule.
+/// An aggregation strategy, compiled in and named after Camel's built-ins,
+/// plus two JSON additions marked as such in
+/// `products/adapter/CONCEPT.md` section 8.6. Externally tagged by name.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
+pub enum AggregationStrategy {
+    /// Keep the newest exchange: the default for `enrich`, which replaces
+    /// the body with the resource reply.
+    UseLatest,
+    /// Keep the original exchange: the default for `split`.
+    UseOriginal,
+    /// Concatenate the split results into one list, Camel's `groupedBody`.
+    GroupedBody,
+    /// Append one array's elements into another, refusing a duplicate
+    /// `uniqueBy` value with the `aggregation.duplicate` class.
+    JsonArrayAppend {
+        /// The array property the elements are appended into.
+        from: String,
+        /// The message body member the array lands in.
+        into: String,
+        /// Member whose value must stay unique across appended elements.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        unique_by: Option<String>,
+    },
+    /// Merge one JSON object into another. No duplicate refusal.
+    JsonMerge {
+        /// The object property merged into the body.
+        from: String,
+        /// The message body member the object lands in.
+        into: String,
+    },
+    /// A custom strategy: a Rhai entrypoint over the old and new bodies.
+    Rhai(RhaiExpression),
+}
+
+/// A closed error class, the port of Camel's Java exception hierarchy
+/// (`products/adapter/CONCEPT.md` section 8.7). Clauses match the closest
+/// class across the error and its cause; the five uncatchable classes name
+/// the boundary no `onException` or `doCatch` may handle.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub enum ErrorClass {
+    Upstream,
+    UpstreamHttp,
+    UpstreamTimeout,
+    UpstreamConnection,
+    UpstreamMalformed,
+    UpstreamTooLarge,
+    UpstreamRedirect,
+    BreakerOpen,
+    ThrottleRejected,
+    Validation,
+    ConversionUnmapped,
+    AggregationDuplicate,
+    Script,
+    BudgetExhausted,
+    CredentialRejected,
+    DisclosureViolation,
+    EgressRefused,
+    ScriptBudgetExceeded,
+}
+
+impl ErrorClass {
+    /// The complete closed hierarchy, in class-string order.
+    pub const ALL: &'static [Self] = &[
+        Self::AggregationDuplicate,
+        Self::BreakerOpen,
+        Self::BudgetExhausted,
+        Self::ConversionUnmapped,
+        Self::CredentialRejected,
+        Self::DisclosureViolation,
+        Self::EgressRefused,
+        Self::Script,
+        Self::ScriptBudgetExceeded,
+        Self::ThrottleRejected,
+        Self::Upstream,
+        Self::UpstreamConnection,
+        Self::UpstreamHttp,
+        Self::UpstreamMalformed,
+        Self::UpstreamRedirect,
+        Self::UpstreamTimeout,
+        Self::UpstreamTooLarge,
+        Self::Validation,
+    ];
+
     #[must_use]
-    pub const fn status_range(&self) -> Option<(u16, u16)> {
+    pub const fn class(self) -> &'static str {
         match self {
-            Self::StatusRange { minimum, maximum } => Some((*minimum, *maximum)),
-            Self::Script { .. } => None,
+            Self::Upstream => "upstream",
+            Self::UpstreamHttp => "upstream.http",
+            Self::UpstreamTimeout => "upstream.timeout",
+            Self::UpstreamConnection => "upstream.connection",
+            Self::UpstreamMalformed => "upstream.malformed",
+            Self::UpstreamTooLarge => "upstream.tooLarge",
+            Self::UpstreamRedirect => "upstream.redirect",
+            Self::BreakerOpen => "breaker.open",
+            Self::ThrottleRejected => "throttle.rejected",
+            Self::Validation => "validation",
+            Self::ConversionUnmapped => "conversion.unmapped",
+            Self::AggregationDuplicate => "aggregation.duplicate",
+            Self::Script => "script",
+            Self::BudgetExhausted => "budget.exhausted",
+            Self::CredentialRejected => "credential.rejected",
+            Self::DisclosureViolation => "disclosure.violation",
+            Self::EgressRefused => "egress.refused",
+            Self::ScriptBudgetExceeded => "script.budgetExceeded",
         }
     }
 
-    /// The script seam this rule carries, if any.
+    /// Resolve a class string back to its variant, or `None` for any string
+    /// outside the closed hierarchy.
     #[must_use]
-    pub const fn script(&self) -> Option<&ScriptReference> {
+    pub fn from_class(class: &str) -> Option<Self> {
+        Self::ALL
+            .iter()
+            .copied()
+            .find(|candidate| candidate.class() == class)
+    }
+
+    /// Whether no `onException` or `doCatch` may name this class. The five
+    /// uncatchable classes guard the boundary
+    /// (`products/adapter/CONCEPT.md` section 8.7).
+    #[must_use]
+    pub const fn is_uncatchable(self) -> bool {
+        matches!(
+            self,
+            Self::BudgetExhausted
+                | Self::CredentialRejected
+                | Self::DisclosureViolation
+                | Self::EgressRefused
+                | Self::ScriptBudgetExceeded
+        )
+    }
+}
+
+impl serde::Serialize for ErrorClass {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.class())
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for ErrorClass {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let class = String::deserialize(deserializer)?;
+        Self::from_class(&class).ok_or_else(|| {
+            serde::de::Error::custom(registry_platform_yaml::Invalid::expected(
+                "an error class from the closed Adapter hierarchy",
+                "Name one class of the error hierarchy in CONCEPT.md section 8.7.",
+            ))
+        })
+    }
+}
+
+/// A component kind, the ported subset of Camel's component library
+/// (`products/adapter/CONCEPT.md` section 8.8). `rest` is the facade
+/// consumer; `direct` calls routes in process; `http` and `graphql` are the
+/// upstream producers.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ComponentKind {
+    Direct,
+    Http,
+    Rest,
+    GraphQl,
+}
+
+impl ComponentKind {
+    /// The complete closed set, in name order.
+    pub const ALL: &'static [Self] = &[Self::Direct, Self::GraphQl, Self::Http, Self::Rest];
+
+    #[must_use]
+    pub const fn name(self) -> &'static str {
         match self {
-            Self::StatusRange { .. } => None,
-            Self::Script { seam } => Some(seam),
+            Self::Direct => "direct",
+            Self::Http => "http",
+            Self::Rest => "rest",
+            Self::GraphQl => "graphql",
         }
+    }
+
+    /// Resolve a component name back to its variant, or `None` outside the
+    /// closed set.
+    #[must_use]
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL
+            .iter()
+            .copied()
+            .find(|candidate| candidate.name() == name)
+    }
+
+    /// Whether a pack endpoint may declare this component. Only the two
+    /// producer components name upstream endpoints; `direct` names routes
+    /// and `rest` is the engine-owned facade consumer.
+    #[must_use]
+    pub const fn is_producer(self) -> bool {
+        matches!(self, Self::Http | Self::GraphQl)
+    }
+}
+
+/// An expression language a pack may require of the engine
+/// (`products/adapter/CONCEPT.md` section 8.5).
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Language {
+    Constant,
+    Header,
+    ExchangeProperty,
+    #[serde(rename = "jsonpath")]
+    JsonPath,
+    Rhai,
+}
+
+impl Language {
+    /// The complete closed set, in name order.
+    pub const ALL: &'static [Self] = &[
+        Self::Constant,
+        Self::ExchangeProperty,
+        Self::Header,
+        Self::JsonPath,
+        Self::Rhai,
+    ];
+
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Constant => "constant",
+            Self::ExchangeProperty => "exchangeProperty",
+            Self::Header => "header",
+            Self::JsonPath => "jsonpath",
+            Self::Rhai => "rhai",
+        }
+    }
+
+    /// Resolve a language name back to its variant, or `None` outside the
+    /// closed set.
+    #[must_use]
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL
+            .iter()
+            .copied()
+            .find(|candidate| candidate.name() == name)
+    }
+}
+
+/// An EIP a pack may require of the engine, named after the step union in
+/// `crate::route` (`products/adapter/CONCEPT.md` section 8.6).
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Eip {
+    Choice,
+    CircuitBreaker,
+    DoTry,
+    Enrich,
+    ErrorHandler,
+    Filter,
+    IdempotentConsumer,
+    Loop,
+    OnException,
+    RemoveHeader,
+    RemoveProperty,
+    Script,
+    SetBody,
+    SetHeader,
+    SetProperty,
+    Split,
+    Stop,
+    Throttle,
+    To,
+    Transform,
+    Validate,
+}
+
+impl Eip {
+    /// The complete closed set, in name order.
+    pub const ALL: &'static [Self] = &[
+        Self::Choice,
+        Self::CircuitBreaker,
+        Self::DoTry,
+        Self::Enrich,
+        Self::ErrorHandler,
+        Self::Filter,
+        Self::IdempotentConsumer,
+        Self::Loop,
+        Self::OnException,
+        Self::RemoveHeader,
+        Self::RemoveProperty,
+        Self::Script,
+        Self::SetBody,
+        Self::SetHeader,
+        Self::SetProperty,
+        Self::Split,
+        Self::Stop,
+        Self::Throttle,
+        Self::To,
+        Self::Transform,
+        Self::Validate,
+    ];
+
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Choice => "choice",
+            Self::CircuitBreaker => "circuitBreaker",
+            Self::DoTry => "doTry",
+            Self::Enrich => "enrich",
+            Self::ErrorHandler => "errorHandler",
+            Self::Filter => "filter",
+            Self::IdempotentConsumer => "idempotentConsumer",
+            Self::Loop => "loop",
+            Self::OnException => "onException",
+            Self::RemoveHeader => "removeHeader",
+            Self::RemoveProperty => "removeProperty",
+            Self::Script => "script",
+            Self::SetBody => "setBody",
+            Self::SetHeader => "setHeader",
+            Self::SetProperty => "setProperty",
+            Self::Split => "split",
+            Self::Stop => "stop",
+            Self::Throttle => "throttle",
+            Self::To => "to",
+            Self::Transform => "transform",
+            Self::Validate => "validate",
+        }
+    }
+
+    /// Resolve an EIP name back to its variant, or `None` outside the
+    /// closed set.
+    #[must_use]
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL
+            .iter()
+            .copied()
+            .find(|candidate| candidate.name() == name)
+    }
+}
+
+/// The destination of a `to` or `enrich` send: a `direct:` route, an
+/// `http:` endpoint, or a `graphql:` endpoint declared in the pack
+/// (`products/adapter/CONCEPT.md` sections 8.3 and 8.8). The URI is static;
+/// no `toD` is ported.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct SendUri {
+    /// The component the URI names.
+    pub component: SendComponent,
+    /// The route or endpoint identifier after the prefix.
+    pub id: String,
+}
+
+/// The component prefix a send URI may carry.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub enum SendComponent {
+    Direct,
+    Http,
+    GraphQl,
+}
+
+impl SendUri {
+    /// Parse a static send URI of the form `<component>:<id>`.
+    #[must_use]
+    pub fn parse(uri: &str) -> Option<Self> {
+        let (prefix, id) = uri.split_once(':')?;
+        let component = match prefix {
+            "direct" => SendComponent::Direct,
+            "http" => SendComponent::Http,
+            "graphql" => SendComponent::GraphQl,
+            _ => return None,
+        };
+        if id.is_empty() {
+            return None;
+        }
+        Some(Self {
+            component,
+            id: id.to_string(),
+        })
+    }
+
+    /// The URI text this reference serializes to.
+    #[must_use]
+    pub fn uri(&self) -> String {
+        let prefix = match self.component {
+            SendComponent::Direct => "direct",
+            SendComponent::Http => "http",
+            SendComponent::GraphQl => "graphql",
+        };
+        format!("{prefix}:{}", self.id)
+    }
+}
+
+impl Serialize for SendUri {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.uri())
+    }
+}
+
+impl<'de> Deserialize<'de> for SendUri {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let uri = String::deserialize(deserializer)?;
+        Self::parse(&uri).ok_or_else(|| {
+            serde::de::Error::custom(registry_platform_yaml::Invalid::expected(
+                "a static send URI: direct:<routeId>, http:<endpointId>, or graphql:<endpointId>",
+                "Write a static `direct:`, `http:`, or `graphql:` URI; `toD` is not ported.",
+            ))
+        })
     }
 }
 
@@ -203,26 +545,8 @@ impl DetectionRule {
 mod tests {
     use super::*;
 
-    #[test]
-    fn operations_round_trip() {
-        for operation in FacadeOperation::ALL {
-            assert_eq!(FacadeOperation::from_id(operation.id()), Some(*operation));
-            let json = serde_json::to_string(operation).expect("serialize");
-            assert_eq!(
-                serde_json::from_str::<FacadeOperation>(&json).ok(),
-                Some(*operation)
-            );
-        }
-        assert_eq!(FacadeOperation::from_id("records.delete"), None);
-    }
-
-    #[test]
-    fn writes_are_create_and_update_only() {
-        assert!(!FacadeOperation::RecordsSearch.is_write());
-        assert!(!FacadeOperation::RecordsGet.is_write());
-        assert!(FacadeOperation::RecordsCreate.is_write());
-        assert!(FacadeOperation::RecordsUpdate.is_write());
-    }
+    const SHA256_EXAMPLE: &str =
+        "sha256:678260a56715cba21db1f0687e5a2c5e5efb2ea0b8eea687b5f3ee8723c5f6c9";
 
     #[test]
     fn envelopes_round_trip_and_refuse_outside_names() {
@@ -239,27 +563,113 @@ mod tests {
     }
 
     #[test]
-    fn detection_rules_round_trip() {
-        let range = DetectionRule::StatusRange {
-            minimum: 200,
-            maximum: 299,
-        };
-        let json = serde_json::to_string(&range).expect("serialize");
-        assert!(json.contains("\"kind\":\"status-range\""));
+    fn http_methods_round_trip_and_only_get_is_safe() {
+        for method in HttpMethod::ALL {
+            let json = serde_json::to_string(method).expect("serialize");
+            assert_eq!(
+                serde_json::from_str::<HttpMethod>(&json).ok(),
+                Some(*method)
+            );
+            assert_eq!(method.is_safe(), *method == HttpMethod::Get);
+        }
         assert_eq!(
-            serde_json::from_str::<DetectionRule>(&json).ok(),
-            Some(range)
+            serde_json::from_str::<HttpMethod>("\"DELETE\"").ok(),
+            None,
+            "DELETE is outside the closed method set"
         );
-        let script = DetectionRule::Script {
-            seam: ScriptReference {
-                path: "seams/summary.rhai".to_string(),
-                digest: Digest::new(SHA256_EXAMPLE).expect("digest"),
-            },
-        };
-        assert_eq!(script.status_range(), None);
-        assert!(script.script().is_some());
     }
 
-    const SHA256_EXAMPLE: &str =
-        "sha256:678260a56715cba21db1f0687e5a2c5e5efb2ea0b8eea687b5f3ee8723c5f6c9";
+    #[test]
+    fn error_classes_round_trip() {
+        for class in ErrorClass::ALL {
+            assert_eq!(ErrorClass::from_class(class.class()), Some(*class));
+            let json = serde_json::to_string(class).expect("serialize");
+            assert_eq!(serde_json::from_str::<ErrorClass>(&json).ok(), Some(*class));
+        }
+        assert_eq!(ErrorClass::from_class("upstream.exploded"), None);
+        assert!(serde_json::from_str::<ErrorClass>("\"upstream.exploded\"").is_err());
+    }
+
+    #[test]
+    fn uncatchable_set_is_exactly_the_boundary() {
+        let uncatchable: Vec<_> = ErrorClass::ALL
+            .iter()
+            .copied()
+            .filter(|class| class.is_uncatchable())
+            .map(|class| class.class())
+            .collect();
+        assert_eq!(
+            uncatchable,
+            [
+                "budget.exhausted",
+                "credential.rejected",
+                "disclosure.violation",
+                "egress.refused",
+                "script.budgetExceeded",
+            ]
+        );
+    }
+
+    #[test]
+    fn component_kinds_round_trip() {
+        for component in ComponentKind::ALL {
+            assert_eq!(ComponentKind::from_name(component.name()), Some(*component));
+            let json = serde_json::to_string(component).expect("serialize");
+            assert_eq!(
+                serde_json::from_str::<ComponentKind>(&json).ok(),
+                Some(*component)
+            );
+        }
+        assert_eq!(
+            ComponentKind::ALL
+                .iter()
+                .filter(|component| component.is_producer())
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn languages_and_eips_round_trip() {
+        for language in Language::ALL {
+            assert_eq!(Language::from_name(language.name()), Some(*language));
+        }
+        for eip in Eip::ALL {
+            assert_eq!(Eip::from_name(eip.name()), Some(*eip));
+        }
+        assert_eq!(Language::from_name("simple"), None);
+        assert_eq!(Eip::from_name("wireTap"), None);
+    }
+
+    #[test]
+    fn send_uris_round_trip_over_the_three_components() {
+        for uri in ["direct:fetchRecord", "http:tracker", "graphql:patient"] {
+            let parsed = SendUri::parse(uri).expect("parse");
+            assert_eq!(parsed.uri(), uri);
+            let json = serde_json::to_string(&parsed).expect("serialize");
+            assert_eq!(json, format!("\"{uri}\""));
+            assert_eq!(serde_json::from_str::<SendUri>(&json).ok(), Some(parsed));
+        }
+        assert_eq!(SendUri::parse("kafka:topic"), None);
+        assert_eq!(SendUri::parse("direct:"), None);
+        assert!(serde_json::from_str::<SendUri>("\"rest:facade\"").is_err());
+    }
+
+    #[test]
+    fn script_references_carry_a_digest_pin() {
+        let script = ScriptReference {
+            path: "scripts/tracked-entity.rhai".to_string(),
+            digest: Digest::new(SHA256_EXAMPLE).expect("digest"),
+        };
+        let json = serde_json::to_string(&script).expect("serialize");
+        assert!(json.contains("\"digest\""));
+        assert_eq!(
+            serde_json::from_str::<ScriptReference>(&json).ok(),
+            Some(script)
+        );
+        assert!(
+            serde_json::from_str::<ScriptReference>(r#"{"path": "x.rhai"}"#).is_err(),
+            "a script without its digest pin is refused"
+        );
+    }
 }
