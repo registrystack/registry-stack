@@ -180,22 +180,6 @@ fn check_command(
             );
             return write_failure(&report, format, stdout, stderr).map(|()| ExitCode::from(exit));
         }
-        Err(check::CheckFailure::SchemaMismatch { path, detail }) => {
-            let exit = OPERATIONAL_FAILURE_EXIT;
-            let report = failure(
-                command_name,
-                exit,
-                vec![json!({
-                    "severity": "error",
-                    "code": "adapterctl.schema-mismatch",
-                    "artifact": "generated-schemas",
-                    "path": path,
-                    "message": format!("a decoded document failed the generated schema: {detail}"),
-                    "suggestedAction": "Regenerate the schemas with `adapterctl schemas`; if the drift check passes, report the mismatch.",
-                })],
-            );
-            return write_failure(&report, format, stdout, stderr).map(|()| ExitCode::from(exit));
-        }
     };
     let errors = refused(&run.diagnostics, args.deny_warnings);
     if errors {

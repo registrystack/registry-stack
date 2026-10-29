@@ -10,7 +10,8 @@ intercepts:
   - kind: endpoint
     endpoint: case-api
 entries:
-  - given:
+  - operation: cases.get
+    given:
       endpoint: case-api
       method: GET
       path: /api/cases/case

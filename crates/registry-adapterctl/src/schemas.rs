@@ -8,7 +8,7 @@
 
 use clap::Args;
 use registry_adapter_core::{
-    ADAPTER_FIXTURE_API_VERSION, ADAPTER_FIXTURE_KIND, ADAPTER_FIXTURE_SCHEMA_ID,
+    ErrorClass, ADAPTER_FIXTURE_API_VERSION, ADAPTER_FIXTURE_KIND, ADAPTER_FIXTURE_SCHEMA_ID,
     ADAPTER_PACK_API_VERSION, ADAPTER_PACK_KIND, ADAPTER_PACK_SCHEMA_ID,
     ADAPTER_PROFILE_API_VERSION, ADAPTER_PROFILE_KIND, ADAPTER_PROFILE_SCHEMA_ID,
     ADAPTER_PROJECT_API_VERSION, ADAPTER_PROJECT_KIND, ADAPTER_PROJECT_SCHEMA_ID,
@@ -24,6 +24,10 @@ use crate::report;
 /// The default directory the generated schemas are written to, relative to
 /// the repository root the command runs from.
 pub const DEFAULT_OUTPUT_DIR: &str = "products/adapter/schemas";
+
+/// The static send URIs `SendUri::parse` accepts. Pinned to the parser by
+/// the generator's own test.
+const SEND_URI_PATTERN: &str = "^(direct|http|graphql):.+$";
 
 #[derive(Debug, Args)]
 pub struct SchemasArgs {
@@ -115,6 +119,7 @@ pub fn documents() -> Result<BTreeMap<&'static str, String>, serde_json::Error> 
         refuse_null_outside_shared_blocks(&mut derived, &shared);
         set_const(&mut derived, "apiVersion", entry.api_version);
         set_const(&mut derived, "kind", entry.kind);
+        apply_manual_wire_forms(&mut derived, entry.file);
         let mut object = match derived {
             Value::Object(object) => object,
             _ => unreachable!("schemars derives a schema object for a struct"),
@@ -231,6 +236,142 @@ fn set_const(schema: &mut Value, property: &str, expected: &str) {
     }
 }
 
+/// Rewrite the definitions whose wire form a manual serde impl defines,
+/// which the derive behind `schemars` cannot see. The table is closed over
+/// the model's hand-written impls; the generator's tests hold each rewrite
+/// to the reader's behavior.
+fn apply_manual_wire_forms(schema: &mut Value, file: &str) {
+    let definitions = schema
+        .get_mut("$defs")
+        .and_then(Value::as_object_mut)
+        .expect("schemars derives the format's definitions");
+    match file {
+        "pack.v1alpha1.schema.json" => {
+            rewrite_send_uri(definitions);
+            rewrite_error_class(definitions);
+            internally_tagged(
+                definitions
+                    .get_mut("EndpointAuthentication")
+                    .expect("the pack schema defines the endpoint authentication"),
+                "type",
+            );
+        }
+        "runtime.v1alpha1.schema.json" => {
+            internally_tagged(
+                definitions
+                    .get_mut("RuntimeCredential")
+                    .expect("the runtime schema defines the runtime credential"),
+                "type",
+            );
+        }
+        _ => {}
+    }
+}
+
+/// `SendUri`'s serde is a manual impl: the wire form is the static URI text
+/// (`direct:<routeId>`, `http:<endpointId>`, `graphql:<endpointId>`), not
+/// the struct `schemars` renders from it. The component definition it
+/// absorbed is dropped with it.
+fn rewrite_send_uri(definitions: &mut serde_json::Map<String, Value>) {
+    let send_uri = definitions
+        .get("SendUri")
+        .expect("the pack schema defines the send URI")
+        .clone();
+    let mut rewritten = serde_json::Map::new();
+    if let Some(description) = send_uri.get("description") {
+        rewritten.insert("description".to_owned(), description.clone());
+    }
+    rewritten.insert(
+        "pattern".to_owned(),
+        Value::String(SEND_URI_PATTERN.to_owned()),
+    );
+    rewritten.insert("type".to_owned(), Value::String("string".to_owned()));
+    definitions.insert("SendUri".to_owned(), Value::Object(rewritten));
+    definitions.remove("SendComponent");
+}
+
+/// `ErrorClass`'s serde is a manual impl: the wire form is the closed
+/// hierarchy's dotted class strings, not the variant names `schemars`
+/// renders. The strings come from the model itself, so a later class lands
+/// here without a generator edit.
+fn rewrite_error_class(definitions: &mut serde_json::Map<String, Value>) {
+    let classes: Vec<Value> = ErrorClass::ALL
+        .iter()
+        .map(|class| Value::String(class.class().to_owned()))
+        .collect();
+    let error_class = definitions
+        .get_mut("ErrorClass")
+        .expect("the pack schema defines the error class")
+        .as_object_mut()
+        .expect("a definition is an object");
+    error_class.insert("enum".to_owned(), Value::Array(classes));
+}
+
+/// Rewrite one enum definition whose serde representation the
+/// `registry-platform-yaml` union macros implement by hand: `schemars`
+/// renders the external form (`{"none": {}}`), the reader accepts the
+/// internally tagged form (`{"type": "none"}`). Every variant keeps its
+/// description and fields and gains the required constant tag member.
+fn internally_tagged(definition: &mut Value, tag: &str) {
+    let object = definition
+        .as_object_mut()
+        .expect("a definition is an object");
+    let variants = object
+        .remove("oneOf")
+        .expect("schemars renders the tagged union as oneOf")
+        .as_array_mut()
+        .expect("oneOf is an array")
+        .drain(..)
+        .map(|variant| tagged_variant(&variant, tag))
+        .collect::<Vec<_>>();
+    object.insert("oneOf".to_owned(), Value::Array(variants));
+}
+
+/// The internally tagged form of one externally rendered variant.
+fn tagged_variant(variant: &Value, tag: &str) -> Value {
+    let properties = variant
+        .get("properties")
+        .and_then(Value::as_object)
+        .expect("schemars renders each variant under its kind name");
+    let mut kinds = properties.iter();
+    let (kind, fields) = kinds.next().expect("schemars renders one kind per variant");
+    assert!(
+        kinds.next().is_none(),
+        "schemars renders one kind per variant"
+    );
+    let fields = fields
+        .as_object()
+        .expect("a variant's fields are an object");
+    let mut tagged = serde_json::Map::new();
+    if let Some(description) = variant.get("description") {
+        tagged.insert("description".to_owned(), description.clone());
+    }
+    tagged.insert("type".to_owned(), Value::String("object".to_owned()));
+    tagged.insert("additionalProperties".to_owned(), Value::Bool(false));
+    let mut members = serde_json::Map::new();
+    members.insert(
+        tag.to_owned(),
+        serde_json::json!({ "const": kind, "type": "string" }),
+    );
+    if let Some(fields) = fields.get("properties").and_then(Value::as_object) {
+        for (name, field) in fields {
+            members.insert(name.clone(), field.clone());
+        }
+    }
+    tagged.insert("properties".to_owned(), Value::Object(members));
+    let mut required = vec![Value::String(tag.to_owned())];
+    if let Some(fields_required) = fields.get("required").and_then(Value::as_array) {
+        required.extend(fields_required.iter().cloned());
+    }
+    required.sort_by(|left, right| {
+        left.as_str()
+            .unwrap_or_default()
+            .cmp(right.as_str().unwrap_or_default())
+    });
+    tagged.insert("required".to_owned(), Value::Array(required));
+    Value::Object(tagged)
+}
+
 /// Why the `schemas` command failed.
 #[derive(Debug)]
 pub(crate) enum SchemasFailure {
@@ -342,6 +483,7 @@ pub(crate) fn failure(failure: &SchemasFailure) -> (u8, Vec<Value>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use registry_adapter_core::SendUri;
 
     /// The generated documents are deterministic and carry the mandated
     /// `$id` for each format.
@@ -424,5 +566,124 @@ mod tests {
         std::fs::write(&profile, edited).unwrap();
         let drifted = compare(&output, &documents().unwrap()).unwrap();
         assert_eq!(drifted, vec!["profile.v1alpha1.schema.json"]);
+    }
+
+    /// The manual wire forms the generator rewrites stay pinned to the
+    /// reader: `SendUri` accepts exactly the URIs its parser accepts, and
+    /// the error classes carry the hierarchy's dotted strings.
+    #[test]
+    fn the_send_uri_schema_and_parser_agree() {
+        let pack: Value =
+            serde_json::from_str(&documents().unwrap()["pack.v1alpha1.schema.json"]).unwrap();
+        let definitions = pack["$defs"].as_object().unwrap();
+        assert!(!definitions.contains_key("SendComponent"));
+        let send_uri = &definitions["SendUri"];
+        assert_eq!(send_uri["type"], "string");
+        let validator = jsonschema::JSONSchema::options()
+            .with_draft(jsonschema::Draft::Draft202012)
+            .compile(send_uri)
+            .unwrap();
+        for (uri, accepted) in [
+            ("direct:fetchCase", true),
+            ("http:case-api", true),
+            ("graphql:list", true),
+            ("rest:fetchCase", false),
+            ("direct:", false),
+            ("fetchCase", false),
+        ] {
+            let instance = Value::String(uri.to_owned());
+            assert_eq!(
+                validator.validate(&instance).is_ok(),
+                accepted,
+                "the schema must {action} {uri}",
+                action = if accepted { "accept" } else { "refuse" }
+            );
+            assert_eq!(
+                SendUri::parse(uri).is_some(),
+                accepted,
+                "the parser must {action} {uri}",
+                action = if accepted { "accept" } else { "refuse" }
+            );
+        }
+    }
+
+    /// The error class schema enumerates the dotted class strings the
+    /// reader resolves, never the variant names.
+    #[test]
+    fn the_error_class_schema_names_the_wire_strings() {
+        let pack: Value =
+            serde_json::from_str(&documents().unwrap()["pack.v1alpha1.schema.json"]).unwrap();
+        let classes = pack["$defs"]["ErrorClass"]["enum"].as_array().unwrap();
+        assert!(classes.contains(&serde_json::json!("upstream.timeout")));
+        assert!(classes.contains(&serde_json::json!("script.budgetExceeded")));
+        assert!(!classes.contains(&serde_json::json!("UpstreamTimeout")));
+        assert_eq!(classes.len(), registry_adapter_core::ErrorClass::ALL.len());
+        for class in registry_adapter_core::ErrorClass::ALL {
+            assert!(classes.contains(&serde_json::json!(class.class())));
+        }
+    }
+
+    /// The endpoint authentication schema renders the internally tagged form
+    /// the reader accepts: the `type` member names the kind, unit kinds
+    /// carry nothing else, and a fielded kind keeps its fields beside the
+    /// tag.
+    #[test]
+    fn the_endpoint_authentication_schema_carries_the_kind_tag() {
+        let pack: Value =
+            serde_json::from_str(&documents().unwrap()["pack.v1alpha1.schema.json"]).unwrap();
+        let authentication = &pack["$defs"]["EndpointAuthentication"];
+        let variants = authentication["oneOf"].as_array().unwrap();
+        let oauth = variants
+            .iter()
+            .find(|variant| variant["properties"]["type"]["const"] == "oauth2-client-credentials")
+            .expect("the client-credentials kind renders");
+        assert_eq!(oauth["required"], serde_json::json!(["type"]));
+        let api_key = variants
+            .iter()
+            .find(|variant| variant["properties"]["type"]["const"] == "static-api-key")
+            .expect("the static-api-key kind renders");
+        assert_eq!(
+            api_key["required"],
+            serde_json::json!(["headerName", "type"])
+        );
+        assert_eq!(api_key["properties"]["headerName"]["type"], "string");
+        let validator = jsonschema::JSONSchema::options()
+            .with_draft(jsonschema::Draft::Draft202012)
+            .compile(authentication)
+            .unwrap();
+        assert!(validator
+            .validate(&serde_json::json!({"type": "oauth2-client-credentials"}))
+            .is_ok());
+        assert!(validator
+            .validate(&serde_json::json!({"type": "static-api-key", "headerName": "X-Key"}))
+            .is_ok());
+        assert!(validator
+            .validate(&serde_json::json!({"type": "imagined"}))
+            .is_err());
+        assert!(validator
+            .validate(&serde_json::json!({"oauth2-client-credentials": {}}))
+            .is_err());
+    }
+
+    /// The runtime credential schema renders the internally tagged form the
+    /// reader accepts, with every credential field beside the tag.
+    #[test]
+    fn the_runtime_credential_schema_carries_the_kind_tag() {
+        let runtime: Value =
+            serde_json::from_str(&documents().unwrap()["runtime.v1alpha1.schema.json"]).unwrap();
+        let credential = &runtime["$defs"]["RuntimeCredential"];
+        let variants = credential["oneOf"].as_array().unwrap();
+        let basic = variants
+            .iter()
+            .find(|variant| variant["properties"]["type"]["const"] == "basic")
+            .expect("the basic kind renders");
+        assert_eq!(
+            basic["required"],
+            serde_json::json!(["passwordRef", "type", "usernameRef"])
+        );
+        assert_eq!(
+            basic["properties"]["usernameRef"]["$ref"],
+            "#/$defs/SecretReference"
+        );
     }
 }

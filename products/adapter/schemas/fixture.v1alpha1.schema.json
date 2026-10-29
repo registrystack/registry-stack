@@ -19,12 +19,17 @@
           "$ref": "#/$defs/RecordedRequest",
           "description": "The recorded upstream exchange."
         },
+        "operation": {
+          "$ref": "#/$defs/ExternalId",
+          "description": "The profile operation this entry exercises; the facade-side\nprimary key of the entry."
+        },
         "upstreamResponse": {
           "$ref": "#/$defs/RecordedResponse",
           "description": "The upstream reply the route works from."
         }
       },
       "required": [
+        "operation",
         "given",
         "upstreamResponse",
         "expectedFacadeResponse"

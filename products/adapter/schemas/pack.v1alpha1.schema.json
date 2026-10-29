@@ -414,13 +414,13 @@
           "additionalProperties": false,
           "description": "Nothing is sent. The checks admit it only for a numeric-loopback\norigin or an endpoint with an mTLS client identity.",
           "properties": {
-            "none": {
-              "additionalProperties": false,
-              "type": "object"
+            "type": {
+              "const": "none",
+              "type": "string"
             }
           },
           "required": [
-            "none"
+            "type"
           ],
           "type": "object"
         },
@@ -428,13 +428,13 @@
           "additionalProperties": false,
           "description": "`Authorization: Basic` from the runtime's `usernameRef` and\n`passwordRef`.",
           "properties": {
-            "basic": {
-              "additionalProperties": false,
-              "type": "object"
+            "type": {
+              "const": "basic",
+              "type": "string"
             }
           },
           "required": [
-            "basic"
+            "type"
           ],
           "type": "object"
         },
@@ -442,19 +442,17 @@
           "additionalProperties": false,
           "description": "`Authorization: <scheme> <token>` from the runtime's `tokenRef`;\n`scheme` defaults to `Bearer`, Evidence's spelling.",
           "properties": {
-            "static-authorization": {
-              "additionalProperties": false,
-              "properties": {
-                "scheme": {
-                  "description": "The RFC 9110 scheme the resolved token is presented under.",
-                  "type": "string"
-                }
-              },
-              "type": "object"
+            "scheme": {
+              "description": "The RFC 9110 scheme the resolved token is presented under.",
+              "type": "string"
+            },
+            "type": {
+              "const": "static-authorization",
+              "type": "string"
             }
           },
           "required": [
-            "static-authorization"
+            "type"
           ],
           "type": "object"
         },
@@ -462,22 +460,18 @@
           "additionalProperties": false,
           "description": "One declared header from the runtime's `valueRef`; reserved header\nnames are refused.",
           "properties": {
-            "static-api-key": {
-              "additionalProperties": false,
-              "properties": {
-                "headerName": {
-                  "description": "The header the key travels under.",
-                  "type": "string"
-                }
-              },
-              "required": [
-                "headerName"
-              ],
-              "type": "object"
+            "headerName": {
+              "description": "The header the key travels under.",
+              "type": "string"
+            },
+            "type": {
+              "const": "static-api-key",
+              "type": "string"
             }
           },
           "required": [
-            "static-api-key"
+            "headerName",
+            "type"
           ],
           "type": "object"
         },
@@ -485,13 +479,13 @@
           "additionalProperties": false,
           "description": "The RFC 6749 client-credentials grant with a shared secret; the\nruntime binds `tokenEndpoint`, `clientIdRef`, and `clientSecretRef`.",
           "properties": {
-            "oauth2-client-credentials": {
-              "additionalProperties": false,
-              "type": "object"
+            "type": {
+              "const": "oauth2-client-credentials",
+              "type": "string"
             }
           },
           "required": [
-            "oauth2-client-credentials"
+            "type"
           ],
           "type": "object"
         },
@@ -499,13 +493,13 @@
           "additionalProperties": false,
           "description": "The RFC 7523 private-key-jwt grant; the runtime binds\n`tokenEndpoint`, `clientIdRef`, and `clientAssertionKeyRef`. The\nsigned assertion always travels in the form body, as in Evidence,\nso this kind carries no placement parameter.",
           "properties": {
-            "oauth2-private-key-jwt": {
-              "additionalProperties": false,
-              "type": "object"
+            "type": {
+              "const": "oauth2-private-key-jwt",
+              "type": "string"
             }
           },
           "required": [
-            "oauth2-private-key-jwt"
+            "type"
           ],
           "type": "object"
         }
@@ -554,24 +548,24 @@
     "ErrorClass": {
       "description": "A closed error class, the port of Camel's Java exception hierarchy\n(`products/adapter/CONCEPT.md` section 8.7). Clauses match the closest\nclass across the error and its cause; the five uncatchable classes name\nthe boundary no `onException` or `doCatch` may handle.",
       "enum": [
-        "Upstream",
-        "UpstreamHttp",
-        "UpstreamTimeout",
-        "UpstreamConnection",
-        "UpstreamMalformed",
-        "UpstreamTooLarge",
-        "UpstreamRedirect",
-        "BreakerOpen",
-        "ThrottleRejected",
-        "Validation",
-        "ConversionUnmapped",
-        "AggregationDuplicate",
-        "Script",
-        "BudgetExhausted",
-        "CredentialRejected",
-        "DisclosureViolation",
-        "EgressRefused",
-        "ScriptBudgetExceeded"
+        "aggregation.duplicate",
+        "breaker.open",
+        "budget.exhausted",
+        "conversion.unmapped",
+        "credential.rejected",
+        "disclosure.violation",
+        "egress.refused",
+        "script",
+        "script.budgetExceeded",
+        "throttle.rejected",
+        "upstream",
+        "upstream.connection",
+        "upstream.http",
+        "upstream.malformed",
+        "upstream.redirect",
+        "upstream.timeout",
+        "upstream.tooLarge",
+        "validation"
       ],
       "type": "string"
     },
@@ -1029,32 +1023,10 @@
       ],
       "type": "object"
     },
-    "SendComponent": {
-      "description": "The component prefix a send URI may carry.",
-      "enum": [
-        "Direct",
-        "Http",
-        "GraphQl"
-      ],
-      "type": "string"
-    },
     "SendUri": {
       "description": "The destination of a `to` or `enrich` send: a `direct:` route, an\n`http:` endpoint, or a `graphql:` endpoint declared in the pack\n(`products/adapter/CONCEPT.md` sections 8.3 and 8.8). The URI is static;\nno `toD` is ported.",
-      "properties": {
-        "component": {
-          "$ref": "#/$defs/SendComponent",
-          "description": "The component the URI names."
-        },
-        "id": {
-          "description": "The route or endpoint identifier after the prefix.",
-          "type": "string"
-        }
-      },
-      "required": [
-        "component",
-        "id"
-      ],
-      "type": "object"
+      "pattern": "^(direct|http|graphql):.+$",
+      "type": "string"
     },
     "SetHeaderStep": {
       "description": "A `setHeader` step.",
@@ -1715,13 +1687,18 @@
         "type": "string"
       },
       "type": "array"
+    },
+    "version": {
+      "description": "The pack's own version; a project pin names it next to the digest\n(CFG-ID-4).",
+      "type": "string"
     }
   },
   "required": [
     "apiVersion",
     "id",
     "kind",
-    "testedVersions"
+    "testedVersions",
+    "version"
   ],
   "title": "Registry Adapter pack",
   "type": "object"

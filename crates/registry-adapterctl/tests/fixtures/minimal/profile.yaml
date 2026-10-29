@@ -1,6 +1,7 @@
 apiVersion: id.registrystack.org/formats/adapter/profile/v1alpha1
 kind: AdapterProfile
 id: case-api
+version: "1.0.0"
 operations:
   - id: cases.get
     method: GET

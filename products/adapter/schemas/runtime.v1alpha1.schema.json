@@ -236,13 +236,13 @@
           "additionalProperties": false,
           "description": "No credential; matches a `none` endpoint.",
           "properties": {
-            "none": {
-              "additionalProperties": false,
-              "type": "object"
+            "type": {
+              "const": "none",
+              "type": "string"
             }
           },
           "required": [
-            "none"
+            "type"
           ],
           "type": "object"
         },
@@ -250,27 +250,23 @@
           "additionalProperties": false,
           "description": "The Basic credential pair.",
           "properties": {
-            "basic": {
-              "additionalProperties": false,
-              "properties": {
-                "passwordRef": {
-                  "$ref": "#/$defs/SecretReference",
-                  "description": "The password secret reference."
-                },
-                "usernameRef": {
-                  "$ref": "#/$defs/SecretReference",
-                  "description": "The username secret reference."
-                }
-              },
-              "required": [
-                "usernameRef",
-                "passwordRef"
-              ],
-              "type": "object"
+            "passwordRef": {
+              "$ref": "#/$defs/SecretReference",
+              "description": "The password secret reference."
+            },
+            "type": {
+              "const": "basic",
+              "type": "string"
+            },
+            "usernameRef": {
+              "$ref": "#/$defs/SecretReference",
+              "description": "The username secret reference."
             }
           },
           "required": [
-            "basic"
+            "passwordRef",
+            "type",
+            "usernameRef"
           ],
           "type": "object"
         },
@@ -278,22 +274,18 @@
           "additionalProperties": false,
           "description": "The static token, presented under the endpoint's declared `scheme`.",
           "properties": {
-            "static-authorization": {
-              "additionalProperties": false,
-              "properties": {
-                "tokenRef": {
-                  "$ref": "#/$defs/SecretReference",
-                  "description": "The token secret reference."
-                }
-              },
-              "required": [
-                "tokenRef"
-              ],
-              "type": "object"
+            "tokenRef": {
+              "$ref": "#/$defs/SecretReference",
+              "description": "The token secret reference."
+            },
+            "type": {
+              "const": "static-authorization",
+              "type": "string"
             }
           },
           "required": [
-            "static-authorization"
+            "tokenRef",
+            "type"
           ],
           "type": "object"
         },
@@ -301,22 +293,18 @@
           "additionalProperties": false,
           "description": "The static API key, sent in the endpoint's declared header.",
           "properties": {
-            "static-api-key": {
-              "additionalProperties": false,
-              "properties": {
-                "valueRef": {
-                  "$ref": "#/$defs/SecretReference",
-                  "description": "The key secret reference."
-                }
-              },
-              "required": [
-                "valueRef"
-              ],
-              "type": "object"
+            "type": {
+              "const": "static-api-key",
+              "type": "string"
+            },
+            "valueRef": {
+              "$ref": "#/$defs/SecretReference",
+              "description": "The key secret reference."
             }
           },
           "required": [
-            "static-api-key"
+            "type",
+            "valueRef"
           ],
           "type": "object"
         },
@@ -324,64 +312,60 @@
           "additionalProperties": false,
           "description": "The client-credentials binding, Evidence's fields: the token\nendpoint, the client id, and the shared secret, all as references\nor fixed strings.",
           "properties": {
-            "oauth2-client-credentials": {
-              "additionalProperties": false,
-              "properties": {
-                "assumedLifetimeSeconds": {
-                  "description": "Lifetime assumed when the provider omits `expires_in`.",
-                  "format": "uint64",
-                  "maximum": 86400,
-                  "minimum": 1,
-                  "type": "integer"
-                },
-                "audience": {
-                  "description": "Fixed `audience` form parameter.",
-                  "type": "string"
-                },
-                "clientIdRef": {
-                  "$ref": "#/$defs/SecretReference",
-                  "description": "The client id secret reference."
-                },
-                "clientSecretRef": {
-                  "$ref": "#/$defs/SecretReference",
-                  "description": "The shared client secret reference."
-                },
-                "credentialPlacement": {
-                  "$ref": "#/$defs/CredentialPlacement",
-                  "description": "Where the shared client secret travels."
-                },
-                "maximumCacheSeconds": {
-                  "description": "The token cache ceiling, Evidence's bound.",
-                  "format": "uint64",
-                  "maximum": 86400,
-                  "minimum": 0,
-                  "type": "integer"
-                },
-                "resource": {
-                  "description": "RFC 8707 resource indicator sent as a token-request form\nparameter.",
-                  "type": "string"
-                },
-                "scope": {
-                  "description": "The token-request scope parameter.",
-                  "type": "string"
-                },
-                "tokenEndpoint": {
-                  "description": "The token endpoint, a fixed destination never derived from a\nresponse.",
-                  "type": "string"
-                }
-              },
-              "required": [
-                "tokenEndpoint",
-                "clientIdRef",
-                "clientSecretRef",
-                "credentialPlacement",
-                "maximumCacheSeconds"
-              ],
-              "type": "object"
+            "assumedLifetimeSeconds": {
+              "description": "Lifetime assumed when the provider omits `expires_in`.",
+              "format": "uint64",
+              "maximum": 86400,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "audience": {
+              "description": "Fixed `audience` form parameter.",
+              "type": "string"
+            },
+            "clientIdRef": {
+              "$ref": "#/$defs/SecretReference",
+              "description": "The client id secret reference."
+            },
+            "clientSecretRef": {
+              "$ref": "#/$defs/SecretReference",
+              "description": "The shared client secret reference."
+            },
+            "credentialPlacement": {
+              "$ref": "#/$defs/CredentialPlacement",
+              "description": "Where the shared client secret travels."
+            },
+            "maximumCacheSeconds": {
+              "description": "The token cache ceiling, Evidence's bound.",
+              "format": "uint64",
+              "maximum": 86400,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "resource": {
+              "description": "RFC 8707 resource indicator sent as a token-request form\nparameter.",
+              "type": "string"
+            },
+            "scope": {
+              "description": "The token-request scope parameter.",
+              "type": "string"
+            },
+            "tokenEndpoint": {
+              "description": "The token endpoint, a fixed destination never derived from a\nresponse.",
+              "type": "string"
+            },
+            "type": {
+              "const": "oauth2-client-credentials",
+              "type": "string"
             }
           },
           "required": [
-            "oauth2-client-credentials"
+            "clientIdRef",
+            "clientSecretRef",
+            "credentialPlacement",
+            "maximumCacheSeconds",
+            "tokenEndpoint",
+            "type"
           ],
           "type": "object"
         },
@@ -389,58 +373,54 @@
           "additionalProperties": false,
           "description": "The private-key-jwt binding, Evidence's fields. The signed\nassertion always travels in the form body; there is no placement\nparameter.",
           "properties": {
-            "oauth2-private-key-jwt": {
-              "additionalProperties": false,
-              "properties": {
-                "assumedLifetimeSeconds": {
-                  "format": "uint64",
-                  "maximum": 86400,
-                  "minimum": 1,
-                  "type": "integer"
-                },
-                "audience": {
-                  "type": "string"
-                },
-                "clientAssertionAudience": {
-                  "description": "Audience claim of the signed assertion, defaulting to the\ntoken endpoint.",
-                  "type": "string"
-                },
-                "clientAssertionKeyRef": {
-                  "$ref": "#/$defs/SecretReference",
-                  "description": "The private JWK the client assertion is signed with."
-                },
-                "clientIdRef": {
-                  "$ref": "#/$defs/SecretReference",
-                  "description": "The client id secret reference."
-                },
-                "maximumCacheSeconds": {
-                  "format": "uint64",
-                  "maximum": 86400,
-                  "minimum": 0,
-                  "type": "integer"
-                },
-                "resource": {
-                  "type": "string"
-                },
-                "scope": {
-                  "type": "string"
-                },
-                "tokenEndpoint": {
-                  "description": "The token endpoint, a fixed destination never derived from a\nresponse.",
-                  "type": "string"
-                }
-              },
-              "required": [
-                "tokenEndpoint",
-                "clientIdRef",
-                "clientAssertionKeyRef",
-                "maximumCacheSeconds"
-              ],
-              "type": "object"
+            "assumedLifetimeSeconds": {
+              "format": "uint64",
+              "maximum": 86400,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "audience": {
+              "type": "string"
+            },
+            "clientAssertionAudience": {
+              "description": "Audience claim of the signed assertion, defaulting to the\ntoken endpoint.",
+              "type": "string"
+            },
+            "clientAssertionKeyRef": {
+              "$ref": "#/$defs/SecretReference",
+              "description": "The private JWK the client assertion is signed with."
+            },
+            "clientIdRef": {
+              "$ref": "#/$defs/SecretReference",
+              "description": "The client id secret reference."
+            },
+            "maximumCacheSeconds": {
+              "format": "uint64",
+              "maximum": 86400,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "resource": {
+              "type": "string"
+            },
+            "scope": {
+              "type": "string"
+            },
+            "tokenEndpoint": {
+              "description": "The token endpoint, a fixed destination never derived from a\nresponse.",
+              "type": "string"
+            },
+            "type": {
+              "const": "oauth2-private-key-jwt",
+              "type": "string"
             }
           },
           "required": [
-            "oauth2-private-key-jwt"
+            "clientAssertionKeyRef",
+            "clientIdRef",
+            "maximumCacheSeconds",
+            "tokenEndpoint",
+            "type"
           ],
           "type": "object"
         }

@@ -6,11 +6,14 @@
 //! (`products/adapter/CONCEPT.md` sections 6, 8.1, and 13.3).
 //!
 //! The command reads every file, verifies the digest pins of the pack's
-//! script and query-file inventory (CFG-EMBED-1), composes the pure checks
-//! of `registry-adapter-core` (never re-implements them), and validates each
-//! fixture document against the generated `AdapterFixture` schema. It is
+//! script and query-file inventory (CFG-EMBED-1), and composes the pure
+//! checks of `registry-adapter-core` (never re-implements them). It is
 //! offline: no network, no database, no execution of a checked route or
 //! script.
+//!
+//! The command runs one reader, `registry-platform-yaml`; the generated
+//! schemas are held to it by this crate's tests, never by a second
+//! validation beside the authoring check.
 
 use clap::Args;
 use registry_adapter_core::{
@@ -23,7 +26,6 @@ use registry_platform_config::sha256_uri;
 use registry_platform_yaml::{
     ApiVersion, Decoded, Diagnostic, EnvelopeRule, Expect, FormatSpec, Reader, Report,
 };
-use serde_json::Value;
 use std::collections::BTreeSet;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -112,9 +114,6 @@ pub(crate) enum CheckFailure {
     /// A required file could not be read: the environment is broken, not the
     /// authoring.
     Io { path: String, source: io::Error },
-    /// A decoded fixture fails its own generated schema: the reader types
-    /// and the generator disagree, which is a defect, not a finding.
-    SchemaMismatch { path: String, detail: String },
 }
 
 /// One run's verdict: the findings collected over every file read, how many
@@ -170,7 +169,6 @@ pub(crate) fn run(args: &CheckArgs) -> Result<CheckRun, CheckFailure> {
         args.fixtures.clone()
     };
     let mut fixtures = Vec::new();
-    let mut fixture_documents = Vec::new();
     for path in &fixture_paths {
         if let Some(decoded) = read::<registry_adapter_core::AdapterFixture>(
             path,
@@ -179,7 +177,6 @@ pub(crate) fn run(args: &CheckArgs) -> Result<CheckRun, CheckFailure> {
             &mut files,
         )? {
             fixtures.push(decoded.value);
-            fixture_documents.push(decoded.document);
         }
     }
 
@@ -220,14 +217,6 @@ pub(crate) fn run(args: &CheckArgs) -> Result<CheckRun, CheckFailure> {
     };
     for diagnostic in check_workspace(&workspace) {
         report.push(diagnostic);
-    }
-
-    // Every fixture document must satisfy the generated `AdapterFixture`
-    // schema. A decoded document that fails it means the generator and the
-    // reader types disagree; the run is an operational failure, because the
-    // finding is about this tool's own outputs, not the authoring.
-    if let Some(failure) = validate_fixtures_against_schema(&fixture_documents)? {
-        return Err(failure);
     }
 
     Ok(CheckRun {
@@ -378,48 +367,59 @@ fn pin_finding(pack_path: &Path, pointer: &str, message: &str, script_path: &str
     diagnostic
 }
 
-/// Validate every fixture document against the generated `AdapterFixture`
-/// schema. `Ok(Some(failure))` is the operational mismatch defect.
-fn validate_fixtures_against_schema(
-    documents: &[registry_platform_yaml::Document],
-) -> Result<Option<CheckFailure>, CheckFailure> {
-    if documents.is_empty() {
-        return Ok(None);
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::Value;
+
+    /// Reader agreement (CFG-YAML-1 in spirit): every authored artifact
+    /// this crate's fixture corpus carries decodes through the platform
+    /// reader and satisfies the generated schema of its kind. The command
+    /// itself runs one reader; this test is where the generator is held to
+    /// it.
+    #[test]
+    fn the_generated_schemas_accept_what_the_reader_decodes() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/minimal");
+        let cases: [(&str, &FormatSpec<'static>, &str); 4] = [
+            (
+                "project.yaml",
+                &PROJECT_FORMAT,
+                "project.v1alpha1.schema.json",
+            ),
+            (
+                "profile.yaml",
+                &PROFILE_FORMAT,
+                "profile.v1alpha1.schema.json",
+            ),
+            ("pack.yaml", &PACK_FORMAT, "pack.v1alpha1.schema.json"),
+            (
+                "fixtures/records.yaml",
+                &FIXTURE_FORMAT,
+                "fixture.v1alpha1.schema.json",
+            ),
+        ];
+        let generated = crate::schemas::documents().expect("the schemas generate");
+        for (file, format, schema_file) in cases {
+            let bytes = std::fs::read(root.join(file)).expect("the corpus file exists");
+            let decoded = Reader::new(file.to_owned())
+                .decode::<Value>(&bytes, &Expect::one(format))
+                .unwrap_or_else(|refused| panic!("{file}: {}", refused.render_human()));
+            let schema: Value = serde_json::from_str(
+                generated
+                    .get(schema_file)
+                    .expect("the generator produces every kind's schema"),
+            )
+            .expect("the generated schema is JSON");
+            let validator = jsonschema::JSONSchema::options()
+                .with_draft(jsonschema::Draft::Draft202012)
+                .compile(&schema)
+                .expect("the generated schema compiles");
+            let errors: Vec<String> = validator
+                .validate(&decoded.document.to_json_value())
+                .err()
+                .map(|errors| errors.map(|error| error.to_string()).collect())
+                .unwrap_or_default();
+            assert!(errors.is_empty(), "{file}: {errors:?}");
+        }
     }
-    let generated = crate::schemas::documents().map_err(|error| CheckFailure::SchemaMismatch {
-        path: "fixture.v1alpha1.schema.json".to_owned(),
-        detail: error.to_string(),
-    })?;
-    let schema_text = generated
-        .get("fixture.v1alpha1.schema.json")
-        .expect("the generator produces the fixture schema");
-    let validator = jsonschema::JSONSchema::options()
-        .with_draft(jsonschema::Draft::Draft202012)
-        .compile(
-            &serde_json::from_str::<Value>(schema_text).map_err(|error| {
-                CheckFailure::SchemaMismatch {
-                    path: "fixture.v1alpha1.schema.json".to_owned(),
-                    detail: error.to_string(),
-                }
-            })?,
-        )
-        .map_err(|error| CheckFailure::SchemaMismatch {
-            path: "fixture.v1alpha1.schema.json".to_owned(),
-            detail: error.to_string(),
-        })?;
-    for document in documents {
-        let instance = document.to_json_value();
-        let detail = match validator.validate(&instance) {
-            Ok(()) => continue,
-            Err(errors) => errors
-                .map(|error| error.to_string())
-                .collect::<Vec<_>>()
-                .join("; "),
-        };
-        return Ok(Some(CheckFailure::SchemaMismatch {
-            path: document.file().to_owned(),
-            detail,
-        }));
-    }
-    Ok(None)
 }

@@ -1,6 +1,7 @@
 apiVersion: id.registrystack.org/formats/adapter/pack/v1alpha1
 kind: AdapterPack
 id: case-api-pack
+version: "1.0.0"
 testedVersions:
   - "2.7"
 endpoints:

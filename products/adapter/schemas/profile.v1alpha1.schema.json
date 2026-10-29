@@ -157,6 +157,10 @@
     "problemEnvelope": {
       "$ref": "#/$defs/EnvelopeTemplate",
       "description": "The problem envelope template; must carry the `problemCode` slot."
+    },
+    "version": {
+      "description": "The profile's own version; a project pin names it next to the\ndigest (CFG-ID-4).",
+      "type": "string"
     }
   },
   "required": [
@@ -165,7 +169,8 @@
     "kind",
     "operations",
     "problemCodes",
-    "problemEnvelope"
+    "problemEnvelope",
+    "version"
   ],
   "title": "Registry Adapter facade profile",
   "type": "object"
