@@ -21,7 +21,7 @@ pub(crate) type HttpStatus = BoundedU32<100, 599>;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(
-    tag = "kind",
+    remote = "Self",
     rename_all = "kebab-case",
     rename_all_fields = "camelCase",
     deny_unknown_fields
@@ -45,7 +45,7 @@ pub enum FixtureProvenance {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(
-    tag = "kind",
+    remote = "Self",
     rename_all = "kebab-case",
     rename_all_fields = "camelCase",
     deny_unknown_fields
@@ -64,6 +64,11 @@ pub enum Intercept {
         endpoint: ExternalId,
     },
 }
+
+registry_platform_yaml::tagged_union!(FixtureProvenance, tag = "type");
+crate::model::serialize_tagged_union!(FixtureProvenance, tag = "type");
+registry_platform_yaml::tagged_union!(Intercept, tag = "type");
+crate::model::serialize_tagged_union!(Intercept, tag = "type");
 
 /// One recorded upstream request the fixture replay matches against.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -146,7 +151,7 @@ mod tests {
             "id": "fx",
             "pack": "case-api-pack",
             "upstreamVersion": "2.7",
-            "provenance": {"kind": "captured", "reference": "staging"},
+            "provenance": {"type": "captured", "reference": "staging"},
             "intercepts": [],
             "entries": [{
                 "given": {"endpoint": "case-api", "method": "GET", "path": "/v2/cases"},
@@ -203,8 +208,8 @@ mod tests {
             }],
         };
         let json = serde_json::to_string(&fixture).expect("serialize");
-        assert!(json.contains(r#""kind":"captured""#));
-        assert!(json.contains(r#""kind":"token-endpoint""#));
+        assert!(json.contains(r#""type":"captured""#));
+        assert!(json.contains(r#""type":"token-endpoint""#));
         assert_eq!(
             serde_json::from_str::<AdapterFixture>(&json).ok(),
             Some(fixture)
@@ -216,19 +221,25 @@ mod tests {
     #[test]
     fn provenance_kinds_are_closed() {
         let documented: FixtureProvenance = serde_json::from_str(
-            r#"{ "kind": "documented", "reference": "API handbook section 4" }"#,
+            r#"{ "type": "documented", "reference": "API handbook section 4" }"#,
         )
         .expect("parse");
         assert!(matches!(documented, FixtureProvenance::Documented { .. }));
         assert!(serde_json::from_str::<FixtureProvenance>(
-            r#"{ "kind": "imagined", "reference": "x" }"#
+            r#"{ "type": "imagined", "reference": "x" }"#
         )
         .is_err());
         assert!(
-            serde_json::from_str::<Intercept>(r#"{ "kind": "route", "endpoint": "case-api" }"#)
+            serde_json::from_str::<Intercept>(r#"{ "type": "route", "endpoint": "case-api" }"#)
                 .is_err(),
             "a route-level intercept is not a fixture concept"
         );
+        // The discriminator is `type`; the earlier `kind` spelling is not
+        // read back (addendum update a).
+        assert!(serde_json::from_str::<FixtureProvenance>(
+            r#"{ "kind": "documented", "reference": "x" }"#,
+        )
+        .is_err());
     }
 
     /// A fixture naming a pack unknown to it is data; the checks refuse the
@@ -240,7 +251,7 @@ mod tests {
                 "id": "case-api-fixtures",
                 "pack": "other-pack",
                 "upstreamVersion": "2.7",
-                "provenance": { "kind": "documented", "reference": "handbook" },
+                "provenance": { "type": "documented", "reference": "handbook" },
                 "intercepts": []
             }"#,
         )
