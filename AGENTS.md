@@ -45,6 +45,10 @@ remain supporting services beside their product, not products of their own.
 | `crates/registry-documentsctl` | Document Store operator tooling and the `documentsctl` binary |
 | `crates/registry-documents-client` | Bounded Rust Document Store client over the runtime's HTTP contract |
 | `products/documents` | Document Store product contracts, starter example, generated schemas and OpenAPI document, and contributor check scripts |
+| `crates/registry-adapter-core` | Source-neutral Adapter model, wire DTOs, `adapter.*` problem codes, and pure authoring checks |
+| `crates/registry-adapter` | Adapter runtime: governed facade, call-plan interpreter, security surface, and audit journal |
+| `crates/registry-adapterctl` | Adapter authoring and operator tooling and the `adapterctl` binary |
+| `products/adapter` | Adapter product contract (`CONCEPT.md`), delivery plan, schemas, profiles, packs, examples, fixtures, and contributor check scripts |
 | `crates/registry-discovery` | Immutable Registry Discovery index runtime and the `discovery` binary |
 | `crates/registry-discovery-profile` | Closed provider-publication profile implemented by Evidence; published v1alpha1 resources retain their historical broader vocabulary |
 | `crates/registry-discovery-client` | Rust relying-party SDK for bounded search, resolution, and inert exact selections |
@@ -126,6 +130,8 @@ Before editing an area, read its owning guide:
 - `registry-coordinator*`: `products/coordinator/AGENTS.md`
 - `registry-documents*`, `registry-documentsctl`:
   `products/documents/AGENTS.md`
+- `registry-adapter*`, `registry-adapterctl`:
+  `products/adapter/AGENTS.md`
 - `registry-discovery*`, `registry-discoveryctl`:
   `products/discovery/AGENTS.md`
 - `registry-manifest-*`: `products/manifest/AGENTS.md`
