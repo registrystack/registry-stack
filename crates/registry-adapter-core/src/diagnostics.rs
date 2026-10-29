@@ -54,6 +54,7 @@ pub enum CheckCode {
     RoutePredicateAmbiguous,
     RoutePredicateLanguageRequired,
     RouteRedeliveryOverNonSafeSend,
+    RouteRedeliveryWithoutUpstreamSend,
     RouteRetryWhileWithoutRedeliveries,
     RouteUncatchableClause,
     RouteUnknownDirectTarget,
@@ -98,6 +99,7 @@ impl CheckCode {
         Self::RoutePredicateAmbiguous,
         Self::RoutePredicateLanguageRequired,
         Self::RouteRedeliveryOverNonSafeSend,
+        Self::RouteRedeliveryWithoutUpstreamSend,
         Self::RouteRetryWhileWithoutRedeliveries,
         Self::RouteUncatchableClause,
         Self::RouteUnknownDirectTarget,
@@ -147,6 +149,9 @@ impl CheckCode {
             Self::RoutePredicateAmbiguous => "adapter.route.predicate-ambiguous",
             Self::RoutePredicateLanguageRequired => "adapter.route.predicate-language-required",
             Self::RouteRedeliveryOverNonSafeSend => "adapter.route.redelivery-over-non-safe-send",
+            Self::RouteRedeliveryWithoutUpstreamSend => {
+                "adapter.route.redelivery-without-upstream-send"
+            }
             Self::RouteRetryWhileWithoutRedeliveries => {
                 "adapter.route.retry-while-without-redeliveries"
             }
@@ -193,6 +198,7 @@ impl CheckCode {
             | Self::RoutePredicateAmbiguous
             | Self::RoutePredicateLanguageRequired
             | Self::RouteRedeliveryOverNonSafeSend
+            | Self::RouteRedeliveryWithoutUpstreamSend
             | Self::RouteRetryWhileWithoutRedeliveries
             | Self::RouteUncatchableClause
             | Self::RouteUnknownDirectTarget

@@ -542,6 +542,17 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
                 "Declare idempotentUpstream on the endpoint operation, or drop the redelivery.",
             ));
         }
+        // Redelivery applies only to upstream component sends; a
+        // declaration whose reachable sends are all `direct:` could never
+        // take effect, and no send is multiplied twice.
+        if declares_redelivery(steps) && !reaches_component_send(steps, &bodies, 0) {
+            findings.push(finding(
+                CheckCode::RouteRedeliveryWithoutUpstreamSend,
+                &format!("/routes/{id}"),
+                "redelivery is declared but the route reaches no http: or graphql: send",
+                "Send to an http: or graphql: endpoint, or drop the redelivery.",
+            ));
+        }
         findings.extend(route_findings);
     }
 
@@ -614,6 +625,63 @@ fn send_claims_idempotent(
             .any(|op| op.id.as_str() == operation_id.as_str() && op.idempotent_upstream),
         None => endpoint.operations.iter().any(|op| op.idempotent_upstream),
     }
+}
+
+/// Whether any upstream component send (`http:` or `graphql:`) is
+/// reachable from the body, through composite steps and `direct:`
+/// expansion. Redelivery applies only to component sends, so a
+/// declaration whose reachable sends are all `direct:` has no effect.
+fn reaches_component_send(steps: &[Step], bodies: &HashMap<&str, &[Step]>, depth: usize) -> bool {
+    if depth > MAX_DIRECT_DEPTH {
+        return false;
+    }
+    steps.iter().any(|step| match step {
+        Step::To(to) => match to.uri.component {
+            SendComponent::Http | SendComponent::GraphQl => true,
+            SendComponent::Direct => bodies
+                .get(to.uri.id.as_str())
+                .is_some_and(|target| reaches_component_send(target, bodies, depth + 1)),
+        },
+        Step::Enrich(enrich) => match enrich.uri.component {
+            SendComponent::Http | SendComponent::GraphQl => true,
+            SendComponent::Direct => bodies
+                .get(enrich.uri.id.as_str())
+                .is_some_and(|target| reaches_component_send(target, bodies, depth + 1)),
+        },
+        Step::Split(split) => reaches_component_send(&split.steps, bodies, depth + 1),
+        Step::Loop(loop_step) => reaches_component_send(&loop_step.steps, bodies, depth + 1),
+        Step::Choice(choice) => {
+            choice
+                .when
+                .iter()
+                .any(|when| reaches_component_send(&when.steps, bodies, depth + 1))
+                || choice.otherwise.as_ref().is_some_and(|otherwise| {
+                    reaches_component_send(&otherwise.steps, bodies, depth + 1)
+                })
+        }
+        Step::CircuitBreaker(breaker) => {
+            reaches_component_send(&breaker.steps, bodies, depth + 1)
+                || breaker.on_fallback.as_ref().is_some_and(|fallback| {
+                    reaches_component_send(&fallback.steps, bodies, depth + 1)
+                })
+        }
+        Step::Throttle(throttle) => reaches_component_send(&throttle.steps, bodies, depth + 1),
+        Step::IdempotentConsumer(idempotent) => {
+            reaches_component_send(&idempotent.steps, bodies, depth + 1)
+        }
+        Step::OnException(clause) => reaches_component_send(&clause.steps, bodies, depth + 1),
+        Step::DoTry(do_try) => {
+            reaches_component_send(&do_try.steps, bodies, depth + 1)
+                || do_try
+                    .do_catch
+                    .iter()
+                    .any(|catch| reaches_component_send(&catch.steps, bodies, depth + 1))
+                || do_try.do_finally.as_ref().is_some_and(|do_finally| {
+                    reaches_component_send(&do_finally.steps, bodies, depth + 1)
+                })
+        }
+        _ => false,
+    })
 }
 
 /// One non-safe upstream send a route body can make.
@@ -2227,26 +2295,30 @@ mod tests {
             &check_routes(&pack, &project_builder(&pack)),
             CheckCode::RouteRetryWhileWithoutRedeliveries,
         );
-        // With redeliveries behind it, the predicate is admitted.
+        // With redeliveries behind it and an upstream send to act on, the
+        // predicate is admitted.
         let admitted = RouteDefinition {
             id: id("fetchCase"),
             from: RouteFrom {
                 uri: direct("fetchCase"),
             },
-            steps: vec![Step::OnException(OnExceptionStep {
-                exception: vec![crate::model::ErrorClass::UpstreamTimeout],
-                on_when: None,
-                handled: Some(true),
-                continued: None,
-                redelivery_policy: Some(RedeliveryOptions {
-                    maximum_redeliveries: 2,
-                    retry_while: Some(rhai("scripts/map.rhai")),
-                    ..Default::default()
+            steps: vec![
+                Step::OnException(OnExceptionStep {
+                    exception: vec![crate::model::ErrorClass::UpstreamTimeout],
+                    on_when: None,
+                    handled: Some(true),
+                    continued: None,
+                    redelivery_policy: Some(RedeliveryOptions {
+                        maximum_redeliveries: 2,
+                        retry_while: Some(rhai("scripts/map.rhai")),
+                        ..Default::default()
+                    }),
+                    steps: vec![],
                 }),
-                steps: vec![],
-            })],
+                to_get("case-api"),
+            ],
         };
-        let pack = pack_builder(vec![], vec![admitted]);
+        let pack = pack_builder(vec![basic_endpoint()], vec![admitted]);
         assert_clean(check_routes(&pack, &project_builder(&pack)));
     }
 
@@ -2410,6 +2482,100 @@ mod tests {
         }])
         .expect("unique");
         assert_clean(check_project(&workspace(&profile, &pack, &project)));
+    }
+
+    /// Redelivery never applies to a `to: direct:` send, so a
+    /// declaration whose reachable sends are all `direct:` is refused;
+    /// through direct expansion to an `http:` send it stays valid.
+    #[test]
+    fn routes_refuse_redelivery_that_reaches_only_direct_sends() {
+        let to_direct = |route: &str| {
+            Step::To(ToStep {
+                uri: direct(route),
+                parameters: None,
+            })
+        };
+        let dead = RouteDefinition {
+            id: id("fetchCase"),
+            from: RouteFrom {
+                uri: direct("fetchCase"),
+            },
+            steps: vec![
+                Step::ErrorHandler(ErrorHandlerStep {
+                    default_error_handler: Some(DefaultErrorHandler {
+                        redelivery_policy: Some(RedeliveryOptions {
+                            maximum_redeliveries: 2,
+                            ..Default::default()
+                        }),
+                    }),
+                    no_error_handler: None,
+                }),
+                to_direct("loadCase"),
+            ],
+        };
+        let leaf = RouteDefinition {
+            id: id("loadCase"),
+            from: RouteFrom {
+                uri: direct("loadCase"),
+            },
+            steps: vec![Step::SetBody(Expression::Constant(serde_json::Value::Null))],
+        };
+        let pack = pack_builder(vec![], vec![dead, leaf]);
+        assert_has(
+            &check_routes(&pack, &project_builder(&pack)),
+            CheckCode::RouteRedeliveryWithoutUpstreamSend,
+        );
+        // The same declaration over a body that itself sends upstream is
+        // the ordinary shape.
+        let ordinary = RouteDefinition {
+            id: id("fetchCase"),
+            from: RouteFrom {
+                uri: direct("fetchCase"),
+            },
+            steps: vec![
+                Step::ErrorHandler(ErrorHandlerStep {
+                    default_error_handler: Some(DefaultErrorHandler {
+                        redelivery_policy: Some(RedeliveryOptions {
+                            maximum_redeliveries: 2,
+                            ..Default::default()
+                        }),
+                    }),
+                    no_error_handler: None,
+                }),
+                to_get("case-api"),
+            ],
+        };
+        let pack = pack_builder(vec![basic_endpoint()], vec![ordinary]);
+        assert_clean(check_routes(&pack, &project_builder(&pack)));
+        // Expansion counts: the declaration reaches an http: send through
+        // the direct target.
+        let expanding = RouteDefinition {
+            id: id("fetchCase"),
+            from: RouteFrom {
+                uri: direct("fetchCase"),
+            },
+            steps: vec![
+                Step::ErrorHandler(ErrorHandlerStep {
+                    default_error_handler: Some(DefaultErrorHandler {
+                        redelivery_policy: Some(RedeliveryOptions {
+                            maximum_redeliveries: 2,
+                            ..Default::default()
+                        }),
+                    }),
+                    no_error_handler: None,
+                }),
+                to_direct("loadCase"),
+            ],
+        };
+        let live_leaf = RouteDefinition {
+            id: id("loadCase"),
+            from: RouteFrom {
+                uri: direct("loadCase"),
+            },
+            steps: vec![to_get("case-api")],
+        };
+        let pack = pack_builder(vec![basic_endpoint()], vec![expanding, live_leaf]);
+        assert_clean(check_routes(&pack, &project_builder(&pack)));
     }
 
     /// A `continued` clause resumes after the failure point, so its body
