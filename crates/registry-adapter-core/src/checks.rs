@@ -158,6 +158,10 @@ pub fn check_workspace(workspace: &Workspace<'_>) -> Vec<Diagnostic> {
     findings.extend(check_pack(workspace.pack));
     findings.extend(check_routes(workspace.pack, workspace.project));
     findings.extend(check_project(workspace));
+    findings.extend(crate::result_schema::check_envelope_derivation(
+        workspace.profile,
+        workspace.project,
+    ));
     if let Some(runtime) = workspace.runtime {
         findings.extend(check_runtime(workspace, runtime));
     }
@@ -5406,6 +5410,35 @@ mod tests {
         let mut ws = workspace(&profile, &pack, &project);
         ws.fixtures = std::slice::from_ref(&success);
         assert_clean(check_fixtures(&ws));
+    }
+
+    /// The workspace check derives every envelope once, independent of
+    /// fixtures: a zero-fixture workspace with a malformed problem
+    /// envelope refuses under the profile-level code (addendum D), and a
+    /// well-formed one adds no derivation finding.
+    #[test]
+    fn the_workspace_check_derives_envelopes_without_fixtures() {
+        let profile = profile_builder(vec![operation("cases.find", HttpMethod::Get)]);
+        let pack = pack_builder(vec![oauth_endpoint()], vec![]);
+        let project = project_builder(&pack);
+
+        let mut broken = profile_builder(vec![operation("cases.find", HttpMethod::Get)]);
+        broken.problem_envelope = EnvelopeTemplate(r#"{"code": "{{problemCode}}""#.to_string());
+        let ws = workspace(&broken, &pack, &project);
+        let findings = check_workspace(&ws);
+        assert_has(&findings, CheckCode::ProfileProblemEnvelopeUncompilable);
+        assert_eq!(
+            codes(&findings)
+                .iter()
+                .filter(|code| **code == CheckCode::ProfileProblemEnvelopeUncompilable.code())
+                .count(),
+            1
+        );
+
+        let ws = workspace(&profile, &pack, &project);
+        let findings = check_workspace(&ws);
+        assert!(!codes(&findings).contains(&CheckCode::ProfileProblemEnvelopeUncompilable.code()));
+        assert!(!codes(&findings).contains(&CheckCode::ProfileResponseEnvelopeUncompilable.code()));
     }
 
     #[test]

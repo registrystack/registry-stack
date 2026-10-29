@@ -38,8 +38,10 @@ pub enum CheckCode {
     PackUnknownTemplateParameter,
     // adapter.profile.*
     ProfileProblemEnvelopeMissingCodeSlot,
+    ProfileProblemEnvelopeUncompilable,
     ProfileRequestEnvelopeMissingRecordSlot,
     ProfileResponseEnvelopeMissingResultSlot,
+    ProfileResponseEnvelopeUncompilable,
     ProfileUnknownSlot,
     // adapter.project.*
     ProjectDuplicateRouteId,
@@ -103,8 +105,10 @@ impl CheckCode {
         Self::PackUnknownScript,
         Self::PackUnknownTemplateParameter,
         Self::ProfileProblemEnvelopeMissingCodeSlot,
+        Self::ProfileProblemEnvelopeUncompilable,
         Self::ProfileRequestEnvelopeMissingRecordSlot,
         Self::ProfileResponseEnvelopeMissingResultSlot,
+        Self::ProfileResponseEnvelopeUncompilable,
         Self::ProfileUnknownSlot,
         Self::ProjectDuplicateRouteId,
         Self::ProjectParameterTypeMismatch,
@@ -167,11 +171,17 @@ impl CheckCode {
             Self::ProfileProblemEnvelopeMissingCodeSlot => {
                 "adapter.profile.problem-envelope-missing-code-slot"
             }
+            Self::ProfileProblemEnvelopeUncompilable => {
+                "adapter.profile.problem-envelope-uncompilable"
+            }
             Self::ProfileRequestEnvelopeMissingRecordSlot => {
                 "adapter.profile.request-envelope-missing-record-slot"
             }
             Self::ProfileResponseEnvelopeMissingResultSlot => {
                 "adapter.profile.response-envelope-missing-result-slot"
+            }
+            Self::ProfileResponseEnvelopeUncompilable => {
+                "adapter.profile.response-envelope-uncompilable"
             }
             Self::ProfileUnknownSlot => "adapter.profile.unknown-slot",
             Self::ProjectDuplicateRouteId => "adapter.project.duplicate-route-id",
@@ -231,8 +241,10 @@ impl CheckCode {
             | Self::RuntimeUnknownEndpoint => crate::naming::ADAPTER_RUNTIME_KIND,
             Self::EnvelopeInvalidPlaceholder
             | Self::ProfileProblemEnvelopeMissingCodeSlot
+            | Self::ProfileProblemEnvelopeUncompilable
             | Self::ProfileRequestEnvelopeMissingRecordSlot
             | Self::ProfileResponseEnvelopeMissingResultSlot
+            | Self::ProfileResponseEnvelopeUncompilable
             | Self::ProfileUnknownSlot => crate::naming::ADAPTER_PROFILE_KIND,
             Self::FixtureResponseSchema
             | Self::FixtureUnknownEndpoint

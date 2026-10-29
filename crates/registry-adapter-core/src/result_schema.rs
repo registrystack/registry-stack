@@ -54,6 +54,53 @@ pub fn derive_problem_envelope_schema(profile: &AdapterProfile) -> Result<Value,
     derive_value(&template, None, None)
 }
 
+/// The derivation error an envelope carrying a record slot raises when the
+/// operation has no binding: the one derivation failure a workspace may
+/// carry, because binding completeness is the project check's concern.
+pub(crate) const UNBOUND_RECORD_SLOT: &str =
+    "the response envelope carries a record slot, but the operation has no binding to a record type";
+
+/// The profile-level envelope derivation check: every operation's result
+/// schema and the problem-envelope schema are derived once per workspace
+/// check, independent of fixtures, so a malformed envelope is a finding
+/// even where no fixture exercises the operation (addendum D). Findings
+/// carry the derivation fault in the finding's message. An operation no
+/// binding binds may leave its record slot unexpanded: that is the one
+/// derivation failure a workspace may carry.
+pub fn check_envelope_derivation(
+    profile: &AdapterProfile,
+    project: &AdapterProject,
+) -> Vec<Diagnostic> {
+    let mut findings = Vec::new();
+    for (index, operation) in profile.operations.iter().enumerate() {
+        if let Err(reason) = derive_operation_result_schema(profile, project, operation.id.as_str())
+        {
+            let unbound = reason == UNBOUND_RECORD_SLOT
+                && project
+                    .bindings
+                    .iter()
+                    .all(|binding| binding.operation.as_str() != operation.id.as_str());
+            if !unbound {
+                findings.push(finding(
+                    CheckCode::ProfileResponseEnvelopeUncompilable,
+                    &format!("/operations/{index}/responseEnvelope"),
+                    &reason,
+                    "Repair the response envelope so the operation's result schema can be derived.",
+                ));
+            }
+        }
+    }
+    if let Err(reason) = derive_problem_envelope_schema(profile) {
+        findings.push(finding(
+            CheckCode::ProfileProblemEnvelopeUncompilable,
+            "/problemEnvelope",
+            &reason,
+            "Repair the problem envelope so the problem schema can be derived.",
+        ));
+    }
+    findings
+}
+
 /// The sentinel opening (and closing) one slot in a parsed envelope
 /// template. A control character real template text cannot carry opens
 /// it, so no literal envelope string can decode as a slot.
@@ -211,10 +258,7 @@ fn record_schema(
     project: Option<&AdapterProject>,
 ) -> Result<Value, String> {
     let (Some(binding), Some(project)) = (binding, project) else {
-        return Err(
-            "the response envelope carries a record slot, but the operation has no binding to a record type"
-                .to_string(),
-        );
+        return Err(UNBOUND_RECORD_SLOT.to_string());
     };
     let record_type = project
         .record_types
@@ -647,6 +691,67 @@ mod tests {
             "a problem envelope carries no record slot"
         );
         assert!(derive_problem_envelope_schema(&problem_envelope(r#"{"code": "#)).is_err());
+    }
+
+    /// The profile-level derivation check runs without fixtures: a
+    /// well-formed profile passes, a response envelope that parses no
+    /// JSON template refuses at the operation, a malformed problem
+    /// envelope refuses once, and an unbound operation's record slot is
+    /// the one derivation failure a workspace may carry.
+    #[test]
+    fn envelope_derivation_is_checked_independently_of_fixtures() {
+        // Well-formed and bound: clean.
+        let findings =
+            check_envelope_derivation(&profile(r#"{"record": {{record}}}"#), &project(true));
+        assert!(findings.is_empty());
+
+        // An unbound operation's record slot does not refuse: binding
+        // completeness is the project check's concern.
+        let findings =
+            check_envelope_derivation(&profile(r#"{"record": {{record}}}"#), &project(false));
+        assert!(findings.is_empty());
+
+        // A response envelope whose template is not closed JSON refuses
+        // at the operation, though its placeholder grammar is fine.
+        let unparseable = profile(r#"{"cases": {{records}}"#);
+        let findings = check_envelope_derivation(&unparseable, &project(true));
+        assert_eq!(findings.len(), 1);
+        assert_eq!(
+            findings[0].code,
+            CheckCode::ProfileResponseEnvelopeUncompilable.code()
+        );
+        assert_eq!(findings[0].path, "/operations/0/responseEnvelope");
+
+        // A binding naming no declared record type refuses: the fault is
+        // the binding, not the envelope.
+        let mut ghost_binding = project(true);
+        ghost_binding.bindings = UniqueIdList::new(vec![Binding {
+            id: external("find-cases"),
+            operation: external("cases.find"),
+            record_type: local("ghost"),
+            route: external("fetchCases"),
+            maximum_upstream_calls: BoundedU64::<1, 100_000>::new(5).expect("budget"),
+        }])
+        .expect("unique");
+        let findings =
+            check_envelope_derivation(&profile(r#"{"record": {{record}}}"#), &ghost_binding);
+        assert_eq!(findings.len(), 1);
+        assert_eq!(
+            findings[0].code,
+            CheckCode::ProfileResponseEnvelopeUncompilable.code()
+        );
+
+        // A malformed problem envelope refuses once, at the envelope.
+        let mut broken_problem = profile(r#"{"record": {{record}}}"#);
+        broken_problem.problem_envelope =
+            EnvelopeTemplate(r#"{"code": "{{problemCode}}""#.to_string());
+        let findings = check_envelope_derivation(&broken_problem, &project(true));
+        assert_eq!(findings.len(), 1);
+        assert_eq!(
+            findings[0].code,
+            CheckCode::ProfileProblemEnvelopeUncompilable.code()
+        );
+        assert_eq!(findings[0].path, "/problemEnvelope");
     }
 
     /// The entry's expected status selects the schema: a non-2xx entry
