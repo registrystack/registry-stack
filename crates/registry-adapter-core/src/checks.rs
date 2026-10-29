@@ -1225,12 +1225,6 @@ pub fn step_expressions(step: &Step) -> Vec<Expression> {
             .and_then(|policy| policy.retry_while.clone())
             .into_iter()
             .collect(),
-        Step::To(to) => to
-            .parameters
-            .as_ref()
-            .and_then(|parameters| parameters.body.clone())
-            .into_iter()
-            .collect(),
         _ => Vec::new(),
     }
 }
@@ -2849,7 +2843,7 @@ mod tests {
     /// (staff review P1-4).
     #[test]
     fn step_expressions_cover_the_send_and_policy_slots() {
-        let steps = vec![
+        let steps = [
             Step::To(ToStep {
                 uri: send("case-api"),
                 parameters: Some(ToParameters {
