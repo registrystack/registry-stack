@@ -25,6 +25,7 @@
 //! read into has no member a private one could be written to.
 
 use std::{
+    borrow::Cow,
     collections::BTreeSet,
     future::{Future, IntoFuture},
     io,
@@ -53,7 +54,7 @@ use registry_evidence_client::{HolderPublicKey, MAXIMUM_HOLDER_KEYS};
 use registry_evidence_verifier::sdjwt_vc::holder_thumbprint;
 use registry_platform_config::describe_secret_failure;
 use registry_platform_crypto::PublicJwk;
-use registry_platform_sdjwt::{validate_oid4vci_proof_jwt, Oid4vciProofPolicy};
+use registry_platform_sdjwt::{validate_oid4vci_proof_jwt, Oid4vciProofPolicy, SdJwtError};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use thiserror::Error;
@@ -996,6 +997,12 @@ async fn credential(
                 holder_keys.push(key);
             }
             Err(refusal) => {
+                tracing::warn!(
+                    target: "registry_evidence_oid4vci::service",
+                    error = refusal.error,
+                    reason = %refusal.description,
+                    "proof refused"
+                );
                 service.metrics.record_outcome(match refusal.nonce_outcome {
                     Some(outcome) => outcome,
                     None => Outcome::ProofRefused,
@@ -1087,10 +1094,11 @@ fn credential_issuance_audit_outcome(error: &IssuanceError) -> CredentialDeliver
 ///
 /// Every refusal below is a bad request, so a refusal is the OAuth error code
 /// and the fixed description a wallet is told. Neither is built from anything
-/// the proof carried.
+/// the proof carried: a proof the validator refused is described by the rule it
+/// failed, never by a value it presented.
 struct ProofRefusal {
     error: &'static str,
-    description: &'static str,
+    description: Cow<'static, str>,
     nonce_outcome: Option<Outcome>,
 }
 
@@ -1098,7 +1106,7 @@ impl ProofRefusal {
     const fn new(error: &'static str, description: &'static str) -> Self {
         Self {
             error,
-            description,
+            description: Cow::Borrowed(description),
             nonce_outcome: None,
         }
     }
@@ -1106,8 +1114,28 @@ impl ProofRefusal {
     const fn nonce(description: &'static str, outcome: Outcome) -> Self {
         Self {
             error: "invalid_nonce",
-            description,
+            description: Cow::Borrowed(description),
             nonce_outcome: Some(outcome),
+        }
+    }
+
+    /// The validator's refusal, with the rule it names appended to the generic
+    /// wording so a wallet developer can tell which part of the proof to change.
+    fn validation(error: &SdJwtError) -> Self {
+        let rule = match error {
+            SdJwtError::Oid4vciProofInvalid(check) => check.description(),
+            SdJwtError::Oid4vciProofIssuerPresent => {
+                "claim `iss` must be absent because a pre-authorized code flow has no authenticated client"
+            }
+            SdJwtError::Oid4vciProofKeyReferenceUnsupported => {
+                "the key reference must be one inline `jwk` or a local `did:jwk` `kid`"
+            }
+            _ => "the proof could not be validated",
+        };
+        Self {
+            error: "invalid_proof",
+            description: Cow::Owned(format!("the proof was not accepted: {rule}")),
+            nonce_outcome: None,
         }
     }
 }
@@ -1132,7 +1160,7 @@ fn holder_key_from_proof(
     let Some(nonce) = peek_proof_nonce(proof) else {
         return Err(ProofRefusal::new(
             "invalid_proof",
-            "the proof does not carry a nonce",
+            "the proof was not accepted: the payload does not carry a readable `nonce` claim",
         ));
     };
     match service.nonces.verify(&nonce, service.now()) {
@@ -1163,7 +1191,7 @@ fn holder_key_from_proof(
         max_future_skew: PROOF_MAX_FUTURE_SKEW,
     };
     let claims = validate_oid4vci_proof_jwt(proof, &policy, service.now())
-        .map_err(|_| ProofRefusal::new("invalid_proof", "the proof was not accepted"))?;
+        .map_err(|error| ProofRefusal::validation(&error))?;
     holder_public_key(&claims.holder_jwk).ok_or(ProofRefusal::new(
         "invalid_proof",
         "the proof presented a key this service cannot forward",
@@ -1394,7 +1422,12 @@ fn unauthorized(description: &'static str) -> Response {
 
 /// One error shape for every refusal: the OAuth members a wallet already reads,
 /// carrying fixed text chosen here and never any part of the request.
-fn problem(status: StatusCode, error: &'static str, description: &'static str) -> Response {
+fn problem(
+    status: StatusCode,
+    error: &'static str,
+    description: impl Into<Cow<'static, str>>,
+) -> Response {
+    let description = description.into();
     let mut response = value_response(
         status,
         &json!({"error": error, "error_description": description}),
@@ -2997,9 +3030,10 @@ mod tests {
     ) {
         assert_eq!(status, StatusCode::BAD_REQUEST, "{case}: body {body}");
         assert_eq!(body["error"], json!("invalid_proof"), "{case}: body {body}");
-        assert_eq!(
-            body["error_description"],
-            json!("the proof was not accepted"),
+        assert!(
+            body["error_description"]
+                .as_str()
+                .is_some_and(|description| description.starts_with("the proof was not accepted: ")),
             "{case}: the refusal must come from proof validation: body {body}"
         );
         assert_eq!(
@@ -3034,6 +3068,126 @@ mod tests {
         .await;
         assert_eq!(from_text.0, StatusCode::OK, "body: {}", from_text.1);
         assert_eq!(from_text.2, 1, "one request reaches Evidence");
+    }
+
+    /// RFC 7519 section 4: a claim the profile does not use is ignored, so a
+    /// wallet library that adds `jti` still gets its credential.
+    #[tokio::test]
+    async fn a_proof_carrying_a_claim_the_profile_does_not_use_is_accepted() {
+        let accepted = credential_request_with_proof(|key, nonce| {
+            let mut payload = proof_payload(nonce);
+            payload["jti"] = json!("wallet-chosen");
+            proof_jwt_with_header(key, proof_header(key), payload)
+        })
+        .await;
+
+        assert_eq!(accepted.0, StatusCode::OK, "body: {}", accepted.1);
+        assert_eq!(accepted.2, 1, "one request reaches Evidence");
+    }
+
+    /// A refusal names the rule that failed so a wallet developer knows what to
+    /// change, and never repeats a value the proof carried.
+    #[tokio::test]
+    async fn a_refused_proof_names_the_failed_check_without_echoing_input() {
+        let description = |(status, body, evidence_requests): (StatusCode, Value, usize)| {
+            assert_eq!(status, StatusCode::BAD_REQUEST, "body {body}");
+            assert_eq!(body["error"], json!("invalid_proof"), "body {body}");
+            assert_eq!(evidence_requests, 0, "nothing reaches Evidence");
+            body["error_description"]
+                .as_str()
+                .expect("a description")
+                .to_owned()
+        };
+
+        let missing_nonce = description(
+            credential_request_with_proof(|key, _nonce| {
+                let mut payload = proof_payload("unused");
+                payload.as_object_mut().expect("payload").remove("nonce");
+                proof_jwt_with_header(key, proof_header(key), payload)
+            })
+            .await,
+        );
+        assert!(missing_nonce.contains("`nonce`"), "{missing_nonce}");
+
+        let missing_iat = description(
+            credential_request_with_proof(|key, nonce| {
+                let mut payload = proof_payload(nonce);
+                payload.as_object_mut().expect("payload").remove("iat");
+                proof_jwt_with_header(key, proof_header(key), payload)
+            })
+            .await,
+        );
+        assert!(missing_iat.contains("`iat`"), "{missing_iat}");
+
+        let other_audience = description(
+            credential_request_with_proof(|key, nonce| {
+                proof_jwt(key, "https://audience-canary.example.org", nonce, now())
+            })
+            .await,
+        );
+        assert!(other_audience.contains("`aud`"), "{other_audience}");
+        assert!(
+            !other_audience.contains("audience-canary"),
+            "{other_audience}"
+        );
+
+        let wrong_typ = description(
+            credential_request_with_proof(|key, nonce| {
+                let mut header = proof_header(key);
+                header["typ"] = json!("typ-canary");
+                proof_jwt_with_header(key, header, proof_payload(nonce))
+            })
+            .await,
+        );
+        assert!(wrong_typ.contains("`typ`"), "{wrong_typ}");
+        assert!(!wrong_typ.contains("typ-canary"), "{wrong_typ}");
+
+        let claimed_issuer = description(
+            credential_request_with_proof(|key, nonce| {
+                let mut payload = proof_payload(nonce);
+                payload["iss"] = json!("issuer-canary");
+                proof_jwt_with_header(key, proof_header(key), payload)
+            })
+            .await,
+        );
+        assert!(claimed_issuer.contains("`iss`"), "{claimed_issuer}");
+        assert!(
+            !claimed_issuer.contains("issuer-canary"),
+            "{claimed_issuer}"
+        );
+    }
+
+    /// The failed check reaches the operator log as well, with the same fixed
+    /// wording and none of the proof's contents.
+    #[tokio::test]
+    async fn a_refused_proof_logs_the_failed_check_without_the_proof_or_nonce() {
+        let buffer = TestLogBuffer::default();
+        let subscriber = tracing_subscriber::fmt()
+            .without_time()
+            .with_ansi(false)
+            .with_writer(buffer.clone())
+            .finish();
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        let observed_nonce = std::sync::Mutex::new(String::new());
+        let refusal = credential_request_with_proof(|key, nonce| {
+            *observed_nonce.lock().expect("nonce lock") = nonce.to_owned();
+            let mut payload = proof_payload(nonce);
+            payload["aud"] = json!("https://audience-canary.example.org");
+            proof_jwt_with_header(key, proof_header(key), payload)
+        })
+        .await;
+        assert_eq!(refusal.0, StatusCode::BAD_REQUEST);
+
+        let rendered = String::from_utf8(buffer.0.lock().expect("log buffer lock").clone())
+            .expect("logs are UTF-8");
+        let nonce = observed_nonce.lock().expect("nonce lock").clone();
+        assert!(!nonce.is_empty());
+        assert!(rendered.contains("proof refused"), "logs: {rendered}");
+        assert!(rendered.contains("`aud`"), "logs: {rendered}");
+        assert!(!rendered.contains(&nonce), "logs: {rendered}");
+        assert!(!rendered.contains("audience-canary"), "logs: {rendered}");
+        assert!(!rendered.contains("eyJ"), "logs carry no token: {rendered}");
     }
 
     /// A self-contained `did:jwk` proof is the same key-possession statement

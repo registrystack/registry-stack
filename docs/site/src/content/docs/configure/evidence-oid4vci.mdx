@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-08-09"
+last_reviewed: "2026-10-29"
 doc_type: how-to
 persona:
   - operator
@@ -209,6 +209,27 @@ Set `metricsListener.bind` to serve Prometheus text at `/metrics` on a private a
 
 {/* Evidence: crates/registry-evidence-oid4vci/src/observability.rs, Outcome, ALL, render_metrics. */}
 
+## What a wallet proof must carry
+
+The `/credential` request carries one `jwt` proof for each holder key. The service checks, in this
+order, a bare `openid4vci-proof+jwt` header `typ`, one key nomination (an inline public `jwk` or a
+local `did:jwk` `kid`), an ES256 `alg` that agrees with the key, the signature, and then the
+payload claims it uses: `aud` must be the credential issuer identifier as one string, `iat` must be
+fresh, `nonce` must be the current challenge, and an optional `exp` must not have passed. `iss`
+must be absent, because a pre-authorized code flow has no authenticated client.
+
+Every other payload claim is ignored, as RFC 7519 section 4 directs for claims an implementation
+does not understand, so a wallet library that adds `jti` still receives its credential. Header
+parameters stay a closed set.
+
+A refused proof answers `invalid_proof` with an `error_description` that names the failed rule, for
+example "the proof was not accepted: required claim `nonce` is missing". The same wording goes to
+the service log. Neither repeats a nonce, a key, or any value the proof carried.
+
+{/* Evidence: crates/registry-platform-sdjwt/src/lib.rs, validate_oid4vci_proof_jwt,
+    Oid4vciProofCheck; crates/registry-evidence-oid4vci/src/service.rs, ProofRefusal;
+    products/evidence/contracts/oid4vci-profile.yaml, proof_rules. */}
+
 ## Check wallet interoperability
 
 Each release is checked against one wallet: Inji Wallet, at the exact revisions of the wallet and
@@ -253,6 +274,7 @@ credential it stores is the Registry Evidence's SD-JWT VC response, bound to the
 | `evidence.oid4vci.invalid-audit` | The audit destination settings do not describe a usable file or stdout destination. | Use an absolute file path with valid rotation and retention settings, or select stdout with no file-only settings. |
 | `evidence.oid4vci.metrics-shared-binding` | The metrics listener shares the delivery binding. | Bind the metrics listener to a port the delivery listener does not use. |
 | `evidence.oid4vci.wildcard-spelled-item` | An `offers` list item spells `*` or `unrestricted`, which matches only itself (a warning). | Write `unrestricted` in place of the list, or remove the item. |
+| `invalid_proof` (wallet response) | The proof failed a named check. | Read the check in `error_description`, then correct that header parameter or claim in the wallet's proof. |
 
 {/* Evidence: crates/registry-platform-config/src/loader.rs, UNAVAILABLE_CODE;
     crates/registry-evidence-oid4vci/src/config.rs, HTTPS_REQUIRED, evidence.oid4vci.listener-port,
