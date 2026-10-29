@@ -320,7 +320,13 @@ also still be reviewable at the source: claim, decide, `next`, and reads of an
 open task refuse or omit it once it is not. Decided tasks and settled requests
 release their retained Casework-owned task, decision, history, and existing
 notes under current Casework authority and retention. Their `/context` read
-and new notes still require current source disclosure.
+still requires current source disclosure. When the exact source binding
+remains disclosed but is no longer reviewable, only the reviewer who recorded
+that task's retained decision may read its context. Casework re-reads that
+authorship and the reviewer's current membership, profile and retention before
+and after the provider read; the source decides disclosure for the reviewer's
+source profile in that read. Other eligible reviewers receive not found. New
+notes still require current source disclosure.
 There is no generic Proposal read or source synchronization in this integration.
 
 For local development, configure `dev-clients.yaml` `integrations` explicitly

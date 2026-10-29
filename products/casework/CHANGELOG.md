@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- The reviewer who recorded a task's decision can read that task's
+  current-source `/context` after the source applies the decision and stops
+  calling the subject reviewable, while the source still discloses it. Casework
+  checks authorship, current membership, profile and retention before and after
+  the provider read. Any other reviewer still receives not found, and expired
+  results are still refused as expired.
+
 ## 0.44.0 - 2026-10-27
 
 - Summarize current-source inbox refusals once per page in operator logs,

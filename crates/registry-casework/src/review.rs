@@ -929,8 +929,14 @@ impl CaseworkService {
         token: &str,
     ) -> Result<ReviewTaskContext, ReviewRuntimeError> {
         require_human_reviewer(actor)?;
-        self.store.review_task(actor, task_id).await?;
+        // A source that no longer calls the subject reviewable still discloses
+        // it to the reviewer who recorded the task's retained decision.
+        let decision_author = |task: &ReviewTask| {
+            task.state == ReviewTaskState::Decided && task.decided_by_caller == Some(true)
+        };
+        let initial_task = self.store.review_task(actor, task_id).await?;
         let record = self.store.review_request_for_task(task_id).await?;
+        let mut retained_author_required = false;
         let context = match record.context.as_ref().ok_or(ReviewRuntimeError::Corrupt)? {
             ReviewContext::Submitted { snapshot } => {
                 if source_profile_id.is_some() {
@@ -968,7 +974,10 @@ impl CaseworkService {
                 .await
                 .map_err(|_| ReviewRuntimeError::SourceUnavailable)?
                 .map_err(map_review_context_source_error)?;
-                if view.identity != identity || !view.reviewable {
+                retained_author_required = !view.reviewable;
+                if view.identity != identity
+                    || (retained_author_required && !decision_author(&initial_task))
+                {
                     return Err(ReviewRuntimeError::NotFound);
                 }
                 record
@@ -986,7 +995,10 @@ impl CaseworkService {
                 }
             }
         };
-        self.store.review_task(actor, task_id).await?;
+        let final_task = self.store.review_task(actor, task_id).await?;
+        if retained_author_required && !decision_author(&final_task) {
+            return Err(ReviewRuntimeError::NotFound);
+        }
         Ok(ReviewTaskContext {
             task_id,
             request_id: record.request_id,

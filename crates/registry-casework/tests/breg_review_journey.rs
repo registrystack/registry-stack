@@ -1682,6 +1682,98 @@ async fn native_proposal_journey(producer_id: &'static str) {
         .unwrap();
     assert!(retained.get::<_, bool>(0));
     assert!(retained.get::<_, bool>(1));
+    let retained_context = reqwest::Client::new()
+        .get(
+            casework_url
+                .join(&format!("v1/review-tasks/{id}/context"))
+                .unwrap(),
+        )
+        .bearer_auth(&human)
+        .header("registry-casework-profile", "staff")
+        .header("registry-source-profile", "proposal-reviewer")
+        .send()
+        .await
+        .unwrap();
+    let retained_context_status = retained_context.status();
+    let retained_context: Value = retained_context.json().await.unwrap();
+    assert_eq!(
+        retained_context_status,
+        StatusCode::OK,
+        "the recorded decision author retains the exact source context while the terminal result is available: {retained_context}"
+    );
+    assert_eq!(retained_context["taskId"], id, "{retained_context}");
+    assert_eq!(
+        retained_context["requestId"],
+        accepted.request_id.to_string(),
+        "{retained_context}"
+    );
+    assert_eq!(
+        retained_context["subject"], create["subject"],
+        "{retained_context}"
+    );
+    assert_eq!(
+        retained_context["requesterReference"], create["requesterReference"],
+        "{retained_context}"
+    );
+    assert_eq!(
+        retained_context["policy"],
+        serde_json::to_value(&binding).unwrap(),
+        "{retained_context}"
+    );
+    assert_eq!(
+        retained_context["policyClosure"]["identity"],
+        serde_json::to_value(&binding).unwrap(),
+        "{retained_context}"
+    );
+    assert_eq!(
+        retained_context["policyClosure"]["context"],
+        json!({
+            "mode":"current-source",
+            "provider":"facility",
+            "contract":exported.contract
+        }),
+        "{retained_context}"
+    );
+    assert_eq!(
+        retained_context["context"]["reference"], context["context"]["reference"],
+        "{retained_context}"
+    );
+    assert_eq!(
+        retained_context["context"]["bindingStatus"], "current",
+        "{retained_context}"
+    );
+    assert_eq!(
+        retained_context["context"]["projection"]["binding"], create["subject"],
+        "{retained_context}"
+    );
+    assert_eq!(
+        retained_context["context"]["projection"]["displayReference"],
+        context["context"]["projection"]["displayReference"],
+        "{retained_context}"
+    );
+    assert_eq!(
+        retained_context["context"]["projection"]["display"],
+        json!({
+            "facilityId":facility,
+            "currentAddressLine":"3 Civic Road",
+            "changes":[{
+                "recordId":facility,
+                "operation":"patch",
+                "before":{
+                    "address-line":"1 Main Road",
+                    "city":"Bangkok",
+                    "postal-code":"10200"
+                },
+                "after":{
+                    "address-line":"3 Civic Road",
+                    "city":"Chiang Mai",
+                    "postal-code":"50000"
+                }
+            }],
+            "supportingDocument":null
+        }),
+        "{retained_context}"
+    );
     let casework_only_human = minted(
         &idp,
         json!(CASEWORK_AUDIENCE),
