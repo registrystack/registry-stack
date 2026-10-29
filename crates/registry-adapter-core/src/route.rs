@@ -11,7 +11,9 @@
 //! (`products/adapter/CONCEPT.md` section 5.5); the authoring checks in
 //! `crate::checks` refuse their absence.
 
-use crate::model::{AggregationStrategy, ErrorClass, Expression, HttpMethod, SendUri};
+use crate::model::{
+    AggregationStrategy, ErrorClass, Expression, HttpMethod, RhaiExpression, SendUri,
+};
 use registry_platform_yaml::{BoundedU64, ExternalId};
 use serde::{Deserialize, Serialize};
 
@@ -132,7 +134,7 @@ pub struct ToParameters {
     /// The request method. Its safety carries the write-safety rules of
     /// `crate::checks`.
     pub http_method: HttpMethod,
-    /// The path template, e.g. `/api/tracker/trackedEntities/{id}`.
+    /// The path template, e.g. `/v2/cases/{type}`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
     /// Path-template segment name to expression.
@@ -178,18 +180,69 @@ pub struct ResumeBinding {
 
 /// One `when` clause of a `choice`: an inline predicate expression (the
 /// language key sits beside `steps`, as Camel's YAML DSL writes it) and
-/// the steps it guards.
+/// the steps it guards. Exactly one language key must be present;
+/// `crate::checks` refuses zero or several under an adapter code, and the
+/// reader refuses any unknown key (`config.unknown-key`, CFG-SCHEMA-8).
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Debug, Default, Eq, Hash, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct When {
-    /// The predicate; the first truthy clause wins, and a non-boolean
-    /// result is an error, never a truthiness guess.
-    #[serde(flatten)]
-    pub predicate: Expression,
+    /// The `constant` language member.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub constant: Option<serde_json::Value>,
+    /// The `header` language member.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub header: Option<String>,
+    /// The `exchangeProperty` language member.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exchange_property: Option<String>,
+    /// The `jsonpath` language member.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub jsonpath: Option<String>,
+    /// The `rhai` language member.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rhai: Option<RhaiExpression>,
     /// The steps the clause runs on match.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub steps: Vec<Step>,
+}
+
+impl When {
+    /// How many language keys the clause carries.
+    pub fn language_members(&self) -> usize {
+        self.constant.is_some() as usize
+            + self.header.is_some() as usize
+            + self.exchange_property.is_some() as usize
+            + self.jsonpath.is_some() as usize
+            + self.rhai.is_some() as usize
+    }
+
+    /// The decoded predicate, when exactly one language key is present;
+    /// `None` for zero or several keys. `crate::checks` reports the
+    /// malformed shapes under `adapter.route.predicate-*` codes, so a
+    /// caller only ever sees a well-formed expression.
+    pub fn predicate(&self) -> Option<Expression> {
+        if self.language_members() != 1 {
+            return None;
+        }
+        self.predicate_unchecked()
+    }
+
+    fn predicate_unchecked(&self) -> Option<Expression> {
+        if let Some(value) = &self.constant {
+            return Some(Expression::Constant(value.clone()));
+        }
+        if let Some(name) = &self.header {
+            return Some(Expression::Header(name.clone()));
+        }
+        if let Some(name) = &self.exchange_property {
+            return Some(Expression::ExchangeProperty(name.clone()));
+        }
+        if let Some(path) = &self.jsonpath {
+            return Some(Expression::JsonPath(path.clone()));
+        }
+        self.rhai.clone().map(Expression::Rhai)
+    }
 }
 
 /// The `otherwise` clause of a `choice`.
@@ -217,17 +270,66 @@ pub struct ChoiceStep {
 
 /// A `filter` step: an inline predicate beside the guarded steps, as
 /// Camel's Message Filter writes it. `CamelFilterMatched` records the
-/// outcome; the route continues after the filter either way.
+/// outcome; the route continues after the filter either way. Exactly one
+/// language key must be present; `crate::checks` refuses zero or several
+/// under an adapter code, and the reader refuses any unknown key
+/// (`config.unknown-key`, CFG-SCHEMA-8).
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Debug, Default, Eq, Hash, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct FilterStep {
-    /// The predicate.
-    #[serde(flatten)]
-    pub predicate: Expression,
+    /// The `constant` language member.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub constant: Option<serde_json::Value>,
+    /// The `header` language member.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub header: Option<String>,
+    /// The `exchangeProperty` language member.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exchange_property: Option<String>,
+    /// The `jsonpath` language member.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub jsonpath: Option<String>,
+    /// The `rhai` language member.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rhai: Option<RhaiExpression>,
     /// The steps that run only on match.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub steps: Vec<Step>,
+}
+
+impl FilterStep {
+    /// How many language keys the step carries.
+    pub fn language_members(&self) -> usize {
+        self.constant.is_some() as usize
+            + self.header.is_some() as usize
+            + self.exchange_property.is_some() as usize
+            + self.jsonpath.is_some() as usize
+            + self.rhai.is_some() as usize
+    }
+
+    /// The decoded predicate, when exactly one language key is present;
+    /// `None` for zero or several keys. `crate::checks` reports the
+    /// malformed shapes under `adapter.route.predicate-*` codes, so a
+    /// caller only ever sees a well-formed expression.
+    pub fn predicate(&self) -> Option<Expression> {
+        if self.language_members() != 1 {
+            return None;
+        }
+        if let Some(value) = &self.constant {
+            return Some(Expression::Constant(value.clone()));
+        }
+        if let Some(name) = &self.header {
+            return Some(Expression::Header(name.clone()));
+        }
+        if let Some(name) = &self.exchange_property {
+            return Some(Expression::ExchangeProperty(name.clone()));
+        }
+        if let Some(path) = &self.jsonpath {
+            return Some(Expression::JsonPath(path.clone()));
+        }
+        self.rhai.clone().map(Expression::Rhai)
+    }
 }
 
 /// A `validate` step.
@@ -495,53 +597,19 @@ pub struct ErrorHandlerStep {
     pub no_error_handler: Option<NoErrorHandler>,
 }
 
-/// Camel's `defaultErrorHandler` with the ported redelivery options
-/// (`products/adapter/CONCEPT.md` section 8.7; CFG-NAME spelling).
+/// Camel's `defaultErrorHandler`: a redelivery policy nested under
+/// `redeliveryPolicy`, as Camel's YAML DSL writes it
+/// (`products/adapter/CONCEPT.md` section 8.7; CFG-NAME spelling inside).
 /// `delayPattern` is not ported. Redelivery is per failing endpoint send,
 /// as in Camel.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Debug, Default, Eq, Hash, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DefaultErrorHandler {
-    /// Redeliveries after the first attempt (Camel `maximumRedeliveries`,
-    /// default 0, so attempts are one plus this).
-    #[serde(default, skip_serializing_if = "is_default_zero_u32")]
-    pub maximum_redeliveries: u32,
-    /// Delay between redeliveries (Camel `redeliveryDelay`, default 1 s).
-    #[serde(
-        default = "default_retry_delay_seconds",
-        skip_serializing_if = "is_default_retry_delay_seconds"
-    )]
-    pub retry_delay_seconds: u32,
-    /// Grow the delay exponentially (default false).
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub use_exponential_back_off: bool,
-    /// The exponential multiplier (Camel `backOffMultiplier`, default 2).
-    #[serde(
-        default = "default_back_off_multiplier",
-        skip_serializing_if = "is_default_back_off_multiplier"
-    )]
-    pub back_off_multiplier: f64,
-    /// The delay ceiling (Camel `maximumRedeliveryDelay`, default 60 s).
-    #[serde(
-        default = "default_maximum_retry_delay_seconds",
-        skip_serializing_if = "is_default_maximum_retry_delay_seconds"
-    )]
-    pub maximum_retry_delay_seconds: u32,
-    /// Add collision avoidance jitter (default false).
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub use_collision_avoidance: bool,
-    /// The jitter fraction (Camel `collisionAvoidanceFactor`, default
-    /// 0.15).
-    #[serde(
-        default = "default_collision_avoidance_factor",
-        skip_serializing_if = "is_default_collision_avoidance_factor"
-    )]
-    pub collision_avoidance_factor: f64,
-    /// Keep retrying while this predicate holds, instead of counting
-    /// redeliveries (Camel `retryWhile`).
+    /// The nested redelivery policy; the default carries no redelivery,
+    /// so the error propagates after the first attempt.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub retry_while: Option<Expression>,
+    pub redelivery_policy: Option<RedeliveryOptions>,
 }
 
 /// Camel's `noErrorHandler`. The empty mapping `{}` is the whole variant.
@@ -552,10 +620,12 @@ pub struct NoErrorHandler {}
 
 /// An `onException` clause over the closed error-class hierarchy
 /// (`products/adapter/CONCEPT.md` section 8.7). No clause may name an
-/// uncatchable class; `crate::checks` refuses one that does.
+/// uncatchable class; `crate::checks` refuses one that does. Redelivery
+/// nests under `redeliveryPolicy`, as Camel's exception clause does in
+/// YAML (`manual/exception-clause.html`, `manual/exception-redelivery.html`).
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct OnExceptionStep {
     /// The matched classes.
     pub exception: Vec<ErrorClass>,
@@ -570,20 +640,24 @@ pub struct OnExceptionStep {
     /// `continued`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub continued: Option<bool>,
-    /// Redelivery options, as on the error handler.
-    #[serde(flatten)]
-    pub redelivery: RedeliveryOptions,
+    /// Redelivery options, as on the error handler, nested under
+    /// `redeliveryPolicy`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub redelivery_policy: Option<RedeliveryOptions>,
     /// The clause's steps.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub steps: Vec<Step>,
 }
 
 /// The redelivery option set, shared by the error handler and an
-/// `onException` clause (`products/adapter/CONCEPT.md` section 8.7). Only
-/// the non-default members serialize.
+/// `onException` clause (`products/adapter/CONCEPT.md` section 8.7; the
+/// nesting under `redeliveryPolicy` follows Camel's own YAML DSL,
+/// `manual/exception-clause.html` and `manual/exception-redelivery.html`).
+/// Option spellings stay ours (CFG-NAME); only the nesting is Camel's.
+/// Only the non-default members serialize.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RedeliveryOptions {
     /// Redeliveries after the first attempt (default 0).
     #[serde(default, skip_serializing_if = "is_default_zero_u32")]
@@ -730,39 +804,10 @@ pub struct TemplatedRoute {
     pub parameters: std::collections::BTreeMap<String, serde_json::Value>,
 }
 
-// The two `f64` members (Camel's `backOffMultiplier` and
+// The two `f64` members of the policy (Camel's `backOffMultiplier` and
 // `collisionAvoidanceFactor`) keep the Camel spelling; equality and the
-// hash derived from it are bitwise so these types stay `Eq` and `Hash`
+// hash derived from it are bitwise so the type stays `Eq` and `Hash`
 // for the unique-list readers.
-impl PartialEq for DefaultErrorHandler {
-    fn eq(&self, other: &Self) -> bool {
-        self.maximum_redeliveries == other.maximum_redeliveries
-            && self.retry_delay_seconds == other.retry_delay_seconds
-            && self.use_exponential_back_off == other.use_exponential_back_off
-            && self.back_off_multiplier.to_bits() == other.back_off_multiplier.to_bits()
-            && self.maximum_retry_delay_seconds == other.maximum_retry_delay_seconds
-            && self.use_collision_avoidance == other.use_collision_avoidance
-            && self.collision_avoidance_factor.to_bits()
-                == other.collision_avoidance_factor.to_bits()
-            && self.retry_while == other.retry_while
-    }
-}
-
-impl Eq for DefaultErrorHandler {}
-
-impl std::hash::Hash for DefaultErrorHandler {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.maximum_redeliveries.hash(state);
-        self.retry_delay_seconds.hash(state);
-        self.use_exponential_back_off.hash(state);
-        self.back_off_multiplier.to_bits().hash(state);
-        self.maximum_retry_delay_seconds.hash(state);
-        self.use_collision_avoidance.hash(state);
-        self.collision_avoidance_factor.to_bits().hash(state);
-        self.retry_while.hash(state);
-    }
-}
-
 impl PartialEq for RedeliveryOptions {
     fn eq(&self, other: &Self) -> bool {
         self.maximum_redeliveries == other.maximum_redeliveries
@@ -944,8 +989,8 @@ mod tests {
     fn route_definition_round_trips_with_direct_from() {
         let route: RouteDefinition = serde_json::from_str(
             r#"{
-                "id": "fetchTrackedEntity",
-                "from": { "uri": "direct:fetchTrackedEntity" },
+                "id": "fetchCase",
+                "from": { "uri": "direct:fetchCase" },
                 "steps": [
                     { "setBody": { "constant": null } }
                 ]
@@ -977,10 +1022,10 @@ mod tests {
         let step: Step = serde_json::from_str(
             r#"{
                 "to": {
-                    "uri": "http:tracker",
+                    "uri": "http:cases",
                     "parameters": {
                         "httpMethod": "GET",
-                        "path": "/api/tracker/trackedEntities/{id}",
+                        "path": "/v2/cases/{type}",
                         "pathParameters": { "id": { "header": "recordId" } },
                         "query": { "program": { "constant": "{{program}}" } },
                         "throwExceptionOnFailure": true
@@ -1001,10 +1046,10 @@ mod tests {
             serde_json::from_str::<serde_json::Value>(
                 r#"{
                     "to": {
-                        "uri": "http:tracker",
+                        "uri": "http:cases",
                         "parameters": {
                             "httpMethod": "GET",
-                            "path": "/api/tracker/trackedEntities/{id}",
+                            "path": "/v2/cases/{type}",
                             "pathParameters": { "id": { "header": "recordId" } },
                             "query": { "program": { "constant": "{{program}}" } }
                         }
@@ -1040,12 +1085,12 @@ mod tests {
     #[test]
     fn header_and_property_steps_round_trip() {
         let set_header: Step = serde_json::from_str(
-            r#"{ "setHeader": { "name": "recordType", "value": { "constant": "person" } } }"#,
+            r#"{ "setHeader": { "name": "recordType", "value": { "constant": "case" } } }"#,
         )
         .expect("parse setHeader");
         assert_eq!(
             serde_json::to_string(&set_header).expect("serialize"),
-            r#"{"setHeader":{"name":"recordType","value":{"constant":"person"}}}"#
+            r#"{"setHeader":{"name":"recordType","value":{"constant":"case"}}}"#
         );
         let set_property: Step = serde_json::from_str(
             r#"{ "setProperty": { "name": "cursor", "value": { "jsonpath": "$.nextCursor" } } }"#,
@@ -1095,9 +1140,10 @@ mod tests {
         };
         assert_eq!(choice.when.len(), 1);
         assert_eq!(
-            choice.when[0].predicate,
-            Expression::JsonPath("$.inactive".to_string())
+            choice.when[0].predicate(),
+            Some(Expression::JsonPath("$.inactive".to_string()))
         );
+        assert_eq!(choice.when[0].language_members(), 1);
         assert!(choice.otherwise.is_some());
         let back = serde_json::to_string(&step).expect("serialize");
         assert_eq!(
@@ -1123,10 +1169,34 @@ mod tests {
             panic!("expected a filter step");
         };
         assert_eq!(filter.steps.len(), 1);
+        assert_eq!(
+            filter.predicate(),
+            Some(Expression::Rhai(RhaiExpression {
+                file: "scripts/guard.rhai".to_string(),
+                entrypoint: "admits".to_string(),
+            }))
+        );
         let back = serde_json::to_string(&step).expect("serialize");
         assert_eq!(
             serde_json::from_str::<Step>(&back).ok().as_ref(),
             Some(&step)
+        );
+        // CFG-SCHEMA-8: the reader refuses any unknown key beside the
+        // language members; the platform codes that refusal
+        // `config.unknown-key` with the key's path, line, and column. The
+        // zero-or-several-key rule is an authoring check in
+        // `crate::checks` under `adapter.route.predicate-*`.
+        assert!(
+            serde_json::from_str::<Step>(
+                r#"{ "filter": { "jsonpath": "$.active", "bogus": 1, "steps": [] } }"#,
+            )
+            .is_err(),
+            "an unknown key beside a valid predicate language key is refused"
+        );
+        assert!(
+            serde_json::from_str::<Step>(r#"{ "choice": { "when": [ { "bogus": 1 } ] } }"#,)
+                .is_err(),
+            "a when with no known predicate key is refused"
         );
     }
 
@@ -1198,7 +1268,7 @@ mod tests {
                 "loop": {
                     "maximumIterations": 20,
                     "doWhile": { "jsonpath": "$.nextCursor" },
-                    "steps": [ { "to": { "uri": "http:tracker" } } ]
+                    "steps": [ { "to": { "uri": "http:cases" } } ]
                 }
             }"#,
         )
@@ -1248,7 +1318,7 @@ mod tests {
         let step: Step = serde_json::from_str(
             r#"{
                 "circuitBreaker": {
-                    "steps": [ { "to": { "uri": "http:tracker" } } ],
+                    "steps": [ { "to": { "uri": "http:cases" } } ],
                     "onFallback": { "steps": [ { "setBody": { "constant": null } } ] }
                 }
             }"#,
@@ -1287,7 +1357,7 @@ mod tests {
             r#"{
                 "throttle": {
                     "limit": { "constant": 10 },
-                    "steps": [ { "to": { "uri": "http:tracker" } } ]
+                    "steps": [ { "to": { "uri": "http:cases" } } ]
                 }
             }"#,
         )
@@ -1318,7 +1388,7 @@ mod tests {
             r#"{
                 "idempotentConsumer": {
                     "expression": { "header": "Idempotency-Key" },
-                    "steps": [ { "to": { "uri": "http:tracker", "parameters": { "httpMethod": "POST" } } } ]
+                    "steps": [ { "to": { "uri": "http:cases", "parameters": { "httpMethod": "POST" } } } ]
                 }
             }"#,
         )
@@ -1336,18 +1406,23 @@ mod tests {
         );
     }
 
-    /// The default error handler and its redelivery options, ported from
-    /// <https://camel.apache.org/manual/defaulterrorhandler.html> and
-    /// <https://camel.apache.org/manual/error-handler.html>; `delayPattern`
-    /// is not ported and the journal is the fixed dead letter.
+    /// The default error handler and its nested redelivery policy, ported
+    /// from <https://camel.apache.org/manual/defaulterrorhandler.html>,
+    /// <https://camel.apache.org/manual/error-handler.html>, and
+    /// <https://camel.apache.org/manual/exception-redelivery.html> (the
+    /// `redeliveryPolicy:` nesting is Camel's own YAML DSL shape);
+    /// `delayPattern` is not ported and the journal is the fixed dead
+    /// letter.
     #[test]
     fn error_handler_step_round_trips() {
         let step: Step = serde_json::from_str(
             r#"{
                 "errorHandler": {
                     "defaultErrorHandler": {
-                        "maximumRedeliveries": 3,
-                        "useExponentialBackOff": true
+                        "redeliveryPolicy": {
+                            "maximumRedeliveries": 3,
+                            "useExponentialBackOff": true
+                        }
                     }
                 }
             }"#,
@@ -1356,12 +1431,28 @@ mod tests {
         let Step::ErrorHandler(handler) = &step else {
             panic!("expected an errorHandler step");
         };
-        let policy = handler.default_error_handler.as_ref().expect("policy");
+        let policy = handler
+            .default_error_handler
+            .as_ref()
+            .expect("handler")
+            .redelivery_policy
+            .as_ref()
+            .expect("policy");
         assert_eq!(policy.maximum_redeliveries, 3);
         assert_eq!(policy.retry_delay_seconds, 1);
         assert_eq!(policy.back_off_multiplier, 2.0);
         assert_eq!(policy.maximum_retry_delay_seconds, 60);
         assert_eq!(policy.collision_avoidance_factor, 0.15);
+        // Unknown keys inside redeliveryPolicy are refused by the reader
+        // (CFG-SCHEMA-8); the platform codes the refusal
+        // `config.unknown-key` with the key's path, line, and column.
+        assert!(
+            serde_json::from_str::<Step>(
+                r#"{ "errorHandler": { "defaultErrorHandler": { "redeliveryPolicy": { "bogus": 1 } } } }"#,
+            )
+            .is_err(),
+            "an unknown key inside redeliveryPolicy is refused"
+        );
         let none: Step =
             serde_json::from_str(r#"{ "errorHandler": { "noErrorHandler": {} } }"#).expect("parse");
         assert!(matches!(
@@ -1379,7 +1470,9 @@ mod tests {
     }
 
     /// The exception clause, ported from
-    /// <https://camel.apache.org/manual/exception-clause.html>; closed
+    /// <https://camel.apache.org/manual/exception-clause.html> with the
+    /// redelivery nesting of
+    /// <https://camel.apache.org/manual/exception-redelivery.html>; closed
     /// class hierarchy, uncatchable classes refused by the checks.
     #[test]
     fn on_exception_step_round_trips() {
@@ -1389,7 +1482,7 @@ mod tests {
                     "exception": ["upstream.timeout"],
                     "onWhen": { "jsonpath": "$.retryable" },
                     "handled": true,
-                    "maximumRedeliveries": 2,
+                    "redeliveryPolicy": { "maximumRedeliveries": 2 },
                     "steps": [ { "setBody": { "constant": null } } ]
                 }
             }"#,
@@ -1399,7 +1492,14 @@ mod tests {
             panic!("expected an onException step");
         };
         assert_eq!(clause.exception, vec![ErrorClass::UpstreamTimeout]);
-        assert_eq!(clause.redelivery.maximum_redeliveries, 2);
+        assert_eq!(
+            clause
+                .redelivery_policy
+                .as_ref()
+                .expect("policy")
+                .maximum_redeliveries,
+            2
+        );
         let back = serde_json::to_string(&step).expect("serialize");
         assert_eq!(
             serde_json::from_str::<Step>(&back).ok().as_ref(),
@@ -1414,7 +1514,7 @@ mod tests {
         let step: Step = serde_json::from_str(
             r#"{
                 "doTry": {
-                    "steps": [ { "to": { "uri": "http:tracker" } } ],
+                    "steps": [ { "to": { "uri": "http:cases" } } ],
                     "doCatch": [
                         { "exception": ["upstream.http"], "steps": [ { "setBody": { "constant": null } } ] }
                     ],
@@ -1456,12 +1556,12 @@ mod tests {
         let templated: TemplatedRoute = serde_json::from_str(
             r#"{
                 "routeTemplateRef": "pagedFetch",
-                "routeId": "fetchPeople",
+                "routeId": "listCases",
                 "parameters": { "program": "salsa" }
             }"#,
         )
         .expect("parse instantiation");
-        assert_eq!(templated.route_id.as_str(), "fetchPeople");
+        assert_eq!(templated.route_id.as_str(), "listCases");
         for value in [
             &serde_json::to_value(&template).expect("template"),
             &serde_json::to_value(&templated).expect("instantiation"),
@@ -1484,8 +1584,8 @@ mod tests {
     #[test]
     fn resume_bindings_round_trip() {
         let binding: ResumeBinding =
-            serde_json::from_str(r#"{ "name": "person_id", "path": "$.id" }"#).expect("parse");
-        assert_eq!(binding.name.as_str(), "person_id");
+            serde_json::from_str(r#"{ "name": "case_id", "path": "$.id" }"#).expect("parse");
+        assert_eq!(binding.name.as_str(), "case_id");
         let json = serde_json::to_string(&binding).expect("serialize");
         assert_eq!(
             serde_json::from_str::<ResumeBinding>(&json).ok(),

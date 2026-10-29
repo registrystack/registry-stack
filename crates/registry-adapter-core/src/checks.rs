@@ -425,6 +425,44 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
                     });
                 }
             }
+            Step::Choice(choice) => {
+                for (when_index, when) in choice.when.iter().enumerate() {
+                    let pointer = &format!("/routes/{id}/steps{path}/when/{when_index}");
+                    match when.language_members() {
+                        0 => route_findings.push(finding(
+                            CheckCode::RoutePredicateLanguageRequired,
+                            pointer,
+                            "the when clause carries no predicate language key",
+                            "Add exactly one language key (constant, header, exchangeProperty, jsonpath, or rhai).",
+                        )),
+                        1 => {}
+                        _ => route_findings.push(finding(
+                            CheckCode::RoutePredicateAmbiguous,
+                            pointer,
+                            "the when clause carries more than one predicate language key",
+                            "Keep exactly one language key beside steps.",
+                        )),
+                    }
+                }
+            }
+            Step::Filter(filter) => {
+                let pointer = &format!("/routes/{id}/steps{path}");
+                match filter.language_members() {
+                    0 => route_findings.push(finding(
+                        CheckCode::RoutePredicateLanguageRequired,
+                        pointer,
+                        "the filter carries no predicate language key",
+                        "Add exactly one language key (constant, header, exchangeProperty, jsonpath, or rhai).",
+                    )),
+                    1 => {}
+                    _ => route_findings.push(finding(
+                        CheckCode::RoutePredicateAmbiguous,
+                        pointer,
+                        "the filter carries more than one predicate language key",
+                        "Keep exactly one language key beside steps.",
+                    )),
+                }
+            }
             Step::Loop(loop_step) if loop_step.maximum_iterations.is_none() => {
                 route_findings.push(finding(
                     CheckCode::RouteMaximumIterationsRequired,
@@ -507,15 +545,20 @@ fn declares_redelivery(steps: &[Step]) -> bool {
     let mut declared = false;
     walk_steps(steps, &mut |step, _| match step {
         Step::ErrorHandler(handler) => {
-            if let Some(policy) = &handler.default_error_handler {
+            if let Some(policy) = handler
+                .default_error_handler
+                .as_ref()
+                .and_then(|handler| handler.redelivery_policy.as_ref())
+            {
                 if policy.maximum_redeliveries > 0 || policy.retry_while.is_some() {
                     declared = true;
                 }
             }
         }
         Step::OnException(clause)
-            if clause.redelivery.maximum_redeliveries > 0
-                || clause.redelivery.retry_while.is_some() =>
+            if clause.redelivery_policy.as_ref().is_some_and(|policy| {
+                policy.maximum_redeliveries > 0 || policy.retry_while.is_some()
+            }) =>
         {
             declared = true;
         }
@@ -990,7 +1033,11 @@ fn worst_case_sends(steps: &[Step], bodies: &HashMap<&str, &[Step]>, depth: usiz
                 }
             }
             Step::ErrorHandler(handler) => {
-                if let Some(policy) = &handler.default_error_handler {
+                if let Some(policy) = handler
+                    .default_error_handler
+                    .as_ref()
+                    .and_then(|handler| handler.redelivery_policy.as_ref())
+                {
                     total += u64::from(policy.maximum_redeliveries);
                 }
             }
@@ -1172,9 +1219,10 @@ mod tests {
         AccessProfile, Binding, PinnedRef, RecordField, RecordFieldType, RecordType,
     };
     use crate::route::{
-        DefaultErrorHandler, DoCatch, DoFinally, DoTryStep, EnrichStep, ErrorHandlerStep,
-        IdempotentConsumerStep, LoopStep, OnExceptionStep, RouteDefinition, RouteFrom,
-        RouteTemplate, SplitStep, TemplatedRoute, ToParameters, ToStep,
+        ChoiceStep, DefaultErrorHandler, DoCatch, DoFinally, DoTryStep, EnrichStep,
+        ErrorHandlerStep, FilterStep, IdempotentConsumerStep, LoopStep, OnExceptionStep,
+        RedeliveryOptions, RouteDefinition, RouteFrom, RouteTemplate, SplitStep, TemplatedRoute,
+        ToParameters, ToStep, When,
     };
     use crate::runtime::{AdapterRuntimeConfig, AuditRetention, EndpointBinding};
     use registry_platform_yaml::Url;
@@ -1772,7 +1820,7 @@ mod tests {
                     on_when: None,
                     handled: Some(true),
                     continued: None,
-                    redelivery: Default::default(),
+                    redelivery_policy: None,
                     steps: vec![],
                 })],
             };
@@ -1812,7 +1860,7 @@ mod tests {
                 on_when: None,
                 handled: Some(true),
                 continued: None,
-                redelivery: Default::default(),
+                redelivery_policy: None,
                 steps: vec![],
             })],
         };
@@ -1837,7 +1885,7 @@ mod tests {
                 on_when: None,
                 handled: Some(true),
                 continued: None,
-                redelivery: Default::default(),
+                redelivery_policy: None,
                 steps: vec![],
             })],
         };
@@ -1846,6 +1894,55 @@ mod tests {
             &check_routes(&pack, &project_builder(&pack)),
             CheckCode::RouteUncatchableClause,
         );
+    }
+
+    /// A predicate carries exactly one language key; zero keys and two
+    /// keys are refused under adapter codes naming the clause (the
+    /// reader-level unknown-key refusal is `config.unknown-key` per
+    /// CFG-SCHEMA-8, so it is pinned in `route.rs` instead).
+    #[test]
+    fn routes_refuse_predicates_without_exactly_one_language_key() {
+        let route = RouteDefinition {
+            id: id("fetchCase"),
+            from: RouteFrom {
+                uri: direct("fetchCase"),
+            },
+            steps: vec![
+                Step::Choice(ChoiceStep {
+                    when: vec![
+                        When {
+                            constant: None,
+                            header: None,
+                            exchange_property: None,
+                            jsonpath: None,
+                            rhai: None,
+                            steps: vec![],
+                        },
+                        When {
+                            constant: Some(serde_json::Value::Bool(true)),
+                            header: Some("recordId".to_string()),
+                            exchange_property: None,
+                            jsonpath: None,
+                            rhai: None,
+                            steps: vec![],
+                        },
+                    ],
+                    otherwise: None,
+                }),
+                Step::Filter(FilterStep {
+                    constant: None,
+                    header: None,
+                    exchange_property: None,
+                    jsonpath: None,
+                    rhai: None,
+                    steps: vec![],
+                }),
+            ],
+        };
+        let pack = pack_builder(vec![], vec![route]);
+        let findings = check_routes(&pack, &project_builder(&pack));
+        assert_has(&findings, CheckCode::RoutePredicateLanguageRequired);
+        assert_has(&findings, CheckCode::RoutePredicateAmbiguous);
     }
 
     #[test]
@@ -1858,14 +1955,10 @@ mod tests {
             steps: vec![
                 Step::ErrorHandler(ErrorHandlerStep {
                     default_error_handler: Some(DefaultErrorHandler {
-                        maximum_redeliveries: 2,
-                        retry_delay_seconds: 1,
-                        use_exponential_back_off: false,
-                        back_off_multiplier: 2.0,
-                        maximum_retry_delay_seconds: 60,
-                        use_collision_avoidance: false,
-                        collision_avoidance_factor: 0.15,
-                        retry_while: None,
+                        redelivery_policy: Some(RedeliveryOptions {
+                            maximum_redeliveries: 2,
+                            ..Default::default()
+                        }),
                     }),
                     no_error_handler: None,
                 }),

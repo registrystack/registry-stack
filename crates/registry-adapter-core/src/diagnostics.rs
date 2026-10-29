@@ -51,6 +51,8 @@ pub enum CheckCode {
     RouteMaximumIterationsRequired,
     RouteMultipleNonSafeSends,
     RouteNonSafeSendInSplit,
+    RoutePredicateAmbiguous,
+    RoutePredicateLanguageRequired,
     RouteRedeliveryOverNonSafeSend,
     RouteUncatchableClause,
     RouteUnknownDirectTarget,
@@ -92,6 +94,8 @@ impl CheckCode {
         Self::RouteMaximumIterationsRequired,
         Self::RouteMultipleNonSafeSends,
         Self::RouteNonSafeSendInSplit,
+        Self::RoutePredicateAmbiguous,
+        Self::RoutePredicateLanguageRequired,
         Self::RouteRedeliveryOverNonSafeSend,
         Self::RouteUncatchableClause,
         Self::RouteUnknownDirectTarget,
@@ -138,6 +142,8 @@ impl CheckCode {
             Self::RouteMaximumIterationsRequired => "adapter.route.maximum-iterations-required",
             Self::RouteMultipleNonSafeSends => "adapter.route.multiple-non-safe-sends",
             Self::RouteNonSafeSendInSplit => "adapter.route.non-safe-send-in-split",
+            Self::RoutePredicateAmbiguous => "adapter.route.predicate-ambiguous",
+            Self::RoutePredicateLanguageRequired => "adapter.route.predicate-language-required",
             Self::RouteRedeliveryOverNonSafeSend => "adapter.route.redelivery-over-non-safe-send",
             Self::RouteUncatchableClause => "adapter.route.uncatchable-clause",
             Self::RouteUnknownDirectTarget => "adapter.route.unknown-direct-target",
@@ -179,6 +185,8 @@ impl CheckCode {
             | Self::RouteMaximumIterationsRequired
             | Self::RouteMultipleNonSafeSends
             | Self::RouteNonSafeSendInSplit
+            | Self::RoutePredicateAmbiguous
+            | Self::RoutePredicateLanguageRequired
             | Self::RouteRedeliveryOverNonSafeSend
             | Self::RouteUncatchableClause
             | Self::RouteUnknownDirectTarget
