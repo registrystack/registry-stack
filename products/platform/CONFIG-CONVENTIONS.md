@@ -106,7 +106,7 @@ CFG-SCHEMA-3).
 **CFG-ENV-2 (MUST). `apiVersion` is
 `id.registrystack.org/formats/<product>/<format>/<version>`.** `<product>` is
 the product token (CFG-ENV-3). `kind` matches
-`^(BReg|Casework|Coordinator|Documents|Scheduling|Messaging|Discovery|Render|Evidence|Manifest|Platform)([A-Z][a-z0-9]+)+$`,
+`^(BReg|Casework|Coordinator|Documents|Scheduling|Messaging|Discovery|Render|Evidence|Manifest|Adapter|Platform)([A-Z][a-z0-9]+)+$`,
 with acronyms written as words (`Mcp`, `Oid4vci`). `<format>` derives from
 `kind`: remove the product prefix; remove a trailing `Config`; split the rest
 before each uppercase letter; lowercase each word and join with `-`. The
@@ -120,6 +120,8 @@ result is non-empty and unique within the product. `<version>` matches
 | `BRegRuntimeConfig` | `id.registrystack.org/formats/breg/runtime/` |
 | `BRegDataImportCheckpoint` | `id.registrystack.org/formats/breg/data-import-checkpoint/` |
 | `CaseworkFixture` | `id.registrystack.org/formats/casework/fixture/` |
+| `AdapterProfile` | `id.registrystack.org/formats/adapter/profile/` |
+| `AdapterRuntimeConfig` | `id.registrystack.org/formats/adapter/runtime/` |
 
 The `apiVersion` is a name, not a URL: readers compare it literally and never
 fetch it. The identifier catalog may document it at the same path under
@@ -145,6 +147,7 @@ prefix, and is unique across the stack.**
 | `Render` | `render` |
 | `Evidence` | `evidence` |
 | `Manifest` | `manifest` |
+| `Adapter` | `adapter` |
 | `Platform` | `platform` |
 
 Supporting services take their parent product's prefix and add their own name
@@ -747,7 +750,7 @@ A path longer than 120 characters is shown as its first and last 60 joined by
 **CFG-DIAG-3 (MUST). Codes are dotted, lowercase, each segment kebab-case.**
 A product code is `<product>.<area>.<condition>` with the product token
 (`breg`, `casework`, `coordinator`, `documents`, `scheduling`, `messaging`, `discovery`,
-`render`, `evidence`, `manifest`, `platform`); a shared reader code is
+`render`, `evidence`, `manifest`, `adapter`, `platform`); a shared reader code is
 `<namespace>.<condition>`, with `yaml` for syntax and `config` for envelope,
 key, and type problems. A code is never reused for a different condition.
 An operator CLI reports an internal failure as `<binary>.internal-error`, using
