@@ -79,6 +79,40 @@ starting the next increment. Blockers and any `CONCEPT.md` contradiction
 are sent the same way as they happen. The reviewer's feedback is binding
 in the same way as Jeremi's for this program.
 
+At every increment the lead reviewer also runs an independent staff
+engineer review (Opus) of the increment's diff against `CONCEPT.md`: is it
+still a faithful Camel port, is the architecture holding up for the next
+increment, what should change in the plan. Its findings become the
+reviewer's feedback and, where the plan should change, a doc commit before
+the next increment launches. The report lands as
+`products/adapter/reviews/increment-<n>-staff.md`.
+
+## API transformation experiments (after Increment 1, again after 3)
+
+Owned by the lead reviewer, under `products/adapter/experiments/**`, no
+`.rs` file. Each experiment is a pack, a profile, a project, and
+`documented` fixtures served over the upstream double, chosen to stress the
+engine on API shapes the two maintained packs do not cover:
+
+- Sources: cursor pagination, offset and page-number pagination, a nested
+  resource needing `enrich` per item, code lists needing conversion,
+  partial failures inside a `split`, a source that returns 200 with an error
+  body, a GraphQL source (after Increment 3).
+- Targets: `breg-records` v1, the 13.6 test profile, a POST-search profile
+  with a query body, a bundle-style envelope with links and totals.
+
+Each experiment records what it needed: when one cannot be expressed
+without Rust, or only awkwardly, the finding is a port-table gap or a
+divergence to revisit, fed back into the plan. Results summarize in
+`products/adapter/experiments/FINDINGS.md`.
+
+## Takeover
+
+When the orchestrator reports Increment 3 (or stops earlier), the lead
+reviewer takes the branch over: runs every acceptance command and the
+final multi-expert review, fixes the remaining findings directly, and
+writes the report to Jeremi.
+
 ## Increment 0: formats and the route model
 
 ### Wave 0, S0: scaffold (done)
