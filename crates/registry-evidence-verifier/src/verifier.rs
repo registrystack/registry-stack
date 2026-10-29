@@ -1204,8 +1204,8 @@ pub fn verify_flattened_jws_report(
 }
 
 /// Strict one-call verification of an issued SD-JWT VC: cryptographic
-/// authenticity, complete disclosure resolution, every policy expectation, and
-/// current validity must all hold.
+/// authenticity, resolution of every presented disclosure, every policy
+/// expectation, and current validity must all hold.
 pub fn verify_sd_jwt_vc(
     serialized: &[u8],
     trusted_jwks: &JwksDocument,
@@ -1271,9 +1271,9 @@ pub fn verify_sd_jwt_vc_presentation(
 /// authenticity separately from current validity.
 ///
 /// The checks run in a fixed order and the order is part of the contract: the
-/// issuer signature, complete disclosure resolution, the rebuilt payload
-/// against the published contract, the confirmation the issuer signed, the
-/// key-binding JWT, and only then the relying party's own expectations. A
+/// issuer signature, resolution of every presented disclosure, the rebuilt
+/// payload against the published contract, the confirmation the issuer signed,
+/// the key-binding JWT, and only then the relying party's own expectations. A
 /// failed possession proof therefore never runs a policy comparison, so it
 /// cannot reveal whether the policy would have matched.
 ///
