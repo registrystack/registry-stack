@@ -191,7 +191,7 @@ pub(crate) fn run(args: &CheckArgs) -> Result<CheckRun, CheckFailure> {
     )?;
 
     let fixture_paths = if args.fixtures.is_empty() {
-        discovered_fixtures(&directory)
+        discovered_fixtures(&directory)?
     } else {
         args.fixtures.clone()
     };
@@ -306,20 +306,36 @@ fn read<T: serde::de::DeserializeOwned>(
 }
 
 /// The fixture files of a project directory, in file-name order. A missing
-/// `fixtures/` directory means no fixtures.
-fn discovered_fixtures(directory: &Path) -> Vec<PathBuf> {
-    let mut paths: Vec<PathBuf> = std::fs::read_dir(directory.join("fixtures"))
-        .into_iter()
-        .flatten()
-        .flatten()
-        .map(|entry| entry.path())
-        .filter(|path| {
-            path.extension()
-                .is_some_and(|extension| extension == "yaml")
-        })
-        .collect();
+/// `fixtures/` directory means no fixtures; a directory that cannot be
+/// read is an environment failure, never a silently empty fixture set.
+fn discovered_fixtures(directory: &Path) -> Result<Vec<PathBuf>, CheckFailure> {
+    let fixtures = directory.join("fixtures");
+    let entries = match std::fs::read_dir(&fixtures) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(source) => {
+            return Err(CheckFailure::Io {
+                path: fixtures.display().to_string(),
+                source,
+            })
+        }
+    };
+    let mut paths = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|source| CheckFailure::Io {
+            path: fixtures.display().to_string(),
+            source,
+        })?;
+        let path = entry.path();
+        if path
+            .extension()
+            .is_some_and(|extension| extension == "yaml")
+        {
+            paths.push(path);
+        }
+    }
     paths.sort();
-    paths
+    Ok(paths)
 }
 
 /// Verify every script and query-file inventory entry against the bytes on

@@ -514,6 +514,29 @@ fn an_unreadable_project_is_an_operational_failure() {
     assert_eq!(report["diagnostics"][0]["code"], "adapterctl.io-failure");
 }
 
+/// A fixtures path that cannot be read as a directory is an operational
+/// failure, never a silently empty fixture set: a check that read no
+/// fixtures must not pass as one that needed none.
+#[test]
+fn an_unreadable_fixtures_directory_is_an_operational_failure() {
+    let (_root, project) = mutated_project(|root| {
+        let fixtures = root.join("fixtures");
+        std::fs::remove_dir_all(&fixtures).expect("drop the copied fixtures directory");
+        std::fs::write(&fixtures, "not a directory\n").expect("write fixtures file");
+    });
+    let (exit, report, _) = run_json(&["check", &project]);
+    assert_eq!(exit, ExitCode::from(3), "{report}");
+    assert_eq!(report["status"], "operational-failure", "{report}");
+    let diagnostic = &report["diagnostics"][0];
+    assert_eq!(diagnostic["code"], "adapterctl.io-failure");
+    assert!(
+        diagnostic["path"]
+            .as_str()
+            .is_some_and(|path| path.ends_with("/fixtures")),
+        "{report}"
+    );
+}
+
 /// The human format prints the verdict line and the findings on stderr,
 /// and stdout stays empty.
 #[test]
