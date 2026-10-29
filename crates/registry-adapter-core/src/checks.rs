@@ -877,7 +877,19 @@ pub fn check_project(workspace: &Workspace<'_>) -> Vec<Diagnostic> {
             ));
         }
         if let (Some(operation), Some(route_steps)) = (operation, route_steps) {
-            let worst = worst_case_sends(route_steps, &bodies, 0);
+            let oauth_endpoints: HashSet<&str> = pack
+                .endpoints
+                .iter()
+                .filter(|endpoint| {
+                    matches!(
+                        endpoint.authentication,
+                        EndpointAuthentication::Oauth2ClientCredentials { .. }
+                            | EndpointAuthentication::Oauth2PrivateKeyJwt { .. }
+                    )
+                })
+                .map(|endpoint| endpoint.id.as_str())
+                .collect();
+            let worst = route_worst_case(route_steps, &bodies, &oauth_endpoints);
             if worst > binding.maximum_upstream_calls.get() {
                 findings.push(finding(
                     CheckCode::ProjectUpstreamBudgetExceeded,
@@ -954,91 +966,246 @@ fn write_route_checks(prefix: &str, steps: &[Step]) -> Vec<Diagnostic> {
     findings
 }
 
-/// The static worst-case upstream send count of a route body: `to` and
-/// `enrich` count one, `direct:` expands the target, `split` and `loop`
-/// multiply by their mandatory bounds, and `choice` takes the widest
-/// branch. Exception-clause bodies are not counted; the runtime enforces
-/// the same budget against the live exchange.
-fn worst_case_sends(steps: &[Step], bodies: &HashMap<&str, &[Step]>, depth: usize) -> u64 {
+/// The static worst-case upstream call count of a route
+/// (`products/adapter/CONCEPT.md` sections 5.5 and 10.2): the route body
+/// plus the widest exception-clause body; every send counts one plus the
+/// declared `maximumRedeliveries` attempts; and each OAuth endpoint the
+/// route touches adds at most two token requests per exchange.
+fn route_worst_case(
+    steps: &[Step],
+    bodies: &HashMap<&str, &[Step]>,
+    oauth_endpoints: &HashSet<&str>,
+) -> u64 {
+    let mut walk = WorstCaseWalk {
+        bodies,
+        oauth_endpoints,
+        used_oauth: &mut HashSet::new(),
+        clause_worst: 0,
+    };
+    let main = worst_body(steps, &mut walk, 0, declared_redeliveries(steps), false);
+    let tokens = 2u64.saturating_mul(u64::try_from(walk.used_oauth.len()).unwrap_or(u64::MAX));
+    main.saturating_add(walk.clause_worst)
+        .saturating_add(tokens)
+}
+
+/// The redeliveries a body declares: the widest `maximumRedeliveries`
+/// across its error handler and `onException` clauses. A `retryWhile`
+/// predicate is not statically bounded; the runtime enforces the budget
+/// against the live exchange.
+fn declared_redeliveries(steps: &[Step]) -> u32 {
+    let mut maximum = 0u32;
+    walk_steps(steps, &mut |step, _| match step {
+        Step::ErrorHandler(handler) => {
+            if let Some(policy) = handler
+                .default_error_handler
+                .as_ref()
+                .and_then(|handler| handler.redelivery_policy.as_ref())
+            {
+                maximum = maximum.max(policy.maximum_redeliveries);
+            }
+        }
+        Step::OnException(clause) => {
+            if let Some(policy) = &clause.redelivery_policy {
+                maximum = maximum.max(policy.maximum_redeliveries);
+            }
+        }
+        _ => {}
+    });
+    maximum
+}
+
+/// The shared state of one worst-case walk: the direct-expansion bodies,
+/// the pack endpoints needing token requests, and the accumulators.
+struct WorstCaseWalk<'a> {
+    bodies: &'a HashMap<&'a str, &'a [Step]>,
+    oauth_endpoints: &'a HashSet<&'a str>,
+    used_oauth: &'a mut HashSet<String>,
+    /// The widest top-level exception-clause body seen so far.
+    clause_worst: u64,
+}
+
+/// The worst-case upstream send count of one body: `to` and `enrich`
+/// count one send times the redelivery attempts in force, `direct:`
+/// expands the target (its own redelivery declarations join the widest in
+/// force), `split` and `loop` multiply by their mandatory bounds, and
+/// `choice` takes the widest branch. Exception-clause bodies do not add
+/// to the running total; the widest clause body becomes a separate
+/// candidate added once by [`route_worst_case`], except a clause nested
+/// inside another clause, which adds to its enclosing clause's body (the
+/// runtime can run both).
+fn worst_body(
+    steps: &[Step],
+    walk: &mut WorstCaseWalk<'_>,
+    depth: usize,
+    redeliveries: u32,
+    in_clause: bool,
+) -> u64 {
     if depth > MAX_DIRECT_DEPTH {
         return 0;
     }
-    let mut total = 0;
+    let attempts = 1u64.saturating_add(u64::from(redeliveries));
+    let mut total = 0u64;
     for step in steps {
         match step {
             Step::To(to) => match to.uri.component {
-                SendComponent::Http | SendComponent::GraphQl => total += 1,
+                SendComponent::Http | SendComponent::GraphQl => {
+                    if walk.oauth_endpoints.contains(to.uri.id.as_str()) {
+                        walk.used_oauth.insert(to.uri.id.to_string());
+                    }
+                    total = total.saturating_add(attempts);
+                }
                 SendComponent::Direct => {
-                    if let Some(target) = bodies.get(to.uri.id.as_str()) {
-                        total += worst_case_sends(target, bodies, depth + 1);
+                    if let Some(target) = walk.bodies.get(to.uri.id.as_str()) {
+                        let target_redeliveries = redeliveries.max(declared_redeliveries(target));
+                        total = total.saturating_add(worst_body(
+                            target,
+                            walk,
+                            depth + 1,
+                            target_redeliveries,
+                            in_clause,
+                        ));
                     }
                 }
             },
             Step::Enrich(enrich) => match enrich.uri.component {
-                SendComponent::Http | SendComponent::GraphQl => total += 1,
+                SendComponent::Http | SendComponent::GraphQl => {
+                    if walk.oauth_endpoints.contains(enrich.uri.id.as_str()) {
+                        walk.used_oauth.insert(enrich.uri.id.to_string());
+                    }
+                    total = total.saturating_add(attempts);
+                }
                 SendComponent::Direct => {
-                    if let Some(target) = bodies.get(enrich.uri.id.as_str()) {
-                        total += worst_case_sends(target, bodies, depth + 1);
+                    if let Some(target) = walk.bodies.get(enrich.uri.id.as_str()) {
+                        let target_redeliveries = redeliveries.max(declared_redeliveries(target));
+                        total = total.saturating_add(worst_body(
+                            target,
+                            walk,
+                            depth + 1,
+                            target_redeliveries,
+                            in_clause,
+                        ));
                     }
                 }
             },
             Step::Split(split) => {
-                let items = split.maximum_items.map(|bound| bound.get()).unwrap_or(1);
-                total = total.saturating_add(items.saturating_mul(worst_case_sends(
+                let items = split.maximum_items.map_or(1u64, |bound| bound.get());
+                total = total.saturating_add(items.saturating_mul(worst_body(
                     &split.steps,
-                    bodies,
+                    walk,
                     depth + 1,
+                    redeliveries,
+                    in_clause,
                 )));
             }
             Step::Loop(loop_step) => {
                 let iterations = loop_step
                     .maximum_iterations
-                    .map(|bound| bound.get())
-                    .unwrap_or(1);
-                total = total.saturating_add(iterations.saturating_mul(worst_case_sends(
+                    .map_or(1u64, |bound| bound.get());
+                total = total.saturating_add(iterations.saturating_mul(worst_body(
                     &loop_step.steps,
-                    bodies,
+                    walk,
                     depth + 1,
+                    redeliveries,
+                    in_clause,
                 )));
             }
             Step::Choice(choice) => {
-                let mut widest = 0;
+                let mut widest = 0u64;
                 for when in &choice.when {
-                    widest = widest.max(worst_case_sends(&when.steps, bodies, depth + 1));
+                    widest = widest.max(worst_body(
+                        &when.steps,
+                        walk,
+                        depth + 1,
+                        redeliveries,
+                        in_clause,
+                    ));
                 }
                 if let Some(otherwise) = &choice.otherwise {
-                    widest = widest.max(worst_case_sends(&otherwise.steps, bodies, depth + 1));
+                    widest = widest.max(worst_body(
+                        &otherwise.steps,
+                        walk,
+                        depth + 1,
+                        redeliveries,
+                        in_clause,
+                    ));
                 }
-                total += widest;
+                total = total.saturating_add(widest);
             }
             Step::CircuitBreaker(breaker) => {
-                total += worst_case_sends(&breaker.steps, bodies, depth + 1);
+                total = total.saturating_add(worst_body(
+                    &breaker.steps,
+                    walk,
+                    depth + 1,
+                    redeliveries,
+                    in_clause,
+                ));
                 if let Some(fallback) = &breaker.on_fallback {
-                    total = total.max(worst_case_sends(&fallback.steps, bodies, depth + 1));
+                    total = total.max(worst_body(
+                        &fallback.steps,
+                        walk,
+                        depth + 1,
+                        redeliveries,
+                        in_clause,
+                    ));
                 }
             }
             Step::Throttle(throttle) => {
-                total += worst_case_sends(&throttle.steps, bodies, depth + 1);
+                total = total.saturating_add(worst_body(
+                    &throttle.steps,
+                    walk,
+                    depth + 1,
+                    redeliveries,
+                    in_clause,
+                ));
             }
             Step::IdempotentConsumer(idempotent) => {
-                total += worst_case_sends(&idempotent.steps, bodies, depth + 1);
+                total = total.saturating_add(worst_body(
+                    &idempotent.steps,
+                    walk,
+                    depth + 1,
+                    redeliveries,
+                    in_clause,
+                ));
             }
             Step::DoTry(do_try) => {
-                total += worst_case_sends(&do_try.steps, bodies, depth + 1);
+                total = total.saturating_add(worst_body(
+                    &do_try.steps,
+                    walk,
+                    depth + 1,
+                    redeliveries,
+                    in_clause,
+                ));
                 for catch in &do_try.do_catch {
-                    total = total.max(worst_case_sends(&catch.steps, bodies, depth + 1));
+                    total = total.max(worst_body(
+                        &catch.steps,
+                        walk,
+                        depth + 1,
+                        redeliveries,
+                        in_clause,
+                    ));
                 }
                 if let Some(do_finally) = &do_try.do_finally {
-                    total += worst_case_sends(&do_finally.steps, bodies, depth + 1);
+                    total = total.saturating_add(worst_body(
+                        &do_finally.steps,
+                        walk,
+                        depth + 1,
+                        redeliveries,
+                        in_clause,
+                    ));
                 }
             }
-            Step::ErrorHandler(handler) => {
-                if let Some(policy) = handler
-                    .default_error_handler
+            Step::OnException(clause) => {
+                let clause_redeliveries = clause
+                    .redelivery_policy
                     .as_ref()
-                    .and_then(|handler| handler.redelivery_policy.as_ref())
-                {
-                    total += u64::from(policy.maximum_redeliveries);
+                    .map_or(redeliveries, |policy| {
+                        redeliveries.max(policy.maximum_redeliveries)
+                    });
+                let worst = worst_body(&clause.steps, walk, depth + 1, clause_redeliveries, true);
+                if in_clause {
+                    total = total.saturating_add(worst);
+                } else {
+                    walk.clause_worst = walk.clause_worst.max(worst);
                 }
             }
             _ => {}
@@ -2084,6 +2251,8 @@ mod tests {
         let pack = pack_builder(vec![oauth_endpoint()], vec![route]);
         let mut project = project_builder(&pack);
         project.access_profiles = UniqueIdList::new(Vec::new()).expect("empty");
+        // Ten looped sends plus two token requests for the one OAuth
+        // endpoint (CONCEPT 10.2): twelve.
         project.bindings = UniqueIdList::new(vec![Binding {
             id: id("find-cases"),
             operation: id("cases.find"),
@@ -2099,7 +2268,58 @@ mod tests {
             operation: id("cases.find"),
             record_type: local("case"),
             route: id("fetchCase"),
-            maximum_upstream_calls: BoundedU64::<1, 100_000>::new(10).expect("budget"),
+            maximum_upstream_calls: BoundedU64::<1, 100_000>::new(12).expect("budget"),
+        }])
+        .expect("unique");
+        assert_clean(check_project(&workspace(&profile, &pack, &project)));
+    }
+
+    /// The budget walk counts exception-clause bodies: a clause body
+    /// alone pushes the route past `maximumUpstreamCalls` (Wave 2
+    /// ruling). The clause's redeliveries multiply its sends the same
+    /// way.
+    #[test]
+    fn project_refuses_a_budget_exceeded_by_an_exception_clause_body() {
+        let profile = profile_builder(vec![operation("cases.find", HttpMethod::Get)]);
+        // The route body sends nothing; the clause body sends three times,
+        // each with two redeliveries: 3 * (1 + 2) = 9 upstream calls.
+        let route = RouteDefinition {
+            id: id("fetchCase"),
+            from: RouteFrom {
+                uri: direct("fetchCase"),
+            },
+            steps: vec![Step::OnException(OnExceptionStep {
+                exception: vec![crate::model::ErrorClass::UpstreamTimeout],
+                on_when: None,
+                handled: Some(true),
+                continued: None,
+                redelivery_policy: Some(RedeliveryOptions {
+                    maximum_redeliveries: 2,
+                    ..Default::default()
+                }),
+                steps: vec![to_get("case-api"), to_get("case-api"), to_get("case-api")],
+            })],
+        };
+        let pack = pack_builder(vec![oauth_endpoint()], vec![route]);
+        let mut project = project_builder(&pack);
+        project.access_profiles = UniqueIdList::new(Vec::new()).expect("empty");
+        project.bindings = UniqueIdList::new(vec![Binding {
+            id: id("find-cases"),
+            operation: id("cases.find"),
+            record_type: local("case"),
+            route: id("fetchCase"),
+            maximum_upstream_calls: BoundedU64::<1, 100_000>::new(8).expect("budget"),
+        }])
+        .expect("unique");
+        let findings = check_project(&workspace(&profile, &pack, &project));
+        assert_has(&findings, CheckCode::ProjectUpstreamBudgetExceeded);
+        // The exact worst case fits: 9 sends + 2 token requests.
+        project.bindings = UniqueIdList::new(vec![Binding {
+            id: id("find-cases"),
+            operation: id("cases.find"),
+            record_type: local("case"),
+            route: id("fetchCase"),
+            maximum_upstream_calls: BoundedU64::<1, 100_000>::new(11).expect("budget"),
         }])
         .expect("unique");
         assert_clean(check_project(&workspace(&profile, &pack, &project)));
