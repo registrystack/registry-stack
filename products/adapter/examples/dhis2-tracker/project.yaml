@@ -30,12 +30,12 @@ kind: AdapterProject
 id: dhis2-tracker-example
 profile:
   id: breg-records
-  version: 0.1.0
-  digest: sha256:f47666e3836512ce8a8dd33d0c454c642f64e4f1d12bd888b9ae569dc47ad9bd
+  version: "1"
+  digest: sha256:e6df82d197926e6b54ce519e6f739f2a9db0b3e0469e7970577184020910799b
 pack:
   id: dhis2-tracker
-  version: 0.1.0
-  digest: sha256:78c3e4c29cce949354093b8baecde4d667180e6dd3f15aa4419a0aa36de77aa5
+  version: "1"
+  digest: sha256:1d91e5c77820400decb5b654ef94394c429413d625b14ac98be7c5f0b6cb983a
 recordTypes:
   - name: person
     fields:
