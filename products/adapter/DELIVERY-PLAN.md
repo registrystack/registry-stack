@@ -93,7 +93,9 @@ vocabulary; the doc commit that carries this plan updates
 
 **A1, core model**, owns `crates/registry-adapter-core/**`.
 Reader types (serde, `deny_unknown_fields`, externally tagged step union
-per CFG-ID-7) for: `AdapterProfile`; `AdapterPack` (endpoints with
+per CFG-ID-7) for: `AdapterProfile` (operations, request and response
+envelope templates over the closed slot vocabulary of `CONCEPT.md` 7,
+pagination parameters, problem envelope and codes); `AdapterPack` (endpoints with
 component kind, auth kind, declared response headers, `idempotentUpstream`
 per operation, tested versions; `routeTemplates` with typed parameters;
 internal `routes`; code maps; script and query-file references with digest
@@ -114,7 +116,9 @@ count per bound operation against `maximumUpstreamCalls`, write-safety
 `to` inside `split` without `stopOnException: true`; write route without
 `idempotentConsumer`; more than one non-safe send in a write route until
 Increment 3), refusal of `onException`/`doCatch` naming an uncatchable
-class, digest-pin shape, envelope-name validity.
+class, digest-pin shape, envelope-name validity, profile envelope checks
+(unknown slot, missing result slot, problem envelope without its code
+slot). No type or check names a `breg-records` path, operation, or field.
 
 DoD: accept and reject unit tests for every check asserting `adapter.*`
 codes, not prose; a round-trip test per step variant; verification floor
@@ -152,7 +156,10 @@ passing.
 
 **B2, authored artifacts**, owns
 `products/adapter/{profiles,packs,examples,fixtures}/**`.
-`breg-records` v1 profile (operations, problem schema and codes); the
+`breg-records` v1 profile (operations, Record v1 envelope templates,
+pagination parameters, problem envelope and codes); a second test profile
+under the corpus with different paths, envelope, and pagination names
+(`CONCEPT.md` 13.6); the
 `dhis2-tracker` pack as route templates: search with pagination as `loop`
 plus `enrich` with `jsonArrayAppend` and `uniqueBy`, get with `choice` and
 a Rhai seam in its own digest-pinned file, code maps, `onException`
@@ -204,13 +211,15 @@ is absent; root `AGENTS.md` and `products/adapter/AGENTS.md` gate rows.
   `src/auth/**`, the upstream double under `tests/support/upstream/**`, and
   `tests/camel_{direct,http,rest_dsl,header_filter}.rs`: `direct`, `http` on
   `FixedDestinationPolicy`, the `rest` consumer on `registry-platform-httpsec`
-  with OIDC and access profiles.
+  with OIDC and access profiles, filling the profile's envelope templates.
 - **C5, journal**, owns `src/notifier/**`, migrations, `tests/camel_event_notifier.rs`,
   and the PostgreSQL suite: event kinds from `CONCEPT.md` 11, value-free,
   written before the response; retention.
 - **C6, compile and replay tooling**, owns `crates/registry-adapterctl/src/{compile,fixtures,verify}/**`
   and `tests/camel_testing.rs`: `adapterctl compile` (byte-stable OpenAPI
-  into the built package, Record v1 shape against `products/breg/generated/`),
+  into the built package, composed from the profile's envelopes and the
+  declared model; the `breg-records` output checked against
+  `registry-record` goldens (dev-dependency) and `products/breg/generated/`),
   `fixtures replay` (intercept and skip semantics), `verify --live` (tested
   against the double; a live DHIS2 run is Jeremi's optional step).
 
@@ -221,7 +230,8 @@ per rule 11.
 ### Wave 2, integration
 
 Wires C1 to C6 into one engine; dhis2-tracker search and get end to end
-over the double and by replay; fault injection (13.4), read property tests
+over the double and by replay, under both the `breg-records` profile and
+the test profile; fault injection (13.4), read property tests
 (13.5), contract tests (13.6), security tests (13.7) in the default suite;
 `check-port-table.py` now requires every Increment 1 row; review report.
 
@@ -323,6 +333,10 @@ Increment 1:
 5. `CARGO run --locked -p registry-cli-docs -- --check` (or the snapshot
    test) passes; `CARGO clippy --workspace --all-targets -- -D warnings`
    exits 0.
+6. `rg -n 'records\.(search|get|create|update|patch)|/v1/records' crates/registry-adapter*/src`
+   prints nothing (the target API lives in profile files only), and
+   `cargo tree -p registry-adapter -e normal | rg registry-record` prints
+   nothing (dev-dependency only).
 
 Increment 2:
 
@@ -341,7 +355,7 @@ Increment 3:
 4. `products/adapter/reviews/final.md` exists, and each finding is fixed
    or listed open.
 
-Global definition of done: `CONCEPT.md` section 14, items 1 to 6, each
+Global definition of done: `CONCEPT.md` section 14, items 1 to 7, each
 verified by the commands above. The final report to Jeremi states the count
 of `captured` and `documented` fixtures, every open finding, every
 contradiction rule 11 surfaced, and the decisions still pending (D7 to D16).

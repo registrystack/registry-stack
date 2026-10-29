@@ -72,8 +72,11 @@ deployment writes only a project file.
 - Camel parity for every pattern the engine implements: someone who knows
   Camel reads a pack and predicts its behavior from the Camel documentation,
   except where the port table says otherwise.
-- Response compatibility with Registry Record v1, so consumers of Base
-  Registry Engine output can read adapter output.
+- The exposed API, envelope included, is a profile artifact, never Rust.
+  The first profile, `breg-records` v1, answers in Registry Record v1 shape
+  so consumers of Base Registry Engine output can read adapter output;
+  other target APIs (GovStack, a ministry's own contract) are further
+  profile files served by the same binary.
 - One native binary, PostgreSQL for the audit journal and the idempotency
   store, deployment story identical to the rest of the stack.
 
@@ -182,7 +185,7 @@ today, not what a profile family could someday offer.
 
 | Artifact | Kind | Registered format | Contains |
 |---|---|---|---|
-| Facade profile | Authored, versioned, maintained by us | `AdapterProfile` | Operation set by id, methods and paths, envelopes, problem codes and problem schema, parameterized parts. First: `breg-records` v1 |
+| Facade profile | Authored, versioned, maintained by us | `AdapterProfile` | Operation set by id, methods and paths, request and response envelope templates, pagination parameters, problem codes and problem envelope, parameterized parts. First: `breg-records` v1 |
 | Adapter pack | Authored, versioned, reviewed | `AdapterPack` | Per source system, Kamelet-style: endpoint declarations (component, auth kind, tested upstream versions), route templates with typed template parameters, internal `direct:` routes, code maps, script references (own files, digest-pinned), required engine capabilities |
 | Adapter project | Authored, top-level | `AdapterProject` | Declared record types and fields, profile and pack references pinned by version and digest, `templatedRoutes` instantiating pack templates, bindings of concrete contract operations to route ids, access profiles |
 | Runtime config | Operator | `AdapterRuntimeConfig` | Environment bindings: endpoint base URLs and TLS, secret references, `allowedPrivateCidrs`, listener, database, OIDC, audit retention, from platform shared blocks |
@@ -199,15 +202,38 @@ in the runtime config because it is environment.
 
 ## 7. Facade contract and dynamic payloads
 
-The facade contract is an artifact, not engine code. A profile declares the
-operation set (`records.search`, `records.get`, `records.create`,
-`records.update`, `records.patch`) with paths, methods, envelopes, and problem
-codes, and declares which parts are parameterized by the deployment. The
-`breg-records` v1 profile mirrors the Base Registry Engine's public read
-surface (`/v1/records/{type}`, `/v1/records/{type}/{record_id}`) plus write
-operations, with responses in Registry Record v1 shape through
-`registry-record`. The adapter depends on `registry-record` and never on the
-`registry-breg` runtime.
+The facade contract is an artifact, not engine code, and nothing about any
+one target API is compiled in (D17). A profile declares its operation set
+with paths, methods, request and response envelopes, pagination parameters,
+and problem codes, and declares which parts are parameterized by the
+deployment. The first profile, `breg-records` v1, is a starting target, not
+the only one: it mirrors the Base Registry Engine's public read surface
+(`/v1/records/{type}`, `/v1/records/{type}/{record_id}`) plus write
+operations (`records.search`, `records.get`, `records.create`,
+`records.update`, `records.patch`), answering in Registry Record v1 shape.
+GovStack, or a contract a ministry already publishes, is another profile
+file.
+
+An envelope is a JSON template in the profile with slots from a closed
+vocabulary the engine fills: `record` (one validated route result),
+`records` (the validated result list), `recordType`, `recordId`,
+`nextCursor`, `requestId`, and, in the problem envelope, `problemCode`,
+`problemTitle`, `problemDetail`, `status`. Request envelopes name where the
+writable record sits in an incoming body; pagination parameters name the
+cursor and page-size query parameters and their bounds. `adapterctl check`
+refuses an unknown slot, a response envelope without its result slot, and a
+problem envelope without its code slot. The engine owns the mechanism
+(filling slots, encoding cursors, setting the status); the profile owns
+every name and shape a caller sees.
+
+This keeps three artifacts independent: a pack knows a source system and
+produces records in the project's declared model; a profile knows a target
+API; a project binds one to the other. The same DHIS2 pack serves a
+`breg-records` deployment and a later GovStack deployment unchanged. The
+adapter's only link to BReg is test-time: `registry-record` is a
+dev-dependency whose serialization goldens prove the `breg-records`
+profile's envelope byte-compatible (section 13.6); the adapter never
+depends on the `registry-breg` runtime.
 
 Payload content is dynamic: request and response schemas and search
 parameters are computed per deployment from the declared model, the same way
@@ -226,7 +252,7 @@ coincide: the deployment serves exactly its contract.
 Route output is checked twice. `adapterctl check` validates every fixture's
 facade response against the generated schema, and the runtime validates the
 final exchange body of every route against the closed per-operation result
-schema before the engine wraps it in the Record v1 envelope. Fixture values
+schema before the engine places it in the profile's envelope. Fixture values
 are checked against declared field types at check time (CFG-VAL-9).
 
 `adapterctl compile` emits the deployment's concrete OpenAPI document into the
@@ -478,8 +504,9 @@ Uncatchable, terminal, journaled (an addition with no Camel equivalent):
   concrete operation dispatches to its bound route; `clientRequestValidation`
   is always on; unmatched requests answer 404 or 405 as in Camel; a missing
   route fails startup (Camel's `missingOperation` default; `ignore` and
-  `mock` are not ported). Authentication, authorization (section 10), and the
-  envelope are engine-owned on `registry-platform-httpsec`.
+  `mock` are not ported). Authentication and authorization (section 10) are
+  engine-owned on `registry-platform-httpsec`; the envelope is the
+  profile's template, filled by the engine.
 - `http`: producer on `FixedDestinationPolicy`. `uri: "http:<endpointId>"`
   names an endpoint declared in the pack and bound to a base URL in the
   runtime config. Parameters: `httpMethod`, `path` (a template whose
@@ -772,9 +799,13 @@ rate; exhausted exchanges land in the journal with the terminal problem code.
 ### 13.6 Contract tests
 
 The runtime serves exactly the generated OpenAPI: every documented route
-answers, every undocumented route is refused with 404 or 405. Record v1
-responses match `registry-record` serialization goldens and the shape of
-BReg's generated per-package OpenAPI (`products/breg/generated/`).
+answers, every undocumented route is refused with 404 or 405. Responses
+under the `breg-records` profile match `registry-record` serialization
+goldens and the shape of BReg's generated per-package OpenAPI
+(`products/breg/generated/`). A second, deliberately different test profile
+in the corpus (other paths, other envelope, other pagination names) is
+served by the same binary over the same pack, proving the target API is
+configuration.
 
 ### 13.7 Security tests
 
@@ -851,7 +882,11 @@ Definition of done for the program, every item verified by a command in
    stores); the security tests in 13.7 run in `check-contracts.sh`.
 5. Every fixture carries honest provenance; the morning report states how
    many are `captured` and how many `documented`.
-6. A review report per increment and a final multi-expert review are
+6. The exposed API is configuration: the test profile of section 13.6
+   serves over the `dhis2-tracker` pack with no Rust change, and no
+   adapter crate names a `breg-records` path, operation, or field outside
+   tests.
+7. A review report per increment and a final multi-expert review are
    recorded under `products/adapter/reviews/`, with every finding either
    fixed or listed as open.
 
@@ -896,3 +931,4 @@ the product documentation credits Camel and the EIP book regardless.
 | D14 | Write resume is an addition, deferred to Increment 3 where OpenCRVS needs it; until then a write route with more than one non-safe send is refused | 2026-10-30, under delegation, pending Jeremi |
 | D15 | Fixture provenance distinguishes `captured` from `documented`; overnight fixtures are `documented` unless a real instance was run | 2026-10-30, under delegation, pending Jeremi |
 | D16 | Facade outcome for a write the source accepted but has not completed | open, Jeremi to decide before Increment 2 |
+| D17 | The exposed API, envelope included, is wholly a profile artifact (envelope templates over a closed slot vocabulary); `breg-records` v1 is the first target, not a built-in; `registry-record` is a dev-dependency for goldens only | 2026-10-30, accepted by Jeremi |
