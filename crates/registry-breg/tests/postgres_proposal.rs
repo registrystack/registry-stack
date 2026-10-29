@@ -2036,6 +2036,163 @@ async fn proposal_turn_filter_pages_a_bounded_scan_without_gaps_or_duplicates() 
     fixture.finish().await;
 }
 
+/// Starts Proposals of `action_id` until one sorts after at least
+/// `smaller_than` of `existing`, so the list scan reaches it only after its
+/// budget has been spent on the others. Proposal ids are random, hence the
+/// loop. Every Proposal started is recorded in `started` and `existing`.
+async fn start_sorted_after(
+    fixture: &client_http::ClientFixture,
+    action_id: &str,
+    existing: &mut Vec<String>,
+    smaller_than: usize,
+    key_prefix: &str,
+) -> registry_breg_client::BRegProposal {
+    for attempt in 0..64 {
+        let proposal = start_action(
+            fixture,
+            action_id,
+            "After",
+            &format!("{key_prefix}-{attempt}"),
+        )
+        .await;
+        let sorted_after = existing
+            .iter()
+            .filter(|id| id.as_str() < proposal.id())
+            .count();
+        existing.push(proposal.id().to_owned());
+        if sorted_after >= smaller_than {
+            return proposal;
+        }
+    }
+    panic!("no Proposal sorted after {smaller_than} others");
+}
+
+/// Follows a filtered list to its end, returning the ids and the page count.
+async fn list_all(
+    client: &registry_breg_client::BaseRegistryClient,
+    collection: &registry_breg_client::BRegProposalCollection,
+    query: BRegProposalQuery,
+) -> (BTreeSet<String>, usize) {
+    let mut ids = BTreeSet::new();
+    let mut cursor = None;
+    let mut pages = 0;
+    loop {
+        let page = client
+            .list_proposals(
+                collection,
+                &BRegProposalQuery {
+                    cursor,
+                    ..query.clone()
+                },
+            )
+            .await
+            .unwrap()
+            .value;
+        pages += 1;
+        ids.extend(page.items.iter().map(|item| item.id().to_owned()));
+        cursor = page.next_cursor;
+        if cursor.is_none() {
+            return (ids, pages);
+        }
+        assert!(pages < 12, "filtered pagination must make progress");
+    }
+}
+
+#[tokio::test]
+async fn proposal_list_action_and_state_filters_narrow_the_scan_before_its_budget() {
+    let mut source = registry_source(false);
+    let mut action = source["actions"][0].clone();
+    action["id"] = json!("correct-alternate");
+    source["actions"].as_array_mut().unwrap().push(action);
+    for permission in ["actions", "proposals"] {
+        let mut grant = source["accessProfiles"][0]["permissions"][permission][0].clone();
+        grant["action"] = json!("correct-alternate");
+        source["accessProfiles"][0]["permissions"][permission]
+            .as_array_mut()
+            .unwrap()
+            .push(grant);
+    }
+    let fixture =
+        client_http::ClientFixture::start(compile(source), claims("author", "zone-a")).await;
+    let client = &fixture.http.client;
+    let mut all = Vec::new();
+    for index in 0..12 {
+        let draft = start(&fixture, "Before", &format!("narrow-draft-{index}")).await;
+        all.push(draft.id().to_owned());
+    }
+    // The last Proposal of each kind sorts behind more than the eight
+    // Proposals one request scans.
+    let before_alternates = all.len();
+    let alternate = start_sorted_after(
+        &fixture,
+        "correct-alternate",
+        &mut all,
+        10,
+        "narrow-alternate",
+    )
+    .await;
+    let alternates = all[before_alternates..]
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let draft =
+        start_sorted_after(&fixture, "correct-name", &mut all, 10, "narrow-submitted").await;
+    let submit = client
+        .prepare_proposal(&draft, "submit", json!({}), &key("narrow-submit"))
+        .unwrap();
+    let submitted = client.execute_proposal(&submit).await.unwrap().value;
+    assert!(alternates.contains(alternate.id()));
+
+    let metadata = client.registry_contract(Some("clerk")).await.unwrap();
+    let collection = metadata.value.select_proposals("clerk").unwrap();
+    let (ids, pages) = list_all(
+        client,
+        &collection,
+        BRegProposalQuery {
+            action: Some("correct-alternate".into()),
+            ..Default::default()
+        },
+    )
+    .await;
+    assert_eq!(ids, alternates);
+    assert_eq!(pages, alternates.len().div_ceil(8), "no empty pages");
+
+    let (ids, pages) = list_all(
+        client,
+        &collection,
+        BRegProposalQuery {
+            state: Some(BRegProposalState::Submitted),
+            ..Default::default()
+        },
+    )
+    .await;
+    assert_eq!(ids, BTreeSet::from([submitted.id().to_owned()]));
+    assert_eq!(pages, 1, "no empty pages");
+
+    // Creation time orders attempts, survives submission, and is listed.
+    let created = |proposal: &registry_breg_client::BRegProposal| {
+        proposal
+            .created_at()
+            .expect("a Proposal serves its creation time")
+            .to_owned()
+    };
+    assert!(created(&draft) > created(&alternate));
+    assert_eq!(created(&submitted), created(&draft));
+    let listed = client
+        .list_proposals(
+            &collection,
+            &BRegProposalQuery {
+                state: Some(BRegProposalState::Submitted),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+        .value;
+    assert_eq!(created(&listed.items[0]), created(&draft));
+    fixture.finish().await;
+}
+
 #[tokio::test]
 async fn proposal_list_audit_counts_only_each_actions_returned_items() {
     let mut source = registry_source(false);

@@ -1347,10 +1347,11 @@ pub fn proposal_apply_input_schema() -> Value {
 
 pub fn proposal_schema() -> Value {
     json!({"type":"object", "additionalProperties":false,
-    "required":["id","actionId","actionRevision","submissionVersion","revision","state","turn","links"],
+    "required":["id","actionId","actionRevision","submissionVersion","revision","state","turn","createdAt","links"],
     "properties": {
         "id":{"type":"string","format":"uuid"},
         "actionId":{"type":"string"},"actionRevision":{"type":"string"},
+        "createdAt":{"type":"string","format":"date-time"},
         "submissionVersion":{"type":"integer","minimum":0},"revision":{"type":"integer","minimum":1},
         "state":{"enum":["draft","submitted","applied","cancelled","rejected"]},
         "title":{"type":"string","maxLength":1024},
@@ -4442,11 +4443,14 @@ mod problem_contract_tests {
             .compile(&schema)
             .unwrap();
         let mut proposal = json!({"id":"00000000-0000-4000-8000-000000000001","actionId":"correct-address", "actionRevision":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            "submissionVersion":1,"revision":2,"state":"submitted","turn":"official","links":{}});
+            "submissionVersion":1,"revision":2,"state":"submitted","turn":"official","createdAt":"2026-10-16T01:00:00.000000Z","links":{}});
         assert!(validator.is_valid(&proposal));
         proposal.as_object_mut().unwrap().remove("turn");
         assert!(!validator.is_valid(&proposal));
         proposal["turn"] = json!("official");
+        proposal.as_object_mut().unwrap().remove("createdAt");
+        assert!(!validator.is_valid(&proposal));
+        proposal["createdAt"] = json!("2026-10-16T01:00:00.000000Z");
         proposal["request"] = json!({});
         assert!(!validator.is_valid(&proposal));
         proposal.as_object_mut().unwrap().remove("request");
