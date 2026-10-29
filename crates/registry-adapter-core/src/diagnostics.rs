@@ -54,6 +54,7 @@ pub enum CheckCode {
     RoutePredicateAmbiguous,
     RoutePredicateLanguageRequired,
     RouteRedeliveryOverNonSafeSend,
+    RouteRetryWhileWithoutRedeliveries,
     RouteUncatchableClause,
     RouteUnknownDirectTarget,
     RouteUnknownEndpoint,
@@ -97,6 +98,7 @@ impl CheckCode {
         Self::RoutePredicateAmbiguous,
         Self::RoutePredicateLanguageRequired,
         Self::RouteRedeliveryOverNonSafeSend,
+        Self::RouteRetryWhileWithoutRedeliveries,
         Self::RouteUncatchableClause,
         Self::RouteUnknownDirectTarget,
         Self::RouteUnknownEndpoint,
@@ -145,6 +147,9 @@ impl CheckCode {
             Self::RoutePredicateAmbiguous => "adapter.route.predicate-ambiguous",
             Self::RoutePredicateLanguageRequired => "adapter.route.predicate-language-required",
             Self::RouteRedeliveryOverNonSafeSend => "adapter.route.redelivery-over-non-safe-send",
+            Self::RouteRetryWhileWithoutRedeliveries => {
+                "adapter.route.retry-while-without-redeliveries"
+            }
             Self::RouteUncatchableClause => "adapter.route.uncatchable-clause",
             Self::RouteUnknownDirectTarget => "adapter.route.unknown-direct-target",
             Self::RouteUnknownEndpoint => "adapter.route.unknown-endpoint",
@@ -188,6 +193,7 @@ impl CheckCode {
             | Self::RoutePredicateAmbiguous
             | Self::RoutePredicateLanguageRequired
             | Self::RouteRedeliveryOverNonSafeSend
+            | Self::RouteRetryWhileWithoutRedeliveries
             | Self::RouteUncatchableClause
             | Self::RouteUnknownDirectTarget
             | Self::RouteUnknownEndpoint

@@ -692,7 +692,13 @@ pub struct RedeliveryOptions {
         skip_serializing_if = "is_default_collision_avoidance_factor"
     )]
     pub collision_avoidance_factor: f64,
-    /// Keep retrying while this predicate holds.
+    /// Stop redelivering early while this predicate holds (Camel
+    /// `retryWhile`). Divergence from Camel: the predicate only stops
+    /// redelivery earlier and `maximumRedeliveries` remains the hard cap,
+    /// where Camel lets `retryWhile` override it, so
+    /// `maximumUpstreamCalls` stays a check-time guarantee. The checks
+    /// refuse the predicate together with `maximumRedeliveries` 0, where
+    /// it could never fire.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retry_while: Option<Expression>,
 }

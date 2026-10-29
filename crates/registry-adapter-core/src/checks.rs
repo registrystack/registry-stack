@@ -494,6 +494,36 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
                     "Remove the clause; the boundary classes cannot be handled.",
                 ));
             }
+            // A retryWhile only stops redelivery earlier; with no
+            // redeliveries behind it, it could never fire.
+            Step::ErrorHandler(handler)
+                if handler
+                    .default_error_handler
+                    .as_ref()
+                    .and_then(|handler| handler.redelivery_policy.as_ref())
+                    .is_some_and(|policy| {
+                        policy.retry_while.is_some() && policy.maximum_redeliveries == 0
+                    }) =>
+            {
+                route_findings.push(finding(
+                    CheckCode::RouteRetryWhileWithoutRedeliveries,
+                    &format!("/routes/{id}/steps{path}"),
+                    "a retryWhile predicate sits on a redelivery policy with maximumRedeliveries 0",
+                    "Set maximumRedeliveries above zero, or drop the retryWhile.",
+                ));
+            }
+            Step::OnException(clause)
+                if clause.redelivery_policy.as_ref().is_some_and(|policy| {
+                    policy.retry_while.is_some() && policy.maximum_redeliveries == 0
+                }) =>
+            {
+                route_findings.push(finding(
+                    CheckCode::RouteRetryWhileWithoutRedeliveries,
+                    &format!("/routes/{id}/steps{path}"),
+                    "a retryWhile predicate sits on a redelivery policy with maximumRedeliveries 0",
+                    "Set maximumRedeliveries above zero, or drop the retryWhile.",
+                ));
+            }
             _ => {}
         });
 
@@ -990,8 +1020,10 @@ fn route_worst_case(
 
 /// The redeliveries a body declares: the widest `maximumRedeliveries`
 /// across its error handler and `onException` clauses. A `retryWhile`
-/// predicate is not statically bounded; the runtime enforces the budget
-/// against the live exchange.
+/// predicate only stops redelivery earlier; `maximumRedeliveries` remains
+/// the hard cap, so every send counts one plus the cap. This diverges
+/// from Camel, where `retryWhile` overrides `maximumRedeliveries`;
+/// `maximumUpstreamCalls` is a check-time guarantee and stays one.
 fn declared_redeliveries(steps: &[Step]) -> u32 {
     let mut maximum = 0u32;
     walk_steps(steps, &mut |step, _| match step {
@@ -2110,6 +2142,77 @@ mod tests {
         let findings = check_routes(&pack, &project_builder(&pack));
         assert_has(&findings, CheckCode::RoutePredicateLanguageRequired);
         assert_has(&findings, CheckCode::RoutePredicateAmbiguous);
+    }
+
+    /// A `retryWhile` predicate without redeliveries behind it could
+    /// never fire (it only stops redelivery early; `maximumRedeliveries`
+    /// stays the hard cap), so it is refused on both the error handler
+    /// and an `onException` clause; with redeliveries it passes.
+    #[test]
+    fn routes_refuse_a_retry_while_without_redeliveries() {
+        let clause = RouteDefinition {
+            id: id("fetchCase"),
+            from: RouteFrom {
+                uri: direct("fetchCase"),
+            },
+            steps: vec![Step::OnException(OnExceptionStep {
+                exception: vec![crate::model::ErrorClass::UpstreamTimeout],
+                on_when: None,
+                handled: Some(true),
+                continued: None,
+                redelivery_policy: Some(RedeliveryOptions {
+                    retry_while: Some(rhai("scripts/map.rhai")),
+                    ..Default::default()
+                }),
+                steps: vec![],
+            })],
+        };
+        let pack = pack_builder(vec![], vec![clause]);
+        assert_has(
+            &check_routes(&pack, &project_builder(&pack)),
+            CheckCode::RouteRetryWhileWithoutRedeliveries,
+        );
+        let handler = RouteDefinition {
+            id: id("fetchCase"),
+            from: RouteFrom {
+                uri: direct("fetchCase"),
+            },
+            steps: vec![Step::ErrorHandler(ErrorHandlerStep {
+                default_error_handler: Some(DefaultErrorHandler {
+                    redelivery_policy: Some(RedeliveryOptions {
+                        retry_while: Some(rhai("scripts/map.rhai")),
+                        ..Default::default()
+                    }),
+                }),
+                no_error_handler: None,
+            })],
+        };
+        let pack = pack_builder(vec![], vec![handler]);
+        assert_has(
+            &check_routes(&pack, &project_builder(&pack)),
+            CheckCode::RouteRetryWhileWithoutRedeliveries,
+        );
+        // With redeliveries behind it, the predicate is admitted.
+        let admitted = RouteDefinition {
+            id: id("fetchCase"),
+            from: RouteFrom {
+                uri: direct("fetchCase"),
+            },
+            steps: vec![Step::OnException(OnExceptionStep {
+                exception: vec![crate::model::ErrorClass::UpstreamTimeout],
+                on_when: None,
+                handled: Some(true),
+                continued: None,
+                redelivery_policy: Some(RedeliveryOptions {
+                    maximum_redeliveries: 2,
+                    retry_while: Some(rhai("scripts/map.rhai")),
+                    ..Default::default()
+                }),
+                steps: vec![],
+            })],
+        };
+        let pack = pack_builder(vec![], vec![admitted]);
+        assert_clean(check_routes(&pack, &project_builder(&pack)));
     }
 
     #[test]
