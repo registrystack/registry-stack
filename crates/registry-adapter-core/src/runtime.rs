@@ -113,8 +113,10 @@ pub struct AdapterRuntimeConfig {
     pub id: ExternalId,
     /// One binding per configured endpoint.
     pub endpoints: UniqueIdList<EndpointBinding>,
-    /// The private ranges egress may reach, at most the platform bound.
-    #[serde(default)]
+    /// The private ranges egress may reach, at least one and at most the
+    /// platform bound (CFG-EMPTY-2).
+    #[serde(deserialize_with = "at_least_one_cidr")]
+    #[cfg_attr(feature = "schema", schemars(schema_with = "at_least_one_cidr_schema"))]
     pub allowed_private_cidrs: UniqueList<Cidr>,
     /// The facade listener, from the platform shared block.
     pub listener: ListenerConfig,
@@ -125,6 +127,31 @@ pub struct AdapterRuntimeConfig {
     pub oidc: OidcIssuerConfig,
     /// The journal retention.
     pub audit: AuditRetention,
+}
+
+/// The allowlist cannot be empty: an egress policy admitting no private
+/// range is not a configuration, it is an omission (CFG-EMPTY-2).
+fn at_least_one_cidr<'de, D>(deserializer: D) -> Result<UniqueList<Cidr>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let list = UniqueList::<Cidr>::deserialize(deserializer)?;
+    if list.is_empty() {
+        return Err(serde::de::Error::custom(
+            "allowedPrivateCidrs carries at least one range",
+        ));
+    }
+    Ok(list)
+}
+
+#[cfg(feature = "schema")]
+fn at_least_one_cidr_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({
+        "type": "array",
+        "minItems": 1,
+        "uniqueItems": true,
+        "items": generator.subschema_for::<Cidr>(),
+    })
 }
 
 #[cfg(test)]
@@ -224,6 +251,37 @@ mod tests {
         assert!(Cidr::new("10.0.0.0").is_err());
         assert!(Cidr::new("not-a-range/8").is_err());
         assert!(Cidr::new("10.0.0.0/8").is_ok());
+    }
+
+    /// The egress allowlist is required and cannot be empty: omission and
+    /// an explicit empty list are both refused (CFG-EMPTY-2).
+    #[test]
+    fn the_private_allowlist_carries_at_least_one_range() {
+        let head = r#"{
+                "id": "case-deployment",
+                "endpoints": [],
+                "listener": { "bind": "127.0.0.1:8080" },
+                "database": {
+                    "runtimeUrlRef": "secret:env/DB_RUNTIME",
+                    "migrationUrlRef": "secret:env/DB_MIGRATION"
+                },
+                "oidc": {
+                    "issuer": "https://issuer.example.invalid",
+                    "audience": "case-api"
+                },
+                "audit": { "retentionDays": 90 }
+            }"#;
+        let json = |cidrs: &str| {
+            head.replace(
+                r#""endpoints": [],"#,
+                &format!(r#""endpoints": [], "allowedPrivateCidrs": {cidrs},"#),
+            )
+        };
+        assert!(serde_json::from_str::<AdapterRuntimeConfig>(head).is_err());
+        assert!(serde_json::from_str::<AdapterRuntimeConfig>(&json("[]")).is_err());
+        let read =
+            serde_json::from_str::<AdapterRuntimeConfig>(&json(r#"["10.0.0.0/8"]"#)).expect("read");
+        assert_eq!(read.allowed_private_cidrs.len(), 1);
     }
 
     /// Duplicate endpoint bindings are refused at the reader (CFG-ID-5).
