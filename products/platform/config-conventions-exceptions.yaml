@@ -511,3 +511,141 @@ exceptions:
   class: protocol-constant
   reason: RS384 is written as JSON Web Algorithms (RFC 7518) defines it
   resolution: Permanent.
+- rule: CFG-NAME-2
+  format: adapter/fixture
+  location: products/adapter/schemas/fixture.v1alpha1.schema.json#/$defs/HttpMethod/enum/GET
+  class: protocol-constant
+  reason: GET is written as RFC 9110 defines method tokens, case-sensitive and uppercase
+  resolution: Permanent.
+- rule: CFG-NAME-2
+  format: adapter/fixture
+  location: products/adapter/schemas/fixture.v1alpha1.schema.json#/$defs/HttpMethod/enum/PATCH
+  class: protocol-constant
+  reason: PATCH is written as RFC 9110 defines method tokens, case-sensitive and uppercase
+  resolution: Permanent.
+- rule: CFG-NAME-2
+  format: adapter/fixture
+  location: products/adapter/schemas/fixture.v1alpha1.schema.json#/$defs/HttpMethod/enum/POST
+  class: protocol-constant
+  reason: POST is written as RFC 9110 defines method tokens, case-sensitive and uppercase
+  resolution: Permanent.
+- rule: CFG-NAME-2
+  format: adapter/fixture
+  location: products/adapter/schemas/fixture.v1alpha1.schema.json#/$defs/HttpMethod/enum/PUT
+  class: protocol-constant
+  reason: PUT is written as RFC 9110 defines method tokens, case-sensitive and uppercase
+  resolution: Permanent.
+- rule: CFG-NAME-2
+  format: adapter/profile
+  location: products/adapter/schemas/profile.v1alpha1.schema.json#/$defs/HttpMethod/enum/GET
+  class: protocol-constant
+  reason: GET is written as RFC 9110 defines method tokens, case-sensitive and uppercase
+  resolution: Permanent.
+- rule: CFG-NAME-2
+  format: adapter/profile
+  location: products/adapter/schemas/profile.v1alpha1.schema.json#/$defs/HttpMethod/enum/PATCH
+  class: protocol-constant
+  reason: PATCH is written as RFC 9110 defines method tokens, case-sensitive and uppercase
+  resolution: Permanent.
+- rule: CFG-NAME-2
+  format: adapter/profile
+  location: products/adapter/schemas/profile.v1alpha1.schema.json#/$defs/HttpMethod/enum/POST
+  class: protocol-constant
+  reason: POST is written as RFC 9110 defines method tokens, case-sensitive and uppercase
+  resolution: Permanent.
+- rule: CFG-NAME-2
+  format: adapter/profile
+  location: products/adapter/schemas/profile.v1alpha1.schema.json#/$defs/HttpMethod/enum/PUT
+  class: protocol-constant
+  reason: PUT is written as RFC 9110 defines method tokens, case-sensitive and uppercase
+  resolution: Permanent.
+- rule: CFG-NAME-2
+  format: adapter/pack
+  location: products/adapter/schemas/pack.v1alpha1.schema.json#/$defs/HttpMethod/enum/GET
+  class: protocol-constant
+  reason: GET is written as RFC 9110 defines method tokens, case-sensitive and uppercase
+  resolution: Permanent.
+- rule: CFG-NAME-2
+  format: adapter/pack
+  location: products/adapter/schemas/pack.v1alpha1.schema.json#/$defs/HttpMethod/enum/PATCH
+  class: protocol-constant
+  reason: PATCH is written as RFC 9110 defines method tokens, case-sensitive and uppercase
+  resolution: Permanent.
+- rule: CFG-NAME-2
+  format: adapter/pack
+  location: products/adapter/schemas/pack.v1alpha1.schema.json#/$defs/HttpMethod/enum/POST
+  class: protocol-constant
+  reason: POST is written as RFC 9110 defines method tokens, case-sensitive and uppercase
+  resolution: Permanent.
+- rule: CFG-NAME-2
+  format: adapter/pack
+  location: products/adapter/schemas/pack.v1alpha1.schema.json#/$defs/HttpMethod/enum/PUT
+  class: protocol-constant
+  reason: PUT is written as RFC 9110 defines method tokens, case-sensitive and uppercase
+  resolution: Permanent.
+- rule: CFG-NAME-2
+  format: adapter/pack
+  location: products/adapter/schemas/pack.v1alpha1.schema.json#/$defs/Eip/enum/circuitBreaker
+  class: protocol-constant
+  reason: The EIP name is written as Apache Camel names it; the pack grammar preserves Camel's step vocabulary
+  resolution: Permanent.
+- rule: CFG-NAME-2
+  format: adapter/pack
+  location: products/adapter/schemas/pack.v1alpha1.schema.json#/$defs/Eip/enum/doTry
+  class: protocol-constant
+  reason: The EIP name is written as Apache Camel names it; the pack grammar preserves Camel's step vocabulary
+  resolution: Permanent.
+- rule: CFG-NAME-2
+  format: adapter/pack
+  location: products/adapter/schemas/pack.v1alpha1.schema.json#/$defs/Eip/enum/errorHandler
+  class: protocol-constant
+  reason: The EIP name is written as Apache Camel names it; the pack grammar preserves Camel's step vocabulary
+  resolution: Permanent.
+- rule: CFG-NAME-2
+  format: adapter/pack
+  location: products/adapter/schemas/pack.v1alpha1.schema.json#/$defs/Eip/enum/idempotentConsumer
+  class: protocol-constant
+  reason: The EIP name is written as Apache Camel names it; the pack grammar preserves Camel's step vocabulary
+  resolution: Permanent.
+- rule: CFG-NAME-2
+  format: adapter/pack
+  location: products/adapter/schemas/pack.v1alpha1.schema.json#/$defs/Eip/enum/onException
+  class: protocol-constant
+  reason: The EIP name is written as Apache Camel names it; the pack grammar preserves Camel's step vocabulary
+  resolution: Permanent.
+- rule: CFG-NAME-2
+  format: adapter/pack
+  location: products/adapter/schemas/pack.v1alpha1.schema.json#/$defs/Eip/enum/removeHeader
+  class: protocol-constant
+  reason: The EIP name is written as Apache Camel names it; the pack grammar preserves Camel's step vocabulary
+  resolution: Permanent.
+- rule: CFG-NAME-2
+  format: adapter/pack
+  location: products/adapter/schemas/pack.v1alpha1.schema.json#/$defs/Eip/enum/removeProperty
+  class: protocol-constant
+  reason: The EIP name is written as Apache Camel names it; the pack grammar preserves Camel's step vocabulary
+  resolution: Permanent.
+- rule: CFG-NAME-2
+  format: adapter/pack
+  location: products/adapter/schemas/pack.v1alpha1.schema.json#/$defs/Eip/enum/setBody
+  class: protocol-constant
+  reason: The EIP name is written as Apache Camel names it; the pack grammar preserves Camel's step vocabulary
+  resolution: Permanent.
+- rule: CFG-NAME-2
+  format: adapter/pack
+  location: products/adapter/schemas/pack.v1alpha1.schema.json#/$defs/Eip/enum/setHeader
+  class: protocol-constant
+  reason: The EIP name is written as Apache Camel names it; the pack grammar preserves Camel's step vocabulary
+  resolution: Permanent.
+- rule: CFG-NAME-2
+  format: adapter/pack
+  location: products/adapter/schemas/pack.v1alpha1.schema.json#/$defs/Eip/enum/setProperty
+  class: protocol-constant
+  reason: The EIP name is written as Apache Camel names it; the pack grammar preserves Camel's step vocabulary
+  resolution: Permanent.
+- rule: CFG-NAME-2
+  format: adapter/pack
+  location: products/adapter/schemas/pack.v1alpha1.schema.json#/$defs/Language/enum/exchangeProperty
+  class: protocol-constant
+  reason: The language name is written as Apache Camel names the exchange-property language; the pack grammar preserves Camel's language vocabulary
+  resolution: Permanent.
