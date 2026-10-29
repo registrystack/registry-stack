@@ -5273,6 +5273,7 @@ fn mutation_problem(error: MutationError) -> Response {
         MutationError::AuthorizationRefused
         | MutationError::PreconditionFailed
         | MutationError::FieldGuardFailed { .. }
+        | MutationError::ProposalGuardFailed(_)
         | MutationError::TimerGenerationUnsupported => precondition_failed(),
         MutationError::Conflict | MutationError::ProposalUniqueConflict => {
             fixed_problem(ProblemCode::MutationConflict)

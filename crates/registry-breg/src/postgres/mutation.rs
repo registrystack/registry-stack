@@ -1905,6 +1905,7 @@ impl PostgresRecordMutationService {
                     ),
                     MutationError::PreconditionFailed
                     | MutationError::FieldGuardFailed { .. }
+                    | MutationError::ProposalGuardFailed(_)
                     | MutationError::ProposalReviewResultMismatch
                     | MutationError::Conflict
                     | MutationError::ProposalUniqueConflict

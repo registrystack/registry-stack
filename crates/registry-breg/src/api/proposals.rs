@@ -1043,8 +1043,74 @@ pub(super) async fn transition(
             "",
             service.field_encryption.as_deref(),
         ),
+        Err(MutationError::ProposalGuardFailed(failure)) => {
+            guard_failure_response(
+                &service,
+                &authority,
+                &claims,
+                &headers,
+                &correlation,
+                *failure,
+            )
+            .await
+        }
         Err(error) => proposal_problem(error),
     }
+}
+
+/// A failed field commit guard is named only when the selected profile could
+/// itself read the guard field and the target Record through the ordinary GET
+/// path and the guard still fails against that disclosed value, exactly the
+/// disclosure rule of an immediate Action. Every other case, including a Record
+/// that changed or moved out of the profile's boundaries since the transaction
+/// rolled back, keeps the generic precondition refusal.
+async fn guard_failure_response(
+    service: &HttpService,
+    authority: &ProposalAuthority,
+    claims: &VerifiedRequestClaims,
+    headers: &HeaderMap,
+    correlation: &RequestCorrelation,
+    failure: crate::mutation::ProposalGuardFailure,
+) -> Response {
+    let guard = &failure.guard;
+    let (Some(entity), Some(boundaries)) = (
+        service.registry.entities().get(&guard.entity_id),
+        authority.targets.get(&guard.entity_id),
+    ) else {
+        return mutation_problem(MutationError::PreconditionFailed);
+    };
+    let observed = super::actions::availability::observe_target(
+        service,
+        authority.common.access_profile(),
+        claims,
+        headers,
+        entity,
+        &failure.record_id.to_string(),
+        &BTreeSet::from([guard.field.clone()]),
+        boundaries,
+        correlation,
+    )
+    .await;
+    let Ok(Some(observed)) = observed else {
+        return mutation_problem(MutationError::PreconditionFailed);
+    };
+    let is_timestamp = entity.fields.get(&guard.field).is_some_and(|field| {
+        matches!(
+            field.field_type,
+            crate::contract::FieldTypeSource::Timestamp
+        )
+    });
+    let today = time::OffsetDateTime::now_utc().date().to_string();
+    if crate::commit_guard::guard_matches(
+        guard,
+        &failure.input,
+        &observed.current,
+        &today,
+        is_timestamp,
+    ) {
+        return mutation_problem(MutationError::PreconditionFailed);
+    }
+    crate::correlation::action_guard_failure_response(guard.reason.clone())
 }
 
 /// Batch transport only: every item retains the scalar context read's current

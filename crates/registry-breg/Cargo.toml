@@ -446,6 +446,11 @@ path = "tests/postgres_proposal_review_delivery.rs"
 required-features = ["postgres-test"]
 
 [[test]]
+name = "postgres_proposal_guard_failure"
+path = "tests/postgres_proposal_guard_failure.rs"
+required-features = ["postgres-test"]
+
+[[test]]
 name = "postgres_proposal_security"
 path = "tests/postgres_proposal_security.rs"
 required-features = ["postgres-test"]

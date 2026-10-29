@@ -260,6 +260,16 @@ correct the input and prepare a fresh submission. A stale Record revision
 instead returns `412 precondition.failed` without creating that application
 block. Read the current Proposal before choosing the next authorized operation.
 
+Submit and Apply check the Action's field commit guards against the current
+target Record. A failed field guard answers `412 action.guard_failed`, with
+`guardReason` when the guard declares one, only when the selected profile can
+perform the ordinary target Get, read the guard field and every row-boundary
+field, and the guard still fails against the value that Get returns. The
+response names no guard ID and no Record value. A profile without that
+authority, a guard that no longer fails on the re-read, and every revision
+mismatch answer `412 precondition.failed`. A revision guard is concurrency, not
+a business-state blocker, so it never answers `action.guard_failed`.
+
 The `apply` link's availability reports Review separately:
 
 | Review of the current submission | Apply availability |
@@ -453,7 +463,8 @@ another source can associate that actor with other matching pseudonyms. An
 audit hash-key holder can also recompute it for a known issuer and subject.
 
 Mutation refusals intentionally share a generic 412 for unavailable authority
-and failed preconditions. To show or test why Apply is unavailable, first read
+and failed preconditions; the one distinct 412 is `action.guard_failed` for a
+field commit guard the selected profile can read (see above). To show or test why Apply is unavailable, first read
 the authorized Proposal and inspect `links.apply.availability.reason`, such as
 `pending-review`. Check the expected Proposal revision as well. A 412 alone
 does not prove that Review is pending, and availability is an observation, not

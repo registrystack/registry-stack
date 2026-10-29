@@ -147,7 +147,9 @@ I/O, but unrelated required form inputs may remain absent. The result distinguis
 available, guard-not-satisfied, input-required, and not-disclosed observations.
 This unkeyed POST is sent once. It evaluates current field-guard availability
 only; invocation remains the authoritative commit check, and a readable guard
-failure is the typed 412 `action.guard_failed` problem.
+failure is the typed 412 `action.guard_failed` problem. Proposal submit and
+apply answer the same problem, with `guard_reason()`, when a readable field
+guard fails; a stale Record revision stays `precondition.failed`.
 
 The maintained capability inventory is
 `products/breg/contracts/client-capabilities.json`; the BReg client-contract gate

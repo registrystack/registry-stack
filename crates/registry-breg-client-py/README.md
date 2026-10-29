@@ -82,7 +82,9 @@ reference with `action_availability(action, "targetId", inputs)`. The input may
 omit unrelated required form fields, while every supplied value is validated
 before token acquisition or I/O. This single unkeyed POST is only a current
 hint. Invocation remains authoritative and a readable field-guard failure is
-reported as 412 `action.guard_failed`.
+reported as 412 `action.guard_failed`. Proposal submit and apply report the
+same problem for a readable field-guard failure; a stale Record revision stays
+`precondition.failed`.
 
 ```python
 contract = client.registry_contract(profile)
