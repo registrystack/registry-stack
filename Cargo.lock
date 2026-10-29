@@ -5024,7 +5024,15 @@ name = "registry-adapterctl"
 version = "0.45.0"
 dependencies = [
  "clap",
+ "jsonschema",
+ "registry-adapter-core",
  "registry-platform-buildinfo",
+ "registry-platform-config",
+ "registry-platform-script",
+ "registry-platform-yaml",
+ "schemars",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]
