@@ -26,6 +26,7 @@ pub enum CheckCode {
     FixtureResponseSchema,
     FixtureUnknownEndpoint,
     FixtureUnknownIntercept,
+    FixtureUnknownOperation,
     // adapter.pack.*
     PackDigestPinRequired,
     PackEndpointComponentInvalid,
@@ -83,6 +84,7 @@ impl CheckCode {
         Self::FixtureResponseSchema,
         Self::FixtureUnknownEndpoint,
         Self::FixtureUnknownIntercept,
+        Self::FixtureUnknownOperation,
         Self::PackDigestPinRequired,
         Self::PackEndpointComponentInvalid,
         Self::PackGraphQlQueryRequired,
@@ -135,6 +137,7 @@ impl CheckCode {
             Self::FixtureResponseSchema => "adapter.fixture.response-schema",
             Self::FixtureUnknownEndpoint => "adapter.fixture.unknown-endpoint",
             Self::FixtureUnknownIntercept => "adapter.fixture.unknown-intercept",
+            Self::FixtureUnknownOperation => "adapter.fixture.unknown-operation",
             Self::PackDigestPinRequired => "adapter.pack.digest-pin-required",
             Self::PackEndpointComponentInvalid => "adapter.pack.endpoint-component-invalid",
             Self::PackGraphQlQueryRequired => "adapter.pack.graphql-query-required",
@@ -206,7 +209,8 @@ impl CheckCode {
             | Self::ProfileUnknownSlot => crate::naming::ADAPTER_PROFILE_KIND,
             Self::FixtureResponseSchema
             | Self::FixtureUnknownEndpoint
-            | Self::FixtureUnknownIntercept => crate::naming::ADAPTER_FIXTURE_KIND,
+            | Self::FixtureUnknownIntercept
+            | Self::FixtureUnknownOperation => crate::naming::ADAPTER_FIXTURE_KIND,
             Self::PackDigestPinRequired
             | Self::PackEndpointComponentInvalid
             | Self::PackGraphQlQueryRequired

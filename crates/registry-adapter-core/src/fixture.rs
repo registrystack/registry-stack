@@ -99,6 +99,9 @@ pub struct RecordedResponse {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct FixtureEntry {
+    /// The profile operation this entry exercises; the facade-side
+    /// primary key of the entry.
+    pub operation: ExternalId,
     /// The recorded upstream exchange.
     pub given: RecordedRequest,
     /// The upstream reply the route works from.
@@ -132,6 +135,31 @@ pub struct AdapterFixture {
 mod tests {
     use super::*;
 
+    /// Every entry names the profile operation it exercises (the
+    /// facade-side primary key); the reader refuses an entry without one.
+    #[test]
+    fn fixture_entry_requires_its_operation() {
+        let mut fixture = serde_json::json!({
+            "id": "fx",
+            "pack": "case-api-pack",
+            "upstreamVersion": "2.7",
+            "provenance": {"kind": "captured", "reference": "staging"},
+            "intercepts": [],
+            "entries": [{
+                "given": {"endpoint": "case-api", "method": "GET", "path": "/v2/cases"},
+                "upstreamResponse": {"status": 200},
+                "expectedFacadeResponse": {"status": 200},
+            }],
+        });
+        assert!(
+            serde_json::from_str::<AdapterFixture>(&fixture.to_string()).is_err(),
+            "an entry without an operation is refused"
+        );
+        fixture["entries"][0]["operation"] = serde_json::json!("cases.find");
+        let parsed = serde_json::from_str::<AdapterFixture>(&fixture.to_string()).expect("parse");
+        assert_eq!(parsed.entries[0].operation.as_str(), "cases.find");
+    }
+
     /// The fixture artifact round-trips with provenance, intercept
     /// declarations, and entries (`products/adapter/CONCEPT.md` sections
     /// 6, 10.2, and 13.3).
@@ -153,6 +181,7 @@ mod tests {
                 },
             ],
             entries: vec![FixtureEntry {
+                operation: ExternalId::new("cases.find").expect("id"),
                 given: RecordedRequest {
                     endpoint: ExternalId::new("case-api").expect("id"),
                     method: crate::model::HttpMethod::Get,

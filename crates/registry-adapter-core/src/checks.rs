@@ -1709,6 +1709,31 @@ pub fn check_fixtures(workspace: &Workspace<'_>) -> Vec<Diagnostic> {
                     "Record the exchange against an endpoint the pinned pack declares.",
                 ));
             }
+            // The entry's operation is the facade-side primary key: the
+            // deployment must be able to exercise it, so it must be a
+            // profile operation the project binds to a route.
+            let operation_pointer = &format!("{prefix}/entries/{entry_index}/operation");
+            let declared = workspace.profile.operations.get(entry.operation.as_str());
+            let bound = workspace
+                .project
+                .bindings
+                .iter()
+                .any(|binding| binding.operation.as_str() == entry.operation.as_str());
+            match (declared, bound) {
+                (None, _) => findings.push(finding(
+                    CheckCode::FixtureUnknownOperation,
+                    operation_pointer,
+                    "the entry names no operation the bound profile declares",
+                    "Name an operation id the pinned profile declares.",
+                )),
+                (Some(_), false) => findings.push(finding(
+                    CheckCode::FixtureUnknownOperation,
+                    operation_pointer,
+                    "the entry names a profile operation the project binds to no route",
+                    "Name an operation a binding of the project binds to a route.",
+                )),
+                (Some(_), true) => {}
+            }
         }
     }
     findings
@@ -3442,9 +3467,17 @@ mod tests {
 
     #[test]
     fn fixtures_accept_declared_intercepts_and_entries() {
-        let profile = profile_builder(vec![]);
+        let profile = profile_builder(vec![operation("cases.find", HttpMethod::Get)]);
         let pack = pack_builder(vec![oauth_endpoint()], vec![]);
-        let project = project_builder(&pack);
+        let mut project = project_builder(&pack);
+        project.bindings = UniqueIdList::new(vec![Binding {
+            id: id("find-cases"),
+            operation: id("cases.find"),
+            record_type: local("case"),
+            route: id("fetchCase"),
+            maximum_upstream_calls: BoundedU64::<1, 100_000>::new(1).expect("budget"),
+        }])
+        .expect("unique");
         let fixture = AdapterFixture {
             id: id("case-api-fixtures"),
             pack: id("case-api-pack"),
@@ -3456,6 +3489,7 @@ mod tests {
                 endpoint: id("case-api"),
             }],
             entries: vec![FixtureEntry {
+                operation: id("cases.find"),
                 given: RecordedRequest {
                     endpoint: id("case-api"),
                     method: HttpMethod::Get,
@@ -3475,6 +3509,76 @@ mod tests {
         };
         let mut ws = workspace(&profile, &pack, &project);
         ws.fixtures = std::slice::from_ref(&fixture);
+        assert_clean(check_fixtures(&ws));
+    }
+
+    /// An entry's operation is the facade-side primary key (D17): it
+    /// must be a profile operation the project binds to a route. Unknown
+    /// and known-but-unbound operations are each refused, with distinct
+    /// value-free messages under one code.
+    #[test]
+    fn fixtures_refuse_entries_whose_operation_the_deployment_cannot_exercise() {
+        let profile = profile_builder(vec![operation("cases.find", HttpMethod::Get)]);
+        let pack = pack_builder(vec![oauth_endpoint()], vec![]);
+        let mut project = project_builder(&pack);
+        let entry = |op: &str| FixtureEntry {
+            operation: id(op),
+            given: RecordedRequest {
+                endpoint: id("case-api"),
+                method: HttpMethod::Get,
+                path: "/v2/cases/person/123".to_string(),
+                query: None,
+                body: None,
+            },
+            upstream_response: RecordedResponse {
+                status: 200,
+                body: None,
+            },
+            expected_facade_response: RecordedResponse {
+                status: 200,
+                body: None,
+            },
+        };
+        let fixture = |op: &str| AdapterFixture {
+            id: id("case-api-fixtures"),
+            pack: id("case-api-pack"),
+            upstream_version: "2.7".to_string(),
+            provenance: FixtureProvenance::Captured {
+                reference: "staging".to_string(),
+            },
+            intercepts: vec![],
+            entries: vec![entry(op)],
+        };
+
+        // Known to the profile but bound by no route: refused.
+        let unbound = fixture("cases.find");
+        let mut ws = workspace(&profile, &pack, &project);
+        ws.fixtures = std::slice::from_ref(&unbound);
+        let findings = check_fixtures(&ws);
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].code, CheckCode::FixtureUnknownOperation.code());
+        assert_eq!(findings[0].path, "/fixtures/0/entries/0/operation");
+
+        // Unknown to the profile: refused with the same code.
+        let unknown = fixture("cases.missing");
+        let mut ws = workspace(&profile, &pack, &project);
+        ws.fixtures = std::slice::from_ref(&unknown);
+        let findings = check_fixtures(&ws);
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].code, CheckCode::FixtureUnknownOperation.code());
+
+        // A binding to a route makes the operation exercisable: passes.
+        project.bindings = UniqueIdList::new(vec![Binding {
+            id: id("find-cases"),
+            operation: id("cases.find"),
+            record_type: local("case"),
+            route: id("fetchCase"),
+            maximum_upstream_calls: BoundedU64::<1, 100_000>::new(1).expect("budget"),
+        }])
+        .expect("unique");
+        let bound = fixture("cases.find");
+        let mut ws = workspace(&profile, &pack, &project);
+        ws.fixtures = std::slice::from_ref(&bound);
         assert_clean(check_fixtures(&ws));
     }
 
@@ -3499,6 +3603,7 @@ mod tests {
                 },
             ],
             entries: vec![FixtureEntry {
+                operation: id("cases.find"),
                 given: RecordedRequest {
                     endpoint: id("also-missing"),
                     method: HttpMethod::Get,
