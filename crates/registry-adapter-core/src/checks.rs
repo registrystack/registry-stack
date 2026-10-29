@@ -372,9 +372,15 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
         .map(|endpoint| endpoint.id.as_str())
         .collect();
 
+    // Findings iterate route ids in sorted order so snapshots and CI
+    // diffs stay stable however the body map hashes.
+    let mut ordered_bodies: Vec<(&str, &[Step])> =
+        bodies.iter().map(|(id, steps)| (*id, *steps)).collect();
+    ordered_bodies.sort_by_key(|(id, _)| *id);
+
     // Graph shape over direct: edges.
     let mut edges: HashMap<&str, Vec<&str>> = HashMap::new();
-    for (id, steps) in &bodies {
+    for (id, steps) in &ordered_bodies {
         let mut targets = Vec::new();
         collect_direct_targets(steps, &mut targets);
         edges.insert(id, targets);
@@ -398,7 +404,7 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
         }
     }
 
-    for (id, steps) in &bodies {
+    for (id, steps) in &ordered_bodies {
         let steps: &[Step] = steps;
         let mut route_findings = Vec::new();
         let sends = collect_non_safe_sends(steps);
@@ -1070,7 +1076,9 @@ fn find_cycle<'a>(edges: &HashMap<&'a str, Vec<&'a str>>) -> Option<&'a str> {
 
     let mut visiting = HashSet::new();
     let mut done = HashSet::new();
-    for &node in edges.keys() {
+    let mut nodes: Vec<&str> = edges.keys().copied().collect();
+    nodes.sort_unstable();
+    for node in nodes {
         if let Some(cycle) = visit(node, edges, &mut visiting, &mut done) {
             return Some(cycle);
         }
@@ -2451,6 +2459,34 @@ mod tests {
         };
         let bounded_pack = pack_builder(vec![], vec![bounded]);
         assert_clean(check_routes(&bounded_pack, &project_builder(&bounded_pack)));
+    }
+
+    /// Findings come out in one order for the same input however the
+    /// internal maps happen to hash: two runs over a pack whose routes
+    /// each carry a finding agree element for element (staff review
+    /// P1-12).
+    #[test]
+    fn findings_come_out_in_a_deterministic_order() {
+        let routes: Vec<RouteDefinition> = (0..24)
+            .map(|index| RouteDefinition {
+                id: id(&format!("route-{index:02}")),
+                from: RouteFrom {
+                    uri: direct(&format!("route-{index:02}")),
+                },
+                steps: vec![to_get("not-an-endpoint")],
+            })
+            .collect();
+        let pack = pack_builder(vec![], routes);
+        let project = project_builder(&pack);
+        let first = check_routes(&pack, &project);
+        let second = check_routes(&pack, &project);
+        assert_eq!(codes(&first).len(), 24);
+        assert_eq!(codes(&first), codes(&second));
+        // The pointers name the routes in id order, not hash order.
+        let pointers: Vec<&str> = first.iter().map(|f| f.path.as_str()).collect();
+        let mut sorted = pointers.clone();
+        sorted.sort_unstable();
+        assert_eq!(pointers, sorted);
     }
 
     /// The loop carries the flat single-language-key count or predicate
