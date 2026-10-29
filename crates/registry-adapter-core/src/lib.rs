@@ -14,3 +14,17 @@
 //! interpreter, security surface, and journal on top of this model, and
 //! `registry-adapterctl` drives its checks. The dependency runs one way:
 //! this crate depends on no other Adapter crate.
+
+mod diagnostics;
+mod model;
+mod naming;
+mod plan;
+mod problem;
+mod profile;
+
+pub use diagnostics::*;
+pub use model::*;
+pub use naming::*;
+pub use plan::*;
+pub use problem::*;
+pub use profile::*;
