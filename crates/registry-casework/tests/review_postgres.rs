@@ -5136,6 +5136,175 @@ async fn decided_current_source_context_is_retained_only_for_its_author() {
     ));
 }
 
+/// Builds a current-source service over the fixture's source with the
+/// two-stage policy, creates one request and approves its first stage as
+/// reviewer A. The request is still reviewing when this returns.
+async fn current_source_primary_decided(
+    fixture: &Fixture,
+    suffix: &str,
+) -> (CaseworkService, Uuid, Uuid) {
+    let mut policy = project(&format!("staged-context-{suffix}"));
+    current_source(&mut policy);
+    let service = CaseworkService::new(
+        fixture.store.clone(),
+        policy,
+        [Arc::new(ReviewSource {
+            revoked: Arc::clone(&fixture.source_revoked),
+            state: Arc::clone(&fixture.source_state),
+            read_blocked: Arc::clone(&fixture.source_read_blocked),
+            read_started: Arc::clone(&fixture.source_read_started),
+            read_continue: Arc::clone(&fixture.source_read_continue),
+            advanced: Arc::clone(&fixture.source_advanced),
+        }) as Arc<dyn ReviewContextProvider>],
+    )
+    .expect("staged current-source service");
+    let mut input = request(
+        &format!("staged-context-{suffix}"),
+        &format!("STAGED-CONTEXT-{suffix}"),
+    );
+    input.context = ReviewContext::CurrentSource {
+        binding: SourceContextBinding {
+            reference: format!("registry:record:staged-context-{suffix}"),
+        },
+    };
+    let request_id = service
+        .create_review_request(
+            &fixture.producer,
+            bind_request(&service, input),
+            &format!("create-staged-context-{suffix}"),
+        )
+        .await
+        .expect("create staged current-source review")
+        .accepted
+        .request_id;
+    let primary = task_id(fixture, request_id, 0).await;
+    approve_staged_task(fixture, &service, &fixture.reviewer_a, primary, suffix).await;
+    (service, request_id, primary)
+}
+
+async fn approve_staged_task(
+    fixture: &Fixture,
+    service: &CaseworkService,
+    actor: &ActorContext,
+    task: Uuid,
+    suffix: &str,
+) {
+    assert!(*fixture.source_state.lock().unwrap());
+    service
+        .claim_review_task(
+            actor,
+            task,
+            Some("staff"),
+            "human-bearer",
+            1,
+            &format!("claim-staged-context-{suffix}-{task}"),
+        )
+        .await
+        .expect("claim staged task");
+    service
+        .decide_review_task(
+            actor,
+            task,
+            ReviewTaskDecisionRequest {
+                decision: DecisionKind::Approve {
+                    outcome: "approved".into(),
+                    public_reason: None,
+                },
+            },
+            Some("staff"),
+            "human-bearer",
+            2,
+            &format!("approve-staged-context-{suffix}-{task}"),
+        )
+        .await
+        .expect("approve staged task");
+}
+
+/// An earlier stage's decision does not release context while the request is
+/// still in review: a source that stops calling the subject reviewable before
+/// the request settles leaves the earlier stage's author with not found.
+#[tokio::test]
+async fn earlier_stage_author_gets_no_context_while_the_request_is_still_reviewing() {
+    let fixture = fixture().await;
+    let (service, _, primary) = current_source_primary_decided(&fixture, "reviewing").await;
+
+    *fixture.source_state.lock().unwrap() = false;
+    assert!(matches!(
+        service
+            .review_task_context(&fixture.reviewer_a, primary, Some("staff"), "human-bearer")
+            .await,
+        Err(ReviewRuntimeError::NotFound)
+    ));
+}
+
+/// After the request settles, each decision's author recovers only the context
+/// of the task they decided. Another stage's author, and the same subject
+/// under a different issuer, receive not found.
+#[tokio::test]
+async fn retained_context_authorship_is_scoped_to_the_decided_task_and_issuer() {
+    let fixture = fixture().await;
+    let (service, request_id, primary) = current_source_primary_decided(&fixture, "terminal").await;
+    let secondary = task_id(&fixture, request_id, 1).await;
+    approve_staged_task(
+        &fixture,
+        &service,
+        &fixture.reviewer_b,
+        secondary,
+        "terminal",
+    )
+    .await;
+    let lifecycle: String = fixture
+        .database
+        .query_one(
+            "SELECT lifecycle FROM casework_review_requests WHERE request_id=$1",
+            &[&request_id],
+        )
+        .await
+        .expect("request lifecycle")
+        .get(0);
+    assert_ne!(lifecycle, "reviewing");
+
+    *fixture.source_state.lock().unwrap() = false;
+    for (actor, task) in [
+        (&fixture.reviewer_a, primary),
+        (&fixture.reviewer_b, secondary),
+    ] {
+        let context = service
+            .review_task_context(actor, task, Some("staff"), "human-bearer")
+            .await
+            .expect("decision author reads their own task's retained context");
+        assert_eq!(context.task_id, task);
+    }
+    for (actor, task) in [
+        (&fixture.reviewer_a, secondary),
+        (&fixture.reviewer_b, primary),
+    ] {
+        assert!(matches!(
+            service
+                .review_task_context(actor, task, Some("staff"), "human-bearer")
+                .await,
+            Err(ReviewRuntimeError::NotFound)
+        ));
+    }
+
+    // The same subject under another issuer is a different principal, even
+    // with its own current membership in the deciding team.
+    let mut other_issuer = fixture.reviewer_a.clone();
+    other_issuer.principal.issuer = "https://other-issuer.test".to_owned();
+    set_review_membership(&fixture, &other_issuer, "staff", true).await;
+    let other_task = service
+        .review_task(&other_issuer, primary, Some("staff"), "human-bearer")
+        .await
+        .expect("other-issuer member reads the retained task");
+    assert_eq!(other_task.decided_by_caller, Some(false));
+    assert!(matches!(
+        service
+            .review_task_context(&other_issuer, primary, Some("staff"), "human-bearer")
+            .await,
+        Err(ReviewRuntimeError::NotFound)
+    ));
+}
+
 #[tokio::test]
 async fn review_decisions_are_audited_after_the_decision_commits() {
     let fixture = fixture().await;
