@@ -111,10 +111,42 @@ class CleanupFailureTests(unittest.TestCase):
         harness.container = "owned-test-container"
         harness.sql = Mock(side_effect=RuntimeError("inventory unavailable"))
         harness.run = Mock(return_value="")
-        with patch("support.write"), patch("support.subprocess.run", return_value=Mock(stdout="")):
+        with (
+            patch("support.write") as write,
+            patch("support.subprocess.run", return_value=Mock(stdout="")),
+        ):
             with self.assertRaises((AssertionError, RuntimeError)):
                 harness.cleanup()
         harness.run.assert_any_call("container-remove", ["docker", "rm", "-f", "owned-test-container"])
+        receipt = write.call_args.args[1]
+        self.assertEqual(["database inventory unavailable"], receipt["errors"])
+        self.assertTrue(receipt["containerRemoved"])
+
+    def test_failed_container_removal_is_reported(self):
+        from pathlib import Path
+        from unittest.mock import Mock, patch
+        from support import Harness
+
+        def run(label, _command):
+            if label == "container-remove":
+                raise RuntimeError("container removal refused")
+            return ""
+
+        harness = object.__new__(Harness)
+        harness.output = Path("/unused-test-output")
+        harness.processes = []
+        harness.issuer = None
+        harness.pg_env = {}
+        harness.resources = {"databases": [], "roles": []}
+        harness.container = "owned-test-container"
+        harness.sql = Mock(return_value="0")
+        harness.run = Mock(side_effect=run)
+        with patch("support.write") as write, patch("support.subprocess.run"):
+            with self.assertRaises(AssertionError):
+                harness.cleanup()
+        receipt = write.call_args.args[1]
+        self.assertEqual(["container cleanup failed"], receipt["errors"])
+        self.assertFalse(receipt["containerRemoved"])
 
 
 class ObservationTests(unittest.TestCase):
