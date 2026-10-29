@@ -59,6 +59,7 @@ pub enum CheckCode {
     RouteMaximumItemsRequired,
     RouteMaximumIterationsRequired,
     RouteMultipleNonSafeSends,
+    RouteNestingDepthExceeded,
     RouteNonSafeSendInSplit,
     RoutePredicateAmbiguous,
     RoutePredicateLanguageRequired,
@@ -113,6 +114,7 @@ impl CheckCode {
         Self::RouteMaximumItemsRequired,
         Self::RouteMaximumIterationsRequired,
         Self::RouteMultipleNonSafeSends,
+        Self::RouteNestingDepthExceeded,
         Self::RouteNonSafeSendInSplit,
         Self::RoutePredicateAmbiguous,
         Self::RoutePredicateLanguageRequired,
@@ -172,6 +174,7 @@ impl CheckCode {
             Self::RouteMaximumItemsRequired => "adapter.route.maximum-items-required",
             Self::RouteMaximumIterationsRequired => "adapter.route.maximum-iterations-required",
             Self::RouteMultipleNonSafeSends => "adapter.route.multiple-non-safe-sends",
+            Self::RouteNestingDepthExceeded => "adapter.route.nesting-depth-exceeded",
             Self::RouteNonSafeSendInSplit => "adapter.route.non-safe-send-in-split",
             Self::RoutePredicateAmbiguous => "adapter.route.predicate-ambiguous",
             Self::RoutePredicateLanguageRequired => "adapter.route.predicate-language-required",
@@ -224,6 +227,7 @@ impl CheckCode {
             | Self::RouteMaximumItemsRequired
             | Self::RouteMaximumIterationsRequired
             | Self::RouteMultipleNonSafeSends
+            | Self::RouteNestingDepthExceeded
             | Self::RouteNonSafeSendInSplit
             | Self::RoutePredicateAmbiguous
             | Self::RoutePredicateLanguageRequired

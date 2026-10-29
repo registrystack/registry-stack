@@ -1212,7 +1212,15 @@ pub fn check_project(workspace: &Workspace<'_>) -> Vec<Diagnostic> {
                 })
                 .map(|endpoint| endpoint.id.as_str())
                 .collect();
-            let worst = route_worst_case(route_steps, &bodies, &oauth_endpoints);
+            let (worst, depth_exceeded) = route_worst_case(route_steps, &bodies, &oauth_endpoints);
+            if depth_exceeded {
+                findings.push(finding(
+                    CheckCode::RouteNestingDepthExceeded,
+                    &format!("{prefix}/route"),
+                    "the route nests past the reader's depth bound, so its worst case is uncountable",
+                    "Flatten the nesting; the reader refuses documents deeper than the bound.",
+                ));
+            }
             if worst > binding.maximum_upstream_calls.get() {
                 findings.push(finding(
                     CheckCode::ProjectUpstreamBudgetExceeded,
@@ -1300,31 +1308,36 @@ fn route_worst_case(
     steps: &[Step],
     bodies: &HashMap<&str, &[Step]>,
     oauth_endpoints: &HashSet<&str>,
-) -> u64 {
+) -> (u64, bool) {
     let mut walk = WorstCaseWalk {
         bodies,
         oauth_endpoints,
         used_oauth: &mut HashSet::new(),
         clauses: Vec::new(),
+        depth_exceeded: false,
     };
-    let main = worst_body(steps, &mut walk, 0, declared_redeliveries(steps), false);
+    let main = worst_body(steps, &mut walk, 0, declared_redeliveries(steps), false, 1);
     let tokens = 2u64.saturating_mul(u64::try_from(walk.used_oauth.len()).unwrap_or(u64::MAX));
-    // A `continued` clause resumes after the failure point, so it can
-    // run once per route-body worst-case send; handled and propagated
-    // clauses run once.
+    // A `continued` clause resumes after the failure point and can fire
+    // once per body failure, so its candidate is the clause worst-case
+    // once per route-body send, plus the clause worst-case when the body
+    // itself cannot fail; handled and propagated clauses run once.
     let clause_worst = walk
         .clauses
         .iter()
         .map(|(worst, continued)| {
             if *continued {
-                worst.saturating_mul(main)
+                worst.saturating_mul(main.saturating_add(1))
             } else {
                 *worst
             }
         })
         .max()
         .unwrap_or(0);
-    main.saturating_add(clause_worst).saturating_add(tokens)
+    (
+        main.saturating_add(clause_worst).saturating_add(tokens),
+        walk.depth_exceeded,
+    )
 }
 
 /// The redeliveries a body declares: the widest `maximumRedeliveries`
@@ -1364,27 +1377,40 @@ struct WorstCaseWalk<'a> {
     /// Top-level exception-clause bodies seen so far, as (worst-case
     /// sends, whether the clause resumes with `continued`).
     clauses: Vec<(u64, bool)>,
+    /// The walk nested past the reader's depth bound: the count is
+    /// uncountable and the caller must refuse.
+    depth_exceeded: bool,
 }
 
 /// The worst-case upstream send count of one body: `to` and `enrich`
 /// count one send times the redelivery attempts in force, `direct:`
 /// expands the target (its own redelivery declarations join the widest in
-/// force), `split` and `loop` multiply by their mandatory bounds, and
-/// `choice` takes the widest branch. Exception-clause bodies do not add
-/// to the running total; each top-level clause body becomes a separate
-/// candidate (multiplied by the route body in [`route_worst_case`] when
-/// the clause resumes with `continued`), and a clause nested inside
-/// another clause adds to its enclosing clause's body (the runtime can
-/// run both).
+/// force), `split`, `loop`, and an `onException` clause inside them
+/// multiply by their bounds, and `choice` takes the widest branch. A
+/// `circuitBreaker` adds its body and its fallback, and a `doTry` adds
+/// its body, the widest catch, and `doFinally`: the failures the clause
+/// and fallback answer are separate worst cases layered on the body's.
+/// Exception-clause bodies do not add to the running total; each
+/// top-level clause body becomes a separate candidate (multiplied by the
+/// route body in [`route_worst_case`] when the clause resumes with
+/// `continued`), and a clause nested inside another clause adds to its
+/// enclosing clause's body (the runtime can run both). A `filter`
+/// wrapper is transparent: its contents count. Past the reader's
+/// nesting bound the count is uncountable: the walk saturates at
+/// `u64::MAX` and reports the depth, never a silent zero. The
+/// `multiplier` carries the enclosing splits' and loops' bounds so a
+/// deferred clause candidate carries them too.
 fn worst_body(
     steps: &[Step],
     walk: &mut WorstCaseWalk<'_>,
     depth: usize,
     redeliveries: u32,
     in_clause: bool,
+    multiplier: u64,
 ) -> u64 {
-    if depth > MAX_DIRECT_DEPTH {
-        return 0;
+    if depth > registry_platform_yaml::MAXIMUM_DEPTH {
+        walk.depth_exceeded = true;
+        return u64::MAX;
     }
     let attempts = 1u64.saturating_add(u64::from(redeliveries));
     let mut total = 0u64;
@@ -1395,7 +1421,7 @@ fn worst_body(
                     if walk.oauth_endpoints.contains(to.uri.id.as_str()) {
                         walk.used_oauth.insert(to.uri.id.to_string());
                     }
-                    total = total.saturating_add(attempts);
+                    total = total.saturating_add(attempts.saturating_mul(multiplier));
                 }
                 SendComponent::Direct => {
                     if let Some(target) = walk.bodies.get(to.uri.id.as_str()) {
@@ -1406,6 +1432,7 @@ fn worst_body(
                             depth + 1,
                             target_redeliveries,
                             in_clause,
+                            multiplier,
                         ));
                     }
                 }
@@ -1415,7 +1442,7 @@ fn worst_body(
                     if walk.oauth_endpoints.contains(enrich.uri.id.as_str()) {
                         walk.used_oauth.insert(enrich.uri.id.to_string());
                     }
-                    total = total.saturating_add(attempts);
+                    total = total.saturating_add(attempts.saturating_mul(multiplier));
                 }
                 SendComponent::Direct => {
                     if let Some(target) = walk.bodies.get(enrich.uri.id.as_str()) {
@@ -1426,31 +1453,34 @@ fn worst_body(
                             depth + 1,
                             target_redeliveries,
                             in_clause,
+                            multiplier,
                         ));
                     }
                 }
             },
             Step::Split(split) => {
                 let items = split.maximum_items.map_or(1u64, |bound| bound.get());
-                total = total.saturating_add(items.saturating_mul(worst_body(
+                total = total.saturating_add(worst_body(
                     &split.steps,
                     walk,
                     depth + 1,
                     redeliveries,
                     in_clause,
-                )));
+                    multiplier.saturating_mul(items),
+                ));
             }
             Step::Loop(loop_step) => {
                 let iterations = loop_step
                     .maximum_iterations
                     .map_or(1u64, |bound| bound.get());
-                total = total.saturating_add(iterations.saturating_mul(worst_body(
+                total = total.saturating_add(worst_body(
                     &loop_step.steps,
                     walk,
                     depth + 1,
                     redeliveries,
                     in_clause,
-                )));
+                    multiplier.saturating_mul(iterations),
+                ));
             }
             Step::Choice(choice) => {
                 let mut widest = 0u64;
@@ -1461,6 +1491,7 @@ fn worst_body(
                         depth + 1,
                         redeliveries,
                         in_clause,
+                        multiplier,
                     ));
                 }
                 if let Some(otherwise) = &choice.otherwise {
@@ -1470,6 +1501,7 @@ fn worst_body(
                         depth + 1,
                         redeliveries,
                         in_clause,
+                        multiplier,
                     ));
                 }
                 total = total.saturating_add(widest);
@@ -1481,14 +1513,16 @@ fn worst_body(
                     depth + 1,
                     redeliveries,
                     in_clause,
+                    multiplier,
                 ));
                 if let Some(fallback) = &breaker.on_fallback {
-                    total = total.max(worst_body(
+                    total = total.saturating_add(worst_body(
                         &fallback.steps,
                         walk,
                         depth + 1,
                         redeliveries,
                         in_clause,
+                        multiplier,
                     ));
                 }
             }
@@ -1499,6 +1533,7 @@ fn worst_body(
                     depth + 1,
                     redeliveries,
                     in_clause,
+                    multiplier,
                 ));
             }
             Step::IdempotentConsumer(idempotent) => {
@@ -1508,6 +1543,7 @@ fn worst_body(
                     depth + 1,
                     redeliveries,
                     in_clause,
+                    multiplier,
                 ));
             }
             Step::DoTry(do_try) => {
@@ -1517,16 +1553,20 @@ fn worst_body(
                     depth + 1,
                     redeliveries,
                     in_clause,
+                    multiplier,
                 ));
+                let mut widest = 0u64;
                 for catch in &do_try.do_catch {
-                    total = total.max(worst_body(
+                    widest = widest.max(worst_body(
                         &catch.steps,
                         walk,
                         depth + 1,
                         redeliveries,
                         in_clause,
+                        multiplier,
                     ));
                 }
+                total = total.saturating_add(widest);
                 if let Some(do_finally) = &do_try.do_finally {
                     total = total.saturating_add(worst_body(
                         &do_finally.steps,
@@ -1534,8 +1574,19 @@ fn worst_body(
                         depth + 1,
                         redeliveries,
                         in_clause,
+                        multiplier,
                     ));
                 }
+            }
+            Step::Filter(filter) => {
+                total = total.saturating_add(worst_body(
+                    &filter.steps,
+                    walk,
+                    depth + 1,
+                    redeliveries,
+                    in_clause,
+                    multiplier,
+                ));
             }
             Step::OnException(clause) => {
                 let clause_redeliveries = clause
@@ -1544,7 +1595,14 @@ fn worst_body(
                     .map_or(redeliveries, |policy| {
                         redeliveries.max(policy.maximum_redeliveries)
                     });
-                let worst = worst_body(&clause.steps, walk, depth + 1, clause_redeliveries, true);
+                let worst = worst_body(
+                    &clause.steps,
+                    walk,
+                    depth + 1,
+                    clause_redeliveries,
+                    true,
+                    multiplier,
+                );
                 if in_clause {
                     total = total.saturating_add(worst);
                 } else {
@@ -1754,10 +1812,11 @@ mod tests {
         AccessProfile, Binding, PinnedRef, RecordField, RecordFieldType, RecordType,
     };
     use crate::route::{
-        ChoiceStep, DefaultErrorHandler, DoCatch, DoFinally, DoTryStep, EnrichStep,
-        ErrorHandlerStep, FilterStep, IdempotentConsumerStep, LoopStep, OnExceptionStep,
-        RedeliveryOptions, RouteDefinition, RouteFrom, RouteTemplate, SplitStep, TemplateParameter,
-        TemplateParameterType, TemplatedRoute, ToParameters, ToStep, When,
+        ChoiceStep, CircuitBreakerStep, DefaultErrorHandler, DoCatch, DoFinally, DoTryStep,
+        EnrichStep, ErrorHandlerStep, FilterStep, IdempotentConsumerStep, LoopStep,
+        OnExceptionStep, OnFallback, RedeliveryOptions, RouteDefinition, RouteFrom, RouteTemplate,
+        SplitStep, TemplateParameter, TemplateParameterType, TemplatedRoute, ThrottleStep,
+        ToParameters, ToStep, When,
     };
     use crate::runtime::{AdapterRuntimeConfig, AuditRetention, EndpointBinding};
     use registry_platform_yaml::Url;
@@ -2645,6 +2704,275 @@ mod tests {
         .contains(&CheckCode::RouteRedeliveryOverNonSafeSend.code()));
     }
 
+    // ----- worst-case walk: one regression per composite step -----
+
+    /// The probes of the Increment 0 staff review, one composite step per
+    /// test: every addition and multiplication in the walk must show up
+    /// in the binding's budget judgment.
+    fn budgeted(steps: Vec<Step>, budget: u64) -> Vec<Diagnostic> {
+        let profile = profile_builder(vec![operation("cases.find", HttpMethod::Get)]);
+        let route = RouteDefinition {
+            id: id("fetchCase"),
+            from: RouteFrom {
+                uri: direct("fetchCase"),
+            },
+            steps,
+        };
+        let pack = pack_builder(vec![basic_endpoint()], vec![route]);
+        let mut project = project_builder(&pack);
+        project.access_profiles = UniqueIdList::new(Vec::new()).expect("empty");
+        project.bindings = UniqueIdList::new(vec![Binding {
+            id: id("find-cases"),
+            operation: id("cases.find"),
+            record_type: local("case"),
+            route: id("fetchCase"),
+            maximum_upstream_calls: BoundedU64::<1, 100_000>::new(budget).expect("budget"),
+        }])
+        .expect("unique");
+        check_project(&workspace(&profile, &pack, &project))
+    }
+
+    fn nested_filters(depth: usize, inner: Vec<Step>) -> Vec<Step> {
+        let mut steps = inner;
+        for _ in 0..depth {
+            steps = vec![Step::Filter(FilterStep {
+                constant: None,
+                header: None,
+                exchange_property: None,
+                jsonpath: None,
+                rhai: None,
+                steps,
+            })];
+        }
+        steps
+    }
+
+    fn split_of(maximum: u64, steps: Vec<Step>) -> Step {
+        Step::Split(SplitStep {
+            expression: rhai("scripts/pieces.rhai"),
+            maximum_items: Some(BoundedU64::<1, 100_000>::new(maximum).expect("items")),
+            aggregation_strategy: None,
+            stop_on_exception: false,
+            error_threshold: None,
+            max_failed_records: None,
+            steps,
+        })
+    }
+
+    fn breaker_of(steps: Vec<Step>, fallback: Option<Vec<Step>>) -> Step {
+        Step::CircuitBreaker(CircuitBreakerStep {
+            failure_rate_threshold: 50,
+            sliding_window_size: 100,
+            minimum_number_of_calls: 100,
+            open_state_wait_seconds: 60,
+            maximum_half_open_calls: 10,
+            automatic_transition_from_open_to_half_open_enabled: false,
+            slow_call_rate_threshold: 100,
+            slow_call_duration_threshold_seconds: 60,
+            steps,
+            on_fallback: fallback.map(|steps| OnFallback { steps }),
+        })
+    }
+
+    /// A breaker adds its body and its fallback to the running total:
+    /// `[GET, GET, circuitBreaker{GET} onFallback{GET}]` sends 4, so a
+    /// budget of 3 is refused (staff review P0-2a).
+    #[test]
+    fn breaker_adds_its_fallback_to_the_running_total() {
+        let steps = vec![
+            to_get("case-api"),
+            to_get("case-api"),
+            breaker_of(vec![to_get("case-api")], Some(vec![to_get("case-api")])),
+        ];
+        assert_has(
+            &budgeted(steps.clone(), 3),
+            CheckCode::ProjectUpstreamBudgetExceeded,
+        );
+        assert_clean(budgeted(steps, 4));
+    }
+
+    /// doTry adds its body, the widest catch, and doFinally: `[GET,
+    /// doTry{GET} doCatch{GET, GET}]` sends 4, so a budget of 2 is
+    /// refused (staff review P0-2a).
+    #[test]
+    fn do_try_adds_its_widest_catch_and_finally_to_the_running_total() {
+        let steps = vec![
+            to_get("case-api"),
+            Step::DoTry(DoTryStep {
+                steps: vec![to_get("case-api")],
+                do_catch: vec![DoCatch {
+                    exception: vec![crate::model::ErrorClass::UpstreamHttp],
+                    on_when: None,
+                    steps: vec![to_get("case-api"), to_get("case-api")],
+                }],
+                do_finally: None,
+            }),
+        ];
+        assert_has(
+            &budgeted(steps.clone(), 2),
+            CheckCode::ProjectUpstreamBudgetExceeded,
+        );
+        assert_clean(budgeted(steps, 4));
+    }
+
+    /// A finally clause adds to the total on top of the widest catch.
+    #[test]
+    fn do_finally_adds_to_the_running_total() {
+        let steps = vec![Step::DoTry(DoTryStep {
+            steps: vec![to_get("case-api")],
+            do_catch: vec![DoCatch {
+                exception: vec![crate::model::ErrorClass::UpstreamHttp],
+                on_when: None,
+                steps: vec![to_get("case-api")],
+            }],
+            do_finally: Some(DoFinally {
+                steps: vec![to_get("case-api")],
+            }),
+        })];
+        assert_has(
+            &budgeted(steps.clone(), 2),
+            CheckCode::ProjectUpstreamBudgetExceeded,
+        );
+        assert_clean(budgeted(steps, 3));
+    }
+
+    /// Choice takes the widest branch, not the sum.
+    #[test]
+    fn choice_takes_the_widest_branch() {
+        let steps = vec![Step::Choice(ChoiceStep {
+            when: vec![When {
+                rhai: None,
+                constant: None,
+                header: None,
+                exchange_property: None,
+                jsonpath: None,
+                steps: vec![to_get("case-api"), to_get("case-api")],
+            }],
+            otherwise: Some(crate::route::Otherwise {
+                steps: vec![to_get("case-api")],
+            }),
+        })];
+        assert_has(
+            &budgeted(steps.clone(), 1),
+            CheckCode::ProjectUpstreamBudgetExceeded,
+        );
+        assert_clean(budgeted(steps, 2));
+    }
+
+    /// Split multiplies by its mandatory bound.
+    #[test]
+    fn split_multiplies_by_maximum_items() {
+        let steps = vec![split_of(1000, vec![to_get("case-api")])];
+        assert_has(
+            &budgeted(steps.clone(), 999),
+            CheckCode::ProjectUpstreamBudgetExceeded,
+        );
+        assert_clean(budgeted(steps, 1000));
+    }
+
+    /// Loop multiplies by its mandatory bound.
+    #[test]
+    fn loop_multiplies_by_maximum_iterations() {
+        let steps = vec![Step::Loop(LoopStep {
+            maximum_iterations: Some(BoundedU64::<1, 100_000>::new(50).expect("bound")),
+            do_while: None,
+            copy: false,
+            steps: vec![to_get("case-api")],
+        })];
+        assert_has(
+            &budgeted(steps.clone(), 49),
+            CheckCode::ProjectUpstreamBudgetExceeded,
+        );
+        assert_clean(budgeted(steps, 50));
+    }
+
+    /// An onException clause inside a split can run once per item, so its
+    /// candidate is multiplied by the split's bound (staff review P2-6).
+    #[test]
+    fn on_exception_inside_split_multiplies_by_maximum_items() {
+        let clause = Step::OnException(OnExceptionStep {
+            exception: vec![crate::model::ErrorClass::UpstreamHttp],
+            on_when: None,
+            handled: None,
+            continued: Some(true),
+            redelivery_policy: None,
+            steps: vec![to_get("case-api")],
+        });
+        let steps = vec![split_of(1000, vec![clause])];
+        assert_has(
+            &budgeted(steps.clone(), 1),
+            CheckCode::ProjectUpstreamBudgetExceeded,
+        );
+        assert_clean(budgeted(steps, 1000));
+    }
+
+    /// A `filter` wrapper is transparent: its inner sends count, at any
+    /// depth (staff review P0-2b regression table).
+    #[test]
+    fn filter_is_transparent_to_the_walk() {
+        let steps = nested_filters(3, vec![to_get("case-api"), to_get("case-api")]);
+        assert_has(
+            &budgeted(steps.clone(), 1),
+            CheckCode::ProjectUpstreamBudgetExceeded,
+        );
+        assert_clean(budgeted(steps, 2));
+    }
+
+    /// A `throttle` does not change its body's worst case: the inner
+    /// sends count once (staff review P0-2b regression table).
+    #[test]
+    fn throttle_counts_its_body() {
+        let steps = vec![Step::Throttle(ThrottleStep {
+            limit: Expression::Constant(serde_json::json!(10)),
+            mode: None,
+            time_period_milliseconds: 1_000,
+            reject_execution: false,
+            steps: vec![to_get("case-api"), to_get("case-api")],
+        })];
+        assert_has(
+            &budgeted(steps.clone(), 1),
+            CheckCode::ProjectUpstreamBudgetExceeded,
+        );
+        assert_clean(budgeted(steps, 2));
+    }
+
+    /// An `idempotentConsumer` does not change its body's worst case: the
+    /// inner sends count once (staff review P0-2b regression table).
+    #[test]
+    fn idempotent_consumer_counts_its_body() {
+        let steps = vec![Step::IdempotentConsumer(IdempotentConsumerStep {
+            expression: rhai("scripts/pieces.rhai"),
+            eager: true,
+            remove_on_failure: true,
+            completion_eager: false,
+            steps: vec![to_get("case-api"), to_get("case-api")],
+        })];
+        assert_has(
+            &budgeted(steps.clone(), 1),
+            CheckCode::ProjectUpstreamBudgetExceeded,
+        );
+        assert_clean(budgeted(steps, 2));
+    }
+
+    /// A walk that runs past the reader's depth bound refuses rather than
+    /// silently counting zero: 17 nested filters around a split of 1000
+    /// must not pass a budget of 1 (staff review P0-2b), and nesting past
+    /// the bound itself carries the depth finding.
+    #[test]
+    fn walk_beyond_the_reader_depth_refuses_rather_than_passing() {
+        let deep = nested_filters(17, vec![split_of(1000, vec![to_get("case-api")])]);
+        let findings = budgeted(deep, 1);
+        assert_has(&findings, CheckCode::ProjectUpstreamBudgetExceeded);
+
+        let past = nested_filters(
+            registry_platform_yaml::MAXIMUM_DEPTH + 1,
+            vec![to_get("case-api")],
+        );
+        let findings = budgeted(past, 100_000);
+        assert_has(&findings, CheckCode::RouteNestingDepthExceeded);
+        assert_has(&findings, CheckCode::ProjectUpstreamBudgetExceeded);
+    }
+
     // ----- project checks -----
 
     #[test]
@@ -3078,11 +3406,11 @@ mod tests {
         assert_clean(check_routes(&pack, &project_builder(&pack)));
     }
 
-    /// A `continued` clause resumes after the failure point, so its body
-    /// counts once per route-body worst-case send: over three body sends
-    /// it triples, pushing the route past `maximumUpstreamCalls`; the
-    /// same route passes with an adequate budget. A clause that does not
-    /// continue counts once.
+    /// A `continued` clause resumes after the failure point and can fire
+    /// once per body failure, so over three body sends its one send
+    /// counts four times (once standalone, once per body send), pushing
+    /// the route past `maximumUpstreamCalls`; the same route passes with
+    /// an adequate budget. A clause that does not continue counts once.
     #[test]
     fn project_counts_a_continued_clause_once_per_route_body_send() {
         let profile = profile_builder(vec![operation("cases.find", HttpMethod::Get)]);
@@ -3111,14 +3439,14 @@ mod tests {
         let pack = pack_builder(vec![basic_endpoint()], vec![route(true)]);
         let mut project = project_builder(&pack);
         project.access_profiles = UniqueIdList::new(Vec::new()).expect("empty");
-        // Three body sends plus one continued-clause send per body send:
-        // 3 + 1 * 3 = 6.
+        // Three body sends plus the continued-clause send standalone and
+        // once per body send: 3 + 1 * (1 + 3) = 7.
         project.bindings = UniqueIdList::new(vec![Binding {
             id: id("find-cases"),
             operation: id("cases.find"),
             record_type: local("case"),
             route: id("fetchCase"),
-            maximum_upstream_calls: BoundedU64::<1, 100_000>::new(5).expect("budget"),
+            maximum_upstream_calls: BoundedU64::<1, 100_000>::new(6).expect("budget"),
         }])
         .expect("unique");
         let findings = check_project(&workspace(&profile, &pack, &project));
@@ -3128,7 +3456,7 @@ mod tests {
             operation: id("cases.find"),
             record_type: local("case"),
             route: id("fetchCase"),
-            maximum_upstream_calls: BoundedU64::<1, 100_000>::new(6).expect("budget"),
+            maximum_upstream_calls: BoundedU64::<1, 100_000>::new(7).expect("budget"),
         }])
         .expect("unique");
         assert_clean(check_project(&workspace(&profile, &pack, &project)));
