@@ -23,7 +23,7 @@ recordTypes:
         type: string
         required: true
 templatedRoutes:
-  - routeTemplateRef: findCases
+  - routeTemplate: findCases
     routeId: caseFind
     parameters:
       bogus: "x"

@@ -23,9 +23,9 @@ recordTypes:
         type: string
         required: true
 templatedRoutes:
-  - routeTemplateRef: noSuchTemplate
+  - routeTemplate: noSuchTemplate
     routeId: orphanRoute
-  - routeTemplateRef: findCases
+  - routeTemplate: findCases
     routeId: caseFind
 bindings:
   - id: case-get
