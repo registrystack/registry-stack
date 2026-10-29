@@ -119,6 +119,9 @@ pub struct Capabilities {
 pub struct AdapterPack {
     /// The pack identifier a project pins.
     pub id: ExternalId,
+    /// The pack's own version; a project pin names it next to the digest
+    /// (CFG-ID-4).
+    pub version: String,
     /// The upstream versions this pack was tested against, pack-wide.
     pub tested_versions: Vec<String>,
     /// The endpoints routes send to.
@@ -178,6 +181,21 @@ mod tests {
         }
     }
 
+    /// The pack declares its own version (the artifact table: authored,
+    /// versioned); the reader refuses a pack without one, since a project
+    /// pin compares against it (CFG-ID-4).
+    #[test]
+    fn pack_reader_requires_a_version() {
+        let json = r#"{"id":"case-api-pack","testedVersions":["2.7"]}"#;
+        assert!(
+            serde_json::from_str::<AdapterPack>(json).is_err(),
+            "a pack without a version is refused"
+        );
+        let declared = r#"{"id":"case-api-pack","version":"1.0.0","testedVersions":["2.7"]}"#;
+        let pack = serde_json::from_str::<AdapterPack>(declared).expect("parse");
+        assert_eq!(pack.version, "1.0.0");
+    }
+
     /// The pack artifact round-trips: endpoints with component kind and
     /// authentication, templates, internal routes, code maps, inventories,
     /// and capabilities.
@@ -185,6 +203,7 @@ mod tests {
     fn pack_round_trips() {
         let pack = AdapterPack {
             id: ExternalId::new("case-api-pack").expect("id"),
+            version: "1.0.0".to_string(),
             tested_versions: vec!["2.7".to_string()],
             endpoints: UniqueIdList::new(vec![endpoint()]).expect("unique"),
             route_templates: UniqueIdList::new(vec![RouteTemplate {
@@ -250,6 +269,7 @@ mod tests {
     fn pinned_file_lookup() {
         let pack = AdapterPack {
             id: ExternalId::new("case-api-pack").expect("id"),
+            version: "1.0.0".to_string(),
             tested_versions: Vec::new(),
             endpoints: UniqueIdList::new(Vec::new()).expect("empty"),
             route_templates: UniqueIdList::new(Vec::new()).expect("empty"),

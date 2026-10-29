@@ -393,6 +393,7 @@ mod tests {
 
     fn profile(envelope: &str) -> AdapterProfile {
         AdapterProfile {
+            version: "1.0.0".to_string(),
             id: external("case-api"),
             operations: UniqueIdList::new(vec![operation(envelope)]).expect("unique"),
             problem_codes: UniqueList::new(vec![external("cases.conflict")]).expect("unique"),

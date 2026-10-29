@@ -1805,6 +1805,7 @@ mod tests {
 
     fn pack_builder(endpoints: Vec<Endpoint>, routes: Vec<RouteDefinition>) -> AdapterPack {
         AdapterPack {
+            version: "1.0.0".to_string(),
             id: id("case-api-pack"),
             tested_versions: vec!["2.7".to_string()],
             endpoints: UniqueIdList::new(endpoints).expect("unique"),
@@ -1857,6 +1858,7 @@ mod tests {
 
     fn profile_builder(operations: Vec<ProfileOperation>) -> AdapterProfile {
         AdapterProfile {
+            version: "1.0.0".to_string(),
             id: id("case-api"),
             operations: UniqueIdList::new(operations).expect("unique"),
             problem_codes: UniqueList::new(vec![id("cases.conflict")]).expect("unique"),

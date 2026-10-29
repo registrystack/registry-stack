@@ -131,6 +131,9 @@ pub struct ParameterizedPart {
 pub struct AdapterProfile {
     /// The profile identifier a project pins.
     pub id: ExternalId,
+    /// The profile's own version; a project pin names it next to the
+    /// digest (CFG-ID-4).
+    pub version: String,
     /// The operations the profile serves.
     pub operations: UniqueIdList<ProfileOperation>,
     /// The facade problem codes, in the profile's own closed list. Route
@@ -159,12 +162,28 @@ mod tests {
         }
     }
 
+    /// The profile declares its own version (the artifact table:
+    /// authored, versioned); the reader refuses a profile without one,
+    /// since a project pin compares against it (CFG-ID-4).
+    #[test]
+    fn profile_reader_requires_a_version() {
+        let json = r#"{"id":"case-api","operations":[],"problemCodes":[],"problemEnvelope":"{}"}"#;
+        assert!(
+            serde_json::from_str::<AdapterProfile>(json).is_err(),
+            "a profile without a version is refused"
+        );
+        let declared = r#"{"id":"case-api","version":"1.0.0","operations":[],"problemCodes":[],"problemEnvelope":"{}"}"#;
+        let profile = serde_json::from_str::<AdapterProfile>(declared).expect("parse");
+        assert_eq!(profile.version, "1.0.0");
+    }
+
     /// The profile artifact round-trips with profile-declared operation
     /// ids (`products/adapter/CONCEPT.md` section 7).
     #[test]
     fn profile_round_trips_with_declared_operation_ids() {
         let profile = AdapterProfile {
             id: ExternalId::new("case-api").expect("id"),
+            version: "1.0.0".to_string(),
             operations: UniqueIdList::new(vec![
                 operation("cases.find", crate::model::HttpMethod::Post),
                 operation("cases.get", crate::model::HttpMethod::Get),
