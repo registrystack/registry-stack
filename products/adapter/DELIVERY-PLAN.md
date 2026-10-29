@@ -97,9 +97,12 @@ engine on API shapes the two maintained packs do not cover:
 - Sources: cursor pagination, offset and page-number pagination, a nested
   resource needing `enrich` per item, code lists needing conversion,
   partial failures inside a `split`, a source that returns 200 with an error
-  body, a GraphQL source (after Increment 3).
+  body, a FHIR R4 source (Bundle paging over `link[relation=next]`,
+  conditional create as `idempotentUpstream`), a GraphQL source (after
+  Increment 3).
 - Targets: `breg-records` v1, the 13.6 test profile, a POST-search profile
-  with a query body, a bundle-style envelope with links and totals.
+  with a query body, a FHIR R4 profile (searchset Bundle with links and
+  totals, `OperationOutcome` problems).
 - Upstream authentication: across the set, every kind of `CONCEPT.md` 10.2
   at least once (`static-api-key`, both OAuth2 kinds, mTLS with `none`),
   so the maintained packs and the experiments together cover all six.
@@ -107,7 +110,9 @@ engine on API shapes the two maintained packs do not cover:
 Each experiment records what it needed: when one cannot be expressed
 without Rust, or only awkwardly, the finding is a port-table gap or a
 divergence to revisit, fed back into the plan. Results summarize in
-`products/adapter/experiments/FINDINGS.md`.
+`products/adapter/experiments/FINDINGS.md`. Candidate components beyond the
+port table, ranked, are in `products/adapter/COMPONENT-CANDIDATES.md`; an
+experiment that forces one of them records it there.
 
 ## Takeover
 
