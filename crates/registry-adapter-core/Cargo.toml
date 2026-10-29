@@ -1,0 +1,12 @@
+[package]
+name = "registry-adapter-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Source-neutral model, wire DTOs, problem codes, and authoring checks for the Registry Stack Adapter."
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true

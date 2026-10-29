@@ -1,0 +1,20 @@
+[package]
+name = "registry-adapterctl"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Registry Stack Adapter authoring and local operator tooling."
+repository.workspace = true
+publish = false
+
+[[bin]]
+name = "adapterctl"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+clap.workspace = true
+registry-platform-buildinfo.workspace = true

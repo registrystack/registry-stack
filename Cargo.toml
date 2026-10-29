@@ -88,6 +88,9 @@ members = [
     "crates/registry-documents",
     "crates/registry-documentsctl",
     "crates/registry-documents-client",
+    "crates/registry-adapter-core",
+    "crates/registry-adapter",
+    "crates/registry-adapterctl",
 ]
 exclude = [
     "products/breg/wasm-handler-sdk",
@@ -157,6 +160,9 @@ registry-documents = { path = "crates/registry-documents", version = "0.45.0" }
 registry-documents-core = { path = "crates/registry-documents-core", version = "0.45.0" }
 registry-documentsctl = { path = "crates/registry-documentsctl", version = "0.45.0" }
 registry-documents-client = { path = "crates/registry-documents-client", version = "0.45.0" }
+registry-adapter = { path = "crates/registry-adapter", version = "0.45.0" }
+registry-adapter-core = { path = "crates/registry-adapter-core", version = "0.45.0" }
+registry-adapterctl = { path = "crates/registry-adapterctl", version = "0.45.0" }
 registry-breg = { path = "crates/registry-breg", version = "0.45.0", default-features = false }
 registry-bregctl = { path = "crates/registry-bregctl", version = "0.45.0" }
 registry-platform-activation = { path = "crates/registry-platform-activation", version = "0.45.0" }

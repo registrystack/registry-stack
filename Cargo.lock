@@ -4999,6 +4999,25 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
+name = "registry-adapter"
+version = "0.45.0"
+dependencies = [
+ "registry-adapter-core",
+]
+
+[[package]]
+name = "registry-adapter-core"
+version = "0.45.0"
+
+[[package]]
+name = "registry-adapterctl"
+version = "0.45.0"
+dependencies = [
+ "clap",
+ "registry-platform-buildinfo",
+]
+
+[[package]]
 name = "registry-breg"
 version = "0.45.0"
 dependencies = [

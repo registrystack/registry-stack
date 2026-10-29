@@ -1,0 +1,15 @@
+[package]
+name = "registry-adapter"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Registry Stack Adapter runtime: governed facade, call-plan interpreter, and audit journal."
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+registry-adapter-core.workspace = true
