@@ -143,11 +143,29 @@ pub struct ToParameters {
     /// The path template, e.g. `/v2/cases/{type}`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
-    /// Path-template segment name to expression.
-    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    /// Path-template segment name to expression; each key is a local
+    /// identifier (CFG-ID-1).
+    #[serde(
+        default,
+        deserialize_with = "crate::model::local_id_map",
+        skip_serializing_if = "std::collections::BTreeMap::is_empty"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(schema_with = "crate::model::local_id_map_schema::<Expression>")
+    )]
     pub path_parameters: std::collections::BTreeMap<String, Expression>,
-    /// Query parameter name to expression.
-    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    /// Query parameter name to expression; each key is a local
+    /// identifier (CFG-ID-1).
+    #[serde(
+        default,
+        deserialize_with = "crate::model::local_id_map",
+        skip_serializing_if = "std::collections::BTreeMap::is_empty"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(schema_with = "crate::model::local_id_map_schema::<Expression>")
+    )]
     pub query: std::collections::BTreeMap<String, Expression>,
     /// The request body expression, marshalled to JSON.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -341,7 +359,7 @@ impl FilterStep {
 /// A `validate` step.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ValidateStep {
     /// The predicate; failure raises the `validation` class.
     pub expression: Expression,
@@ -356,7 +374,7 @@ pub struct StopStep {}
 /// A `setHeader` step.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SetHeaderStep {
     /// The header name; bounded and engine-validated.
     pub name: String,
@@ -367,7 +385,7 @@ pub struct SetHeaderStep {
 /// A `setProperty` step.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SetPropertyStep {
     /// The exchange property name.
     pub name: String,
@@ -379,7 +397,7 @@ pub struct SetPropertyStep {
 /// `parallelProcessing`, `streaming`, and `timeout` are not ported.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SplitStep {
     /// The expression that produces the pieces.
     pub expression: Expression,
@@ -522,7 +540,7 @@ pub struct EnrichStep {
 /// `breaker.open`, and `onFallback` runs on failure and on rejection.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CircuitBreakerStep {
     /// Failure-rate percentage that opens the breaker (resilience4j
     /// default 50).
@@ -610,7 +628,7 @@ pub enum ThrottleMode {
 /// raises `throttle.rejected`.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ThrottleStep {
     /// The request limit per period, an expression as Camel 4 reads it.
     pub limit: Expression,
@@ -639,7 +657,7 @@ pub struct ThrottleStep {
 /// response; `skipDuplicate` is not ported.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct IdempotentConsumerStep {
     /// The key expression, conventionally the caller's `Idempotency-Key`
     /// header.
@@ -801,7 +819,7 @@ impl Default for RedeliveryOptions {
 /// A `doCatch` clause of a `doTry`.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DoCatch {
     /// The matched classes.
     pub exception: Vec<ErrorClass>,
@@ -900,8 +918,17 @@ pub struct TemplatedRoute {
     pub route_template_ref: ExternalId,
     /// The instantiated route id; its `from` becomes `direct:<routeId>`.
     pub route_id: ExternalId,
-    /// Parameter value by parameter name.
-    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    /// Parameter value by parameter name; each key is a local identifier,
+    /// the template parameter it instantiates (CFG-ID-1).
+    #[serde(
+        default,
+        deserialize_with = "crate::model::local_id_map",
+        skip_serializing_if = "std::collections::BTreeMap::is_empty"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(schema_with = "crate::model::local_id_map_schema::<serde_json::Value>")
+    )]
     pub parameters: std::collections::BTreeMap<String, serde_json::Value>,
 }
 
@@ -1778,6 +1805,58 @@ mod tests {
         assert!(serde_json::from_str::<Step>(r#"{ "wireTap": {} }"#).is_err());
         assert!(serde_json::from_str::<Step>(r#"{ "toD": {} }"#).is_err());
         assert!(serde_json::from_str::<Step>(r#"{ "multicast": {} }"#).is_err());
+    }
+
+    /// Every step struct refuses unknown members, and an id-keyed map
+    /// refuses a key that is not a local identifier (CFG-SCHEMA-4,
+    /// CFG-ID-1).
+    #[test]
+    fn step_structs_refuse_unknown_members_and_foreign_map_keys() {
+        assert!(serde_json::from_str::<ValidateStep>(
+            r#"{ "expression": { "constant": 1 }, "ghost": 1 }"#
+        )
+        .is_err());
+        assert!(serde_json::from_str::<SetHeaderStep>(
+            r#"{ "name": "x", "value": { "constant": 1 }, "ghost": 1 }"#
+        )
+        .is_err());
+        assert!(serde_json::from_str::<SetPropertyStep>(
+            r#"{ "name": "x", "value": { "constant": 1 }, "ghost": 1 }"#
+        )
+        .is_err());
+        assert!(serde_json::from_str::<SplitStep>(
+            r#"{ "expression": { "constant": 1 }, "ghost": 1 }"#
+        )
+        .is_err());
+        assert!(serde_json::from_str::<CircuitBreakerStep>(r#"{ "ghost": 1 }"#).is_err());
+        assert!(serde_json::from_str::<ThrottleStep>(
+            r#"{ "limit": { "constant": 1 }, "ghost": 1 }"#
+        )
+        .is_err());
+        assert!(serde_json::from_str::<IdempotentConsumerStep>(
+            r#"{ "expression": { "constant": 1 }, "ghost": 1 }"#
+        )
+        .is_err());
+        assert!(
+            serde_json::from_str::<DoCatch>(r#"{ "exception": ["upstream"], "ghost": 1 }"#)
+                .is_err()
+        );
+
+        let to = |key: &str| {
+            serde_json::from_str::<ToStep>(&format!(
+                r#"{{ "uri": "http:case-api", "parameters": {{ "httpMethod": "GET", "query": {{ "{key}": {{ "constant": 10 }} }} }} }}"#
+            ))
+        };
+        assert!(to("page-size").is_ok());
+        assert!(to("PageSize").is_err());
+        assert!(to("two words").is_err());
+        let templated = |key: &str| {
+            serde_json::from_str::<TemplatedRoute>(&format!(
+                r#"{{ "routeTemplateRef": "pager", "routeId": "listCases", "parameters": {{ "{key}": "50" }} }}"#
+            ))
+        };
+        assert!(templated("page-size").is_ok());
+        assert!(templated("PageSize").is_err());
     }
 
     /// Resume bindings, the Increment 3 write-resume addition of CONCEPT 9.

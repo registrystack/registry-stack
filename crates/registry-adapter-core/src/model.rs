@@ -8,6 +8,39 @@
 use registry_platform_yaml::Digest;
 use serde::{Deserialize, Serialize};
 
+/// A mapping keyed by local identifiers (CFG-ID-1): each key is refused at
+/// its own position unless it is a `LocalId`, and the model keeps the
+/// keys as text.
+pub fn local_id_map<'de, D, V>(
+    deserializer: D,
+) -> Result<std::collections::BTreeMap<String, V>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    V: serde::Deserialize<'de>,
+{
+    let map = std::collections::BTreeMap::<registry_platform_yaml::LocalId, V>::deserialize(
+        deserializer,
+    )?;
+    Ok(map
+        .into_iter()
+        .map(|(key, value)| (key.into_string(), value))
+        .collect())
+}
+
+/// The schema of a [`local_id_map`] member: an object whose property names
+/// are `LocalId` and whose values are `V`.
+#[cfg(feature = "schema")]
+pub fn local_id_map_schema<V: schemars::JsonSchema>(
+    generator: &mut schemars::SchemaGenerator,
+) -> schemars::Schema {
+    let names = generator.subschema_for::<registry_platform_yaml::LocalId>();
+    schemars::json_schema!({
+        "type": "object",
+        "propertyNames": names,
+        "additionalProperties": generator.subschema_for::<V>(),
+    })
+}
+
 /// The wire envelope an artifact speaks: the closed set of envelope
 /// executors compiled into the engine (`products/adapter/CONCEPT.md`
 /// section 8.8). Executors are named for mechanisms, never products.
