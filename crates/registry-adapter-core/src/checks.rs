@@ -3648,7 +3648,7 @@ mod tests {
     /// `credential.rejected` joins the other four uncatchable classes in
     /// the clause refusal (coordinator ruling); this pins the kind by
     /// name alongside `budget.exhausted`, `disclosure.violation`,
-    /// `egress.refused`, and `script.budgetExceeded` above.
+    /// `egress.refused`, and `script.budget-exceeded` above.
     #[test]
     fn credential_rejected_is_refused_in_a_clause() {
         let route = RouteDefinition {

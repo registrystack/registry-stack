@@ -419,7 +419,7 @@ pub struct SplitStep {
 /// false). `maximumIterations` stays mandatory, a declared divergence:
 /// the check refuses its absence and the runtime enforces it again.
 /// Reaching the bound with a dynamic count above it, or a predicate
-/// still holding, raises the catchable `loop.maximumIterationsReached`
+/// still holding, raises the catchable `loop.maximum-iterations-reached`
 /// class, never a silent stop. Pagination is `loop` with `doWhile` over
 /// the upstream cursor.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]

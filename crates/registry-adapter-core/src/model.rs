@@ -222,11 +222,11 @@ impl ErrorClass {
             Self::UpstreamTimeout => "upstream.timeout",
             Self::UpstreamConnection => "upstream.connection",
             Self::UpstreamMalformed => "upstream.malformed",
-            Self::UpstreamTooLarge => "upstream.tooLarge",
+            Self::UpstreamTooLarge => "upstream.too-large",
             Self::UpstreamRedirect => "upstream.redirect",
             Self::BreakerOpen => "breaker.open",
             Self::ThrottleRejected => "throttle.rejected",
-            Self::LoopMaximumIterationsReached => "loop.maximumIterationsReached",
+            Self::LoopMaximumIterationsReached => "loop.maximum-iterations-reached",
             Self::Validation => "validation",
             Self::ConversionUnmapped => "conversion.unmapped",
             Self::AggregationDuplicate => "aggregation.duplicate",
@@ -235,7 +235,7 @@ impl ErrorClass {
             Self::CredentialRejected => "credential.rejected",
             Self::DisclosureViolation => "disclosure.violation",
             Self::EgressRefused => "egress.refused",
-            Self::ScriptBudgetExceeded => "script.budgetExceeded",
+            Self::ScriptBudgetExceeded => "script.budget-exceeded",
         }
     }
 
@@ -262,6 +262,39 @@ impl ErrorClass {
                 | Self::EgressRefused
                 | Self::ScriptBudgetExceeded
         )
+    }
+
+    /// Whether this class is the named clause class or one of its
+    /// subclasses in the closed hierarchy: a clause naming a parent
+    /// matches the classes under it, as Camel's clause matching does.
+    #[must_use]
+    pub fn is_within(self, clause: Self) -> bool {
+        self.class()
+            .split('.')
+            .zip(clause.class().split('.'))
+            .all(|(raised, declared)| raised == declared)
+    }
+
+    /// The class a clause fires for: the closest match across the error
+    /// and its cause chain, Camel's rule
+    /// (`manual/exception-clause.html`). `raised` carries the error's
+    /// class followed by its causes; the first cause with a declared
+    /// match wins, and the most specific declared match on it. An
+    /// uncatchable class matches no clause, whatever prefix the clause
+    /// names.
+    #[must_use]
+    pub fn closest_match(raised: &[Self], clause: &[Self]) -> Option<Self> {
+        raised
+            .iter()
+            .copied()
+            .filter(|error| !error.is_uncatchable())
+            .find_map(|error| {
+                clause
+                    .iter()
+                    .copied()
+                    .filter(|declared| error.is_within(*declared))
+                    .max_by_key(|declared| declared.class().split('.').count())
+            })
     }
 }
 
@@ -608,7 +641,7 @@ mod tests {
                 "credential.rejected",
                 "disclosure.violation",
                 "egress.refused",
-                "script.budgetExceeded",
+                "script.budget-exceeded",
             ]
         );
     }
@@ -617,9 +650,81 @@ mod tests {
     /// prefix of another class resolves to it (staff review P0-3).
     #[test]
     fn loop_bound_class_is_catchable() {
-        let class = ErrorClass::from_class("loop.maximumIterationsReached");
+        let class = ErrorClass::from_class("loop.maximum-iterations-reached");
         assert_eq!(class, Some(ErrorClass::LoopMaximumIterationsReached));
         assert!(!class.unwrap().is_uncatchable());
+    }
+
+    /// Every multi-word class segment is kebab-case; the old camelCase
+    /// spellings resolve to nothing.
+    #[test]
+    fn class_segments_are_kebab() {
+        assert_eq!(
+            ErrorClass::from_class("upstream.too-large"),
+            Some(ErrorClass::UpstreamTooLarge)
+        );
+        assert_eq!(ErrorClass::from_class("upstream.tooLarge"), None);
+        assert_eq!(
+            ErrorClass::from_class("script.budget-exceeded"),
+            Some(ErrorClass::ScriptBudgetExceeded)
+        );
+        assert_eq!(ErrorClass::from_class("script.budgetExceeded"), None);
+        for class in ErrorClass::ALL {
+            for segment in class.class().split('.') {
+                assert!(
+                    segment
+                        .chars()
+                        .all(|character| character.is_ascii_lowercase() || character == '-'),
+                    "segment {segment} of {} is not kebab",
+                    class.class()
+                );
+            }
+        }
+    }
+
+    /// Clause matching is Camel's closest match across the error and its
+    /// cause chain, and an uncatchable class matches no clause whatever
+    /// prefix the clause names (staff review P1-10).
+    #[test]
+    fn closest_match_walks_the_cause_chain_and_skips_the_boundary() {
+        // The most specific declared match on a cause wins.
+        assert_eq!(
+            ErrorClass::closest_match(
+                &[ErrorClass::UpstreamHttp],
+                &[ErrorClass::UpstreamHttp, ErrorClass::Upstream],
+            ),
+            Some(ErrorClass::UpstreamHttp)
+        );
+        // A clause naming the parent matches the subclass.
+        assert_eq!(
+            ErrorClass::closest_match(&[ErrorClass::UpstreamTimeout], &[ErrorClass::Upstream],),
+            Some(ErrorClass::Upstream)
+        );
+        // The first cause with a declared match wins over a deeper match
+        // further out.
+        assert_eq!(
+            ErrorClass::closest_match(
+                &[ErrorClass::UpstreamTimeout, ErrorClass::Validation],
+                &[ErrorClass::Upstream, ErrorClass::Validation],
+            ),
+            Some(ErrorClass::Upstream)
+        );
+        // An exact match matches.
+        assert_eq!(
+            ErrorClass::closest_match(&[ErrorClass::Script], &[ErrorClass::Script]),
+            Some(ErrorClass::Script)
+        );
+        // The boundary never matches: the clause names the parent and the
+        // raised class sits under it.
+        assert_eq!(
+            ErrorClass::closest_match(&[ErrorClass::ScriptBudgetExceeded], &[ErrorClass::Script],),
+            None
+        );
+        // No declared match matches nothing.
+        assert_eq!(
+            ErrorClass::closest_match(&[ErrorClass::UpstreamTimeout], &[ErrorClass::Validation]),
+            None
+        );
     }
 
     #[test]
