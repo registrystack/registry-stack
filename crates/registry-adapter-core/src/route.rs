@@ -615,7 +615,7 @@ pub struct OnFallback {
 /// Throttle mode, Camel 4's `mode` option.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "kebab-case")]
 pub enum ThrottleMode {
     /// Total requests per period (Camel default).
     TotalRequests,
@@ -1603,6 +1603,25 @@ mod tests {
             serde_json::from_str::<Step>(&back).ok().as_ref(),
             Some(&step)
         );
+    }
+
+    /// The throttle mode names its unit on the wire in kebab case
+    /// (CFG-NAME-2).
+    #[test]
+    fn throttle_mode_names_its_unit_in_kebab_case() {
+        assert_eq!(
+            serde_json::to_string(&ThrottleMode::TotalRequests).expect("serialize"),
+            r#""total-requests""#
+        );
+        assert_eq!(
+            serde_json::to_string(&ThrottleMode::ConcurrentRequests).expect("serialize"),
+            r#""concurrent-requests""#
+        );
+        assert_eq!(
+            serde_json::from_str::<ThrottleMode>(r#""concurrent-requests""#).expect("read"),
+            ThrottleMode::ConcurrentRequests
+        );
+        assert!(serde_json::from_str::<ThrottleMode>(r#""concurrentRequests""#).is_err());
     }
 
     /// The Idempotent Consumer, ported from
