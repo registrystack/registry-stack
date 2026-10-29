@@ -6,5 +6,9 @@
 // mapping as scripts/to-record.rhai. An instance without its UID throws.
 // Pure and deterministic; no I/O.
 fn shape_records(instances) {
-    instances.map(|entity| to_record(entity))
+    let records = [];
+    for entity in instances {
+        records.push(to_record(entity));
+    }
+    records
 }

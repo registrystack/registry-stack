@@ -51,8 +51,7 @@
 # export reply's page block is read at $.page.totalPage; DHIS2 fills it
 # only when the request carries totalPages=true, which the fetchPage route
 # always sends (docs.dhis2.org tracker export parameters). The reviewed
-# page bound is 10: the loop's maximumIterations and the
-# dhis2MaximumPages property are the same fact and must stay in step.
+# page bound is the loop's maximumIterations: 10.
 apiVersion: id.registrystack.org/formats/adapter/pack/v1alpha1
 kind: AdapterPack
 id: dhis2-tracker
@@ -148,16 +147,12 @@ routeTemplates:
           name: dhis2Page
           value:
             constant: 1
-      - setProperty:
-          name: dhis2MaximumPages
-          value:
-            constant: 10
       - loop:
+          rhai:
+            file: scripts/has-more-pages.rhai
+            entrypoint: has_more_pages
+          doWhile: true
           maximumIterations: 10
-          doWhile:
-            rhai:
-              file: scripts/has-more-pages.rhai
-              entrypoint: has_more_pages
           steps:
             - enrich:
                 uri: direct:fetchPage
@@ -419,9 +414,9 @@ scripts:
   - path: scripts/to-record.rhai
     digest: sha256:061f1f3202de34cebc29175bce58f49709addd9426b861ed33f87ffa3453e2c8
   - path: scripts/shape-records.rhai
-    digest: sha256:088bd184bb36dd6738bb919965a74e80c971c0210d040f5298b22d384406f959
+    digest: sha256:41f58444a46b965555a58dbe52a03e3ee7fdf736041a63af5a604fccce2f8382
   - path: scripts/to-bundle.rhai
-    digest: sha256:25499fde562770b39109b70941f2ad1f83d00ef725c2d87fdc0fa2fefb40afde
+    digest: sha256:22d57870ac395d6a62587454da018dc0240e29f247185741498be04b35a956df
   - path: scripts/import-failed.rhai
     digest: sha256:3c134059622ceda11bbcb2fbac36b5f96831abeffe2bb0bcfcb4acda36799afe
   - path: scripts/accepted-record.rhai

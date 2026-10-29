@@ -17,11 +17,11 @@ fn to_bundle(record) {
         throw "record carries no org_unit";
     }
     #{
-        trackedEntities: #[
+        trackedEntities: [
             #{
                 trackedEntity: record.recordIdentifier,
                 orgUnit: record.domainData.org_unit,
-                attributes: #[]
+                attributes: []
             }
         ]
     }
