@@ -4953,6 +4953,189 @@ async fn decided_review_state_stays_readable_after_the_source_conceals_context()
     ));
 }
 
+/// Once the source acts on a decision, only that decision's author may recover
+/// still-disclosed current-source context. Casework authority and authorship
+/// must hold before and after provider I/O, the source must still disclose the
+/// binding, and terminal retention still ends the read.
+#[tokio::test]
+async fn decided_current_source_context_is_retained_only_for_its_author() {
+    let fixture = fixture().await;
+    let mut policy = project("decided-context-author");
+    policy.review_policies[0].stages.truncate(1);
+    current_source(&mut policy);
+    let service = CaseworkService::new(
+        fixture.store.clone(),
+        policy,
+        [Arc::new(ReviewSource {
+            revoked: Arc::clone(&fixture.source_revoked),
+            state: Arc::clone(&fixture.source_state),
+            read_blocked: Arc::clone(&fixture.source_read_blocked),
+            read_started: Arc::clone(&fixture.source_read_started),
+            read_continue: Arc::clone(&fixture.source_read_continue),
+            advanced: Arc::clone(&fixture.source_advanced),
+        }) as Arc<dyn ReviewContextProvider>],
+    )
+    .expect("decided context author service");
+    let mut tasks = Vec::new();
+    for suffix in ["decided", "open"] {
+        let mut input = request(
+            &format!("decided-context-{suffix}"),
+            &format!("DECIDED-CONTEXT-{suffix}"),
+        );
+        input.context = ReviewContext::CurrentSource {
+            binding: SourceContextBinding {
+                reference: format!("registry:record:decided-context-{suffix}"),
+            },
+        };
+        let accepted = service
+            .create_review_request(
+                &fixture.producer,
+                bind_request(&service, input),
+                &format!("create-decided-context-{suffix}"),
+            )
+            .await
+            .expect("create current-source review")
+            .accepted;
+        tasks.push((
+            accepted.request_id,
+            task_id(&fixture, accepted.request_id, 0).await,
+        ));
+    }
+    let (request_id, decided) = tasks[0];
+    let (_, open) = tasks[1];
+    service
+        .claim_review_task(
+            &fixture.reviewer_a,
+            decided,
+            Some("staff"),
+            "human-bearer",
+            1,
+            "claim-decided-context-author",
+        )
+        .await
+        .expect("claim decision-author task");
+    service
+        .decide_review_task(
+            &fixture.reviewer_a,
+            decided,
+            ReviewTaskDecisionRequest {
+                decision: DecisionKind::Reject {
+                    outcome: "incorrect".to_owned(),
+                    public_reason: Some("The record could not be matched.".to_owned()),
+                    reason: Some("retained author reason".to_owned()),
+                    result: Some(json!({"correction": "bounded correction"})),
+                },
+            },
+            Some("staff"),
+            "human-bearer",
+            2,
+            "decide-decided-context-author",
+        )
+        .await
+        .expect("record decision author");
+
+    *fixture.source_state.lock().unwrap() = false;
+    let context = service
+        .review_task_context(&fixture.reviewer_a, decided, Some("staff"), "human-bearer")
+        .await
+        .expect("decision author recovers retained current-source context");
+    assert_eq!(context.task_id, decided);
+    assert_eq!(context.request_id, request_id);
+    assert_eq!(context.requester_reference, "DECIDED-CONTEXT-decided");
+    assert!(matches!(
+        context.context,
+        ReviewTaskContextData::CurrentSource {
+            binding_status: ReviewSourceBindingStatus::Current,
+            projection: Some(_),
+            ..
+        }
+    ));
+    for (actor, task) in [(&fixture.reviewer_b, decided), (&fixture.reviewer_a, open)] {
+        assert!(matches!(
+            service
+                .review_task_context(actor, task, Some("staff"), "human-bearer")
+                .await,
+            Err(ReviewRuntimeError::NotFound)
+        ));
+    }
+
+    let mut wrong_profile = fixture.reviewer_a.clone();
+    wrong_profile.profile_id = "other-profile".to_owned();
+    assert!(matches!(
+        service
+            .review_task_context(&wrong_profile, decided, Some("staff"), "human-bearer")
+            .await,
+        Err(ReviewRuntimeError::NotFound)
+    ));
+    fixture.source_revoked.store(true, Ordering::SeqCst);
+    assert!(matches!(
+        service
+            .review_task_context(&fixture.reviewer_a, decided, Some("staff"), "human-bearer",)
+            .await,
+        Err(ReviewRuntimeError::NotFound)
+    ));
+    fixture.source_revoked.store(false, Ordering::SeqCst);
+    set_review_membership(&fixture, &fixture.reviewer_a, "staff", false).await;
+    assert!(matches!(
+        service
+            .review_task_context(&fixture.reviewer_a, decided, Some("staff"), "human-bearer",)
+            .await,
+        Err(ReviewRuntimeError::NotFound)
+    ));
+    set_review_membership(&fixture, &fixture.reviewer_a, "staff", true).await;
+
+    fixture.source_read_blocked.store(true, Ordering::SeqCst);
+    let pending_service = service.clone();
+    let pending_reviewer = fixture.reviewer_a.clone();
+    let pending = tokio::spawn(async move {
+        pending_service
+            .review_task_context(&pending_reviewer, decided, Some("staff"), "human-bearer")
+            .await
+    });
+    fixture.source_read_started.notified().await;
+    set_review_membership(&fixture, &fixture.reviewer_a, "staff", false).await;
+    fixture.source_read_continue.notify_one();
+    assert!(matches!(
+        pending.await.expect("context read joins"),
+        Err(ReviewRuntimeError::NotFound)
+    ));
+    set_review_membership(&fixture, &fixture.reviewer_a, "staff", true).await;
+
+    fixture
+        .database
+        .execute(
+            "UPDATE casework_review_requests
+             SET terminal_at=now()-interval '2 seconds',
+                 result_available_until=now()-interval '1 second'
+             WHERE request_id=$1",
+            &[&request_id],
+        )
+        .await
+        .expect("expire retained decision context");
+    assert!(matches!(
+        service
+            .review_task_context(&fixture.reviewer_a, decided, Some("staff"), "human-bearer",)
+            .await,
+        Err(ReviewRuntimeError::ResultExpired)
+    ));
+    fixture
+        .database
+        .execute(
+            "UPDATE casework_review_requests
+             SET result_available_until=now()+interval '1 day', result_erased_at=now()
+             WHERE request_id=$1",
+            &[&request_id],
+        )
+        .await
+        .expect("erase retained decision context");
+    assert!(matches!(
+        service
+            .review_task_context(&fixture.reviewer_a, decided, Some("staff"), "human-bearer",)
+            .await,
+        Err(ReviewRuntimeError::ResultExpired)
+    ));
+}
+
 #[tokio::test]
 async fn review_decisions_are_audited_after_the_decision_commits() {
     let fixture = fixture().await;
