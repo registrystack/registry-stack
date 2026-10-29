@@ -272,6 +272,44 @@ pub struct BRegProposalReviewDocument {
     pub policy: Option<registry_review_protocol::PolicySelection>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub result: Option<BRegProposalReviewResult>,
+    /// Handoff of the submission to the Review provider, on status reads only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handoff: Option<BRegProposalReviewHandoff>,
+}
+/// Where the submission stands with the Review provider. `Accepted` means the
+/// provider holds the request, whatever later stage of the review follows;
+/// `Withdrawn` means the submission was closed before the provider accepted it.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum BRegProposalReviewHandoffState {
+    Pending,
+    Accepted,
+    Failed,
+    Withdrawn,
+}
+/// Why a handoff failed. `Unspecified` covers a stored cause outside this
+/// vocabulary.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum BRegProposalReviewHandoffReason {
+    RemoteRefused,
+    ProducerIdentityMismatch,
+    ReviewAcceptanceChanged,
+    ReviewPolicyChanged,
+    SubmissionRecoveryExpired,
+    OperatorClosed,
+    Unspecified,
+}
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BRegProposalReviewHandoff {
+    pub state: BRegProposalReviewHandoffState,
+    /// Present exactly when the handoff failed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<BRegProposalReviewHandoffReason>,
 }
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -1906,12 +1944,27 @@ fn valid_review_projection(document: &BRegProposalReviewDocument, is_context: bo
             && document.context.fields.is_some()
             && document.result.is_none()
             && document.request_id.is_none()
+            && document.handoff.is_none()
     } else {
         document.context.fields.is_none()
             && document
                 .request_id
                 .as_deref()
                 .is_none_or(|id| document.policy.is_some() && canonical_proposal_id(id))
+            && document.handoff.as_ref().is_none_or(|handoff| {
+                document.policy.is_some()
+                    && match handoff.state {
+                        BRegProposalReviewHandoffState::Accepted => document.request_id.is_some(),
+                        BRegProposalReviewHandoffState::Pending
+                        | BRegProposalReviewHandoffState::Withdrawn => {
+                            document.request_id.is_none()
+                        }
+                        // A contradicted acceptance keeps the binding it was recorded with.
+                        BRegProposalReviewHandoffState::Failed => true,
+                    }
+                    && (handoff.state == BRegProposalReviewHandoffState::Failed)
+                        == handoff.reason.is_some()
+            })
             && document.result.is_some() == document.policy.is_some()
             && document.result.as_ref().is_none_or(|result| {
                 valid_review_result(result)
@@ -3155,6 +3208,95 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn review_status_accepts_only_a_coherent_handoff() {
+        let valid = json!({"id":ID,"actionId":"correct-address","actionRevision":REVISION,
+            "submissionVersion":1,"revision":2,"effectDigest":REVISION,
+            "subject":{"source":"directory","subjectType":"proposal","id":ID,"version":"1","digest":REVISION},
+            "context":{"reference":"breg:directory:correct-address:proposal:1"},"reviewable":true,
+            "authority":"review","policy":{"id":"address-review"},"result":{"state":"pending"},
+            "handoff":{"state":"pending"}});
+        let (client, response, server) = proposal_response_client(valid.clone()).await;
+        let mut prior = document();
+        prior["links"]["reviewStatus"] = json!({"method":"GET","path":format!("/v1/proposals/{ID}/review-status"),"accessProfile":"author","operation":"get-review-status"});
+        let prior = proposal(&client, prior);
+        let read = |value: Value| {
+            let (client, prior, response) = (&client, &prior, &response);
+            async move {
+                *response.lock().unwrap() = value;
+                client
+                    .read_proposal_review_status(prior)
+                    .await
+                    .map(|complete| complete.value.handoff)
+            }
+        };
+        assert_eq!(
+            read(valid.clone()).await.unwrap(),
+            Some(BRegProposalReviewHandoff {
+                state: BRegProposalReviewHandoffState::Pending,
+                reason: None
+            })
+        );
+        let mut withdrawn = valid.clone();
+        withdrawn["handoff"] = json!({"state":"withdrawn"});
+        assert_eq!(
+            read(withdrawn).await.unwrap().unwrap().state,
+            BRegProposalReviewHandoffState::Withdrawn
+        );
+        let mut failed = valid.clone();
+        failed["handoff"] = json!({"state":"failed","reason":"remote-refused"});
+        assert_eq!(
+            read(failed.clone()).await.unwrap().unwrap().reason,
+            Some(BRegProposalReviewHandoffReason::RemoteRefused)
+        );
+        let mut accepted = valid.clone();
+        accepted["handoff"] = json!({"state":"accepted"});
+        accepted["requestId"] = json!(ID);
+        assert_eq!(
+            read(accepted.clone()).await.unwrap().unwrap().state,
+            BRegProposalReviewHandoffState::Accepted
+        );
+        // A failure after a recorded acceptance keeps the binding it was recorded with.
+        failed["requestId"] = json!(ID);
+        assert!(read(failed).await.is_ok());
+        // A server that does not report a handoff stays readable.
+        let mut absent = valid.clone();
+        absent.as_object_mut().unwrap().remove("handoff");
+        assert_eq!(read(absent).await.unwrap(), None);
+
+        let mut cases = Vec::new();
+        for handoff in [
+            json!({"state":"accepted"}),
+            json!({"state":"failed"}),
+            json!({"state":"pending","reason":"remote-refused"}),
+            json!({"state":"failed","reason":"synthetic-internal-code"}),
+            json!({"state":"settled"}),
+            json!({"state":"pending","extra":true}),
+            json!({}),
+            json!("pending"),
+        ] {
+            let mut invalid = valid.clone();
+            invalid["handoff"] = handoff;
+            cases.push(invalid);
+        }
+        let mut pending_with_request = valid.clone();
+        pending_with_request["requestId"] = json!(ID);
+        cases.push(pending_with_request);
+        let mut no_policy = valid.clone();
+        for field in ["authority", "policy", "result"] {
+            no_policy.as_object_mut().unwrap().remove(field);
+        }
+        cases.push(no_policy);
+        for invalid in cases {
+            assert!(
+                read(invalid.clone()).await.is_err(),
+                "accepted handoff {}",
+                invalid["handoff"]
+            );
+        }
+        server.abort();
+    }
+
+    #[tokio::test]
     async fn review_context_exchange_requires_a_closed_producer_contract_binding() {
         use axum::{extract::State, routing::get, Json, Router};
         use std::sync::{Arc, Mutex};
@@ -3226,6 +3368,9 @@ mod tests {
         let mut status_correlation = valid.clone();
         status_correlation["requestId"] = json!(ID);
         refused.push(status_correlation);
+        let mut status_handoff = valid.clone();
+        status_handoff["handoff"] = json!({"state":"pending"});
+        refused.push(status_handoff);
         for field in ["id", "revision", "schemaDigest"] {
             let mut changed = valid.clone();
             changed["context"]["contract"][field] = json!("unbound-contract-canary");

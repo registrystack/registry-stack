@@ -174,6 +174,24 @@ has accepted that exact submission. Before acceptance the member is absent.
 Use this provider-issued ID to correlate independently authorized Casework
 history, clocks or notes reads, including a changes-requested explanation.
 The ID grants no Casework access and is absent from human review-context reads.
+
+The same read carries `handoff`, which says where the submission stands with
+the Review provider, so a client need not infer it from `requestId` and an
+unchanged `result`:
+
+| `handoff.state` | Meaning |
+|---|---|
+| `pending` | Queued, in flight, or retrying after an uncertain exchange. No `requestId` yet. |
+| `accepted` | The provider accepted the request; `requestId` is present. A later stage of the review that fails, such as a poll or cancellation budget, still reads as `accepted`; `result` carries the review outcome. |
+| `failed` | The handoff ended without an acceptance, or the provider contradicted a recorded one. `handoff.reason` names the cause. |
+| `withdrawn` | The submission was withdrawn before the provider accepted it, for example because the Proposal was cancelled. |
+
+`handoff.reason` is one of `remote-refused`, `producer-identity-mismatch`,
+`review-acceptance-changed`, `review-policy-changed`,
+`submission-recovery-expired`, `operator-closed`, or `unspecified` for a stored
+cause outside this list. It is a closed vocabulary: stored error text never
+reaches the caller. `handoff` is absent from human review-context reads and
+from submissions whose Action requires no review.
 Refetch status for the intended submission after Revise or Rebase; do not use a
 previous submission's request ID for new work.
 

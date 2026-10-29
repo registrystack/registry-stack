@@ -40,6 +40,15 @@
   ungranted and missing-claim selectors stay a concealed `404`. The Rust client
   accepts `/values` only on `request.invalid`; Node.js and Python pass it
   through `fieldPath` unchanged.
+- Review-status reads add a `handoff` member that reports the submission's
+  handoff to the Review provider: `pending`, `accepted`, `failed` with a closed
+  `reason`, or `withdrawn` when the submission was closed before the provider
+  accepted it. A client previously inferred this from `requestId` and an
+  unchanged `result`. The Rust, Node.js and Python clients expose it
+  (`BRegProposalReviewHandoff`; `handoff` on the documents), and the generated
+  OpenAPI schema lists it. The Rust client rejects unknown response members, so
+  update the client together with the server. See
+  [Proposals](proposals.md).
 
 ## 0.44.0 - 2026-10-27
 
