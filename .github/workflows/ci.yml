@@ -1886,7 +1886,7 @@ jobs:
           -p registry-bregctl -p registry-caseworkctl -p registry-schedulingctl
           -p registry-coordinator
           -p registry-messagingctl -p registry-discoveryctl -p registry-render
-          -p registry-documentsctl
+          -p registry-documentsctl -p registry-adapterctl
           -p registry-evidence -p registry-evidencectl -p registry-manifest-cli
           -p registry-breg-mcp -p registry-breg-review -p registry-evidence-oid4vci -p registry-mcp
 

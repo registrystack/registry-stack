@@ -172,6 +172,7 @@ CONFIG_CONFORMANCE_PACKAGES = frozenset(
 CONFIG_CHECK_PACKAGES = frozenset(
     {
         "registry-coordinator",
+        "registry-adapterctl",
         "registry-breg-mcp",
         "registry-breg-review",
         "registry-bregctl",
