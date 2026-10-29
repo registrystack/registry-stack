@@ -771,6 +771,8 @@ fn send_claims_idempotent(
 /// reachable from the body, through composite steps and `direct:`
 /// expansion. Redelivery applies only to component sends, so a
 /// declaration whose reachable sends are all `direct:` has no effect.
+/// The depth bound counts `direct:` hops only: composite nesting is
+/// unbounded here and the cycle check guards the graph.
 fn reaches_component_send(steps: &[Step], bodies: &HashMap<&str, &[Step]>, depth: usize) -> bool {
     if depth > MAX_DIRECT_DEPTH {
         return false;
@@ -788,36 +790,38 @@ fn reaches_component_send(steps: &[Step], bodies: &HashMap<&str, &[Step]>, depth
                 .get(enrich.uri.id.as_str())
                 .is_some_and(|target| reaches_component_send(target, bodies, depth + 1)),
         },
-        Step::Split(split) => reaches_component_send(&split.steps, bodies, depth + 1),
-        Step::Loop(loop_step) => reaches_component_send(&loop_step.steps, bodies, depth + 1),
+        Step::Filter(filter) => reaches_component_send(&filter.steps, bodies, depth),
+        Step::Split(split) => reaches_component_send(&split.steps, bodies, depth),
+        Step::Loop(loop_step) => reaches_component_send(&loop_step.steps, bodies, depth),
         Step::Choice(choice) => {
             choice
                 .when
                 .iter()
-                .any(|when| reaches_component_send(&when.steps, bodies, depth + 1))
+                .any(|when| reaches_component_send(&when.steps, bodies, depth))
                 || choice.otherwise.as_ref().is_some_and(|otherwise| {
-                    reaches_component_send(&otherwise.steps, bodies, depth + 1)
+                    reaches_component_send(&otherwise.steps, bodies, depth)
                 })
         }
         Step::CircuitBreaker(breaker) => {
-            reaches_component_send(&breaker.steps, bodies, depth + 1)
-                || breaker.on_fallback.as_ref().is_some_and(|fallback| {
-                    reaches_component_send(&fallback.steps, bodies, depth + 1)
-                })
+            reaches_component_send(&breaker.steps, bodies, depth)
+                || breaker
+                    .on_fallback
+                    .as_ref()
+                    .is_some_and(|fallback| reaches_component_send(&fallback.steps, bodies, depth))
         }
-        Step::Throttle(throttle) => reaches_component_send(&throttle.steps, bodies, depth + 1),
+        Step::Throttle(throttle) => reaches_component_send(&throttle.steps, bodies, depth),
         Step::IdempotentConsumer(idempotent) => {
-            reaches_component_send(&idempotent.steps, bodies, depth + 1)
+            reaches_component_send(&idempotent.steps, bodies, depth)
         }
-        Step::OnException(clause) => reaches_component_send(&clause.steps, bodies, depth + 1),
+        Step::OnException(clause) => reaches_component_send(&clause.steps, bodies, depth),
         Step::DoTry(do_try) => {
-            reaches_component_send(&do_try.steps, bodies, depth + 1)
+            reaches_component_send(&do_try.steps, bodies, depth)
                 || do_try
                     .do_catch
                     .iter()
-                    .any(|catch| reaches_component_send(&catch.steps, bodies, depth + 1))
+                    .any(|catch| reaches_component_send(&catch.steps, bodies, depth))
                 || do_try.do_finally.as_ref().is_some_and(|do_finally| {
-                    reaches_component_send(&do_finally.steps, bodies, depth + 1)
+                    reaches_component_send(&do_finally.steps, bodies, depth)
                 })
         }
         _ => false,
@@ -2764,6 +2768,78 @@ mod tests {
         assert_has(
             &check_routes(&pack, &project_builder(&pack)),
             CheckCode::RouteRedeliveryOverNonSafeSend,
+        );
+    }
+
+    /// Composite nesting does not consume the direct depth bound: a
+    /// redelivery over a send nested many composites and one direct hop
+    /// deep still reaches its send, while a direct target that resolves
+    /// to nothing stays dead config (staff review R2).
+    #[test]
+    fn redelivery_reaches_a_send_past_deep_composite_nesting() {
+        let route = |target: Step| {
+            let mut steps = vec![target];
+            for _ in 0..17 {
+                steps = vec![Step::Filter(FilterStep {
+                    constant: None,
+                    header: None,
+                    exchange_property: None,
+                    jsonpath: None,
+                    rhai: None,
+                    steps,
+                })];
+            }
+            let mut route_steps = vec![Step::ErrorHandler(ErrorHandlerStep {
+                default_error_handler: Some(DefaultErrorHandler {
+                    redelivery_policy: Some(RedeliveryOptions {
+                        maximum_redeliveries: 2,
+                        ..Default::default()
+                    }),
+                }),
+                no_error_handler: None,
+            })];
+            route_steps.extend(steps);
+            RouteDefinition {
+                id: id("createCase"),
+                from: RouteFrom {
+                    uri: direct("createCase"),
+                },
+                steps: route_steps,
+            }
+        };
+        let writer = RouteDefinition {
+            id: id("writer"),
+            from: RouteFrom {
+                uri: direct("writer"),
+            },
+            steps: vec![to_get("case-api")],
+        };
+        let pack = pack_builder(
+            vec![basic_endpoint()],
+            vec![
+                writer.clone(),
+                route(Step::To(ToStep {
+                    uri: direct("writer"),
+                    parameters: None,
+                })),
+            ],
+        );
+        assert!(!codes(&check_routes(&pack, &project_builder(&pack)))
+            .contains(&CheckCode::RouteRedeliveryWithoutUpstreamSend.code()));
+        // A direct hop to nothing is still dead config.
+        let pack = pack_builder(
+            vec![basic_endpoint()],
+            vec![
+                writer,
+                route(Step::To(ToStep {
+                    uri: direct("nowhere"),
+                    parameters: None,
+                })),
+            ],
+        );
+        assert_has(
+            &check_routes(&pack, &project_builder(&pack)),
+            CheckCode::RouteRedeliveryWithoutUpstreamSend,
         );
     }
 
