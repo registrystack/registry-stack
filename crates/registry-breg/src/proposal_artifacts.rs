@@ -382,6 +382,9 @@ fn operation_document(
     };
     let mut document = json!({"operationId":id,"x-registry-accessProfiles":profiles,"parameters":parameters,
         "responses":{"200":{"description":"Authorized Proposal operation","content":{"application/json":{"schema":response_schema}}},"404":{"description":"Resource unavailable to this caller"},"412":{"description":"Observed authority or lifecycle condition changed"}}});
+    if matches!(id, "proposals.submit" | "proposals.apply") {
+        document["responses"]["412"]["description"] = json!("Observed authority or lifecycle condition changed, or a Record revision guard failed (`precondition.failed`); a failed field commit guard answers `action.guard_failed` when the selected profile can read it");
+    }
     if method != "get" && !collection {
         document["responses"]["409"] = json!({"description":"The Proposal was rejected, or the idempotency key was reused with a different request"});
     }

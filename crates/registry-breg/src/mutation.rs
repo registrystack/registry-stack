@@ -2297,6 +2297,26 @@ pub(crate) fn strong_record_etag_for_representation(
     Ok(format!("\"breg-{digest}\""))
 }
 
+/// A Proposal field commit guard that refused, with the frozen inputs it was
+/// evaluated against so HTTP can re-check it against a disclosed re-read. It
+/// carries no stored Record value, and its `Debug` form omits the inputs.
+#[derive(Clone, Eq, PartialEq)]
+pub struct ProposalGuardFailure {
+    pub(crate) record_id: Uuid,
+    pub(crate) guard: crate::model::CompiledCommitGuard,
+    pub(crate) input: Map<String, Value>,
+}
+
+impl std::fmt::Debug for ProposalGuardFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ProposalGuardFailure")
+            .field("record_id", &self.record_id)
+            .field("guard", &self.guard)
+            .finish_non_exhaustive()
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum MutationError {
     #[error("mutation request is invalid")]
@@ -2320,6 +2340,11 @@ pub enum MutationError {
     /// unless a fresh, ordinary authorized GET safely confirms the failed guard.
     #[error("mutation precondition failed")]
     FieldGuardFailed { input: String },
+    /// Internal cause only: a field commit guard refused a Proposal submit or
+    /// apply. HTTP names it only after the same disclosure check an immediate
+    /// Action uses; a stale Record revision is never this error.
+    #[error("mutation precondition failed")]
+    ProposalGuardFailed(Box<ProposalGuardFailure>),
     #[error("the current review result does not match the retained approval")]
     ProposalReviewResultMismatch,
     #[error("mutation conflicts with current state")]

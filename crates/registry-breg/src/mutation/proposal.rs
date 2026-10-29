@@ -2215,7 +2215,7 @@ impl MutationTransaction {
                         crate::contract::FieldTypeSource::Timestamp
                     )
                 });
-            verify_guard(guard, input, &row, timestamp, revision, Some(revision))?;
+            verify_guard(guard, id, input, &row, timestamp, revision, Some(revision))?;
             guards.insert(guard.input.clone(), (id, revision, row));
         }
         for input_id in crate::commit_evidence::target_fields(&action.commit_evidence).keys() {
@@ -2375,6 +2375,7 @@ impl MutationTransaction {
                 });
                 verify_guard(
                     guard,
+                    id,
                     &input,
                     &row.data,
                     timestamp,
@@ -4076,6 +4077,7 @@ fn verify_apply_binding(
 }
 fn verify_guard(
     guard: &crate::model::CompiledCommitGuard,
+    record_id: Uuid,
     input: &Map<String, Value>,
     row: &Map<String, Value>,
     timestamp: bool,
@@ -4098,7 +4100,13 @@ fn verify_guard(
     ) {
         Ok(())
     } else {
-        Err(MutationError::PreconditionFailed)
+        Err(MutationError::ProposalGuardFailed(Box::new(
+            ProposalGuardFailure {
+                record_id,
+                guard: guard.clone(),
+                input: input.clone(),
+            },
+        )))
     }
 }
 

@@ -289,6 +289,21 @@ the refused `hook.proposal.precondition_failed`. This prevents the distinct code
 from becoming a hidden-field or row-existence oracle while letting an authorized
 application distinguish a confirmed guard failure from stale input.
 
+Proposal Submit and Apply apply the same rule to a failed field commit guard.
+The mutation transaction rolls back with an internal cause that carries the
+guard and the frozen inputs, never a stored value. HTTP then performs the
+ordinary target Get under the selected profile only, requires the profile to
+read the guard field and every row-boundary field, re-checks the boundaries
+against the returned values, and re-evaluates the guard against them. Only a
+guard that still fails answers `412 action.guard_failed` with its authored
+`guardReason`. A profile without ordinary Get authority, an unreadable guard or
+boundary field, a Record that changed or left the profile's boundaries since the
+rollback, and every Record revision mismatch answer the generic
+`412 precondition.failed`. The re-read emits the ordinary Get read audit event.
+The PostgreSQL test `postgres_proposal_guard_failure` covers the disclosed
+guard on Submit and Apply, the revision mismatch that stays generic while the
+guard would also fail, and the unreadable guard field.
+
 The focused PostgreSQL Action availability test covers selected-profile Get
 authority, row concealment, hidden guard and boundary fields, closed unknown
 responses, and the split between the distinct guard code and the generic

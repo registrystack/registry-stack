@@ -22,6 +22,17 @@
   projections; omit permissions with unsupported row, membership, consent or
   task-grant restrictions and report coverage. The output is for operator review
   and does not change runtime authorization or public Manifest publication.
+- BREAKING: Proposal Submit and Apply now answer `412 action.guard_failed`,
+  with `guardReason` when the guard declares one, instead of
+  `412 precondition.failed` when a field commit guard fails and the selected
+  profile can perform the ordinary target Get, read the guard field and every
+  row-boundary field, and the guard still fails against the value that Get
+  returns. A Record revision mismatch, a profile without that authority, and a
+  guard that no longer fails on the re-read stay `412 precondition.failed`.
+  Clients that match `precondition.failed` on these operations, for example to
+  offer reload and retry, must accept the new code. The generated OpenAPI
+  `412` description for the Proposal `submit` and `apply` operations names both
+  codes.
 
 ## 0.44.0 - 2026-10-27
 

@@ -90,9 +90,98 @@ pub(super) async fn observe(
     let Some(boundaries) = action.context.target_authority().get(target) else {
         return Ok(Availability::NotDisclosed);
     };
-    let fields = guards
+    let boundaries = boundaries
+        .iter()
+        .map(crate::postgres::api_boundary)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| unavailable())?;
+    let guard_fields = guards
         .iter()
         .map(|guard| guard.field.clone())
+        .collect::<BTreeSet<_>>();
+    let Some(observed) = observe_target(
+        service,
+        action.context.selected_profile(),
+        claims,
+        headers,
+        entity,
+        record_id,
+        &guard_fields,
+        &boundaries,
+        correlation,
+    )
+    .await?
+    else {
+        return Ok(Availability::NotDisclosed);
+    };
+    let ObservedTarget { revision, current } = observed;
+    let today = time::OffsetDateTime::now_utc().date().to_string();
+    let mut missing = BTreeSet::new();
+    for guard in guards {
+        if let Some(input_id) = &guard.equals_input {
+            if !input.contains_key(input_id) {
+                let declared = action
+                    .action
+                    .inputs
+                    .iter()
+                    .find(|input| input.id == *input_id)
+                    .ok_or_else(unavailable)?;
+                missing.insert(declared.api_name.clone());
+                continue;
+            }
+        }
+        let field = entity.fields.get(&guard.field).ok_or_else(unavailable)?;
+        if !crate::commit_guard::guard_matches(
+            guard,
+            input,
+            &current,
+            &today,
+            matches!(field.field_type, FieldTypeSource::Timestamp),
+        ) {
+            return Ok(Availability::NotSatisfied {
+                revision,
+                guard_reason: guard.reason.clone(),
+            });
+        }
+    }
+    Ok(if missing.is_empty() {
+        Availability::Satisfied { revision }
+    } else {
+        Availability::InputRequired {
+            revision,
+            inputs: missing,
+        }
+    })
+}
+
+/// The guard and boundary facts of one Record, read back through the ordinary
+/// GET path under the selected profile.
+pub(in crate::api) struct ObservedTarget {
+    pub(in crate::api) revision: u64,
+    pub(in crate::api) current: Map<String, Value>,
+}
+
+/// Re-read one target under the selected profile only, never the GET route's
+/// default profile and never a combination of profiles. `Ok(None)` means the
+/// profile cannot disclose every fact the guards and row boundaries need, or
+/// has no ordinary GET route for the entity; the Record is then not probed.
+/// A concealed error means the Record is outside the profile's boundaries now.
+#[allow(clippy::too_many_arguments)]
+pub(in crate::api) async fn observe_target(
+    service: &HttpService,
+    selected_profile: &str,
+    claims: &VerifiedRequestClaims,
+    headers: &HeaderMap,
+    entity: &crate::model::CompiledEntity,
+    record_id: &str,
+    guard_fields: &BTreeSet<String>,
+    boundaries: &[crate::postgres::RowBoundaryContext],
+    correlation: &RequestCorrelation,
+) -> Result<Option<ObservedTarget>, Response> {
+    let target = &entity.id;
+    let fields = guard_fields
+        .iter()
+        .cloned()
         .chain(
             boundaries
                 .iter()
@@ -107,17 +196,16 @@ pub(super) async fn observe(
         .iter()
         .find(|route| route.entity_id == *target && route.operation == Operation::Get)
     else {
-        return Ok(Availability::NotDisclosed);
+        return Ok(None);
     };
-    // Never fall back to the GET route's default profile or combine two profiles.
     let mut options = QueryOptions::default();
-    options.parsed.access_profile = Some(action.context.selected_profile().to_owned());
+    options.parsed.access_profile = Some(selected_profile.to_owned());
     let Ok(mut surface) = authorize_direct_route(service, route, claims, &options) else {
-        return Ok(Availability::NotDisclosed);
+        return Ok(None);
     };
     if !fields.is_subset(&surface.readable_fields) {
         // Do not even probe the record when any required fact is undisclosed.
-        return Ok(Availability::NotDisclosed);
+        return Ok(None);
     }
     if surface
         .context
@@ -183,56 +271,15 @@ pub(super) async fn observe(
             return Err(unavailable());
         }
     }
-    let boundaries = boundaries
-        .iter()
-        .map(crate::postgres::api_boundary)
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|_| unavailable())?;
     if !crate::postgres::snapshot_matches_boundaries(
         entity,
         &current,
         Uuid::parse_str(record_id).map_err(|_| unavailable())?,
-        &boundaries,
+        boundaries,
     )
     .map_err(|_| unavailable())?
     {
         return Err(concealed());
     }
-    let today = time::OffsetDateTime::now_utc().date().to_string();
-    let mut missing = BTreeSet::new();
-    for guard in guards {
-        if let Some(input_id) = &guard.equals_input {
-            if !input.contains_key(input_id) {
-                let declared = action
-                    .action
-                    .inputs
-                    .iter()
-                    .find(|input| input.id == *input_id)
-                    .ok_or_else(unavailable)?;
-                missing.insert(declared.api_name.clone());
-                continue;
-            }
-        }
-        let field = entity.fields.get(&guard.field).ok_or_else(unavailable)?;
-        if !crate::commit_guard::guard_matches(
-            guard,
-            input,
-            &current,
-            &today,
-            matches!(field.field_type, FieldTypeSource::Timestamp),
-        ) {
-            return Ok(Availability::NotSatisfied {
-                revision,
-                guard_reason: guard.reason.clone(),
-            });
-        }
-    }
-    Ok(if missing.is_empty() {
-        Availability::Satisfied { revision }
-    } else {
-        Availability::InputRequired {
-            revision,
-            inputs: missing,
-        }
-    })
+    Ok(Some(ObservedTarget { revision, current }))
 }

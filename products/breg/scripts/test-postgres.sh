@@ -119,6 +119,7 @@ postgres_targets=(
   postgres_reviewed_change_example
   postgres_proposal_hooks
   postgres_proposal_review_delivery
+  postgres_proposal_guard_failure
   postgres_proposal_security
   postgres_proposal_s3
   postgres_facility_proposal

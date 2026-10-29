@@ -174,6 +174,8 @@ It accepts a validated subset of the Action inputs and is a single unkeyed POST.
 The answer can be available, guard-not-satisfied, input-required with missing
 API input names, or not-disclosed. It is a current hint; `invokeAction` still
 performs the authoritative guard check and may return `action.guard_failed`.
+Proposal submit and apply return the same problem for a readable field-guard
+failure; a stale Record revision stays `precondition.failed`.
 
 `batchRecords` accepts an ordered array of create and patch items plus an
 optional change or correction context. It enforces the served item and body

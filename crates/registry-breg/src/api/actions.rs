@@ -2,7 +2,7 @@
 //! Admission for compiled immediate actions. Ordinary GET authority additionally
 //! bounds the state disclosed by an advisory availability read.
 
-mod availability;
+pub(in crate::api) mod availability;
 
 #[cfg(test)]
 #[path = "tests/immediate_action_tests.rs"]
