@@ -9,8 +9,11 @@
 //! endpoint like any other send), so packs are replayable without a
 //! credential. A route never declares its own test intercepts.
 
-use registry_platform_yaml::ExternalId;
+use registry_platform_yaml::{BoundedU32, ExternalId};
 use serde::{Deserialize, Serialize};
+
+/// An HTTP status code, 100 through 599 (CFG-QTY-4).
+pub(crate) type HttpStatus = BoundedU32<100, 599>;
 
 /// Where a fixture's recording came from
 /// (`products/adapter/CONCEPT.md` section 13.3): captured from a live
@@ -87,7 +90,7 @@ pub struct RecordedRequest {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RecordedResponse {
     /// The status the upstream answered with.
-    pub status: u16,
+    pub status: HttpStatus,
     /// The reply body.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub body: Option<serde_json::Value>,
@@ -190,11 +193,11 @@ mod tests {
                     body: None,
                 },
                 upstream_response: RecordedResponse {
-                    status: 200,
+                    status: HttpStatus::new(200).expect("a status"),
                     body: Some(serde_json::json!({"id": "123"})),
                 },
                 expected_facade_response: RecordedResponse {
-                    status: 200,
+                    status: HttpStatus::new(200).expect("a status"),
                     body: Some(serde_json::json!({"record": {"id": "123"}})),
                 },
             }],
@@ -243,5 +246,18 @@ mod tests {
         )
         .expect("parse");
         assert_eq!(fixture.pack.as_str(), "other-pack");
+    }
+
+    /// A recorded status is an HTTP status; the reader refuses anything
+    /// outside the 100 to 599 range (CFG-QTY-4).
+    #[test]
+    fn recorded_statuses_carry_the_http_range() {
+        let status = |value: u32| {
+            serde_json::from_str::<RecordedResponse>(&format!(r#"{{ "status": {value} }}"#))
+        };
+        assert!(status(99).is_err());
+        assert!(status(600).is_err());
+        assert!(status(200).is_ok());
+        assert!(status(404).is_ok());
     }
 }

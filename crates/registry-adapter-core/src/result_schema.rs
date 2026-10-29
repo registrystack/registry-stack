@@ -541,7 +541,10 @@ mod tests {
         let profile = profile(r#"{"record": {{record}}}"#);
         let schema =
             derive_operation_result_schema(&profile, &project(true), "cases.find").expect("derive");
-        let expected = |body: Option<Value>| Expected { status: 200, body };
+        let expected = |body: Option<Value>| Expected {
+            status: crate::fixture::HttpStatus::new(200).expect("a status"),
+            body,
+        };
 
         let good = expected(Some(json!({"record": {"id": "c-1"}})));
         assert!(check_fixture_expected_response(0, &good, &schema).is_empty());

@@ -675,6 +675,36 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
                     "Set maximumRedeliveries above zero, or drop the retryWhile.",
                 ));
             }
+            Step::OnException(clause) => {
+                if clause.exception.is_empty() {
+                    route_findings.push(finding(
+                        CheckCode::RouteEmptyExceptionList,
+                        &format!("/routes/{id}/steps{path}"),
+                        "the onException clause names no error class",
+                        "Name at least one error class the clause matches.",
+                    ));
+                }
+                if clause.handled == Some(true) && clause.continued == Some(true) {
+                    route_findings.push(finding(
+                        CheckCode::RouteHandledAndContinued,
+                        &format!("/routes/{id}/steps{path}"),
+                        "the onException clause sets handled and continued together",
+                        "Keep handled or continued, not both.",
+                    ));
+                }
+            }
+            Step::DoTry(do_try) => {
+                for (catch_index, catch) in do_try.do_catch.iter().enumerate() {
+                    if catch.exception.is_empty() {
+                        route_findings.push(finding(
+                            CheckCode::RouteEmptyExceptionList,
+                            &format!("/routes/{id}/steps{path}/doCatch/{catch_index}"),
+                            "the doCatch clause names no error class",
+                            "Name at least one error class the clause matches.",
+                        ));
+                    }
+                }
+            }
             _ => {}
         });
 
@@ -2180,9 +2210,9 @@ mod tests {
     use crate::route::{
         ChoiceStep, CircuitBreakerStep, DefaultErrorHandler, DoCatch, DoFinally, DoTryStep,
         EnrichStep, ErrorHandlerStep, FilterStep, IdempotentConsumerStep, LoopStep,
-        OnExceptionStep, OnFallback, RedeliveryOptions, RouteDefinition, RouteFrom, RouteTemplate,
-        SplitStep, TemplateParameter, TemplateParameterType, TemplatedRoute, ThrottleStep,
-        ToParameters, ToStep, When,
+        OnExceptionStep, OnFallback, Percentage, PositiveU32, RedeliveryOptions, RouteDefinition,
+        RouteFrom, RouteTemplate, SplitStep, TemplateParameter, TemplateParameterType,
+        TemplatedRoute, ThrottleStep, ToParameters, ToStep, When,
     };
     use crate::runtime::{AdapterRuntimeConfig, AuditRetention, EndpointBinding};
     use registry_platform_yaml::Url;
@@ -3753,6 +3783,88 @@ mod tests {
         assert_clean(check_routes(&pack, &project_builder(&pack)));
     }
 
+    /// An exception clause naming no class can never match, and `handled`
+    /// with `continued` contradicts itself: the clause both consumes the
+    /// error and resumes past it.
+    #[test]
+    fn routes_refuse_an_exception_clause_without_classes_or_with_both_outcomes() {
+        let classless = RouteDefinition {
+            id: id("fetchCase"),
+            from: RouteFrom {
+                uri: direct("fetchCase"),
+            },
+            steps: vec![Step::OnException(OnExceptionStep {
+                exception: vec![],
+                on_when: None,
+                handled: Some(true),
+                continued: None,
+                redelivery_policy: None,
+                steps: vec![],
+            })],
+        };
+        let pack = pack_builder(vec![], vec![classless]);
+        assert_has(
+            &check_routes(&pack, &project_builder(&pack)),
+            CheckCode::RouteEmptyExceptionList,
+        );
+        let contradictory = RouteDefinition {
+            id: id("fetchCase"),
+            from: RouteFrom {
+                uri: direct("fetchCase"),
+            },
+            steps: vec![Step::OnException(OnExceptionStep {
+                exception: vec![crate::model::ErrorClass::UpstreamTimeout],
+                on_when: None,
+                handled: Some(true),
+                continued: Some(true),
+                redelivery_policy: None,
+                steps: vec![],
+            })],
+        };
+        let pack = pack_builder(vec![], vec![contradictory]);
+        assert_has(
+            &check_routes(&pack, &project_builder(&pack)),
+            CheckCode::RouteHandledAndContinued,
+        );
+        let unanchored = RouteDefinition {
+            id: id("fetchCase"),
+            from: RouteFrom {
+                uri: direct("fetchCase"),
+            },
+            steps: vec![Step::DoTry(crate::route::DoTryStep {
+                steps: vec![],
+                do_catch: vec![crate::route::DoCatch {
+                    exception: vec![],
+                    on_when: None,
+                    steps: vec![],
+                }],
+                do_finally: None,
+            })],
+        };
+        let pack = pack_builder(vec![], vec![unanchored]);
+        assert_has(
+            &check_routes(&pack, &project_builder(&pack)),
+            CheckCode::RouteEmptyExceptionList,
+        );
+        // One class and one outcome stays clean.
+        let admitted = RouteDefinition {
+            id: id("fetchCase"),
+            from: RouteFrom {
+                uri: direct("fetchCase"),
+            },
+            steps: vec![Step::OnException(OnExceptionStep {
+                exception: vec![crate::model::ErrorClass::UpstreamTimeout],
+                on_when: None,
+                handled: Some(true),
+                continued: None,
+                redelivery_policy: None,
+                steps: vec![],
+            })],
+        };
+        let pack = pack_builder(vec![], vec![admitted]);
+        assert_clean(check_routes(&pack, &project_builder(&pack)));
+    }
+
     #[test]
     fn routes_refuse_redelivery_over_a_non_safe_send_without_the_claim() {
         let route = RouteDefinition {
@@ -3849,14 +3961,14 @@ mod tests {
 
     fn breaker_of(steps: Vec<Step>, fallback: Option<Vec<Step>>) -> Step {
         Step::CircuitBreaker(CircuitBreakerStep {
-            failure_rate_threshold: 50,
-            sliding_window_size: 100,
-            minimum_number_of_calls: 100,
-            open_state_wait_seconds: 60,
-            maximum_half_open_calls: 10,
+            failure_rate_threshold: Percentage::new(50).expect("a percentage"),
+            sliding_window_calls: PositiveU32::new(100).expect("a count"),
+            minimum_number_of_calls: PositiveU32::new(100).expect("a count"),
+            open_state_wait_seconds: PositiveU32::new(60).expect("a count"),
+            maximum_half_open_calls: PositiveU32::new(10).expect("a count"),
             automatic_transition_from_open_to_half_open_enabled: false,
-            slow_call_rate_threshold: 100,
-            slow_call_duration_threshold_seconds: 60,
+            slow_call_rate_threshold: Percentage::new(100).expect("a percentage"),
+            slow_call_duration_threshold_seconds: PositiveU32::new(60).expect("a count"),
             steps,
             on_fallback: fallback.map(|steps| OnFallback { steps }),
         })
@@ -4018,7 +4130,7 @@ mod tests {
         let steps = vec![Step::Throttle(ThrottleStep {
             limit: Expression::Constant(serde_json::json!(10)),
             mode: None,
-            time_period_milliseconds: 1_000,
+            time_period_milliseconds: PositiveU32::new(1_000).expect("a period"),
             reject_execution: false,
             steps: vec![to_get("case-api"), to_get("case-api")],
         })];
@@ -4925,11 +5037,11 @@ mod tests {
                     body: None,
                 },
                 upstream_response: RecordedResponse {
-                    status: 200,
+                    status: BoundedU32::new(200).expect("a status"),
                     body: None,
                 },
                 expected_facade_response: RecordedResponse {
-                    status: 200,
+                    status: BoundedU32::new(200).expect("a status"),
                     body: None,
                 },
             }],
@@ -4958,11 +5070,11 @@ mod tests {
                 body: None,
             },
             upstream_response: RecordedResponse {
-                status: 200,
+                status: BoundedU32::new(200).expect("a status"),
                 body: None,
             },
             expected_facade_response: RecordedResponse {
-                status: 200,
+                status: BoundedU32::new(200).expect("a status"),
                 body: None,
             },
         };
@@ -5039,11 +5151,11 @@ mod tests {
                     body: None,
                 },
                 upstream_response: RecordedResponse {
-                    status: 200,
+                    status: BoundedU32::new(200).expect("a status"),
                     body: None,
                 },
                 expected_facade_response: RecordedResponse {
-                    status: 200,
+                    status: BoundedU32::new(200).expect("a status"),
                     body: None,
                 },
             }],

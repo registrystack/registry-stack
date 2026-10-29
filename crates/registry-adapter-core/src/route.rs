@@ -14,8 +14,14 @@
 use crate::model::{
     AggregationStrategy, ErrorClass, Expression, HttpMethod, RhaiExpression, SendUri,
 };
-use registry_platform_yaml::{BoundedU64, ExternalId};
+use registry_platform_yaml::{BoundedU32, BoundedU64, ExternalId};
 use serde::{Deserialize, Serialize};
+
+/// A percentage the reader bounds to 1 through 100 (CFG-QTY-4).
+pub(crate) type Percentage = BoundedU32<1, 100>;
+/// A positive count or unit quantity; zero cannot bound a behavior
+/// (CFG-QTY-4).
+pub(crate) type PositiveU32 = BoundedU32<1, { u32::MAX }>;
 
 /// A route as Camel's YAML DSL writes it: one `from`, `direct:` only, and
 /// an ordered step list (`products/adapter/CONCEPT.md` section 8.3). Pack
@@ -513,33 +519,33 @@ pub struct CircuitBreakerStep {
         default = "default_failure_rate_threshold",
         skip_serializing_if = "is_default_failure_rate_threshold"
     )]
-    pub failure_rate_threshold: u8,
-    /// The count-based window size (default 100); the window type is fixed
-    /// count-based and not configurable.
+    pub failure_rate_threshold: Percentage,
+    /// The count-based window size in calls (default 100); the window type
+    /// is fixed count-based and not configurable.
     #[serde(
-        default = "default_sliding_window_size",
-        skip_serializing_if = "is_default_sliding_window_size"
+        default = "default_sliding_window_calls",
+        skip_serializing_if = "is_default_sliding_window_calls"
     )]
-    pub sliding_window_size: u32,
+    pub sliding_window_calls: PositiveU32,
     /// Calls recorded before the breaker judges (default 100).
     #[serde(
         default = "default_minimum_number_of_calls",
         skip_serializing_if = "is_default_minimum_number_of_calls"
     )]
-    pub minimum_number_of_calls: u32,
+    pub minimum_number_of_calls: PositiveU32,
     /// Seconds the breaker stays open (resilience4j
     /// `waitDurationInOpenState`, default 60).
     #[serde(
         default = "default_open_state_wait_seconds",
         skip_serializing_if = "is_default_open_state_wait_seconds"
     )]
-    pub open_state_wait_seconds: u32,
+    pub open_state_wait_seconds: PositiveU32,
     /// Permitted half-open calls (default 10).
     #[serde(
         default = "default_maximum_half_open_calls",
         skip_serializing_if = "is_default_maximum_half_open_calls"
     )]
-    pub maximum_half_open_calls: u32,
+    pub maximum_half_open_calls: PositiveU32,
     /// Automatic open-to-half-open transition (default false).
     #[serde(
         default = "default_automatic_transition",
@@ -551,13 +557,13 @@ pub struct CircuitBreakerStep {
         default = "default_slow_call_rate_threshold",
         skip_serializing_if = "is_default_slow_call_rate_threshold"
     )]
-    pub slow_call_rate_threshold: u8,
+    pub slow_call_rate_threshold: Percentage,
     /// Seconds over which a call counts as slow (default 60).
     #[serde(
         default = "default_slow_call_duration_threshold_seconds",
         skip_serializing_if = "is_default_slow_call_duration_threshold_seconds"
     )]
-    pub slow_call_duration_threshold_seconds: u32,
+    pub slow_call_duration_threshold_seconds: PositiveU32,
     /// The guarded steps.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub steps: Vec<Step>,
@@ -600,12 +606,13 @@ pub struct ThrottleStep {
     /// Total or concurrent requests (Camel default total).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mode: Option<ThrottleMode>,
-    /// The period in milliseconds (Camel default 1000).
+    /// The period in milliseconds (Camel default 1000); zero cannot bound
+    /// a period.
     #[serde(
         default = "default_time_period_milliseconds",
         skip_serializing_if = "is_default_time_period_milliseconds"
     )]
-    pub time_period_milliseconds: u32,
+    pub time_period_milliseconds: PositiveU32,
     /// Whether to reject immediately instead of waiting (Camel default
     /// false).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -714,33 +721,37 @@ pub struct OnExceptionStep {
 /// Option spellings stay ours (CFG-NAME); only the nesting is Camel's.
 /// Only the non-default members serialize.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RedeliveryOptions {
     /// Redeliveries after the first attempt (default 0).
     #[serde(default, skip_serializing_if = "is_default_zero_u32")]
     pub maximum_redeliveries: u32,
-    /// Delay between redeliveries (default 1 s).
+    /// Delay between redeliveries in seconds (default 1); zero cannot
+    /// bound a delay.
     #[serde(
         default = "default_retry_delay_seconds",
         skip_serializing_if = "is_default_retry_delay_seconds"
     )]
-    pub retry_delay_seconds: u32,
+    pub retry_delay_seconds: PositiveU32,
     /// Grow the delay exponentially (default false).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub use_exponential_back_off: bool,
-    /// The exponential multiplier (default 2).
+    /// The exponential multiplier (default 2); it grows delays, so the
+    /// reader refuses a value below 1 (CFG-QTY-4).
     #[serde(
         default = "default_back_off_multiplier",
-        skip_serializing_if = "is_default_back_off_multiplier"
+        skip_serializing_if = "is_default_back_off_multiplier",
+        deserialize_with = "back_off_multiplier_at_least_one"
     )]
     pub back_off_multiplier: f64,
-    /// The delay ceiling (default 60 s).
+    /// The delay ceiling in seconds (default 60); zero cannot bound a
+    /// delay.
     #[serde(
         default = "default_maximum_retry_delay_seconds",
         skip_serializing_if = "is_default_maximum_retry_delay_seconds"
     )]
-    pub maximum_retry_delay_seconds: u32,
+    pub maximum_retry_delay_seconds: PositiveU32,
     /// Add collision avoidance jitter (default false).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub use_collision_avoidance: bool,
@@ -759,6 +770,21 @@ pub struct RedeliveryOptions {
     /// it could never fire.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retry_while: Option<Expression>,
+}
+
+impl Default for RedeliveryOptions {
+    fn default() -> Self {
+        Self {
+            maximum_redeliveries: 0,
+            retry_delay_seconds: default_retry_delay_seconds(),
+            use_exponential_back_off: false,
+            back_off_multiplier: default_back_off_multiplier(),
+            maximum_retry_delay_seconds: default_maximum_retry_delay_seconds(),
+            use_collision_avoidance: false,
+            collision_avoidance_factor: default_collision_avoidance_factor(),
+            retry_while: None,
+        }
+    }
 }
 
 /// A `doCatch` clause of a `doTry`.
@@ -931,44 +957,44 @@ fn is_default_zero_u32(value: &u32) -> bool {
     *value == 0
 }
 
-fn default_failure_rate_threshold() -> u8 {
-    50
+fn default_failure_rate_threshold() -> Percentage {
+    Percentage::new(50).expect("a percentage bound")
 }
 
-fn is_default_failure_rate_threshold(value: &u8) -> bool {
-    *value == 50
+fn is_default_failure_rate_threshold(value: &Percentage) -> bool {
+    value.get() == 50
 }
 
-fn default_sliding_window_size() -> u32 {
-    100
+fn default_sliding_window_calls() -> PositiveU32 {
+    PositiveU32::new(100).expect("a positive bound")
 }
 
-fn is_default_sliding_window_size(value: &u32) -> bool {
-    *value == 100
+fn is_default_sliding_window_calls(value: &PositiveU32) -> bool {
+    value.get() == 100
 }
 
-fn default_minimum_number_of_calls() -> u32 {
-    100
+fn default_minimum_number_of_calls() -> PositiveU32 {
+    PositiveU32::new(100).expect("a positive bound")
 }
 
-fn is_default_minimum_number_of_calls(value: &u32) -> bool {
-    *value == 100
+fn is_default_minimum_number_of_calls(value: &PositiveU32) -> bool {
+    value.get() == 100
 }
 
-fn default_open_state_wait_seconds() -> u32 {
-    60
+fn default_open_state_wait_seconds() -> PositiveU32 {
+    PositiveU32::new(60).expect("a positive bound")
 }
 
-fn is_default_open_state_wait_seconds(value: &u32) -> bool {
-    *value == 60
+fn is_default_open_state_wait_seconds(value: &PositiveU32) -> bool {
+    value.get() == 60
 }
 
-fn default_maximum_half_open_calls() -> u32 {
-    10
+fn default_maximum_half_open_calls() -> PositiveU32 {
+    PositiveU32::new(10).expect("a positive bound")
 }
 
-fn is_default_maximum_half_open_calls(value: &u32) -> bool {
-    *value == 10
+fn is_default_maximum_half_open_calls(value: &PositiveU32) -> bool {
+    value.get() == 10
 }
 
 fn default_automatic_transition() -> bool {
@@ -979,36 +1005,52 @@ fn is_default_automatic_transition(value: &bool) -> bool {
     !*value
 }
 
-fn default_slow_call_rate_threshold() -> u8 {
-    100
+fn default_slow_call_rate_threshold() -> Percentage {
+    Percentage::new(100).expect("a percentage bound")
 }
 
-fn is_default_slow_call_rate_threshold(value: &u8) -> bool {
-    *value == 100
+fn is_default_slow_call_rate_threshold(value: &Percentage) -> bool {
+    value.get() == 100
 }
 
-fn default_slow_call_duration_threshold_seconds() -> u32 {
-    60
+fn default_slow_call_duration_threshold_seconds() -> PositiveU32 {
+    PositiveU32::new(60).expect("a positive bound")
 }
 
-fn is_default_slow_call_duration_threshold_seconds(value: &u32) -> bool {
-    *value == 60
+fn is_default_slow_call_duration_threshold_seconds(value: &PositiveU32) -> bool {
+    value.get() == 60
 }
 
-fn default_time_period_milliseconds() -> u32 {
-    1000
+fn default_time_period_milliseconds() -> PositiveU32 {
+    PositiveU32::new(1000).expect("a positive bound")
 }
 
-fn is_default_time_period_milliseconds(value: &u32) -> bool {
-    *value == 1000
+fn is_default_time_period_milliseconds(value: &PositiveU32) -> bool {
+    value.get() == 1000
 }
 
-fn default_retry_delay_seconds() -> u32 {
-    1
+fn default_retry_delay_seconds() -> PositiveU32 {
+    PositiveU32::new(1).expect("a positive bound")
 }
 
-fn is_default_retry_delay_seconds(value: &u32) -> bool {
-    *value == 1
+fn is_default_retry_delay_seconds(value: &PositiveU32) -> bool {
+    value.get() == 1
+}
+
+/// The multiplier grows delays; below 1 it shrinks them, and a
+/// non-finite value bounds no delay (CFG-QTY-4).
+fn back_off_multiplier_at_least_one<'de, D>(deserializer: D) -> Result<f64, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = f64::deserialize(deserializer)?;
+    if value.is_finite() && value >= 1.0 {
+        Ok(value)
+    } else {
+        Err(serde::de::Error::custom(
+            "backOffMultiplier expects a finite number of at least 1",
+        ))
+    }
 }
 
 fn default_back_off_multiplier() -> f64 {
@@ -1019,12 +1061,12 @@ fn is_default_back_off_multiplier(value: &f64) -> bool {
     *value == 2.0
 }
 
-fn default_maximum_retry_delay_seconds() -> u32 {
-    60
+fn default_maximum_retry_delay_seconds() -> PositiveU32 {
+    PositiveU32::new(60).expect("a positive bound")
 }
 
-fn is_default_maximum_retry_delay_seconds(value: &u32) -> bool {
-    *value == 60
+fn is_default_maximum_retry_delay_seconds(value: &PositiveU32) -> bool {
+    value.get() == 60
 }
 
 fn default_collision_avoidance_factor() -> f64 {
@@ -1434,14 +1476,14 @@ mod tests {
             panic!("expected a circuitBreaker step");
         };
         // resilience4j defaults, as CONCEPT 8.7 pins them.
-        assert_eq!(breaker.failure_rate_threshold, 50);
-        assert_eq!(breaker.sliding_window_size, 100);
-        assert_eq!(breaker.minimum_number_of_calls, 100);
-        assert_eq!(breaker.open_state_wait_seconds, 60);
-        assert_eq!(breaker.maximum_half_open_calls, 10);
+        assert_eq!(breaker.failure_rate_threshold.get(), 50);
+        assert_eq!(breaker.sliding_window_calls.get(), 100);
+        assert_eq!(breaker.minimum_number_of_calls.get(), 100);
+        assert_eq!(breaker.open_state_wait_seconds.get(), 60);
+        assert_eq!(breaker.maximum_half_open_calls.get(), 10);
         assert!(!breaker.automatic_transition_from_open_to_half_open_enabled);
-        assert_eq!(breaker.slow_call_rate_threshold, 100);
-        assert_eq!(breaker.slow_call_duration_threshold_seconds, 60);
+        assert_eq!(breaker.slow_call_rate_threshold.get(), 100);
+        assert_eq!(breaker.slow_call_duration_threshold_seconds.get(), 60);
         let back = serde_json::to_string(&step).expect("serialize");
         assert_eq!(
             serde_json::from_str::<Step>(&back).ok().as_ref(),
@@ -1449,7 +1491,7 @@ mod tests {
         );
         let plain = serde_json::to_value(&step).expect("serialize");
         assert!(
-            !plain.to_string().contains("slidingWindowSize"),
+            !plain.to_string().contains("slidingWindow"),
             "default members do not serialize"
         );
     }
@@ -1471,7 +1513,7 @@ mod tests {
         let Step::Throttle(throttle) = &step else {
             panic!("expected a throttle step");
         };
-        assert_eq!(throttle.time_period_milliseconds, 1000);
+        assert_eq!(throttle.time_period_milliseconds.get(), 1000);
         assert!(!throttle.reject_execution);
         assert!(
             throttle.mode.is_none(),
@@ -1545,9 +1587,9 @@ mod tests {
             .as_ref()
             .expect("policy");
         assert_eq!(policy.maximum_redeliveries, 3);
-        assert_eq!(policy.retry_delay_seconds, 1);
+        assert_eq!(policy.retry_delay_seconds.get(), 1);
         assert_eq!(policy.back_off_multiplier, 2.0);
-        assert_eq!(policy.maximum_retry_delay_seconds, 60);
+        assert_eq!(policy.maximum_retry_delay_seconds.get(), 60);
         assert_eq!(policy.collision_avoidance_factor, 0.15);
         // Unknown keys inside redeliveryPolicy are refused by the reader
         // (CFG-SCHEMA-8); the platform codes the refusal
@@ -1697,5 +1739,83 @@ mod tests {
             serde_json::from_str::<ResumeBinding>(&json).ok(),
             Some(binding)
         );
+    }
+
+    /// Breaker and throttle quantities carry typed bounds; the reader
+    /// refuses an impossible value instead of accepting it (CFG-QTY-4).
+    #[test]
+    fn breaker_and_throttle_quantities_refuse_out_of_range_values() {
+        let breaker = |key: &str, value: &str| {
+            let document = format!(r#"{{ "steps": [], "{key}": {value} }}"#);
+            serde_json::from_str::<CircuitBreakerStep>(&document)
+        };
+        assert!(breaker("failureRateThreshold", "0").is_err());
+        assert!(breaker("failureRateThreshold", "101").is_err());
+        assert!(breaker("slowCallRateThreshold", "250").is_err());
+        assert!(breaker("minimumNumberOfCalls", "0").is_err());
+        assert!(breaker("slidingWindowCalls", "0").is_err());
+        assert!(breaker("openStateWaitSeconds", "0").is_err());
+        assert!(breaker("maximumHalfOpenCalls", "0").is_err());
+        assert!(breaker("slowCallDurationThresholdSeconds", "0").is_err());
+        assert!(breaker("failureRateThreshold", "50").is_ok());
+        assert!(breaker("slowCallRateThreshold", "100").is_ok());
+
+        let throttle = |key: &str, value: &str| {
+            let document = format!(r#"{{ "limit": {{ "constant": 1 }}, "{key}": {value} }}"#);
+            serde_json::from_str::<ThrottleStep>(&document)
+        };
+        assert!(throttle("timePeriodMilliseconds", "0").is_err());
+        assert!(throttle("timePeriodMilliseconds", "1000").is_ok());
+    }
+
+    /// Redelivery quantities carry typed bounds; the back-off multiplier
+    /// grows delays, so the reader refuses one below 1 (CFG-QTY-4).
+    #[test]
+    fn redelivery_quantities_refuse_out_of_range_values() {
+        let policy = |key: &str, value: &str| {
+            let document = format!(r#"{{ "{key}": {value} }}"#);
+            serde_json::from_str::<RedeliveryOptions>(&document)
+        };
+        assert!(policy("retryDelaySeconds", "0").is_err());
+        assert!(policy("maximumRetryDelaySeconds", "0").is_err());
+        assert!(policy("backOffMultiplier", "0.5").is_err());
+        assert!(policy("backOffMultiplier", "-1.0").is_err());
+        assert!(policy("backOffMultiplier", "\"twice\"").is_err());
+        assert!(policy("retryDelaySeconds", "1").is_ok());
+        assert!(policy("backOffMultiplier", "2.0").is_ok());
+    }
+
+    /// The window names its unit; the window counts calls
+    /// (CFG-NAME-4). The old `slidingWindowSize` key is gone.
+    #[test]
+    fn breaker_window_names_its_unit() {
+        let breaker: CircuitBreakerStep =
+            serde_json::from_str(r#"{ "slidingWindowCalls": 20 }"#).expect("parse");
+        assert_eq!(breaker.sliding_window_calls.get(), 20);
+        let json = serde_json::to_value(&breaker).expect("serialize");
+        assert_eq!(json["slidingWindowCalls"], 20);
+        assert!(json.get("slidingWindowSize").is_none());
+    }
+
+    /// Typed defaults stay off the wire: the reader accepts an empty
+    /// mapping, and the defaults do not serialize (CFG-QTY-4).
+    #[test]
+    fn breaker_and_throttle_defaults_stay_off_the_wire() {
+        let breaker: CircuitBreakerStep = serde_json::from_str("{}").expect("parse");
+        assert_eq!(breaker.failure_rate_threshold.get(), 50);
+        assert_eq!(breaker.sliding_window_calls.get(), 100);
+        assert_eq!(
+            serde_json::to_value(&breaker).expect("serialize"),
+            serde_json::json!({})
+        );
+        let throttle: ThrottleStep =
+            serde_json::from_str(r#"{ "limit": { "constant": 5 } }"#).expect("parse");
+        assert_eq!(throttle.time_period_milliseconds.get(), 1000);
+        let json = serde_json::to_value(&throttle).expect("serialize");
+        assert!(json.get("timePeriodMilliseconds").is_none());
+        let policy: RedeliveryOptions = serde_json::from_str("{}").expect("parse");
+        assert_eq!(policy.retry_delay_seconds.get(), 1);
+        assert_eq!(policy.maximum_retry_delay_seconds.get(), 60);
+        assert_eq!(policy.back_off_multiplier, 2.0);
     }
 }

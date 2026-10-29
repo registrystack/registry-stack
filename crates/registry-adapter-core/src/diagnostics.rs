@@ -56,8 +56,10 @@ pub enum CheckCode {
     // adapter.route.*
     RouteDirectCycle,
     RouteDirectDepthExceeded,
+    RouteEmptyExceptionList,
     RouteErrorHandlerShape,
     RouteFromNotDirect,
+    RouteHandledAndContinued,
     RouteLoopCountAboveBound,
     RouteMaximumItemsRequired,
     RouteMaximumIterationsRequired,
@@ -115,8 +117,10 @@ impl CheckCode {
         Self::ProjectUpstreamBudgetExceeded,
         Self::RouteDirectCycle,
         Self::RouteDirectDepthExceeded,
+        Self::RouteEmptyExceptionList,
         Self::RouteErrorHandlerShape,
         Self::RouteFromNotDirect,
+        Self::RouteHandledAndContinued,
         Self::RouteLoopCountAboveBound,
         Self::RouteMaximumItemsRequired,
         Self::RouteMaximumIterationsRequired,
@@ -179,8 +183,10 @@ impl CheckCode {
             Self::ProjectUpstreamBudgetExceeded => "adapter.project.upstream-budget-exceeded",
             Self::RouteDirectCycle => "adapter.route.direct-cycle",
             Self::RouteDirectDepthExceeded => "adapter.route.direct-depth-exceeded",
+            Self::RouteEmptyExceptionList => "adapter.route.empty-exception-list",
             Self::RouteErrorHandlerShape => "adapter.route.error-handler-shape",
             Self::RouteFromNotDirect => "adapter.route.from-not-direct",
+            Self::RouteHandledAndContinued => "adapter.route.handled-and-continued",
             Self::RouteLoopCountAboveBound => "adapter.route.loop-count-above-bound",
             Self::RouteMaximumItemsRequired => "adapter.route.maximum-items-required",
             Self::RouteMaximumIterationsRequired => "adapter.route.maximum-iterations-required",
@@ -235,8 +241,10 @@ impl CheckCode {
             | Self::PackUnknownTemplateParameter
             | Self::RouteDirectCycle
             | Self::RouteDirectDepthExceeded
+            | Self::RouteEmptyExceptionList
             | Self::RouteErrorHandlerShape
             | Self::RouteFromNotDirect
+            | Self::RouteHandledAndContinued
             | Self::RouteLoopCountAboveBound
             | Self::RouteMaximumItemsRequired
             | Self::RouteMaximumIterationsRequired
