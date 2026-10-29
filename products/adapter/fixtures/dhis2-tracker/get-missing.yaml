@@ -1,0 +1,43 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/fixture/fixture.v1alpha1.schema.json
+#
+# Documented fixture (NOT captured): the source's hard not-found answer.
+# The tracker API answers a GET for an absent tracked entity with 404, and
+# DHIS2 writes every error body in its consistent web API envelope
+# (httpStatus, httpStatusCode, status, message; DHIS2 documentation,
+# "Introduction", Error and info messages, which shows the format on a
+# 403). The tracker page itself documents no 404 body, so the message
+# text here is reconstructed from that envelope. The pack's
+# not-found clause maps exactly this answer (upstream.http narrowed by
+# scripts/is-not-found.rhai) to the facade's not-found problem; other
+# upstream HTTP outcomes map to source.upstream-error.
+apiVersion: id.registrystack.org/formats/adapter/fixture/v1alpha1
+kind: AdapterFixture
+id: dhis2-tracker-get-missing
+pack: dhis2-tracker
+upstreamVersion: "2.41"
+provenance:
+  kind: documented
+  reference: https://docs.dhis2.org/en/develop/using-the-api/dhis-core-version-241/introduction.html
+intercepts:
+  - kind: endpoint
+    endpoint: tracker
+entries:
+  - operation: records.get
+    given:
+      endpoint: tracker
+      method: GET
+      path: /api/tracker/trackedEntities/Uid00000004
+    upstreamResponse:
+      status: 404
+      body:
+        httpStatus: Not Found
+        httpStatusCode: 404
+        status: ERROR
+        message: The requested tracked entity does not exist.
+    expectedFacadeResponse:
+      status: 404
+      body:
+        type: https://id.registrystack.org/problems/registry-adapter/source.not-found
+        title: No record with that identifier exists at the source.
+        status: 404
+        code: source.not-found

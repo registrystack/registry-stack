@@ -76,7 +76,7 @@ routeTemplates:
         type: string
         required: true
         description: The DHIS2 program the search narrows to.
-      - name: pageSize
+      - name: page_size
         type: integer
         defaultValue: 50
         description: The DHIS2 page size each loop iteration fetches (DHIS2 default 50).
@@ -120,7 +120,7 @@ routeTemplates:
       - onException:
           exception:
             - upstream.malformed
-            - upstream.tooLarge
+            - upstream.too-large
             - script
           handled: true
           steps:
@@ -142,7 +142,7 @@ routeTemplates:
       - setProperty:
           name: dhis2PageSize
           value:
-            constant: "{{pageSize}}"
+            constant: "{{page_size}}"
       - setProperty:
           name: dhis2Page
           value:
@@ -157,10 +157,10 @@ routeTemplates:
             - enrich:
                 uri: direct:fetchPage
                 aggregationStrategy:
-                  jsonArrayAppend:
-                    from: pages
-                    into: records
-                    uniqueBy: trackedEntity
+                  type: json-array-append
+                  from: pages
+                  into: records
+                  uniqueBy: trackedEntity
             - setProperty:
                 name: dhis2Page
                 value:
@@ -177,6 +177,10 @@ routeTemplates:
       - onException:
           exception:
             - upstream.http
+          onWhen:
+            rhai:
+              file: scripts/is-not-found.rhai
+              entrypoint: is_not_found
           handled: true
           steps:
             - setBody:
@@ -189,6 +193,22 @@ routeTemplates:
                 name: CamelHttpResponseCode
                 value:
                   constant: 404
+            - stop: {}
+      - onException:
+          exception:
+            - upstream.http
+          handled: true
+          steps:
+            - setBody:
+                constant:
+                  type: https://id.registrystack.org/problems/registry-adapter/source.upstream-error
+                  title: The source refused the lookup.
+                  status: 502
+                  code: source.upstream-error
+            - setHeader:
+                name: CamelHttpResponseCode
+                value:
+                  constant: 502
             - stop: {}
       - onException:
           exception:
@@ -213,7 +233,7 @@ routeTemplates:
       - onException:
           exception:
             - upstream.malformed
-            - upstream.tooLarge
+            - upstream.too-large
             - script
           handled: true
           steps:
@@ -305,7 +325,7 @@ routeTemplates:
       - onException:
           exception:
             - upstream.malformed
-            - upstream.tooLarge
+            - upstream.too-large
             - script
             - validation
             - conversion.unmapped
@@ -411,10 +431,12 @@ scripts:
     digest: sha256:90c9a587cc85b1955e8132b13e2ec039036854d4f5b188ed62f5df2e0f1a171d
   - path: scripts/soft-deleted.rhai
     digest: sha256:747885f0e440c1d5eec9e2ae94fe4b96a55dbb6b97e6399dd3fa6e6584715de7
+  - path: scripts/is-not-found.rhai
+    digest: sha256:8e47e278aa244e57be9815e89b78e81664ddd763bb74d216d201879b845f1967
   - path: scripts/to-record.rhai
     digest: sha256:061f1f3202de34cebc29175bce58f49709addd9426b861ed33f87ffa3453e2c8
   - path: scripts/shape-records.rhai
-    digest: sha256:41f58444a46b965555a58dbe52a03e3ee7fdf736041a63af5a604fccce2f8382
+    digest: sha256:a524b60f101ef0572e3a2105340cd576a91cf17e8735ab1a19c1ad8f6f37b857
   - path: scripts/to-bundle.rhai
     digest: sha256:22d57870ac395d6a62587454da018dc0240e29f247185741498be04b35a956df
   - path: scripts/import-failed.rhai

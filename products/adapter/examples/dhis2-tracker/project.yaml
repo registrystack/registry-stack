@@ -24,7 +24,8 @@
 #     --fixtures products/adapter/fixtures/dhis2-tracker/get-found.yaml \
 #     --fixtures products/adapter/fixtures/dhis2-tracker/get-soft-deleted.yaml \
 #     --fixtures products/adapter/fixtures/dhis2-tracker/import-accepted.yaml \
-#     --fixtures products/adapter/fixtures/dhis2-tracker/import-error-200.yaml
+#     --fixtures products/adapter/fixtures/dhis2-tracker/import-error-200.yaml \
+#     --fixtures products/adapter/fixtures/dhis2-tracker/get-missing.yaml
 apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
 kind: AdapterProject
 id: dhis2-tracker-example
@@ -35,7 +36,7 @@ profile:
 pack:
   id: dhis2-tracker
   version: "1"
-  digest: sha256:ba088670b732b402d73b912da1f4fe2ef071cdeb1e1f0b512148a20a62afb03d
+  digest: sha256:012045ea17eb59a3e5bce372d0b1243ac981b41491dad88b1638c29fa2ff7247
 recordTypes:
   - name: person
     fields:
@@ -50,14 +51,14 @@ recordTypes:
       - name: updated_at
         type: date-time
 templatedRoutes:
-  - routeTemplateRef: searchTrackedEntities
+  - routeTemplate: searchTrackedEntities
     routeId: personSearch
     parameters:
       program: qyVpUaAYv2A
-      pageSize: 50
-  - routeTemplateRef: fetchTrackedEntity
+      page_size: 50
+  - routeTemplate: fetchTrackedEntity
     routeId: personFetch
-  - routeTemplateRef: importTrackedEntity
+  - routeTemplate: importTrackedEntity
     routeId: personImport
 bindings:
   - id: person-search
