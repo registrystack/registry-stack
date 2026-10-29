@@ -103,6 +103,45 @@ work; an external webhook failure cannot roll back the registry transaction.
 Use the [durable webhook receiver](examples/webhook-receiver/README.md) when an
 adopting service needs durable acceptance and deduplication.
 
+### Compare a stored field with an input
+
+A field guard on a reference input compares the target's stored field with a
+literal (`equals`, or an integer `atLeast` or `atMost`) or with a declared
+Action input, so the caller never echoes the stored value back:
+
+```yaml
+commitGuards:
+  targets:
+    - {input: case, field: opened-at, atMostFromInput: assigned-at}
+    - {input: case, field: expires-on, atLeastFromInput: assigned-on}
+inputs:
+  - {id: assigned-at, type: timestamp, required: true, classification: internal}
+  - {id: assigned-on, type: date, required: true, classification: internal}
+```
+
+`equalsFromInput`, `atLeastFromInput`, and `atMostFromInput` each name one
+declared input; a guard carries exactly one comparison. The stored field is the
+subject, and both bounds are inclusive: `atMostFromInput` passes when the stored
+value is less than or equal to the input, and `atLeastFromInput` when it is
+greater than or equal to it. The two ordered keys accept `int64`, `date`, and
+`timestamp` fields only, and the input must be a `required` input of the same
+type. `bregctl check` refuses a pairing of different types, a field with no
+order (such as `string` or `decimal`), an undeclared input, and an optional
+input (`breg.action.commit_guards.targets-value-invalid`). A missing input
+therefore never reaches a guard at commit, and an availability check that lacks
+it answers `input-required` with `missingInputs`, as for `equalsFromInput`.
+The comparisons use no new operators or expressions.
+
+Dates compare as calendar dates and timestamps compare as instants, not as
+text, so `2026-10-30T10:00:00Z`, `2026-10-30T10:00:00+00:00`, and
+`2026-10-30T12:00:00+02:00` are the same instant. A stored `timestamp` is an
+instant that the registry reads back in UTC with a `+00:00` offset (see
+[event records](event-records.md)); a client never needs to match that text. A
+stored value that is absent fails the guard, so an unset optional field is
+never at least or at most any input. A failed guard answers like any other
+field guard: `412 action.guard_failed` when the guard facts are readable, else
+`412 precondition.failed`, with no record changed.
+
 ### Check one target's advisory availability
 
 An immediate Action with at least one reference input advertises one

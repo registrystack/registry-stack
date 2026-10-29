@@ -118,13 +118,13 @@ pub(super) async fn observe(
     let today = time::OffsetDateTime::now_utc().date().to_string();
     let mut missing = BTreeSet::new();
     for guard in guards {
-        if let Some(input_id) = &guard.equals_input {
+        if let Some(input_id) = guard.compared_input() {
             if !input.contains_key(input_id) {
                 let declared = action
                     .action
                     .inputs
                     .iter()
-                    .find(|input| input.id == *input_id)
+                    .find(|input| input.id == input_id)
                     .ok_or_else(unavailable)?;
                 missing.insert(declared.api_name.clone());
                 continue;

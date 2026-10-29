@@ -97,6 +97,115 @@ fn action_requirements_can_compare_a_target_field_to_a_typed_action_input() {
     );
 }
 
+/// A project whose parent stores one ordered field of each kind and whose
+/// action takes a required input of each kind.
+fn ordered_guard_project() -> Value {
+    let mut source = support::project();
+    let fields = source["recordTypes"][0]["fields"].as_array_mut().unwrap();
+    for (id, kind) in [
+        ("opened-on", "date"),
+        ("opened-at", "timestamp"),
+        ("quota", "int64"),
+    ] {
+        fields.push(json!({"id": id, "type": kind, "classification": "restricted"}));
+    }
+    let inputs = source["actions"][0]["inputs"].as_array_mut().unwrap();
+    for (id, kind) in [("on", "date"), ("at", "timestamp"), ("limit", "int64")] {
+        inputs.push(
+            json!({"id": id, "type": kind, "required": true, "classification": "restricted"}),
+        );
+    }
+    source["actions"][0]["commitGuards"]["targets"] = json!([]);
+    source
+}
+
+fn ordered_guard(source: &mut Value, field: &str, key: &str, input: &str) {
+    source["actions"][0]["commitGuards"]["targets"] =
+        json!([{"input": "parent", "field": field, key: input}]);
+}
+
+#[test]
+fn action_requirements_can_order_a_target_field_against_a_typed_action_input() {
+    for (field, input) in [("opened-on", "on"), ("opened-at", "at"), ("quota", "limit")] {
+        let mut source = ordered_guard_project();
+        ordered_guard(&mut source, field, "atMostFromInput", input);
+        let registry = compile(source.clone()).unwrap();
+        let requirement = &registry.actions().actions[0].requires[0];
+        assert_eq!(requirement.field, field);
+        assert_eq!(requirement.at_most_input.as_deref(), Some(input));
+        assert_eq!(requirement.at_least_input, None);
+        assert_eq!(requirement.equals, None);
+
+        ordered_guard(&mut source, field, "atLeastFromInput", input);
+        let registry = compile(source).unwrap();
+        let requirement = &registry.actions().actions[0].requires[0];
+        assert_eq!(requirement.at_least_input.as_deref(), Some(input));
+        assert_eq!(requirement.at_most_input, None);
+    }
+}
+
+#[test]
+fn the_action_fingerprint_binds_the_direction_and_input_of_an_ordered_guard() {
+    let revision = |field: &str, key: &str, input: &str| {
+        let mut source = ordered_guard_project();
+        ordered_guard(&mut source, field, key, input);
+        compile(source).unwrap().actions().actions[0]
+            .definition_revision
+            .clone()
+    };
+    let at_most = revision("opened-on", "atMostFromInput", "on");
+    assert_ne!(at_most, revision("opened-on", "atLeastFromInput", "on"));
+    assert_ne!(at_most, revision("opened-at", "atMostFromInput", "at"));
+    assert_eq!(at_most, revision("opened-on", "atMostFromInput", "on"));
+}
+
+#[test]
+fn ordered_input_guards_refuse_mismatched_types_unordered_fields_and_unusable_inputs() {
+    let invalid = "breg.action.commit_guards.targets-value-invalid";
+    for key in ["atLeastFromInput", "atMostFromInput"] {
+        for (field, input) in [
+            // A date field against an instant input, and the reverse.
+            ("opened-on", "at"),
+            ("opened-at", "on"),
+            // An integer field against a date input.
+            ("quota", "on"),
+            // A string field has no order, even against a string input.
+            ("zone", "label"),
+            // An undeclared input.
+            ("opened-on", "undeclared-input-canary"),
+        ] {
+            let mut source = ordered_guard_project();
+            ordered_guard(&mut source, field, key, input);
+            let report = format!("{:?}", compile(source).unwrap_err());
+            assert!(report.contains(invalid), "{field} {input}: {report}");
+            assert!(
+                !report.contains("canary"),
+                "diagnostics must not echo source values"
+            );
+        }
+
+        // An optional input may be absent, so a guard cannot rest on it.
+        let mut source = ordered_guard_project();
+        source["actions"][0]["inputs"][2]["required"] = json!(false);
+        ordered_guard(&mut source, "opened-on", key, "on");
+        assert!(format!("{:?}", compile(source).unwrap_err()).contains(invalid));
+
+        // One comparison per guard.
+        let mut source = ordered_guard_project();
+        ordered_guard(&mut source, "opened-on", key, "on");
+        source["actions"][0]["commitGuards"]["targets"][0]["equalsFromInput"] = json!("on");
+        assert!(format!("{:?}", compile(source).unwrap_err()).contains(invalid));
+        let mut source = ordered_guard_project();
+        ordered_guard(&mut source, "opened-on", key, "on");
+        source["actions"][0]["commitGuards"]["targets"][0]["atLeast"] = json!(1);
+        assert!(format!("{:?}", compile(source).unwrap_err()).contains(invalid));
+    }
+    let mut source = ordered_guard_project();
+    ordered_guard(&mut source, "opened-on", "atLeastFromInput", "on");
+    source["actions"][0]["commitGuards"]["targets"][0]["atMostFromInput"] = json!("on");
+    assert!(format!("{:?}", compile(source).unwrap_err()).contains(invalid));
+}
+
 #[test]
 fn action_inputs_can_narrow_a_target_vocabulary_for_values_and_requirements() {
     let mut source = support::project();

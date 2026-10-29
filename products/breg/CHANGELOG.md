@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Add `atLeastFromInput` and `atMostFromInput` Action commit guard keys beside
+  `equalsFromInput`. A guard compares a stored `int64`, `date`, or `timestamp`
+  field with a required Action input of the same type, with inclusive bounds,
+  so a caller no longer copies the stored value into a hidden input. Dates
+  compare as dates and timestamps as instants, so `Z` and `+00:00` spellings of
+  one instant are equal. `bregctl check` refuses mismatched types, fields with no
+  order, undeclared inputs, and optional inputs. A failed guard keeps the
+  existing `412` guard refusal. See [immediate Actions](immediate-actions.md).
 - Allow an optional native `pattern` on `string` and `text` Action inputs, in
   the dialect and with the bounds of a Record field `pattern`. A submitted value
   that does not match is refused with HTTP 400 `request.invalid` naming the

@@ -1093,6 +1093,8 @@ fn compile_requirements(
                 || requirement.at_least.is_some()
                 || requirement.at_most.is_some()
                 || requirement.current_date.is_some()
+                || requirement.at_least_from_input.is_some()
+                || requirement.at_most_from_input.is_some()
             {
                 errors.push(Diagnostic::error(
                     "breg.action.guard-revision-invalid",
@@ -1111,6 +1113,8 @@ fn compile_requirements(
                     at_least: None,
                     at_most: None,
                     current_date: None,
+                    at_least_input: None,
+                    at_most_input: None,
                 });
             }
             continue;
@@ -1139,7 +1143,9 @@ fn compile_requirements(
             + usize::from(requirement.equals_input.is_some())
             + usize::from(requirement.at_least.is_some())
             + usize::from(requirement.at_most.is_some())
-            + usize::from(requirement.current_date.is_some());
+            + usize::from(requirement.current_date.is_some())
+            + usize::from(requirement.at_least_from_input.is_some())
+            + usize::from(requirement.at_most_from_input.is_some());
         let literal = requirement.literal();
         let literal_invalid = literal.as_ref().is_some_and(|equals| {
             equals.is_array()
@@ -1163,7 +1169,20 @@ fn compile_requirements(
                     || !compatible_field_types(&expected.field_type, &field.field_type)
             })
         });
+        let ordered_input_invalid = requirement
+            .at_least_from_input
+            .as_ref()
+            .or(requirement.at_most_from_input.as_ref())
+            .is_some_and(|input_id| {
+                !matches!(
+                    field.field_type,
+                    FieldTypeSource::Int64 | FieldTypeSource::Date | FieldTypeSource::Timestamp
+                ) || inputs
+                    .get(input_id.as_str())
+                    .is_none_or(|bound| !bound.required || bound.field_type != field.field_type)
+            });
         if choices != 1
+            || ordered_input_invalid
             || matches!(
                 field.field_type,
                 FieldTypeSource::Structured { .. } | FieldTypeSource::Crs84Point { .. }
@@ -1177,7 +1196,7 @@ fn compile_requirements(
             errors.push(Diagnostic::error(
                 "breg.action.commit_guards.targets-value-invalid",
                 "actions[].commitGuards.targets[]",
-                "a guard declares one typed equality, null check, input equality, integer bound, or current-date comparison",
+                "a guard declares one typed equality, null check, input equality, integer bound, current-date comparison, or ordered comparison with a required input of the same date, instant, or integer type",
             ));
             continue;
         }
@@ -1199,6 +1218,8 @@ fn compile_requirements(
                     crate::model::CompiledCurrentDateRelation::OnOrBefore
                 }
             }),
+            at_least_input: requirement.at_least_from_input.clone(),
+            at_most_input: requirement.at_most_from_input.clone(),
         });
     }
     compiled.sort_by(|left, right| (&left.input, &left.field).cmp(&(&right.input, &right.field)));

@@ -565,6 +565,22 @@ pub struct CompiledCommitGuard {
     pub at_least: Option<i64>,
     pub at_most: Option<i64>,
     pub current_date: Option<CompiledCurrentDateRelation>,
+    /// Keeps the stored field at or above the named action input.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at_least_input: Option<String>,
+    /// Keeps the stored field at or below the named action input.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at_most_input: Option<String>,
+}
+
+impl CompiledCommitGuard {
+    /// The action input this guard compares the stored field with, if any.
+    pub fn compared_input(&self) -> Option<&str> {
+        self.equals_input
+            .as_deref()
+            .or(self.at_least_input.as_deref())
+            .or(self.at_most_input.as_deref())
+    }
 }
 
 /// The compiled action-handler backend tag, owned by the handler alone. A

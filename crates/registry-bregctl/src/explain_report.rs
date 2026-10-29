@@ -145,8 +145,14 @@ pub(crate) fn actions(value: &Value, lines: &mut Lines) {
         }
         for guard in items(&action["commitGuards"]) {
             let mut terms = Vec::new();
-            if let Some(input) = guard["equalsInput"].as_str() {
-                terms.push(format!("equals input {input}"));
+            for (key, label) in [
+                ("equalsInput", "equals input"),
+                ("atLeastInput", "at least input"),
+                ("atMostInput", "at most input"),
+            ] {
+                if let Some(input) = guard[key].as_str() {
+                    terms.push(format!("{label} {input}"));
+                }
             }
             if guard["revisionUnchanged"] == true {
                 terms.push("revision unchanged".into());

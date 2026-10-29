@@ -301,6 +301,139 @@ async fn action_input_equality_is_authorized_atomic_and_replayed_from_the_receip
     database.cleanup().await;
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn ordered_input_guards_compare_dates_and_instants_against_stored_fields() {
+    let mut source = with_parent_get(
+        support::project(),
+        &["status", "zone", "opened-on", "opened-at", "expires-on"],
+    );
+    let fields = source["recordTypes"][0]["fields"].as_array_mut().unwrap();
+    for (id, kind) in [
+        ("opened-on", "date"),
+        ("opened-at", "timestamp"),
+        ("expires-on", "date"),
+    ] {
+        fields.push(json!({"id": id, "type": kind, "classification": "restricted"}));
+    }
+    let inputs = source["actions"][0]["inputs"].as_array_mut().unwrap();
+    for (id, api_name, kind) in [
+        ("assigned-on", "assignedOn", "date"),
+        ("assigned-at", "assignedAt", "timestamp"),
+    ] {
+        inputs.push(json!({
+            "id": id, "apiName": api_name, "type": kind, "required": true,
+            "classification": "restricted"
+        }));
+    }
+    source["actions"][0]["commitGuards"]["targets"] = json!([
+        {"input": "parent", "field": "opened-on", "atMostFromInput": "assigned-on"},
+        {"input": "parent", "field": "opened-at", "atMostFromInput": "assigned-at"},
+        {"input": "parent", "field": "expires-on", "atLeastFromInput": "assigned-on"}
+    ]);
+    let (database, registry, identity) = setup_with_project(source).await;
+    let parent = &registry.entities()["parent"];
+    database
+        .admin
+        .execute(
+            &format!(
+                "UPDATE registry_data.{} SET {} = DATE '2026-10-30', {} = TIMESTAMPTZ '2026-10-30 10:00:00+00', {} = DATE '2026-11-30' WHERE record_id = $1",
+                q(&parent.physical_table),
+                q(&parent.fields["opened-on"].physical_name),
+                q(&parent.fields["opened-at"].physical_name),
+                q(&parent.fields["expires-on"].physical_name),
+            ),
+            &[&Uuid::parse_str(ID).unwrap()],
+        )
+        .await
+        .unwrap();
+    let app = app(&database, registry.clone(), identity, None);
+    let body = |assigned_on: &str, assigned_at: &str| {
+        json!({
+            "parentId": ID, "label": "synthetic",
+            "assignedOn": assigned_on, "assignedAt": assigned_at
+        })
+    };
+
+    // The stored instant is 10:00:00 UTC. The same instant written with a
+    // different offset is not later than it, so both spellings are accepted.
+    let zulu = invoke_with_input(
+        app.clone(),
+        "ordered-zulu",
+        body("2026-10-30", "2026-10-30T10:00:00Z"),
+    )
+    .await;
+    assert_eq!(zulu.0, StatusCode::OK, "{}", zulu.1);
+    let offset = invoke_with_input(
+        app.clone(),
+        "ordered-offset",
+        body("2026-10-30", "2026-10-30T10:00:00+00:00"),
+    )
+    .await;
+    assert_eq!(offset.0, StatusCode::OK, "{}", offset.1);
+    let shifted = invoke_with_input(
+        app.clone(),
+        "ordered-shifted",
+        body("2026-11-30", "2026-10-30T12:00:00+02:00"),
+    )
+    .await;
+    assert_eq!(shifted.0, StatusCode::OK, "{}", shifted.1);
+    let accepted = counts(&database, &registry).await;
+    assert_eq!(accepted[0], 3);
+
+    // Each refusal breaks exactly one guard and leaves no trace. The offset
+    // case would pass a text comparison (`10:59:59` sorts after `10:00:00`)
+    // but is 09:59:59 UTC.
+    for (key, assigned_on, assigned_at) in [
+        ("instant-earlier", "2026-10-30", "2026-10-30T09:59:59Z"),
+        (
+            "instant-earlier-with-offset",
+            "2026-10-30",
+            "2026-10-30T10:59:59+01:00",
+        ),
+        ("date-earlier", "2026-10-29", "2026-10-30T10:00:00Z"),
+        ("date-later", "2026-12-01", "2026-10-30T10:00:00Z"),
+    ] {
+        let refused = invoke_with_input(app.clone(), key, body(assigned_on, assigned_at)).await;
+        assert_eq!(
+            refused.0,
+            StatusCode::PRECONDITION_FAILED,
+            "{key}: {}",
+            refused.1
+        );
+        assert_eq!(refused.1["code"], "action.guard_failed", "{key}");
+        assert_eq!(accepted, counts(&database, &registry).await, "{key}");
+    }
+
+    let available = availability(
+        app.clone(),
+        json!({"parentId": ID, "assignedOn": "2026-10-30", "assignedAt": "2026-10-30T10:00:00+00:00"}),
+    )
+    .await;
+    assert_eq!(
+        available.1,
+        json!({"availability":{"available":true,"observedRevision":1}})
+    );
+    let unavailable = availability(
+        app.clone(),
+        json!({"parentId": ID, "assignedOn": "2026-10-30", "assignedAt": "2026-10-30T09:00:00Z"}),
+    )
+    .await;
+    assert_eq!(unavailable.0, StatusCode::OK, "{}", unavailable.1);
+    assert_eq!(unavailable.1["availability"]["available"], false);
+    let missing = availability(app, json!({"parentId": ID, "assignedOn": "2026-10-30"})).await;
+    assert_eq!(missing.0, StatusCode::OK, "{}", missing.1);
+    assert_eq!(
+        missing.1["availability"]["reason"], "input-required",
+        "{}",
+        missing.1
+    );
+    assert_eq!(
+        missing.1["availability"]["missingInputs"],
+        json!(["assignedAt"])
+    );
+    database.cleanup().await;
+}
+
 fn with_parent_get(source: Value, readable_fields: &[&str]) -> Value {
     with_parent_get_boundaries(
         source,
