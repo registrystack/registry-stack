@@ -4388,7 +4388,7 @@ fn validate_entity_fields(
                     &path,
                     "pattern requires a persisted string or text field",
                 ));
-            } else if pattern.len() > 4096 || pattern.contains('\0') {
+            } else if !native_pattern_within_bounds(pattern) {
                 errors.push(Diagnostic::error("breg.field.pattern-bounds-invalid", &path,
                     "PostgreSQL pattern must be at most 4096 UTF-8 bytes and contain no NUL; syntax is validated by PostgreSQL schema-test"));
             }
@@ -4904,6 +4904,12 @@ fn validate_logical_names(entity: &EntitySource, errors: &mut Vec<Diagnostic>) {
             ));
         }
     }
+}
+
+/// Whether a native PostgreSQL pattern fits the authored bounds shared by Record
+/// fields and Action inputs. Syntax is PostgreSQL's to judge, not the compiler's.
+pub(crate) fn native_pattern_within_bounds(pattern: &str) -> bool {
+    pattern.len() <= 4096 && !pattern.contains('\0')
 }
 
 fn validate_field_type_bounds(

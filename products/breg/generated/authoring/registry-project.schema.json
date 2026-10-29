@@ -669,6 +669,10 @@
             "id": {
               "$ref": "#/$defs/LocalId"
             },
+            "pattern": {
+              "description": "Native PostgreSQL ARE expression the submitted string must match, in the\ndialect and with the bounds of a Record field `pattern`.",
+              "type": "string"
+            },
             "required": {
               "default": false,
               "type": "boolean"
@@ -695,6 +699,9 @@
             },
             "id": {
               "$ref": "#/$defs/LocalId"
+            },
+            "pattern": {
+              "type": "string"
             },
             "required": {
               "default": false,

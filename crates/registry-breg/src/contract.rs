@@ -2283,6 +2283,10 @@ pub struct ActionInputSource {
     pub api_name: Option<String>,
     #[serde(flatten)]
     pub field_type: FieldTypeSource,
+    /// Native PostgreSQL ARE expression the submitted string must match, in the
+    /// dialect and with the bounds of a Record field `pattern`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pattern: Option<String>,
     #[serde(default)]
     pub required: bool,
     pub classification: Classification,
@@ -2297,15 +2301,14 @@ impl<'de> Deserialize<'de> for ActionInputSource {
     {
         let raw = RawFieldSource::deserialize(deserializer)?;
         if raw.valid_time_role.is_some()
-            || raw.pattern.is_some()
             || raw.encrypted.is_some()
             || raw.lookup.is_some()
             || raw.generate.is_some()
             || raw.relationship.is_some()
         {
             return Err(Invalid::expected(
-                "an action input without validTimeRole, pattern, encrypted, lookup, or generate",
-                "Remove validTimeRole, pattern, encrypted, lookup, and generate from the action input.",
+                "an action input without validTimeRole, encrypted, lookup, or generate",
+                "Remove validTimeRole, encrypted, lookup, and generate from the action input.",
             )
             .into_error());
         }
@@ -2314,6 +2317,7 @@ impl<'de> Deserialize<'de> for ActionInputSource {
             id: raw.id,
             api_name: raw.api_name,
             field_type,
+            pattern: raw.pattern,
             required: raw.required,
             classification: raw.classification,
             display: raw.display,

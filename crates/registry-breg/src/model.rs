@@ -622,6 +622,9 @@ pub struct CompiledActionInput {
     pub id: String,
     pub api_name: String,
     pub field_type: FieldTypeSource,
+    /// Native PostgreSQL ARE expression a submitted string value must match.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pattern: Option<String>,
     pub required: bool,
     pub classification: Classification,
     #[serde(default)]

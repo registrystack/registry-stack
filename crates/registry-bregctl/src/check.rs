@@ -884,19 +884,34 @@ pub(super) fn compiler_diagnostic(diagnostic: registry_breg::Diagnostic) -> Diag
 
 /// A native pattern is checked offline for its structure and bounds only.
 fn unverified_patterns(compiled: &CompiledRegistry) -> Vec<registry_breg::Diagnostic> {
-    compiled
-        .entities()
-        .values()
-        .flat_map(|entity| {
-            entity.fields.values().filter_map(move |field| {
-                field.pattern.as_ref().map(|_| registry_breg::Diagnostic {
-                    severity: DiagnosticSeverity::Finding,
-                    code: "breg.field.pattern-unverified-offline".to_owned(),
-                    path: format!("recordTypes[{}].fields[{}].pattern", entity.id, field.id),
-                    message: "Offline check validates pattern structure and bounds only. Run bregctl test against disposable PostgreSQL to verify native pattern syntax and storage behavior.".to_owned(),
-                    related: Vec::new(),
-                })
+    let record_fields = compiled.entities().values().flat_map(|entity| {
+        entity.fields.values().filter_map(move |field| {
+            field.pattern.as_ref().map(|_| {
+                (
+                    "breg.field.pattern-unverified-offline",
+                    format!("recordTypes[{}].fields[{}].pattern", entity.id, field.id),
+                )
             })
+        })
+    });
+    let action_inputs = compiled.actions().actions.iter().flat_map(|action| {
+        action.inputs.iter().filter_map(move |input| {
+            input.pattern.as_ref().map(|_| {
+                (
+                    "breg.action.input-pattern-unverified-offline",
+                    format!("actions[{}].inputs[{}].pattern", action.id, input.id),
+                )
+            })
+        })
+    });
+    record_fields
+        .chain(action_inputs)
+        .map(|(code, path)| registry_breg::Diagnostic {
+            severity: DiagnosticSeverity::Finding,
+            code: code.to_owned(),
+            path,
+            message: "Offline check validates pattern structure and bounds only. Run bregctl test against disposable PostgreSQL to verify native pattern syntax and storage behavior.".to_owned(),
+            related: Vec::new(),
         })
         .collect()
 }
@@ -1646,7 +1661,9 @@ fn without_values(path: &str) -> String {
 
 fn action_for(code: &str, severity: Severity) -> &'static str {
     match code {
-        "breg.field.pattern-unverified-offline" => RUN_SCHEMA_TEST,
+        "breg.field.pattern-unverified-offline" | "breg.action.input-pattern-unverified-offline" => {
+            RUN_SCHEMA_TEST
+        }
         "breg.package.migration-statement-capacity" => REDUCE_MIGRATION_STATEMENTS,
         "breg.module.lock-digest-missing"
         | "breg.module.lock-digest-required"

@@ -399,6 +399,55 @@ fn check_reports_native_patterns_as_unverified_until_postgres_schema_test() {
 }
 
 #[test]
+fn check_reports_action_input_patterns_as_unverified_until_postgres_schema_test() {
+    let fixture =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../products/breg/examples/facility");
+    let source = fs::read_to_string(fixture.join("registry.yaml"))
+        .expect("facility source reads")
+        .replace(
+            "{id: postal-code, apiName: postalCode, typeRef: postal-code, required: true,",
+            "{id: postal-code, apiName: postalCode, typeRef: postal-code, pattern: '[action-pattern-expression-canary', required: true,",
+        );
+    let project = TestProject::from_registry_source(source.as_bytes());
+    fs::create_dir(project.path().join("plans")).expect("plans directory is created");
+    fs::copy(
+        fixture.join("plans/correct-address.rhai"),
+        project.path().join("plans/correct-address.rhai"),
+    )
+    .expect("plan source is copied");
+
+    let output = bregctl(&["--format", "json", "check", path(project.path())]);
+    assert!(output.status.success(), "{output:?}");
+    let report = json_stdout(&output);
+    let findings: Vec<_> = report["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|finding| finding["code"] == "breg.action.input-pattern-unverified-offline")
+        .collect();
+    assert_eq!(findings.len(), 2, "one finding per patterned action input");
+    for finding in findings {
+        assert_eq!(finding["severity"], "warning");
+        assert_check_diagnostic(finding, Some("BRegProject"));
+        let pointer = finding["path"].as_str().unwrap();
+        assert!(
+            pointer.starts_with("/actions/") && pointer.ends_with("/pattern"),
+            "{finding}"
+        );
+        assert_eq!(
+            finding["source"]["file"],
+            project.path().join("registry.yaml").display().to_string()
+        );
+        assert!(finding["source"]["line"].as_u64().is_some(), "{finding}");
+        assert!(finding["suggestedAction"]
+            .as_str()
+            .unwrap()
+            .contains("bregctl test"));
+    }
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("action-pattern-expression-canary"));
+}
+
+#[test]
 fn check_places_nested_compiler_diagnostics_at_the_exact_authored_members() {
     let fixture =
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../products/breg/examples/facility");

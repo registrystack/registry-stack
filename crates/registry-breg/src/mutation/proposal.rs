@@ -1177,6 +1177,7 @@ impl MutationTransaction {
                     action,
                     input.input.as_ref().ok_or(MutationError::InvalidRequest)?,
                 )?;
+                crate::input_patterns::check_input_patterns(tx, action, &values).await?;
                 validate_input_write_authority(action, input.authority, &values, None)?;
                 let id = Uuid::new_v4();
                 proposal_store::initialize_draft(
@@ -1459,6 +1460,7 @@ impl MutationTransaction {
                                 .or(document.input.as_ref())
                                 .ok_or(MutationError::InvalidRequest)?,
                         )?;
+                        crate::input_patterns::check_input_patterns(tx, action, &values).await?;
                         validate_input_write_authority(
                             action,
                             input.authority,

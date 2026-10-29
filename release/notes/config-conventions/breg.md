@@ -616,6 +616,9 @@ become `breg.package.*`, and `check.package.package_refused` becomes
 | `action.input.decimal.bounds_invalid` | `breg.action.input-decimal-bounds-invalid` |
 | `action.input.id.duplicate` | `breg.action.input-id-duplicate` |
 | `action.input.id.reserved` | `breg.action.input-id-reserved` |
+| `action.input.pattern.bounds_invalid` | `breg.action.input-pattern-bounds-invalid` |
+| `action.input.pattern.type_unsupported` | `breg.action.input-pattern-type-unsupported` |
+| `action.input.pattern.unverified_offline` | `breg.action.input-pattern-unverified-offline` |
 | `action.input.reference.target_invalid` | `breg.action.input-reference-target-invalid` |
 | `action.input.reference.target_unknown` | `breg.action.input-reference-target-unknown` |
 | `action.input.string.bounds_invalid` | `breg.action.input-string-bounds-invalid` |
