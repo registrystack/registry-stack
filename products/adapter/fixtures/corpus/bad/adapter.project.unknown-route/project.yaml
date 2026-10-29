@@ -1,0 +1,41 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.project.unknown-route: this artifact set must be refused with
+# exactly adapter.project.unknown-route. The binding references no route the pack or project declares.
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.project.unknown-route/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
+kind: AdapterProject
+id: case-api-example
+profile:
+  id: case-api
+  version: "1"
+  digest: sha256:c35f04a90faea054da8a49d152570f13a38deed52bf87f503104fbb63821fa70
+pack:
+  id: case-api-pack
+  version: "1"
+  digest: sha256:f74e76a69ad5d530e6b37301c4c1574affd268e70d27a742fd76cd8fe9366c2d
+recordTypes:
+  - name: case
+    fields:
+      - name: case_type
+        type: string
+        required: true
+templatedRoutes:
+  - routeTemplateRef: findCases
+    routeId: caseFind
+bindings:
+  - id: case-get
+    operation: cases.get
+    recordType: case
+    route: absentRoute
+    maximumUpstreamCalls: 4
+accessProfiles:
+  - id: case-reader
+    scopes:
+      - cases.read
+    operations:
+      - cases.get
+    recordTypes:
+      - case

@@ -1,0 +1,41 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.route.uncatchable-clause: this artifact set must be refused with
+# exactly adapter.route.uncatchable-clause. The onException clause names budget.exhausted, which the engine never raises into routes.
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.route.uncatchable-clause/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
+kind: AdapterProject
+id: case-api-example
+profile:
+  id: case-api
+  version: "1"
+  digest: sha256:eb74e22fc3ea99eea3e4afcb4bbd0ac4d6d1a682e4f942eb5d5f2c0124a55b67
+pack:
+  id: case-api-pack
+  version: "1"
+  digest: sha256:e05062e9334442bb0d3afc7e0ce2df71bc4e72611c8cb85435bdfd8865d25ff2
+recordTypes:
+  - name: case
+    fields:
+      - name: case_type
+        type: string
+        required: true
+templatedRoutes:
+  - routeTemplateRef: findCases
+    routeId: caseFind
+bindings:
+  - id: case-get
+    operation: cases.get
+    recordType: case
+    route: caseFind
+    maximumUpstreamCalls: 4
+accessProfiles:
+  - id: case-reader
+    scopes:
+      - cases.read
+    operations:
+      - cases.get
+    recordTypes:
+      - case

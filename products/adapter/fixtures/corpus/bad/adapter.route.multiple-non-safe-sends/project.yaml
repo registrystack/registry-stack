@@ -1,0 +1,41 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.route.multiple-non-safe-sends: this artifact set must be refused with
+# exactly adapter.route.multiple-non-safe-sends. One idempotentConsumer guards two POST sends; a write route carries at most one.
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.route.multiple-non-safe-sends/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
+kind: AdapterProject
+id: case-api-example
+profile:
+  id: case-api
+  version: "1"
+  digest: sha256:3986cf43f2b708be6221cc27e07061113648b1305da835b337d035d7f7df6d61
+pack:
+  id: case-api-pack
+  version: "1"
+  digest: sha256:83dee910dd2550b999ee68ecb03d516acf8c3057d75357af8b0cfde87124f6de
+recordTypes:
+  - name: case
+    fields:
+      - name: case_type
+        type: string
+        required: true
+templatedRoutes:
+  - routeTemplateRef: findCases
+    routeId: caseFind
+bindings:
+  - id: case-get
+    operation: cases.file
+    recordType: case
+    route: caseFind
+    maximumUpstreamCalls: 4
+accessProfiles:
+  - id: case-reader
+    scopes:
+      - cases.read
+    operations:
+      - cases.get
+    recordTypes:
+      - case

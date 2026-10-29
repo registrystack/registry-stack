@@ -1,0 +1,41 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.profile.problem-envelope-missing-code-slot: this artifact set must be refused with
+# exactly adapter.profile.problem-envelope-missing-code-slot. The problem envelope never names the problemCode slot.
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.profile.problem-envelope-missing-code-slot/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
+kind: AdapterProject
+id: case-api-example
+profile:
+  id: case-api
+  version: "1"
+  digest: sha256:94e7ac10a44ccfb46a533e85cedc7d28a6ebc33cceed8e44fa18af82f557164f
+pack:
+  id: case-api-pack
+  version: "1"
+  digest: sha256:9fcfca8867c166e1f75735d1d0ba58d5fbc09fdbf96adcd66cec11d34d87c8bd
+recordTypes:
+  - name: case
+    fields:
+      - name: case_type
+        type: string
+        required: true
+templatedRoutes:
+  - routeTemplateRef: findCases
+    routeId: caseFind
+bindings:
+  - id: case-get
+    operation: cases.get
+    recordType: case
+    route: caseFind
+    maximumUpstreamCalls: 4
+accessProfiles:
+  - id: case-reader
+    scopes:
+      - cases.read
+    operations:
+      - cases.get
+    recordTypes:
+      - case

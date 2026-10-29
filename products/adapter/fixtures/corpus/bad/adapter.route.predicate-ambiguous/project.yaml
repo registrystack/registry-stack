@@ -1,0 +1,41 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.route.predicate-ambiguous: this artifact set must be refused with
+# exactly adapter.route.predicate-ambiguous. The choice clause carries two language keys, constant and jsonpath.
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.route.predicate-ambiguous/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
+kind: AdapterProject
+id: case-api-example
+profile:
+  id: case-api
+  version: "1"
+  digest: sha256:bb47784d84904c1315b789eed409766ec30e4b1405bd5d63ec198a411f08a467
+pack:
+  id: case-api-pack
+  version: "1"
+  digest: sha256:448d9936a1f719ac5c1a7c8466d8cdf65b3dcc7746ac260fb2e678016d31e9fe
+recordTypes:
+  - name: case
+    fields:
+      - name: case_type
+        type: string
+        required: true
+templatedRoutes:
+  - routeTemplateRef: findCases
+    routeId: caseFind
+bindings:
+  - id: case-get
+    operation: cases.get
+    recordType: case
+    route: caseFind
+    maximumUpstreamCalls: 4
+accessProfiles:
+  - id: case-reader
+    scopes:
+      - cases.read
+    operations:
+      - cases.get
+    recordTypes:
+      - case

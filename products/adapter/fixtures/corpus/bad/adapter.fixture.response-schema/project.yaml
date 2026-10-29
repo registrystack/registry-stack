@@ -1,0 +1,41 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.fixture.response-schema: this artifact set must be refused with
+# exactly adapter.fixture.response-schema. The fixture's expected facade response violates the operation's result schema: case_type is an integer where the project declares string.
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.fixture.response-schema/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
+kind: AdapterProject
+id: case-api-example
+profile:
+  id: case-api
+  version: "1"
+  digest: sha256:f11e1dd1f7f685b6bd38a27fa0033456cf7d27f20b776b78e6e366b566351119
+pack:
+  id: case-api-pack
+  version: "1"
+  digest: sha256:1e72e350ff4bbfd46ab9846249ddda2e8e200175547970e9d7a988e611cf654f
+recordTypes:
+  - name: case
+    fields:
+      - name: case_type
+        type: string
+        required: true
+templatedRoutes:
+  - routeTemplateRef: findCases
+    routeId: caseFind
+bindings:
+  - id: case-get
+    operation: cases.get
+    recordType: case
+    route: caseFind
+    maximumUpstreamCalls: 4
+accessProfiles:
+  - id: case-reader
+    scopes:
+      - cases.read
+    operations:
+      - cases.get
+    recordTypes:
+      - case

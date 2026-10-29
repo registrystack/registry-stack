@@ -1,0 +1,41 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.pack.reserved-header-name: this artifact set must be refused with
+# exactly adapter.pack.reserved-header-name. The static-api-key endpoint declares the reserved header name Authorization.
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.pack.reserved-header-name/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
+kind: AdapterProject
+id: case-api-example
+profile:
+  id: case-api
+  version: "1"
+  digest: sha256:c68bf3ad9b3036668941e0c9c012e52ee1a5c1ea2f48e4f2e5cf509d919b641e
+pack:
+  id: case-api-pack
+  version: "1"
+  digest: sha256:fa5730e32372ac00340add8fcfa4f094aaf371ba228c4dcf48ef8de4bfe6baa8
+recordTypes:
+  - name: case
+    fields:
+      - name: case_type
+        type: string
+        required: true
+templatedRoutes:
+  - routeTemplateRef: findCases
+    routeId: caseFind
+bindings:
+  - id: case-get
+    operation: cases.get
+    recordType: case
+    route: caseFind
+    maximumUpstreamCalls: 4
+accessProfiles:
+  - id: case-reader
+    scopes:
+      - cases.read
+    operations:
+      - cases.get
+    recordTypes:
+      - case

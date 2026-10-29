@@ -1,0 +1,31 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/pack/pack.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.pack.endpoint-component-invalid: this artifact set must be refused with
+# exactly adapter.pack.endpoint-component-invalid. The pack carries the adapter.pack.endpoint-component-invalid defect.
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.pack.endpoint-component-invalid/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/pack/v1alpha1
+kind: AdapterPack
+id: case-api-pack
+version: "1"
+testedVersions:
+  - "1.0"
+endpoints:
+  - id: cases
+    component: direct
+    authentication:
+      type: basic
+routeTemplates:
+  - id: findCases
+    parameters: []
+    steps:
+      - to:
+          uri: http:cases
+          parameters:
+            httpMethod: GET
+            path: /v2/cases/{type}/{case_id}
+            pathParameters:
+              case_id:
+                header: recordId
+capabilities: {}

@@ -1,0 +1,43 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.project.unknown-template-parameter: this artifact set must be refused with
+# exactly adapter.project.unknown-template-parameter. The instantiation supplies parameter bogus, which the template does not declare.
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.project.unknown-template-parameter/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
+kind: AdapterProject
+id: case-api-example
+profile:
+  id: case-api
+  version: "1"
+  digest: sha256:3fa1a46e386f02a312a7f67dc53147e4df517ac854c94e074c451fe3e7c363ed
+pack:
+  id: case-api-pack
+  version: "1"
+  digest: sha256:c9a4f0590983581cc984e37cce2ae2be89b4a186eef23317f2a02f8c381b98c5
+recordTypes:
+  - name: case
+    fields:
+      - name: case_type
+        type: string
+        required: true
+templatedRoutes:
+  - routeTemplateRef: findCases
+    routeId: caseFind
+    parameters:
+      bogus: "x"
+bindings:
+  - id: case-get
+    operation: cases.get
+    recordType: case
+    route: caseFind
+    maximumUpstreamCalls: 4
+accessProfiles:
+  - id: case-reader
+    scopes:
+      - cases.read
+    operations:
+      - cases.get
+    recordTypes:
+      - case

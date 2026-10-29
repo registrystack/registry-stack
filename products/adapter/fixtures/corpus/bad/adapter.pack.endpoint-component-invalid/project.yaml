@@ -1,0 +1,41 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.pack.endpoint-component-invalid: this artifact set must be refused with
+# exactly adapter.pack.endpoint-component-invalid. The endpoint declares component direct, which is not a producer component.
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.pack.endpoint-component-invalid/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
+kind: AdapterProject
+id: case-api-example
+profile:
+  id: case-api
+  version: "1"
+  digest: sha256:c8db79304f0ae26f31f023f589ce496b94fc31a68ebe28431276cc9f99634d73
+pack:
+  id: case-api-pack
+  version: "1"
+  digest: sha256:504e708533cb7b5190e3184c63452748c593100fcbea270fb73ce6e212c16f05
+recordTypes:
+  - name: case
+    fields:
+      - name: case_type
+        type: string
+        required: true
+templatedRoutes:
+  - routeTemplateRef: findCases
+    routeId: caseFind
+bindings:
+  - id: case-get
+    operation: cases.get
+    recordType: case
+    route: caseFind
+    maximumUpstreamCalls: 4
+accessProfiles:
+  - id: case-reader
+    scopes:
+      - cases.read
+    operations:
+      - cases.get
+    recordTypes:
+      - case

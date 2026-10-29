@@ -1,0 +1,49 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/pack/pack.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.route.non-safe-send-in-split: this artifact set must be refused with
+# exactly adapter.route.non-safe-send-in-split. Clean baseline pack; another artifact carries the defect.
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.route.non-safe-send-in-split/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/pack/v1alpha1
+kind: AdapterPack
+id: case-api-pack
+version: "1"
+testedVersions:
+  - "1.0"
+endpoints:
+  - id: cases
+    component: http
+    authentication:
+      type: basic
+routeTemplates:
+  - id: findCases
+    parameters: []
+    steps:
+      - idempotentConsumer:
+          expression:
+            header: Idempotency-Key
+          steps:
+            - split:
+                expression:
+                  constant: []
+                maximumItems: 5
+                steps:
+                  - to:
+                      uri: http:cases
+                      parameters:
+                        httpMethod: POST
+                        path: /v2/cases/{type}
+                        pathParameters:
+                          type:
+                            header: recordType
+                        body:
+                          exchangeProperty: record
+capabilities:
+  components:
+    - http
+  languages:
+    - exchangeProperty
+  eips:
+    - idempotentConsumer
+    - split

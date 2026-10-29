@@ -1,0 +1,41 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.runtime.insecure-origin: this artifact set must be refused with
+# exactly adapter.runtime.insecure-origin. The runtime binds the endpoint to a plain-HTTP origin off the loopback exception.
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.runtime.insecure-origin/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
+kind: AdapterProject
+id: case-api-example
+profile:
+  id: case-api
+  version: "1"
+  digest: sha256:625c021651162a8ba89469f74acf31349f8475a2f4d6b84f3c8d2e0f4d1b802b
+pack:
+  id: case-api-pack
+  version: "1"
+  digest: sha256:86ba53355a6a9431a897b8a04fff01c7d124c857438190e271757a94f7f216cd
+recordTypes:
+  - name: case
+    fields:
+      - name: case_type
+        type: string
+        required: true
+templatedRoutes:
+  - routeTemplateRef: findCases
+    routeId: caseFind
+bindings:
+  - id: case-get
+    operation: cases.get
+    recordType: case
+    route: caseFind
+    maximumUpstreamCalls: 4
+accessProfiles:
+  - id: case-reader
+    scopes:
+      - cases.read
+    operations:
+      - cases.get
+    recordTypes:
+      - case

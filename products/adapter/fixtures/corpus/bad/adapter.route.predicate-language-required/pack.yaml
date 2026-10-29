@@ -1,0 +1,45 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/pack/pack.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.route.predicate-language-required: this artifact set must be refused with
+# exactly adapter.route.predicate-language-required. Clean baseline pack; another artifact carries the defect.
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.route.predicate-language-required/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/pack/v1alpha1
+kind: AdapterPack
+id: case-api-pack
+version: "1"
+testedVersions:
+  - "1.0"
+endpoints:
+  - id: cases
+    component: http
+    authentication:
+      type: basic
+routeTemplates:
+  - id: findCases
+    parameters: []
+    steps:
+      - choice:
+          when:
+            - steps:
+                - stop: {}
+          otherwise:
+            steps:
+              - setBody:
+                  constant: "{}"
+      - to:
+          uri: http:cases
+          parameters:
+            httpMethod: GET
+            path: /v2/cases/{type}/{case_id}
+            pathParameters:
+              case_id:
+                header: recordId
+capabilities:
+  components:
+    - http
+  languages:
+    - constant
+  eips:
+    - choice

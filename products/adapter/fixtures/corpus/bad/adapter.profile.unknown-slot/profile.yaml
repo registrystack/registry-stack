@@ -1,0 +1,19 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/profile/profile.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.profile.unknown-slot: this artifact set must be refused with
+# exactly adapter.profile.unknown-slot. The response envelope names a slot outside the closed vocabulary.
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.profile.unknown-slot/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/profile/v1alpha1
+kind: AdapterProfile
+id: case-api
+version: "1"
+operations:
+  - id: cases.get
+    method: GET
+    path: /v2/cases/{type}/{case_id}
+    responseEnvelope: '{"case": {{record}}, "via": "{{?bogusSlot}}"}'
+problemCodes:
+  - cases.missing
+problemEnvelope: '{"family": "{{problemCode}}"}'

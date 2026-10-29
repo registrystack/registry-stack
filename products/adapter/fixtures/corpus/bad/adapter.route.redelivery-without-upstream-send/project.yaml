@@ -1,0 +1,41 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.route.redelivery-without-upstream-send: this artifact set must be refused with
+# exactly adapter.route.redelivery-without-upstream-send. The onException clause declares redelivery, but no upstream send is reachable.
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.route.redelivery-without-upstream-send/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
+kind: AdapterProject
+id: case-api-example
+profile:
+  id: case-api
+  version: "1"
+  digest: sha256:a2b9dde6e5bbac24518988186f75619f820e3afc9c26e5af49d62fd3d329398a
+pack:
+  id: case-api-pack
+  version: "1"
+  digest: sha256:71c758a71426fe198c69ae4496fbc8035c1164e3e6cb1891fd252acaad2196a6
+recordTypes:
+  - name: case
+    fields:
+      - name: case_type
+        type: string
+        required: true
+templatedRoutes:
+  - routeTemplateRef: findCases
+    routeId: caseFind
+bindings:
+  - id: case-get
+    operation: cases.get
+    recordType: case
+    route: caseFind
+    maximumUpstreamCalls: 4
+accessProfiles:
+  - id: case-reader
+    scopes:
+      - cases.read
+    operations:
+      - cases.get
+    recordTypes:
+      - case

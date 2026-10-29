@@ -1,0 +1,19 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/profile/profile.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.profile.response-envelope-missing-result-slot: this artifact set must be refused with
+# exactly adapter.profile.response-envelope-missing-result-slot. The response envelope names no result slot.
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.profile.response-envelope-missing-result-slot/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/profile/v1alpha1
+kind: AdapterProfile
+id: case-api
+version: "1"
+operations:
+  - id: cases.get
+    method: GET
+    path: /v2/cases/{type}/{case_id}
+    responseEnvelope: '{"fetched": true}'
+problemCodes:
+  - cases.missing
+problemEnvelope: '{"family": "{{problemCode}}"}'

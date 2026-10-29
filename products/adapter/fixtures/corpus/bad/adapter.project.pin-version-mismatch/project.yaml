@@ -1,0 +1,41 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.project.pin-version-mismatch: this artifact set must be refused with
+# exactly adapter.project.pin-version-mismatch. The project pins the pack at version 0.0.1 while the pack declares version 1 (the digest matches the bytes).
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.project.pin-version-mismatch/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
+kind: AdapterProject
+id: case-api-example
+profile:
+  id: case-api
+  version: "1"
+  digest: sha256:78f3985b1db72c4151394e5c80e121159fbdefee241b9dff33e1a82093bcf36e
+pack:
+  id: case-api-pack
+  version: "0.0.1"
+  digest: sha256:3c60b5059ef7e753cba5a5b8a7032de031a2501a1650c2a313b555477df13739
+recordTypes:
+  - name: case
+    fields:
+      - name: case_type
+        type: string
+        required: true
+templatedRoutes:
+  - routeTemplateRef: findCases
+    routeId: caseFind
+bindings:
+  - id: case-get
+    operation: cases.get
+    recordType: case
+    route: caseFind
+    maximumUpstreamCalls: 4
+accessProfiles:
+  - id: case-reader
+    scopes:
+      - cases.read
+    operations:
+      - cases.get
+    recordTypes:
+      - case

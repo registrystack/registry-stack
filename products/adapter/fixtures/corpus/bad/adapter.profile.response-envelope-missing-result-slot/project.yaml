@@ -1,0 +1,41 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.profile.response-envelope-missing-result-slot: this artifact set must be refused with
+# exactly adapter.profile.response-envelope-missing-result-slot. The response envelope names neither record nor records.
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.profile.response-envelope-missing-result-slot/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
+kind: AdapterProject
+id: case-api-example
+profile:
+  id: case-api
+  version: "1"
+  digest: sha256:5587f35a4fa82af10a1efa87ef28609d7346de036883107aa3474b44b5c73ea2
+pack:
+  id: case-api-pack
+  version: "1"
+  digest: sha256:4db5f36f2c21b3c75ba209e58baf1da3a1a32526ae36e3d84aff037013497cdf
+recordTypes:
+  - name: case
+    fields:
+      - name: case_type
+        type: string
+        required: true
+templatedRoutes:
+  - routeTemplateRef: findCases
+    routeId: caseFind
+bindings:
+  - id: case-get
+    operation: cases.get
+    recordType: case
+    route: caseFind
+    maximumUpstreamCalls: 4
+accessProfiles:
+  - id: case-reader
+    scopes:
+      - cases.read
+    operations:
+      - cases.get
+    recordTypes:
+      - case

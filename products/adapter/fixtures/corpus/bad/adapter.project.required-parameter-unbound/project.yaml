@@ -1,0 +1,42 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.project.required-parameter-unbound: this artifact set must be refused with
+# exactly adapter.project.required-parameter-unbound. The instantiation omits required parameter program.
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.project.required-parameter-unbound/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
+kind: AdapterProject
+id: case-api-example
+profile:
+  id: case-api
+  version: "1"
+  digest: sha256:5e3fdb548822dc3390651c3703efe03f07ade7c445bd2da4f0ee89e2c2a4edc6
+pack:
+  id: case-api-pack
+  version: "1"
+  digest: sha256:c189af393e01df7e5cf9928662eca551c89820a73a4e2c8b97e7bb211141aed9
+recordTypes:
+  - name: case
+    fields:
+      - name: case_type
+        type: string
+        required: true
+templatedRoutes:
+  - routeTemplateRef: findCases
+    routeId: caseFind
+    parameters: {}
+bindings:
+  - id: case-get
+    operation: cases.get
+    recordType: case
+    route: caseFind
+    maximumUpstreamCalls: 4
+accessProfiles:
+  - id: case-reader
+    scopes:
+      - cases.read
+    operations:
+      - cases.get
+    recordTypes:
+      - case

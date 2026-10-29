@@ -1,0 +1,41 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json
+#
+# Bad-corpus member config.unknown-key-redelivery: this artifact set must be refused with
+# exactly config.unknown-key-redelivery. An unknown key bogusOption sits inside the nested redeliveryPolicy; the reader refuses it as config.unknown-key.
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/config.unknown-key-redelivery/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
+kind: AdapterProject
+id: case-api-example
+profile:
+  id: case-api
+  version: "1"
+  digest: sha256:8db8fb0207edc226ce75f89596ae22a86218cd0d2725d914b59c38a09e123d0e
+pack:
+  id: case-api-pack
+  version: "1"
+  digest: sha256:c5182239bdafc17bc2f46083850cbbb2c42c8af540c57ab4f2ba2ee59c5588c6
+recordTypes:
+  - name: case
+    fields:
+      - name: case_type
+        type: string
+        required: true
+templatedRoutes:
+  - routeTemplateRef: findCases
+    routeId: caseFind
+bindings:
+  - id: case-get
+    operation: cases.get
+    recordType: case
+    route: caseFind
+    maximumUpstreamCalls: 4
+accessProfiles:
+  - id: case-reader
+    scopes:
+      - cases.read
+    operations:
+      - cases.get
+    recordTypes:
+      - case

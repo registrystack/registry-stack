@@ -1,0 +1,24 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/profile/profile.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.profile.request-envelope-missing-record-slot: this artifact set must be refused with
+# exactly adapter.profile.request-envelope-missing-record-slot. The POST operation's request envelope names no record slot.
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.profile.request-envelope-missing-record-slot/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/profile/v1alpha1
+kind: AdapterProfile
+id: case-api
+version: "1"
+operations:
+  - id: cases.get
+    method: GET
+    path: /v2/cases/{type}/{case_id}
+    responseEnvelope: '{"case": {{record}}, "fetchedAt": "{{requestId}}"}'
+  - id: cases.file
+    method: POST
+    path: /v2/cases/{type}
+    requestEnvelope: '{"payload": {}}'
+    responseEnvelope: '{"created": {{record}}}'
+problemCodes:
+  - cases.missing
+problemEnvelope: '{"family": "{{problemCode}}"}'

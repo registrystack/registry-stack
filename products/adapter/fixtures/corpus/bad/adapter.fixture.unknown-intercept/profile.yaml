@@ -1,0 +1,19 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/profile/profile.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.fixture.unknown-intercept: this artifact set must be refused with
+# exactly adapter.fixture.unknown-intercept. Clean baseline profile.
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.fixture.unknown-intercept/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/profile/v1alpha1
+kind: AdapterProfile
+id: case-api
+version: "1"
+operations:
+  - id: cases.get
+    method: GET
+    path: /v2/cases/{type}/{case_id}
+    responseEnvelope: '{"case": {{record}}, "fetchedAt": "{{requestId}}"}'
+problemCodes:
+  - cases.missing
+problemEnvelope: '{"family": "{{problemCode}}"}'

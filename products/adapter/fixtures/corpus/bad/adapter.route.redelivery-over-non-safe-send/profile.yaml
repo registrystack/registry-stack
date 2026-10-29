@@ -1,0 +1,24 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/profile/profile.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.route.redelivery-over-non-safe-send: this artifact set must be refused with
+# exactly adapter.route.redelivery-over-non-safe-send. Clean baseline profile.
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.route.redelivery-over-non-safe-send/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/profile/v1alpha1
+kind: AdapterProfile
+id: case-api
+version: "1"
+operations:
+  - id: cases.get
+    method: GET
+    path: /v2/cases/{type}/{case_id}
+    responseEnvelope: '{"case": {{record}}, "fetchedAt": "{{requestId}}"}'
+  - id: cases.file
+    method: POST
+    path: /v2/cases/{type}
+    requestEnvelope: '{"case": {{record}}}'
+    responseEnvelope: '{"created": {{record}}}'
+problemCodes:
+  - cases.missing
+problemEnvelope: '{"family": "{{problemCode}}"}'

@@ -1,0 +1,30 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/pack/pack.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.pack.digest-pin-required: this artifact set must be refused with
+# exactly adapter.pack.digest-pin-required. The pack carries the adapter.pack.digest-pin-required defect.
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.pack.digest-pin-required/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/pack/v1alpha1
+kind: AdapterPack
+id: case-api-pack
+version: "1"
+testedVersions:
+  - "1.0"
+endpoints:
+  - id: cases
+    component: http
+    authentication:
+      type: basic
+routeTemplates:
+  - id: findCases
+    parameters: []
+    steps:
+      - setBody:
+          rhai:
+            file: scripts/case-api.rhai
+            entrypoint: shape
+scripts:
+  - path: scripts/case-api.rhai
+    digest: sha256:1111111111111111111111111111111111111111111111111111111111111111
+capabilities: {}

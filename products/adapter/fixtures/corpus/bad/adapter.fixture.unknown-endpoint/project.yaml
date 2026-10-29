@@ -1,0 +1,41 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.fixture.unknown-endpoint: this artifact set must be refused with
+# exactly adapter.fixture.unknown-endpoint. The recorded request names endpoint nope, which the pack does not declare.
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.fixture.unknown-endpoint/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
+kind: AdapterProject
+id: case-api-example
+profile:
+  id: case-api
+  version: "1"
+  digest: sha256:d00153d75f162a8821260e9cf68d143accc1b9b1d9aa615ee0d6e960a403524d
+pack:
+  id: case-api-pack
+  version: "1"
+  digest: sha256:08812ea34acfa3dcf51e5fc633387cf57262b963f39f402ccc57ad29b3446f81
+recordTypes:
+  - name: case
+    fields:
+      - name: case_type
+        type: string
+        required: true
+templatedRoutes:
+  - routeTemplateRef: findCases
+    routeId: caseFind
+bindings:
+  - id: case-get
+    operation: cases.get
+    recordType: case
+    route: caseFind
+    maximumUpstreamCalls: 4
+accessProfiles:
+  - id: case-reader
+    scopes:
+      - cases.read
+    operations:
+      - cases.get
+    recordTypes:
+      - case

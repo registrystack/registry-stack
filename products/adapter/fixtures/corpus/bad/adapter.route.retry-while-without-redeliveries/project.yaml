@@ -1,0 +1,41 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.route.retry-while-without-redeliveries: this artifact set must be refused with
+# exactly adapter.route.retry-while-without-redeliveries. The error handler carries a retryWhile with maximumRedeliveries at its default of zero.
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.route.retry-while-without-redeliveries/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
+kind: AdapterProject
+id: case-api-example
+profile:
+  id: case-api
+  version: "1"
+  digest: sha256:c354a9e67e6b5811a9fa68acad82fc1cabdbba154bf88618e589d06ef80fb8b1
+pack:
+  id: case-api-pack
+  version: "1"
+  digest: sha256:dde884f6ae4e3ba84a7bc4260a5c39a0a07c2a72a0300ff9b44f1bfee5444838
+recordTypes:
+  - name: case
+    fields:
+      - name: case_type
+        type: string
+        required: true
+templatedRoutes:
+  - routeTemplateRef: findCases
+    routeId: caseFind
+bindings:
+  - id: case-get
+    operation: cases.get
+    recordType: case
+    route: caseFind
+    maximumUpstreamCalls: 4
+accessProfiles:
+  - id: case-reader
+    scopes:
+      - cases.read
+    operations:
+      - cases.get
+    recordTypes:
+      - case

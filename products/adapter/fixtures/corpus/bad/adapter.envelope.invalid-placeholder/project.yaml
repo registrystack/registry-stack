@@ -1,0 +1,41 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.envelope.invalid-placeholder: this artifact set must be refused with
+# exactly adapter.envelope.invalid-placeholder. The response envelope carries a malformed placeholder: '{{bogus' never closes.
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.envelope.invalid-placeholder/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
+kind: AdapterProject
+id: case-api-example
+profile:
+  id: case-api
+  version: "1"
+  digest: sha256:3cfd68dba902ce274129d9f53de20e97d7e48f2c0b2066988de691231cc1c11f
+pack:
+  id: case-api-pack
+  version: "1"
+  digest: sha256:e024225bc1a85ab0658d0f65a7d346c5e1c0a0a780072591793feb6793498cc4
+recordTypes:
+  - name: case
+    fields:
+      - name: case_type
+        type: string
+        required: true
+templatedRoutes:
+  - routeTemplateRef: findCases
+    routeId: caseFind
+bindings:
+  - id: case-get
+    operation: cases.get
+    recordType: case
+    route: caseFind
+    maximumUpstreamCalls: 4
+accessProfiles:
+  - id: case-reader
+    scopes:
+      - cases.read
+    operations:
+      - cases.get
+    recordTypes:
+      - case

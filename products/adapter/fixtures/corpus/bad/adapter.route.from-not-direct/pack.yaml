@@ -1,0 +1,36 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/pack/pack.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.route.from-not-direct: this artifact set must be refused with
+# exactly adapter.route.from-not-direct. Clean baseline pack; another artifact carries the defect.
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.route.from-not-direct/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/pack/v1alpha1
+kind: AdapterPack
+id: case-api-pack
+version: "1"
+testedVersions:
+  - "1.0"
+endpoints:
+  - id: cases
+    component: http
+    authentication:
+      type: basic
+routeTemplates:
+  - id: findCases
+    parameters: []
+    steps:
+      - to:
+          uri: http:cases
+          parameters:
+            httpMethod: GET
+            path: /v2/cases/{type}/{case_id}
+            pathParameters:
+              case_id:
+                header: recordId
+routes:
+  - id: oddRoute
+    from:
+      uri: http:cases
+    steps: []
+capabilities: {}

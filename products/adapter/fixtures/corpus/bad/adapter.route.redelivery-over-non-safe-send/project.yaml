@@ -1,0 +1,41 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.route.redelivery-over-non-safe-send: this artifact set must be refused with
+# exactly adapter.route.redelivery-over-non-safe-send. The onException clause declares redelivery over a POST send whose endpoint operation claims no idempotentUpstream.
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.route.redelivery-over-non-safe-send/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
+kind: AdapterProject
+id: case-api-example
+profile:
+  id: case-api
+  version: "1"
+  digest: sha256:40bc7ea554843dc82efb91bba5fc8e1493368c1292f67e053b2521a3e66984d2
+pack:
+  id: case-api-pack
+  version: "1"
+  digest: sha256:31489b89cc15e9ba4e14df971ecc50e7dda0f9683203485c6b0d585cdaed138e
+recordTypes:
+  - name: case
+    fields:
+      - name: case_type
+        type: string
+        required: true
+templatedRoutes:
+  - routeTemplateRef: findCases
+    routeId: caseFind
+bindings:
+  - id: case-get
+    operation: cases.file
+    recordType: case
+    route: caseFind
+    maximumUpstreamCalls: 8
+accessProfiles:
+  - id: case-reader
+    scopes:
+      - cases.read
+    operations:
+      - cases.get
+    recordTypes:
+      - case

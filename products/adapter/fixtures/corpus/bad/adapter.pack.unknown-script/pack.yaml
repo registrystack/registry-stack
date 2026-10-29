@@ -1,0 +1,27 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/pack/pack.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.pack.unknown-script: this artifact set must be refused with
+# exactly adapter.pack.unknown-script. The pack carries the adapter.pack.unknown-script defect.
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.pack.unknown-script/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/pack/v1alpha1
+kind: AdapterPack
+id: case-api-pack
+version: "1"
+testedVersions:
+  - "1.0"
+endpoints:
+  - id: cases
+    component: http
+    authentication:
+      type: basic
+routeTemplates:
+  - id: findCases
+    parameters: []
+    steps:
+      - setBody:
+          rhai:
+            file: scripts/case-api.rhai
+            entrypoint: shape
+capabilities: {}

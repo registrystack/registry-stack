@@ -1,0 +1,33 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/pack/pack.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.pack.unknown-template-parameter: this artifact set must be refused with
+# exactly adapter.pack.unknown-template-parameter. The pack carries the adapter.pack.unknown-template-parameter defect.
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.pack.unknown-template-parameter/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/pack/v1alpha1
+kind: AdapterPack
+id: case-api-pack
+version: "1"
+testedVersions:
+  - "1.0"
+endpoints:
+  - id: cases
+    component: http
+    authentication:
+      type: basic
+routeTemplates:
+  - id: findCases
+    parameters: []
+    steps:
+      - setBody:
+          constant: "look up {{missingParam}}"
+      - to:
+          uri: http:cases
+          parameters:
+            httpMethod: GET
+            path: /v2/cases/{type}/{case_id}
+            pathParameters:
+              case_id:
+                header: recordId
+capabilities: {}

@@ -1,0 +1,41 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.runtime.unknown-endpoint: this artifact set must be refused with
+# exactly adapter.runtime.unknown-endpoint. The runtime binds an endpoint the pack does not declare.
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.runtime.unknown-endpoint/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
+kind: AdapterProject
+id: case-api-example
+profile:
+  id: case-api
+  version: "1"
+  digest: sha256:70eb5dea34b9fe2e2865a44407c42eb37a4f7ff2a2b25357b0caf49ec54b4d6a
+pack:
+  id: case-api-pack
+  version: "1"
+  digest: sha256:6c1fb3afbf3e5f05b6b14046e67f78ebfffc4140554d7cd47fc6accc10f254fa
+recordTypes:
+  - name: case
+    fields:
+      - name: case_type
+        type: string
+        required: true
+templatedRoutes:
+  - routeTemplateRef: findCases
+    routeId: caseFind
+bindings:
+  - id: case-get
+    operation: cases.get
+    recordType: case
+    route: caseFind
+    maximumUpstreamCalls: 4
+accessProfiles:
+  - id: case-reader
+    scopes:
+      - cases.read
+    operations:
+      - cases.get
+    recordTypes:
+      - case

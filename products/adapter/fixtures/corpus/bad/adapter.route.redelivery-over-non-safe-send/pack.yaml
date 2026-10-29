@@ -1,0 +1,54 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/pack/pack.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.route.redelivery-over-non-safe-send: this artifact set must be refused with
+# exactly adapter.route.redelivery-over-non-safe-send. Clean baseline pack; another artifact carries the defect.
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.route.redelivery-over-non-safe-send/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/pack/v1alpha1
+kind: AdapterPack
+id: case-api-pack
+version: "1"
+testedVersions:
+  - "1.0"
+endpoints:
+  - id: cases
+    component: http
+    authentication:
+      type: basic
+routeTemplates:
+  - id: findCases
+    parameters: []
+    steps:
+      - onException:
+          exception:
+            - upstream.timeout
+          handled: true
+          redeliveryPolicy:
+            maximumRedeliveries: 1
+            retryDelaySeconds: 1
+          steps:
+            - stop: {}
+      - idempotentConsumer:
+          expression:
+            header: Idempotency-Key
+          steps:
+            - to:
+                uri: http:cases
+                parameters:
+                  httpMethod: POST
+                  path: /v2/cases/{type}
+                  pathParameters:
+                    type:
+                      header: recordType
+                  body:
+                    exchangeProperty: record
+capabilities:
+  components:
+    - http
+  languages:
+    - exchangeProperty
+  eips:
+    - idempotentConsumer
+    - onException
+    - stop

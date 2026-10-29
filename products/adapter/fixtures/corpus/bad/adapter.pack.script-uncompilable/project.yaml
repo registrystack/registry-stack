@@ -1,0 +1,41 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.pack.script-uncompilable: this artifact set must be refused with
+# exactly adapter.pack.script-uncompilable. The pinned script scripts/case-api.rhai does not parse (missing closing brace).
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.pack.script-uncompilable/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
+kind: AdapterProject
+id: case-api-example
+profile:
+  id: case-api
+  version: "1"
+  digest: sha256:5a2e90c37289cca7cf14e5fb3f4224b0955dce1ea6518466c6785681457e4622
+pack:
+  id: case-api-pack
+  version: "1"
+  digest: sha256:8698e87cea8035bf6a12edd06be8076ca2c83e081cda6f6e1500466718285374
+recordTypes:
+  - name: case
+    fields:
+      - name: case_type
+        type: string
+        required: true
+templatedRoutes:
+  - routeTemplateRef: findCases
+    routeId: caseFind
+bindings:
+  - id: case-get
+    operation: cases.get
+    recordType: case
+    route: caseFind
+    maximumUpstreamCalls: 4
+accessProfiles:
+  - id: case-reader
+    scopes:
+      - cases.read
+    operations:
+      - cases.get
+    recordTypes:
+      - case

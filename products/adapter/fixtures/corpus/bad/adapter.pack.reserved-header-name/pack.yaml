@@ -1,0 +1,32 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/pack/pack.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.pack.reserved-header-name: this artifact set must be refused with
+# exactly adapter.pack.reserved-header-name. The pack carries the adapter.pack.reserved-header-name defect.
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.pack.reserved-header-name/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/pack/v1alpha1
+kind: AdapterPack
+id: case-api-pack
+version: "1"
+testedVersions:
+  - "1.0"
+endpoints:
+  - id: cases
+    component: http
+    authentication:
+      type: static-api-key
+      headerName: Authorization
+routeTemplates:
+  - id: findCases
+    parameters: []
+    steps:
+      - to:
+          uri: http:cases
+          parameters:
+            httpMethod: GET
+            path: /v2/cases/{type}/{case_id}
+            pathParameters:
+              case_id:
+                header: recordId
+capabilities: {}
