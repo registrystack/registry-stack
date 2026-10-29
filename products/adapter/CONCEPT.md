@@ -187,7 +187,7 @@ today, not what a profile family could someday offer.
 |---|---|---|---|
 | Facade profile | Authored, versioned, maintained by us | `AdapterProfile` | Operation set by id, methods and paths, request and response envelope templates, pagination parameters, the problem envelope and the `problems` list mapping error classes to problems (section 8.11.6), parameterized parts. First: `breg-records` v1 |
 | Adapter pack | Authored, versioned, reviewed | `AdapterPack` | Per source system, Kamelet-style: endpoint declarations (component, auth kind, tested upstream versions), route templates with typed template parameters, internal `direct:` routes, code maps, script references (own files, digest-pinned), required engine capabilities |
-| Adapter project | Authored, top-level | `AdapterProject` | Declared record types and fields, profile and pack references pinned by version and digest, `templatedRoutes` instantiating pack templates, bindings of concrete contract operations to route ids, access profiles |
+| Adapter project | Authored, top-level | `AdapterProject` | A `project` block (ProjectIdentity `id` and `version`, CFG-ENV-6), declared record types and fields, profile and pack references pinned by version and digest, `templatedRoutes` instantiating pack templates, bindings of concrete contract operations to route ids, access profiles |
 | Runtime config | Operator | `AdapterRuntimeConfig` | Environment bindings: endpoint base URLs and TLS, secret references (credentials and the cursor key `cursorKeyRef`), `allowedPrivateCidrs`, listener, database, OIDC, audit retention, from platform shared blocks |
 | Fixture suite | Authored, per pack | `AdapterFixture` | Recorded upstream exchanges with expected facade responses, each with provenance (section 13.3) |
 | Generated outputs | Build artifacts | read-back, drift-gated | Per-deployment facade OpenAPI and computed schemas, emitted by `adapterctl compile` into the built package |
@@ -515,7 +515,17 @@ is in the profile's shape.
   `maximumRetryDelaySeconds` (Camel `maximumRedeliveryDelay`, default 60 s),
   `useCollisionAvoidance` (default false), `collisionAvoidanceFactor`
   (default 0.15), `retryWhile`. `delayPattern` is not ported. Redelivery is
-  per failing endpoint send, as in Camel. Divergence for writes: `check`
+  per failing endpoint send, as in Camel, but reaches only upstream
+  component sends (`http`, `graphql`; token requests sit outside it per
+  section 10.2), never a `to: direct:` send; that scope is a declared
+  divergence from Camel, which retries from the point of failure with no
+  endpoint-type restriction (camel.apache.org/manual/error-handler.html,
+  camel.apache.org/manual/exception-redelivery.html). `retryWhile` only
+  stops redelivery earlier: `maximumRedeliveries` remains the hard cap, and
+  `check` refuses `retryWhile` with `maximumRedeliveries` 0; divergence
+  from Camel, where `retryWhile` replaces the maximum
+  (camel.apache.org/components/4.22.x/eips/dead-letter-channel.html).
+  Divergence for writes: `check`
   refuses `maximumRedeliveries > 0` over a `to` whose `httpMethod` is not
   safe, unless that endpoint operation declares `idempotentUpstream: true`
   (a reviewed claim, for example DHIS2 creates with client-supplied UIDs).
@@ -538,7 +548,8 @@ is in the profile's shape.
 - `circuitBreaker`: resilience4j semantics and defaults, per EIP node,
   process-local state (as in Camel; replicas have independent breakers):
   `failureRateThreshold` 50, `slidingWindowType` count-based,
-  `slidingWindowSize` 100, `minimumNumberOfCalls` 100,
+  `slidingWindowCalls` (resilience4j `slidingWindowSize`) 100,
+  `minimumNumberOfCalls` 100,
   `openStateWaitSeconds` (resilience4j `waitDurationInOpenState`, 60 s),
   `maximumHalfOpenCalls` (resilience4j
   `permittedNumberOfCallsInHalfOpenState`, 10),
@@ -655,7 +666,7 @@ delivers the row.
 | Aggregation strategies | `components/next/eips/aggregate-eip.html` (strategies section) | `useLatest`, `useOriginal`, `groupedBody`, `rhai` | Additions: `jsonArrayAppend`, `jsonMerge` | 1 |
 | Default error handler | `manual/defaulterrorhandler.html`, `manual/error-handler.html` | `errorHandler: defaultErrorHandler`, `noErrorHandler` | Dead letter is always the journal | 1 |
 | Redelivery policy | `manual/error-handler.html` (redelivery) | Options in 8.7 | CFG-NAME spelling; write-safety refusal | 1 |
-| Exception clause | `manual/exception-clause.html` | `onException` | Closed class hierarchy; uncatchable boundary errors; a handled clause answers with a success body, problems come from the profile | 1 |
+| Exception clause | `manual/exception-clause.html` | `onException` | Closed class hierarchy; uncatchable boundary errors; a handled clause answers with a success body, problems come from the profile; `handled` and `continued` are booleans where Camel takes predicates | 1 |
 | Try, catch, finally | `manual/try-catch-finally.html` | `doTry`, `doCatch`, `doFinally` | Uncatchable boundary errors | 1 |
 | Circuit Breaker | `components/next/eips/circuitBreaker-eip.html`, `resilience4j-eip.html` | `circuitBreaker`, `onFallback` | Rejection always raises; fallback on rejection | 1 |
 | Throttler | `components/next/eips/throttle-eip.html` | `throttle` | Waits bounded by the deadline | 1 |
@@ -1056,7 +1067,8 @@ marked delivered by an increment that has not landed.
 ### 13.3 Pack conformance: fixture replay
 
 Every maintained pack ships recorded upstream exchanges with expected facade
-responses. `adapterctl fixtures replay` (and `check`) run them offline the
+responses; each fixture entry names the facade operation it exercises.
+`adapterctl fixtures replay` (and `check`) run them offline the
 way Camel tests do: every `http` and `graphql` send is intercepted
 (`interceptSendToEndpoint` with `skipSendToOriginalEndpoint`) and answered
 from the fixture in order; the outgoing request must match the recorded
@@ -1064,7 +1076,7 @@ method, path, query, and body digest; the facade response must equal the
 expected one byte for byte and validate against the generated schema; error
 fixtures must map to the expected problem codes.
 
-Provenance is mandatory and honest: each fixture records `kind` (`captured`
+Provenance is mandatory and honest: each fixture records `type` (`captured`
 from a running instance, or `documented`, synthesized from the source's
 published API documentation), the upstream version, and the reference (the
 instance version string, or the documentation URL). A pack declares its
