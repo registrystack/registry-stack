@@ -529,6 +529,19 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
                         }
                     });
                 }
+                // Camel makes stopOnException exclusive with the failure
+                // accounting: stopping at the first failure leaves no
+                // threshold to reach.
+                if split.stop_on_exception
+                    && (split.error_threshold.is_some() || split.maximum_failed_records.is_some())
+                {
+                    route_findings.push(finding(
+                        CheckCode::RouteStopOnExceptionExclusive,
+                        &format!("/routes/{id}/steps{path}"),
+                        "the split sets stopOnException beside its failure accounting",
+                        "Keep stopOnException or the failure accounting, not both.",
+                    ));
+                }
             }
             Step::Choice(choice) => {
                 for (when_index, when) in choice.when.iter().enumerate() {
@@ -2768,7 +2781,7 @@ mod tests {
                     aggregation_strategy: None,
                     stop_on_exception: false,
                     error_threshold: None,
-                    max_failed_records: None,
+                    maximum_failed_records: None,
                     steps: vec![],
                 }),
                 Step::Loop(LoopStep {
@@ -2800,7 +2813,7 @@ mod tests {
                     aggregation_strategy: None,
                     stop_on_exception: false,
                     error_threshold: None,
-                    max_failed_records: None,
+                    maximum_failed_records: None,
                     steps: vec![],
                 }),
                 Step::Loop(LoopStep {
@@ -3029,7 +3042,7 @@ mod tests {
                 ))),
                 stop_on_exception: false,
                 error_threshold: None,
-                max_failed_records: None,
+                maximum_failed_records: None,
                 steps: vec![],
             }),
             Step::Enrich(EnrichStep {
@@ -3080,7 +3093,7 @@ mod tests {
                 ))),
                 stop_on_exception: false,
                 error_threshold: None,
-                max_failed_records: None,
+                maximum_failed_records: None,
                 steps: vec![to_get("case-api")],
             })],
         };
@@ -3379,7 +3392,7 @@ mod tests {
                     aggregation_strategy: None,
                     stop_on_exception: true,
                     error_threshold: None,
-                    max_failed_records: None,
+                    maximum_failed_records: None,
                     steps: inner,
                 })],
             })],
@@ -3536,7 +3549,7 @@ mod tests {
                 aggregation_strategy: None,
                 stop_on_exception: stop,
                 error_threshold: None,
-                max_failed_records: None,
+                maximum_failed_records: None,
                 steps: vec![to_post("case-api", "cases.create")],
             })]
         };
@@ -3783,6 +3796,47 @@ mod tests {
         assert_clean(check_routes(&pack, &project_builder(&pack)));
     }
 
+    /// `stopOnException` and Camel's failure accounting are exclusive: a
+    /// split that stops on the first failure carries no threshold.
+    #[test]
+    fn split_refuses_stop_on_exception_with_a_failure_threshold() {
+        let split = |stop_on_exception: bool,
+                     error_threshold: Option<f64>,
+                     maximum_failed_records: Option<u64>| {
+            RouteDefinition {
+                id: id("fetchCase"),
+                from: RouteFrom {
+                    uri: direct("fetchCase"),
+                },
+                steps: vec![Step::Split(SplitStep {
+                    expression: rhai("scripts/pieces.rhai"),
+                    maximum_items: Some(BoundedU64::<1, 100_000>::new(10).expect("items")),
+                    aggregation_strategy: None,
+                    stop_on_exception,
+                    error_threshold,
+                    maximum_failed_records: maximum_failed_records
+                        .map(|records| BoundedU64::<1, 100_000>::new(records).expect("records")),
+                    steps: vec![],
+                })],
+            }
+        };
+        let both = split(true, Some(0.5), None);
+        let pack = pack_builder(vec![], vec![both]);
+        assert_has(
+            &check_routes(&pack, &project_builder(&pack)),
+            CheckCode::RouteStopOnExceptionExclusive,
+        );
+        let records = split(true, None, Some(5));
+        let pack = pack_builder(vec![], vec![records]);
+        assert_has(
+            &check_routes(&pack, &project_builder(&pack)),
+            CheckCode::RouteStopOnExceptionExclusive,
+        );
+        let accounted = split(false, Some(0.5), None);
+        let pack = pack_builder(vec![], vec![accounted]);
+        assert_clean(check_routes(&pack, &project_builder(&pack)));
+    }
+
     /// An exception clause naming no class can never match, and `handled`
     /// with `continued` contradicts itself: the clause both consumes the
     /// error and resumes past it.
@@ -3954,7 +4008,7 @@ mod tests {
             aggregation_strategy: None,
             stop_on_exception: false,
             error_threshold: None,
-            max_failed_records: None,
+            maximum_failed_records: None,
             steps,
         })
     }

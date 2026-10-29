@@ -378,7 +378,7 @@ pub struct SetPropertyStep {
 /// A `split` step (`products/adapter/CONCEPT.md` sections 8.6 and 5.5).
 /// `parallelProcessing`, `streaming`, and `timeout` are not ported.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SplitStep {
     /// The expression that produces the pieces.
@@ -392,15 +392,21 @@ pub struct SplitStep {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub aggregation_strategy: Option<AggregationStrategy>,
     /// Whether a failing piece stops the split (Camel default false). A
-    /// non-safe send inside a split requires true.
+    /// non-safe send inside a split requires true. Exclusive with the
+    /// failure accounting below; the checks refuse both.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub stop_on_exception: bool,
-    /// Camel's failure accounting: failed pieces that stop the split.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub error_threshold: Option<BoundedU64<1, 100_000>>,
+    /// Camel's failure accounting: the share of failed pieces (a ratio
+    /// from 0 to 1) that stops the split.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "error_threshold_ratio"
+    )]
+    pub error_threshold: Option<f64>,
     /// Camel's failure accounting: the maximum failed pieces.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_failed_records: Option<BoundedU64<1, 100_000>>,
+    pub maximum_failed_records: Option<BoundedU64<1, 100_000>>,
     /// The steps applied to each piece.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub steps: Vec<Step>,
@@ -927,6 +933,32 @@ impl std::hash::Hash for RedeliveryOptions {
     }
 }
 
+impl PartialEq for SplitStep {
+    fn eq(&self, other: &Self) -> bool {
+        self.expression == other.expression
+            && self.maximum_items == other.maximum_items
+            && self.aggregation_strategy == other.aggregation_strategy
+            && self.stop_on_exception == other.stop_on_exception
+            && self.error_threshold.map(f64::to_bits) == other.error_threshold.map(f64::to_bits)
+            && self.maximum_failed_records == other.maximum_failed_records
+            && self.steps == other.steps
+    }
+}
+
+impl Eq for SplitStep {}
+
+impl std::hash::Hash for SplitStep {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.expression.hash(state);
+        self.maximum_items.hash(state);
+        self.aggregation_strategy.hash(state);
+        self.stop_on_exception.hash(state);
+        self.error_threshold.map(f64::to_bits).hash(state);
+        self.maximum_failed_records.hash(state);
+        self.steps.hash(state);
+    }
+}
+
 impl registry_platform_yaml::Identified for RouteDefinition {
     fn id(&self) -> &str {
         self.id.as_str()
@@ -1050,6 +1082,21 @@ where
         Err(serde::de::Error::custom(
             "backOffMultiplier expects a finite number of at least 1",
         ))
+    }
+}
+
+/// Camel's split failure share is a ratio from 0 to 1; a count there is
+/// Camel's old shape and the reader refuses it.
+fn error_threshold_ratio<'de, D>(deserializer: D) -> Result<Option<f64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<f64>::deserialize(deserializer)?;
+    match value {
+        Some(value) if value.is_finite() && (0.0..=1.0).contains(&value) => Ok(Some(value)),
+        _ => Err(serde::de::Error::custom(
+            "errorThreshold expects a finite ratio from 0 to 1",
+        )),
     }
 }
 
@@ -1817,5 +1864,29 @@ mod tests {
         assert_eq!(policy.retry_delay_seconds.get(), 1);
         assert_eq!(policy.maximum_retry_delay_seconds.get(), 60);
         assert_eq!(policy.back_off_multiplier, 2.0);
+    }
+
+    /// Camel's split `errorThreshold` is a ratio from 0 to 1, and the
+    /// failed-records bound names its unit (CFG-NAME-3).
+    #[test]
+    fn split_threshold_is_a_ratio_and_the_records_bound_names_its_unit() {
+        let split = |body: &str| {
+            serde_json::from_str::<SplitStep>(&format!(
+                r#"{{ "expression": {{ "constant": 1 }}, {body} }}"#
+            ))
+        };
+        let ratio: SplitStep = split(r#""errorThreshold": 0.5"#).expect("parse");
+        assert_eq!(ratio.error_threshold, Some(0.5));
+        assert!(split(r#""errorThreshold": 1.5"#).is_err());
+        assert!(split(r#""errorThreshold": -0.1"#).is_err());
+        assert!(split(r#""errorThreshold": "half""#).is_err());
+        let records: SplitStep = split(r#""maximumFailedRecords": 5"#).expect("parse");
+        assert_eq!(
+            records.maximum_failed_records,
+            Some(BoundedU64::<1, 100_000>::new(5).expect("records"))
+        );
+        let json = serde_json::to_value(&records).expect("serialize");
+        assert!(json.get("maximumFailedRecords").is_some());
+        assert!(json.get("maxFailedRecords").is_none());
     }
 }

@@ -71,6 +71,7 @@ pub enum CheckCode {
     RouteRedeliveryOverNonSafeSend,
     RouteRedeliveryWithoutUpstreamSend,
     RouteRetryWhileWithoutRedeliveries,
+    RouteStopOnExceptionExclusive,
     RouteUncatchableClause,
     RouteUnknownDirectTarget,
     RouteUnknownEndpoint,
@@ -132,6 +133,7 @@ impl CheckCode {
         Self::RouteRedeliveryOverNonSafeSend,
         Self::RouteRedeliveryWithoutUpstreamSend,
         Self::RouteRetryWhileWithoutRedeliveries,
+        Self::RouteStopOnExceptionExclusive,
         Self::RouteUncatchableClause,
         Self::RouteUnknownDirectTarget,
         Self::RouteUnknownEndpoint,
@@ -202,6 +204,7 @@ impl CheckCode {
             Self::RouteRetryWhileWithoutRedeliveries => {
                 "adapter.route.retry-while-without-redeliveries"
             }
+            Self::RouteStopOnExceptionExclusive => "adapter.route.stop-on-exception-exclusive",
             Self::RouteUncatchableClause => "adapter.route.uncatchable-clause",
             Self::RouteUnknownDirectTarget => "adapter.route.unknown-direct-target",
             Self::RouteUnknownEndpoint => "adapter.route.unknown-endpoint",
@@ -256,6 +259,7 @@ impl CheckCode {
             | Self::RouteRedeliveryOverNonSafeSend
             | Self::RouteRedeliveryWithoutUpstreamSend
             | Self::RouteRetryWhileWithoutRedeliveries
+            | Self::RouteStopOnExceptionExclusive
             | Self::RouteUncatchableClause
             | Self::RouteUnknownDirectTarget
             | Self::RouteUnknownEndpoint
