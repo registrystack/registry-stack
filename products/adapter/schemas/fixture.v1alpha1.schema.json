@@ -1,0 +1,238 @@
+{
+  "$defs": {
+    "ExternalId": {
+      "description": "An identifier another system issues, written exactly as its issuer gives it.",
+      "maxLength": 512,
+      "minLength": 1,
+      "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$",
+      "type": "string"
+    },
+    "FixtureEntry": {
+      "additionalProperties": false,
+      "description": "One fixture entry: a recorded upstream exchange and the facade response\nthe pack must produce for it.",
+      "properties": {
+        "expectedFacadeResponse": {
+          "$ref": "#/$defs/RecordedResponse",
+          "description": "The facade response the replay expects."
+        },
+        "given": {
+          "$ref": "#/$defs/RecordedRequest",
+          "description": "The recorded upstream exchange."
+        },
+        "upstreamResponse": {
+          "$ref": "#/$defs/RecordedResponse",
+          "description": "The upstream reply the route works from."
+        }
+      },
+      "required": [
+        "given",
+        "upstreamResponse",
+        "expectedFacadeResponse"
+      ],
+      "type": "object"
+    },
+    "FixtureProvenance": {
+      "description": "Where a fixture's recording came from\n(`products/adapter/CONCEPT.md` section 13.3): captured from a live\nsystem, or documented as an authored reconstruction.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Recorded from the named live system.",
+          "properties": {
+            "kind": {
+              "const": "captured",
+              "type": "string"
+            },
+            "reference": {
+              "description": "Where the recording came from, for review.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "reference"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Authored from the source system's documented behavior.",
+          "properties": {
+            "kind": {
+              "const": "documented",
+              "type": "string"
+            },
+            "reference": {
+              "description": "The documentation the reconstruction follows, for review.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "reference"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "HttpMethod": {
+      "description": "An HTTP method a facade operation or an upstream send may declare. The\nmethod decides send safety: `GET` is safe, the write methods are not\n(`products/adapter/CONCEPT.md` sections 8.7 and 9).",
+      "enum": [
+        "GET",
+        "POST",
+        "PUT",
+        "PATCH"
+      ],
+      "type": "string"
+    },
+    "Intercept": {
+      "description": "One declared intercept. Fixture replay intercepts `http` and `graphql`\nsends and the token endpoint of an OAuth2 kind; nothing else is\ninterceptable.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Intercept every send to the named endpoint.",
+          "properties": {
+            "endpoint": {
+              "$ref": "#/$defs/ExternalId",
+              "description": "The pack endpoint id whose sends replay from the fixtures."
+            },
+            "kind": {
+              "const": "endpoint",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "endpoint"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Intercept the token requests of the named endpoint's OAuth2 kind\n(`products/adapter/CONCEPT.md` section 10.2).",
+          "properties": {
+            "endpoint": {
+              "$ref": "#/$defs/ExternalId",
+              "description": "The pack endpoint whose token requests replay from the\nfixtures."
+            },
+            "kind": {
+              "const": "token-endpoint",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "endpoint"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "RecordedRequest": {
+      "additionalProperties": false,
+      "description": "One recorded upstream request the fixture replay matches against.",
+      "properties": {
+        "body": {
+          "description": "The request body."
+        },
+        "endpoint": {
+          "$ref": "#/$defs/ExternalId",
+          "description": "The endpoint the request goes to."
+        },
+        "method": {
+          "$ref": "#/$defs/HttpMethod",
+          "description": "The request method."
+        },
+        "path": {
+          "description": "The request path, with any template segments already filled.",
+          "type": "string"
+        },
+        "query": {
+          "description": "The encoded query string.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "endpoint",
+        "method",
+        "path"
+      ],
+      "type": "object"
+    },
+    "RecordedResponse": {
+      "additionalProperties": false,
+      "description": "One recorded upstream reply.",
+      "properties": {
+        "body": {
+          "description": "The reply body."
+        },
+        "status": {
+          "description": "The status the upstream answered with.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "https://id.registrystack.org/schemas/adapter/fixture/fixture.v1alpha1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "The fixture suite artifact (`AdapterFixture`), authored per pack.",
+  "properties": {
+    "apiVersion": {
+      "const": "id.registrystack.org/formats/adapter/fixture/v1alpha1",
+      "type": "string"
+    },
+    "entries": {
+      "default": [],
+      "description": "The recorded exchanges and expectations.",
+      "items": {
+        "$ref": "#/$defs/FixtureEntry"
+      },
+      "type": "array"
+    },
+    "id": {
+      "$ref": "#/$defs/ExternalId",
+      "description": "The suite identifier."
+    },
+    "intercepts": {
+      "description": "The sends this suite intercepts, by endpoint id and token endpoint.\nA route never declares its own test intercepts.",
+      "items": {
+        "$ref": "#/$defs/Intercept"
+      },
+      "type": "array"
+    },
+    "kind": {
+      "const": "AdapterFixture",
+      "type": "string"
+    },
+    "pack": {
+      "$ref": "#/$defs/ExternalId",
+      "description": "The pack this suite replays."
+    },
+    "provenance": {
+      "$ref": "#/$defs/FixtureProvenance",
+      "description": "Where the recording came from."
+    },
+    "upstreamVersion": {
+      "description": "The upstream version the recording reflects.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "apiVersion",
+    "id",
+    "intercepts",
+    "kind",
+    "pack",
+    "provenance",
+    "upstreamVersion"
+  ],
+  "title": "Registry Adapter fixture suite",
+  "type": "object"
+}

@@ -1,0 +1,172 @@
+{
+  "$defs": {
+    "EnvelopeTemplate": {
+      "description": "An envelope template: a JSON template whose string members carry\n`{{slot}}` placeholders from the closed vocabulary\n(`products/adapter/CONCEPT.md` section 7). The template is data; the\nengine fills it.",
+      "type": "string"
+    },
+    "ExternalId": {
+      "description": "An identifier another system issues, written exactly as its issuer gives it.",
+      "maxLength": 512,
+      "minLength": 1,
+      "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$",
+      "type": "string"
+    },
+    "HttpMethod": {
+      "description": "An HTTP method a facade operation or an upstream send may declare. The\nmethod decides send safety: `GET` is safe, the write methods are not\n(`products/adapter/CONCEPT.md` sections 8.7 and 9).",
+      "enum": [
+        "GET",
+        "POST",
+        "PUT",
+        "PATCH"
+      ],
+      "type": "string"
+    },
+    "PaginationParameters": {
+      "additionalProperties": false,
+      "description": "The pagination parameters of a search operation: the cursor and\npage-size query parameter names and their bounds\n(`products/adapter/CONCEPT.md` section 7). The engine owns encoding the\ncursor; the profile owns the names.",
+      "properties": {
+        "cursorParameter": {
+          "$ref": "#/$defs/ExternalId",
+          "description": "The cursor query parameter name."
+        },
+        "pageSizeMaximum": {
+          "description": "The largest page size a caller may ask for.",
+          "format": "uint64",
+          "maximum": 100000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "pageSizeMinimum": {
+          "description": "The smallest page size a caller may ask for.",
+          "format": "uint64",
+          "maximum": 10000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "pageSizeParameter": {
+          "$ref": "#/$defs/ExternalId",
+          "description": "The page-size query parameter name."
+        }
+      },
+      "required": [
+        "cursorParameter",
+        "pageSizeParameter",
+        "pageSizeMinimum",
+        "pageSizeMaximum"
+      ],
+      "type": "object"
+    },
+    "ParameterizedPart": {
+      "additionalProperties": false,
+      "description": "One parameterized part: a part of the profile a deployment declares at\nbind time (`products/adapter/CONCEPT.md` sections 6 and 7).",
+      "properties": {
+        "description": {
+          "description": "What the part means, for review.",
+          "type": "string"
+        },
+        "name": {
+          "$ref": "#/$defs/ExternalId",
+          "description": "The part name."
+        }
+      },
+      "required": [
+        "name",
+        "description"
+      ],
+      "type": "object"
+    },
+    "ProfileOperation": {
+      "additionalProperties": false,
+      "description": "One facade operation, declared by id\n(`products/adapter/CONCEPT.md` sections 6 and 7). The id is a\nprofile-declared bounded string (CFG-ID-5), never an engine enum.",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/ExternalId",
+          "description": "The profile-declared operation id a binding names."
+        },
+        "method": {
+          "$ref": "#/$defs/HttpMethod",
+          "description": "The facade method."
+        },
+        "pagination": {
+          "$ref": "#/$defs/PaginationParameters",
+          "description": "The pagination parameters of a search operation."
+        },
+        "path": {
+          "description": "The facade path template, e.g. `/v2/cases/{type}`.",
+          "type": "string"
+        },
+        "requestEnvelope": {
+          "$ref": "#/$defs/EnvelopeTemplate",
+          "description": "Where a writable record sits in an incoming body. A write\noperation's request envelope must name the `record` slot."
+        },
+        "responseEnvelope": {
+          "$ref": "#/$defs/EnvelopeTemplate",
+          "description": "The response envelope; must name its result slot."
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "path",
+        "responseEnvelope"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "https://id.registrystack.org/schemas/adapter/profile/profile.v1alpha1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "The facade profile artifact (`AdapterProfile`): the operation set, the\nenvelope templates, the pagination parameters, and the problem codes\nand problem envelope.",
+  "properties": {
+    "apiVersion": {
+      "const": "id.registrystack.org/formats/adapter/profile/v1alpha1",
+      "type": "string"
+    },
+    "id": {
+      "$ref": "#/$defs/ExternalId",
+      "description": "The profile identifier a project pins."
+    },
+    "kind": {
+      "const": "AdapterProfile",
+      "type": "string"
+    },
+    "operations": {
+      "description": "The operations the profile serves.",
+      "items": {
+        "$ref": "#/$defs/ProfileOperation"
+      },
+      "type": "array"
+    },
+    "parameterizedParts": {
+      "default": [],
+      "description": "The parts of the profile a deployment declares at bind time.",
+      "items": {
+        "$ref": "#/$defs/ParameterizedPart"
+      },
+      "type": "array",
+      "uniqueItems": true
+    },
+    "problemCodes": {
+      "description": "The facade problem codes, in the profile's own closed list. Route\nclause bodies must carry one of these codes\n(`products/adapter/CONCEPT.md` section 8.7).",
+      "items": {
+        "$ref": "#/$defs/ExternalId"
+      },
+      "type": "array",
+      "uniqueItems": true
+    },
+    "problemEnvelope": {
+      "$ref": "#/$defs/EnvelopeTemplate",
+      "description": "The problem envelope template; must carry the `problemCode` slot."
+    }
+  },
+  "required": [
+    "apiVersion",
+    "id",
+    "kind",
+    "operations",
+    "problemCodes",
+    "problemEnvelope"
+  ],
+  "title": "Registry Adapter facade profile",
+  "type": "object"
+}

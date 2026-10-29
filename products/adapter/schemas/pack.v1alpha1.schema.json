@@ -1,0 +1,1728 @@
+{
+  "$defs": {
+    "AggregationStrategy": {
+      "description": "An aggregation strategy, compiled in and named after Camel's built-ins,\nplus two JSON additions marked as such in\n`products/adapter/CONCEPT.md` section 8.6. Externally tagged by name.",
+      "oneOf": [
+        {
+          "const": "useLatest",
+          "description": "Keep the newest exchange: the default for `enrich`, which replaces\nthe body with the resource reply.",
+          "type": "string"
+        },
+        {
+          "const": "useOriginal",
+          "description": "Keep the original exchange: the default for `split`.",
+          "type": "string"
+        },
+        {
+          "const": "groupedBody",
+          "description": "Concatenate the split results into one list, Camel's `groupedBody`.",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Append one array's elements into another, refusing a duplicate\n`uniqueBy` value with the `aggregation.duplicate` class.",
+          "properties": {
+            "jsonArrayAppend": {
+              "properties": {
+                "from": {
+                  "description": "The array property the elements are appended into.",
+                  "type": "string"
+                },
+                "into": {
+                  "description": "The message body member the array lands in.",
+                  "type": "string"
+                },
+                "uniqueBy": {
+                  "description": "Member whose value must stay unique across appended elements.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "from",
+                "into"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "jsonArrayAppend"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Merge one JSON object into another. No duplicate refusal.",
+          "properties": {
+            "jsonMerge": {
+              "properties": {
+                "from": {
+                  "description": "The object property merged into the body.",
+                  "type": "string"
+                },
+                "into": {
+                  "description": "The message body member the object lands in.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "from",
+                "into"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "jsonMerge"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A custom strategy: a Rhai entrypoint over the old and new bodies.",
+          "properties": {
+            "rhai": {
+              "$ref": "#/$defs/RhaiExpression"
+            }
+          },
+          "required": [
+            "rhai"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Capabilities": {
+      "additionalProperties": false,
+      "description": "The engine capabilities a pack requires: the components, languages, and\nEIPs its routes use. The ctl refuses a pack the binary cannot run\n(`products/adapter/CONCEPT.md` section 6).",
+      "properties": {
+        "components": {
+          "default": [],
+          "description": "The components the pack's routes reach.",
+          "items": {
+            "$ref": "#/$defs/ComponentKind"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "eips": {
+          "default": [],
+          "description": "The EIPs the pack's routes use.",
+          "items": {
+            "$ref": "#/$defs/Eip"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "languages": {
+          "default": [],
+          "description": "The expression languages the pack's routes use.",
+          "items": {
+            "$ref": "#/$defs/Language"
+          },
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "type": "object"
+    },
+    "ChoiceStep": {
+      "additionalProperties": false,
+      "description": "A `choice` step: first matching predicate wins, as Camel's Content-Based\nRouter.",
+      "properties": {
+        "otherwise": {
+          "$ref": "#/$defs/Otherwise",
+          "description": "The fallback clause."
+        },
+        "when": {
+          "description": "The clauses, in declaration order.",
+          "items": {
+            "$ref": "#/$defs/When"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "when"
+      ],
+      "type": "object"
+    },
+    "CircuitBreakerStep": {
+      "description": "A `circuitBreaker` step: resilience4j semantics and defaults\n(`products/adapter/CONCEPT.md` section 8.7), per EIP node,\nprocess-local. Divergence: a rejected call always raises\n`breaker.open`, and `onFallback` runs on failure and on rejection.",
+      "properties": {
+        "automaticTransitionFromOpenToHalfOpenEnabled": {
+          "description": "Automatic open-to-half-open transition (default false).",
+          "type": "boolean"
+        },
+        "failureRateThreshold": {
+          "description": "Failure-rate percentage that opens the breaker (resilience4j\ndefault 50).",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "maximumHalfOpenCalls": {
+          "description": "Permitted half-open calls (default 10).",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "minimumNumberOfCalls": {
+          "description": "Calls recorded before the breaker judges (default 100).",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "onFallback": {
+          "$ref": "#/$defs/OnFallback",
+          "description": "The fallback, run on failure and on rejection; its output is\nvalidated like any route output."
+        },
+        "openStateWaitSeconds": {
+          "description": "Seconds the breaker stays open (resilience4j\n`waitDurationInOpenState`, default 60).",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "slidingWindowSize": {
+          "description": "The count-based window size (default 100); the window type is fixed\ncount-based and not configurable.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "slowCallDurationThresholdSeconds": {
+          "description": "Seconds over which a call counts as slow (default 60).",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "slowCallRateThreshold": {
+          "description": "Slow-call-rate percentage that opens the breaker (default 100).",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "steps": {
+          "description": "The guarded steps.",
+          "items": {
+            "$ref": "#/$defs/Step"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "CodeMap": {
+      "additionalProperties": false,
+      "description": "One code map: an explicit conversion table, the port of Camel's type\nconverter (`products/adapter/CONCEPT.md` sections 8.6 and 8.10). No\nconverter chains; a key with no entry raises `conversion.unmapped`.\nThe member stays small enough for CFG-YAML-6 so its content can move to\na digest-pinned data file without a format change.",
+      "properties": {
+        "entries": {
+          "additionalProperties": true,
+          "description": "The conversion entries.",
+          "type": "object"
+        },
+        "id": {
+          "$ref": "#/$defs/ExternalId",
+          "description": "The map identifier."
+        }
+      },
+      "required": [
+        "id",
+        "entries"
+      ],
+      "type": "object"
+    },
+    "ComponentKind": {
+      "description": "A component kind, the ported subset of Camel's component library\n(`products/adapter/CONCEPT.md` section 8.8). `rest` is the facade\nconsumer; `direct` calls routes in process; `http` and `graphql` are the\nupstream producers.",
+      "enum": [
+        "direct",
+        "http",
+        "rest",
+        "graphql"
+      ],
+      "type": "string"
+    },
+    "DefaultErrorHandler": {
+      "additionalProperties": false,
+      "description": "Camel's `defaultErrorHandler`: a redelivery policy nested under\n`redeliveryPolicy`, as Camel's YAML DSL writes it\n(`products/adapter/CONCEPT.md` section 8.7; CFG-NAME spelling inside).\n`delayPattern` is not ported. Redelivery is per failing endpoint send,\nas in Camel.",
+      "properties": {
+        "redeliveryPolicy": {
+          "$ref": "#/$defs/RedeliveryOptions",
+          "description": "The nested redelivery policy; the default carries no redelivery,\nso the error propagates after the first attempt."
+        }
+      },
+      "type": "object"
+    },
+    "Digest": {
+      "description": "A SHA-256 digest: `sha256:` followed by 64 lowercase hex digits.",
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "DoCatch": {
+      "description": "A `doCatch` clause of a `doTry`.",
+      "properties": {
+        "exception": {
+          "description": "The matched classes.",
+          "items": {
+            "$ref": "#/$defs/ErrorClass"
+          },
+          "type": "array"
+        },
+        "onWhen": {
+          "$ref": "#/$defs/Expression",
+          "description": "Narrow the clause with a predicate."
+        },
+        "steps": {
+          "description": "The clause's steps.",
+          "items": {
+            "$ref": "#/$defs/Step"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "exception"
+      ],
+      "type": "object"
+    },
+    "DoFinally": {
+      "additionalProperties": false,
+      "description": "The `doFinally` clause of a `doTry`.",
+      "properties": {
+        "steps": {
+          "description": "The always-run steps.",
+          "items": {
+            "$ref": "#/$defs/Step"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "DoTryStep": {
+      "additionalProperties": false,
+      "description": "A `doTry` step, ported as in Camel (`manual/try-catch-finally.html`).",
+      "properties": {
+        "doCatch": {
+          "description": "The catch clauses, in declaration order.",
+          "items": {
+            "$ref": "#/$defs/DoCatch"
+          },
+          "type": "array"
+        },
+        "doFinally": {
+          "$ref": "#/$defs/DoFinally",
+          "description": "The finally clause."
+        },
+        "steps": {
+          "description": "The guarded steps.",
+          "items": {
+            "$ref": "#/$defs/Step"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "Eip": {
+      "description": "An EIP a pack may require of the engine, named after the step union in\n`crate::route` (`products/adapter/CONCEPT.md` section 8.6).",
+      "enum": [
+        "choice",
+        "circuitBreaker",
+        "doTry",
+        "enrich",
+        "errorHandler",
+        "filter",
+        "idempotentConsumer",
+        "loop",
+        "onException",
+        "removeHeader",
+        "removeProperty",
+        "script",
+        "setBody",
+        "setHeader",
+        "setProperty",
+        "split",
+        "stop",
+        "throttle",
+        "to",
+        "transform",
+        "validate"
+      ],
+      "type": "string"
+    },
+    "Endpoint": {
+      "additionalProperties": false,
+      "description": "One endpoint a route may send to: the component, the authentication\nkind, the declared response headers, the endpoint operations with their\n`idempotentUpstream` claims, and the tested upstream versions\n(`products/adapter/CONCEPT.md` sections 6, 8.8, and 10.2).",
+      "properties": {
+        "authentication": {
+          "$ref": "#/$defs/EndpointAuthentication",
+          "description": "The upstream authentication kind, with its non-secret parameters."
+        },
+        "component": {
+          "$ref": "#/$defs/ComponentKind",
+          "description": "The producer component: `http` or `graphql`."
+        },
+        "id": {
+          "$ref": "#/$defs/ExternalId",
+          "description": "The endpoint identifier `http:` and `graphql:` URIs name."
+        },
+        "operationName": {
+          "description": "The GraphQL operation name.",
+          "type": "string"
+        },
+        "operations": {
+          "description": "The operations this endpoint serves, each with its\n`idempotentUpstream` claim.",
+          "items": {
+            "$ref": "#/$defs/EndpointOperation"
+          },
+          "type": "array"
+        },
+        "queryFile": {
+          "description": "The GraphQL query file, from the pack's query-file inventory.\nRequired for a `graphql` endpoint.",
+          "type": "string"
+        },
+        "responseHeaders": {
+          "description": "The response headers the engine copies onto the exchange, Camel's\n`HeaderFilterStrategy` as an allowlist.",
+          "items": {
+            "$ref": "#/$defs/ExternalId"
+          },
+          "type": "array"
+        },
+        "testedVersions": {
+          "description": "The upstream versions this pack was tested against.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "variables": {
+          "$ref": "#/$defs/Expression",
+          "description": "The GraphQL variables expression."
+        }
+      },
+      "required": [
+        "id",
+        "component",
+        "authentication"
+      ],
+      "type": "object"
+    },
+    "EndpointAuthentication": {
+      "description": "The authentication kind a pack endpoint declares\n(`products/adapter/CONCEPT.md` section 10.2): the kind tag itself, plus\nonly the API-intrinsic parameters (`headerName` for `static-api-key`,\n`scheme` for `static-authorization`). Every credential value lives in\nthe runtime config, in [`RuntimeCredential`].",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Nothing is sent. The checks admit it only for a numeric-loopback\norigin or an endpoint with an mTLS client identity.",
+          "properties": {
+            "none": {
+              "additionalProperties": false,
+              "type": "object"
+            }
+          },
+          "required": [
+            "none"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "`Authorization: Basic` from the runtime's `usernameRef` and\n`passwordRef`.",
+          "properties": {
+            "basic": {
+              "additionalProperties": false,
+              "type": "object"
+            }
+          },
+          "required": [
+            "basic"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "`Authorization: <scheme> <token>` from the runtime's `tokenRef`;\n`scheme` defaults to `Bearer`, Evidence's spelling.",
+          "properties": {
+            "static-authorization": {
+              "additionalProperties": false,
+              "properties": {
+                "scheme": {
+                  "description": "The RFC 9110 scheme the resolved token is presented under.",
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            }
+          },
+          "required": [
+            "static-authorization"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "One declared header from the runtime's `valueRef`; reserved header\nnames are refused.",
+          "properties": {
+            "static-api-key": {
+              "additionalProperties": false,
+              "properties": {
+                "headerName": {
+                  "description": "The header the key travels under.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "headerName"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "static-api-key"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The RFC 6749 client-credentials grant with a shared secret; the\nruntime binds `tokenEndpoint`, `clientIdRef`, and `clientSecretRef`.",
+          "properties": {
+            "oauth2-client-credentials": {
+              "additionalProperties": false,
+              "type": "object"
+            }
+          },
+          "required": [
+            "oauth2-client-credentials"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The RFC 7523 private-key-jwt grant; the runtime binds\n`tokenEndpoint`, `clientIdRef`, and `clientAssertionKeyRef`. The\nsigned assertion always travels in the form body, as in Evidence,\nso this kind carries no placement parameter.",
+          "properties": {
+            "oauth2-private-key-jwt": {
+              "additionalProperties": false,
+              "type": "object"
+            }
+          },
+          "required": [
+            "oauth2-private-key-jwt"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "EndpointOperation": {
+      "additionalProperties": false,
+      "description": "One operation of an endpoint, with the reviewed write claim\n(`products/adapter/CONCEPT.md` sections 8.7 and 9): redelivery over a\nnon-safe send is admitted only when the endpoint operation declares\n`idempotentUpstream: true`.",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/ExternalId",
+          "description": "The operation identifier a `to` step's `operation` member names."
+        },
+        "idempotentUpstream": {
+          "description": "The reviewed claim that repeating this operation's send is safe,\nfor example an upstream create with client-supplied UIDs.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "type": "object"
+    },
+    "EnrichStep": {
+      "additionalProperties": false,
+      "description": "An `enrich` step: call a static endpoint and merge the reply. Static URI\nonly; no `pollEnrich`. Absent a strategy, the reply replaces the body\n(Camel's default).",
+      "properties": {
+        "aggregateOnException": {
+          "description": "Whether to aggregate the reply of a failed call (Camel default\nfalse; failure propagates to the error handler).",
+          "type": "boolean"
+        },
+        "aggregationStrategy": {
+          "$ref": "#/$defs/AggregationStrategy",
+          "description": "The aggregation strategy."
+        },
+        "uri": {
+          "$ref": "#/$defs/SendUri",
+          "description": "The static destination."
+        }
+      },
+      "required": [
+        "uri"
+      ],
+      "type": "object"
+    },
+    "ErrorClass": {
+      "description": "A closed error class, the port of Camel's Java exception hierarchy\n(`products/adapter/CONCEPT.md` section 8.7). Clauses match the closest\nclass across the error and its cause; the five uncatchable classes name\nthe boundary no `onException` or `doCatch` may handle.",
+      "enum": [
+        "Upstream",
+        "UpstreamHttp",
+        "UpstreamTimeout",
+        "UpstreamConnection",
+        "UpstreamMalformed",
+        "UpstreamTooLarge",
+        "UpstreamRedirect",
+        "BreakerOpen",
+        "ThrottleRejected",
+        "Validation",
+        "ConversionUnmapped",
+        "AggregationDuplicate",
+        "Script",
+        "BudgetExhausted",
+        "CredentialRejected",
+        "DisclosureViolation",
+        "EgressRefused",
+        "ScriptBudgetExceeded"
+      ],
+      "type": "string"
+    },
+    "ErrorHandlerStep": {
+      "additionalProperties": false,
+      "description": "The route `errorHandler` step: `defaultErrorHandler` (no redelivery,\nthe error propagates) or `noErrorHandler`. Exactly one member is set.",
+      "properties": {
+        "defaultErrorHandler": {
+          "$ref": "#/$defs/DefaultErrorHandler",
+          "description": "The default error handler with its redelivery policy."
+        },
+        "noErrorHandler": {
+          "$ref": "#/$defs/NoErrorHandler",
+          "description": "The no-op error handler: failures propagate untouched."
+        }
+      },
+      "type": "object"
+    },
+    "Expression": {
+      "description": "An expression in one of the ported languages, externally tagged by\nlanguage name as in Camel's YAML DSL (`products/adapter/CONCEPT.md`\nsection 8.5). `rhai` replaces Simple, Groovy, JavaScript, and `bean`.\nA predicate is an expression whose result is a boolean; the runtime\nnever coerces.\n\nRound-trip forms are covered beside the steps that carry them, in\n`crate::route`.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "A literal JSON value, Camel's `constant` language.",
+          "properties": {
+            "constant": true
+          },
+          "required": [
+            "constant"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A message header by name, Camel's `header` language.",
+          "properties": {
+            "header": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "header"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "An exchange property by name, Camel's `exchangeProperty` language.",
+          "properties": {
+            "exchangeProperty": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "exchangeProperty"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "An inline RFC 9535 JSONPath selector over the message body, as\nCamel's `jsonpath` language but on the IETF standard.",
+          "properties": {
+            "jsonpath": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "jsonpath"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A digest-pinned Rhai script and entrypoint.",
+          "properties": {
+            "rhai": {
+              "$ref": "#/$defs/RhaiExpression"
+            }
+          },
+          "required": [
+            "rhai"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ExternalId": {
+      "description": "An identifier another system issues, written exactly as its issuer gives it.",
+      "maxLength": 512,
+      "minLength": 1,
+      "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$",
+      "type": "string"
+    },
+    "FilterStep": {
+      "additionalProperties": false,
+      "description": "A `filter` step: an inline predicate beside the guarded steps, as\nCamel's Message Filter writes it. `CamelFilterMatched` records the\noutcome; the route continues after the filter either way. Exactly one\nlanguage key must be present; `crate::checks` refuses zero or several\nunder an adapter code, and the reader refuses any unknown key\n(`config.unknown-key`, CFG-SCHEMA-8).",
+      "properties": {
+        "constant": {
+          "description": "The `constant` language member."
+        },
+        "exchangeProperty": {
+          "description": "The `exchangeProperty` language member.",
+          "type": "string"
+        },
+        "header": {
+          "description": "The `header` language member.",
+          "type": "string"
+        },
+        "jsonpath": {
+          "description": "The `jsonpath` language member.",
+          "type": "string"
+        },
+        "rhai": {
+          "$ref": "#/$defs/RhaiExpression",
+          "description": "The `rhai` language member."
+        },
+        "steps": {
+          "description": "The steps that run only on match.",
+          "items": {
+            "$ref": "#/$defs/Step"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "HttpMethod": {
+      "description": "An HTTP method a facade operation or an upstream send may declare. The\nmethod decides send safety: `GET` is safe, the write methods are not\n(`products/adapter/CONCEPT.md` sections 8.7 and 9).",
+      "enum": [
+        "GET",
+        "POST",
+        "PUT",
+        "PATCH"
+      ],
+      "type": "string"
+    },
+    "IdempotentConsumerStep": {
+      "description": "An `idempotentConsumer` step (`products/adapter/CONCEPT.md` section 9).\nThe key is namespaced by caller identity and concrete operation and\nbound to the request digest; a duplicate replays the recorded facade\nresponse; `skipDuplicate` is not ported.",
+      "properties": {
+        "completionEager": {
+          "description": "Release the key on completion (Camel default false).",
+          "type": "boolean"
+        },
+        "eager": {
+          "description": "Add the key before processing (Camel default true).",
+          "type": "boolean"
+        },
+        "expression": {
+          "$ref": "#/$defs/Expression",
+          "description": "The key expression, conventionally the caller's `Idempotency-Key`\nheader."
+        },
+        "removeOnFailure": {
+          "description": "Remove the key on failure before any upstream effect (Camel default\ntrue).",
+          "type": "boolean"
+        },
+        "steps": {
+          "description": "The guarded steps.",
+          "items": {
+            "$ref": "#/$defs/Step"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "expression"
+      ],
+      "type": "object"
+    },
+    "Language": {
+      "description": "An expression language a pack may require of the engine\n(`products/adapter/CONCEPT.md` section 8.5).",
+      "enum": [
+        "constant",
+        "header",
+        "exchangeProperty",
+        "jsonpath",
+        "rhai"
+      ],
+      "type": "string"
+    },
+    "LocalId": {
+      "description": "A local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`.",
+      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+      "type": "string"
+    },
+    "LoopStep": {
+      "description": "A `loop` step (`products/adapter/CONCEPT.md` sections 8.6 and 5.5).\nPagination is `loop` with `doWhile` over the upstream cursor.",
+      "properties": {
+        "copy": {
+          "description": "Whether each iteration works on a copy of the message (Camel\ndefault false).",
+          "type": "boolean"
+        },
+        "doWhile": {
+          "$ref": "#/$defs/Expression",
+          "description": "The do-while predicate: continue while it holds, bounded by\n`maximumIterations`."
+        },
+        "maximumIterations": {
+          "description": "The mandatory iteration bound; the check refuses its absence and\nthe runtime enforces it again.",
+          "format": "uint64",
+          "maximum": 100000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "steps": {
+          "description": "The repeated steps.",
+          "items": {
+            "$ref": "#/$defs/Step"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "NoErrorHandler": {
+      "additionalProperties": false,
+      "description": "Camel's `noErrorHandler`. The empty mapping `{}` is the whole variant.",
+      "type": "object"
+    },
+    "OnExceptionStep": {
+      "additionalProperties": false,
+      "description": "An `onException` clause over the closed error-class hierarchy\n(`products/adapter/CONCEPT.md` section 8.7). No clause may name an\nuncatchable class; `crate::checks` refuses one that does. Redelivery\nnests under `redeliveryPolicy`, as Camel's exception clause does in\nYAML (`manual/exception-clause.html`, `manual/exception-redelivery.html`).",
+      "properties": {
+        "continued": {
+          "description": "Whether the route resumes after the failure point (Camel\n`continued`).",
+          "type": "boolean"
+        },
+        "exception": {
+          "description": "The matched classes.",
+          "items": {
+            "$ref": "#/$defs/ErrorClass"
+          },
+          "type": "array"
+        },
+        "handled": {
+          "description": "Whether the clause consumes the error (Camel `handled`). True ends\nthe exchange with the clause's result.",
+          "type": "boolean"
+        },
+        "onWhen": {
+          "$ref": "#/$defs/Expression",
+          "description": "Narrow the clause with a predicate (Camel `onWhen`)."
+        },
+        "redeliveryPolicy": {
+          "$ref": "#/$defs/RedeliveryOptions",
+          "description": "Redelivery options, as on the error handler, nested under\n`redeliveryPolicy`."
+        },
+        "steps": {
+          "description": "The clause's steps.",
+          "items": {
+            "$ref": "#/$defs/Step"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "exception"
+      ],
+      "type": "object"
+    },
+    "OnFallback": {
+      "additionalProperties": false,
+      "description": "The `onFallback` of a `circuitBreaker`.",
+      "properties": {
+        "steps": {
+          "description": "The fallback steps.",
+          "items": {
+            "$ref": "#/$defs/Step"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "Otherwise": {
+      "additionalProperties": false,
+      "description": "The `otherwise` clause of a `choice`.",
+      "properties": {
+        "steps": {
+          "description": "The steps the clause runs when no `when` matched.",
+          "items": {
+            "$ref": "#/$defs/Step"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "RedeliveryOptions": {
+      "additionalProperties": false,
+      "description": "The redelivery option set, shared by the error handler and an\n`onException` clause (`products/adapter/CONCEPT.md` section 8.7; the\nnesting under `redeliveryPolicy` follows Camel's own YAML DSL,\n`manual/exception-clause.html` and `manual/exception-redelivery.html`).\nOption spellings stay ours (CFG-NAME); only the nesting is Camel's.\nOnly the non-default members serialize.",
+      "properties": {
+        "backOffMultiplier": {
+          "description": "The exponential multiplier (default 2).",
+          "format": "double",
+          "type": "number"
+        },
+        "collisionAvoidanceFactor": {
+          "description": "The jitter fraction (default 0.15).",
+          "format": "double",
+          "type": "number"
+        },
+        "maximumRedeliveries": {
+          "description": "Redeliveries after the first attempt (default 0).",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "maximumRetryDelaySeconds": {
+          "description": "The delay ceiling (default 60 s).",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "retryDelaySeconds": {
+          "description": "Delay between redeliveries (default 1 s).",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "retryWhile": {
+          "$ref": "#/$defs/Expression",
+          "description": "Stop redelivering early while this predicate holds (Camel\n`retryWhile`). Divergence from Camel: the predicate only stops\nredelivery earlier and `maximumRedeliveries` remains the hard cap,\nwhere Camel lets `retryWhile` override it, so\n`maximumUpstreamCalls` stays a check-time guarantee. The checks\nrefuse the predicate together with `maximumRedeliveries` 0, where\nit could never fire."
+        },
+        "useCollisionAvoidance": {
+          "description": "Add collision avoidance jitter (default false).",
+          "type": "boolean"
+        },
+        "useExponentialBackOff": {
+          "description": "Grow the delay exponentially (default false).",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "ResumeBinding": {
+      "additionalProperties": false,
+      "description": "One resume binding of a non-safe send: the source-native identifier a\nlater step needs, read by an RFC 9535 selector and stored typed as an\nidentifier, never as an arbitrary value\n(`products/adapter/CONCEPT.md` section 9).",
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/LocalId",
+          "description": "The binding name later steps reference."
+        },
+        "path": {
+          "description": "The RFC 9535 selector that reads the identifier from the reply.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "path"
+      ],
+      "type": "object"
+    },
+    "RhaiExpression": {
+      "additionalProperties": false,
+      "description": "A Rhai expression reference: the digest-pinned file from the pack's\nscript inventory and the precompiled entrypoint to call\n(`products/adapter/CONCEPT.md` sections 5.6 and 8.5). Inline code is\nrefused (CFG-EMBED-1).",
+      "properties": {
+        "entrypoint": {
+          "description": "The precompiled entrypoint the engine calls.",
+          "type": "string"
+        },
+        "file": {
+          "description": "The script file path, resolved against the pack's script inventory.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "file",
+        "entrypoint"
+      ],
+      "type": "object"
+    },
+    "RouteDefinition": {
+      "additionalProperties": false,
+      "description": "A route as Camel's YAML DSL writes it: one `from`, `direct:` only, and\nan ordered step list (`products/adapter/CONCEPT.md` section 8.3). Pack\ntemplates carry the same steps without the `from`; the instantiated\nroute's `from` is `direct:<routeId>`.",
+      "properties": {
+        "from": {
+          "$ref": "#/$defs/RouteFrom",
+          "description": "The route consumer; `direct:` only."
+        },
+        "id": {
+          "$ref": "#/$defs/ExternalId",
+          "description": "The route identifier `direct:` targets and bindings name."
+        },
+        "steps": {
+          "description": "The ordered steps.",
+          "items": {
+            "$ref": "#/$defs/Step"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "from"
+      ],
+      "type": "object"
+    },
+    "RouteFrom": {
+      "additionalProperties": false,
+      "description": "The `from` of a route: Camel's route consumer, bounded to `direct:`\n(divergence: the `rest` consumer dispatches to `direct:` routes;\nsection 8.8).",
+      "properties": {
+        "uri": {
+          "$ref": "#/$defs/SendUri",
+          "description": "A `direct:<routeId>` URI."
+        }
+      },
+      "required": [
+        "uri"
+      ],
+      "type": "object"
+    },
+    "RouteTemplate": {
+      "additionalProperties": false,
+      "description": "A route template, Camel's `routeTemplate` without its `from`\n(`products/adapter/CONCEPT.md` section 8.4): the instantiated route's\n`from` is `direct:<routeId>`, bound by the contract.",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/ExternalId",
+          "description": "The template identifier `templatedRoutes` reference."
+        },
+        "parameters": {
+          "description": "The typed parameters the template body references.",
+          "items": {
+            "$ref": "#/$defs/TemplateParameter"
+          },
+          "type": "array"
+        },
+        "steps": {
+          "description": "The template body, with `{{name}}` and `{{?name}}` placeholders.",
+          "items": {
+            "$ref": "#/$defs/Step"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "type": "object"
+    },
+    "ScriptReference": {
+      "additionalProperties": false,
+      "description": "A script seam: code in its own file beside the pack, referenced by a\nrelative path and pinned by digest (CFG-EMBED-1). Scripts never carry\ncredentials and never construct URLs; the `http` component builds every\nrequest from its declared template\n(`products/adapter/CONCEPT.md` section 5.6).",
+      "properties": {
+        "digest": {
+          "$ref": "#/$defs/Digest",
+          "description": "The `sha256:` digest the file must hash to."
+        },
+        "path": {
+          "description": "The script file, relative to the pack document.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "digest"
+      ],
+      "type": "object"
+    },
+    "SendComponent": {
+      "description": "The component prefix a send URI may carry.",
+      "enum": [
+        "Direct",
+        "Http",
+        "GraphQl"
+      ],
+      "type": "string"
+    },
+    "SendUri": {
+      "description": "The destination of a `to` or `enrich` send: a `direct:` route, an\n`http:` endpoint, or a `graphql:` endpoint declared in the pack\n(`products/adapter/CONCEPT.md` sections 8.3 and 8.8). The URI is static;\nno `toD` is ported.",
+      "properties": {
+        "component": {
+          "$ref": "#/$defs/SendComponent",
+          "description": "The component the URI names."
+        },
+        "id": {
+          "description": "The route or endpoint identifier after the prefix.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "component",
+        "id"
+      ],
+      "type": "object"
+    },
+    "SetHeaderStep": {
+      "description": "A `setHeader` step.",
+      "properties": {
+        "name": {
+          "description": "The header name; bounded and engine-validated.",
+          "type": "string"
+        },
+        "value": {
+          "$ref": "#/$defs/Expression",
+          "description": "The value expression."
+        }
+      },
+      "required": [
+        "name",
+        "value"
+      ],
+      "type": "object"
+    },
+    "SetPropertyStep": {
+      "description": "A `setProperty` step.",
+      "properties": {
+        "name": {
+          "description": "The exchange property name.",
+          "type": "string"
+        },
+        "value": {
+          "$ref": "#/$defs/Expression",
+          "description": "The value expression."
+        }
+      },
+      "required": [
+        "name",
+        "value"
+      ],
+      "type": "object"
+    },
+    "SplitStep": {
+      "description": "A `split` step (`products/adapter/CONCEPT.md` sections 8.6 and 5.5).\n`parallelProcessing`, `streaming`, and `timeout` are not ported.",
+      "properties": {
+        "aggregationStrategy": {
+          "$ref": "#/$defs/AggregationStrategy",
+          "description": "The aggregation strategy; absent, the original message is returned,\nCamel's default."
+        },
+        "errorThreshold": {
+          "description": "Camel's failure accounting: failed pieces that stop the split.",
+          "format": "uint64",
+          "maximum": 100000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "expression": {
+          "$ref": "#/$defs/Expression",
+          "description": "The expression that produces the pieces."
+        },
+        "maxFailedRecords": {
+          "description": "Camel's failure accounting: the maximum failed pieces.",
+          "format": "uint64",
+          "maximum": 100000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "maximumItems": {
+          "description": "The mandatory piece bound; the check refuses its absence and the\nruntime enforces it again.",
+          "format": "uint64",
+          "maximum": 100000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "steps": {
+          "description": "The steps applied to each piece.",
+          "items": {
+            "$ref": "#/$defs/Step"
+          },
+          "type": "array"
+        },
+        "stopOnException": {
+          "description": "Whether a failing piece stops the split (Camel default false). A\nnon-safe send inside a split requires true.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "expression"
+      ],
+      "type": "object"
+    },
+    "Step": {
+      "description": "One step of a route body, externally tagged by the Camel EIP name\n(CFG-ID-7). Every port-table row for Increments 0 to 3 has a variant,\nso the format does not change when a later increment lands\n(`products/adapter/CONCEPT.md` section 8.10).\n\nStep round-trip forms are pinned one per variant by the tests of this\nmodule; each test names the Camel 4.x page the variant's semantics port\nfrom.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Send to a static endpoint or route. No `toD` is ported.",
+          "properties": {
+            "to": {
+              "$ref": "#/$defs/ToStep"
+            }
+          },
+          "required": [
+            "to"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Set the message body from an expression.",
+          "properties": {
+            "setBody": {
+              "$ref": "#/$defs/Expression"
+            }
+          },
+          "required": [
+            "setBody"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Set the message body from an expression (Camel's `transform`).",
+          "properties": {
+            "transform": {
+              "$ref": "#/$defs/Expression"
+            }
+          },
+          "required": [
+            "transform"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Set one message header.",
+          "properties": {
+            "setHeader": {
+              "$ref": "#/$defs/SetHeaderStep"
+            }
+          },
+          "required": [
+            "setHeader"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Set one exchange property.",
+          "properties": {
+            "setProperty": {
+              "$ref": "#/$defs/SetPropertyStep"
+            }
+          },
+          "required": [
+            "setProperty"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Remove one message header by name.",
+          "properties": {
+            "removeHeader": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "removeHeader"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Remove one exchange property by name.",
+          "properties": {
+            "removeProperty": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "removeProperty"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Run an expression for effect on properties without changing the\nbody, as Camel's `script` EIP.",
+          "properties": {
+            "script": {
+              "$ref": "#/$defs/Expression"
+            }
+          },
+          "required": [
+            "script"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Content-based router: the first matching `when` wins.",
+          "properties": {
+            "choice": {
+              "$ref": "#/$defs/ChoiceStep"
+            }
+          },
+          "required": [
+            "choice"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Message filter: nested steps run only on match; the route continues\nafter the filter either way.",
+          "properties": {
+            "filter": {
+              "$ref": "#/$defs/FilterStep"
+            }
+          },
+          "required": [
+            "filter"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A failing predicate raises the `validation` class.",
+          "properties": {
+            "validate": {
+              "$ref": "#/$defs/ValidateStep"
+            }
+          },
+          "required": [
+            "validate"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Stop routing the exchange.",
+          "properties": {
+            "stop": {
+              "$ref": "#/$defs/StopStep"
+            }
+          },
+          "required": [
+            "stop"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Split a message into pieces and aggregate them.",
+          "properties": {
+            "split": {
+              "$ref": "#/$defs/SplitStep"
+            }
+          },
+          "required": [
+            "split"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Repeat a block a bounded number of times.",
+          "properties": {
+            "loop": {
+              "$ref": "#/$defs/LoopStep"
+            }
+          },
+          "required": [
+            "loop"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Call a static endpoint and merge its reply.",
+          "properties": {
+            "enrich": {
+              "$ref": "#/$defs/EnrichStep"
+            }
+          },
+          "required": [
+            "enrich"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Wrap steps in a resilience4j circuit breaker with `onFallback`.",
+          "properties": {
+            "circuitBreaker": {
+              "$ref": "#/$defs/CircuitBreakerStep"
+            }
+          },
+          "required": [
+            "circuitBreaker"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Throttle sends; a waiting exchange waits at most until its\ndeadline, then raises `throttle.rejected`.",
+          "properties": {
+            "throttle": {
+              "$ref": "#/$defs/ThrottleStep"
+            }
+          },
+          "required": [
+            "throttle"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Wrap a write route in idempotent consumption\n(`products/adapter/CONCEPT.md` section 9).",
+          "properties": {
+            "idempotentConsumer": {
+              "$ref": "#/$defs/IdempotentConsumerStep"
+            }
+          },
+          "required": [
+            "idempotentConsumer"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The route's error handler: `defaultErrorHandler` or\n`noErrorHandler`. The exhausted exchange is always journaled; the\njournal is the fixed dead letter.",
+          "properties": {
+            "errorHandler": {
+              "$ref": "#/$defs/ErrorHandlerStep"
+            }
+          },
+          "required": [
+            "errorHandler"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "An exception clause over the closed error-class hierarchy.",
+          "properties": {
+            "onException": {
+              "$ref": "#/$defs/OnExceptionStep"
+            }
+          },
+          "required": [
+            "onException"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "`doTry` with `doCatch` and `doFinally` clauses.",
+          "properties": {
+            "doTry": {
+              "$ref": "#/$defs/DoTryStep"
+            }
+          },
+          "required": [
+            "doTry"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "StopStep": {
+      "additionalProperties": false,
+      "description": "A `stop` step. The empty mapping `{}` is the whole variant.",
+      "type": "object"
+    },
+    "TemplateParameter": {
+      "additionalProperties": false,
+      "description": "A route template parameter (`products/adapter/CONCEPT.md` section 8.4).\nDivergence from Camel: typed and checked under CFG-VAL-9, where Camel\nparameters are untyped strings.",
+      "properties": {
+        "defaultValue": {
+          "description": "The value used when the instantiation omits the parameter."
+        },
+        "description": {
+          "description": "What the parameter means, for the reviewed pack.",
+          "type": "string"
+        },
+        "name": {
+          "$ref": "#/$defs/ExternalId",
+          "description": "The parameter name, referenced as `{{name}}` or `{{?name}}`."
+        },
+        "required": {
+          "description": "Whether instantiation without the parameter is refused.",
+          "type": "boolean"
+        },
+        "type": {
+          "$ref": "#/$defs/TemplateParameterType",
+          "description": "The value type checked at instantiation."
+        }
+      },
+      "required": [
+        "name",
+        "type"
+      ],
+      "type": "object"
+    },
+    "TemplateParameterType": {
+      "description": "A template parameter's value type (CFG-VAL-9).",
+      "enum": [
+        "string",
+        "integer",
+        "number",
+        "boolean"
+      ],
+      "type": "string"
+    },
+    "ThrottleMode": {
+      "description": "Throttle mode, Camel 4's `mode` option.",
+      "oneOf": [
+        {
+          "const": "totalRequests",
+          "description": "Total requests per period (Camel default).",
+          "type": "string"
+        },
+        {
+          "const": "concurrentRequests",
+          "description": "Concurrent requests.",
+          "type": "string"
+        }
+      ]
+    },
+    "ThrottleStep": {
+      "description": "A `throttle` step (`products/adapter/CONCEPT.md` section 8.6).\nDivergence: a waiting exchange waits at most until its deadline, then\nraises `throttle.rejected`.",
+      "properties": {
+        "limit": {
+          "$ref": "#/$defs/Expression",
+          "description": "The request limit per period, an expression as Camel 4 reads it."
+        },
+        "mode": {
+          "$ref": "#/$defs/ThrottleMode",
+          "description": "Total or concurrent requests (Camel default total)."
+        },
+        "rejectExecution": {
+          "description": "Whether to reject immediately instead of waiting (Camel default\nfalse).",
+          "type": "boolean"
+        },
+        "steps": {
+          "description": "The throttled steps.",
+          "items": {
+            "$ref": "#/$defs/Step"
+          },
+          "type": "array"
+        },
+        "timePeriodMilliseconds": {
+          "description": "The period in milliseconds (Camel default 1000).",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "limit"
+      ],
+      "type": "object"
+    },
+    "ToParameters": {
+      "additionalProperties": false,
+      "description": "The parameters of an upstream send, Camel's `http` component options\n(`products/adapter/CONCEPT.md` section 8.8). The path template's\n`{name}` segments are filled from `pathParameters` expressions and\npercent-encoded by the engine as single segments; query members are\nengine-encoded.",
+      "properties": {
+        "body": {
+          "$ref": "#/$defs/Expression",
+          "description": "The request body expression, marshalled to JSON."
+        },
+        "httpMethod": {
+          "$ref": "#/$defs/HttpMethod",
+          "description": "The request method. Its safety carries the write-safety rules of\n`crate::checks`."
+        },
+        "okStatusCodeRange": {
+          "description": "The inclusive status range treated as success (Camel default\n`200-299`).",
+          "type": "string"
+        },
+        "operation": {
+          "$ref": "#/$defs/ExternalId",
+          "description": "The endpoint operation this send invokes, when the pack declares\nendpoint operations; write-safety checks read its\n`idempotentUpstream` claim."
+        },
+        "path": {
+          "description": "The path template, e.g. `/v2/cases/{type}`.",
+          "type": "string"
+        },
+        "pathParameters": {
+          "additionalProperties": {
+            "$ref": "#/$defs/Expression"
+          },
+          "description": "Path-template segment name to expression.",
+          "type": "object"
+        },
+        "query": {
+          "additionalProperties": {
+            "$ref": "#/$defs/Expression"
+          },
+          "description": "Query parameter name to expression.",
+          "type": "object"
+        },
+        "resumeBindings": {
+          "description": "The source-native identifiers a later write-resume step needs\n(Increment 3; `products/adapter/CONCEPT.md` section 9).",
+          "items": {
+            "$ref": "#/$defs/ResumeBinding"
+          },
+          "type": "array"
+        },
+        "throwExceptionOnFailure": {
+          "description": "Whether a failure status raises an error (Camel default true).",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "httpMethod"
+      ],
+      "type": "object"
+    },
+    "ToStep": {
+      "additionalProperties": false,
+      "description": "A `to` send: the static destination and its parameters\n(`products/adapter/CONCEPT.md` section 8.8). The `http` component\nbuilds the request from the declared template; no expression can change\nthe origin or inject a path segment.",
+      "properties": {
+        "parameters": {
+          "$ref": "#/$defs/ToParameters",
+          "description": "The send parameters; `direct:` sends carry none."
+        },
+        "uri": {
+          "$ref": "#/$defs/SendUri",
+          "description": "The static destination."
+        }
+      },
+      "required": [
+        "uri"
+      ],
+      "type": "object"
+    },
+    "ValidateStep": {
+      "description": "A `validate` step.",
+      "properties": {
+        "expression": {
+          "$ref": "#/$defs/Expression",
+          "description": "The predicate; failure raises the `validation` class."
+        }
+      },
+      "required": [
+        "expression"
+      ],
+      "type": "object"
+    },
+    "When": {
+      "additionalProperties": false,
+      "description": "One `when` clause of a `choice`: an inline predicate expression (the\nlanguage key sits beside `steps`, as Camel's YAML DSL writes it) and\nthe steps it guards. Exactly one language key must be present;\n`crate::checks` refuses zero or several under an adapter code, and the\nreader refuses any unknown key (`config.unknown-key`, CFG-SCHEMA-8).",
+      "properties": {
+        "constant": {
+          "description": "The `constant` language member."
+        },
+        "exchangeProperty": {
+          "description": "The `exchangeProperty` language member.",
+          "type": "string"
+        },
+        "header": {
+          "description": "The `header` language member.",
+          "type": "string"
+        },
+        "jsonpath": {
+          "description": "The `jsonpath` language member.",
+          "type": "string"
+        },
+        "rhai": {
+          "$ref": "#/$defs/RhaiExpression",
+          "description": "The `rhai` language member."
+        },
+        "steps": {
+          "description": "The steps the clause runs on match.",
+          "items": {
+            "$ref": "#/$defs/Step"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$id": "https://id.registrystack.org/schemas/adapter/pack/pack.v1alpha1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "The adapter pack artifact (`AdapterPack`), a per-source-system catalog:\nendpoint declarations, route templates with typed parameters, internal\n`direct:` routes, code maps, script references with digest pins, and\nthe required engine capabilities.",
+  "properties": {
+    "apiVersion": {
+      "const": "id.registrystack.org/formats/adapter/pack/v1alpha1",
+      "type": "string"
+    },
+    "capabilities": {
+      "$ref": "#/$defs/Capabilities",
+      "default": {
+        "components": [],
+        "eips": [],
+        "languages": []
+      },
+      "description": "The engine capabilities the pack requires."
+    },
+    "codeMaps": {
+      "default": [],
+      "description": "The code maps routes convert values through.",
+      "items": {
+        "$ref": "#/$defs/CodeMap"
+      },
+      "type": "array"
+    },
+    "endpoints": {
+      "default": [],
+      "description": "The endpoints routes send to.",
+      "items": {
+        "$ref": "#/$defs/Endpoint"
+      },
+      "type": "array"
+    },
+    "id": {
+      "$ref": "#/$defs/ExternalId",
+      "description": "The pack identifier a project pins."
+    },
+    "kind": {
+      "const": "AdapterPack",
+      "type": "string"
+    },
+    "queryFiles": {
+      "default": [],
+      "description": "The GraphQL query-file inventory, each file digest-pinned.",
+      "items": {
+        "$ref": "#/$defs/ScriptReference"
+      },
+      "type": "array",
+      "uniqueItems": true
+    },
+    "routeTemplates": {
+      "default": [],
+      "description": "The route templates projects instantiate.",
+      "items": {
+        "$ref": "#/$defs/RouteTemplate"
+      },
+      "type": "array"
+    },
+    "routes": {
+      "default": [],
+      "description": "The internal `direct:` routes shared sub-flows call.",
+      "items": {
+        "$ref": "#/$defs/RouteDefinition"
+      },
+      "type": "array"
+    },
+    "scripts": {
+      "default": [],
+      "description": "The Rhai script inventory, each file digest-pinned (CFG-EMBED-1).",
+      "items": {
+        "$ref": "#/$defs/ScriptReference"
+      },
+      "type": "array",
+      "uniqueItems": true
+    },
+    "testedVersions": {
+      "description": "The upstream versions this pack was tested against, pack-wide.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "apiVersion",
+    "id",
+    "kind",
+    "testedVersions"
+  ],
+  "title": "Registry Adapter pack",
+  "type": "object"
+}
