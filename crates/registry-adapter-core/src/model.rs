@@ -643,7 +643,7 @@ mod tests {
 
     #[test]
     fn send_uris_round_trip_over_the_three_components() {
-        for uri in ["direct:fetchRecord", "http:tracker", "graphql:patient"] {
+        for uri in ["direct:fetchRecord", "http:cases", "graphql:patient"] {
             let parsed = SendUri::parse(uri).expect("parse");
             assert_eq!(parsed.uri(), uri);
             let json = serde_json::to_string(&parsed).expect("serialize");

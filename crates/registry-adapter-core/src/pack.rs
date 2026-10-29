@@ -65,7 +65,7 @@ pub struct EndpointOperation {
     /// The operation identifier a `to` step's `operation` member names.
     pub id: ExternalId,
     /// The reviewed claim that repeating this operation's send is safe,
-    /// for example a DHIS2 create with client-supplied UIDs.
+    /// for example an upstream create with client-supplied UIDs.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub idempotent_upstream: bool,
 }
