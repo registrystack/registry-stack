@@ -929,13 +929,17 @@ impl CaseworkService {
         token: &str,
     ) -> Result<ReviewTaskContext, ReviewRuntimeError> {
         require_human_reviewer(actor)?;
-        // A source that no longer calls the subject reviewable still discloses
-        // it to the reviewer who recorded the task's retained decision.
-        let decision_author = |task: &ReviewTask| {
-            task.state == ReviewTaskState::Decided && task.decided_by_caller == Some(true)
-        };
         let initial_task = self.store.review_task(actor, task_id).await?;
         let record = self.store.review_request_for_task(task_id).await?;
+        // Once the request has left review, a source that no longer calls the
+        // subject reviewable still discloses it to the reviewer who recorded
+        // this task's retained decision. An earlier stage's decision on a
+        // request still in review releases nothing.
+        let decision_author = |task: &ReviewTask| {
+            record.lifecycle != ReviewRequestLifecycle::Reviewing
+                && task.state == ReviewTaskState::Decided
+                && task.decided_by_caller == Some(true)
+        };
         let mut retained_author_required = false;
         let context = match record.context.as_ref().ok_or(ReviewRuntimeError::Corrupt)? {
             ReviewContext::Submitted { snapshot } => {

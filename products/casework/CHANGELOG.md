@@ -2,12 +2,15 @@
 
 ## Unreleased
 
-- The reviewer who recorded a task's decision can read that task's
-  current-source `/context` after the source applies the decision and stops
-  calling the subject reviewable, while the source still discloses it. Casework
-  checks authorship, current membership, profile and retention before and after
-  the provider read. Any other reviewer still receives not found, and expired
-  results are still refused as expired.
+- Once a request has left review, the reviewer who recorded a task's decision
+  can read that task's current-source `/context` after the source applies the
+  decision and stops calling the subject reviewable, while the source still
+  discloses it to that reviewer's own token and source profile. The read covers
+  only that task and ends with the result's retention. Casework checks
+  authorship, current membership, profile and retention before the provider
+  read and re-checks them after it. Any other reviewer, including an earlier
+  stage's author while the request is still in review, receives not found, and
+  expired results are still refused as expired.
 
 ## 0.44.0 - 2026-10-27
 

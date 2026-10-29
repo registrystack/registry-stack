@@ -1774,6 +1774,75 @@ async fn native_proposal_journey(producer_id: &'static str) {
         }),
         "{retained_context}"
     );
+    // Another current team member with the same BReg source authority is not
+    // the decision's author, so the retained context stays not found and is
+    // indistinguishable from an unknown task.
+    admin.execute("INSERT INTO casework_memberships(team_id,issuer,subject,membership_kind) VALUES('reviewers',$1,'reviewer-two','staff')", &[&idp.issuer()]).await.unwrap();
+    let other_reviewer = minted(
+        &idp,
+        json!([CASEWORK_AUDIENCE, BREG_AUDIENCE]),
+        "reviewer-two",
+        "casework-human",
+        "casework:staff registry:proposal:review",
+        "human",
+        Some("facility-review"),
+    );
+    let context_body = |task: String, token: String| {
+        let url = casework_url
+            .join(&format!("v1/review-tasks/{task}/context"))
+            .unwrap();
+        async move {
+            let response = reqwest::Client::new()
+                .get(url)
+                .bearer_auth(&token)
+                .header("registry-casework-profile", "staff")
+                .header("registry-source-profile", "proposal-reviewer")
+                .send()
+                .await
+                .unwrap();
+            let status = response.status();
+            (status, response.json::<Value>().await.unwrap())
+        }
+    };
+    let other_task = reqwest::Client::new()
+        .get(casework_url.join(&format!("v1/review-tasks/{id}")).unwrap())
+        .bearer_auth(&other_reviewer)
+        .header("registry-casework-profile", "staff")
+        .header("registry-source-profile", "proposal-reviewer")
+        .send()
+        .await
+        .unwrap();
+    let other_task_status = other_task.status();
+    let other_task: Value = other_task.json().await.unwrap();
+    assert_eq!(other_task_status, StatusCode::OK, "{other_task}");
+    assert_eq!(other_task["state"], "decided", "{other_task}");
+    let (other_context_status, mut other_context) =
+        context_body(id.to_string(), other_reviewer.clone()).await;
+    assert_eq!(
+        other_context_status,
+        StatusCode::NOT_FOUND,
+        "a non-author reviewer cannot read the retained context: {other_context}"
+    );
+    assert_eq!(
+        other_context["code"], "request.not-found",
+        "{other_context}"
+    );
+    let (unknown_context_status, mut unknown_context) =
+        context_body(Uuid::new_v4().to_string(), other_reviewer.clone()).await;
+    assert_eq!(unknown_context_status, StatusCode::NOT_FOUND);
+    // Each response carries its own trace id; everything else must match.
+    for body in [&mut other_context, &mut unknown_context] {
+        let trace = body
+            .as_object_mut()
+            .unwrap()
+            .remove("traceId")
+            .expect("problem body carries a trace id");
+        assert!(trace.is_string(), "{trace}");
+    }
+    assert_eq!(
+        other_context, unknown_context,
+        "a non-author refusal matches an unknown task"
+    );
     let casework_only_human = minted(
         &idp,
         json!(CASEWORK_AUDIENCE),
