@@ -224,7 +224,12 @@ const submitted = await client.executeProposal(submit);
 ```
 
 Transitions are `edit`, `submit`, `revise`, `rebase`, `retry`, `cancel`, and
-`apply`, subject to current availability and caller authority. Apply's body
+`apply`, subject to current availability and caller authority. `prepareProposal`
+also refuses locally any operation that is not a legal transition from the
+Proposal's observed state: `cancel` is prepared only for a Draft or Submitted
+Proposal, so cancelling an Applied or Cancelled Proposal throws before any
+request is sent. A conformance test that needs the server's own terminal-state
+refusal must call the HTTP route directly rather than the typed client. Apply's body
 binds `submissionVersion` and `effectDigest`; optional `reason` text is limited
 to 4096 Unicode characters with NUL refused. Proposal conditions are distinct
 from record ETags. Use `readProposal` or `getProposal` for a current observation.
