@@ -17,7 +17,6 @@
   starting this runtime, test, build, plan, and apply one governed successor
   with the current tooling. The successor installs the shared engine store;
   there is no separate timer schema command.
-
 - Add `bregctl generate odrl` for an experimental, partial ODRL description of
   configured `get` and `list` permissions. Preserve token requirements and field
   projections; omit permissions with unsupported row, membership, consent or
