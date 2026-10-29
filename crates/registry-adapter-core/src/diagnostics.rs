@@ -41,6 +41,7 @@ pub enum CheckCode {
     // adapter.project.*
     ProjectDuplicateRouteId,
     ProjectParameterTypeMismatch,
+    ProjectPinMismatch,
     ProjectRequiredParameterUnbound,
     ProjectUnknownOperation,
     ProjectUnknownRecordType,
@@ -92,6 +93,7 @@ impl CheckCode {
         Self::ProfileUnknownSlot,
         Self::ProjectDuplicateRouteId,
         Self::ProjectParameterTypeMismatch,
+        Self::ProjectPinMismatch,
         Self::ProjectRequiredParameterUnbound,
         Self::ProjectUnknownOperation,
         Self::ProjectUnknownRecordType,
@@ -147,6 +149,7 @@ impl CheckCode {
             Self::ProfileUnknownSlot => "adapter.profile.unknown-slot",
             Self::ProjectDuplicateRouteId => "adapter.project.duplicate-route-id",
             Self::ProjectParameterTypeMismatch => "adapter.project.parameter-type-mismatch",
+            Self::ProjectPinMismatch => "adapter.project.pin-mismatch",
             Self::ProjectRequiredParameterUnbound => "adapter.project.required-parameter-unbound",
             Self::ProjectUnknownOperation => "adapter.project.unknown-operation",
             Self::ProjectUnknownRecordType => "adapter.project.unknown-record-type",
@@ -223,6 +226,7 @@ impl CheckCode {
             | Self::RouteWriteWithoutIdempotency => crate::naming::ADAPTER_PACK_KIND,
             Self::ProjectDuplicateRouteId
             | Self::ProjectParameterTypeMismatch
+            | Self::ProjectPinMismatch
             | Self::ProjectRequiredParameterUnbound
             | Self::ProjectUnknownOperation
             | Self::ProjectUnknownRecordType

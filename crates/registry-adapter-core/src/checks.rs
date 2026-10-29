@@ -18,7 +18,7 @@ use crate::profile::{
 use crate::project::AdapterProject;
 use crate::route::{Step, TemplateParameterType};
 use crate::runtime::AdapterRuntimeConfig;
-use registry_platform_yaml::{Diagnostic, ExternalId};
+use registry_platform_yaml::{Diagnostic, Digest, ExternalId};
 use std::collections::{HashMap, HashSet};
 
 /// The deepest `direct:` call chain the graph may form
@@ -897,6 +897,54 @@ pub fn step_expressions(step: &Step) -> Vec<&Expression> {
             .collect(),
         _ => Vec::new(),
     }
+}
+
+/// Verifies a project's profile and pack pins (CFG-ID-4) against
+/// caller-computed values: adapterctl reads the artifact bytes, computes
+/// their version and digest, and passes them here; core stays no-I/O.
+/// Each mismatch is refused at the pin it concerns.
+#[must_use]
+pub fn check_project_pins(
+    project: &AdapterProject,
+    computed_profile_version: &str,
+    computed_profile_digest: &Digest,
+    computed_pack_version: &str,
+    computed_pack_digest: &Digest,
+) -> Vec<Diagnostic> {
+    let mut findings = Vec::new();
+    if project.profile.version != computed_profile_version {
+        findings.push(finding(
+            CheckCode::ProjectPinMismatch,
+            "/profile/version",
+            "the pinned profile version does not match the profile bytes",
+            "Pin the version the profile artifact's bytes carry.",
+        ));
+    }
+    if &project.profile.digest != computed_profile_digest {
+        findings.push(finding(
+            CheckCode::ProjectPinMismatch,
+            "/profile/digest",
+            "the pinned profile digest does not match the profile bytes",
+            "Pin the sha256 digest of the profile artifact's bytes.",
+        ));
+    }
+    if project.pack.version != computed_pack_version {
+        findings.push(finding(
+            CheckCode::ProjectPinMismatch,
+            "/pack/version",
+            "the pinned pack version does not match the pack bytes",
+            "Pin the version the pack artifact's bytes carry.",
+        ));
+    }
+    if &project.pack.digest != computed_pack_digest {
+        findings.push(finding(
+            CheckCode::ProjectPinMismatch,
+            "/pack/digest",
+            "the pinned pack digest does not match the pack bytes",
+            "Pin the sha256 digest of the pack artifact's bytes.",
+        ));
+    }
+    findings
 }
 
 /// One Rhai script site reachable in a route body.
@@ -2779,6 +2827,36 @@ mod tests {
             ("label".to_string(), serde_json::json!("weekly")),
         ]);
         assert_clean(instantiate(well_typed));
+    }
+
+    /// Pin verification (CFG-ID-4): each declared reference's version and
+    /// digest must equal the caller-computed values of the artifact bytes;
+    /// any divergence is refused at the pin it concerns. Core stays
+    /// no-I/O: adapterctl hashes the files and passes the results in.
+    #[test]
+    fn project_pins_refuse_a_version_or_digest_mismatch() {
+        let pack = pack_builder(vec![], vec![]);
+        let project = project_builder(&pack);
+
+        assert_clean(check_project_pins(
+            &project,
+            "1.0.0",
+            &digest(),
+            "1.0.0",
+            &digest(),
+        ));
+
+        let findings = check_project_pins(&project, "2.0.0", &digest(), "1.0.0", &digest());
+        assert_eq!(findings.len(), 1, "a version mismatch names one pin");
+        assert_eq!(findings[0].code, CheckCode::ProjectPinMismatch.code());
+        assert_eq!(findings[0].path, "/profile/version");
+
+        let other_digest =
+            Digest::new("sha256:1111111111111111111111111111111111111111111111111111111111111111")
+                .expect("digest");
+        let findings = check_project_pins(&project, "1.0.0", &digest(), "1.0.0", &other_digest);
+        assert_eq!(findings.len(), 1, "a digest mismatch names one pin");
+        assert_eq!(findings[0].path, "/pack/digest");
     }
 
     #[test]
