@@ -21,7 +21,6 @@ jsonschema.workspace = true
 registry-adapter-core = { workspace = true, features = ["schema"] }
 registry-platform-buildinfo.workspace = true
 registry-platform-config.workspace = true
-registry-platform-script.workspace = true
 registry-platform-yaml.workspace = true
 schemars.workspace = true
 serde.workspace = true

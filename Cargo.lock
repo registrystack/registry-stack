@@ -5028,7 +5028,6 @@ dependencies = [
  "registry-adapter-core",
  "registry-platform-buildinfo",
  "registry-platform-config",
- "registry-platform-script",
  "registry-platform-yaml",
  "schemars",
  "serde",
