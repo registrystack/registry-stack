@@ -678,7 +678,11 @@ asserts that it never appears in any product's output.
 **CFG-EMBED-1 (MUST). Code lives in its own file,** referenced by a relative
 path and pinned by digest where the format pins content: Rhai scripts, SQL,
 WASM modules, message templates, and Typst sources. Regular-expression
-patterns and JSON Schema fragments may be written inline.
+patterns, JSON Schema fragments, and RFC 9535 JSONPath selectors may be
+written inline: a selector is a query, not code.
+*Why:* a selector queries the document the way a pattern matches it, which is
+why the Adapter expression languages write `jsonpath` inline
+(products/adapter/CONCEPT.md section 8.5).
 
 **CFG-EMBED-2 (MUST). An embedded foreign document (a JSON Schema, an
 OpenAPI fragment) is read by its own rules, not ours,** and the schema marks
