@@ -78,9 +78,12 @@ Ok(())
 - `validate_key_binding_jwt` and `validate_oid4vci_proof_jwt` verify the
   signature before parsing any claim, so no decision is taken from an unverified
   token. Both reject duplicate JSON members outright instead of resolving them,
-  accept only the header parameters and payload claims they name, compare the
-  challenge in constant time, and bound `iat` with checked arithmetic so a
-  policy duration that cannot be represented is reported rather than clamped.
+  accept only the header parameters they name, compare the challenge in
+  constant time, and bound `iat` with checked arithmetic so a policy duration
+  that cannot be represented is reported rather than clamped. A key-binding JWT
+  payload is a closed claim set. An OpenID4VCI proof payload ignores claims it
+  does not use (RFC 7519 section 4) except `iss`, and its rejection names the
+  failed check without echoing any presented value.
 - Comparing a challenge is not consuming one. Both validators check equality
   only; single use of a nonce or `c_nonce` belongs to the caller's challenge
   store, as RFC 9901 section 7.3 requires.

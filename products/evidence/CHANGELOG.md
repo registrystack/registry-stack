@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- The OID4VCI `jwt` proof ignores payload claims it does not use, such as
+  `jti`, as RFC 7519 section 4 directs. `aud`, `iat` and `nonce` stay required,
+  `exp` stays optional, `iss` stays refused, and header rules are unchanged. A
+  refused proof now names the failed check in the `invalid_proof`
+  `error_description` and in the service log (for example "the proof was not
+  accepted: required claim `nonce` is missing"), without echoing nonces, keys or
+  tokens.
 - `evidencectl explain` JSON reports each assertion definition's
   `validitySeconds` beside its `representations` and `subjectBinding`. The
   field is additive; the report `apiVersion` is unchanged.
