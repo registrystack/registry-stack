@@ -356,7 +356,7 @@ fn registry_source(selection: Value) -> Value {
         "accessProfiles":[{"id":"clerk","default":true,"principalClaim":"sub","requiredScopes":["proposal:manage"],"requiredPurposes":["registry-administration"],"permissions":{
             "records":[{"recordType":"target","operations":["create","get","list"],"readableFields":["name","jurisdiction"],"writableFields":["name","jurisdiction"],"rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]}],
             "actions":[{"action":"correct-name","operations":["start"],"targets":[{"recordType":"target","rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]}]}],
-            "proposals":[{"action":"correct-name","operations":["get","list","submit","cancel"],"ownership":"caller","targets":[{"recordType":"target","rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]}]}]}}]})
+            "proposals":[{"action":"correct-name","operations":["get","list","submit","cancel","get-review-status"],"ownership":"caller","targets":[{"recordType":"target","rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]}]}]}}]})
 }
 async fn fixture(authority: &Authority) -> client_http::ClientFixture {
     let bindings = authority.registry.clone();
@@ -2065,6 +2065,185 @@ async fn native_submission_remote_refusal_warns_the_operator_without_values() {
         );
     }
     drop(client);
+    fixture.finish().await;
+}
+
+async fn review_status(fixture: &client_http::ClientFixture, id: Uuid) -> Value {
+    let response = reqwest::get(format!(
+        "{}/v1/proposals/{id}/review-status?accessProfile=clerk",
+        fixture.http.base_url
+    ))
+    .await
+    .unwrap();
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    response.json().await.unwrap()
+}
+
+async fn set_submission(
+    fixture: &client_http::ClientFixture,
+    id: Uuid,
+    state: &str,
+    code: Option<&str>,
+    withdrawn: bool,
+) {
+    fixture
+        .database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_proposal_review_submissions
+                SET state=$2,last_error_code=$3,withdrawn=$4 WHERE proposal_id=$1",
+            &[&id, &state, &code, &withdrawn],
+        )
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn review_status_reports_the_handoff_state_before_and_after_acceptance() {
+    async fn refuse() -> Response {
+        (
+            StatusCode::FORBIDDEN,
+            [
+                ("content-type", "application/problem+json"),
+                ("traceparent", TRACE),
+            ],
+            json!({"type":"https://review-provider.example.test/problems/producer/refused",
+                "title":"Forbidden","status":403,"detail":"The producer is not allowed.",
+                "code":"producer.refused","traceId":"0123456789abcdef0123456789abcdef"})
+            .to_string(),
+        )
+            .into_response()
+    }
+    let authority = Authority::start(false, true).await;
+    let fixture = fixture(&authority).await;
+
+    // Queued, in flight, and retrying after an uncertain exchange all read as
+    // a handoff still waiting: no request ID, no reason.
+    let id = submitted(&fixture, "handoff-pending").await;
+    for (state, code) in [
+        ("pending", None),
+        ("submitting", None),
+        ("uncertain", Some("remote-uncertain")),
+    ] {
+        set_submission(&fixture, id, state, code, false).await;
+        let status = review_status(&fixture, id).await;
+        assert_eq!(status["handoff"], json!({"state":"pending"}), "{state}");
+        assert!(status.get("requestId").is_none(), "{state}");
+        assert_eq!(status["result"], json!({"state":"pending"}));
+    }
+
+    // A refusal from the Review provider ends the handoff with its reason.
+    set_submission(&fixture, id, "pending", None, false).await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}/", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            Router::new().route("/v1/review-requests", post(refuse)),
+        )
+        .await
+        .unwrap();
+    });
+    let refusing = ReviewClient::new(ReviewClientConfig::new(endpoint.parse().unwrap())).unwrap();
+    let client = fixture.pool.get_for_test().await.unwrap();
+    assert!(run_one_submission(
+        &**client,
+        AUTHORITY,
+        &refusing,
+        "producer",
+        &BearerToken::new(OUTGOING_TOKEN).unwrap(),
+        30
+    )
+    .await
+    .unwrap());
+    server.abort();
+    drop(client);
+    let status = review_status(&fixture, id).await;
+    assert_eq!(
+        status["handoff"],
+        json!({"state":"failed","reason":"remote-refused"})
+    );
+    assert!(status.get("requestId").is_none());
+    let rendered = status.to_string();
+    for canary in [
+        OUTGOING_TOKEN,
+        "producer.refused",
+        "The producer is not allowed.",
+    ] {
+        assert!(!rendered.contains(canary), "status disclosed {canary}");
+    }
+
+    // Every terminal reason BReg records before acceptance is named; a code
+    // outside that vocabulary never reaches the caller.
+    for code in [
+        "producer-identity-mismatch",
+        "review-acceptance-changed",
+        "review-policy-changed",
+        "submission-recovery-expired",
+        "operator-closed",
+    ] {
+        set_submission(&fixture, id, "failed", Some(code), false).await;
+        assert_eq!(
+            review_status(&fixture, id).await["handoff"],
+            json!({"state":"failed","reason":code})
+        );
+    }
+    set_submission(
+        &fixture,
+        id,
+        "failed",
+        Some("synthetic-internal-code"),
+        false,
+    )
+    .await;
+    let status = review_status(&fixture, id).await;
+    assert_eq!(
+        status["handoff"],
+        json!({"state":"failed","reason":"unspecified"})
+    );
+    assert!(!status.to_string().contains("synthetic-internal-code"));
+
+    // Acceptance is recorded with the provider's request ID, and stays
+    // accepted when a later stage of the same review fails.
+    let binding = retained_binding(&fixture, id).await;
+    accept(&fixture, id, &binding).await;
+    let status = review_status(&fixture, id).await;
+    assert_eq!(status["handoff"], json!({"state":"accepted"}));
+    assert_eq!(status["requestId"], binding.request_id.to_string());
+    set_submission(
+        &fixture,
+        id,
+        "failed",
+        Some("result-poll-attempts-exhausted"),
+        false,
+    )
+    .await;
+    let status = review_status(&fixture, id).await;
+    assert_eq!(status["handoff"], json!({"state":"accepted"}));
+    assert_eq!(status["requestId"], binding.request_id.to_string());
+
+    // A provider answer that contradicts the recorded acceptance ends the
+    // handoff, whatever binding was stored.
+    set_submission(
+        &fixture,
+        id,
+        "failed",
+        Some("review-acceptance-changed"),
+        false,
+    )
+    .await;
+    assert_eq!(
+        review_status(&fixture, id).await["handoff"],
+        json!({"state":"failed","reason":"review-acceptance-changed"})
+    );
+
+    // A submission withdrawn before the provider accepted it is neither
+    // waiting nor failed.
+    let withdrawn = submitted(&fixture, "handoff-withdrawn").await;
+    set_submission(&fixture, withdrawn, "cancelled", None, true).await;
+    let status = review_status(&fixture, withdrawn).await;
+    assert_eq!(status["handoff"], json!({"state":"withdrawn"}));
+    assert!(status.get("requestId").is_none());
     fixture.finish().await;
 }
 

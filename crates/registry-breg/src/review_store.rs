@@ -1281,6 +1281,56 @@ impl ReviewResultSource for ReviewAuthorityClient {
     }
 }
 
+/// Reasons a submission can end before the Review provider accepts it, in the
+/// closed vocabulary a status read may name. Stored codes outside this list
+/// never reach a caller.
+const HANDOFF_FAILURE_REASONS: [&str; 6] = [
+    "remote-refused",
+    "producer-identity-mismatch",
+    "review-acceptance-changed",
+    "review-policy-changed",
+    "submission-recovery-expired",
+    "operator-closed",
+];
+
+/// Project the handoff of the frozen submission to the Review provider: still
+/// `pending` (queued, in flight or retrying), `accepted`, `failed` with a
+/// closed `reason`, or `withdrawn` before the provider accepted it. Acceptance
+/// follows the stored binding, like `requestId`, so a later stage of the same
+/// review failing never reads as a failed handoff.
+pub(crate) async fn load_handoff_status(
+    client: &impl GenericClient,
+    action_id: &str,
+    proposal_id: Uuid,
+    submission_version: i64,
+) -> Result<Value, MutationError> {
+    let row = client
+        .query_opt(
+            "SELECT state,withdrawn,accepted_binding IS NOT NULL,last_error_code
+            FROM registry_internal.registry_proposal_review_submissions
+            WHERE action_id=$1 AND proposal_id=$2 AND submission_version=$3",
+            &[&action_id, &proposal_id, &submission_version],
+        )
+        .await
+        .map_err(|_| MutationError::Unavailable)?
+        .ok_or(MutationError::PreconditionFailed)?;
+    let state: String = row.get(0);
+    let withdrawn: bool = row.get(1);
+    let accepted: bool = row.get(2);
+    let code: Option<String> = row.get(3);
+    let reason = code
+        .as_deref()
+        .filter(|code| HANDOFF_FAILURE_REASONS.contains(code));
+    Ok(match (state.as_str(), reason) {
+        ("failed", Some(reason)) => serde_json::json!({"state":"failed","reason":reason}),
+        _ if accepted => serde_json::json!({"state":"accepted"}),
+        ("failed", None) => serde_json::json!({"state":"failed","reason":"unspecified"}),
+        ("cancelled", _) => serde_json::json!({"state":"withdrawn"}),
+        _ if withdrawn => serde_json::json!({"state":"withdrawn"}),
+        _ => serde_json::json!({"state":"pending"}),
+    })
+}
+
 /// Read the exact accepted correlation without treating worker state as authority.
 /// In particular, cancellation keeps the original accepted binding while it settles.
 pub(crate) async fn load_status_binding(

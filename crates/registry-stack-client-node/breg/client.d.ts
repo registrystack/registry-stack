@@ -1017,6 +1017,8 @@ export interface BRegProposalReviewDocument {
   readonly subject: {readonly source: string; readonly subjectType: 'proposal'; readonly id: string; readonly version: string; readonly digest: string}
   readonly context: {readonly reference: string; readonly contract?: {readonly id: string; readonly revision: string; readonly schemaDigest: string}; readonly fields?: Readonly<Record<string, JsonValue>>}
   readonly requestId?: string
+  /** Status reads only: where the submission stands with the Review provider. `reason` is present exactly when `state` is `failed`. */
+  readonly handoff?: {readonly state: 'pending' | 'accepted' | 'failed' | 'withdrawn'; readonly reason?: 'remote-refused' | 'producer-identity-mismatch' | 'review-acceptance-changed' | 'review-policy-changed' | 'submission-recovery-expired' | 'operator-closed' | 'unspecified'}
   readonly authority?: string; readonly policy?: {readonly id: string; readonly version: string; readonly digest: string}
   readonly result?: {readonly state: 'pending' | 'approved' | 'rejected' | 'changes-requested' | 'answered' | 'cancelled' | 'superseded' | 'expired'; readonly resultId?: string; readonly completedAt?: string; readonly availableUntil?: string}
 }

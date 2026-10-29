@@ -407,6 +407,13 @@ fn review_document_schema(context: bool) -> Value {
         properties["context"]["required"] = json!(["reference", "contract", "fields"]);
     } else {
         properties["requestId"] = json!({"type":"string","format":"uuid"});
+        properties["handoff"] = json!({
+            "type":"object","additionalProperties":false,"required":["state"],
+            "properties":{
+                "state":{"enum":["pending","accepted","failed","withdrawn"]},
+                "reason":{"enum":["remote-refused","producer-identity-mismatch","review-acceptance-changed","review-policy-changed","submission-recovery-expired","operator-closed","unspecified"]}
+            }
+        });
     }
     json!({"type":"object","additionalProperties":false,"required":["id","actionId","actionRevision","submissionVersion","revision","effectDigest","subject","context","reviewable"],"properties":properties})
 }

@@ -3077,6 +3077,13 @@ impl MutationTransaction {
                     {
                         value["requestId"] = json!(accepted.request_id);
                     }
+                    value["handoff"] = crate::review_store::load_handoff_status(
+                        tx,
+                        &document.action_id,
+                        document.proposal_id,
+                        document.header.submission_version,
+                    )
+                    .await?;
                     value["result"] = proposal_review_result(tx, document).await?;
                 }
             }
