@@ -100,6 +100,9 @@ engine on API shapes the two maintained packs do not cover:
   body, a GraphQL source (after Increment 3).
 - Targets: `breg-records` v1, the 13.6 test profile, a POST-search profile
   with a query body, a bundle-style envelope with links and totals.
+- Upstream authentication: across the set, every kind of `CONCEPT.md` 10.2
+  at least once (`static-api-key`, both OAuth2 kinds, mTLS with `none`),
+  so the maintained packs and the experiments together cover all six.
 
 Each experiment records what it needed: when one cannot be expressed
 without Rust, or only awkwardly, the finding is a port-table gap or a
@@ -130,12 +133,16 @@ Reader types (serde, `deny_unknown_fields`, externally tagged step union
 per CFG-ID-7) for: `AdapterProfile` (operations, request and response
 envelope templates over the closed slot vocabulary of `CONCEPT.md` 7,
 pagination parameters, problem envelope and codes); `AdapterPack` (endpoints with
-component kind, auth kind, declared response headers, `idempotentUpstream`
+component kind, the `authentication` kind of `CONCEPT.md` 10.2 (six kinds,
+fields and spelling copied from Evidence's `SourceAuthentication`, read it,
+do not depend on it), declared response headers, `idempotentUpstream`
 per operation, tested versions; `routeTemplates` with typed parameters;
 internal `routes`; code maps; script and query-file references with digest
 pins; required capabilities); `AdapterProject` (record types and fields,
 pinned pack and profile references, `templatedRoutes`, bindings, access
-profiles); `AdapterRuntimeConfig`; `AdapterFixture` with provenance
+profiles); `AdapterRuntimeConfig` (per-endpoint base URL, credential
+`secret:` references matching the endpoint's kind, token endpoint, optional
+CA bundle and mTLS identity); `AdapterFixture` with provenance
 (`kind: captured | documented`, `upstreamVersion`, `reference`). The step
 union covers every port-table row in `CONCEPT.md` 8.10 for Increments 0 to
 3, including `idempotentConsumer` and the `graphql` endpoint kind, so the
@@ -152,7 +159,9 @@ count per bound operation against `maximumUpstreamCalls`, write-safety
 Increment 3), refusal of `onException`/`doCatch` naming an uncatchable
 class, digest-pin shape, envelope-name validity, profile envelope checks
 (unknown slot, missing result slot, problem envelope without its code
-slot). No type or check names a `breg-records` path, operation, or field.
+slot), authentication checks (runtime credentials match the endpoint kind,
+`none` only on loopback or with an mTLS identity, reserved `headerName`
+refused). No type or check names a `breg-records` path, operation, or field.
 
 DoD: accept and reject unit tests for every check asserting `adapter.*`
 codes, not prose; a round-trip test per step variant; verification floor
@@ -245,7 +254,12 @@ is absent; root `AGENTS.md` and `products/adapter/AGENTS.md` gate rows.
   `src/auth/**`, the upstream double under `tests/support/upstream/**`, and
   `tests/camel_{direct,http,rest_dsl,header_filter}.rs`: `direct`, `http` on
   `FixedDestinationPolicy`, the `rest` consumer on `registry-platform-httpsec`
-  with OIDC and access profiles, filling the profile's envelope templates.
+  with OIDC and access profiles, filling the profile's envelope templates;
+  `src/auth/**` carries all six upstream kinds of `CONCEPT.md` 10.2 with
+  the token cache, the single refresh after a 401, `credential.rejected`,
+  and mTLS identity, plus `tests/camel_http_authentication.rs` with one
+  module per kind against a double token endpoint, and a marker secret
+  asserted absent from journal, diagnostics, and replay output.
 - **C5, journal**, owns `src/notifier/**`, migrations, `tests/camel_event_notifier.rs`,
   and the PostgreSQL suite: event kinds from `CONCEPT.md` 11, value-free,
   written before the response; retention.
@@ -293,7 +307,10 @@ proceeds on synchronous outcomes only.
 
 Pre-launch check (orchestrator, before any stream): confirm from current
 OpenCRVS documentation which API the current release exposes for reads and
-registration (GraphQL gateway or REST events API), and send the finding to
+registration (GraphQL gateway or REST events API) and how an integration
+client authenticates (which `CONCEPT.md` 10.2 kind; if its token endpoint
+needs credentials in the query string, that is a finding, not an engine
+change), and send the finding to
 the lead reviewer before launching.
 
 - **E1, graphql component** (if OpenCRVS is GraphQL), owns
@@ -371,6 +388,8 @@ Increment 1:
    prints nothing (the target API lives in profile files only), and
    `cargo tree -p registry-adapter -e normal | rg registry-record` prints
    nothing (dev-dependency only).
+7. `CARGO test --locked -p registry-adapter --test camel_http_authentication`
+   runs a nonzero number of tests covering each of the six kinds.
 
 Increment 2:
 
@@ -389,10 +408,11 @@ Increment 3:
 4. `products/adapter/reviews/final.md` exists, and each finding is fixed
    or listed open.
 
-Global definition of done: `CONCEPT.md` section 14, items 1 to 7, each
+Global definition of done: `CONCEPT.md` section 14, items 1 to 8, each
 verified by the commands above. The final report to Jeremi states the count
 of `captured` and `documented` fixtures, every open finding, every
-contradiction rule 11 surfaced, and the decisions still pending (D7 to D16).
+contradiction rule 11 surfaced, and the decisions still pending (D7 to D16,
+D18, D19).
 
 ## Increment checklist
 

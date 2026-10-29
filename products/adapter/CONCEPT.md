@@ -450,8 +450,10 @@ script                   script error inside its budget
 ```
 
 Uncatchable, terminal, journaled (an addition with no Camel equivalent):
-`budget.exhausted`, `disclosure.violation`, `egress.refused`,
-`script.budgetExceeded`. No `onException` or `doCatch` may name them;
+`budget.exhausted`, `credential.rejected` (the upstream refused the
+deployment's credential after the single token refresh of section 10.2; it
+sits outside `upstream` so no clause for `upstream` matches it),
+`disclosure.violation`, `egress.refused`, `script.budgetExceeded`. No `onException` or `doCatch` may name them;
 `adapterctl check` refuses a clause that does.
 
 - `errorHandler`: `defaultErrorHandler` (Camel's default: no redelivery,
@@ -517,8 +519,8 @@ Uncatchable, terminal, journaled (an addition with no Camel equivalent):
   `200-299`). Divergence: Camel builds dynamic requests from the
   `CamelHttpPath` and `CamelHttpQuery` headers or `toD`; ours are structured
   and encoded by the engine so no expression can change the origin or inject
-  a path. Authentication to the upstream is endpoint-declared and injected at
-  send time from secret references.
+  a path. Authentication to the upstream is one of the closed kinds of
+  section 10.2, declared on the endpoint and injected at send time.
 - `graphql`: producer, Camel's `camel-graphql` shape (`query` as a
   digest-pinned `queryFile`, `operationName`, `variables` expression) over
   the same transport; a GraphQL `errors` array raises `upstream.http`-class
@@ -561,6 +563,7 @@ delivers the row.
 | REST DSL contract-first | `manual/rest-dsl-openapi.html` | `rest` consumer over the generated OpenAPI | Validation always on; `missingOperation` fail only | 1 |
 | `direct` | `components/next/direct-component.html` | `direct:<routeId>` | Depth bound | 1 |
 | `http` | `components/next/http-component.html` | `http:<endpointId>` on `FixedDestinationPolicy` | Structured, engine-encoded path and query; no redirects | 1 |
+| HTTP authentication | `components/next/http-component.html` (authentication options) | `authentication` on the pack endpoint, credentials bound in the runtime config (section 10.2) | Closed kinds; secret references only; the token endpoint is a fixed destination too; no NTLM, no Digest, no query-placed keys | 1 |
 | `graphql` | `components/next/graphql-component.html` | `graphql:<endpointId>` | Query from a pinned file only | 3 |
 | Languages | `components/next/languages/constant-language.html`, `header-language.html`, `exchangeProperty-language.html`, `jsonpath-language.html` | `constant`, `header`, `exchangeProperty`, `jsonpath` | RFC 9535, not Jayway | 1 |
 | Simple, bean, process | `components/next/languages/simple-language.html` | `rhai` files | Not ported; Rhai replaces them | 1 |
@@ -653,14 +656,66 @@ process (draft, declare), several `to` steps in sequence.
 
 ## 10. Authorization and secrets
 
-Every facade call is authenticated (OIDC via the platform block) and
-authorized by the adapter's own access profiles: named bindings of scopes to
-concrete facade operations and record types, declared in the project. The
-adapter inherits no authorization from any product and grants none to any
-source. Upstream credentials live only as `secret:` references in the
-runtime config, injected by the `http` and `graphql` components at send time;
-the exchange, scripts, packs, diagnostics, and the audit journal never see
-them.
+### 10.1 Facade callers
+
+Every facade call is authenticated (OIDC bearer tokens via the platform
+block, as every Registry Stack product) and authorized by the adapter's own
+access profiles: named bindings of scopes to concrete facade operations and
+record types, declared in the project. No API keys, no Basic, no anonymous
+calls on the facade. The adapter inherits no authorization from any product
+and grants none to any source. The caller's token is never forwarded
+upstream: upstream calls run under the deployment's own credential for that
+source (section 10.2), and the journal records which caller asked (D19).
+
+### 10.2 Upstream authentication
+
+Sources authenticate in different ways, so the pack endpoint declares one
+`authentication` kind from a closed list, and the runtime config binds its
+credentials as `secret:` references. The kinds and their fields are the ones
+Evidence already ships for fixed sources (`SourceAuthentication` in
+`registry-evidence`), spelled identically, so an operator who configured an
+Evidence source configures an adapter endpoint the same way:
+
+| Kind | Sends | Typical source |
+|---|---|---|
+| `none` | Nothing; admitted only for a numeric-loopback origin (the test double) or an endpoint with an mTLS client identity | Tests, mTLS-only sources |
+| `basic` | `Authorization: Basic` from `usernameRef` and `passwordRef` | DHIS2 user accounts |
+| `static-authorization` | `Authorization: <scheme> <token>` from `tokenRef`, `scheme` defaulting to `Bearer` | DHIS2 personal access tokens (`ApiToken`), static bearer tokens |
+| `static-api-key` | One declared header (`headerName`) from `valueRef`; reserved header names refused | Gateways keyed by an API-key header |
+| `oauth2-client-credentials` | Bearer token from the RFC 6749 client-credentials grant with a shared secret (`credentialPlacement`, `scope`, `audience`, `resource`, bounded cache) | OpenCRVS-style integration clients, Keycloak-fronted APIs |
+| `oauth2-private-key-jwt` | Bearer token from the client-credentials grant authenticated by an RFC 7523 signed assertion | SMART on FHIR Backend Services, high-assurance gateways |
+
+Orthogonal to the kind, the runtime config may give an endpoint a private CA
+bundle and an mTLS client identity, which `FixedDestinationPolicy` already
+supports; mutual TLS therefore combines with any kind, and is the only way
+`none` reaches a non-loopback source.
+
+Rules:
+
+- The token endpoint of an OAuth2 kind is itself a fixed destination bound
+  in the runtime config, never derived from a response. Token requests are
+  engine sends outside `maximumUpstreamCalls`, bounded separately: at most
+  two per endpoint per exchange.
+- For an OAuth2 kind, an upstream 401 invalidates the cached token and the
+  send is repeated once with a fresh one (safe for writes too: a 401 means
+  the request was not processed). A 401 after that, or any 401 under a
+  static kind, raises the uncatchable `credential.rejected` (section 8.7): a
+  route cannot repair a credential, and a fallback must not mask one. A 403
+  stays `upstream.http`, since it answers about the request, not the
+  credential.
+- Tokens and secrets live in zeroizing buffers inside the `http` and
+  `graphql` components only; the exchange, scripts, packs, fixtures,
+  diagnostics, and the audit journal never see them. The journal records the
+  endpoint's kind and token-request outcomes, never a value.
+- Fixture replay intercepts the token endpoint like any other send, so packs
+  are replayable without a credential.
+
+Not ported: Camel's NTLM and Digest methods, API keys in the query string
+(they leak into upstream and proxy access logs), and caller token exchange
+(D19). The implementation is adapter-local over
+`registry-platform-httputil` primitives; Evidence and the adapter are then
+two systems sharing one credential shape, the trigger for lifting it into a
+platform crate in a later, separately reviewed change, not in this program.
 
 ## 11. Audit and data minimization
 
@@ -818,7 +873,11 @@ explicitly (`allowedPrivateCidrs`, bounded count), and plain HTTP stays
 confined to those addresses. No expression can alter the origin or inject a
 path segment. Uncatchable errors cannot be handled by any `onException` or
 `doCatch`. Secrets never appear in the exchange, scripts, diagnostics, or
-audit. Script budgets terminate runaway loops. Response size caps are
+audit. Every upstream authentication kind of section 10.2 is exercised over
+the double, including token caching, the single retry after a 401, token
+endpoint failure, and a marker secret proven absent from the journal,
+diagnostics, and fixtures; the facade refuses a missing, expired,
+wrong-audience, or wrong-scope token. Script budgets terminate runaway loops. Response size caps are
 enforced. Diagnostics are value-free, asserted by the corpus marker. The
 idempotency store's retention sweep erases expired bodies.
 
@@ -889,6 +948,11 @@ Definition of done for the program, every item verified by a command in
 7. A review report per increment and a final multi-expert review are
    recorded under `products/adapter/reviews/`, with every finding either
    fixed or listed as open.
+8. Every upstream authentication kind of section 10.2 has a conformance
+   test over the double, and the maintained packs and experiments between
+   them use at least four distinct kinds (DHIS2 `basic` and
+   `static-authorization`, OpenCRVS's confirmed kind, and the OAuth2 kinds
+   in experiments).
 
 ## 15. Credit and licensing
 
@@ -932,3 +996,5 @@ the product documentation credits Camel and the EIP book regardless.
 | D15 | Fixture provenance distinguishes `captured` from `documented`; overnight fixtures are `documented` unless a real instance was run | 2026-10-30, under delegation, pending Jeremi |
 | D16 | Facade outcome for a write the source accepted but has not completed | open, Jeremi to decide before Increment 2 |
 | D17 | The exposed API, envelope included, is wholly a profile artifact (envelope templates over a closed slot vocabulary); `breg-records` v1 is the first target, not a built-in; `registry-record` is a dev-dependency for goldens only | 2026-10-30, accepted by Jeremi |
+| D18 | Upstream authentication is a closed list of six kinds with Evidence's `SourceAuthentication` shape and spelling (section 10.2), plus orthogonal mTLS; adapter-local in this program, lifted to the platform later | 2026-10-30, under delegation, pending Jeremi |
+| D19 | The facade caller's token is never forwarded or exchanged upstream; upstream calls use the deployment's per-source credential, and per-user upstream authority waits for a source that requires it | 2026-10-30, under delegation, pending Jeremi |
