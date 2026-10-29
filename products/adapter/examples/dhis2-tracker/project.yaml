@@ -1,0 +1,83 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json
+#
+# The dhis2-tracker example deployment: the breg-records facade profile
+# bound to the dhis2-tracker pack over one declared record type. The
+# program UID is the deployment's own DHIS2 program; every secret travels
+# through the runtime config as a secret reference, never here.
+#
+# Upstream-call budgets, under the worst-case rule (route body plus the
+# widest exception-clause body; every send counts one plus the widest
+# declared maximumRedeliveries; token requests none, the endpoint is
+# basic):
+#   - personSearch: loop bound 10 pages x (1 fetch per page) x
+#     (1 + 1 redelivery) = 20; budget 24 leaves headroom.
+#   - personFetch: 1 send x (1 + 1 redelivery) = 2; budget 4.
+#   - personImport: 1 send x (1 + 1 redelivery) = 2; budget 4.
+apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
+kind: AdapterProject
+id: dhis2-tracker-example
+profile:
+  id: breg-records
+  version: 0.1.0
+  digest: sha256:f47666e3836512ce8a8dd33d0c454c642f64e4f1d12bd888b9ae569dc47ad9bd
+pack:
+  id: dhis2-tracker
+  version: 0.1.0
+  digest: sha256:78c3e4c29cce949354093b8baecde4d667180e6dd3f15aa4419a0aa36de77aa5
+recordTypes:
+  - name: person
+    fields:
+      - name: org_unit
+        type: string
+        required: true
+      - name: tracked_entity_type
+        type: string
+        required: true
+      - name: created_at
+        type: date-time
+      - name: updated_at
+        type: date-time
+templatedRoutes:
+  - routeTemplateRef: searchTrackedEntities
+    routeId: personSearch
+    parameters:
+      program: qyVpUaAYv2A
+      pageSize: 50
+  - routeTemplateRef: fetchTrackedEntity
+    routeId: personFetch
+  - routeTemplateRef: importTrackedEntity
+    routeId: personImport
+bindings:
+  - id: person-search
+    operation: records.search
+    recordType: person
+    route: personSearch
+    maximumUpstreamCalls: 24
+  - id: person-get
+    operation: records.get
+    recordType: person
+    route: personFetch
+    maximumUpstreamCalls: 4
+  - id: person-create
+    operation: records.create
+    recordType: person
+    route: personImport
+    maximumUpstreamCalls: 4
+accessProfiles:
+  - id: records-reader
+    scopes:
+      - records.read
+    operations:
+      - records.search
+      - records.get
+    recordTypes:
+      - person
+  - id: records-writer
+    scopes:
+      - records.write
+    operations:
+      - records.create
+      - records.update
+      - records.patch
+    recordTypes:
+      - person
