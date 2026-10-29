@@ -104,7 +104,7 @@ expectation lists both.
 |---|---|---|---|
 | `adapter.project.unknown-template` | An orphan instantiation references no declared template | `adapter.project.unknown-template` | checks |
 | `adapter.project.unknown-template-parameter` | Instantiation supplies parameter `bogus`, undeclared by the template | `adapter.project.unknown-template-parameter` | checks |
-| `adapter.project.parameter-type-mismatch` | Instantiation binds integer parameter `pageSize` a string | `adapter.project.parameter-type-mismatch` | checks |
+| `adapter.project.parameter-type-mismatch` | Instantiation binds integer parameter `page_size` a string | `adapter.project.parameter-type-mismatch` | checks |
 | `adapter.project.required-parameter-unbound` | Instantiation omits required parameter `program` | `adapter.project.required-parameter-unbound` | checks |
 | `adapter.project.pin-digest-mismatch` | Pinned profile digest does not match the profile bytes (valid hex, wrong value) | `adapter.project.pin-digest-mismatch` | checks |
 | `adapter.project.pin-version-mismatch` | Pack pinned at version `0.0.1`, pack declares `1` (digest matches the bytes) | `adapter.project.pin-version-mismatch` | checks |
