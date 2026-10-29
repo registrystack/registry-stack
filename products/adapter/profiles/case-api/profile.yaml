@@ -1,0 +1,40 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/profile/profile.v1alpha1.schema.json
+#
+# The second test profile of the Increment 0 corpus: a foreign convention
+# set, deliberately unlike breg-records in every authored choice a caller
+# sees. Its operation ids, facade paths, envelope shape, pagination
+# parameter names, and problem vocabulary share nothing with
+# `products/adapter/profiles/breg-records/profile.yaml`, so a passing check
+# over both proves that a second target API is pure configuration, not a
+# second engine. The corpus README at
+# `products/adapter/fixtures/corpus/README.md` maps every corpus member to
+# the refusal it expects; this profile is the good member of that corpus.
+apiVersion: id.registrystack.org/formats/adapter/profile/v1alpha1
+kind: AdapterProfile
+id: case-api
+operations:
+  - id: cases.find
+    method: POST
+    path: /v2/cases/{type}
+    requestEnvelope: '{"query": {{record}}}'
+    responseEnvelope: '{"cases": {{records}}, "pageStateToken": "{{?nextCursor}}"}'
+    pagination:
+      cursorParameter: pageStateToken
+      pageSizeParameter: maxResults
+      pageSizeMinimum: 10
+      pageSizeMaximum: 500
+  - id: cases.get
+    method: GET
+    path: /v2/cases/{type}/{case_id}
+    responseEnvelope: '{"case": {{record}}, "retrievedAt": "{{requestId}}"}'
+  - id: cases.file
+    method: PUT
+    path: /v2/cases/{type}/{case_id}
+    requestEnvelope: '{"record": {{record}}}'
+    responseEnvelope: '{"case": {{record}}}'
+problemCodes:
+  - cases.missing
+  - cases.conflict
+  - cases.unreachable
+  - cases.refused
+problemEnvelope: '{"family": "{{problemCode}}", "message": "{{problemTitle}}", "httpStatus": {{status}}, "more": "{{?problemDetail}}"}'

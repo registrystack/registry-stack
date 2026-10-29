@@ -1,0 +1,71 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/profile/profile.v1alpha1.schema.json
+#
+# The breg-records facade profile: the Registry Record v1 contract a caller
+# sees, served over any upstream the bound pack reaches.
+#
+# Registry Record v1 shapes are the DTOs of `crates/registry-record`; BReg
+# serves them from `crates/registry-breg/src/record_profile.rs`: one record
+# under `data`, a collection under `items` with `pageInfo.nextCursor`, and
+# `meta` naming the registry, the dataset, and the entity type. This profile
+# serves the same shapes so a consumer of BReg output reads adapter output
+# unchanged.
+#
+# The closed slot vocabulary carries `record`, `records`, `recordType`,
+# `recordId`, `nextCursor`, and `requestId`. Record v1's
+# `meta.registryIdentifier` and `meta.datasetIdentifier` are deployment
+# values (BReg fills them from the service configuration and the entity's
+# primary dataset), not engine slots, so they are declared as
+# `parameterizedParts`: the engine writes the deployment's values over the
+# envelope members of these names at instantiation. The envelope literals
+# below carry the part names themselves as the stand-in text that names the
+# binding point.
+apiVersion: id.registrystack.org/formats/adapter/profile/v1alpha1
+kind: AdapterProfile
+id: breg-records
+operations:
+  - id: records.search
+    method: GET
+    path: /v1/records/{type}
+    responseEnvelope: '{"items": {{records}}, "pageInfo": {"nextCursor": "{{?nextCursor}}"}, "meta": {"registryIdentifier": "registryIdentifier", "datasetIdentifier": "datasetIdentifier", "entityTypeIdentifier": "{{recordType}}"}'
+    pagination:
+      cursorParameter: cursor
+      pageSizeParameter: limit
+      pageSizeMinimum: 1
+      pageSizeMaximum: 1000
+  - id: records.get
+    method: GET
+    path: /v1/records/{type}/{record_id}
+    responseEnvelope: '{"data": {{record}}, "meta": {"registryIdentifier": "registryIdentifier", "datasetIdentifier": "datasetIdentifier", "entityTypeIdentifier": "{{recordType}}"}'
+  - id: records.create
+    method: POST
+    path: /v1/records/{type}
+    requestEnvelope: '{"data": {{record}}}'
+    responseEnvelope: '{"data": {{record}}, "meta": {"registryIdentifier": "registryIdentifier", "datasetIdentifier": "datasetIdentifier", "entityTypeIdentifier": "{{recordType}}"}'
+  - id: records.update
+    method: PUT
+    path: /v1/records/{type}/{record_id}
+    requestEnvelope: '{"data": {{record}}}'
+    responseEnvelope: '{"data": {{record}}, "meta": {"registryIdentifier": "registryIdentifier", "datasetIdentifier": "datasetIdentifier", "entityTypeIdentifier": "{{recordType}}"}'
+  - id: records.patch
+    method: PATCH
+    path: /v1/records/{type}/{record_id}
+    requestEnvelope: '{"data": {{record}}}'
+    responseEnvelope: '{"data": {{record}}, "meta": {"registryIdentifier": "registryIdentifier", "datasetIdentifier": "datasetIdentifier", "entityTypeIdentifier": "{{recordType}}"}'
+problemCodes:
+  - source.not-found
+  - source.unavailable
+  - source.upstream-error
+  - source.write-rejected
+  - source.write-partial
+problemEnvelope: '{"type": "https://id.registrystack.org/problems/registry-adapter/{{problemCode}}", "title": "{{problemTitle}}", "status": {{status}}, "detail": "{{?problemDetail}}", "code": "{{problemCode}}"}'
+parameterizedParts:
+  - name: registryIdentifier
+    description: >-
+      The registry identifier this deployment serves in the Registry Record
+      v1 meta block. The engine writes the deployment's declared value over
+      the envelope members of this name at instantiation; the literal in the
+      envelope template stands in for that member until then.
+  - name: datasetIdentifier
+    description: >-
+      The dataset identifier this deployment serves in the Registry Record
+      v1 meta block, as `registryIdentifier` above.
