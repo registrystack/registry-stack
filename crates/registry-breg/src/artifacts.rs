@@ -1347,7 +1347,7 @@ pub fn proposal_apply_input_schema() -> Value {
 
 pub fn proposal_schema() -> Value {
     json!({"type":"object", "additionalProperties":false,
-    "required":["id","actionId","actionRevision","submissionVersion","revision","state","turn","createdAt","links"],
+    "required":["id","actionId","actionRevision","submissionVersion","revision","state","turn","links"],
     "properties": {
         "id":{"type":"string","format":"uuid"},
         "actionId":{"type":"string"},"actionRevision":{"type":"string"},
@@ -4448,8 +4448,10 @@ mod problem_contract_tests {
         proposal.as_object_mut().unwrap().remove("turn");
         assert!(!validator.is_valid(&proposal));
         proposal["turn"] = json!("official");
+        // A command receipt stored before `createdAt` was served replays
+        // without it, so the member is optional.
         proposal.as_object_mut().unwrap().remove("createdAt");
-        assert!(!validator.is_valid(&proposal));
+        assert!(validator.is_valid(&proposal));
         proposal["createdAt"] = json!("2026-10-16T01:00:00.000000Z");
         proposal["request"] = json!({});
         assert!(!validator.is_valid(&proposal));
