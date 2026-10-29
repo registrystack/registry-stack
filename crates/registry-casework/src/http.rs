@@ -306,10 +306,64 @@ where
                 None,
             )
         })?;
-        serde_json::from_value(value)
+        serde_path_to_error::deserialize(value)
             .map(Self)
-            .map_err(|_| problem_response(ProblemCode::RequestUnprocessable, None, None))
+            .map_err(|error| shape_rejection(&error))
     }
+}
+
+/// The longest member name echoed back in a shape refusal.
+const MAXIMUM_SHAPE_MEMBER_BYTES: usize = 64;
+
+/// The 422 for a document that does not match the closed request type. It
+/// names the failing JSON path and the closed `schema-mismatch` category in the
+/// validation headers, never the submitted value. A member name is client text,
+/// so the path stops at the last segment that is not a short identifier.
+fn shape_rejection(error: &serde_path_to_error::Error<serde_json::Error>) -> Response {
+    let mut path = String::from("$");
+    let mut named = true;
+    for segment in error.path().iter() {
+        match segment {
+            serde_path_to_error::Segment::Seq { index } => path.push_str(&format!(".{index}")),
+            serde_path_to_error::Segment::Map { key } => named = push_member(&mut path, key),
+            serde_path_to_error::Segment::Enum { .. } | serde_path_to_error::Segment::Unknown => {}
+        }
+        if !named {
+            break;
+        }
+    }
+    // The path tracker names an undeclared member of a plain object but stops
+    // at the object holding one inside an internally tagged enum, so the member
+    // is also read from the error text when the path does not already end in it.
+    if named {
+        if let Some(member) = unknown_member(&error.inner().to_string()) {
+            if path.rsplit('.').next() != Some(member) {
+                push_member(&mut path, member);
+            }
+        }
+    }
+    let validation = ReviewValidationError::new(path, ReviewValidationReason::SchemaMismatch);
+    problem_response(ProblemCode::RequestUnprocessable, None, Some(&validation))
+}
+
+/// Appends `.name` when it is a short identifier; reports whether it was.
+fn push_member(path: &mut String, name: &str) -> bool {
+    let safe = !name.is_empty()
+        && name.len() <= MAXIMUM_SHAPE_MEMBER_BYTES
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'));
+    if safe {
+        path.push('.');
+        path.push_str(name);
+    }
+    safe
+}
+
+/// The member serde names in an "unknown field `name`, expected ..." message.
+fn unknown_member(message: &str) -> Option<&str> {
+    let rest = message.strip_prefix("unknown field `")?;
+    rest.split_once('`').map(|(name, _)| name)
 }
 
 /// `application/json` or an `application/*+json` media type with well-formed
@@ -2305,6 +2359,86 @@ mod tests {
             );
             assert_eq!(calls.load(Ordering::Relaxed), 0, "{name}");
         }
+    }
+
+    async fn decision_route(
+        StrictJson(request): StrictJson<ReviewTaskDecisionRequest>,
+    ) -> StatusCode {
+        let _ = request;
+        StatusCode::NO_CONTENT
+    }
+
+    async fn refused_shape(body: &str) -> (Response, serde_json::Value) {
+        let response = http_edge(Router::new().route("/decision", post(decision_route)))
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/decision")
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(body.to_owned()))
+                    .expect("decision request"),
+            )
+            .await
+            .expect("bounded shape response");
+        let (parts, body) = response.into_parts();
+        let bytes = to_bytes(body, 16 * 1024).await.expect("bounded problem");
+        let problem: serde_json::Value = serde_json::from_slice(&bytes).expect("problem JSON");
+        (Response::from_parts(parts, Body::empty()), problem)
+    }
+
+    /// A member the closed request type does not declare is named by path, so
+    /// the client sees which field was refused rather than a generic 422.
+    #[tokio::test]
+    async fn an_undeclared_member_is_refused_with_its_json_path() {
+        let (response, problem) = refused_shape(
+            r#"{"decision":{"type":"approve","outcome":"approved","reason":"private words"}}"#,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(problem["code"], ProblemCode::RequestUnprocessable.code());
+        let headers = response.headers();
+        assert_eq!(headers[VALIDATION_PATH_HEADER], "$.decision.reason");
+        assert_eq!(headers[VALIDATION_REASON_HEADER], "schema-mismatch");
+        assert!(!problem.to_string().contains("private words"));
+        assert!(!format!("{headers:?}").contains("private words"));
+
+        let (response, _) = refused_shape(r#"{"decision":{"type":"approve"},"extra":1}"#).await;
+        assert_eq!(response.headers()[VALIDATION_PATH_HEADER], "$.extra");
+    }
+
+    /// A member name is client-chosen text, so a name that is not a short
+    /// identifier is never echoed: the path stops at its parent.
+    #[tokio::test]
+    async fn an_unsafe_member_name_is_not_echoed() {
+        let (response, _) = refused_shape(
+            r#"{"decision":{"type":"approve","outcome":"approved","pri vate;words":"x"}}"#,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(response.headers()[VALIDATION_PATH_HEADER], "$.decision");
+        assert!(!format!("{:?}", response.headers()).contains("pri vate"));
+
+        let long = "a".repeat(80);
+        let (response, _) = refused_shape(&format!(r#"{{"{long}":1}}"#)).await;
+        assert_eq!(response.headers()[VALIDATION_PATH_HEADER], "$");
+    }
+
+    /// A wrongly typed member is refused with the deepest path the parser can
+    /// attribute and no submitted value; inside a tagged decision that is the
+    /// decision itself.
+    #[tokio::test]
+    async fn a_mistyped_member_is_refused_without_its_value() {
+        let (response, problem) = refused_shape(
+            r#"{"decision":{"type":"approve","outcome":"approved","publicReason":7}}"#,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(problem["code"], ProblemCode::RequestUnprocessable.code());
+        assert_eq!(response.headers()[VALIDATION_PATH_HEADER], "$.decision");
+        assert_eq!(
+            response.headers()[VALIDATION_REASON_HEADER],
+            "schema-mismatch"
+        );
     }
 
     /// An outcome refusal lists the declared outcomes the reviewer may send,

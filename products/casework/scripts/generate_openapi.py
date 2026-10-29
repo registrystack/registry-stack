@@ -237,6 +237,11 @@ def document(contract: dict, wire: dict) -> dict:
             headers[prefix+"-Validation-Path"]={"description":"Bounded value-free JSON path; present together with the validation reason.","schema":{"type":"string","maxLength":256}}
             headers[prefix+"-Validation-Reason"]={"description":"Closed value-free validation category; present together with the validation path.","schema":ref("ReviewValidationReason")}
             if endpoint.body=="ReviewTaskDecisionRequest":headers["Registry-Casework-Validation-Allowed"]={"description":"Comma-separated outcome identifiers the review policy declares for the requested settlement; present only with the outcome-not-declared reason.","schema":{"type":"string","maxLength":1039,"pattern":"^[a-z][a-z0-9_-]{0,63}(,[a-z][a-z0-9_-]{0,63}){0,15}$"}}
+        if endpoint.body and "422" in responses:
+            prefix="Registry-Review" if endpoint.review else "Registry-Casework"
+            headers=responses["422"].setdefault("headers",{})
+            headers[prefix+"-Validation-Path"]={"description":"Bounded value-free JSON path of the member the request type refused; present together with the validation reason.","schema":{"type":"string","maxLength":256}}
+            headers[prefix+"-Validation-Reason"]={"description":"Closed value-free validation category, always schema-mismatch for a request shape refusal; present together with the validation path.","schema":ref("ReviewValidationReason")}
         paths.setdefault(endpoint.path,{})[endpoint.method.lower()]=operation
     result={"openapi":"3.1.0","info":{"title":"Registry Casework API","version":"v1alpha1","description":"Source-neutral review policies, requests, human decisions, and immutable results. Context providers and downstream grant authority remain independent trust boundaries.","license":{"name":"Apache-2.0","identifier":"Apache-2.0"}},"paths":paths,"components":{"schemas":schemas,"headers":{"TraceparentHeader":{"description":"W3C trace context.","schema":{"type":"string"}}},"securitySchemes":{"bearerAuth":{"type":"http","scheme":"bearer","bearerFormat":"JWT","description":"Exact trusted-issuer identity and governed scopes. A producer token grants no human review authority."}}},"x-registry-casework-framework-problems":contract["frameworkProblems"]}
     verify_operation_responses(result,contract)

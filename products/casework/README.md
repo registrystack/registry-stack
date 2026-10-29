@@ -121,6 +121,11 @@ outcomes. Each outcome declares `publicReason: required`, `optional` or
 `none`: a public reason of at most 2000 UTF-8 bytes reaches the producer on
 the ReviewResult, while the private `reason` stays in the accountability
 record and the audit journal records only that a public reason was given.
+An approval carries no private `reason`: only `outcome` and `publicReason`. A
+member the request type does not declare, such as `reason` on an approval, is
+refused with 422 `request.unprocessable`, and the
+`Registry-Casework-Validation-Path` header names it (`$.decision.reason`) with
+reason `schema-mismatch`; the submitted value is never echoed.
 Stage thresholds count independent
 eligible reviewers. Every approval in one stage names the same outcome: one
 naming another outcome than the stage already chose is refused at

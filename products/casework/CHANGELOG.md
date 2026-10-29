@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- A request body that the closed request type refuses with 422
+  `request.unprocessable` now carries the failing JSON path in the
+  `Registry-Casework-Validation-Path` header and `schema-mismatch` in the
+  `Registry-Casework-Validation-Reason` header (the Review profile uses the
+  `Registry-Review-` names), for example `$.decision.reason` for a private
+  `reason` sent on an approval. A member name that is not a short identifier is
+  not echoed, and no submitted value is ever returned. The README states that
+  an approval carries no private reason.
 - Once a request has left review, the reviewer who recorded a task's decision
   can read that task's current-source `/context` after the source applies the
   decision and stops calling the subject reviewable, while the source still
