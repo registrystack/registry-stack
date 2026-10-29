@@ -46,6 +46,7 @@ pub enum CheckCode {
     ProjectPinDigestMismatch,
     ProjectPinVersionMismatch,
     ProjectRequiredParameterUnbound,
+    ProjectTemplateNotInstantiated,
     ProjectUnknownOperation,
     ProjectUnknownRecordType,
     ProjectUnknownRoute,
@@ -104,6 +105,7 @@ impl CheckCode {
         Self::ProjectPinDigestMismatch,
         Self::ProjectPinVersionMismatch,
         Self::ProjectRequiredParameterUnbound,
+        Self::ProjectTemplateNotInstantiated,
         Self::ProjectUnknownOperation,
         Self::ProjectUnknownRecordType,
         Self::ProjectUnknownRoute,
@@ -166,6 +168,7 @@ impl CheckCode {
             Self::ProjectPinDigestMismatch => "adapter.project.pin-digest-mismatch",
             Self::ProjectPinVersionMismatch => "adapter.project.pin-version-mismatch",
             Self::ProjectRequiredParameterUnbound => "adapter.project.required-parameter-unbound",
+            Self::ProjectTemplateNotInstantiated => "adapter.project.template-not-instantiated",
             Self::ProjectUnknownOperation => "adapter.project.unknown-operation",
             Self::ProjectUnknownRecordType => "adapter.project.unknown-record-type",
             Self::ProjectUnknownRoute => "adapter.project.unknown-route",
@@ -251,6 +254,7 @@ impl CheckCode {
             | Self::ProjectPinDigestMismatch
             | Self::ProjectPinVersionMismatch
             | Self::ProjectRequiredParameterUnbound
+            | Self::ProjectTemplateNotInstantiated
             | Self::ProjectUnknownOperation
             | Self::ProjectUnknownRecordType
             | Self::ProjectUnknownRoute

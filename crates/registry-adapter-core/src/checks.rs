@@ -1520,6 +1520,22 @@ pub fn check_project(workspace: &Workspace<'_>) -> Vec<Diagnostic> {
                 "Name a record type the project declares.",
             ));
         }
+        // A raw template never instantiated has no concrete send shape:
+        // the runtime would interpolate nothing and send the placeholder
+        // text, so a binding may only name a pack route or an
+        // instantiated route.
+        let instantiated = project
+            .templated_routes
+            .iter()
+            .any(|instantiated| instantiated.route_id.as_str() == binding.route.as_str());
+        if pack.routes.get(binding.route.as_str()).is_none() && !instantiated {
+            findings.push(finding(
+                CheckCode::ProjectTemplateNotInstantiated,
+                &format!("{prefix}/route"),
+                "the binding names a raw template that is never instantiated",
+                "Name a pack route, or instantiate the template in templatedRoutes and bind its route id.",
+            ));
+        }
         let route_steps = bodies_by_id.get(binding.route.as_str()).copied();
         if route_steps.is_none() {
             findings.push(finding(
@@ -2792,6 +2808,49 @@ mod tests {
         assert_has(
             &check_routes(&pack, &project_builder(&pack)),
             CheckCode::RouteUnknownDirectTarget,
+        );
+    }
+
+    /// A binding may not name a raw template: only a pack route or an
+    /// instantiated route id carries a concrete send shape (staff review
+    /// P1-5).
+    #[test]
+    fn project_refuses_a_binding_of_a_never_instantiated_template() {
+        let profile = profile_builder(vec![operation("cases.find", HttpMethod::Get)]);
+        let template = RouteTemplate {
+            id: id("pager"),
+            parameters: Vec::new(),
+            steps: vec![to_get("case-api")],
+        };
+        let mut pack = pack_builder(vec![basic_endpoint()], vec![]);
+        pack.route_templates = UniqueIdList::new(vec![template]).expect("unique");
+        let binding = |route: registry_platform_yaml::ExternalId| Binding {
+            id: id("find-cases"),
+            operation: id("cases.find"),
+            record_type: local("case"),
+            route,
+            maximum_upstream_calls: BoundedU64::<1, 100_000>::new(10).expect("budget"),
+        };
+        let mut project = project_builder(&pack);
+        project.access_profiles = UniqueIdList::new(Vec::new()).expect("empty");
+        project.bindings = UniqueIdList::new(vec![binding(id("pager"))]).expect("unique");
+        assert_has(
+            &check_project(&workspace(&profile, &pack, &project)),
+            CheckCode::ProjectTemplateNotInstantiated,
+        );
+        // Instantiating the template gives the binding a concrete route.
+        let mut project = project_builder(&pack);
+        project.access_profiles = UniqueIdList::new(Vec::new()).expect("empty");
+        project.templated_routes = UniqueIdList::new(vec![TemplatedRoute {
+            route_template_ref: id("pager"),
+            route_id: id("pager-1"),
+            parameters: BTreeMap::new(),
+        }])
+        .expect("unique");
+        project.bindings = UniqueIdList::new(vec![binding(id("pager-1"))]).expect("unique");
+        assert!(
+            !codes(&check_project(&workspace(&profile, &pack, &project)))
+                .contains(&CheckCode::ProjectTemplateNotInstantiated.code())
         );
     }
 
