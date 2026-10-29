@@ -2162,6 +2162,42 @@ fn is_plain_http(url: &registry_platform_yaml::Url) -> bool {
     !is_loopback_origin(url)
 }
 
+/// The problem code a non-2xx entry expects is checked against the
+/// profile's declared problem codes: the facade's error path emits a code
+/// the profile fills its problem envelope with, so an entry expecting an
+/// undeclared code can never pass a run. The check sits at the entry; the
+/// body shape itself is the response-schema check's concern.
+fn problem_code_check(
+    entry_pointer: &str,
+    expected: &crate::fixture::RecordedResponse,
+    profile: &AdapterProfile,
+) -> Vec<Diagnostic> {
+    let non_2xx =
+        registry_platform_yaml::BoundedU32::<200, 299>::new(expected.status.get()).is_err();
+    let code = expected
+        .body
+        .as_ref()
+        .and_then(|body| body.get("code"))
+        .and_then(|code| code.as_str());
+    let (Some(code), true) = (code, non_2xx) else {
+        return Vec::new();
+    };
+    if profile
+        .problem_codes
+        .iter()
+        .any(|declared| declared.as_str() == code)
+    {
+        Vec::new()
+    } else {
+        vec![finding(
+            CheckCode::FixtureUnknownProblemCode,
+            entry_pointer,
+            "the entry expects a problem code the bound profile does not declare",
+            "Expect a problem code the pinned profile declares, or declare the code in the profile.",
+        )]
+    }
+}
+
 /// Fixture checks (`products/adapter/CONCEPT.md` sections 10.2 and 13.3):
 /// intercepts and recorded requests name declared endpoints; a route never
 /// declares its own test intercepts, so there is nothing else to refuse.
@@ -2222,7 +2258,13 @@ pub fn check_fixtures(workspace: &Workspace<'_>) -> Vec<Diagnostic> {
                     "the entry names a profile operation the project binds to no route",
                     "Name an operation a binding of the project binds to a route.",
                 )),
-                (Some(_), true) => {}
+                (Some(_), true) => {
+                    findings.extend(problem_code_check(
+                        &format!("{prefix}/entries/{entry_index}"),
+                        &entry.expected_facade_response,
+                        workspace.profile,
+                    ));
+                }
             }
         }
     }
@@ -5295,6 +5337,74 @@ mod tests {
         let bound = fixture("cases.find");
         let mut ws = workspace(&profile, &pack, &project);
         ws.fixtures = std::slice::from_ref(&bound);
+        assert_clean(check_fixtures(&ws));
+    }
+
+    /// A non-2xx entry expects a problem code the profile declares: an
+    /// undeclared code refuses at the entry, the declared code passes, and
+    /// the check stays out of 2xx entries (addendum C).
+    #[test]
+    fn fixtures_resolve_the_expected_problem_code_against_the_profile() {
+        let profile = profile_builder(vec![operation("cases.find", HttpMethod::Get)]);
+        let pack = pack_builder(vec![oauth_endpoint()], vec![]);
+        let mut project = project_builder(&pack);
+        project.bindings = UniqueIdList::new(vec![Binding {
+            id: id("find-cases"),
+            operation: id("cases.find"),
+            record_type: local("case"),
+            route: id("fetchCase"),
+            maximum_upstream_calls: BoundedU64::<1, 100_000>::new(1).expect("budget"),
+        }])
+        .expect("unique");
+        let entry = |status: u32, code: Option<&str>| FixtureEntry {
+            operation: id("cases.find"),
+            given: RecordedRequest {
+                endpoint: id("case-api"),
+                method: HttpMethod::Get,
+                path: "/v2/cases/person/123".to_string(),
+                query: None,
+                body: None,
+            },
+            upstream_response: RecordedResponse {
+                status: BoundedU32::new(200).expect("a status"),
+                body: None,
+            },
+            expected_facade_response: RecordedResponse {
+                status: BoundedU32::new(status).expect("a status"),
+                body: code.map(|code| serde_json::json!({ "code": code })),
+            },
+        };
+        let fixture = |status: u32, code: Option<&str>| AdapterFixture {
+            id: id("case-api-fixtures"),
+            pack: id("case-api-pack"),
+            upstream_version: "2.7".to_string(),
+            provenance: FixtureProvenance::Captured {
+                reference: "staging".to_string(),
+            },
+            intercepts: vec![],
+            entries: vec![entry(status, code)],
+        };
+
+        // An undeclared problem code refuses, at the entry.
+        let undeclared = fixture(404, Some("cases.smashed"));
+        let mut ws = workspace(&profile, &pack, &project);
+        ws.fixtures = std::slice::from_ref(&undeclared);
+        let findings = check_fixtures(&ws);
+        assert_eq!(findings.len(), 1);
+        assert_eq!(
+            findings[0].code,
+            CheckCode::FixtureUnknownProblemCode.code()
+        );
+        assert_eq!(findings[0].path, "/fixtures/0/entries/0");
+
+        // The declared code passes; a 2xx entry is not a problem body.
+        let declared = fixture(404, Some("cases.conflict"));
+        let mut ws = workspace(&profile, &pack, &project);
+        ws.fixtures = std::slice::from_ref(&declared);
+        assert_clean(check_fixtures(&ws));
+        let success = fixture(200, Some("cases.smashed"));
+        let mut ws = workspace(&profile, &pack, &project);
+        ws.fixtures = std::slice::from_ref(&success);
         assert_clean(check_fixtures(&ws));
     }
 
