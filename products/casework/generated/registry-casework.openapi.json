@@ -6813,6 +6813,19 @@
             },
             "description": "Problem: absence.cover-cycle, absence.invalid-period, absence.overlap, absence.self-cover, request.unprocessable, review.initiator-required",
             "headers": {
+              "Registry-Casework-Validation-Path": {
+                "description": "Bounded value-free JSON path of the member the request type refused; present together with the validation reason.",
+                "schema": {
+                  "maxLength": 256,
+                  "type": "string"
+                }
+              },
+              "Registry-Casework-Validation-Reason": {
+                "description": "Closed value-free validation category, always schema-mismatch for a request shape refusal; present together with the validation path.",
+                "schema": {
+                  "$ref": "#/components/schemas/ReviewValidationReason"
+                }
+              },
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
               }
@@ -7576,6 +7589,19 @@
             },
             "description": "Problem: absence.cover-cycle, absence.invalid-period, absence.overlap, absence.self-cover, request.unprocessable, review.initiator-required",
             "headers": {
+              "Registry-Casework-Validation-Path": {
+                "description": "Bounded value-free JSON path of the member the request type refused; present together with the validation reason.",
+                "schema": {
+                  "maxLength": 256,
+                  "type": "string"
+                }
+              },
+              "Registry-Casework-Validation-Reason": {
+                "description": "Closed value-free validation category, always schema-mismatch for a request shape refusal; present together with the validation path.",
+                "schema": {
+                  "$ref": "#/components/schemas/ReviewValidationReason"
+                }
+              },
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
               }
@@ -7957,6 +7983,19 @@
             },
             "description": "Problem: absence.cover-cycle, absence.invalid-period, absence.overlap, absence.self-cover, request.unprocessable, review.initiator-required",
             "headers": {
+              "Registry-Casework-Validation-Path": {
+                "description": "Bounded value-free JSON path of the member the request type refused; present together with the validation reason.",
+                "schema": {
+                  "maxLength": 256,
+                  "type": "string"
+                }
+              },
+              "Registry-Casework-Validation-Reason": {
+                "description": "Closed value-free validation category, always schema-mismatch for a request shape refusal; present together with the validation path.",
+                "schema": {
+                  "$ref": "#/components/schemas/ReviewValidationReason"
+                }
+              },
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
               }
@@ -8328,6 +8367,19 @@
             },
             "description": "Problem: absence.cover-cycle, absence.invalid-period, absence.overlap, absence.self-cover, request.unprocessable, review.initiator-required",
             "headers": {
+              "Registry-Casework-Validation-Path": {
+                "description": "Bounded value-free JSON path of the member the request type refused; present together with the validation reason.",
+                "schema": {
+                  "maxLength": 256,
+                  "type": "string"
+                }
+              },
+              "Registry-Casework-Validation-Reason": {
+                "description": "Closed value-free validation category, always schema-mismatch for a request shape refusal; present together with the validation path.",
+                "schema": {
+                  "$ref": "#/components/schemas/ReviewValidationReason"
+                }
+              },
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
               }
@@ -8699,6 +8751,19 @@
             },
             "description": "Problem: absence.cover-cycle, absence.invalid-period, absence.overlap, absence.self-cover, request.unprocessable, review.initiator-required",
             "headers": {
+              "Registry-Casework-Validation-Path": {
+                "description": "Bounded value-free JSON path of the member the request type refused; present together with the validation reason.",
+                "schema": {
+                  "maxLength": 256,
+                  "type": "string"
+                }
+              },
+              "Registry-Casework-Validation-Reason": {
+                "description": "Closed value-free validation category, always schema-mismatch for a request shape refusal; present together with the validation path.",
+                "schema": {
+                  "$ref": "#/components/schemas/ReviewValidationReason"
+                }
+              },
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
               }
@@ -9070,6 +9135,19 @@
             },
             "description": "Problem: absence.cover-cycle, absence.invalid-period, absence.overlap, absence.self-cover, request.unprocessable, review.initiator-required",
             "headers": {
+              "Registry-Casework-Validation-Path": {
+                "description": "Bounded value-free JSON path of the member the request type refused; present together with the validation reason.",
+                "schema": {
+                  "maxLength": 256,
+                  "type": "string"
+                }
+              },
+              "Registry-Casework-Validation-Reason": {
+                "description": "Closed value-free validation category, always schema-mismatch for a request shape refusal; present together with the validation path.",
+                "schema": {
+                  "$ref": "#/components/schemas/ReviewValidationReason"
+                }
+              },
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
               }
@@ -9441,6 +9519,19 @@
             },
             "description": "Problem: absence.cover-cycle, absence.invalid-period, absence.overlap, absence.self-cover, request.unprocessable, review.initiator-required",
             "headers": {
+              "Registry-Casework-Validation-Path": {
+                "description": "Bounded value-free JSON path of the member the request type refused; present together with the validation reason.",
+                "schema": {
+                  "maxLength": 256,
+                  "type": "string"
+                }
+              },
+              "Registry-Casework-Validation-Reason": {
+                "description": "Closed value-free validation category, always schema-mismatch for a request shape refusal; present together with the validation path.",
+                "schema": {
+                  "$ref": "#/components/schemas/ReviewValidationReason"
+                }
+              },
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
               }
@@ -9812,6 +9903,19 @@
             },
             "description": "Problem: absence.cover-cycle, absence.invalid-period, absence.overlap, absence.self-cover, request.unprocessable, review.initiator-required",
             "headers": {
+              "Registry-Casework-Validation-Path": {
+                "description": "Bounded value-free JSON path of the member the request type refused; present together with the validation reason.",
+                "schema": {
+                  "maxLength": 256,
+                  "type": "string"
+                }
+              },
+              "Registry-Casework-Validation-Reason": {
+                "description": "Closed value-free validation category, always schema-mismatch for a request shape refusal; present together with the validation path.",
+                "schema": {
+                  "$ref": "#/components/schemas/ReviewValidationReason"
+                }
+              },
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
               }
@@ -10842,6 +10946,19 @@
             },
             "description": "Problem: absence.cover-cycle, absence.invalid-period, absence.overlap, absence.self-cover, request.unprocessable, review.initiator-required",
             "headers": {
+              "Registry-Casework-Validation-Path": {
+                "description": "Bounded value-free JSON path of the member the request type refused; present together with the validation reason.",
+                "schema": {
+                  "maxLength": 256,
+                  "type": "string"
+                }
+              },
+              "Registry-Casework-Validation-Reason": {
+                "description": "Closed value-free validation category, always schema-mismatch for a request shape refusal; present together with the validation path.",
+                "schema": {
+                  "$ref": "#/components/schemas/ReviewValidationReason"
+                }
+              },
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
               }
@@ -12108,6 +12225,19 @@
             },
             "description": "Problem: absence.cover-cycle, absence.invalid-period, absence.overlap, absence.self-cover, request.unprocessable, review.initiator-required",
             "headers": {
+              "Registry-Review-Validation-Path": {
+                "description": "Bounded value-free JSON path of the member the request type refused; present together with the validation reason.",
+                "schema": {
+                  "maxLength": 256,
+                  "type": "string"
+                }
+              },
+              "Registry-Review-Validation-Reason": {
+                "description": "Closed value-free validation category, always schema-mismatch for a request shape refusal; present together with the validation path.",
+                "schema": {
+                  "$ref": "#/components/schemas/ReviewValidationReason"
+                }
+              },
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
               }
@@ -12770,6 +12900,19 @@
             },
             "description": "Problem: absence.cover-cycle, absence.invalid-period, absence.overlap, absence.self-cover, request.unprocessable, review.initiator-required",
             "headers": {
+              "Registry-Review-Validation-Path": {
+                "description": "Bounded value-free JSON path of the member the request type refused; present together with the validation reason.",
+                "schema": {
+                  "maxLength": 256,
+                  "type": "string"
+                }
+              },
+              "Registry-Review-Validation-Reason": {
+                "description": "Closed value-free validation category, always schema-mismatch for a request shape refusal; present together with the validation path.",
+                "schema": {
+                  "$ref": "#/components/schemas/ReviewValidationReason"
+                }
+              },
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
               }
@@ -13773,6 +13916,19 @@
             },
             "description": "Problem: absence.cover-cycle, absence.invalid-period, absence.overlap, absence.self-cover, request.unprocessable, review.initiator-required",
             "headers": {
+              "Registry-Casework-Validation-Path": {
+                "description": "Bounded value-free JSON path of the member the request type refused; present together with the validation reason.",
+                "schema": {
+                  "maxLength": 256,
+                  "type": "string"
+                }
+              },
+              "Registry-Casework-Validation-Reason": {
+                "description": "Closed value-free validation category, always schema-mismatch for a request shape refusal; present together with the validation path.",
+                "schema": {
+                  "$ref": "#/components/schemas/ReviewValidationReason"
+                }
+              },
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
               }
@@ -16952,6 +17108,19 @@
             },
             "description": "Problem: absence.cover-cycle, absence.invalid-period, absence.overlap, absence.self-cover, request.unprocessable, review.initiator-required",
             "headers": {
+              "Registry-Casework-Validation-Path": {
+                "description": "Bounded value-free JSON path of the member the request type refused; present together with the validation reason.",
+                "schema": {
+                  "maxLength": 256,
+                  "type": "string"
+                }
+              },
+              "Registry-Casework-Validation-Reason": {
+                "description": "Closed value-free validation category, always schema-mismatch for a request shape refusal; present together with the validation path.",
+                "schema": {
+                  "$ref": "#/components/schemas/ReviewValidationReason"
+                }
+              },
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
               }
@@ -18058,6 +18227,19 @@
             },
             "description": "Problem: absence.cover-cycle, absence.invalid-period, absence.overlap, absence.self-cover, request.unprocessable, review.initiator-required",
             "headers": {
+              "Registry-Casework-Validation-Path": {
+                "description": "Bounded value-free JSON path of the member the request type refused; present together with the validation reason.",
+                "schema": {
+                  "maxLength": 256,
+                  "type": "string"
+                }
+              },
+              "Registry-Casework-Validation-Reason": {
+                "description": "Closed value-free validation category, always schema-mismatch for a request shape refusal; present together with the validation path.",
+                "schema": {
+                  "$ref": "#/components/schemas/ReviewValidationReason"
+                }
+              },
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
               }
@@ -18462,6 +18644,19 @@
             },
             "description": "Problem: absence.cover-cycle, absence.invalid-period, absence.overlap, absence.self-cover, request.unprocessable, review.initiator-required",
             "headers": {
+              "Registry-Casework-Validation-Path": {
+                "description": "Bounded value-free JSON path of the member the request type refused; present together with the validation reason.",
+                "schema": {
+                  "maxLength": 256,
+                  "type": "string"
+                }
+              },
+              "Registry-Casework-Validation-Reason": {
+                "description": "Closed value-free validation category, always schema-mismatch for a request shape refusal; present together with the validation path.",
+                "schema": {
+                  "$ref": "#/components/schemas/ReviewValidationReason"
+                }
+              },
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
               }
@@ -19536,6 +19731,19 @@
             },
             "description": "Problem: absence.cover-cycle, absence.invalid-period, absence.overlap, absence.self-cover, request.unprocessable, review.initiator-required",
             "headers": {
+              "Registry-Casework-Validation-Path": {
+                "description": "Bounded value-free JSON path of the member the request type refused; present together with the validation reason.",
+                "schema": {
+                  "maxLength": 256,
+                  "type": "string"
+                }
+              },
+              "Registry-Casework-Validation-Reason": {
+                "description": "Closed value-free validation category, always schema-mismatch for a request shape refusal; present together with the validation path.",
+                "schema": {
+                  "$ref": "#/components/schemas/ReviewValidationReason"
+                }
+              },
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
               }
@@ -20626,6 +20834,19 @@
             },
             "description": "Problem: absence.cover-cycle, absence.invalid-period, absence.overlap, absence.self-cover, request.unprocessable, review.initiator-required",
             "headers": {
+              "Registry-Casework-Validation-Path": {
+                "description": "Bounded value-free JSON path of the member the request type refused; present together with the validation reason.",
+                "schema": {
+                  "maxLength": 256,
+                  "type": "string"
+                }
+              },
+              "Registry-Casework-Validation-Reason": {
+                "description": "Closed value-free validation category, always schema-mismatch for a request shape refusal; present together with the validation path.",
+                "schema": {
+                  "$ref": "#/components/schemas/ReviewValidationReason"
+                }
+              },
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
               }
