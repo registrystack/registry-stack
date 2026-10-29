@@ -505,6 +505,7 @@ sed -i 's/^host /hostssl /' /var/lib/postgresql/data/pg_hba.conf
                 failures.append("database inventory unavailable")
         else:
             remaining_dbs, remaining_roles = len(self.resources["databases"]), len(self.resources["roles"])
+        container_removed = False
         if self.container:
             try:
                 self.run("postgres-log", ["docker", "logs", self.container])
@@ -518,6 +519,7 @@ sed -i 's/^host /hostssl /' /var/lib/postgresql/data/pg_hba.conf
                         ["docker", "ps", "-aq", "--no-trunc"], capture_output=True, text=True, check=True
                     ).stdout.splitlines()
                 )
+                container_removed = True
             except (RuntimeError, AssertionError, subprocess.CalledProcessError):
                 failures.append("container cleanup failed")
         receipt = {
@@ -527,7 +529,7 @@ sed -i 's/^host /hostssl /' /var/lib/postgresql/data/pg_hba.conf
         }
         write(
             self.output / "cleanup.json",
-            dict(receipt, errors=failures, containerRemoved=self.container is not None and not failures),
+            dict(receipt, errors=failures, containerRemoved=container_removed),
         )
         assert not failures, "cleanup failed; inspect owner-only receipt"
         return receipt
