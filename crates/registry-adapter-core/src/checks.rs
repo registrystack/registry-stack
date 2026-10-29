@@ -3042,7 +3042,7 @@ mod tests {
                         "caseId".to_string(),
                         rhai("scripts/id.rhai"),
                     )]),
-                    query: BTreeMap::from([("cursor".to_string(), rhai("scripts/page.rhai"))]),
+                    query: BTreeMap::from([(id("cursor"), rhai("scripts/page.rhai"))]),
                     body: None,
                     operation: None,
                     throw_exception_on_failure: true,
@@ -3206,7 +3206,7 @@ mod tests {
                     path: None,
                     path_parameters: BTreeMap::new(),
                     query: BTreeMap::from([(
-                        "filter".to_string(),
+                        id("filter"),
                         crate::model::Expression::Rhai(crate::model::RhaiExpression {
                             file: "scripts/unpinned.rhai".to_string(),
                             entrypoint: "main".to_string(),
@@ -3232,7 +3232,7 @@ mod tests {
         let template = |path: Option<String>| RouteTemplate {
             id: id("pager"),
             parameters: vec![TemplateParameter {
-                name: id("cursor"),
+                name: local("cursor"),
                 r#type: TemplateParameterType::String,
                 required: true,
                 default_value: None,
@@ -4488,7 +4488,7 @@ mod tests {
         pack.route_templates = UniqueIdList::new(vec![RouteTemplate {
             id: id("fetchPage"),
             parameters: vec![TemplateParameter {
-                name: id("region"),
+                name: local("region"),
                 r#type: TemplateParameterType::String,
                 required: true,
                 default_value: None,
@@ -4511,14 +4511,14 @@ mod tests {
             id: id("fetchPage"),
             parameters: vec![
                 TemplateParameter {
-                    name: id("page"),
+                    name: local("page"),
                     r#type: TemplateParameterType::Integer,
                     required: true,
                     default_value: None,
                     description: None,
                 },
                 TemplateParameter {
-                    name: id("label"),
+                    name: local("label"),
                     r#type: TemplateParameterType::String,
                     required: false,
                     default_value: None,

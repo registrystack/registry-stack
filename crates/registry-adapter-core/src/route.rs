@@ -155,18 +155,12 @@ pub struct ToParameters {
         schemars(schema_with = "crate::model::local_id_map_schema::<Expression>")
     )]
     pub path_parameters: std::collections::BTreeMap<String, Expression>,
-    /// Query parameter name to expression; each key is a local
-    /// identifier (CFG-ID-1).
-    #[serde(
-        default,
-        deserialize_with = "crate::model::local_id_map",
-        skip_serializing_if = "std::collections::BTreeMap::is_empty"
-    )]
-    #[cfg_attr(
-        feature = "schema",
-        schemars(schema_with = "crate::model::local_id_map_schema::<Expression>")
-    )]
-    pub query: std::collections::BTreeMap<String, Expression>,
+    /// Query parameter name to expression; each key is the upstream's
+    /// wire parameter name, an external identifier, because the key is
+    /// what the source system documents, not a name the pack defines
+    /// (CFG-ID-1).
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub query: std::collections::BTreeMap<ExternalId, Expression>,
     /// The request body expression, marshalled to JSON.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub body: Option<Expression>,
@@ -864,8 +858,10 @@ pub struct DoTryStep {
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TemplateParameter {
-    /// The parameter name, referenced as `{{name}}` or `{{?name}}`.
-    pub name: ExternalId,
+    /// The parameter name, referenced as `{{name}}` or `{{?name}}`; a
+    /// local identifier, the same taxonomy an instantiation's binding
+    /// keys carry (CFG-ID-1).
+    pub name: registry_platform_yaml::LocalId,
     /// The value type checked at instantiation.
     pub r#type: TemplateParameterType,
     /// Whether instantiation without the parameter is refused.
@@ -1791,9 +1787,9 @@ mod tests {
                 "id": "pagedFetch",
                 "parameters": [
                     { "name": "program", "type": "string", "required": true },
-                    { "name": "pageSize", "type": "integer", "defaultValue": 50, "description": "page size" }
+                    { "name": "page-size", "type": "integer", "defaultValue": 50, "description": "page size" }
                 ],
-                "steps": [ { "setBody": { "constant": "{{?pageSize}}" } } ]
+                "steps": [ { "setBody": { "constant": "{{?page-size}}" } } ]
             }"#,
         )
         .expect("parse template");
@@ -1867,8 +1863,11 @@ mod tests {
             ))
         };
         assert!(to("page-size").is_ok());
-        assert!(to("PageSize").is_err());
-        assert!(to("two words").is_err());
+        // A query key is the upstream's wire parameter name, kept exactly
+        // as the source documents it (CFG-ID-1).
+        assert!(to("pageSize").is_ok());
+        assert!(to("").is_err());
+        assert!(to("two\u{0000}words").is_err());
         let templated = |key: &str| {
             serde_json::from_str::<TemplatedRoute>(&format!(
                 r#"{{ "routeTemplate": "pager", "routeId": "listCases", "parameters": {{ "{key}": "50" }} }}"#
