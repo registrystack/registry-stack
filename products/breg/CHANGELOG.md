@@ -72,9 +72,10 @@
 - Proposal documents add `createdAt`, the UTC time the draft was started. It
   stays fixed through submission and application, so clients can order
   attempts on one target chronologically. The generated OpenAPI and Action
-  response schemas list it (so Action contract revisions change), and the Rust
-  client, which rejects unknown response members, exposes `createdAt()`; update
-  the client together with the server. See [Proposals](proposals.md).
+  response schemas list it as optional, because a command receipt stored
+  before the upgrade replays without it. The Rust client, which rejects
+  unknown response members, exposes `createdAt()`; update the client together
+  with the server. See [Proposals](proposals.md).
 
 ## 0.44.0 - 2026-10-27
 
