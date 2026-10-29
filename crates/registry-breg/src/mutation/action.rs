@@ -166,21 +166,23 @@ impl MutationTransaction {
         };
         #[cfg(feature = "postgres-test")]
         authority.wait_after_preflight().await?;
-        let normalized_input = match validate_action_input(action, input) {
-            Ok(input) => input,
-            Err(_) => {
-                self.record_action_boundary_audit(
-                    claims,
-                    &route_id,
-                    execution.correlation,
-                    PreIoAuditKind::Refusal,
-                )
-                .await?;
-                return Ok(TimerActionDisposition::Refused(
-                    TimerRefusalOutcome::InputRefused,
-                ));
-            }
-        };
+        let normalized_input =
+            match validate_action_input_with_patterns(&***client, action, input).await {
+                Ok(input) => input,
+                Err(MutationError::Unavailable) => return Err(MutationError::Unavailable),
+                Err(_) => {
+                    self.record_action_boundary_audit(
+                        claims,
+                        &route_id,
+                        execution.correlation,
+                        PreIoAuditKind::Refusal,
+                    )
+                    .await?;
+                    return Ok(TimerActionDisposition::Refused(
+                        TimerRefusalOutcome::InputRefused,
+                    ));
+                }
+            };
         let request_digest =
             match canonical_action_request_digest(action, &normalized_input, &BTreeMap::new()) {
                 Ok(digest) => digest,
@@ -561,7 +563,8 @@ impl MutationTransaction {
             ActionRouteKind::Invoke,
         )?;
         validate_action_claims(action, claims, Operation::Invoke)?;
-        let normalized_input = validate_action_input(action, input.input)?;
+        let normalized_input =
+            validate_action_input_with_patterns(&***client, action, input.input).await?;
         validate_precondition_set(action, &input.preconditions)?;
         let _attempt = self
             .begin_action_boundary_audit(claims, input.route_id, input.correlation)
@@ -1046,12 +1049,17 @@ impl MutationTransaction {
                 "The declared principal's grant does not authorize this invocation.",
             );
         }
-        let Ok(normalized_input) = validate_action_input(action, input_values) else {
-            return refused_proposal(
-                "hook.proposal.input_refused",
-                "The proposal input does not satisfy the action's declared inputs.",
-            );
-        };
+        let normalized_input =
+            match validate_action_input_with_patterns(&***client, action, input_values).await {
+                Ok(input) => input,
+                Err(MutationError::Unavailable) => return Err(UncertainApply),
+                Err(_) => {
+                    return refused_proposal(
+                        "hook.proposal.input_refused",
+                        "The proposal input does not satisfy the action's declared inputs.",
+                    );
+                }
+            };
         if validate_precondition_set(action, &preconditions).is_err() {
             return refused_proposal(
                 "hook.proposal.precondition_refused",
@@ -2927,6 +2935,17 @@ impl ActionClaimExt for ActionClaimContext {
     }
 }
 
+/// The declared inputs, type-checked and then matched against any input pattern.
+async fn validate_action_input_with_patterns(
+    client: &(impl tokio_postgres::GenericClient + Sync),
+    action: &CompiledAction,
+    input: Map<String, Value>,
+) -> Result<ActionInputs, MutationError> {
+    let input = validate_action_input(action, input)?;
+    crate::input_patterns::check_input_patterns(client, action, &input).await?;
+    Ok(input)
+}
+
 fn validate_action_input(
     action: &CompiledAction,
     input: Map<String, Value>,
@@ -3785,7 +3804,8 @@ impl MutationTransaction {
             ActionRouteKind::Invoke,
         )?;
         validate_action_claims(action, claims, Operation::Invoke)?;
-        let normalized = validate_action_input(action, input.input)?;
+        let normalized =
+            validate_action_input_with_patterns(&***client, action, input.input).await?;
         validate_precondition_set(action, &input.preconditions)?;
         *attempt = Some(
             self.begin_action_boundary_audit(claims, input.route_id, input.correlation)

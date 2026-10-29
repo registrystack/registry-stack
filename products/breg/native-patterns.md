@@ -31,8 +31,8 @@ matches a substring. Native options embedded in the expression retain their
 PostgreSQL meanings. Requiredness remains separate: SQL null passes the pattern
 check wherever the field or governed request-detail retention permits null.
 An empty string is matched normally, and an empty pattern is valid PostgreSQL
-syntax. Derived fields, action inputs, and other field types cannot declare
-`pattern`; use a persisted target field for storage integrity.
+syntax. Derived fields and other field types cannot declare `pattern`. An
+action input may declare one too; see [Action input patterns](#action-input-patterns).
 
 An expression is limited to 4096 UTF-8 bytes and cannot contain NUL. Values keep
 the existing field bounds: `string.maximumLength` is at most 1,000,000 characters;
@@ -41,6 +41,50 @@ and database statement deadlines continue to bound execution, including native
 regex evaluation. A pathological expression can exhaust those limits. Review
 and schema-test expressions against representative values before activation.
 Runtime callers supply values, never expressions.
+
+## Action input patterns
+
+A `string` or `text` Action input can declare `pattern` in the same dialect and
+within the same bounds as a Record field: at most 4096 UTF-8 bytes, no NUL. The
+Action refuses a submitted value that does not match before it writes anything,
+and a Proposal Action applies the same check when a draft is started and when it
+is edited, revised, or rebased.
+
+```yaml
+inputs:
+  - id: postal-code
+    apiName: postalCode
+    typeRef: postal-code
+    pattern: '^[0-9]{5}$'
+    required: true
+    classification: internal
+```
+
+The expression sits beside `typeRef` on the input, as it does on a Record field.
+A reusable `valueTypes` entry cannot carry `pattern`, so a shared type cannot
+smuggle one into every Action that uses it. An input of any other type is refused
+with `breg.action.input-pattern-type-unsupported`, and an expression over the
+bounds with `breg.action.input-pattern-bounds-invalid`.
+
+PostgreSQL evaluates the expression with the same `~` operator and no rewriting
+as for a Record field, using the connection that runs the Action, so there is
+still no second regular-expression engine. A mismatch returns HTTP 400
+`request.invalid` with `fieldPath` naming the input (`/input/postalCode`); neither
+the expression nor the submitted value is returned. Absent and null values are
+not tested; `required` decides those. Each patterned string input costs one extra
+round trip on the Action's connection.
+
+The expression is not published in generated JSON Schema or OpenAPI, for the same
+reason as for a Record field. Its syntax cannot be checked offline.
+`bregctl check` reports `breg.action.input-pattern-unverified-offline` at the
+authored input. Unlike a Record field pattern, no installer step evaluates an
+input pattern, so PostgreSQL rejects invalid syntax only when an Action first
+receives a value for that input. The Action then refuses with HTTP 503 and logs
+the action and input identifiers without the expression. Exercise every patterned
+Action input in a fixture journey (`bregctl test`) before activation.
+
+A value that passes the input pattern still meets the Record field's own
+pattern and CHECK at write time, which stays authoritative for storage integrity.
 
 ## Authoring and verification
 

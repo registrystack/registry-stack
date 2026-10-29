@@ -50,7 +50,28 @@ fn key(value: &str) -> BRegIdempotencyKey {
 }
 
 fn registry() -> registry_breg::CompiledRegistry {
+    registry_from(include_str!(
+        "../../../products/breg/examples/facility/registry.yaml"
+    ))
+}
+
+const POSTAL_INPUT: &str =
+    "{id: postal-code, apiName: postalCode, typeRef: postal-code, required: true, classification: internal}";
+
+/// The canonical example with a native pattern on the postal-code input of its
+/// Actions.
+fn patterned_registry() -> registry_breg::CompiledRegistry {
     let yaml = include_str!("../../../products/breg/examples/facility/registry.yaml");
+    let (records, actions) = yaml.split_once("\nactions:\n").unwrap();
+    assert_eq!(actions.matches(POSTAL_INPUT).count(), 2);
+    let patterned = POSTAL_INPUT.replace("required: true", "pattern: '^[0-9]{5}$', required: true");
+    registry_from(&format!(
+        "{records}\nactions:\n{}",
+        actions.replace(POSTAL_INPUT, &patterned)
+    ))
+}
+
+fn registry_from(yaml: &str) -> registry_breg::CompiledRegistry {
     let correction = yaml
         .split("  - id: correct-address\n")
         .nth(1)
@@ -182,10 +203,15 @@ impl registry_breg::review_store::ReviewResultSource for SyntheticApproval {
     }
 }
 async fn fixture() -> (client_http::ClientFixture, Arc<SyntheticApproval>) {
+    fixture_for(registry()).await
+}
+async fn fixture_for(
+    registry: registry_breg::CompiledRegistry,
+) -> (client_http::ClientFixture, Arc<SyntheticApproval>) {
     let review = Arc::new(SyntheticApproval::default());
     let injected = review.clone();
     let fixture = client_http::ClientFixture::start_with_mutations(
-        registry(),
+        registry,
         claims("registry:operator:write", "facility-administration"),
         move |mutations| {
             mutations.with_proposal_review_substitute_for_test(review_binding(), injected)
@@ -197,10 +223,9 @@ async fn fixture() -> (client_http::ClientFixture, Arc<SyntheticApproval>) {
 fn correction_input(facility: &str, postal: &str) -> Value {
     json!({"facilityId":facility,"addressLine":"3 Civic Road","city":"Chiang Mai","postalCode":postal})
 }
-async fn start(
-    fixture: &client_http::ClientFixture,
-    postal: &str,
-) -> (client_http::ClientHttp, String, BRegProposal) {
+/// Registers the operator and the facility the correction Action targets and
+/// returns their record identifiers.
+async fn seed_facility(fixture: &client_http::ClientFixture) -> (String, String) {
     let seed = fixture
         .http
         .client
@@ -261,6 +286,13 @@ async fn start(
         2,
         "the real Action creates the facility and assignment"
     );
+    (operator, facility)
+}
+async fn start(
+    fixture: &client_http::ClientFixture,
+    postal: &str,
+) -> (client_http::ClientHttp, String, BRegProposal) {
+    let (_, facility) = seed_facility(fixture).await;
     let author = fixture
         .client_for(claims(
             "registry:facility:correction:submit",
@@ -909,4 +941,213 @@ async fn canonical_rhai_refusal_current_revision_and_status_guards_recover_by_re
         drop(author);
         fixture.finish().await;
     }
+}
+
+async fn stored_proposals(fixture: &client_http::ClientFixture) -> i64 {
+    fixture
+        .database
+        .admin
+        .query_one(
+            "SELECT count(*)::bigint FROM registry_internal.registry_proposal_state",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get::<_, i64>(0)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_action_input_pattern_refuses_before_anything_is_stored_and_names_the_input() {
+    let (fixture, _review) = fixture_for(patterned_registry()).await;
+    let (operator, facility) = seed_facility(&fixture).await;
+
+    // A start whose input does not match is refused naming the input, nothing
+    // is stored, and the value it carried is not repeated.
+    let author = fixture
+        .client_for(claims(
+            "registry:facility:correction:submit",
+            "facility-administration",
+        ))
+        .await;
+    let metadata = author
+        .client
+        .registry_contract(Some("facility-correction-author"))
+        .await
+        .unwrap();
+    let action = metadata
+        .value
+        .select_action("correct-address", "facility-correction-author")
+        .unwrap();
+    let invalid = BRegActionInvocationRequest::new(
+        &action,
+        map(correction_input(&facility, "SECRET-POSTAL")),
+        None,
+    )
+    .unwrap();
+    let refused = author
+        .client
+        .start_proposal(&action, &invalid, &key("pattern-start-invalid"))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        refused.problem_code(),
+        Some(BRegProblemCode::RequestInvalid),
+        "{refused:?}"
+    );
+    assert_eq!(
+        refused.field_path().map(|path| path.as_str()),
+        Some("/input/postalCode")
+    );
+    assert!(!format!("{refused:?}").contains("SECRET-POSTAL"));
+    assert_eq!(stored_proposals(&fixture).await, 0);
+
+    // A matching start is admitted; an edit is held to the same pattern.
+    let valid =
+        BRegActionInvocationRequest::new(&action, map(correction_input(&facility, "50000")), None)
+            .unwrap();
+    let draft = author
+        .client
+        .start_proposal(&action, &valid, &key("pattern-start-valid"))
+        .await
+        .unwrap()
+        .value;
+    assert_eq!(stored_proposals(&fixture).await, 1);
+    let bad_edit = author
+        .client
+        .prepare_proposal(
+            &draft,
+            "edit",
+            json!({"input":correction_input(&facility,"5000")}),
+            &key("pattern-edit-invalid"),
+        )
+        .unwrap();
+    let refused = author.client.execute_proposal(&bad_edit).await.unwrap_err();
+    assert_eq!(
+        refused.problem_code(),
+        Some(BRegProblemCode::RequestInvalid),
+        "{refused:?}"
+    );
+    assert_eq!(
+        refused.field_path().map(|path| path.as_str()),
+        Some("/input/postalCode")
+    );
+    let good_edit = author
+        .client
+        .prepare_proposal(
+            &draft,
+            "edit",
+            json!({"input":correction_input(&facility,"50001")}),
+            &key("pattern-edit-valid"),
+        )
+        .unwrap();
+    author.client.execute_proposal(&good_edit).await.unwrap();
+
+    // An immediate Action is held to the pattern before it writes.
+    let registrar = fixture
+        .client_for(claims(
+            "registry:facility:register",
+            "facility-administration",
+        ))
+        .await;
+    let metadata = registrar
+        .client
+        .registry_contract(Some("facility-registrar"))
+        .await
+        .unwrap();
+    let register = metadata
+        .value
+        .select_action("register-facility", "facility-registrar")
+        .unwrap();
+    let registration = |code: &str, postal: &str| {
+        BRegActionInvocationRequest::new(
+            &register,
+            map(json!({"facilityCode":code,"name":"Civic clinic","addressLine":"1 Main Road",
+                "city":"Bangkok","postalCode":postal,"operatorId":operator,"jurisdiction":"zone-a"})),
+            None,
+        )
+        .unwrap()
+    };
+    let refused = registrar
+        .client
+        .invoke_action(
+            &register,
+            &registration("PATTERN-2", "1020"),
+            &key("pattern-register-invalid"),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(
+        refused.problem_code(),
+        Some(BRegProblemCode::RequestInvalid),
+        "{refused:?}"
+    );
+    assert_eq!(
+        refused.field_path().map(|path| path.as_str()),
+        Some("/input/postalCode")
+    );
+    registrar
+        .client
+        .invoke_action(
+            &register,
+            &registration("PATTERN-2", "10200"),
+            &key("pattern-register-valid"),
+        )
+        .await
+        .unwrap();
+    drop(author);
+    drop(registrar);
+    fixture.finish().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_action_input_pattern_postgresql_rejects_fails_closed_without_naming_it() {
+    let yaml = include_str!("../../../products/breg/examples/facility/registry.yaml");
+    let (records, actions) = yaml.split_once("\nactions:\n").unwrap();
+    let broken = POSTAL_INPUT.replace(
+        "required: true",
+        "pattern: '[unclosed-canary', required: true",
+    );
+    let (fixture, _review) = fixture_for(registry_from(&format!(
+        "{records}\nactions:\n{}",
+        actions.replace(POSTAL_INPUT, &broken)
+    )))
+    .await;
+    let registrar = fixture
+        .client_for(claims(
+            "registry:facility:register",
+            "facility-administration",
+        ))
+        .await;
+    let metadata = registrar
+        .client
+        .registry_contract(Some("facility-registrar"))
+        .await
+        .unwrap();
+    let register = metadata
+        .value
+        .select_action("register-facility", "facility-registrar")
+        .unwrap();
+    let request = BRegActionInvocationRequest::new(
+        &register,
+        map(
+            json!({"facilityCode":"BROKEN-1","name":"Civic clinic","addressLine":"1 Main Road",
+            "city":"Bangkok","postalCode":"10200","operatorId":Uuid::new_v4().to_string(),
+            "jurisdiction":"zone-a"}),
+        ),
+        None,
+    )
+    .unwrap();
+    let refused = registrar
+        .client
+        .invoke_action(&register, &request, &key("pattern-broken"))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        refused.problem_code(),
+        Some(BRegProblemCode::ServiceUnavailable),
+        "{refused:?}"
+    );
+    assert!(!format!("{refused:?}").contains("unclosed-canary"));
+    drop(registrar);
+    fixture.finish().await;
 }

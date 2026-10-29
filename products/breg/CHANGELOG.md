@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Allow an optional native `pattern` on `string` and `text` Action inputs, in
+  the dialect and with the bounds of a Record field `pattern`. A submitted value
+  that does not match is refused with HTTP 400 `request.invalid` naming the
+  input (`/input/<apiName>`), for immediate Actions and when a Proposal Action is
+  started, edited, revised, or rebased. `bregctl check` reports
+  `breg.action.input-pattern-unverified-offline`; invalid syntax is found only
+  when an Action receives a value. See [native patterns](native-patterns.md).
 - Add root-granted Record timers that invoke bounded timer-only immediate
   Actions from current governed Record controls and facts. The operator surface
   provides status, list, show, pause, resume, and exact-occurrence retry. See

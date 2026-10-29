@@ -152,7 +152,12 @@ fn local_value_type_use_schemas(schema: &mut Value) {
     }
     if let Some(input) = definitions.get_mut("ActionInputSource") {
         let inline = input.take();
-        *input = serde_json::json!({"anyOf":[inline,named_field]});
+        let mut named_input = named_field.clone();
+        named_input["properties"]
+            .as_object_mut()
+            .expect("named field properties")
+            .insert("pattern".to_owned(), serde_json::json!({"type":"string"}));
+        *input = serde_json::json!({"anyOf":[inline,named_input]});
     }
 }
 

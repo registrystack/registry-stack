@@ -1248,6 +1248,24 @@ fn compile_inputs(
             ));
         }
         validate_field_type_bounds(&input.field_type, "actions[].inputs[]", errors);
+        if let Some(pattern) = &input.pattern {
+            if !matches!(
+                input.field_type,
+                FieldTypeSource::String { .. } | FieldTypeSource::Text { .. }
+            ) {
+                errors.push(Diagnostic::error(
+                    "breg.action.input-pattern-type-unsupported",
+                    "actions[].inputs[].pattern",
+                    "pattern requires a string or text action input",
+                ));
+            } else if !crate::compiler::native_pattern_within_bounds(pattern) {
+                errors.push(Diagnostic::error(
+                    "breg.action.input-pattern-bounds-invalid",
+                    "actions[].inputs[].pattern",
+                    "PostgreSQL pattern must be at most 4096 UTF-8 bytes and contain no NUL; syntax is validated by PostgreSQL",
+                ));
+            }
+        }
         if let FieldTypeSource::Reference { target, .. } = &input.field_type {
             if !entities.contains_key(target) {
                 errors.push(Diagnostic::error(
@@ -1261,6 +1279,7 @@ fn compile_inputs(
             id: input.id.clone(),
             api_name,
             field_type: input.field_type.clone(),
+            pattern: input.pattern.clone(),
             required: input.required,
             classification: input.classification,
             display: input.display.clone(),
