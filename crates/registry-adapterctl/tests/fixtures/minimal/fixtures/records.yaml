@@ -1,0 +1,25 @@
+apiVersion: id.registrystack.org/formats/adapter/fixture/v1alpha1
+kind: AdapterFixture
+id: case-api-fixtures
+pack: case-api-pack
+upstreamVersion: "2.7"
+provenance:
+  kind: documented
+  reference: https://example.invalid/api-handbook#cases
+intercepts:
+  - kind: endpoint
+    endpoint: case-api
+entries:
+  - given:
+      endpoint: case-api
+      method: GET
+      path: /api/cases/case
+    upstreamResponse:
+      status: 200
+      body:
+        id: "123"
+    expectedFacadeResponse:
+      status: 200
+      body:
+        record:
+          id: "123"

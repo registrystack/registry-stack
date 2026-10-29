@@ -1,0 +1,12 @@
+apiVersion: id.registrystack.org/formats/adapter/profile/v1alpha1
+kind: AdapterProfile
+id: case-api
+operations:
+  - id: cases.get
+    method: GET
+    path: /v2/cases/{type}
+    responseEnvelope: '{"record": {{record}}}'
+problemCodes:
+  - cases.conflict
+problemEnvelope: '{"code": "{{problemCode}}"}'
+parameterizedParts: []

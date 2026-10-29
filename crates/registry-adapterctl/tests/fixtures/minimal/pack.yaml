@@ -1,0 +1,55 @@
+apiVersion: id.registrystack.org/formats/adapter/pack/v1alpha1
+kind: AdapterPack
+id: case-api-pack
+testedVersions:
+  - "2.7"
+endpoints:
+  - id: case-api
+    component: http
+    authentication:
+      type: oauth2-client-credentials
+    operations:
+      - id: cases.read
+        idempotentUpstream: true
+routeTemplates:
+  - id: fetchPage
+    parameters:
+      - name: recordType
+        type: string
+        required: true
+        description: The declared record type the page fetches.
+    steps:
+      - setBody:
+          rhai:
+            file: scripts/map.rhai
+            entrypoint: map
+routes:
+  - id: sharedLookup
+    from:
+      uri: direct:sharedLookup
+    steps:
+      - to:
+          uri: http:case-api
+          parameters:
+            httpMethod: GET
+            path: /api/cases/{type}
+            pathParameters:
+              type:
+                constant: case
+codeMaps:
+  - id: genderCodes
+    entries:
+      female: F
+scripts:
+  - path: scripts/map.rhai
+    digest: sha256:e414310e7f436c42f8461592fb7d98c02a61e97a15be5d13c14d452d5197525b
+queryFiles: []
+capabilities:
+  components:
+    - http
+  languages:
+    - rhai
+    - constant
+  eips:
+    - setBody
+    - to
