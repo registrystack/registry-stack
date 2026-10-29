@@ -998,7 +998,9 @@ fn write_route_checks(prefix: &str, steps: &[Step]) -> Vec<Diagnostic> {
 
 /// The static worst-case upstream call count of a route
 /// (`products/adapter/CONCEPT.md` sections 5.5 and 10.2): the route body
-/// plus the widest exception-clause body; every send counts one plus the
+/// plus the widest exception-clause body, where a `continued` clause
+/// counts its body once per route-body worst-case send because it
+/// resumes after the failure point; every send counts one plus the
 /// declared `maximumRedeliveries` attempts; and each OAuth endpoint the
 /// route touches adds at most two token requests per exchange.
 fn route_worst_case(
@@ -1010,12 +1012,26 @@ fn route_worst_case(
         bodies,
         oauth_endpoints,
         used_oauth: &mut HashSet::new(),
-        clause_worst: 0,
+        clauses: Vec::new(),
     };
     let main = worst_body(steps, &mut walk, 0, declared_redeliveries(steps), false);
     let tokens = 2u64.saturating_mul(u64::try_from(walk.used_oauth.len()).unwrap_or(u64::MAX));
-    main.saturating_add(walk.clause_worst)
-        .saturating_add(tokens)
+    // A `continued` clause resumes after the failure point, so it can
+    // run once per route-body worst-case send; handled and propagated
+    // clauses run once.
+    let clause_worst = walk
+        .clauses
+        .iter()
+        .map(|(worst, continued)| {
+            if *continued {
+                worst.saturating_mul(main)
+            } else {
+                *worst
+            }
+        })
+        .max()
+        .unwrap_or(0);
+    main.saturating_add(clause_worst).saturating_add(tokens)
 }
 
 /// The redeliveries a body declares: the widest `maximumRedeliveries`
@@ -1052,8 +1068,9 @@ struct WorstCaseWalk<'a> {
     bodies: &'a HashMap<&'a str, &'a [Step]>,
     oauth_endpoints: &'a HashSet<&'a str>,
     used_oauth: &'a mut HashSet<String>,
-    /// The widest top-level exception-clause body seen so far.
-    clause_worst: u64,
+    /// Top-level exception-clause bodies seen so far, as (worst-case
+    /// sends, whether the clause resumes with `continued`).
+    clauses: Vec<(u64, bool)>,
 }
 
 /// The worst-case upstream send count of one body: `to` and `enrich`
@@ -1061,10 +1078,11 @@ struct WorstCaseWalk<'a> {
 /// expands the target (its own redelivery declarations join the widest in
 /// force), `split` and `loop` multiply by their mandatory bounds, and
 /// `choice` takes the widest branch. Exception-clause bodies do not add
-/// to the running total; the widest clause body becomes a separate
-/// candidate added once by [`route_worst_case`], except a clause nested
-/// inside another clause, which adds to its enclosing clause's body (the
-/// runtime can run both).
+/// to the running total; each top-level clause body becomes a separate
+/// candidate (multiplied by the route body in [`route_worst_case`] when
+/// the clause resumes with `continued`), and a clause nested inside
+/// another clause adds to its enclosing clause's body (the runtime can
+/// run both).
 fn worst_body(
     steps: &[Step],
     walk: &mut WorstCaseWalk<'_>,
@@ -1237,7 +1255,7 @@ fn worst_body(
                 if in_clause {
                     total = total.saturating_add(worst);
                 } else {
-                    walk.clause_worst = walk.clause_worst.max(worst);
+                    walk.clauses.push((worst, clause.continued == Some(true)));
                 }
             }
             _ => {}
@@ -1518,6 +1536,23 @@ mod tests {
             response_headers: Vec::new(),
             operations: vec![EndpointOperation {
                 id: id("cases.create"),
+                idempotent_upstream: true,
+            }],
+            tested_versions: vec!["2.7".to_string()],
+            query_file: None,
+            operation_name: None,
+            variables: None,
+        }
+    }
+
+    fn basic_endpoint() -> Endpoint {
+        Endpoint {
+            id: id("case-api"),
+            component: ComponentKind::Http,
+            authentication: EndpointAuthentication::Basic {},
+            response_headers: Vec::new(),
+            operations: vec![EndpointOperation {
+                id: id("cases.find"),
                 idempotent_upstream: true,
             }],
             tested_versions: vec!["2.7".to_string()],
@@ -2372,6 +2407,75 @@ mod tests {
             record_type: local("case"),
             route: id("fetchCase"),
             maximum_upstream_calls: BoundedU64::<1, 100_000>::new(12).expect("budget"),
+        }])
+        .expect("unique");
+        assert_clean(check_project(&workspace(&profile, &pack, &project)));
+    }
+
+    /// A `continued` clause resumes after the failure point, so its body
+    /// counts once per route-body worst-case send: over three body sends
+    /// it triples, pushing the route past `maximumUpstreamCalls`; the
+    /// same route passes with an adequate budget. A clause that does not
+    /// continue counts once.
+    #[test]
+    fn project_counts_a_continued_clause_once_per_route_body_send() {
+        let profile = profile_builder(vec![operation("cases.find", HttpMethod::Get)]);
+        let clause = |continued: bool| {
+            Step::OnException(OnExceptionStep {
+                exception: vec![crate::model::ErrorClass::UpstreamTimeout],
+                on_when: None,
+                handled: Some(true),
+                continued: Some(continued),
+                redelivery_policy: None,
+                steps: vec![to_get("case-api")],
+            })
+        };
+        let route = |continued: bool| RouteDefinition {
+            id: id("fetchCase"),
+            from: RouteFrom {
+                uri: direct("fetchCase"),
+            },
+            steps: vec![
+                clause(continued),
+                to_get("case-api"),
+                to_get("case-api"),
+                to_get("case-api"),
+            ],
+        };
+        let pack = pack_builder(vec![basic_endpoint()], vec![route(true)]);
+        let mut project = project_builder(&pack);
+        project.access_profiles = UniqueIdList::new(Vec::new()).expect("empty");
+        // Three body sends plus one continued-clause send per body send:
+        // 3 + 1 * 3 = 6.
+        project.bindings = UniqueIdList::new(vec![Binding {
+            id: id("find-cases"),
+            operation: id("cases.find"),
+            record_type: local("case"),
+            route: id("fetchCase"),
+            maximum_upstream_calls: BoundedU64::<1, 100_000>::new(5).expect("budget"),
+        }])
+        .expect("unique");
+        let findings = check_project(&workspace(&profile, &pack, &project));
+        assert_has(&findings, CheckCode::ProjectUpstreamBudgetExceeded);
+        project.bindings = UniqueIdList::new(vec![Binding {
+            id: id("find-cases"),
+            operation: id("cases.find"),
+            record_type: local("case"),
+            route: id("fetchCase"),
+            maximum_upstream_calls: BoundedU64::<1, 100_000>::new(6).expect("budget"),
+        }])
+        .expect("unique");
+        assert_clean(check_project(&workspace(&profile, &pack, &project)));
+        // Without `continued`, the clause body counts once: 3 + 1 = 4.
+        let pack = pack_builder(vec![basic_endpoint()], vec![route(false)]);
+        let mut project = project_builder(&pack);
+        project.access_profiles = UniqueIdList::new(Vec::new()).expect("empty");
+        project.bindings = UniqueIdList::new(vec![Binding {
+            id: id("find-cases"),
+            operation: id("cases.find"),
+            record_type: local("case"),
+            route: id("fetchCase"),
+            maximum_upstream_calls: BoundedU64::<1, 100_000>::new(4).expect("budget"),
         }])
         .expect("unique");
         assert_clean(check_project(&workspace(&profile, &pack, &project)));
