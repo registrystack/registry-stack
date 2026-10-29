@@ -434,7 +434,7 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
     for (id, steps) in &ordered_bodies {
         let steps: &[Step] = steps;
         let mut route_findings = Vec::new();
-        let sends = collect_non_safe_sends(steps);
+        let sends = collect_non_safe_sends(steps, &bodies);
         walk_steps(steps, &mut |step, path| match step {
             Step::To(to) => {
                 let target = &to.uri;
@@ -808,18 +808,37 @@ struct NonSafeSend {
     operation: Option<ExternalId>,
     /// Whether the send sits inside an `idempotentConsumer`.
     inside_idempotency: bool,
+    /// Whether the send runs per item or iteration (inside a `split` or
+    /// `loop`).
+    repeated: bool,
 }
 
 /// Every non-safe upstream send a body can reach, with its enclosing
 /// `idempotentConsumer` context.
-fn collect_non_safe_sends(steps: &[Step]) -> Vec<NonSafeSend> {
-    fn walk(steps: &[Step], inside_idempotency: bool, sends: &mut Vec<NonSafeSend>) {
+fn collect_non_safe_sends(steps: &[Step], bodies: &HashMap<&str, &[Step]>) -> Vec<NonSafeSend> {
+    #[allow(clippy::too_many_arguments)]
+    fn walk<'a>(
+        steps: &'a [Step],
+        inside_idempotency: bool,
+        repeated: bool,
+        bodies: &HashMap<&'a str, &'a [Step]>,
+        visiting: &mut Vec<&'a str>,
+        depth: usize,
+        sends: &mut Vec<NonSafeSend>,
+    ) {
+        // Direct expansion follows Camel's connection by from URI; a
+        // cycle or a chain past the bounded depth stops here (the graph
+        // checks report the cycle and depth separately).
+        if depth > MAX_DIRECT_DEPTH {
+            return;
+        }
         for step in steps {
             match step {
                 Step::To(to) if is_non_safe_to(to) => sends.push(NonSafeSend {
                     endpoint: to.uri.id.clone(),
                     operation: to.parameters.as_ref().and_then(|p| p.operation.clone()),
                     inside_idempotency,
+                    repeated,
                 }),
                 Step::Enrich(enrich)
                     if matches!(
@@ -831,45 +850,198 @@ fn collect_non_safe_sends(steps: &[Step]) -> Vec<NonSafeSend> {
                         endpoint: enrich.uri.id.clone(),
                         operation: None,
                         inside_idempotency,
+                        repeated,
                     });
                 }
+                Step::To(to) if to.uri.component == SendComponent::Direct => {
+                    expand_direct(
+                        &to.uri,
+                        bodies,
+                        visiting,
+                        depth,
+                        inside_idempotency,
+                        repeated,
+                        sends,
+                    );
+                }
+                Step::Enrich(enrich) if enrich.uri.component == SendComponent::Direct => {
+                    expand_direct(
+                        &enrich.uri,
+                        bodies,
+                        visiting,
+                        depth,
+                        inside_idempotency,
+                        repeated,
+                        sends,
+                    );
+                }
                 Step::IdempotentConsumer(idempotent) => {
-                    walk(&idempotent.steps, true, sends);
+                    walk(
+                        &idempotent.steps,
+                        true,
+                        repeated,
+                        bodies,
+                        visiting,
+                        depth,
+                        sends,
+                    );
                 }
                 Step::Choice(choice) => {
                     for when in &choice.when {
-                        walk(&when.steps, inside_idempotency, sends);
+                        walk(
+                            &when.steps,
+                            inside_idempotency,
+                            repeated,
+                            bodies,
+                            visiting,
+                            depth,
+                            sends,
+                        );
                     }
                     if let Some(otherwise) = &choice.otherwise {
-                        walk(&otherwise.steps, inside_idempotency, sends);
+                        walk(
+                            &otherwise.steps,
+                            inside_idempotency,
+                            repeated,
+                            bodies,
+                            visiting,
+                            depth,
+                            sends,
+                        );
                     }
                 }
-                Step::Filter(filter) => walk(&filter.steps, inside_idempotency, sends),
-                Step::Split(split) => walk(&split.steps, inside_idempotency, sends),
-                Step::Loop(loop_step) => walk(&loop_step.steps, inside_idempotency, sends),
+                Step::Filter(filter) => walk(
+                    &filter.steps,
+                    inside_idempotency,
+                    repeated,
+                    bodies,
+                    visiting,
+                    depth,
+                    sends,
+                ),
+                Step::Split(split) => walk(
+                    &split.steps,
+                    inside_idempotency,
+                    true,
+                    bodies,
+                    visiting,
+                    depth,
+                    sends,
+                ),
+                Step::Loop(loop_step) => walk(
+                    &loop_step.steps,
+                    inside_idempotency,
+                    true,
+                    bodies,
+                    visiting,
+                    depth,
+                    sends,
+                ),
                 Step::CircuitBreaker(breaker) => {
-                    walk(&breaker.steps, inside_idempotency, sends);
+                    walk(
+                        &breaker.steps,
+                        inside_idempotency,
+                        repeated,
+                        bodies,
+                        visiting,
+                        depth,
+                        sends,
+                    );
                     if let Some(fallback) = &breaker.on_fallback {
-                        walk(&fallback.steps, inside_idempotency, sends);
+                        walk(
+                            &fallback.steps,
+                            inside_idempotency,
+                            repeated,
+                            bodies,
+                            visiting,
+                            depth,
+                            sends,
+                        );
                     }
                 }
-                Step::Throttle(throttle) => walk(&throttle.steps, inside_idempotency, sends),
+                Step::Throttle(throttle) => walk(
+                    &throttle.steps,
+                    inside_idempotency,
+                    repeated,
+                    bodies,
+                    visiting,
+                    depth,
+                    sends,
+                ),
                 Step::DoTry(do_try) => {
-                    walk(&do_try.steps, inside_idempotency, sends);
+                    walk(
+                        &do_try.steps,
+                        inside_idempotency,
+                        repeated,
+                        bodies,
+                        visiting,
+                        depth,
+                        sends,
+                    );
                     for catch in &do_try.do_catch {
-                        walk(&catch.steps, inside_idempotency, sends);
+                        walk(
+                            &catch.steps,
+                            inside_idempotency,
+                            repeated,
+                            bodies,
+                            visiting,
+                            depth,
+                            sends,
+                        );
                     }
                     if let Some(do_finally) = &do_try.do_finally {
-                        walk(&do_finally.steps, inside_idempotency, sends);
+                        walk(
+                            &do_finally.steps,
+                            inside_idempotency,
+                            repeated,
+                            bodies,
+                            visiting,
+                            depth,
+                            sends,
+                        );
                     }
                 }
-                Step::OnException(clause) => walk(&clause.steps, inside_idempotency, sends),
+                Step::OnException(clause) => walk(
+                    &clause.steps,
+                    inside_idempotency,
+                    repeated,
+                    bodies,
+                    visiting,
+                    depth,
+                    sends,
+                ),
                 _ => {}
             }
         }
     }
+    fn expand_direct<'a>(
+        uri: &'a crate::model::SendUri,
+        bodies: &HashMap<&'a str, &'a [Step]>,
+        visiting: &mut Vec<&'a str>,
+        depth: usize,
+        inside_idempotency: bool,
+        repeated: bool,
+        sends: &mut Vec<NonSafeSend>,
+    ) {
+        if visiting.contains(&uri.id.as_str()) {
+            return;
+        }
+        if let Some(target) = bodies.get(uri.id.as_str()) {
+            visiting.push(uri.id.as_str());
+            walk(
+                target,
+                inside_idempotency,
+                repeated,
+                bodies,
+                visiting,
+                depth + 1,
+                sends,
+            );
+            visiting.pop();
+        }
+    }
     let mut sends = Vec::new();
-    walk(steps, false, &mut sends);
+    walk(steps, false, false, bodies, &mut Vec::new(), 0, &mut sends);
     sends
 }
 
@@ -1300,7 +1472,7 @@ pub fn check_project(workspace: &Workspace<'_>) -> Vec<Diagnostic> {
                 ));
             }
             if !operation.method.is_safe() {
-                findings.extend(write_route_checks(&prefix, route_steps));
+                findings.extend(write_route_checks(&prefix, route_steps, &bodies));
             }
         }
     }
@@ -1345,9 +1517,13 @@ pub fn check_project(workspace: &Workspace<'_>) -> Vec<Diagnostic> {
 /// non-safe send sits inside an `idempotentConsumer`, and a write route
 /// carries at most one non-safe send until write resume lands in
 /// Increment 3.
-fn write_route_checks(prefix: &str, steps: &[Step]) -> Vec<Diagnostic> {
+fn write_route_checks(
+    prefix: &str,
+    steps: &[Step],
+    bodies: &HashMap<&str, &[Step]>,
+) -> Vec<Diagnostic> {
     let mut findings = Vec::new();
-    let sends = collect_non_safe_sends(steps);
+    let sends = collect_non_safe_sends(steps, bodies);
     if sends.iter().any(|send| !send.inside_idempotency) {
         findings.push(finding(
             CheckCode::RouteWriteWithoutIdempotency,
@@ -1356,7 +1532,9 @@ fn write_route_checks(prefix: &str, steps: &[Step]) -> Vec<Diagnostic> {
             "Wrap the write route's sends in idempotentConsumer.",
         ));
     }
-    if sends.len() > 1 {
+    // A send repeated per item or iteration counts as more than one
+    // non-safe send.
+    if sends.len() > 1 || sends.iter().any(|send| send.repeated) {
         findings.push(finding(
             CheckCode::RouteMultipleNonSafeSends,
             &format!("{prefix}/route"),
@@ -2519,6 +2697,171 @@ mod tests {
         assert_has(
             &check_routes(&pack, &project_builder(&pack)),
             CheckCode::RouteUnknownDirectTarget,
+        );
+    }
+
+    /// Write safety looks through `direct:`: two wrapped POSTs reached
+    /// through a direct target refuse the one-non-safe-send rule (staff
+    /// review P1-2).
+    #[test]
+    fn write_refuses_two_posts_through_direct() {
+        let profile = profile_builder(vec![ProfileOperation {
+            id: id("cases.create"),
+            method: HttpMethod::Post,
+            path: "/v2/cases/{type}".to_string(),
+            request_envelope: Some(EnvelopeTemplate(r#"{"input": {{record}}}"#.to_string())),
+            response_envelope: EnvelopeTemplate(r#"{"cases": {{records}}}"#.to_string()),
+            pagination: None,
+        }]);
+        let writer = RouteDefinition {
+            id: id("writer"),
+            from: RouteFrom {
+                uri: direct("writer"),
+            },
+            steps: vec![Step::IdempotentConsumer(IdempotentConsumerStep {
+                expression: rhai("scripts/key.rhai"),
+                eager: true,
+                remove_on_failure: true,
+                completion_eager: false,
+                steps: vec![
+                    to_post("case-api", "cases.create"),
+                    to_post("case-api", "cases.create"),
+                ],
+            })],
+        };
+        let caller = RouteDefinition {
+            id: id("createCase"),
+            from: RouteFrom {
+                uri: direct("createCase"),
+            },
+            steps: vec![Step::To(ToStep {
+                uri: direct("writer"),
+                parameters: None,
+            })],
+        };
+        let pack = pack_builder(vec![oauth_endpoint()], vec![writer, caller]);
+        let mut project = project_builder(&pack);
+        project.access_profiles = UniqueIdList::new(Vec::new()).expect("empty");
+        project.bindings = UniqueIdList::new(vec![Binding {
+            id: id("create-cases"),
+            operation: id("cases.create"),
+            record_type: local("case"),
+            route: id("createCase"),
+            maximum_upstream_calls: BoundedU64::<1, 100_000>::new(10).expect("budget"),
+        }])
+        .expect("unique");
+        assert_has(
+            &check_project(&workspace(&profile, &pack, &project)),
+            CheckCode::RouteMultipleNonSafeSends,
+        );
+    }
+
+    /// Caller-level redelivery over a POST inside a `direct:` target
+    /// needs the target send's `idempotentUpstream` claim (staff review
+    /// P1-2).
+    #[test]
+    fn write_refuses_caller_redelivery_over_a_post_inside_direct() {
+        let writer = RouteDefinition {
+            id: id("writer"),
+            from: RouteFrom {
+                uri: direct("writer"),
+            },
+            steps: vec![Step::IdempotentConsumer(IdempotentConsumerStep {
+                expression: rhai("scripts/key.rhai"),
+                eager: true,
+                remove_on_failure: true,
+                completion_eager: false,
+                steps: vec![to_post("case-api", "cases.create")],
+            })],
+        };
+        let caller = RouteDefinition {
+            id: id("createCase"),
+            from: RouteFrom {
+                uri: direct("createCase"),
+            },
+            steps: vec![
+                Step::ErrorHandler(ErrorHandlerStep {
+                    default_error_handler: Some(DefaultErrorHandler {
+                        redelivery_policy: Some(RedeliveryOptions {
+                            maximum_redeliveries: 2,
+                            ..Default::default()
+                        }),
+                    }),
+                    no_error_handler: None,
+                }),
+                Step::To(ToStep {
+                    uri: direct("writer"),
+                    parameters: None,
+                }),
+            ],
+        };
+        let mut unclaimed = oauth_endpoint();
+        unclaimed.operations = vec![EndpointOperation {
+            id: id("cases.create"),
+            idempotent_upstream: false,
+        }];
+        let pack = pack_builder(vec![unclaimed], vec![writer.clone(), caller.clone()]);
+        assert_has(
+            &check_routes(&pack, &project_builder(&pack)),
+            CheckCode::RouteRedeliveryOverNonSafeSend,
+        );
+        // With the claim, the same shape is admitted.
+        let claimed = pack_builder(vec![oauth_endpoint()], vec![writer, caller]);
+        assert!(!codes(&check_routes(&claimed, &project_builder(&claimed)))
+            .contains(&CheckCode::RouteRedeliveryOverNonSafeSend.code()));
+    }
+
+    /// A write `split` of POSTs runs the send per item, so it refuses the
+    /// one-non-safe-send rule even wrapped and with `stopOnException`
+    /// (staff review P1-2); a split of reads stays admitted.
+    #[test]
+    fn write_refuses_a_split_of_posts() {
+        let route = |inner: Vec<Step>| RouteDefinition {
+            id: id("createCase"),
+            from: RouteFrom {
+                uri: direct("createCase"),
+            },
+            steps: vec![Step::IdempotentConsumer(IdempotentConsumerStep {
+                expression: rhai("scripts/key.rhai"),
+                eager: true,
+                remove_on_failure: true,
+                completion_eager: false,
+                steps: vec![Step::Split(SplitStep {
+                    expression: rhai("scripts/pieces.rhai"),
+                    maximum_items: Some(BoundedU64::<1, 100_000>::new(100).expect("items")),
+                    aggregation_strategy: None,
+                    stop_on_exception: true,
+                    error_threshold: None,
+                    max_failed_records: None,
+                    steps: inner,
+                })],
+            })],
+        };
+        let profile = profile_builder(vec![ProfileOperation {
+            id: id("cases.create"),
+            method: HttpMethod::Post,
+            path: "/v2/cases/{type}".to_string(),
+            request_envelope: Some(EnvelopeTemplate(r#"{"input": {{record}}}"#.to_string())),
+            response_envelope: EnvelopeTemplate(r#"{"cases": {{records}}}"#.to_string()),
+            pagination: None,
+        }]);
+        let pack = pack_builder(
+            vec![oauth_endpoint()],
+            vec![route(vec![to_post("case-api", "cases.create")])],
+        );
+        let mut project = project_builder(&pack);
+        project.access_profiles = UniqueIdList::new(Vec::new()).expect("empty");
+        project.bindings = UniqueIdList::new(vec![Binding {
+            id: id("create-cases"),
+            operation: id("cases.create"),
+            record_type: local("case"),
+            route: id("createCase"),
+            maximum_upstream_calls: BoundedU64::<1, 100_000>::new(10_000).expect("budget"),
+        }])
+        .expect("unique");
+        assert_has(
+            &check_project(&workspace(&profile, &pack, &project)),
+            CheckCode::RouteMultipleNonSafeSends,
         );
     }
 
