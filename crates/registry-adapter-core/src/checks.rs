@@ -317,6 +317,29 @@ fn template_parameter_checks(pack: &AdapterPack) -> Vec<Diagnostic> {
     for (index, template) in pack.route_templates.iter().enumerate() {
         let mut refused: HashSet<(String, String)> = HashSet::new();
         walk_steps(&template.steps, &mut |step, path| {
+            // A send's path carries placeholders like any expression slot.
+            let path_text = match step {
+                Step::To(to) => to.parameters.as_ref().and_then(|p| p.path.clone()),
+                _ => None,
+            };
+            if let Some(text) = path_text {
+                for (name, _) in placeholders(&text) {
+                    let declared = template
+                        .parameters
+                        .iter()
+                        .any(|parameter| parameter.name.as_str() == name);
+                    if !declared && refused.insert((name.clone(), path.to_string())) {
+                        findings.push(finding(
+                            CheckCode::PackUnknownTemplateParameter,
+                            &format!("/routeTemplates/{index}/steps{path}"),
+                            &format!(
+                                "the template body references {{{{{name}}}}}, which no declared parameter provides"
+                            ),
+                            "Declare the parameter in the template's parameters or remove the placeholder.",
+                        ));
+                    }
+                }
+            }
             for expression in step_expressions(step) {
                 if let Expression::Constant(value) = expression {
                     let Some(text) = value.as_str() else {
@@ -1128,9 +1151,24 @@ pub fn walk_steps<'a>(steps: &'a [Step], visit: &mut dyn FnMut(&'a Step, &str)) 
     walk(steps, "", visit);
 }
 
+/// The Rhai expression of an aggregation strategy, when it carries one.
+fn aggregation_expressions(
+    strategy: &Option<crate::model::AggregationStrategy>,
+) -> Vec<Expression> {
+    strategy
+        .as_ref()
+        .and_then(|strategy| match strategy {
+            crate::model::AggregationStrategy::Rhai(rhai) => Some(Expression::Rhai(rhai.clone())),
+            _ => None,
+        })
+        .into_iter()
+        .collect()
+}
+
 /// Every expression a step carries directly, including the optional ones
-/// (`onWhen`, `doWhile`, `retryWhile`, a send's `body`) and the language
-/// members of `split`, `throttle`, and `idempotentConsumer`. Public so
+/// (`onWhen`, `retryWhile`, a send's `body`, `pathParameters`, `query`,
+/// Rhai aggregation strategies) and the language members of `split`,
+/// `throttle`, and `idempotentConsumer`. Public so
 /// adopter tooling reuses one exhaustive extraction instead of
 /// duplicating it; pair it with [`walk_steps`] and [`script_references`]
 /// to reach every expression and script in a route body.
@@ -1142,11 +1180,39 @@ pub fn step_expressions(step: &Step) -> Vec<Expression> {
         Step::SetHeader(header) => vec![header.value.clone()],
         Step::SetProperty(property) => vec![property.value.clone()],
         Step::Validate(validate) => vec![validate.expression.clone()],
-        Step::Split(split) => vec![split.expression.clone()],
         Step::Throttle(throttle) => vec![throttle.limit.clone()],
         Step::IdempotentConsumer(idempotent) => vec![idempotent.expression.clone()],
         Step::Loop(loop_step) => loop_step.expression().into_iter().collect(),
-        Step::OnException(clause) => clause.on_when.iter().cloned().collect(),
+        Step::Split(split) => {
+            let mut expressions = vec![split.expression.clone()];
+            expressions.extend(aggregation_expressions(&split.aggregation_strategy));
+            expressions
+        }
+        Step::Enrich(enrich) => aggregation_expressions(&enrich.aggregation_strategy),
+        Step::To(to) => {
+            let Some(parameters) = to.parameters.as_ref() else {
+                return Vec::new();
+            };
+            let mut expressions = parameters
+                .path_parameters
+                .values()
+                .cloned()
+                .collect::<Vec<_>>();
+            expressions.extend(parameters.query.values().cloned());
+            if let Some(body) = &parameters.body {
+                expressions.push(body.clone());
+            }
+            expressions
+        }
+        Step::OnException(clause) => {
+            let mut expressions = clause.on_when.iter().cloned().collect::<Vec<_>>();
+            if let Some(policy) = &clause.redelivery_policy {
+                if let Some(retry_while) = &policy.retry_while {
+                    expressions.push(retry_while.clone());
+                }
+            }
+            expressions
+        }
         Step::DoTry(do_try) => do_try
             .do_catch
             .iter()
@@ -2158,6 +2224,13 @@ mod tests {
         })
     }
 
+    fn rhai_expr(file: &str) -> RhaiExpression {
+        RhaiExpression {
+            file: file.to_string(),
+            entrypoint: "main".to_string(),
+        }
+    }
+
     fn rhai(file: &str) -> Expression {
         Expression::Rhai(RhaiExpression {
             file: file.to_string(),
@@ -2768,6 +2841,153 @@ mod tests {
         assert_has(
             &check_routes(&pack, &project_builder(&pack)),
             CheckCode::RouteRedeliveryOverNonSafeSend,
+        );
+    }
+
+    /// The expression walk covers a send's path parameters and query, an
+    /// exception policy's retryWhile, and Rhai aggregation strategies
+    /// (staff review P1-4).
+    #[test]
+    fn step_expressions_cover_the_send_and_policy_slots() {
+        let steps = vec![
+            Step::To(ToStep {
+                uri: send("case-api"),
+                parameters: Some(ToParameters {
+                    http_method: HttpMethod::Get,
+                    path: Some("/v2/cases/{{caseId}}".to_string()),
+                    path_parameters: BTreeMap::from([(
+                        "caseId".to_string(),
+                        rhai("scripts/id.rhai"),
+                    )]),
+                    query: BTreeMap::from([("cursor".to_string(), rhai("scripts/page.rhai"))]),
+                    body: None,
+                    operation: None,
+                    throw_exception_on_failure: true,
+                    ok_status_code_range: None,
+                    resume_bindings: Vec::new(),
+                }),
+            }),
+            Step::OnException(OnExceptionStep {
+                exception: vec![crate::model::ErrorClass::UpstreamTimeout],
+                on_when: None,
+                handled: None,
+                continued: None,
+                redelivery_policy: Some(RedeliveryOptions {
+                    retry_while: Some(rhai("scripts/again.rhai")),
+                    ..Default::default()
+                }),
+                steps: vec![],
+            }),
+            Step::Split(SplitStep {
+                expression: rhai("scripts/pieces.rhai"),
+                maximum_items: None,
+                aggregation_strategy: Some(crate::model::AggregationStrategy::Rhai(rhai_expr(
+                    "scripts/group.rhai",
+                ))),
+                stop_on_exception: false,
+                error_threshold: None,
+                max_failed_records: None,
+                steps: vec![],
+            }),
+            Step::Enrich(EnrichStep {
+                uri: send("case-api"),
+                aggregation_strategy: Some(crate::model::AggregationStrategy::Rhai(rhai_expr(
+                    "scripts/merge.rhai",
+                ))),
+                aggregate_on_exception: false,
+            }),
+        ];
+        let files: Vec<String> = steps
+            .iter()
+            .flat_map(|step| {
+                crate::checks::step_expressions(step)
+                    .into_iter()
+                    .filter_map(|expression| match expression {
+                        Expression::Rhai(rhai) => Some(rhai.file),
+                        _ => None,
+                    })
+            })
+            .collect();
+        for file in [
+            "scripts/id.rhai",
+            "scripts/page.rhai",
+            "scripts/again.rhai",
+            "scripts/pieces.rhai",
+            "scripts/group.rhai",
+            "scripts/merge.rhai",
+        ] {
+            assert!(files.contains(&file.to_string()), "missing {file}");
+        }
+    }
+
+    /// A Rhai aggregation strategy names a digest-pinned script like any
+    /// other reference (staff review P1-4).
+    #[test]
+    fn aggregation_rhai_scripts_resolve_to_the_inventory() {
+        let route = RouteDefinition {
+            id: id("fetchCase"),
+            from: RouteFrom {
+                uri: direct("fetchCase"),
+            },
+            steps: vec![Step::Split(SplitStep {
+                expression: rhai("scripts/pieces.rhai"),
+                maximum_items: None,
+                aggregation_strategy: Some(crate::model::AggregationStrategy::Rhai(rhai_expr(
+                    "scripts/unpinned.rhai",
+                ))),
+                stop_on_exception: false,
+                error_threshold: None,
+                max_failed_records: None,
+                steps: vec![to_get("case-api")],
+            })],
+        };
+        let pack = pack_builder(vec![basic_endpoint()], vec![route]);
+        assert_has(&check_pack(&pack), CheckCode::PackUnknownScript);
+    }
+
+    /// A template send's path references declared parameters like any
+    /// other slot: an undeclared `{{placeholder}}` in the path refuses
+    /// (staff review P1-4).
+    #[test]
+    fn template_paths_reference_declared_parameters() {
+        let template = |path: Option<String>| RouteTemplate {
+            id: id("pager"),
+            parameters: vec![TemplateParameter {
+                name: id("cursor"),
+                r#type: TemplateParameterType::String,
+                required: true,
+                default_value: None,
+                description: None,
+            }],
+            steps: vec![Step::To(ToStep {
+                uri: send("case-api"),
+                parameters: Some(ToParameters {
+                    http_method: HttpMethod::Get,
+                    path,
+                    path_parameters: BTreeMap::new(),
+                    query: BTreeMap::new(),
+                    body: None,
+                    operation: None,
+                    throw_exception_on_failure: true,
+                    ok_status_code_range: None,
+                    resume_bindings: Vec::new(),
+                }),
+            })],
+        };
+        let mut pack = pack_builder(vec![], vec![]);
+        pack.route_templates =
+            UniqueIdList::new(vec![template(Some("/v2/cases/{{cursor}}".to_string()))])
+                .expect("unique");
+        assert!(
+            !codes(&check_pack(&pack)).contains(&CheckCode::PackUnknownTemplateParameter.code())
+        );
+        let mut undeclared = pack_builder(vec![], vec![]);
+        undeclared.route_templates =
+            UniqueIdList::new(vec![template(Some("/v2/cases/{{page}}".to_string()))])
+                .expect("unique");
+        assert_has(
+            &check_pack(&undeclared),
+            CheckCode::PackUnknownTemplateParameter,
         );
     }
 
