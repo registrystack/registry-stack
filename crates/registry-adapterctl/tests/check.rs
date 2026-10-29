@@ -271,6 +271,176 @@ fn a_script_without_the_declared_entrypoint_refuses_with_the_compile_code() {
     assert_refused(exit, &report, "adapter.pack.script-uncompilable");
 }
 
+/// Assert `code` carries no diagnostic in the report.
+fn assert_code_absent(report: &Value, code: &str) {
+    let codes = report["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|diagnostic| diagnostic["code"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert!(!codes.contains(&code), "expected no {code} among {codes:?}");
+}
+
+/// The JSON pointer of the one diagnostic carrying `code`.
+fn diagnostic_path(report: &Value, code: &str) -> String {
+    report["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|diagnostic| diagnostic["code"] == code)
+        .map(|diagnostic| diagnostic["path"].as_str().unwrap().to_owned())
+        .unwrap_or_else(|| panic!("expected {code} among the diagnostics"))
+}
+
+/// A profile edited after the project pinned it refuses with the digest
+/// code at the profile pointer alone: the version pin still holds.
+#[test]
+fn a_tampered_profile_refuses_with_the_pin_digest_code() {
+    let (_root, project) = mutated_project(|root| {
+        edit(
+            &root.join("profile.yaml"),
+            "id: case-api",
+            "id: case-api\n# edited after pinning",
+        );
+    });
+    let (exit, report, _) = run_json(&["check", &project]);
+    assert_refused(exit, &report, "adapter.project.pin-digest-mismatch");
+    assert_code_absent(&report, "adapter.project.pin-version-mismatch");
+    assert_eq!(
+        diagnostic_path(&report, "adapter.project.pin-digest-mismatch"),
+        "/profile/digest"
+    );
+}
+
+/// A project pin naming a version the profile bytes do not carry refuses
+/// with the version code at the profile pointer alone: the digest pin
+/// still holds.
+#[test]
+fn a_wrong_pinned_profile_version_refuses_with_the_pin_version_code() {
+    let (_root, project) = mutated_project(|root| {
+        edit(
+            &root.join("project.yaml"),
+            "profile:\n  id: case-api\n  version: 1.0.0",
+            "profile:\n  id: case-api\n  version: 9.9.9",
+        );
+    });
+    let (exit, report, _) = run_json(&["check", &project]);
+    assert_refused(exit, &report, "adapter.project.pin-version-mismatch");
+    assert_code_absent(&report, "adapter.project.pin-digest-mismatch");
+    assert_eq!(
+        diagnostic_path(&report, "adapter.project.pin-version-mismatch"),
+        "/profile/version"
+    );
+}
+
+/// An expected facade body carrying a member the bound record type does
+/// not declare refuses at that member's pointer.
+#[test]
+fn an_expected_body_with_an_unknown_member_refuses_with_the_response_schema_code() {
+    let (_root, project) = mutated_project(|root| {
+        edit(
+            &root.join("fixtures/records.yaml"),
+            "          national_id: \"123\"",
+            "          national_id: \"123\"\n          ghost: true",
+        );
+    });
+    let (exit, report, _) = run_json(&["check", &project]);
+    assert_refused(exit, &report, "adapter.fixture.response-schema");
+    assert_eq!(
+        diagnostic_path(&report, "adapter.fixture.response-schema"),
+        "/entries/0/expectedFacadeResponse/body/record/ghost"
+    );
+}
+
+/// An expected facade body typing a record member wrongly refuses at that
+/// member's pointer.
+#[test]
+fn an_expected_body_with_a_wrong_typed_member_refuses_with_the_response_schema_code() {
+    let (_root, project) = mutated_project(|root| {
+        edit(
+            &root.join("fixtures/records.yaml"),
+            "          national_id: \"123\"",
+            "          national_id: 7",
+        );
+    });
+    let (exit, report, _) = run_json(&["check", &project]);
+    assert_refused(exit, &report, "adapter.fixture.response-schema");
+    assert_eq!(
+        diagnostic_path(&report, "adapter.fixture.response-schema"),
+        "/entries/0/expectedFacadeResponse/body/record/national_id"
+    );
+}
+
+/// An expected facade body missing a required record member refuses at
+/// that member's pointer.
+#[test]
+fn an_expected_body_missing_a_required_member_refuses_with_the_response_schema_code() {
+    let (_root, project) = mutated_project(|root| {
+        edit(
+            &root.join("fixtures/records.yaml"),
+            "        record:\n          national_id: \"123\"",
+            "        record: {}",
+        );
+    });
+    let (exit, report, _) = run_json(&["check", &project]);
+    assert_refused(exit, &report, "adapter.fixture.response-schema");
+    assert_eq!(
+        diagnostic_path(&report, "adapter.fixture.response-schema"),
+        "/entries/0/expectedFacadeResponse/body/record/national_id"
+    );
+}
+
+/// An expected facade response without a body refuses where the
+/// operation's result schema requires one.
+#[test]
+fn an_expected_body_absent_refuses_with_the_response_schema_code() {
+    let (_root, project) = mutated_project(|root| {
+        edit(
+            &root.join("fixtures/records.yaml"),
+            "      body:\n        record:\n          national_id: \"123\"",
+            "",
+        );
+    });
+    let (exit, report, _) = run_json(&["check", &project]);
+    assert_refused(exit, &report, "adapter.fixture.response-schema");
+    assert_eq!(
+        diagnostic_path(&report, "adapter.fixture.response-schema"),
+        "/entries/0/expectedFacadeResponse"
+    );
+}
+
+/// An entry naming an operation the bound profile does not declare
+/// refuses with the core pairing code: `adapterctl check` runs the core
+/// fixture checks, it never reimplements them.
+#[test]
+fn an_entry_with_an_unknown_operation_refuses_with_the_operation_code() {
+    let (_root, project) = mutated_project(|root| {
+        edit(
+            &root.join("fixtures/records.yaml"),
+            "- operation: cases.get",
+            "- operation: cases.ghost",
+        );
+    });
+    let (exit, report, _) = run_json(&["check", &project]);
+    assert_refused(exit, &report, "adapter.fixture.unknown-operation");
+}
+
+/// An entry naming an operation the profile declares but the project
+/// binds to no route refuses with the core pairing code.
+#[test]
+fn an_entry_with_an_unbound_operation_refuses_with_the_operation_code() {
+    let (_root, project) = mutated_project(|root| {
+        edit(
+            &root.join("project.yaml"),
+            "bindings:\n  - id: find-cases\n    operation: cases.get\n    recordType: case\n    route: fetchCases\n    maximumUpstreamCalls: 5",
+            "bindings: []",
+        );
+    });
+    let (exit, report, _) = run_json(&["check", &project]);
+    assert_refused(exit, &report, "adapter.fixture.unknown-operation");
+}
+
 /// An instantiation naming no declared template refuses with the core
 /// code, and the refusal never repeats the rejected identifier.
 #[test]

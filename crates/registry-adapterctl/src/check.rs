@@ -6,7 +6,11 @@
 //! (`products/adapter/CONCEPT.md` sections 6, 8.1, and 13.3).
 //!
 //! The command reads every file, verifies the digest pins of the pack's
-//! script and query-file inventory (CFG-EMBED-1), and composes the pure
+//! script and query-file inventory (CFG-EMBED-1), verifies the versions
+//! and digests the project pins for its profile and pack against the
+//! artifacts as read (CFG-ID-4), precompiles the pack's Rhai entrypoints,
+//! checks each fixture entry's expected facade response against the
+//! derived result schema of the operation it names, and composes the pure
 //! checks of `registry-adapter-core` (never re-implements them). It is
 //! offline: no network, no database, no execution of a checked route or
 //! script.
@@ -17,7 +21,8 @@
 
 use clap::Args;
 use registry_adapter_core::{
-    check_workspace, finding, script_references, CheckCode, ScriptSite, Workspace,
+    check_fixture_expected_response, check_project_pins, check_workspace,
+    derive_operation_result_schema, finding, script_references, CheckCode, ScriptSite, Workspace,
     ADAPTER_FIXTURE_API_VERSION, ADAPTER_FIXTURE_KIND, ADAPTER_PACK_API_VERSION, ADAPTER_PACK_KIND,
     ADAPTER_PROFILE_API_VERSION, ADAPTER_PROFILE_KIND, ADAPTER_PROJECT_API_VERSION,
     ADAPTER_PROJECT_KIND, ADAPTER_RUNTIME_API_VERSION, ADAPTER_RUNTIME_KIND,
@@ -27,7 +32,7 @@ use registry_platform_script::rhai::{
     compile_entrypoint, RhaiBaseEngine, RhaiCompileError, RhaiLimits, RhaiProfile,
 };
 use registry_platform_yaml::{
-    ApiVersion, Decoded, Diagnostic, EnvelopeRule, Expect, FormatSpec, Reader, Report,
+    ApiVersion, Decoded, Diagnostic, Digest, EnvelopeRule, Expect, FormatSpec, Reader, Report,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::io;
@@ -192,7 +197,7 @@ pub(crate) fn run(args: &CheckArgs) -> Result<CheckRun, CheckFailure> {
     };
     let mut fixtures = Vec::new();
     for path in &fixture_paths {
-        if let Some(decoded) = read::<registry_adapter_core::AdapterFixture>(
+        if let Some((decoded, _)) = read::<registry_adapter_core::AdapterFixture>(
             path,
             &FIXTURE_FORMAT,
             &mut report,
@@ -209,7 +214,7 @@ pub(crate) fn run(args: &CheckArgs) -> Result<CheckRun, CheckFailure> {
             &mut report,
             &mut files,
         )?
-        .map(|decoded| decoded.value),
+        .map(|(decoded, _)| decoded.value),
         None => None,
     };
 
@@ -223,12 +228,23 @@ pub(crate) fn run(args: &CheckArgs) -> Result<CheckRun, CheckFailure> {
         });
     }
 
-    let project = project.expect("the project decoded").value;
-    let profile = profile.expect("the profile decoded").value;
-    let pack = pack.expect("the pack decoded").value;
+    let (project_decoded, _) = project.expect("the project decoded");
+    let (profile_decoded, profile_bytes) = profile.expect("the profile decoded");
+    let (pack_decoded, pack_bytes) = pack.expect("the pack decoded");
+    let project = project_decoded.value;
+    let profile = profile_decoded.value;
+    let pack = pack_decoded.value;
 
     let pinned = verify_digest_pins(&pack, &pack_path, &mut report, &mut files)?;
     verify_entrypoints(&pack, &pack_path, &pinned, &mut report);
+    verify_project_pins(
+        &project,
+        &profile,
+        &profile_bytes,
+        &pack,
+        &pack_bytes,
+        &mut report,
+    );
 
     // Compose the core's pure checks over the parsed workspace.
     let workspace = Workspace {
@@ -241,6 +257,7 @@ pub(crate) fn run(args: &CheckArgs) -> Result<CheckRun, CheckFailure> {
     for diagnostic in check_workspace(&workspace) {
         report.push(diagnostic);
     }
+    check_fixture_bodies(&profile, &project, &fixtures, &mut report);
 
     Ok(CheckRun {
         diagnostics: report.into_diagnostics(),
@@ -255,12 +272,18 @@ fn project_string(path: &Path) -> String {
 
 /// Read and decode one document, folding a reader refusal into `report` and
 /// counting the file as checked either way. `None` means the reader refused.
+/// The bytes come back with the decode so the pin checks hash the file as
+/// read, not a second read of it.
+/// One read's outcome: the decoded document with the bytes it was read
+/// from, or `None` when the reader refused the document.
+type DecodedFile<T> = Option<(Decoded<T>, Vec<u8>)>;
+
 fn read<T: serde::de::DeserializeOwned>(
     path: &Path,
     format: &FormatSpec<'static>,
     report: &mut Report,
     files: &mut usize,
-) -> Result<Option<Decoded<T>>, CheckFailure> {
+) -> Result<DecodedFile<T>, CheckFailure> {
     let shown = path.display().to_string();
     let bytes = std::fs::read(path).map_err(|source| CheckFailure::Io {
         path: shown.clone(),
@@ -273,7 +296,7 @@ fn read<T: serde::de::DeserializeOwned>(
             for warning in decoded.document.warnings().into_diagnostics() {
                 report.push(warning);
             }
-            Ok(Some(decoded))
+            Ok(Some((decoded, bytes)))
         }
         Err(refused) => {
             report.extend(refused);
@@ -490,6 +513,62 @@ fn pin_finding(pack_path: &Path, pointer: &str, message: &str, script_path: &str
         column: None,
     });
     diagnostic
+}
+
+/// Verify the versions and digests the project pins for its profile and
+/// pack against the artifacts as read (CFG-ID-4). Core owns the
+/// comparison; this command owns the hashing of the bytes it already read.
+fn verify_project_pins(
+    project: &registry_adapter_core::AdapterProject,
+    profile: &registry_adapter_core::AdapterProfile,
+    profile_bytes: &[u8],
+    pack: &registry_adapter_core::AdapterPack,
+    pack_bytes: &[u8],
+    report: &mut Report,
+) {
+    for diagnostic in check_project_pins(
+        project,
+        &profile.version,
+        &digest_of(profile_bytes),
+        &pack.version,
+        &digest_of(pack_bytes),
+    ) {
+        report.push(diagnostic);
+    }
+}
+
+/// The sha256 digest of one artifact's bytes, in the pinned uri form.
+fn digest_of(bytes: &[u8]) -> Digest {
+    Digest::new(sha256_uri(bytes)).expect("a computed sha256 uri is a valid digest")
+}
+
+/// Check every fixture entry's expected facade response body against the
+/// result schema derived from the operation the entry names (CONCEPT 6).
+/// Core owns the derivation and the check; the pairing refusal for an
+/// entry whose operation cannot derive a schema is already reported by the
+/// core fixture checks, so such an entry checks no body here.
+fn check_fixture_bodies(
+    profile: &registry_adapter_core::AdapterProfile,
+    project: &registry_adapter_core::AdapterProject,
+    fixtures: &[registry_adapter_core::AdapterFixture],
+    report: &mut Report,
+) {
+    for fixture in fixtures {
+        for (entry_index, entry) in fixture.entries.iter().enumerate() {
+            let schema =
+                match derive_operation_result_schema(profile, project, entry.operation.as_str()) {
+                    Ok(schema) => schema,
+                    Err(_) => continue,
+                };
+            for diagnostic in check_fixture_expected_response(
+                entry_index,
+                &entry.expected_facade_response,
+                &schema,
+            ) {
+                report.push(diagnostic);
+            }
+        }
+    }
 }
 
 #[cfg(test)]

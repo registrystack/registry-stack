@@ -23,4 +23,4 @@ entries:
       status: 200
       body:
         record:
-          id: "123"
+          national_id: "123"
