@@ -18,7 +18,13 @@ endpoints:
       type: basic
 routeTemplates:
   - id: find-cases
-    parameters: []
+    parameters:
+      - name: type
+        type: string
+        required: false
+      - name: case_id
+        type: string
+        required: false
     steps:
       - enrich:
           uri: direct:absent-route

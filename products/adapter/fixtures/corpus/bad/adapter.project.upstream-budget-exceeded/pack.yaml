@@ -18,7 +18,13 @@ endpoints:
       type: basic
 routeTemplates:
   - id: find-cases
-    parameters: []
+    parameters:
+      - name: type
+        type: string
+        required: false
+      - name: case_id
+        type: string
+        required: false
     steps:
       - loop:
           constant: 2
@@ -28,8 +34,10 @@ routeTemplates:
                 uri: http:cases
                 parameters:
                   httpMethod: GET
-                  path: /v2/cases/{type}/{case_id}
+                  path: /v2/cases/{{type}}/{{case_id}}
                   pathParameters:
+                    type:
+                      constant: welfare
                     case_id:
                       header: recordId
 capabilities:

@@ -1,0 +1,43 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.pack.invalid-header-name: this artifact set must be refused with
+# exactly adapter.pack.invalid-header-name. The static-api-key endpoint declares the header name bad=header, not an RFC 9110 token.
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.pack.invalid-header-name/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
+kind: AdapterProject
+project:
+  id: case-api-example
+  version: "1"
+profile:
+  id: case-api
+  version: "1"
+  digest: sha256:bd8bb131695fa744895b8cd373925aad60718fb2811a0c895beb1e05f9c14512
+pack:
+  id: case-api-pack
+  version: "1"
+  digest: sha256:175599c89337b47012c2870e7aa6a7cf5ae4847b4ca58846eacef8e7348c3cb7
+recordTypes:
+  - name: case
+    fields:
+      - name: case_type
+        type: string
+        required: true
+templatedRoutes:
+  - routeTemplate: find-cases
+    routeId: case-find
+bindings:
+  - id: case-get
+    operation: cases-get
+    recordType: case
+    route: case-find
+    maximumUpstreamCalls: 4
+accessProfiles:
+  - id: case-reader
+    scopes:
+      - cases.read
+    operations:
+      - cases-get
+    recordTypes:
+      - case

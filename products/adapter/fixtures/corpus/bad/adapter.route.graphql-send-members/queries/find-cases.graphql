@@ -1,0 +1,6 @@
+# Bad-corpus member: the query file a graphql endpoint names.
+query FindCases {
+  cases {
+    id
+  }
+}

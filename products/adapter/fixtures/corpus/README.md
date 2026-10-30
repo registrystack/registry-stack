@@ -11,9 +11,13 @@ file is its manifest.
 - `base/` is the clean control: profile, pack, and project that pass with
   zero findings. Any change here is a regression in the checks or reader.
 - `bad/<code>/` is one member per code. The directory name IS the expected
-  code, except the two reader-level members whose directories carry a
-  suffix (`config.unknown-key-predicate`, `config.unknown-key-redelivery`);
-  both expect `config.unknown-key`.
+  code, except the five suffixed members: the reader-level members
+  `config.unknown-key-predicate` and `config.unknown-key-redelivery` both
+  expect `config.unknown-key`, and `config.missing-key-project`,
+  `config.invalid-value-token-endpoint`, and
+  `adapter.runtime.insecure-origin-token-endpoint` expect the code their
+  name starts with (the last one because the plain code's directory is
+  taken by the binding-origin member).
 - Each member carries `profile.yaml`, `pack.yaml`, and `project.yaml`
   (plus `scripts/` or `fixtures/` where the defect needs them, and
   `runtime.yaml` where the expected code is a runtime or auth code).
@@ -70,6 +74,9 @@ so the code appears twice; the refused code set is still exactly one.
 | `adapter.profile.response-envelope-missing-result-slot` | Response envelope names neither `record` nor `records` | `adapter.profile.response-envelope-missing-result-slot` | checks |
 | `adapter.profile.request-envelope-missing-record-slot` | A write operation's request envelope names no `record` slot | `adapter.profile.request-envelope-missing-record-slot` | checks |
 | `adapter.profile.problem-envelope-missing-code-slot` | Problem envelope names no `problemCode` slot | `adapter.profile.problem-envelope-missing-code-slot` | checks |
+| `adapter.profile.invalid-path` | Operation path `v2/cases/...` carries no leading slash | `adapter.profile.invalid-path` | checks |
+| `adapter.profile.problem-envelope-uncompilable` | Problem envelope carries a `{{record}}` slot, which the problem-envelope derivation refuses | `adapter.profile.problem-envelope-uncompilable` | checks |
+| `adapter.profile.response-envelope-uncompilable` | Response envelope is an array whose members derive different shapes | `adapter.profile.response-envelope-uncompilable` | checks |
 
 ### Pack members
 
@@ -78,6 +85,7 @@ so the code appears twice; the refused code set is still exactly one.
 | `adapter.pack.endpoint-component-invalid` | Endpoint declares component `direct`, not a producer | `adapter.pack.endpoint-component-invalid` | checks |
 | `adapter.pack.graphql-query-required` | `graphql` endpoint names no `queryFile` | `adapter.pack.graphql-query-required` | checks |
 | `adapter.pack.reserved-header-name` | `static-api-key` declares the reserved header `Authorization` | `adapter.pack.reserved-header-name` | checks |
+| `adapter.pack.invalid-header-name` | `static-api-key` declares the header name `bad=header`, not an RFC 9110 token | `adapter.pack.invalid-header-name` | checks |
 | `adapter.pack.unknown-script` | A route's `rhai` file is not in the digest-pinned inventory | `adapter.pack.unknown-script` | checks |
 | `adapter.pack.unknown-template-parameter` | Template body references `{{missing-param}}`, no declared parameter provides it | `adapter.pack.unknown-template-parameter` | checks |
 | `adapter.pack.digest-pin-required` | Script file's bytes do not hash to its pin (the pin is valid hex, wrong value) | `adapter.pack.digest-pin-required` | tool |
@@ -151,6 +159,15 @@ derivation sees, and their sweep expectations list both codes.
 | `adapter.route.empty-exception-list` | onException clause names no error class | `adapter.route.empty-exception-list` | checks, per body |
 | `adapter.route.handled-and-continued` | onException clause sets `handled: true` and `continued: true` | `adapter.route.handled-and-continued` | checks, per body |
 | `adapter.route.unknown-operation` | POST send names operation `nope`, which its endpoint does not declare | `adapter.route.unknown-operation` | checks, per body |
+| `adapter.route.reserved-header-name` | Route sets `Authorization`, a credential header no route may write | `adapter.route.reserved-header-name` | checks, per body |
+| `adapter.route.unknown-header` | Route reads `Etag`, which no facade input, engine placement, allowlist, or earlier step places | `adapter.route.unknown-header` | checks, per body |
+| `adapter.route.invalid-path` | Send path carries a scheme and authority instead of staying origin-relative | `adapter.route.invalid-path` | checks, per body |
+| `adapter.route.invalid-status-code-range` | `okStatusCodeRange: 200-100` runs backwards | `adapter.route.invalid-status-code-range` | checks, per body |
+| `adapter.route.path-parameter-mismatch` | Path carries `{{case_id}}`, which no `pathParameters` entry binds | `adapter.route.path-parameter-mismatch` | checks, per body |
+| `adapter.route.invalid-header-name` | Route writes the header name `bad=header`, not an RFC 9110 token | `adapter.route.invalid-header-name` | checks, per body |
+| `adapter.route.invalid-query-key` | Query key `bad=key` carries an unescaped `=` | `adapter.route.invalid-query-key` | checks, per body |
+| `adapter.route.graphql-send-members` | A graphql send carries `httpMethod`, an HTTP-send member | `adapter.route.graphql-send-members` | checks, per body |
+| `adapter.route.stop-on-exception-exclusive` | Split sets `stopOnException` beside `errorThreshold` failure accounting | `adapter.route.stop-on-exception-exclusive` | checks, per body |
 
 ### Runtime and auth members
 
@@ -163,6 +180,7 @@ These members ship `runtime.yaml`; check them with `--runtime runtime.yaml`.
 | `adapter.runtime.insecure-origin` | Binding on `http://` off the loopback exception | `adapter.runtime.insecure-origin` | checks |
 | `adapter.runtime.missing-endpoint` | Runtime binds no endpoint; the pack declares `cases` | `adapter.runtime.missing-endpoint` | checks |
 | `adapter.runtime.unknown-endpoint` | Runtime binds endpoint `nope` | `adapter.runtime.unknown-endpoint` | checks |
+| `adapter.runtime.insecure-origin-token-endpoint` | Credential `tokenEndpoint` on plain HTTP off the loopback exception (the binding's own base URL stays https) | `adapter.runtime.insecure-origin` | checks |
 
 ### Fixture members
 
@@ -175,10 +193,11 @@ Fixture files sit in the member's `fixtures/` directory, which
 | `adapter.fixture.unknown-intercept` | Intercept names endpoint `nope` | `adapter.fixture.unknown-intercept` | checks |
 | `adapter.fixture.response-schema` | Expected facade response's record violates the derived result schema (`case_type` integer, declared string) | `adapter.fixture.response-schema` | checks |
 | `adapter.fixture.unknown-problem-code` | Expected 404 problem body names code `cases.spectre`, which the profile does not declare; the member's profile spells the problem slot as a literal `code` member, the member the check reads | `adapter.fixture.unknown-problem-code` | checks |
+| `adapter.fixture.unknown-operation` | Entry names operation `nope`, which the profile does not declare | `adapter.fixture.unknown-operation` | checks |
 
 ### Reader-level members
 
-Three members expect the platform YAML reader's own codes, refused with
+Four members expect the platform YAML reader's own codes, refused with
 path, line, and column before any check runs.
 
 | Member | Defect | Expected code | Layer |
@@ -186,6 +205,7 @@ path, line, and column before any check runs.
 | `config.unknown-key-predicate` | `bogusKey` beside a valid `jsonpath` predicate | `config.unknown-key` | reader |
 | `config.unknown-key-redelivery` | `bogusOption` inside the nested `redeliveryPolicy` | `config.unknown-key` | reader |
 | `config.missing-key-project` | The project document omits the required `project` block | `config.missing-key` | reader |
+| `config.invalid-value-token-endpoint` | Credential `tokenEndpoint` is not a URL at all | `config.invalid-value` | reader |
 
 ## Conventions
 
@@ -195,6 +215,9 @@ path, line, and column before any check runs.
   template, one binding, one defect.
 - Credentials are always `secret:` references, never values; example
   origins use the reserved `.example.invalid` names.
+- Send paths carry `{{name}}` placeholders bound in `pathParameters`, and a
+  template whose send path names a placeholder declares it in its
+  `parameters` (required: false), the same name both places.
 - The wrong pins are valid form, wrong value: the pack script digest pin is
   `sha256:1111…`, the project's profile digest pin is `sha256:2222…`; every
   other member pins real digests and the pinned versions are real.

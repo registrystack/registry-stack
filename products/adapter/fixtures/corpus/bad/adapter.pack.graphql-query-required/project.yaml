@@ -17,7 +17,7 @@ profile:
 pack:
   id: case-api-pack
   version: "1"
-  digest: sha256:f2427ead2b8b4a69d148b9bd00f20777df90d3198ca08cc59507d40773f89bc5
+  digest: sha256:105a19e8a2c7dbad84d70a4bb122506e1bba311f4037a98d089b2017db9a3d2d
 recordTypes:
   - name: case
     fields:

@@ -1,0 +1,43 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.profile.response-envelope-uncompilable: this artifact set must be refused with
+# exactly adapter.profile.response-envelope-uncompilable. The response envelope is an array whose members derive different shapes.
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.profile.response-envelope-uncompilable/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
+kind: AdapterProject
+project:
+  id: case-api-example
+  version: "1"
+profile:
+  id: case-api
+  version: "1"
+  digest: sha256:31b1369974dbd68df5757f47395c95bd300c55368507ff9f69d5fb625846e329
+pack:
+  id: case-api-pack
+  version: "1"
+  digest: sha256:ff963c0474ce1beef079a59331d0bbae8e627281fda22ea0730fd51aaf023f29
+recordTypes:
+  - name: case
+    fields:
+      - name: case_type
+        type: string
+        required: true
+templatedRoutes:
+  - routeTemplate: find-cases
+    routeId: case-find
+bindings:
+  - id: case-get
+    operation: cases-get
+    recordType: case
+    route: case-find
+    maximumUpstreamCalls: 4
+accessProfiles:
+  - id: case-reader
+    scopes:
+      - cases.read
+    operations:
+      - cases-get
+    recordTypes:
+      - case

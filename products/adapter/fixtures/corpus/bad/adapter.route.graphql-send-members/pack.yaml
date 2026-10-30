@@ -1,0 +1,38 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/pack/pack.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.route.graphql-send-members: this artifact set must be refused with
+# exactly adapter.route.graphql-send-members. Clean baseline pack; another artifact carries the defect.
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.route.graphql-send-members/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/pack/v1alpha1
+kind: AdapterPack
+id: case-api-pack
+version: "1"
+testedVersions:
+  - "1.0"
+endpoints:
+  - id: cases
+    component: graphql
+    authentication:
+      type: basic
+    queryFile: queries/find-cases.graphql
+    operationName: FindCases
+routeTemplates:
+  - id: find-cases
+    parameters:
+      - name: type
+        type: string
+        required: false
+      - name: case_id
+        type: string
+        required: false
+    steps:
+      - to:
+          uri: graphql:cases
+          parameters:
+            httpMethod: GET
+queryFiles:
+  - path: queries/find-cases.graphql
+    digest: sha256:b9bf7fdea204f8bf4f3f62ec03311c435aded2c993179c2225b51756f0c34895
+capabilities: {}

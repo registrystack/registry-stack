@@ -1,0 +1,43 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.route.invalid-query-key: this artifact set must be refused with
+# exactly adapter.route.invalid-query-key. The send's query key bad=key carries an unescaped =.
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.route.invalid-query-key/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
+kind: AdapterProject
+project:
+  id: case-api-example
+  version: "1"
+profile:
+  id: case-api
+  version: "1"
+  digest: sha256:90e5571fb9135e5af06c3e4f1e26bb850349df1433c1878c4dd7474e51fa9f5d
+pack:
+  id: case-api-pack
+  version: "1"
+  digest: sha256:9bf4a1d055a04c3a409a5a8382ddadb20ba0f0d703665f17f8fd63034559d479
+recordTypes:
+  - name: case
+    fields:
+      - name: case_type
+        type: string
+        required: true
+templatedRoutes:
+  - routeTemplate: find-cases
+    routeId: case-find
+bindings:
+  - id: case-get
+    operation: cases-get
+    recordType: case
+    route: case-find
+    maximumUpstreamCalls: 4
+accessProfiles:
+  - id: case-reader
+    scopes:
+      - cases.read
+    operations:
+      - cases-get
+    recordTypes:
+      - case

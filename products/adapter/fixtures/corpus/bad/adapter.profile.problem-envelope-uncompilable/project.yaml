@@ -1,0 +1,43 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.profile.problem-envelope-uncompilable: this artifact set must be refused with
+# exactly adapter.profile.problem-envelope-uncompilable. The problem envelope carries a record slot, which the problem-envelope derivation refuses.
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.profile.problem-envelope-uncompilable/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
+kind: AdapterProject
+project:
+  id: case-api-example
+  version: "1"
+profile:
+  id: case-api
+  version: "1"
+  digest: sha256:1cc6d1296aeb9e98238d3eb6f64b19b2a03f98c99ff8a750a7f95bd31c5ea59f
+pack:
+  id: case-api-pack
+  version: "1"
+  digest: sha256:4e5fb83a707e9390daf76e65335ef6302b64dc9b59506cc07392d2787c7d6777
+recordTypes:
+  - name: case
+    fields:
+      - name: case_type
+        type: string
+        required: true
+templatedRoutes:
+  - routeTemplate: find-cases
+    routeId: case-find
+bindings:
+  - id: case-get
+    operation: cases-get
+    recordType: case
+    route: case-find
+    maximumUpstreamCalls: 4
+accessProfiles:
+  - id: case-reader
+    scopes:
+      - cases.read
+    operations:
+      - cases-get
+    recordTypes:
+      - case

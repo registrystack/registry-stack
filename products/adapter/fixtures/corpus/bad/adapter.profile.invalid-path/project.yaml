@@ -1,0 +1,43 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.profile.invalid-path: this artifact set must be refused with
+# exactly adapter.profile.invalid-path. The operation path carries no leading slash, so it is not origin-relative.
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.profile.invalid-path/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
+kind: AdapterProject
+project:
+  id: case-api-example
+  version: "1"
+profile:
+  id: case-api
+  version: "1"
+  digest: sha256:ba13246602cd51cb6d16a0d9a9eac36f038c897a43a5a8eabe7a90fb7c797b25
+pack:
+  id: case-api-pack
+  version: "1"
+  digest: sha256:54a8811dfa9f622ec72ee9aef1546f13a1addf45f0639afaff358d383dd2dbb5
+recordTypes:
+  - name: case
+    fields:
+      - name: case_type
+        type: string
+        required: true
+templatedRoutes:
+  - routeTemplate: find-cases
+    routeId: case-find
+bindings:
+  - id: case-get
+    operation: cases-get
+    recordType: case
+    route: case-find
+    maximumUpstreamCalls: 4
+accessProfiles:
+  - id: case-reader
+    scopes:
+      - cases.read
+    operations:
+      - cases-get
+    recordTypes:
+      - case

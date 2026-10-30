@@ -1,0 +1,43 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/project/project.v1alpha1.schema.json
+#
+# Bad-corpus member adapter.route.invalid-status-code-range: this artifact set must be refused with
+# exactly adapter.route.invalid-status-code-range. The send's okStatusCodeRange runs backwards, 200-100.
+#
+# Refuse with:
+#   target/debug/adapterctl check products/adapter/fixtures/corpus/bad/adapter.route.invalid-status-code-range/project.yaml
+apiVersion: id.registrystack.org/formats/adapter/project/v1alpha1
+kind: AdapterProject
+project:
+  id: case-api-example
+  version: "1"
+profile:
+  id: case-api
+  version: "1"
+  digest: sha256:33031e9e753c747994ad3dbefdebc3369f06b295e89e5546264c1d988d251777
+pack:
+  id: case-api-pack
+  version: "1"
+  digest: sha256:c96e80a0a7f993121ffe1ba0c690cb6c6fe0628bb5ecdaa3b149ddb44a854142
+recordTypes:
+  - name: case
+    fields:
+      - name: case_type
+        type: string
+        required: true
+templatedRoutes:
+  - routeTemplate: find-cases
+    routeId: case-find
+bindings:
+  - id: case-get
+    operation: cases-get
+    recordType: case
+    route: case-find
+    maximumUpstreamCalls: 4
+accessProfiles:
+  - id: case-reader
+    scopes:
+      - cases.read
+    operations:
+      - cases-get
+    recordTypes:
+      - case
