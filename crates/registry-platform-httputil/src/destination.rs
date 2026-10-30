@@ -3147,7 +3147,7 @@ fn decode_script_component(value: &str) -> Result<String, DestinationRequestErro
 /// reviewed path selector. In addition to Unicode `Control`, this closes the
 /// bidi, zero-width, line/paragraph, annotation, and tag controls that could
 /// make an upstream target render differently from its committed byte form.
-fn disallowed_path_scalar(character: char) -> bool {
+pub fn disallowed_path_scalar(character: char) -> bool {
     character.is_control()
         || matches!(
             character,

@@ -59,7 +59,9 @@
 use std::fmt;
 
 use registry_adapter_core::ErrorClass;
-use registry_platform_httputil::destination::MAX_DESTINATION_ORIGIN_URL_BYTES;
+use registry_platform_httputil::destination::{
+    disallowed_path_scalar, MAX_DESTINATION_ORIGIN_URL_BYTES,
+};
 use url::{Position, Url};
 
 /// Why an endpoint's base URL cannot be pinned.
@@ -519,12 +521,16 @@ pub(crate) fn percent_encode(text: &str) -> String {
 }
 
 /// `text` percent-encoded as one path segment, when that encoding is a
-/// segment [`PinnedOrigin::pin`] admits: not empty, not a dot segment, and
-/// canonical by the same rule the pin applies to a link's path. `None` for a
-/// value that cannot stand as one segment of a pinned link.
+/// segment [`PinnedOrigin::pin`] admits: not empty, not a dot segment,
+/// canonical by the same rule the pin applies to a link's path, and free of
+/// the scalars the outbound transport refuses in a path. `None` for a value
+/// that cannot stand as one segment of a pinned link.
 pub(crate) fn encode_path_segment(text: &str) -> Option<String> {
     let encoded = percent_encode(text);
-    if encoded.is_empty() || is_dot_segment(encoded.as_bytes()) {
+    if encoded.is_empty()
+        || is_dot_segment(encoded.as_bytes())
+        || text.chars().any(disallowed_path_scalar)
+    {
         return None;
     }
     is_canonical_path(&format!("/{encoded}")).then_some(encoded)
@@ -537,8 +543,22 @@ mod segment_tests {
     #[test]
     fn a_value_that_would_leave_its_segment_or_alias_another_is_not_a_segment() {
         for hostile in [
-            "", ".", "..", "a/b", "a%2Fb", "a\\b", "a?b", "a;b", "a:b", "a%b", "a\u{1}b",
-            "a\u{7f}b", "a\nb",
+            "a\u{200b}b",
+            "a\u{202e}b",
+            "a\u{feff}b",
+            "",
+            ".",
+            "..",
+            "a/b",
+            "a%2Fb",
+            "a\\b",
+            "a?b",
+            "a;b",
+            "a:b",
+            "a%b",
+            "a\u{1}b",
+            "a\u{7f}b",
+            "a\nb",
         ] {
             assert_eq!(encode_path_segment(hostile), None, "{hostile:?}");
         }

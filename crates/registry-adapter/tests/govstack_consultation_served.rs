@@ -409,7 +409,17 @@ async fn a_lookup_identifier_that_cannot_be_one_path_segment_is_not_found_before
     let token = served.token("records.read");
 
     for hostile in [
-        ".", "..", "a/b", "a%2Fb", "a\\b", "a?b", "a;b", "a:b", "a\u{1}b", "a%b",
+        ".",
+        "..",
+        "a/b",
+        "a%2Fb",
+        "a\\b",
+        "a?b",
+        "a;b",
+        "a:b",
+        "a\u{1}b",
+        "a\u{200b}b",
+        "a%b",
     ] {
         let (status, _, body) = served.post(
             LOOKUP_PATH,
@@ -417,8 +427,37 @@ async fn a_lookup_identifier_that_cannot_be_one_path_segment_is_not_found_before
             &json!({"selector": "byRecordId", "values": {"recordId": hostile}}),
         );
         assert_eq!(status, 404, "{hostile:?}: {body}");
-        // The profile maps the facade not-found class to this problem.
-        contract::assert_problem(&body, 404, "collection-not-available");
+        // The collection exists; no record can carry this identifier.
+        contract::assert_problem(&body, 404, "record-not-available");
+    }
+    assert_eq!(upstream.request_count(), 0);
+}
+
+#[tokio::test]
+async fn a_retrieve_identifier_that_cannot_be_one_path_segment_is_not_found_before_any_upstream_call(
+) {
+    let upstream = UpstreamDouble::start();
+    upstream.respond_with(vec![found()]);
+    let served = start(&upstream).await;
+    let token = served.token("records.read");
+
+    // The spellings are as a caller writes them; the router decodes each once.
+    for spelling in [
+        ".",
+        "..",
+        "%2E%2E",
+        "a%2Fb",
+        "a%5Cb",
+        "a%3Fb",
+        "a%3Bb",
+        "a%3Ab",
+        "a%01b",
+        "a%25b",
+        "a%E2%80%8Bb",
+    ] {
+        let (status, _, body) = served.get(&format!("{LIST_PATH}/{spelling}"), Some(&token));
+        assert_eq!(status, 404, "{spelling}: {body}");
+        contract::assert_problem(&body, 404, "record-not-available");
     }
     assert_eq!(upstream.request_count(), 0);
 }

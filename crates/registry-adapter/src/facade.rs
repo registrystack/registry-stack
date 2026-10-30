@@ -365,7 +365,7 @@ async fn answer(
             &caller,
             &record_type,
             &request_id,
-            ErrorClass::FacadeNotFound,
+            ErrorClass::OutcomeNotFound,
             StatusCode::NOT_FOUND,
         )
         .await;

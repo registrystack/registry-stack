@@ -130,8 +130,23 @@ async fn a_record_identifier_that_cannot_be_one_path_segment_is_not_found_before
     // The spellings are as a caller writes them; the router decodes each
     // once, so `a%252Fb` reaches the facade as `a%2Fb`.
     for spelling in [
-        "..", "%2E%2E", "%2e%2e", ".", "%2E", ".%2e", "a%2Fb", "a%2fb", "a%252Fb", "a%5Cb",
-        "a%3Fb", "a%3Bb", "a%3Ab", "a%01b", "a%7Fb", "a%25b",
+        "..",
+        "%2E%2E",
+        "%2e%2e",
+        ".",
+        "%2E",
+        ".%2e",
+        "a%2Fb",
+        "a%2fb",
+        "a%252Fb",
+        "a%5Cb",
+        "a%3Fb",
+        "a%3Bb",
+        "a%3Ab",
+        "a%01b",
+        "a%7Fb",
+        "a%25b",
+        "a%E2%80%8Bb",
     ] {
         let (status, _, body) = served.get(&format!("/v1/records/person/{spelling}"), Some(&token));
         assert_eq!(status, 404, "{spelling}: {body}");
