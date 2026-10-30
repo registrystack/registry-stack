@@ -37,6 +37,7 @@ pub enum CheckCode {
     PackUnknownScript,
     PackUnknownTemplateParameter,
     // adapter.profile.*
+    ProfileInvalidPath,
     ProfileProblemEnvelopeMissingCodeSlot,
     ProfileProblemEnvelopeUncompilable,
     ProfileRequestEnvelopeMissingRecordSlot,
@@ -63,6 +64,7 @@ pub enum CheckCode {
     RouteErrorHandlerShape,
     RouteFromNotDirect,
     RouteHandledAndContinued,
+    RouteInvalidPath,
     RouteLoopCountAboveBound,
     RouteMaximumItemsRequired,
     RouteMaximumIterationsRequired,
@@ -106,6 +108,7 @@ impl CheckCode {
         Self::PackScriptUncompilable,
         Self::PackUnknownScript,
         Self::PackUnknownTemplateParameter,
+        Self::ProfileInvalidPath,
         Self::ProfileProblemEnvelopeMissingCodeSlot,
         Self::ProfileProblemEnvelopeUncompilable,
         Self::ProfileRequestEnvelopeMissingRecordSlot,
@@ -130,6 +133,7 @@ impl CheckCode {
         Self::RouteErrorHandlerShape,
         Self::RouteFromNotDirect,
         Self::RouteHandledAndContinued,
+        Self::RouteInvalidPath,
         Self::RouteLoopCountAboveBound,
         Self::RouteMaximumItemsRequired,
         Self::RouteMaximumIterationsRequired,
@@ -172,6 +176,7 @@ impl CheckCode {
             Self::PackScriptUncompilable => "adapter.pack.script-uncompilable",
             Self::PackUnknownScript => "adapter.pack.unknown-script",
             Self::PackUnknownTemplateParameter => "adapter.pack.unknown-template-parameter",
+            Self::ProfileInvalidPath => "adapter.profile.invalid-path",
             Self::ProfileProblemEnvelopeMissingCodeSlot => {
                 "adapter.profile.problem-envelope-missing-code-slot"
             }
@@ -206,6 +211,7 @@ impl CheckCode {
             Self::RouteErrorHandlerShape => "adapter.route.error-handler-shape",
             Self::RouteFromNotDirect => "adapter.route.from-not-direct",
             Self::RouteHandledAndContinued => "adapter.route.handled-and-continued",
+            Self::RouteInvalidPath => "adapter.route.invalid-path",
             Self::RouteLoopCountAboveBound => "adapter.route.loop-count-above-bound",
             Self::RouteMaximumItemsRequired => "adapter.route.maximum-items-required",
             Self::RouteMaximumIterationsRequired => "adapter.route.maximum-iterations-required",
@@ -246,6 +252,7 @@ impl CheckCode {
             | Self::RuntimeMissingEndpoint
             | Self::RuntimeUnknownEndpoint => crate::naming::ADAPTER_RUNTIME_KIND,
             Self::EnvelopeInvalidPlaceholder
+            | Self::ProfileInvalidPath
             | Self::ProfileProblemEnvelopeMissingCodeSlot
             | Self::ProfileProblemEnvelopeUncompilable
             | Self::ProfileRequestEnvelopeMissingRecordSlot
@@ -270,6 +277,7 @@ impl CheckCode {
             | Self::RouteErrorHandlerShape
             | Self::RouteFromNotDirect
             | Self::RouteHandledAndContinued
+            | Self::RouteInvalidPath
             | Self::RouteLoopCountAboveBound
             | Self::RouteMaximumItemsRequired
             | Self::RouteMaximumIterationsRequired

@@ -237,6 +237,14 @@ pub fn check_profile(profile: &AdapterProfile) -> Vec<Diagnostic> {
     let mut findings = Vec::new();
     for (index, operation) in profile.operations.iter().enumerate() {
         let prefix = format!("/operations/{index}");
+        if let Some(fault) = origin_relative_path_fault(&operation.path) {
+            findings.push(finding(
+                CheckCode::ProfileInvalidPath,
+                &format!("{prefix}/path"),
+                fault,
+                "Author the path origin-relative: a leading slash, no scheme or authority, and no `..` segment.",
+            ));
+        }
         findings.extend(envelope_checks(&prefix, &operation.response_envelope));
         if !(operation.response_envelope.mentions(SLOT_RECORD)
             || operation.response_envelope.mentions(SLOT_RECORDS))
@@ -265,6 +273,25 @@ pub fn check_profile(profile: &AdapterProfile) -> Vec<Diagnostic> {
         ));
     }
     findings
+}
+
+/// The origin-relative fault of an authored static path, if any: no
+/// scheme or authority, no `..` segment, and a leading slash. The fault
+/// text never quotes the path.
+fn origin_relative_path_fault(path: &str) -> Option<&'static str> {
+    if path.contains("://") {
+        return Some("the path carries a scheme");
+    }
+    if path.starts_with("//") {
+        return Some("the path carries an authority");
+    }
+    if !path.starts_with('/') {
+        return Some("the path lacks a leading slash");
+    }
+    if path.split(['/', '?', '#']).any(|segment| segment == "..") {
+        return Some("the path escapes the origin with a `..` segment");
+    }
+    None
 }
 
 fn request_envelope_checks(prefix: &str, operation: &ProfileOperation) -> Vec<Diagnostic> {
@@ -540,6 +567,19 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
         walk_steps(steps, &mut |step, path| match step {
             Step::To(to) => {
                 let target = &to.uri;
+                if let Some(fault) = to
+                    .parameters
+                    .as_ref()
+                    .and_then(|parameters| parameters.path.as_deref())
+                    .and_then(origin_relative_path_fault)
+                {
+                    route_findings.push(finding(
+                        CheckCode::RouteInvalidPath,
+                        &format!("/routes/{id}/steps{path}/parameters/path"),
+                        fault,
+                        "Author the path origin-relative: a leading slash, no scheme or authority, and no `..` segment.",
+                    ));
+                }
                 match target.component {
                     SendComponent::Http | SendComponent::GraphQl => {
                         if !endpoint_ids.contains(target.id.as_str()) {
@@ -563,28 +603,43 @@ pub fn check_routes(pack: &AdapterPack, project: &AdapterProject) -> Vec<Diagnos
                     }
                 }
             }
-            Step::Enrich(enrich) => match enrich.uri.component {
-                SendComponent::Http | SendComponent::GraphQl => {
-                    if !endpoint_ids.contains(enrich.uri.id.as_str()) {
-                        route_findings.push(finding(
-                            CheckCode::RouteUnknownEndpoint,
-                            &format!("/routes/{id}/steps{path}"),
-                            "the enrichment names no declared endpoint",
-                            "Name an endpoint the pack declares.",
-                        ));
-                    }
+            Step::Enrich(enrich) => {
+                if let Some(fault) = enrich
+                    .parameters
+                    .as_ref()
+                    .and_then(|parameters| parameters.path.as_deref())
+                    .and_then(origin_relative_path_fault)
+                {
+                    route_findings.push(finding(
+                        CheckCode::RouteInvalidPath,
+                        &format!("/routes/{id}/steps{path}/parameters/path"),
+                        fault,
+                        "Author the path origin-relative: a leading slash, no scheme or authority, and no `..` segment.",
+                    ));
                 }
-                SendComponent::Direct => {
-                    if !known_ids.contains(enrich.uri.id.as_str()) {
-                        route_findings.push(finding(
+                match enrich.uri.component {
+                    SendComponent::Http | SendComponent::GraphQl => {
+                        if !endpoint_ids.contains(enrich.uri.id.as_str()) {
+                            route_findings.push(finding(
+                                CheckCode::RouteUnknownEndpoint,
+                                &format!("/routes/{id}/steps{path}"),
+                                "the enrichment names no declared endpoint",
+                                "Name an endpoint the pack declares.",
+                            ));
+                        }
+                    }
+                    SendComponent::Direct => {
+                        if !known_ids.contains(enrich.uri.id.as_str()) {
+                            route_findings.push(finding(
                                 CheckCode::RouteUnknownDirectTarget,
                                 &format!("/routes/{id}/steps{path}"),
                                 "the direct enrichment names no route or template",
                                 "Name a route or template the pack declares or the project instantiates.",
                             ));
+                        }
                     }
                 }
-            },
+            }
             Step::Split(split) => {
                 if split.maximum_items.is_none() {
                     route_findings.push(finding(
@@ -5422,6 +5477,69 @@ mod tests {
         let findings = check_runtime(&ws, &runtime);
         assert_has(&findings, CheckCode::RuntimeUnknownEndpoint);
         assert_has(&findings, CheckCode::RuntimeMissingEndpoint);
+    }
+
+    // ----- origin-relative paths (round 6 C1) -----
+
+    /// An authored operation path is origin-relative: no scheme or
+    /// authority, no `..` segment, and a leading slash.
+    #[test]
+    fn profile_refuses_paths_that_leave_the_origin() {
+        for path in [
+            "https://cases.example.invalid/v2",
+            "//cases.example.invalid/v2",
+            "v2/cases",
+            "/v2/../admin",
+        ] {
+            let mut bad = operation("cases-find", HttpMethod::Get);
+            bad.path = path.to_string();
+            let profile = profile_builder(vec![bad]);
+            let findings = check_profile(&profile);
+            assert_eq!(findings.len(), 1, "at {path}");
+            assert_eq!(findings[0].code, CheckCode::ProfileInvalidPath.code());
+            assert_eq!(findings[0].path, "/operations/0/path");
+        }
+        assert_clean(check_profile(&profile_builder(vec![operation(
+            "cases-find",
+            HttpMethod::Get,
+        )])));
+    }
+
+    /// A send's static path answers to the same origin-relative rule,
+    /// refused at the step's parameters.
+    #[test]
+    fn routes_refuse_send_paths_that_leave_the_origin() {
+        let to_with_path = |path: &str| {
+            let mut step = to_get("case-api");
+            if let Step::To(to) = &mut step {
+                if let Some(parameters) = &mut to.parameters {
+                    parameters.path = Some(path.to_string());
+                }
+            }
+            step
+        };
+        for path in [
+            "https://cases.example.invalid/v2",
+            "//cases.example.invalid/v2",
+            "v2/cases",
+            "/v2/../admin",
+        ] {
+            let route = RouteDefinition {
+                id: local("fetch-case"),
+                from: RouteFrom {
+                    uri: direct("fetch-case"),
+                },
+                steps: vec![to_with_path(path)],
+            };
+            let pack = pack_builder(vec![oauth_endpoint()], vec![route]);
+            let findings = check_routes(&pack, &project_builder(&pack));
+            assert_eq!(findings.len(), 1, "at {path}: {:?}", codes(&findings));
+            assert_eq!(findings[0].code, CheckCode::RouteInvalidPath.code());
+            assert_eq!(
+                findings[0].path,
+                "/routes/fetch-case/steps/0/parameters/path"
+            );
+        }
     }
 
     // ----- header hygiene (round 6 C3) -----
