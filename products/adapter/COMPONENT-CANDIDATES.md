@@ -104,6 +104,38 @@ service accounts use the RFC 7523 section 2.1 JWT bearer grant (the JWT is
 the grant, not client authentication), and some SOAP services sign with
 WS-Security. Neither enters D18 until a pack needs it.
 
+## Registry Coordinator as a caller
+
+Recorded 2026-10-30 as candidates, not plan scope. Neither changes an
+increment.
+
+- **Coordinator calls an adapter facade.** Coordinator's `external.get/v1`
+  and `external.command/v1` (`products/coordinator/PRODUCT-CONTRACT.md`,
+  "Bounded external command") reach one exact path per connection and hand
+  the workflow the source's own JSON, so a workflow polling DHIS2 carries
+  DHIS2's shape in its interpreter. Behind an adapter facade, the workflow
+  calls a reviewed, profile-shaped API and the source knowledge stays in the
+  pack. It composes the way products already do: over the adapter's public
+  HTTP contract through a maintained client, under Coordinator's dependency
+  gate. It needs a `registry-adapter-client` crate, which no increment
+  builds. Trigger: a Coordinator workflow whose interpreter is mostly
+  translation for one source.
+- **Upstream authentication as a platform crate.** Evidence's
+  `SourceAuthentication`, the adapter's copy of it (D18), and Coordinator's
+  connection credentials (OAuth token endpoints in
+  `products/coordinator/DEPLOYMENT.md`) are up to three implementations of
+  one concept. D18 lifts the shape into a platform crate once two systems
+  share it. First step: compare Coordinator's kinds, spelling, and token
+  rules with Evidence's; the lift is due only if they match or can converge
+  without a Coordinator contract break.
+
+What does not carry over: the route engine, redelivery, and the circuit
+breaker. An adapter exchange is in memory, bounded by one facade deadline;
+a Coordinator run is durable across waits and holds an ambiguous write as
+uncertain rather than resending it, which Camel redelivery does not model.
+Saga does not apply either: Coordinator's contract excludes compensation and
+distributed rollback.
+
 ## Out of the adapter's model
 
 Recorded so the list is complete, not to reopen it:
