@@ -12,7 +12,7 @@
 
 use registry_adapter_core::{
     derive_operation_result_schema, derive_problem_envelope_schema, AdapterProfile, AdapterProject,
-    Binding, HttpMethod, ParameterizedPart, ProfileOperation, RecordField,
+    Binding, HttpMethod, ParameterizedPart, Problem, ProfileOperation, RecordField,
 };
 use registry_platform_yaml::{Diagnostic, UniqueIdList};
 use serde_json::{json, Map, Value};
@@ -106,15 +106,18 @@ pub(crate) fn assemble(
                 }
             }
         }
-        members.insert(
-            "responses".to_owned(),
+        let mut responses = Map::new();
+        responses.insert(
+            success_status(operation).to_string(),
             json!({
-                success_status(operation).to_string(): {
-                    "description": SUCCESS_DESCRIPTION,
-                    "content": {"application/json": {"schema": response}},
-                },
+                "description": SUCCESS_DESCRIPTION,
+                "content": {"application/json": {"schema": response}},
             }),
         );
+        for (status, error) in problem_responses(&profile.problems) {
+            responses.entry(status).or_insert(error);
+        }
+        members.insert("responses".to_owned(), Value::Object(responses));
         members.insert("security".to_owned(), json!([{"bearerAuth": []}]));
         let Some(path_object) = path_item.as_object_mut() else {
             unreachable!("the path item was inserted as an object");
@@ -300,30 +303,16 @@ fn field_schema(field_type: registry_adapter_core::RecordFieldType) -> Value {
     }
 }
 
-/// One declared problem of a future profile problems list: the status it
-/// answers and the title its response description carries.
-#[allow(dead_code)]
-pub(crate) struct DeclaredProblem {
-    /// The HTTP status the problem answers with.
-    pub status: u16,
-    /// The problem's title.
-    pub title: String,
-}
-
-/// The error responses of a profile's declared problems: one response per
-/// distinct status, each answering the shared problem schema.
-///
-/// Unwired stand-in for increment 1: the profile format carries problem
-/// codes but not the problems list that gives each code its status and
-/// title (X1 scope), so the compiled contract declares no error responses
-/// and invents no status. The assembler is the pure function the adaptation
-/// pass wires in when the list lands.
-#[allow(dead_code)]
-fn problem_responses(problems: &[DeclaredProblem]) -> Map<String, Value> {
+/// The error responses of a profile's problems list: one response per
+/// distinct status, each answering the shared problem schema and described
+/// by the first problem carrying that status (`products/adapter/CONCEPT.md`
+/// section 8.11.6). The statuses, not the codes, key the responses: two
+/// problems answering with the same status share one response.
+fn problem_responses(problems: &[Problem]) -> Map<String, Value> {
     let mut responses = Map::new();
     for problem in problems {
         responses
-            .entry(problem.status.to_string())
+            .entry(problem.status.get().to_string())
             .or_insert_with(|| {
                 json!({
                     "description": problem.title,
@@ -484,7 +473,26 @@ mod tests {
                     },
                 },
             ],
-            "problemCodes": ["cases.missing"],
+            "problems": [
+                {
+                    "code": "cases.missing",
+                    "status": 404,
+                    "title": "No case answers the request.",
+                    "classes": ["outcome.not-found"],
+                },
+                {
+                    "code": "cases.changed",
+                    "status": 409,
+                    "title": "The case changed since it was read.",
+                    "classes": ["outcome.conflict"],
+                },
+                {
+                    "code": "cases.gone",
+                    "status": 404,
+                    "title": "A second code with the same status.",
+                    "classes": ["facade.not-found"],
+                },
+            ],
             "problemEnvelope": PROBLEM_ENVELOPE,
             "parameterizedParts": [
                 {
@@ -643,7 +651,14 @@ mod tests {
                 "pathParameters": ["type"],
                 "responseEnvelope": r#"{"kind": "case", "meta": {"registryIdentifier": "registryIdentifier"}}"#,
             }],
-            "problemCodes": ["cases.missing"],
+            "problems": [
+                {
+                    "code": "cases.missing",
+                    "status": 404,
+                    "title": "No case answers the request.",
+                    "classes": ["outcome.not-found"],
+                },
+            ],
             "problemEnvelope": PROBLEM_ENVELOPE,
             "parameterizedParts": [
                 {"name": "registryIdentifier", "description": "the registry"},
@@ -758,24 +773,11 @@ mod tests {
     }
 
     /// The problem assembler answers one response per distinct status, each
-    /// referencing the shared problem schema. Unwired until the profile
-    /// format carries the problems list.
+    /// referencing the shared problem schema; the first problem carrying a
+    /// status describes its response.
     #[test]
     fn problem_responses_are_keyed_by_status() {
-        let responses = problem_responses(&[
-            DeclaredProblem {
-                status: 404,
-                title: "No case answers the request.".to_owned(),
-            },
-            DeclaredProblem {
-                status: 409,
-                title: "The case changed since it was read.".to_owned(),
-            },
-            DeclaredProblem {
-                status: 404,
-                title: "A second code with the same status.".to_owned(),
-            },
-        ]);
+        let responses = problem_responses(&profile().problems);
         assert_eq!(responses.len(), 2);
         assert_eq!(
             responses["404"]["description"],
@@ -785,5 +787,37 @@ mod tests {
             responses["409"]["content"]["application/json"]["schema"],
             json!({"$ref": "#/components/schemas/Problem"})
         );
+    }
+
+    /// Every compiled operation answers the profile's problems beside its
+    /// success response: one error response per distinct status, described
+    /// by the first problem carrying that status.
+    #[test]
+    fn error_responses_follow_the_problems_list() {
+        let document = assemble(&profile(), &project(both_bindings())).expect("the assembly runs");
+        for (path, method) in [
+            ("/v2/cases/case/{case_id}", "get"),
+            ("/v2/cases/case", "post"),
+        ] {
+            let responses = &document["paths"][path][method]["responses"];
+            let keys: Vec<&str> = responses
+                .as_object()
+                .unwrap()
+                .keys()
+                .map(String::as_str)
+                .collect();
+            assert_eq!(keys, ["200", "404", "409"], "{path} {method}");
+            assert_eq!(
+                responses["404"],
+                json!({
+                    "description": "No case answers the request.",
+                    "content": {
+                        "application/json": {
+                            "schema": {"$ref": "#/components/schemas/Problem"}
+                        }
+                    },
+                })
+            );
+        }
     }
 }

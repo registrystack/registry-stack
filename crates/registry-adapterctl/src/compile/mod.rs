@@ -13,9 +13,8 @@ mod document;
 use clap::Args;
 use registry_adapter_core::{
     check_project_pins, check_workspace, AdapterPack, AdapterProfile, AdapterProject, Workspace,
-    ADAPTER_PACK_API_VERSION, ADAPTER_PACK_KIND, ADAPTER_PROFILE_API_VERSION, ADAPTER_PROFILE_KIND,
 };
-use registry_platform_yaml::{ApiVersion, Diagnostic, EnvelopeRule, FormatSpec, Report};
+use registry_platform_yaml::{Diagnostic, Report};
 use serde_json::Value;
 use std::io;
 use std::path::PathBuf;
@@ -26,29 +25,6 @@ use crate::report;
 /// The file the compiled contract is written to, relative to the project
 /// directory.
 pub(crate) const DEFAULT_OUTPUT: &str = "generated/openapi.json";
-
-/// The authored profile format. The same spec `check` reads; its const in
-/// `check.rs` is private to that module, and this command does not edit
-/// that file, so the spec is written again over the same public core
-/// constants.
-const PROFILE_FORMAT: FormatSpec<'static> = FormatSpec {
-    kind: ADAPTER_PROFILE_KIND,
-    envelope: EnvelopeRule::ApiVersionKind {
-        api_versions: &[ApiVersion::current(ADAPTER_PROFILE_API_VERSION)],
-        retired_api_versions: &[],
-    },
-    removed_keys: &[],
-};
-
-/// The authored pack format, as `check` reads it (see `PROFILE_FORMAT`).
-const PACK_FORMAT: FormatSpec<'static> = FormatSpec {
-    kind: ADAPTER_PACK_KIND,
-    envelope: EnvelopeRule::ApiVersionKind {
-        api_versions: &[ApiVersion::current(ADAPTER_PACK_API_VERSION)],
-        retired_api_versions: &[],
-    },
-    removed_keys: &[],
-};
 
 #[derive(Debug, Args)]
 pub struct CompileArgs {
@@ -123,14 +99,18 @@ pub(crate) fn run(args: &CompileArgs) -> Result<CompileRun, CompileFailure> {
         .profile
         .clone()
         .unwrap_or_else(|| directory.join("profile.yaml"));
-    let profile =
-        check::read::<AdapterProfile>(&profile_path, &PROFILE_FORMAT, &mut report, &mut files)
-            .map_err(io_failure)?;
+    let profile = check::read::<AdapterProfile>(
+        &profile_path,
+        &check::PROFILE_FORMAT,
+        &mut report,
+        &mut files,
+    )
+    .map_err(io_failure)?;
     let pack_path = args
         .pack
         .clone()
         .unwrap_or_else(|| directory.join("pack.yaml"));
-    let pack = check::read::<AdapterPack>(&pack_path, &PACK_FORMAT, &mut report, &mut files)
+    let pack = check::read::<AdapterPack>(&pack_path, &check::PACK_FORMAT, &mut report, &mut files)
         .map_err(io_failure)?;
 
     // A document the reader refuses stops the composition: the pure checks

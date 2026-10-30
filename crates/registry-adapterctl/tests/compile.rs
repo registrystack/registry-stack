@@ -186,6 +186,74 @@ fn the_minimal_fixture_project_compiles() {
     );
 }
 
+/// The profile's problems list becomes the error responses of every
+/// operation (R7, CONCEPT section 8.11.6): one response per distinct
+/// status, each answering the shared problem schema, described by the
+/// first problem carrying that status. Two problems sharing 502 prove the
+/// statuses, not the codes, key the responses.
+#[test]
+fn error_responses_come_from_the_profile_problems_list() {
+    let (root, project) = copied_tree(&minimal_dir());
+    let (document, _) = compile(&project, &[]);
+    let _ = root;
+
+    let responses = &document["paths"]["/v2/cases/case"]["get"]["responses"];
+    let keys: Vec<&str> = responses
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    assert_eq!(keys, ["200", "422", "500", "502"]);
+    assert_eq!(
+        responses["200"]["description"],
+        "The operation's response envelope for the bound record type."
+    );
+    assert_eq!(
+        responses,
+        &json!({
+            "200": responses["200"].clone(),
+            "422": {
+                "description": "the request or its mapping was refused",
+                "content": {
+                    "application/json": {
+                        "schema": {"$ref": "#/components/schemas/Problem"}
+                    }
+                }
+            },
+            "500": {
+                "description": "the facade refused the call",
+                "content": {
+                    "application/json": {
+                        "schema": {"$ref": "#/components/schemas/Problem"}
+                    }
+                }
+            },
+            "502": {
+                "description": "the source could not be reached",
+                "content": {
+                    "application/json": {
+                        "schema": {"$ref": "#/components/schemas/Problem"}
+                    }
+                }
+            }
+        }),
+        "the responses are the success response plus one per problem status"
+    );
+
+    // Every operation carries the error responses, not only the first.
+    for item in document["paths"].as_object().unwrap().values() {
+        for operation in item.as_object().unwrap().values() {
+            assert!(
+                operation["responses"]["502"]["content"]["application/json"]["schema"]
+                    .get("$ref")
+                    .is_some(),
+                "every operation answers the profile's problems"
+            );
+        }
+    }
+}
+
 /// The document is pretty-printed with sorted keys and a trailing
 /// newline, so its diff is the contract review, and two runs over the
 /// same project give identical bytes.

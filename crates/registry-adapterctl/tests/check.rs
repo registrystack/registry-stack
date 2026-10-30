@@ -745,8 +745,8 @@ fn project_lock_pins_bytes_a_reader_would_refuse() {
     let (_root, project) = mutated_project(|root| {
         edit(
             &root.join("profile.yaml"),
-            "problemCodes:",
-            "conformanceUnknown: x\nproblemCodes:",
+            "problemEnvelope:",
+            "conformanceUnknown: x\nproblemEnvelope:",
         );
         edit(
             &root.join("project.yaml"),

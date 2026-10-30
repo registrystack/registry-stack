@@ -79,7 +79,7 @@ pub(crate) const PROJECT_FORMAT: FormatSpec<'static> = FormatSpec {
 };
 
 /// The authored profile format.
-const PROFILE_FORMAT: FormatSpec<'static> = FormatSpec {
+pub(crate) const PROFILE_FORMAT: FormatSpec<'static> = FormatSpec {
     kind: ADAPTER_PROFILE_KIND,
     envelope: EnvelopeRule::ApiVersionKind {
         api_versions: &[ApiVersion::current(ADAPTER_PROFILE_API_VERSION)],
@@ -89,7 +89,7 @@ const PROFILE_FORMAT: FormatSpec<'static> = FormatSpec {
 };
 
 /// The authored pack format.
-const PACK_FORMAT: FormatSpec<'static> = FormatSpec {
+pub(crate) const PACK_FORMAT: FormatSpec<'static> = FormatSpec {
     kind: ADAPTER_PACK_KIND,
     envelope: EnvelopeRule::ApiVersionKind {
         api_versions: &[ApiVersion::current(ADAPTER_PACK_API_VERSION)],
