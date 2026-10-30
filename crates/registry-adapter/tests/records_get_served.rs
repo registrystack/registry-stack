@@ -172,6 +172,22 @@ async fn an_identifier_with_a_space_or_a_non_ascii_character_is_sent_as_one_enco
 }
 
 #[tokio::test]
+async fn a_source_refusal_of_an_encoded_identifier_is_the_not_found_problem() {
+    let upstream = UpstreamDouble::start();
+    let (status, body) = capture("get-malformed");
+    upstream.respond_with(vec![Response::json(status, &body); 2]);
+    let served = Served::start(&upstream.url("")).await;
+    let token = served.token("records.read");
+
+    for spelling in ["a%20b", "caf%C3%A9"] {
+        let (status, _, body) = served.get(&format!("/v1/records/person/{spelling}"), Some(&token));
+        assert_eq!(status, 404, "{spelling}: {body}");
+        assert_eq!(body["code"], "source.not-found", "{spelling}");
+    }
+    assert_eq!(upstream.request_count(), 2);
+}
+
+#[tokio::test]
 async fn a_token_from_an_unlisted_client_is_refused_before_any_upstream_call() {
     let upstream = UpstreamDouble::start();
     let (status, body) = capture("get-found");

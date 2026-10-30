@@ -305,6 +305,19 @@ routeTemplates:
             - throwException:
                 exceptionType: outcome.not-found
                 message: No tracked entity with that identifier exists at the source.
+      # The source refuses an identifier it cannot read (a 400 from the
+      # export): the record cannot exist, so it answers as an absent one.
+      - onException:
+          exception:
+            - upstream.http
+          onWhen:
+            rhai:
+              file: scripts/is-bad-request.rhai
+              entrypoint: is_bad_request
+          steps:
+            - throwException:
+                exceptionType: outcome.not-found
+                message: No tracked entity with that identifier exists at the source.
       - onException:
           exception:
             - upstream.timeout

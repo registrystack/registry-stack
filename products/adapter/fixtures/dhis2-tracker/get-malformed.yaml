@@ -1,0 +1,39 @@
+# yaml-language-server: $schema=https://id.registrystack.org/schemas/adapter/fixture/fixture.v1alpha1.schema.json
+#
+# Derived fixture: the source's bad-request answer to an identifier it
+# cannot read. The upstream answer is the documented DHIS2 error envelope
+# (the same one captured for the not-found case in get-missing.yaml, with
+# the 400 status); the pack's second clause on the fetch route maps it to
+# the same not-found outcome as an absent record. Synthetic: no real DHIS2
+# produced this exact reply, and the identifier is made up.
+apiVersion: id.registrystack.org/formats/adapter/fixture/v1alpha1
+kind: AdapterFixture
+id: dhis2-tracker-get-malformed
+pack: dhis2-tracker
+upstreamVersion: "2.43.2.1"
+provenance:
+  type: documented
+  reference: products/adapter/fixtures/dhis2-tracker/get-missing.yaml
+intercepts:
+  - type: endpoint
+    endpoint: tracker
+entries:
+  - facadeRequest:
+      operation: records-get
+      path: /v1/records/person/not%20an%20id
+    upstream:
+      - request:
+          endpoint: tracker
+          method: GET
+          path: /api/tracker/trackedEntities/not%20an%20id
+        response:
+          status: 400
+          body:
+            httpStatus: Bad Request
+            httpStatusCode: 400
+            status: ERROR
+            message: Not a valid identifier.
+    expected:
+      type: problem
+      class: outcome.not-found
+      code: source.not-found
